@@ -113,5 +113,7 @@ int sigsuspend(const sigset_t*) { return errno = ENOSYS, -1; }
 int kill(pid_t, int) { return errno = ENOSYS, -1; }
 int tgkill(pid_t, pid_t, int) { return errno = ENOSYS, -1; }
 int sigqueue(pid_t, int, const union sigval) { return errno = ENOSYS, -1; }
+int sigwaitinfo(const sigset_t*, siginfo_t*) { return errno = ENOSYS, -1; }
+int sigtimedwait(const sigset_t*, siginfo_t*, const struct timespec*) { return errno = ENOSYS, -1; }
 
 }  // extern "C"

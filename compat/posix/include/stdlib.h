@@ -1,0 +1,29 @@
+// gesher-base: POSIX additions to <stdlib.h>.
+#pragma once
+
+#include_next <stdlib.h>
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// The Windows CRT's RAND_MAX is 32767; Linux code assumes 2^31-1 (ART
+// static_asserts at least 65535). rand()/srand() are redirected to a
+// generator with the glibc range.
+#undef RAND_MAX
+#define RAND_MAX 0x7fffffff
+int gesher_rand(void);
+void gesher_srand(unsigned int seed);
+#define rand() gesher_rand()
+#define srand(seed) gesher_srand(seed)
+
+char* realpath(const char* path, char* resolved_path);
+int posix_memalign(void** memptr, size_t alignment, size_t size);
+int setenv(const char* name, const char* value, int overwrite);
+int unsetenv(const char* name);
+
+#ifdef __cplusplus
+}
+#endif

@@ -8,17 +8,18 @@ include(cmake/aosp/libart_srcs.cmake)
 
 # --- aconfig flags (cc_aconfig_library art-aconfig-flags-lib, -rw-) ---------
 set(_aconfig_values "${CMAKE_SOURCE_DIR}/config/aconfig/art.values")
-foreach(pair "art-flags.aconfig:com_android_art_flags.h"
-             "art-rw-flags.aconfig:com_android_art_rw_flags.h")
-  string(REPLACE ":" ";" pair "${pair}")
+foreach(pair "art/build/flags/art-flags.aconfig|com_android_art_flags.h"
+             "art/build/flags/art-rw-flags.aconfig|com_android_art_rw_flags.h"
+             "libcore/libcore.aconfig|com_android_libcore.h")
+  string(REPLACE "|" ";" pair "${pair}")
   list(GET pair 0 decl)
   list(GET pair 1 header)
   add_custom_command(
     OUTPUT "${_gen}/aconfig/${header}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${_gen}/aconfig"
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/gen/aconfig_header.py"
-            "${_art}/build/flags/${decl}" "${_aconfig_values}" > "${_gen}/aconfig/${header}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/tools/gen/aconfig_header.py" "${_art}/build/flags/${decl}"
+            "${AOSP_DIR}/${decl}" "${_aconfig_values}" > "${_gen}/aconfig/${header}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/gen/aconfig_header.py" "${AOSP_DIR}/${decl}"
             "${_aconfig_values}"
     VERBATIM)
   list(APPEND _aconfig_headers "${_gen}/aconfig/${header}")

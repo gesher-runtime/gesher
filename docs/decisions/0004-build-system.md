@@ -22,6 +22,9 @@ module by module and runs comfortably on hosted CI runners.
     target lists the overlay instead of the original.
   - `patches/<project>/NNNN-*.patch` — small edits to shared files, applied in
     order by the fetch script. Keep them minimal; each should be upstreamable.
+    New code paths are gated on `defined(GESHER)` (defined for every Gesher
+    build), so a patch changes nothing for other AOSP builds. Create patches
+    with `tools/aosp-patch.sh begin <project>` / `end <project> <slug>`.
 - Everything links statically: each tool is one self-contained `.exe`.
 
 ## Consequences

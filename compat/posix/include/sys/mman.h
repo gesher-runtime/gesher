@@ -57,6 +57,15 @@ int msync(void* addr, size_t length, int flags);
 int mincore(void* addr, size_t length, unsigned char* vec);
 int mlock(const void* addr, size_t length);
 int munlock(const void* addr, size_t length);
+#define MFD_CLOEXEC       0x0001U
+#define MFD_ALLOW_SEALING 0x0002U
+#define MFD_HUGETLB       0x0004U
+#define MFD_NOEXEC_SEAL   0x0008U
+#define MFD_EXEC          0x0010U
+
+// An anonymous file, backed by a delete-on-close temporary file.
+int memfd_create(const char* name, unsigned int flags);
+
 void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...);
 
 #ifdef __cplusplus

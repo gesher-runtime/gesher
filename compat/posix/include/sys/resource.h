@@ -43,6 +43,8 @@ struct rusage {
 #define PRIO_PROCESS 0
 #define PRIO_PGRP    1
 #define PRIO_USER    2
+#define PRIO_MIN     (-20)
+#define PRIO_MAX     20
 
 int getrlimit(int resource, struct rlimit* rlim);
 int setrlimit(int resource, const struct rlimit* rlim);

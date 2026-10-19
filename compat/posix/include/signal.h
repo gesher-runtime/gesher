@@ -74,9 +74,30 @@ extern "C" {
 #define SEGV_ACCERR 2
 #define BUS_ADRALN  1
 #define BUS_ADRERR  2
+#define BUS_OBJERR  3
 #define ILL_ILLOPC  1
+#define ILL_ILLOPN  2
+#define ILL_ILLADR  3
+#define ILL_ILLTRP  4
+#define ILL_PRVOPC  5
+#define ILL_PRVREG  6
+#define ILL_COPROC  7
+#define ILL_BADSTK  8
 #define FPE_INTDIV  1
+#define FPE_INTOVF  2
+#define FPE_FLTDIV  3
+#define FPE_FLTOVF  4
+#define FPE_FLTUND  5
+#define FPE_FLTRES  6
+#define FPE_FLTINV  7
+#define FPE_FLTSUB  8
 #define TRAP_BRKPT  1
+#define TRAP_TRACE  2
+#define SYS_SECCOMP 1
+#define SI_TIMER   (-2)
+#define SI_MESGQ   (-3)
+#define SI_ASYNCIO (-4)
+#define SI_SIGIO   (-5)
 
 union sigval {
   int sival_int;

@@ -65,7 +65,7 @@ jobs:
       - name: Report
         run: |
           python3 tools/compile-report.py runtime.log cmake/aosp/libart_srcs.cmake \
-            "ART runtime port status" | tee runtime-report.md
+            "ART runtime port status" out | tee runtime-report.md
           cat runtime-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
