@@ -1,0 +1,31 @@
+name: aosp-survey
+
+on:
+  push:
+    branches: [main]
+    paths: [tools/aosp-survey.sh, .github/workflows/aosp-survey.yml]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: AOSP release tag to survey
+        default: android-16.0.0_r4
+
+permissions:
+  contents: read
+
+jobs:
+  survey:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Survey Linux-specific surface
+        run: |
+          bash tools/aosp-survey.sh "${{ inputs.tag || 'android-16.0.0_r4' }}" \
+            "$RUNNER_TEMP/aosp" survey.md
+          cat survey.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aosp-survey
+          path: survey.md
