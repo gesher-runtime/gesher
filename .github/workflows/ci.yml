@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_TAG: "20261006"
+
+jobs:
+  # Everything is cross-compiled on Linux with llvm-mingw, the same toolchain
+  # the ART port will use, then executed on a real Windows runner.
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache toolchain
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW }}
+
+      - name: Fetch llvm-mingw
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - name: Build platform probe
+        run: |
+          export PATH="$HOME/toolchain/$LLVM_MINGW/bin:$PATH"
+          mkdir -p out
+          x86_64-w64-mingw32-clang -O2 -Wall -Wextra -Werror \
+            -o out/platform_probe.exe probes/platform/platform_probe.c -lsynchronization
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: out/
+
+  probe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+
+      - name: Run platform probe
+        shell: pwsh
+        run: |
+          ./platform_probe.exe | Tee-Object -FilePath probe.txt
+          $code = $LASTEXITCODE
+          "### Platform probe — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content probe.txt >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          exit $code
