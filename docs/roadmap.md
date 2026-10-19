@@ -31,13 +31,25 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] libartpalette, libartbase, libdexfile for Windows
 - [x] `dexdump.exe` reads and disassembles `.dex` files, including from a
       compressed `.apk`, tested in CI on Windows 2022 and 2025
-- [x] `mmap` emulation for ART: anonymous maps, address hints, partial unmap,
-      `mprotect` (overlay `mem_map_windows.cc`)
-- [ ] `MAP_FIXED` over existing reservations (placeholder mappings,
-      `VirtualAlloc2` / `MapViewOfFile3`)
+- [x] gesher-base POSIX layer started ([0005](decisions/0005-posix-layer.md)):
+      `mmap` family (anonymous maps, hints, partial unmap, `mprotect`,
+      `madvise`), signal sets and handler registration; Linux-layout
+      `pid_t`, `siginfo_t`, `ucontext_t`; headers for `dlfcn`, `elf`,
+      `link`, `resource`, `uio`, `utsname`, `statvfs`, `poll`, `unistd`
+- [x] LLP64: ART treats Windows x64 as 64-bit (patch 0002)
+- [x] Generated sources outside Soong: aconfig flags, `asm_defines.h`
+      (computed for the Windows target), enum operators
+- [ ] **ART runtime compiles for Windows** — tracked per file by the
+      `runtime-port` CI job (89% at the time of writing)
+- [ ] Implement the declared-but-stubbed POSIX functions (`dlopen`,
+      `sysconf`, `getrlimit`, `poll`, `uname`, ...)
+- [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
+      `CONTEXT` ↔ `ucontext_t`) — needed for implicit null checks
+- [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
 - [ ] Executable file mappings (`.oat` code)
+- [ ] Thread register: ART on x86-64 points `%gs` at its `Thread`; on
+      Windows `%gs` is the TEB, so assembly stubs need another scheme
+- [ ] Assembly entrypoints: ELF/System V assembly → COFF, with C++ targets
+      called from assembly declared `sysv_abi`
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
-- [ ] LLP64: audit ART for `long`-is-pointer-sized assumptions (`__LP64__` is
-      not defined on Windows x64)
-- [ ] libart (runtime) compiles for Windows
 - [ ] `dalvikvm.exe` runs `Hello` with the interpreter

@@ -13,3 +13,7 @@ system/core libcutils/include libutils/include
 external/zlib
 external/tinyxml2
 external/fmtlib
+external/dlmalloc
+external/lz4
+external/cpu_features
+system/unwinding libunwindstack/include

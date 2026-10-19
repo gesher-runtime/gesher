@@ -66,11 +66,11 @@ add_library(artbase STATIC
   ${_ab}/base/unix_file/fd_file.cc
   ${_ab}/base/unix_file/random_access_file_utils.cc ${_ab}/base/utils.cc
   ${_ab}/base/zip_archive.cc
-  # windows-only (Gesher overlay replaces upstream's version)
-  ${CMAKE_SOURCE_DIR}/overlay/art/libartbase/base/mem_map_windows.cc
+  # Gesher: the Unix implementation, on top of gesher-base's mmap
+  ${_ab}/base/mem_map_unix.cc
   ${artbase_ops})
 target_include_directories(artbase PUBLIC ${_ab})
-target_link_libraries(artbase PUBLIC art_defaults ziparchive z log artpalette base tinyxml2)
+target_link_libraries(artbase PUBLIC art_defaults ziparchive z log artpalette base tinyxml2 gesher_posix)
 
 # --- libdexfile -------------------------------------------------------------
 art_operator_srcs(dexfile_ops art/libdexfile
