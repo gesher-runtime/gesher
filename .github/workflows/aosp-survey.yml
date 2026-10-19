@@ -24,6 +24,7 @@ jobs:
           bash tools/aosp-survey.sh "${{ inputs.tag || 'android-16.0.0_r4' }}" \
             "$RUNNER_TEMP/aosp" survey.md
           cat survey.md >> "$GITHUB_STEP_SUMMARY"
+          cat survey.md  # also in the log, for networks that block artifact downloads
 
       - uses: actions/upload-artifact@v4
         with:
