@@ -1,0 +1,15 @@
+# AOSP projects Gesher builds from, all at one release tag.
+# Format: <project path> [sparse directories...]
+# Fetched by tools/fetch-aosp.sh into $AOSP_DIR (default: third_party/aosp).
+
+tag android-16.0.0_r4
+
+art
+libnativehelper
+system/libbase
+system/logging
+system/libziparchive
+system/core libcutils/include libutils/include
+external/zlib
+external/tinyxml2
+external/fmtlib

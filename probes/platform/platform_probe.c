@@ -13,7 +13,9 @@
 //   filemap    map a file at a chosen low address (ART: boot image / .oat)
 //   jit        write code, flip to executable, run it (ART: JIT code cache)
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>

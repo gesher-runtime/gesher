@@ -22,6 +22,22 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] Platform probe: implicit null checks, stack overflow, futex, low-4 GiB
       heap, fixed-address file mapping, JIT
 - [x] AOSP porting-surface survey, pinned to `android-16.0.0_r4`
-- [ ] Decide how to build ART outside Soong (Soong → CMake/GN export, or a
-      hand-written build) — the first task of phase 1
-- [ ] Self-hosted build cache so phase-1 CI builds stay under the 6-hour limit
+
+## Phase 1 checklist
+
+- [x] Build approach decided: CMake mirroring `Android.bp`, with overlays and
+      patches ([0004](decisions/0004-build-system.md))
+- [x] libbase, liblog, libziparchive, zlib, tinyxml2, fmtlib for Windows
+- [x] libartpalette, libartbase, libdexfile for Windows
+- [x] `dexdump.exe` reads and disassembles `.dex` files, including from a
+      compressed `.apk`, tested in CI on Windows 2022 and 2025
+- [x] `mmap` emulation for ART: anonymous maps, address hints, partial unmap,
+      `mprotect` (overlay `mem_map_windows.cc`)
+- [ ] `MAP_FIXED` over existing reservations (placeholder mappings,
+      `VirtualAlloc2` / `MapViewOfFile3`)
+- [ ] Executable file mappings (`.oat` code)
+- [ ] ART's own gtests for libartbase/libdexfile running on Windows
+- [ ] LLP64: audit ART for `long`-is-pointer-sized assumptions (`__LP64__` is
+      not defined on Windows x64)
+- [ ] libart (runtime) compiles for Windows
+- [ ] `dalvikvm.exe` runs `Hello` with the interpreter

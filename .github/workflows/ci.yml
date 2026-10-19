@@ -10,44 +10,71 @@ permissions:
   contents: read
 
 env:
-  LLVM_MINGW: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
   LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
-  # Everything is cross-compiled on Linux with llvm-mingw, the same toolchain
-  # the ART port will use, then executed on a real Windows runner.
+  # Everything is cross-compiled on Linux with llvm-mingw, then executed on
+  # real Windows runners.
   build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Cache toolchain
-        id: cache
+        id: toolchain
         uses: actions/cache@v4
         with:
           path: ~/toolchain
-          key: ${{ env.LLVM_MINGW }}
+          key: ${{ env.LLVM_MINGW_NAME }}
 
       - name: Fetch llvm-mingw
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/toolchain
-          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW.tar.xz" \
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
             | tar -xJ -C ~/toolchain
 
-      - name: Build platform probe
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Fetch AOSP sources
+        run: tools/fetch-aosp.sh
+
+      - name: Install build tools
+        run: sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Build
         run: |
-          export PATH="$HOME/toolchain/$LLVM_MINGW/bin:$PATH"
-          mkdir -p out
-          x86_64-w64-mingw32-clang -O2 -Wall -Wextra -Werror \
-            -o out/platform_probe.exe probes/platform/platform_probe.c -lsynchronization
+          cmake -S . -B out -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME"
+          ninja -C out
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build test apps
+        run: tests/build-test-apps.sh out/test-apps
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp out/*.exe out/test-apps/* dist/
+          ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: out/
+          path: dist/
 
-  probe:
+  test:
     needs: build
     strategy:
       fail-fast: false
@@ -55,17 +82,22 @@ jobs:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests
+
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64
+          path: dist
 
-      - name: Run platform probe
+      - name: Run tests
         shell: pwsh
         run: |
-          ./platform_probe.exe | Tee-Object -FilePath probe.txt
+          pwsh -NoProfile -File tests/windows/run-tests.ps1 dist | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
-          "### Platform probe — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
-          Get-Content probe.txt >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
