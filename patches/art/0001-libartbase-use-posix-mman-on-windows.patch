@@ -16,18 +16,35 @@ index bdc3c3d..13c56ee 100644
    PLOG(ERROR) << "mprotect(" << reinterpret_cast<void*>(base_begin_) << ", " << base_size_ << ", "
                << prot << ") failed";
 diff --git a/libartbase/base/mman.h b/libartbase/base/mman.h
-index b56edfc..ffe8557 100644
+index b56edfc..6971fe2 100644
 --- a/libartbase/base/mman.h
 +++ b/libartbase/base/mman.h
-@@ -33,6 +33,11 @@
- #define MAP_FIXED      0x10
- #define MAP_ANONYMOUS  0x20
+@@ -17,27 +17,8 @@
+ #ifndef ART_LIBARTBASE_BASE_MMAN_H_
+ #define ART_LIBARTBASE_BASE_MMAN_H_
  
-+#include <stddef.h>
-+
-+// Implemented by Gesher in mem_map_windows.cc.
-+int mprotect(void* addr, size_t len, int prot);
-+
- #else
- 
+-#ifdef _WIN32
+-
+-// There is no sys/mman.h in mingw.
+-
+-#define PROT_READ      0x1
+-#define PROT_WRITE     0x2
+-#define PROT_EXEC      0x4
+-#define PROT_NONE      0x0
+-
+-#define MAP_SHARED     0x01
+-#define MAP_PRIVATE    0x02
+-
+-#define MAP_FAILED     ((void*) -1)
+-#define MAP_FIXED      0x10
+-#define MAP_ANONYMOUS  0x20
+-
+-#else
+-
++// Gesher: <sys/mman.h> is provided on Windows by gesher-base (compat/posix).
  #include <sys/mman.h>
+ 
+-#endif
+-
+ 
+ #endif  // ART_LIBARTBASE_BASE_MMAN_H_

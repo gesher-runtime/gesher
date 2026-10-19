@@ -23,7 +23,7 @@ endif()
 
 # Flags Soong applies to every Windows host module.
 add_compile_definitions(
-  USE_MINGW WIN32_LEAN_AND_MEAN NOMINMAX _USE_MATH_DEFINES
+  USE_MINGW WIN32_LEAN_AND_MEAN NOMINMAX NOGDI _USE_MATH_DEFINES
   __STDC_FORMAT_MACROS __STDC_CONSTANT_MACROS __STDC_LIMIT_MACROS
   _WIN32_WINNT=0x0A00 WINVER=0x0A00 _FILE_OFFSET_BITS=64
   _POSIX_THREAD_SAFE_FUNCTIONS)
@@ -31,9 +31,13 @@ add_compile_options(-mno-ms-bitfields -fno-exceptions)
 # Everything links statically: one self-contained .exe per tool.
 add_link_options(-static)
 
+# gesher-base: POSIX/Linux interfaces implemented on Win32.
+include(compat/posix/posix.cmake)
+
 include(cmake/aosp/third_party.cmake)
 include(cmake/aosp/system.cmake)
 include(cmake/aosp/art.cmake)
+include(cmake/aosp/art_runtime.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
