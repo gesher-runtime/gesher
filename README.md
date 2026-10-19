@@ -6,7 +6,7 @@ Gesher (Hebrew: *bridge*) is to Android what Wine is to Windows: a compatibility
 layer. Double-click an `.apk`, and the app runs in an ordinary window, at native
 speed, with no hidden VM and no Android image to boot.
 
-> **Status: phase 0 — research and infrastructure.** Nothing runs apps yet.
+> **Status: phase 1 — porting ART.** ART's DEX libraries run on Windows; nothing runs apps yet.
 > See the [roadmap](docs/roadmap.md).
 
 ## How it works
@@ -39,15 +39,25 @@ Full design: [docs/architecture.md](docs/architecture.md).
 
 ## Building
 
-Phase 0 has one artifact, a probe that checks the Windows primitives ART needs:
+Requirements: CMake 3.24+, Ninja, Python 3, git, and
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (works on Linux and
+Windows hosts). CI does all of this on every push.
 
 ```sh
-x86_64-w64-mingw32-gcc -O2 -o platform_probe.exe probes/platform/platform_probe.c -lsynchronization
-./platform_probe.exe
+tools/fetch-aosp.sh                       # pinned AOSP sources + Gesher patches
+cmake -S . -B out -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+  -DLLVM_MINGW=/path/to/llvm-mingw
+ninja -C out
 ```
 
-CI builds it with [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and runs
-it on Windows Server 2022 and 2025.
+Outputs today:
+
+- `platform_probe.exe`: checks the Windows primitives ART relies on.
+- `dexdump.exe`: ART's own DEX reader, running natively on Windows.
+
+Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
+`tests/windows/run-tests.ps1` on Windows.
 
 ## License
 

@@ -1,0 +1,33 @@
+diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
+index bdc3c3d..13c56ee 100644
+--- a/libartbase/base/mem_map.cc
++++ b/libartbase/base/mem_map.cc
+@@ -892,12 +892,10 @@ bool MemMap::Protect(int prot) {
+     return true;
+   }
+ 
+-#ifndef _WIN32
+   if (mprotect(base_begin_, base_size_, prot) == 0) {
+     prot_ = prot;
+     return true;
+   }
+-#endif
+ 
+   PLOG(ERROR) << "mprotect(" << reinterpret_cast<void*>(base_begin_) << ", " << base_size_ << ", "
+               << prot << ") failed";
+diff --git a/libartbase/base/mman.h b/libartbase/base/mman.h
+index b56edfc..ffe8557 100644
+--- a/libartbase/base/mman.h
++++ b/libartbase/base/mman.h
+@@ -33,6 +33,11 @@
+ #define MAP_FIXED      0x10
+ #define MAP_ANONYMOUS  0x20
+ 
++#include <stddef.h>
++
++// Implemented by Gesher in mem_map_windows.cc.
++int mprotect(void* addr, size_t len, int prot);
++
+ #else
+ 
+ #include <sys/mman.h>
