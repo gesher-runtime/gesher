@@ -21,8 +21,13 @@ clone() {  # clone <project> <dir> [sparse dirs...]
   # Keep LF endings everywhere: AOSP generators parse sources with regexes.
   local git=(git -c advice.detachedHead=false -c core.autocrlf=false)
   if (($#)); then
-    "${git[@]}" clone -q --depth 1 --filter=blob:none --sparse --branch "$tag" "$url" "$dir"
-    git -C "$dir" sparse-checkout set "$@"
+    # Non-cone patterns, so single files can be listed too. protectNTFS is off
+    # because some AOSP projects (libcore) have paths Windows cannot hold;
+    # those paths are outside the sparse set and never written to disk.
+    "${git[@]}" -c core.protectNTFS=false clone -q --depth 1 --filter=blob:none --no-checkout       --branch "$tag" "$url" "$dir"
+    git -C "$dir" config core.protectNTFS false
+    git -C "$dir" sparse-checkout set --no-cone "$@"
+    git -C "$dir" read-tree -mu HEAD
   else
     "${git[@]}" clone -q --depth 1 --branch "$tag" "$url" "$dir"
   fi
@@ -33,12 +38,12 @@ grep -vE '^\s*(#|$|tag )' "$lock" | while read -r project sparse; do
   stamp=$dir/.gesher-tag
   patches=("$root/patches/$project"/*.patch)
   [[ -e ${patches[0]} ]] || patches=()
-  want="$tag $(cat "${patches[@]}" /dev/null | git hash-object --stdin)"
+  want="$tag $({ echo "$sparse"; cat "${patches[@]}" /dev/null; } | git hash-object --stdin)"
   have=$(cat "$stamp" 2>/dev/null || true)
 
   if [[ $have == "$want" ]]; then
     continue
-  elif [[ ${have%% *} == "$tag" ]]; then
+  elif [[ ${have%% *} == "$tag" && -z $sparse ]]; then
     echo "re-patching $project"
     git -C "$dir" reset -q --hard
     git -C "$dir" clean -qfdx -e .gesher-tag

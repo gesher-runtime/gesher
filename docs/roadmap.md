@@ -40,9 +40,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] Generated sources outside Soong: aconfig flags, `asm_defines.h`
       (computed for the Windows target), enum operators
 - [ ] **ART runtime compiles for Windows** — tracked per file by the
-      `runtime-port` CI job (89% at the time of writing)
-- [ ] Implement the declared-but-stubbed POSIX functions (`dlopen`,
-      `sysconf`, `getrlimit`, `poll`, `uname`, ...)
+      `runtime-port` CI job (96% at the time of writing)
+- [x] Implement the declared POSIX functions (`dlopen`,
+      `sysconf`, `getrlimit`, `poll`, `uname`, futex via `syscall`, ...)
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
       `CONTEXT` ↔ `ucontext_t`) — needed for implicit null checks
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)

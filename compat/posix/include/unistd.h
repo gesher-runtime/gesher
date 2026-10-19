@@ -29,12 +29,9 @@ pid_t getppid(void);
 pid_t gettid(void);
 pid_t setsid(void);
 
-// Process creation is not supported (Android apps cannot fork either); these
-// fail with ENOSYS.
+// Android apps cannot fork; neither can Gesher. Fails with ENOSYS.
+// (execv and friends come from the Windows CRT.)
 pid_t fork(void);
-int execv(const char* path, char* const argv[]);
-int execve(const char* path, char* const argv[], char* const envp[]);
-int execvp(const char* file, char* const argv[]);
 
 int pipe(int fds[2]);
 int pipe2(int fds[2], int flags);
@@ -47,7 +44,6 @@ ssize_t pwrite64(int fd, const void* buf, size_t count, off_t offset);
 ssize_t readlink(const char* path, char* buf, size_t size);
 int symlink(const char* target, const char* linkpath);
 int link(const char* oldpath, const char* newpath);
-unsigned int alarm(unsigned int seconds);
 int nice(int inc);
 
 #ifdef __cplusplus
