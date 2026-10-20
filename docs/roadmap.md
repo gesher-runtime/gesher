@@ -52,8 +52,8 @@ Each phase ends with something demonstrable, built and tested in CI.
       a TLS slot reachable through `%gs`
 - [x] Assembly builds as COFF (nterp generated, `.type`/`.size`/`.hidden`/PLT
       handled); `Thread*` loads ported
-- [ ] Remaining thread-register accesses in the assembly (`%gs:FIELD`,
-      nterp's `rSELF`), tracked by the `asm-port` CI job
+- [x] Every thread-register access in the assembly (`%gs:FIELD`, nterp's
+      `rSELF`) goes through the TLS slot; the `asm-port` CI job keeps it at 0
 - [ ] `sysv_abi` on every C++ function called from assembly, and on the
       assembly symbols called from C++; checked with `tools/coff-symbols.py`
 - [ ] `JNICALL` and the `JNIEnv`/`JavaVM` tables as System V (libnativehelper)
