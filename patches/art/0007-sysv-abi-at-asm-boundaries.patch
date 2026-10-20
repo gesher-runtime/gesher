@@ -1,0 +1,1117 @@
+diff --git a/libartbase/base/macros.h b/libartbase/base/macros.h
+index fb8165a..19ec3be 100644
+--- a/libartbase/base/macros.h
++++ b/libartbase/base/macros.h
+@@ -27,6 +27,15 @@
+ 
+ // Declare a friend relationship in a class with a test. Used rather that FRIEND_TEST to avoid
+ // globally importing gtest/gtest.h into the main ART header files.
++// Calling convention of functions on either side of a boundary with ART's
++// assembly, which uses the System V AMD64 ABI. That is the platform ABI
++// everywhere except Windows, where Gesher has to ask for it.
++#if defined(GESHER)
++#define ART_SYSV_ABI __attribute__((sysv_abi))
++#else
++#define ART_SYSV_ABI
++#endif
++
+ #define ART_FRIEND_TEST(test_set_name, individual_test)\
+ friend class test_set_name##_##individual_test##_Test
+ 
+diff --git a/runtime/arch/context.cc b/runtime/arch/context.cc
+index f09b8ef..d6e6d68 100644
+--- a/runtime/arch/context.cc
++++ b/runtime/arch/context.cc
+@@ -24,7 +24,7 @@ Context* Context::Create() {
+ 
+ // Copy the GPRs and FPRs from the given thread's context to the given buffers. This function
+ // expects that a long jump (art_quick_do_long_jump) is called afterwards.
+-extern "C" void artContextCopyForLongJump(Context* context, uintptr_t* gprs, uintptr_t* fprs) {
++extern "C" ART_SYSV_ABI void artContextCopyForLongJump(Context* context, uintptr_t* gprs, uintptr_t* fprs) {
+   context->CopyContextTo(gprs, fprs);
+   // Once the context has been copied, it is no longer needed.
+   // The context pointer is passed via hand-written assembly stubs, otherwise we'd take the
+diff --git a/runtime/arch/memcmp16.h b/runtime/arch/memcmp16.h
+index 1e857db..37da4e7 100644
+--- a/runtime/arch/memcmp16.h
++++ b/runtime/arch/memcmp16.h
+@@ -34,7 +34,7 @@
+ 
+ #if defined(__aarch64__) || defined(__arm__) || defined(__i386__) || defined(__x86_64__)
+ 
+-extern "C" uint32_t __memcmp16(const uint16_t* s0, const uint16_t* s1, size_t count);
++extern "C" ART_SYSV_ABI uint32_t __memcmp16(const uint16_t* s0, const uint16_t* s1, size_t count);
+ #define MemCmp16 __memcmp16
+ 
+ #else
+diff --git a/runtime/arch/x86_64/asm_support_x86_64.S b/runtime/arch/x86_64/asm_support_x86_64.S
+index c90e324..5f3189a 100644
+--- a/runtime/arch/x86_64/asm_support_x86_64.S
++++ b/runtime/arch/x86_64/asm_support_x86_64.S
+@@ -58,6 +58,13 @@
+     #define CALL_MACRO(name) name&
+ #endif
+ 
++#if defined(GESHER)
++    // The C library uses the Microsoft ABI; gesher-base wraps what the
++    // assembly calls.
++    #define memcpy gesher_sysv_memcpy
++    #define free gesher_sysv_free
++#endif
++
+ #define LITERAL(value) $value
+ #if defined(__APPLE__)
+     #define MACRO_LITERAL(value) $(value)
+diff --git a/runtime/arch/x86_64/entrypoints_init_x86_64.cc b/runtime/arch/x86_64/entrypoints_init_x86_64.cc
+index 7502174..1843856 100644
+--- a/runtime/arch/x86_64/entrypoints_init_x86_64.cc
++++ b/runtime/arch/x86_64/entrypoints_init_x86_64.cc
+@@ -108,8 +108,15 @@ void InitEntryPoints(JniEntryPoints* jpoints,
+   qpoints->SetTanh(tanh);
+ 
+   // Math
++#if defined(GESHER)
++  // Only compiled code calls through the table, with the System V ABI these
++  // functions are declared with; the table's pointer types do not say so.
++  qpoints->SetD2l(reinterpret_cast<int64_t (*)(double)>(art_d2l));
++  qpoints->SetF2l(reinterpret_cast<int64_t (*)(float)>(art_f2l));
++#else
+   qpoints->SetD2l(art_d2l);
+   qpoints->SetF2l(art_f2l);
++#endif
+   qpoints->SetLdiv(art_quick_ldiv);
+   qpoints->SetLmod(art_quick_lmod);
+   qpoints->SetLmul(art_quick_lmul);
+diff --git a/runtime/art_method.cc b/runtime/art_method.cc
+index e662e78..b97c3ee 100644
+--- a/runtime/art_method.cc
++++ b/runtime/art_method.cc
+@@ -58,9 +58,9 @@ namespace art HIDDEN {
+ 
+ using android::base::StringPrintf;
+ 
+-extern "C" void art_quick_invoke_stub(ArtMethod*, uint32_t*, uint32_t, Thread*, JValue*,
++extern "C" ART_SYSV_ABI void art_quick_invoke_stub(ArtMethod*, uint32_t*, uint32_t, Thread*, JValue*,
+                                       const char*);
+-extern "C" void art_quick_invoke_static_stub(ArtMethod*, uint32_t*, uint32_t, Thread*, JValue*,
++extern "C" ART_SYSV_ABI void art_quick_invoke_static_stub(ArtMethod*, uint32_t*, uint32_t, Thread*, JValue*,
+                                              const char*);
+ 
+ // Enforce that we have the right index for runtime methods.
+diff --git a/runtime/entrypoints/entrypoint_utils-inl.h b/runtime/entrypoints/entrypoint_utils-inl.h
+index 3ddcfd8..c34999a 100644
+--- a/runtime/entrypoints/entrypoint_utils-inl.h
++++ b/runtime/entrypoints/entrypoint_utils-inl.h
+@@ -508,7 +508,7 @@ static inline bool IsStringInit(const Instruction& instr, ArtMethod* caller)
+ }
+ 
+ LIBART_PROTECTED
+-extern "C" size_t NterpGetMethod(
++extern "C" ART_SYSV_ABI size_t NterpGetMethod(
+     Thread* self, ArtMethod* caller, const uint16_t* dex_pc_ptr, uint32_t* registers);
+ 
+ template <InvokeType type>
+diff --git a/runtime/entrypoints/jni/jni_entrypoints.cc b/runtime/entrypoints/jni/jni_entrypoints.cc
+index 1167710..ac0ba6d 100644
+--- a/runtime/entrypoints/jni/jni_entrypoints.cc
++++ b/runtime/entrypoints/jni/jni_entrypoints.cc
+@@ -48,7 +48,7 @@ static inline uint32_t GetInvokeStaticMethodIndex(ArtMethod* caller, uint32_t de
+ }
+ 
+ // Used by the JNI dlsym stub to find the native method to invoke if none is registered.
+-extern "C" const void* artFindNativeMethodRunnable(Thread* self)
++extern "C" ART_SYSV_ABI const void* artFindNativeMethodRunnable(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   Locks::mutator_lock_->AssertSharedHeld(self);  // We come here as Runnable.
+   uint32_t dex_pc;
+@@ -125,14 +125,14 @@ extern "C" const void* artFindNativeMethodRunnable(Thread* self)
+ }
+ 
+ // Used by the JNI dlsym stub to find the native method to invoke if none is registered.
+-extern "C" const void* artFindNativeMethod(Thread* self) {
++extern "C" ART_SYSV_ABI const void* artFindNativeMethod(Thread* self) {
+   DCHECK_EQ(self, Thread::Current());
+   Locks::mutator_lock_->AssertNotHeld(self);  // We come here as Native.
+   ScopedObjectAccess soa(self);
+   return artFindNativeMethodRunnable(self);
+ }
+ 
+-extern "C" size_t artCriticalNativeFrameSize(ArtMethod* method, uintptr_t caller_pc)
++extern "C" ART_SYSV_ABI size_t artCriticalNativeFrameSize(ArtMethod* method, uintptr_t caller_pc)
+     REQUIRES_SHARED(Locks::mutator_lock_)  {
+   if (method->IsNative()) {
+     // Get the method's shorty.
+diff --git a/runtime/entrypoints/quick/quick_alloc_entrypoints.cc b/runtime/entrypoints/quick/quick_alloc_entrypoints.cc
+index 4742bb6..3455990 100644
+--- a/runtime/entrypoints/quick/quick_alloc_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_alloc_entrypoints.cc
+@@ -71,36 +71,36 @@ static ALWAYS_INLINE inline mirror::Object* artAllocObjectFromCode(
+ }
+ 
+ #define GENERATE_ENTRYPOINTS_FOR_ALLOCATOR_INST(suffix, suffix2, instrumented_bool, allocator_type) \
+-extern "C" mirror::Object* artAllocObjectFromCodeWithChecks##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::Object* artAllocObjectFromCodeWithChecks##suffix##suffix2( \
+     mirror::Class* klass, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   return artAllocObjectFromCode<false, true, instrumented_bool, allocator_type>(klass, self); \
+ } \
+-extern "C" mirror::Object* artAllocObjectFromCodeResolved##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::Object* artAllocObjectFromCodeResolved##suffix##suffix2( \
+     mirror::Class* klass, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   return artAllocObjectFromCode<false, false, instrumented_bool, allocator_type>(klass, self); \
+ } \
+-extern "C" mirror::Object* artAllocObjectFromCodeInitialized##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::Object* artAllocObjectFromCodeInitialized##suffix##suffix2( \
+     mirror::Class* klass, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   return artAllocObjectFromCode<true, false, instrumented_bool, allocator_type>(klass, self); \
+ } \
+-extern "C" mirror::String* artAllocStringObject##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::String* artAllocStringObject##suffix##suffix2( \
+     mirror::Class* klass, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   /* The klass arg is so it matches the ABI of the other object alloc callbacks. */ \
+   DCHECK(klass->IsStringClass()) << klass->PrettyClass(); \
+   return mirror::String::AllocEmptyString<instrumented_bool>(self, allocator_type).Ptr(); \
+ } \
+-extern "C" mirror::Array* artAllocArrayFromCodeResolved##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::Array* artAllocArrayFromCodeResolved##suffix##suffix2( \
+     mirror::Class* klass, int32_t component_count, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   ScopedQuickEntrypointChecks sqec(self); \
+   return AllocArrayFromCodeResolved<instrumented_bool>( \
+       klass, component_count, self, allocator_type).Ptr(); \
+ } \
+-extern "C" mirror::String* artAllocStringFromBytesFromCode##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::String* artAllocStringFromBytesFromCode##suffix##suffix2( \
+     mirror::ByteArray* byte_array, int32_t high, int32_t offset, int32_t byte_count, \
+     Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+@@ -110,7 +110,7 @@ extern "C" mirror::String* artAllocStringFromBytesFromCode##suffix##suffix2( \
+   return mirror::String::AllocFromByteArray<instrumented_bool>( \
+       self, byte_count, handle_array, offset, high, allocator_type).Ptr(); \
+ } \
+-extern "C" mirror::String* artAllocStringFromCharsFromCode##suffix##suffix2( \
++extern "C" ART_SYSV_ABI mirror::String* artAllocStringFromCharsFromCode##suffix##suffix2( \
+     int32_t offset, int32_t char_count, mirror::CharArray* char_array, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   StackHandleScope<1> hs(self); \
+@@ -118,7 +118,7 @@ extern "C" mirror::String* artAllocStringFromCharsFromCode##suffix##suffix2( \
+   return mirror::String::AllocFromCharArray<instrumented_bool>( \
+       self, char_count, handle_array, offset, allocator_type).Ptr(); \
+ } \
+-extern "C" mirror::String* artAllocStringFromStringFromCode##suffix##suffix2( /* NOLINT */ \
++extern "C" ART_SYSV_ABI mirror::String* artAllocStringFromStringFromCode##suffix##suffix2( /* NOLINT */ \
+     mirror::String* string, Thread* self) \
+     REQUIRES_SHARED(Locks::mutator_lock_) { \
+   StackHandleScope<1> hs(self); \
+diff --git a/runtime/entrypoints/quick/quick_cast_entrypoints.cc b/runtime/entrypoints/quick/quick_cast_entrypoints.cc
+index a32c483..a591978 100644
+--- a/runtime/entrypoints/quick/quick_cast_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_cast_entrypoints.cc
+@@ -20,7 +20,7 @@
+ namespace art HIDDEN {
+ 
+ // Assignable test for code, won't throw.  Null and equality tests already performed
+-extern "C" size_t artIsAssignableFromCode(mirror::Class* klass, mirror::Class* ref_class)
++extern "C" ART_SYSV_ABI size_t artIsAssignableFromCode(mirror::Class* klass, mirror::Class* ref_class)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(klass != nullptr);
+   DCHECK(ref_class != nullptr);
+@@ -28,7 +28,7 @@ extern "C" size_t artIsAssignableFromCode(mirror::Class* klass, mirror::Class* r
+ }
+ 
+ // Is assignable test for code, won't throw.  Null and equality test already performed.
+-extern "C" size_t artInstanceOfFromCode(mirror::Object* obj, mirror::Class* ref_class)
++extern "C" ART_SYSV_ABI size_t artInstanceOfFromCode(mirror::Object* obj, mirror::Class* ref_class)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(obj != nullptr);
+   DCHECK(ref_class != nullptr);
+diff --git a/runtime/entrypoints/quick/quick_deoptimization_entrypoints.cc b/runtime/entrypoints/quick/quick_deoptimization_entrypoints.cc
+index 3dfeacc..d774227 100644
+--- a/runtime/entrypoints/quick/quick_deoptimization_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_deoptimization_entrypoints.cc
+@@ -37,7 +37,7 @@ extern "C" Context* artDeoptimize(Thread* self, bool skip_method_exit_callbacks)
+ }
+ 
+ // This is called directly from compiled code by an HDeoptimize.
+-extern "C" Context* artDeoptimizeFromCompiledCode(DeoptimizationKind kind, Thread* self)
++extern "C" ART_SYSV_ABI Context* artDeoptimizeFromCompiledCode(DeoptimizationKind kind, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   // Before deoptimizing to interpreter, we must push the deoptimization context.
+diff --git a/runtime/entrypoints/quick/quick_dexcache_entrypoints.cc b/runtime/entrypoints/quick/quick_dexcache_entrypoints.cc
+index 32c709c..ccb99f2 100644
+--- a/runtime/entrypoints/quick/quick_dexcache_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_dexcache_entrypoints.cc
+@@ -207,7 +207,7 @@ static inline void StoreMethodTypeInBss(ArtMethod* caller,
+   }
+ }
+ 
+-extern "C" mirror::Class* artInitializeStaticStorageFromCode(mirror::Class* klass, Thread* self)
++extern "C" ART_SYSV_ABI mirror::Class* artInitializeStaticStorageFromCode(mirror::Class* klass, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Called to ensure static storage base is initialized for direct static field reads and writes.
+   // A class may be accessing another class' fields when it doesn't have access, as access has been
+@@ -225,7 +225,7 @@ extern "C" mirror::Class* artInitializeStaticStorageFromCode(mirror::Class* klas
+   return h_klass.Get();
+ }
+ 
+-extern "C" mirror::Class* artResolveTypeFromCode(uint32_t type_idx, Thread* self)
++extern "C" ART_SYSV_ABI mirror::Class* artResolveTypeFromCode(uint32_t type_idx, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Called when the .bss slot was empty or for main-path runtime call.
+   ScopedQuickEntrypointChecks sqec(self);
+@@ -244,7 +244,7 @@ extern "C" mirror::Class* artResolveTypeFromCode(uint32_t type_idx, Thread* self
+   return result.Ptr();
+ }
+ 
+-extern "C" mirror::Class* artResolveTypeAndVerifyAccessFromCode(uint32_t type_idx, Thread* self)
++extern "C" ART_SYSV_ABI mirror::Class* artResolveTypeAndVerifyAccessFromCode(uint32_t type_idx, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Called when caller isn't guaranteed to have access to a type.
+   ScopedQuickEntrypointChecks sqec(self);
+@@ -263,7 +263,7 @@ extern "C" mirror::Class* artResolveTypeAndVerifyAccessFromCode(uint32_t type_id
+   return result.Ptr();
+ }
+ 
+-extern "C" mirror::MethodHandle* artResolveMethodHandleFromCode(uint32_t method_handle_idx,
++extern "C" ART_SYSV_ABI mirror::MethodHandle* artResolveMethodHandleFromCode(uint32_t method_handle_idx,
+                                                                 Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+@@ -274,7 +274,7 @@ extern "C" mirror::MethodHandle* artResolveMethodHandleFromCode(uint32_t method_
+   return result.Ptr();
+ }
+ 
+-extern "C" mirror::MethodType* artResolveMethodTypeFromCode(uint32_t proto_idx, Thread* self)
++extern "C" ART_SYSV_ABI mirror::MethodType* artResolveMethodTypeFromCode(uint32_t proto_idx, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   auto caller_and_outer = GetCalleeSaveMethodCallerAndOuterMethod(self,
+@@ -288,7 +288,7 @@ extern "C" mirror::MethodType* artResolveMethodTypeFromCode(uint32_t proto_idx,
+   return result.Ptr();
+ }
+ 
+-extern "C" mirror::String* artResolveStringFromCode(int32_t string_idx, Thread* self)
++extern "C" ART_SYSV_ABI mirror::String* artResolveStringFromCode(int32_t string_idx, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   auto caller_and_outer = GetCalleeSaveMethodCallerAndOuterMethod(self,
+diff --git a/runtime/entrypoints/quick/quick_field_entrypoints.cc b/runtime/entrypoints/quick/quick_field_entrypoints.cc
+index 1666e7d..8549182 100644
+--- a/runtime/entrypoints/quick/quick_field_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_field_entrypoints.cc
+@@ -108,7 +108,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+ //
+ #define ART_GET_FIELD_FROM_CODE(Kind, RetType, SetType, PrimitiveOrObject,     \
+                                 IsObject, Ptr)                                 \
+-  extern "C" RetType artGet ## Kind ## StaticFromCode(uint32_t field_idx,      \
++  extern "C" ART_SYSV_ABI RetType artGet ## Kind ## StaticFromCode(uint32_t field_idx,      \
+                                                       ArtMethod* referrer,     \
+                                                       Thread* self)            \
+       REQUIRES_SHARED(Locks::mutator_lock_) {                                  \
+@@ -127,7 +127,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+     return 0;                                                                  \
+   }                                                                            \
+                                                                                \
+-  extern "C" RetType artGet ## Kind ## InstanceFromCode(uint32_t field_idx,    \
++  extern "C" ART_SYSV_ABI RetType artGet ## Kind ## InstanceFromCode(uint32_t field_idx,    \
+                                                         mirror::Object* obj,   \
+                                                         ArtMethod* referrer,   \
+                                                         Thread* self)          \
+@@ -147,7 +147,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+     return 0;                                                                  \
+   }                                                                            \
+                                                                                \
+-  extern "C" int artSet ## Kind ## StaticFromCode(uint32_t field_idx,          \
++  extern "C" ART_SYSV_ABI int artSet ## Kind ## StaticFromCode(uint32_t field_idx,          \
+                                                   SetType new_value,           \
+                                                   ArtMethod* referrer,         \
+                                                   Thread* self)                \
+@@ -181,7 +181,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+     return 0;                                                                  \
+   }                                                                            \
+                                                                                \
+-  extern "C" int artSet ## Kind ## InstanceFromCode(uint32_t field_idx,        \
++  extern "C" ART_SYSV_ABI int artSet ## Kind ## InstanceFromCode(uint32_t field_idx,        \
+                                                     mirror::Object* obj,       \
+                                                     SetType new_value,         \
+                                                     ArtMethod* referrer,       \
+@@ -217,7 +217,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+     return 0;                                                                  \
+   }                                                                            \
+                                                                                \
+-  extern "C" RetType artGet ## Kind ## StaticFromCompiledCode(                 \
++  extern "C" ART_SYSV_ABI RetType artGet ## Kind ## StaticFromCompiledCode(                 \
+       uint32_t field_idx,                                                      \
+       Thread* self)                                                            \
+       REQUIRES_SHARED(Locks::mutator_lock_) {                                  \
+@@ -225,7 +225,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+         field_idx, GetReferrer(self), self);                                   \
+   }                                                                            \
+                                                                                \
+-  extern "C" RetType artGet ## Kind ## InstanceFromCompiledCode(               \
++  extern "C" ART_SYSV_ABI RetType artGet ## Kind ## InstanceFromCompiledCode(               \
+       uint32_t field_idx,                                                      \
+       mirror::Object* obj,                                                     \
+       Thread* self)                                                            \
+@@ -234,7 +234,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+         field_idx, obj, GetReferrer(self), self);                              \
+   }                                                                            \
+                                                                                \
+-  extern "C" int artSet ## Kind ## StaticFromCompiledCode(                     \
++  extern "C" ART_SYSV_ABI int artSet ## Kind ## StaticFromCompiledCode(                     \
+       uint32_t field_idx,                                                      \
+       SetType new_value,                                                       \
+       Thread* self)                                                            \
+@@ -243,7 +243,7 @@ static ArtMethod* GetReferrer(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_
+         field_idx, new_value, GetReferrer(self), self);                        \
+   }                                                                            \
+                                                                                \
+-  extern "C" int artSet ## Kind ## InstanceFromCompiledCode(                   \
++  extern "C" ART_SYSV_ABI int artSet ## Kind ## InstanceFromCompiledCode(                   \
+       uint32_t field_idx,                                                      \
+       mirror::Object* obj,                                                     \
+       SetType new_value,                                                       \
+@@ -361,21 +361,21 @@ ART_GET_FIELD_FROM_CODE(Obj, mirror::Object*, mirror::Object*, Object, true, .Pt
+ // To cut on the number of entrypoints, we have shared entries for
+ // byte/boolean and char/short for setting an instance or static field. We just
+ // forward those to the unsigned variant.
+-extern "C" int artSet8StaticFromCompiledCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet8StaticFromCompiledCode(uint32_t field_idx,
+                                              uint32_t new_value,
+                                              Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artSetBooleanStaticFromCode(field_idx, new_value, GetReferrer(self), self);
+ }
+ 
+-extern "C" int artSet16StaticFromCompiledCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet16StaticFromCompiledCode(uint32_t field_idx,
+                                               uint16_t new_value,
+                                               Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artSetCharStaticFromCode(field_idx, new_value, GetReferrer(self), self);
+ }
+ 
+-extern "C" int artSet8InstanceFromCompiledCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet8InstanceFromCompiledCode(uint32_t field_idx,
+                                                mirror::Object* obj,
+                                                uint8_t new_value,
+                                                Thread* self)
+@@ -383,7 +383,7 @@ extern "C" int artSet8InstanceFromCompiledCode(uint32_t field_idx,
+   return artSetBooleanInstanceFromCode(field_idx, obj, new_value, GetReferrer(self), self);
+ }
+ 
+-extern "C" int artSet16InstanceFromCompiledCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet16InstanceFromCompiledCode(uint32_t field_idx,
+                                                 mirror::Object* obj,
+                                                 uint16_t new_value,
+                                                 Thread* self)
+@@ -391,7 +391,7 @@ extern "C" int artSet16InstanceFromCompiledCode(uint32_t field_idx,
+   return artSetCharInstanceFromCode(field_idx, obj, new_value, GetReferrer(self), self);
+ }
+ 
+-extern "C" int artSet8StaticFromCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet8StaticFromCode(uint32_t field_idx,
+                                      uint32_t new_value,
+                                      ArtMethod* referrer,
+                                      Thread* self)
+@@ -399,7 +399,7 @@ extern "C" int artSet8StaticFromCode(uint32_t field_idx,
+   return artSetBooleanStaticFromCode(field_idx, new_value, referrer, self);
+ }
+ 
+-extern "C" int artSet16StaticFromCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet16StaticFromCode(uint32_t field_idx,
+                                       uint16_t new_value,
+                                       ArtMethod* referrer,
+                                       Thread* self)
+@@ -407,7 +407,7 @@ extern "C" int artSet16StaticFromCode(uint32_t field_idx,
+   return artSetCharStaticFromCode(field_idx, new_value, referrer, self);
+ }
+ 
+-extern "C" int artSet8InstanceFromCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet8InstanceFromCode(uint32_t field_idx,
+                                        mirror::Object* obj,
+                                        uint8_t new_value,
+                                        ArtMethod* referrer,
+@@ -416,7 +416,7 @@ extern "C" int artSet8InstanceFromCode(uint32_t field_idx,
+   return artSetBooleanInstanceFromCode(field_idx, obj, new_value, referrer, self);
+ }
+ 
+-extern "C" int artSet16InstanceFromCode(uint32_t field_idx,
++extern "C" ART_SYSV_ABI int artSet16InstanceFromCode(uint32_t field_idx,
+                                         mirror::Object* obj,
+                                         uint16_t new_value,
+                                         ArtMethod* referrer,
+@@ -434,7 +434,7 @@ extern "C" int artSet16InstanceFromCode(uint32_t field_idx,
+ // Mark the heap reference `obj`. This entry point is used by read
+ // barrier fast path implementations generated by the compiler to mark
+ // an object that is referenced by a field of a gray object.
+-extern "C" mirror::Object* artReadBarrierMark(mirror::Object* obj)
++extern "C" ART_SYSV_ABI mirror::Object* artReadBarrierMark(mirror::Object* obj)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(gUseReadBarrier);
+   return ReadBarrier::Mark(obj);
+@@ -443,7 +443,7 @@ extern "C" mirror::Object* artReadBarrierMark(mirror::Object* obj)
+ // Read barrier entrypoint for heap references.
+ // This is the read barrier slow path for instance and static fields
+ // and reference type arrays.
+-extern "C" mirror::Object* artReadBarrierSlow([[maybe_unused]] mirror::Object* ref,
++extern "C" ART_SYSV_ABI mirror::Object* artReadBarrierSlow([[maybe_unused]] mirror::Object* ref,
+                                               mirror::Object* obj,
+                                               uint32_t offset)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+@@ -461,7 +461,7 @@ extern "C" mirror::Object* artReadBarrierSlow([[maybe_unused]] mirror::Object* r
+ }
+ 
+ // Read barrier entrypoint for GC roots.
+-extern "C" mirror::Object* artReadBarrierForRootSlow(GcRoot<mirror::Object>* root)
++extern "C" ART_SYSV_ABI mirror::Object* artReadBarrierForRootSlow(GcRoot<mirror::Object>* root)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(gUseReadBarrier);
+   return root->Read();
+diff --git a/runtime/entrypoints/quick/quick_fillarray_entrypoints.cc b/runtime/entrypoints/quick/quick_fillarray_entrypoints.cc
+index b87d815..c66ffc8 100644
+--- a/runtime/entrypoints/quick/quick_fillarray_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_fillarray_entrypoints.cc
+@@ -24,7 +24,7 @@ namespace art HIDDEN {
+ /*
+  * Handle fill array data by copying appropriate part of dex file into array.
+  */
+-extern "C" int artHandleFillArrayDataFromCode(const Instruction::ArrayDataPayload* payload,
++extern "C" ART_SYSV_ABI int artHandleFillArrayDataFromCode(const Instruction::ArrayDataPayload* payload,
+                                               mirror::Array* array,
+                                               Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+diff --git a/runtime/entrypoints/quick/quick_jni_entrypoints.cc b/runtime/entrypoints/quick/quick_jni_entrypoints.cc
+index a110c95..8d02464 100644
+--- a/runtime/entrypoints/quick/quick_jni_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_jni_entrypoints.cc
+@@ -41,7 +41,7 @@ namespace art HIDDEN {
+ static_assert(sizeof(jni::LRTSegmentState) == sizeof(uint32_t), "LRTSegmentState size unexpected");
+ static_assert(std::is_trivial<jni::LRTSegmentState>::value, "LRTSegmentState not trivial");
+ 
+-extern "C" void artJniReadBarrier(ArtMethod* method)
++extern "C" ART_SYSV_ABI void artJniReadBarrier(ArtMethod* method)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(gUseReadBarrier);
+   mirror::CompressedReference<mirror::Object>* declaring_class =
+@@ -60,7 +60,7 @@ extern "C" void artJniReadBarrier(ArtMethod* method)
+ }
+ 
+ // Called on entry to JNI, transition out of Runnable and release share of mutator_lock_.
+-extern "C" void artJniMethodStart(Thread* self)
++extern "C" ART_SYSV_ABI void artJniMethodStart(Thread* self)
+     UNLOCK_FUNCTION(Locks::mutator_lock_) {
+   if (kIsDebugBuild) {
+     ArtMethod* native_method = *self->GetManagedStack()->GetTopQuickFrame();
+@@ -83,7 +83,7 @@ static void PopLocalReferences(uint32_t saved_local_ref_cookie, Thread* self)
+ 
+ // TODO: annotalysis disabled as monitor semantics are maintained in Java code.
+ __attribute__((no_sanitize("memtag")))  // TODO(b/305919664)
+-extern "C" void
++extern "C" ART_SYSV_ABI void
+ artJniUnlockObject(mirror::Object* locked, Thread* self) NO_THREAD_SAFETY_ANALYSIS
+     REQUIRES(!Roles::uninterruptible_) REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Note: No thread suspension is allowed for successful unlocking, otherwise plain
+@@ -117,7 +117,7 @@ artJniUnlockObject(mirror::Object* locked, Thread* self) NO_THREAD_SAFETY_ANALYS
+ // TODO: These should probably be templatized or macro-ized.
+ // Otherwise there's just too much repetitive boilerplate.
+ 
+-extern "C" void artJniMethodEnd(Thread* self) SHARED_LOCK_FUNCTION(Locks::mutator_lock_) {
++extern "C" ART_SYSV_ABI void artJniMethodEnd(Thread* self) SHARED_LOCK_FUNCTION(Locks::mutator_lock_) {
+   self->TransitionFromSuspendedToRunnable();
+ 
+   if (kIsDebugBuild) {
+@@ -230,12 +230,12 @@ extern uint64_t GenericJniMethodEnd(Thread* self,
+   return ret;
+ }
+ 
+-extern "C" void artJniMonitoredMethodStart(Thread* self) UNLOCK_FUNCTION(Locks::mutator_lock_) {
++extern "C" ART_SYSV_ABI void artJniMonitoredMethodStart(Thread* self) UNLOCK_FUNCTION(Locks::mutator_lock_) {
+   artJniMethodStart(self);
+   MONITOR_JNI(PaletteNotifyBeginJniInvocation);
+ }
+ 
+-extern "C" void artJniMonitoredMethodEnd(Thread* self) SHARED_LOCK_FUNCTION(Locks::mutator_lock_) {
++extern "C" ART_SYSV_ABI void artJniMonitoredMethodEnd(Thread* self) SHARED_LOCK_FUNCTION(Locks::mutator_lock_) {
+   MONITOR_JNI(PaletteNotifyEndJniInvocation);
+   artJniMethodEnd(self);
+ }
+diff --git a/runtime/entrypoints/quick/quick_lock_entrypoints.cc b/runtime/entrypoints/quick/quick_lock_entrypoints.cc
+index 402f8f6..c72d1c9 100644
+--- a/runtime/entrypoints/quick/quick_lock_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_lock_entrypoints.cc
+@@ -20,7 +20,7 @@
+ 
+ namespace art HIDDEN {
+ 
+-extern "C" int artLockObjectFromCode(mirror::Object* obj, Thread* self)
++extern "C" ART_SYSV_ABI int artLockObjectFromCode(mirror::Object* obj, Thread* self)
+     NO_THREAD_SAFETY_ANALYSIS
+     REQUIRES(!Roles::uninterruptible_)
+     REQUIRES_SHARED(Locks::mutator_lock_) /* EXCLUSIVE_LOCK_FUNCTION(Monitor::monitor_lock_) */ {
+@@ -48,7 +48,7 @@ extern "C" int artLockObjectFromCode(mirror::Object* obj, Thread* self)
+   }
+ }
+ 
+-extern "C" int artUnlockObjectFromCode(mirror::Object* obj, Thread* self)
++extern "C" ART_SYSV_ABI int artUnlockObjectFromCode(mirror::Object* obj, Thread* self)
+     NO_THREAD_SAFETY_ANALYSIS
+     REQUIRES(!Roles::uninterruptible_)
+     REQUIRES_SHARED(Locks::mutator_lock_) /* UNLOCK_FUNCTION(Monitor::monitor_lock_) */ {
+diff --git a/runtime/entrypoints/quick/quick_string_builder_append_entrypoints.cc b/runtime/entrypoints/quick/quick_string_builder_append_entrypoints.cc
+index 4db8094..cca3397 100644
+--- a/runtime/entrypoints/quick/quick_string_builder_append_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_string_builder_append_entrypoints.cc
+@@ -21,7 +21,7 @@
+ 
+ namespace art HIDDEN {
+ 
+-extern "C" mirror::String* artStringBuilderAppend(uint32_t format,
++extern "C" ART_SYSV_ABI mirror::String* artStringBuilderAppend(uint32_t format,
+                                                   const uint32_t* args,
+                                                   Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+diff --git a/runtime/entrypoints/quick/quick_thread_entrypoints.cc b/runtime/entrypoints/quick/quick_thread_entrypoints.cc
+index 079dd4e..823d2be 100644
+--- a/runtime/entrypoints/quick/quick_thread_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_thread_entrypoints.cc
+@@ -23,7 +23,7 @@
+ 
+ namespace art HIDDEN {
+ 
+-extern "C" Context* artDeoptimizeIfNeeded(Thread* self, uintptr_t result, bool is_ref)
++extern "C" ART_SYSV_ABI Context* artDeoptimizeIfNeeded(Thread* self, uintptr_t result, bool is_ref)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   instrumentation::Instrumentation* instr = Runtime::Current()->GetInstrumentation();
+@@ -39,7 +39,7 @@ extern "C" Context* artDeoptimizeIfNeeded(Thread* self, uintptr_t result, bool i
+   return context.release();
+ }
+ 
+-extern "C" Context* artTestSuspendFromCode(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_) {
++extern "C" ART_SYSV_ABI Context* artTestSuspendFromCode(Thread* self) REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Called when there is a pending checkpoint or suspend request.
+   ScopedQuickEntrypointChecks sqec(self);
+   self->CheckSuspend();
+@@ -69,7 +69,7 @@ extern "C" Context* artImplicitSuspendFromCode(Thread* self) REQUIRES_SHARED(Loc
+   return context.release();
+ }
+ 
+-extern "C" void artCompileOptimized(ArtMethod* method, Thread* self)
++extern "C" ART_SYSV_ABI void artCompileOptimized(ArtMethod* method, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   // It is important this method is not suspended due to:
+@@ -82,7 +82,7 @@ extern "C" void artCompileOptimized(ArtMethod* method, Thread* self)
+   Runtime::Current()->GetJit()->EnqueueOptimizedCompilation(method, self);
+ }
+ 
+-extern "C" void artCompileBaseline(ArtMethod* method, Thread* self)
++extern "C" ART_SYSV_ABI void artCompileBaseline(ArtMethod* method, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   // It is important this method is not suspended due to:
+diff --git a/runtime/entrypoints/quick/quick_throw_entrypoints.cc b/runtime/entrypoints/quick/quick_throw_entrypoints.cc
+index a3ac287..b35b657 100644
+--- a/runtime/entrypoints/quick/quick_throw_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_throw_entrypoints.cc
+@@ -28,7 +28,7 @@
+ namespace art HIDDEN {
+ 
+ // Deliver an exception that's pending on thread helping set up a callee save frame on the way.
+-extern "C" Context* artDeliverPendingExceptionFromCode(Thread* self)
++extern "C" ART_SYSV_ABI Context* artDeliverPendingExceptionFromCode(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   std::unique_ptr<Context> context = self->QuickDeliverException();
+@@ -36,7 +36,7 @@ extern "C" Context* artDeliverPendingExceptionFromCode(Thread* self)
+   return context.release();
+ }
+ 
+-extern "C" Context* artInvokeObsoleteMethod(ArtMethod* method, Thread* self)
++extern "C" ART_SYSV_ABI Context* artInvokeObsoleteMethod(ArtMethod* method, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(method->IsObsolete());
+   ScopedQuickEntrypointChecks sqec(self);
+@@ -48,7 +48,7 @@ extern "C" Context* artInvokeObsoleteMethod(ArtMethod* method, Thread* self)
+ }
+ 
+ // Called by generated code to throw an exception.
+-extern "C" Context* artDeliverExceptionFromCode(mirror::Throwable* exception, Thread* self)
++extern "C" ART_SYSV_ABI Context* artDeliverExceptionFromCode(mirror::Throwable* exception, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   /*
+    * exception may be null, in which case this routine should
+@@ -69,7 +69,7 @@ extern "C" Context* artDeliverExceptionFromCode(mirror::Throwable* exception, Th
+ }
+ 
+ // Called by generated code to throw a NPE exception.
+-extern "C" Context* artThrowNullPointerExceptionFromCode(Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowNullPointerExceptionFromCode(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   // We come from an explicit check in the generated code. This path is triggered
+@@ -81,7 +81,7 @@ extern "C" Context* artThrowNullPointerExceptionFromCode(Thread* self)
+ }
+ 
+ // Installed by a signal handler to throw a NPE exception.
+-extern "C" Context* artThrowNullPointerExceptionFromSignal(uintptr_t addr, Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowNullPointerExceptionFromSignal(uintptr_t addr, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   ThrowNullPointerExceptionFromDexPC(/* check_address= */ true, addr);
+@@ -91,7 +91,7 @@ extern "C" Context* artThrowNullPointerExceptionFromSignal(uintptr_t addr, Threa
+ }
+ 
+ // Called by generated code to throw an arithmetic divide by zero exception.
+-extern "C" Context* artThrowDivZeroFromCode(Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowDivZeroFromCode(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   ThrowArithmeticExceptionDivideByZero();
+@@ -101,7 +101,7 @@ extern "C" Context* artThrowDivZeroFromCode(Thread* self)
+ }
+ 
+ // Called by generated code to throw an array index out of bounds exception.
+-extern "C" Context* artThrowArrayBoundsFromCode(int index, int length, Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowArrayBoundsFromCode(int index, int length, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   ThrowArrayIndexOutOfBoundsException(index, length);
+@@ -111,7 +111,7 @@ extern "C" Context* artThrowArrayBoundsFromCode(int index, int length, Thread* s
+ }
+ 
+ // Called by generated code to throw a string index out of bounds exception.
+-extern "C" Context* artThrowStringBoundsFromCode(int index, int length, Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowStringBoundsFromCode(int index, int length, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   ThrowStringIndexOutOfBoundsException(index, length);
+@@ -120,7 +120,7 @@ extern "C" Context* artThrowStringBoundsFromCode(int index, int length, Thread*
+   return context.release();
+ }
+ 
+-extern "C" Context* artThrowStackOverflowFromCode(Thread* self)
++extern "C" ART_SYSV_ABI Context* artThrowStackOverflowFromCode(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   // Throw a stack overflow error for the quick stack. This is needed to throw stack overflow
+@@ -164,7 +164,7 @@ extern "C" Context* artThrowClassCastException(mirror::Class* dest_type,
+   return context.release();
+ }
+ 
+-extern "C" Context* artThrowClassCastExceptionForObject(mirror::Object* obj,
++extern "C" ART_SYSV_ABI Context* artThrowClassCastExceptionForObject(mirror::Object* obj,
+                                                         mirror::Class* dest_type,
+                                                         Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+@@ -172,7 +172,7 @@ extern "C" Context* artThrowClassCastExceptionForObject(mirror::Object* obj,
+   return artThrowClassCastException(dest_type, obj->GetClass(), self);
+ }
+ 
+-extern "C" Context* artThrowArrayStoreException(mirror::Object* array,
++extern "C" ART_SYSV_ABI Context* artThrowArrayStoreException(mirror::Object* array,
+                                                 mirror::Object* value,
+                                                 Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+diff --git a/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc b/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc
+index ebd90e8..a49eff1 100644
+--- a/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc
+@@ -758,7 +758,7 @@ static int64_t NanBoxResultIfNeeded(int64_t result, char result_shorty) {
+ }
+ 
+ NO_STACK_PROTECTOR
+-extern "C" uint64_t artQuickToInterpreterBridge(ArtMethod* method, Thread* self, ArtMethod** sp)
++extern "C" ART_SYSV_ABI uint64_t artQuickToInterpreterBridge(ArtMethod* method, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // Ensure we don't get thread suspension until the object arguments are safely in the shadow
+   // frame.
+@@ -902,7 +902,7 @@ void BuildQuickArgumentVisitor::Visit() {
+ // which is responsible for recording callee save registers. We explicitly place into jobjects the
+ // incoming reference arguments (so they survive GC). We invoke the invocation handler, which is a
+ // field within the proxy object, which will box the primitive arguments and deal with error cases.
+-extern "C" uint64_t artQuickProxyInvokeHandler(
++extern "C" ART_SYSV_ABI uint64_t artQuickProxyInvokeHandler(
+     ArtMethod* proxy_method, mirror::Object* receiver, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   DCHECK(proxy_method->IsProxyMethod()) << proxy_method->PrettyMethod();
+@@ -1206,7 +1206,7 @@ static void DumpB74410240DebugData(ArtMethod** sp) REQUIRES_SHARED(Locks::mutato
+ }
+ 
+ // Lazily resolve a method for quick. Called by stub code.
+-extern "C" const void* artQuickResolutionTrampoline(
++extern "C" ART_SYSV_ABI const void* artQuickResolutionTrampoline(
+     ArtMethod* called, mirror::Object* receiver, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // The resolution trampoline stashes the resolved method into the callee-save frame to transport
+@@ -2049,7 +2049,7 @@ void BuildGenericJniFrameVisitor::Visit() {
+  * NO_THREAD_SAFETY_ANALYSIS: Depending on the use case, the trampoline may
+  * or may not lock a synchronization object and transition out of Runnable.
+  */
+-extern "C" const void* artQuickGenericJniTrampoline(Thread* self,
++extern "C" ART_SYSV_ABI const void* artQuickGenericJniTrampoline(Thread* self,
+                                                     ArtMethod** managed_sp,
+                                                     uintptr_t* reserved_area)
+     REQUIRES_SHARED(Locks::mutator_lock_) NO_THREAD_SAFETY_ANALYSIS {
+@@ -2165,7 +2165,7 @@ extern uint64_t GenericJniMethodEnd(Thread* self,
+  * Is called after the native JNI code. Responsible for cleanup (handle scope, saved state) and
+  * unlocking.
+  */
+-extern "C" uint64_t artQuickGenericJniEndTrampoline(Thread* self,
++extern "C" ART_SYSV_ABI uint64_t artQuickGenericJniEndTrampoline(Thread* self,
+                                                     jvalue result,
+                                                     uint64_t result_f) {
+   // We're here just back from a native call. We don't have the shared mutator lock at this point
+@@ -2257,19 +2257,19 @@ EXPLICIT_INVOKE_COMMON_TEMPLATE_DECL(kSuper);
+ #undef EXPLICIT_INVOKE_COMMON_TEMPLATE_DECL
+ 
+ // See comments in runtime_support_asm.S
+-extern "C" TwoWordReturn artInvokeInterfaceTrampolineWithAccessCheck(
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeInterfaceTrampolineWithAccessCheck(
+     uint32_t method_idx, mirror::Object* this_object, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artInvokeCommon<kInterface>(method_idx, this_object, self, sp);
+ }
+ 
+-extern "C" TwoWordReturn artInvokeDirectTrampolineWithAccessCheck(
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeDirectTrampolineWithAccessCheck(
+     uint32_t method_idx, mirror::Object* this_object, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artInvokeCommon<kDirect>(method_idx, this_object, self, sp);
+ }
+ 
+-extern "C" TwoWordReturn artInvokeStaticTrampolineWithAccessCheck(
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeStaticTrampolineWithAccessCheck(
+     uint32_t method_idx, [[maybe_unused]] mirror::Object* this_object, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // For static, this_object is not required and may be random garbage. Don't pass it down so that
+@@ -2277,13 +2277,13 @@ extern "C" TwoWordReturn artInvokeStaticTrampolineWithAccessCheck(
+   return artInvokeCommon<kStatic>(method_idx, nullptr, self, sp);
+ }
+ 
+-extern "C" TwoWordReturn artInvokeSuperTrampolineWithAccessCheck(
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeSuperTrampolineWithAccessCheck(
+     uint32_t method_idx, mirror::Object* this_object, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artInvokeCommon<kSuper>(method_idx, this_object, self, sp);
+ }
+ 
+-extern "C" TwoWordReturn artInvokeVirtualTrampolineWithAccessCheck(
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeVirtualTrampolineWithAccessCheck(
+     uint32_t method_idx, mirror::Object* this_object, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return artInvokeCommon<kVirtual>(method_idx, this_object, self, sp);
+@@ -2291,7 +2291,7 @@ extern "C" TwoWordReturn artInvokeVirtualTrampolineWithAccessCheck(
+ 
+ // Determine target of interface dispatch. The interface method and this object are known non-null.
+ // The interface method is the method returned by the dex cache in the conflict trampoline.
+-extern "C" TwoWordReturn artInvokeInterfaceTrampoline(ArtMethod* interface_method,
++extern "C" ART_SYSV_ABI TwoWordReturn artInvokeInterfaceTrampoline(ArtMethod* interface_method,
+                                                       mirror::Object* raw_this_object,
+                                                       Thread* self,
+                                                       ArtMethod** sp)
+@@ -2411,7 +2411,7 @@ extern "C" TwoWordReturn artInvokeInterfaceTrampoline(ArtMethod* interface_metho
+ }
+ 
+ // Returns uint64_t representing raw bits from JValue.
+-extern "C" uint64_t artInvokePolymorphic(mirror::Object* raw_receiver, Thread* self, ArtMethod** sp)
++extern "C" ART_SYSV_ABI uint64_t artInvokePolymorphic(mirror::Object* raw_receiver, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   DCHECK(raw_receiver != nullptr);
+@@ -2534,7 +2534,7 @@ extern "C" uint64_t artInvokePolymorphic(mirror::Object* raw_receiver, Thread* s
+   return NanBoxResultIfNeeded(result.GetJ(), shorty[0]);
+ }
+ 
+-extern "C" uint64_t artInvokePolymorphicWithHiddenReceiver(mirror::Object* raw_receiver,
++extern "C" ART_SYSV_ABI uint64_t artInvokePolymorphicWithHiddenReceiver(mirror::Object* raw_receiver,
+                                                            Thread* self,
+                                                            ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+@@ -2635,7 +2635,7 @@ extern "C" uint64_t artInvokePolymorphicWithHiddenReceiver(mirror::Object* raw_r
+ }
+ 
+ // Returns uint64_t representing raw bits from JValue.
+-extern "C" uint64_t artInvokeCustom(uint32_t call_site_idx, Thread* self, ArtMethod** sp)
++extern "C" ART_SYSV_ABI uint64_t artInvokeCustom(uint32_t call_site_idx, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   DCHECK_EQ(*sp, Runtime::Current()->GetCalleeSaveMethod(CalleeSaveType::kSaveRefsAndArgs));
+@@ -2693,14 +2693,14 @@ extern "C" uint64_t artInvokeCustom(uint32_t call_site_idx, Thread* self, ArtMet
+   return NanBoxResultIfNeeded(result.GetJ(), shorty[0]);
+ }
+ 
+-extern "C" void artJniMethodEntryHook(Thread* self)
++extern "C" ART_SYSV_ABI void artJniMethodEntryHook(Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   instrumentation::Instrumentation* instr = Runtime::Current()->GetInstrumentation();
+   ArtMethod* method = *self->GetManagedStack()->GetTopQuickFrame();
+   instr->MethodEnterEvent(self, method);
+ }
+ 
+-extern "C" Context* artMethodEntryHook(ArtMethod* method, Thread* self, ArtMethod** sp)
++extern "C" ART_SYSV_ABI Context* artMethodEntryHook(ArtMethod* method, Thread* self, ArtMethod** sp)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedQuickEntrypointChecks sqec(self);
+   instrumentation::Instrumentation* instr = Runtime::Current()->GetInstrumentation();
+@@ -2727,7 +2727,7 @@ extern "C" Context* artMethodEntryHook(ArtMethod* method, Thread* self, ArtMetho
+   return nullptr;
+ }
+ 
+-extern "C" Context* artMethodExitHook(Thread* self,
++extern "C" ART_SYSV_ABI Context* artMethodExitHook(Thread* self,
+                                       ArtMethod** sp,
+                                       uint64_t* gpr_result,
+                                       uint64_t* fpr_result,
+diff --git a/runtime/entrypoints/quick/runtime_entrypoints_list.h b/runtime/entrypoints/quick/runtime_entrypoints_list.h
+index ffa20e5..748f890 100644
+--- a/runtime/entrypoints/quick/runtime_entrypoints_list.h
++++ b/runtime/entrypoints/quick/runtime_entrypoints_list.h
+@@ -442,7 +442,7 @@ enum class DeoptimizationKind;
+ // Define a macro that will extract information from RUNTIME_ENTRYPOINT_LIST to create a function
+ // declaration.
+ #define ENTRYPOINT_ENUM(name, attr, rettype, ...) \
+-  extern "C" rettype name(__VA_ARGS__) attr;
++  extern "C" ART_SYSV_ABI rettype name(__VA_ARGS__) attr;
+ 
+ // Declare all C++ quick entrypoints.
+ RUNTIME_ENTRYPOINT_LIST(ENTRYPOINT_ENUM)
+diff --git a/runtime/interpreter/interpreter_common.h b/runtime/interpreter/interpreter_common.h
+index e069ff4..577b345 100644
+--- a/runtime/interpreter/interpreter_common.h
++++ b/runtime/interpreter/interpreter_common.h
+@@ -284,13 +284,13 @@ ALWAYS_INLINE static JValue GetFieldValue(const ShadowFrame& shadow_frame, uint3
+ }
+ 
+ LIBART_PROTECTED
+-extern "C" size_t NterpGetStaticField(Thread* self,
++extern "C" ART_SYSV_ABI size_t NterpGetStaticField(Thread* self,
+                                       ArtMethod* caller,
+                                       const uint16_t* dex_pc_ptr,
+                                       size_t resolve_field_type);
+ 
+ LIBART_PROTECTED
+-extern "C" uint32_t NterpGetInstanceFieldOffset(Thread* self,
++extern "C" ART_SYSV_ABI uint32_t NterpGetInstanceFieldOffset(Thread* self,
+                                                 ArtMethod* caller,
+                                                 const uint16_t* dex_pc_ptr,
+                                                 uint32_t* registers);
+diff --git a/runtime/interpreter/interpreter_switch_impl-inl.h b/runtime/interpreter/interpreter_switch_impl-inl.h
+index 5b3f804..c5a6a03 100644
+--- a/runtime/interpreter/interpreter_switch_impl-inl.h
++++ b/runtime/interpreter/interpreter_switch_impl-inl.h
+@@ -2047,7 +2047,7 @@ DEX_INSTRUCTION_LIST(OPCODE_CASE)
+ 
+ template<bool transaction_active>
+ NO_STACK_PROTECTOR
+-void ExecuteSwitchImplCpp(SwitchImplContext* ctx) {
++ART_SYSV_ABI void ExecuteSwitchImplCpp(SwitchImplContext* ctx) {
+   Thread* self = ctx->self;
+   const CodeItemDataAccessor& accessor = ctx->accessor;
+   ShadowFrame& shadow_frame = ctx->shadow_frame;
+diff --git a/runtime/interpreter/interpreter_switch_impl.h b/runtime/interpreter/interpreter_switch_impl.h
+index 9e5f8f5..4cd520f 100644
+--- a/runtime/interpreter/interpreter_switch_impl.h
++++ b/runtime/interpreter/interpreter_switch_impl.h
+@@ -45,12 +45,12 @@ struct SwitchImplContext {
+ 
+ // The actual internal implementation of the switch interpreter.
+ template<bool transaction_active>
+-void ExecuteSwitchImplCpp(SwitchImplContext* ctx)
++ART_SYSV_ABI void ExecuteSwitchImplCpp(SwitchImplContext* ctx)
+   REQUIRES_SHARED(Locks::mutator_lock_);
+ 
+ // Hand-written assembly method which wraps the C++ implementation,
+ // while defining the DEX PC in the CFI so that libunwind can resolve it.
+-extern "C" void ExecuteSwitchImplAsm(
++extern "C" ART_SYSV_ABI void ExecuteSwitchImplAsm(
+     SwitchImplContext* ctx, const void* impl, const uint16_t* dexpc)
+     REQUIRES_SHARED(Locks::mutator_lock_);
+ 
+diff --git a/runtime/interpreter/mterp/nterp.cc b/runtime/interpreter/mterp/nterp.cc
+index 54edd75..2ce13c5 100644
+--- a/runtime/interpreter/mterp/nterp.cc
++++ b/runtime/interpreter/mterp/nterp.cc
+@@ -270,19 +270,19 @@ extern "C" const dex::CodeItem* NterpGetCodeItem(ArtMethod* method)
+   return method->GetCodeItem();
+ }
+ 
+-extern "C" const char* NterpGetShorty(ArtMethod* method)
++extern "C" ART_SYSV_ABI const char* NterpGetShorty(ArtMethod* method)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   return method->GetInterfaceMethodIfProxy(kRuntimePointerSize)->GetShorty();
+ }
+ 
+-extern "C" const char* NterpGetShortyFromMethodId(ArtMethod* caller, uint32_t method_index)
++extern "C" ART_SYSV_ABI const char* NterpGetShortyFromMethodId(ArtMethod* caller, uint32_t method_index)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   return caller->GetDexFile()->GetMethodShorty(method_index);
+ }
+ 
+-extern "C" const char* NterpGetShortyFromInvokePolymorphic(ArtMethod* caller, uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI const char* NterpGetShortyFromInvokePolymorphic(ArtMethod* caller, uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   const Instruction* inst = Instruction::At(dex_pc_ptr);
+@@ -292,7 +292,7 @@ extern "C" const char* NterpGetShortyFromInvokePolymorphic(ArtMethod* caller, ui
+   return caller->GetDexFile()->GetShorty(proto_idx);
+ }
+ 
+-extern "C" const char* NterpGetShortyFromInvokeCustom(ArtMethod* caller, uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI const char* NterpGetShortyFromInvokeCustom(ArtMethod* caller, uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   const Instruction* inst = Instruction::At(dex_pc_ptr);
+@@ -442,7 +442,7 @@ static ArtMethod* FindMethodFast(ArtMethod* caller,
+ static constexpr std::array<uint8_t, 256u> kOpcodeInvokeTypes = GenerateOpcodeInvokeTypes();
+ 
+ LIBART_PROTECTED FLATTEN
+-extern "C" size_t NterpGetMethod(Thread* self,
++extern "C" ART_SYSV_ABI size_t NterpGetMethod(Thread* self,
+                                  ArtMethod* caller,
+                                  const uint16_t* dex_pc_ptr,
+                                  uint32_t* registers)
+@@ -598,7 +598,7 @@ static ArtField* FindFieldSlow(Thread* self,
+ }
+ 
+ LIBART_PROTECTED
+-extern "C" size_t NterpGetStaticField(Thread* self,
++extern "C" ART_SYSV_ABI size_t NterpGetStaticField(Thread* self,
+                                       ArtMethod* caller,
+                                       const uint16_t* dex_pc_ptr,
+                                       size_t resolve_field_type)  // Resolve if not zero
+@@ -683,7 +683,7 @@ static size_t NterpGetLocalStaticFieldInternal(mirror::Class* cls, const uint16_
+ 
+ // `cls` can be a from-space, see comment in `NterpGetLocalStaticFieldInternal`.
+ FLATTEN
+-extern "C" size_t NterpGetLocalStaticField(mirror::Class* cls, const uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI size_t NterpGetLocalStaticField(mirror::Class* cls, const uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   return NterpGetLocalStaticFieldInternal(cls, dex_pc_ptr);
+@@ -691,7 +691,7 @@ extern "C" size_t NterpGetLocalStaticField(mirror::Class* cls, const uint16_t* d
+ 
+ // `cls` can be a from-space, see comment in `NterpGetLocalStaticFieldInternal`.
+ FLATTEN
+-extern "C" size_t NterpGetLocalStaticFieldForSPutObject(mirror::Class* cls,
++extern "C" ART_SYSV_ABI size_t NterpGetLocalStaticFieldForSPutObject(mirror::Class* cls,
+                                                         const uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+@@ -720,13 +720,13 @@ static size_t NterpGetLocalInstanceFieldInternal(mirror::Class* cls, const uint1
+ }
+ 
+ FLATTEN
+-extern "C" size_t NterpGetLocalInstanceField(mirror::Class* cls, const uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI size_t NterpGetLocalInstanceField(mirror::Class* cls, const uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   return NterpGetLocalInstanceFieldInternal(cls, dex_pc_ptr);
+ }
+ 
+ FLATTEN
+-extern "C" size_t NterpGetLocalInstanceFieldForIPutObject(mirror::Class* cls,
++extern "C" ART_SYSV_ABI size_t NterpGetLocalInstanceFieldForIPutObject(mirror::Class* cls,
+                                                           const uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   if (cls->HasTypeChecksFailure()) {
+@@ -736,7 +736,7 @@ extern "C" size_t NterpGetLocalInstanceFieldForIPutObject(mirror::Class* cls,
+ }
+ 
+ LIBART_PROTECTED
+-extern "C" uint32_t NterpGetInstanceFieldOffset(Thread* self,
++extern "C" ART_SYSV_ABI uint32_t NterpGetInstanceFieldOffset(Thread* self,
+                                                 ArtMethod* caller,
+                                                 const uint16_t* dex_pc_ptr,
+                                                 uint32_t* registers)
+@@ -784,7 +784,7 @@ extern "C" uint32_t NterpGetInstanceFieldOffset(Thread* self,
+   return resolved_field->GetOffset().Uint32Value();
+ }
+ 
+-extern "C" mirror::Object* NterpGetClass(Thread* self, ArtMethod* caller, uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI mirror::Object* NterpGetClass(Thread* self, ArtMethod* caller, uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   UpdateHotness(self, caller);
+   const Instruction* inst = Instruction::At(dex_pc_ptr);
+@@ -816,7 +816,7 @@ extern "C" mirror::Object* NterpGetClass(Thread* self, ArtMethod* caller, uint16
+   return c.Ptr();
+ }
+ 
+-extern "C" mirror::Object* NterpAllocateObject(Thread* self,
++extern "C" ART_SYSV_ABI mirror::Object* NterpAllocateObject(Thread* self,
+                                                ArtMethod* caller,
+                                                uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+@@ -849,7 +849,7 @@ extern "C" mirror::Object* NterpAllocateObject(Thread* self,
+   }
+ }
+ 
+-extern "C" mirror::Object* NterpLoadObject(Thread* self, ArtMethod* caller, uint16_t* dex_pc_ptr)
++extern "C" ART_SYSV_ABI mirror::Object* NterpLoadObject(Thread* self, ArtMethod* caller, uint16_t* dex_pc_ptr)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   const Instruction* inst = Instruction::At(dex_pc_ptr);
+   ClassLinker* const class_linker = Runtime::Current()->GetClassLinker();
+@@ -965,7 +965,7 @@ static mirror::Object* DoFilledNewArray(Thread* self,
+   return new_array.Ptr();
+ }
+ 
+-extern "C" mirror::Object* NterpFilledNewArray(Thread* self,
++extern "C" ART_SYSV_ABI mirror::Object* NterpFilledNewArray(Thread* self,
+                                                ArtMethod* caller,
+                                                uint32_t* registers,
+                                                uint16_t* dex_pc_ptr)
+@@ -973,7 +973,7 @@ extern "C" mirror::Object* NterpFilledNewArray(Thread* self,
+   return DoFilledNewArray(self, caller, dex_pc_ptr, registers, /* is_range= */ false);
+ }
+ 
+-extern "C" mirror::Object* NterpFilledNewArrayRange(Thread* self,
++extern "C" ART_SYSV_ABI mirror::Object* NterpFilledNewArrayRange(Thread* self,
+                                                     ArtMethod* caller,
+                                                     uint32_t* registers,
+                                                     uint16_t* dex_pc_ptr)
+@@ -981,7 +981,7 @@ extern "C" mirror::Object* NterpFilledNewArrayRange(Thread* self,
+   return DoFilledNewArray(self, caller, dex_pc_ptr, registers, /* is_range= */ true);
+ }
+ 
+-extern "C" jit::OsrData* NterpHotMethod(ArtMethod* method, uint16_t* dex_pc_ptr, uint32_t* vregs)
++extern "C" ART_SYSV_ABI jit::OsrData* NterpHotMethod(ArtMethod* method, uint16_t* dex_pc_ptr, uint32_t* vregs)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   // It is important this method is not suspended because it can be called on
+   // method entry and async deoptimization does not expect runtime methods other than the
+@@ -1019,7 +1019,7 @@ extern "C" jit::OsrData* NterpHotMethod(ArtMethod* method, uint16_t* dex_pc_ptr,
+   return nullptr;
+ }
+ 
+-extern "C" ssize_t NterpDoPackedSwitch(const uint16_t* switchData, int32_t testVal)
++extern "C" ART_SYSV_ABI ssize_t NterpDoPackedSwitch(const uint16_t* switchData, int32_t testVal)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   const int kInstrLen = 3;
+@@ -1060,7 +1060,7 @@ extern "C" ssize_t NterpDoPackedSwitch(const uint16_t* switchData, int32_t testV
+  * Returns 3 if we don't find a match (it's the size of the sparse-switch
+  * instruction).
+  */
+-extern "C" ssize_t NterpDoSparseSwitch(const uint16_t* switchData, int32_t testVal)
++extern "C" ART_SYSV_ABI ssize_t NterpDoSparseSwitch(const uint16_t* switchData, int32_t testVal)
+     REQUIRES_SHARED(Locks::mutator_lock_) {
+   ScopedAssertNoThreadSuspension sants("In nterp");
+   const int kInstrLen = 3;
+diff --git a/runtime/jit/jit.cc b/runtime/jit/jit.cc
+index 6167da1..9c8ad32 100644
+--- a/runtime/jit/jit.cc
++++ b/runtime/jit/jit.cc
+@@ -346,7 +346,7 @@ void Jit::DumpTypeInfoForLoadedTypes(ClassLinker* linker) {
+   }
+ }
+ 
+-extern "C" void art_quick_osr_stub(void** stack,
++extern "C" ART_SYSV_ABI void art_quick_osr_stub(void** stack,
+                                    size_t stack_size_in_bytes,
+                                    const uint8_t* native_pc,
+                                    JValue* result,

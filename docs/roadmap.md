@@ -54,8 +54,12 @@ Each phase ends with something demonstrable, built and tested in CI.
       handled); `Thread*` loads ported
 - [x] Every thread-register access in the assembly (`%gs:FIELD`, nterp's
       `rSELF`) goes through the TLS slot; the `asm-port` CI job keeps it at 0
-- [ ] `sysv_abi` on every C++ function called from assembly, and on the
-      assembly symbols called from C++; checked with `tools/coff-symbols.py`
+- [x] `sysv_abi` (`ART_SYSV_ABI`) on every C++ function the assembly calls
+      and on the assembly C++ calls; C library calls go through System V
+      wrappers. `tools/abi-check.py` verifies all 203 boundaries in CI
+- [ ] Math entrypoints (`sin`, `fmod`, ...) called by compiled code need
+      System V wrappers too (the Microsoft ABI's 32-byte shadow space);
+      only matters once the JIT/AOT compiler runs
 - [ ] `JNICALL` and the `JNIEnv`/`JavaVM` tables as System V (libnativehelper)
 - [ ] Android root, boot class path: libcore (`core-oj`, `core-libart`) and
       its native libraries for Windows
