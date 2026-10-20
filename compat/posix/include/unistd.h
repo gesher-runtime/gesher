@@ -28,6 +28,9 @@ gid_t getegid(void);
 pid_t getppid(void);
 pid_t gettid(void);
 pid_t setsid(void);
+int setpgid(pid_t pid, pid_t pgid);
+pid_t getpgid(pid_t pid);
+pid_t getpgrp(void);
 
 // Android apps cannot fork; neither can Gesher. Fails with ENOSYS.
 // (execv and friends come from the Windows CRT.)

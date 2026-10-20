@@ -33,6 +33,8 @@ int sched_getcpu(void);
 int sched_setaffinity(pid_t pid, size_t size, const cpu_set_t* set);
 int sched_getaffinity(pid_t pid, size_t size, cpu_set_t* set);
 int unshare(int flags);
+int sched_getparam(pid_t pid, struct sched_param* param);
+int sched_setparam(pid_t pid, const struct sched_param* param);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,48 @@
+diff --git a/runtime/interpreter/interpreter_switch_impl-inl.h b/runtime/interpreter/interpreter_switch_impl-inl.h
+index 24d19fb..5b3f804 100644
+--- a/runtime/interpreter/interpreter_switch_impl-inl.h
++++ b/runtime/interpreter/interpreter_switch_impl-inl.h
+@@ -41,6 +41,12 @@
+ #include "thread.h"
+ #include "verifier/method_verifier.h"
+ 
++#if defined(GESHER)
++// <minwindef.h> defines CONST, which is also an opcode name.
++#pragma push_macro("CONST")
++#undef CONST
++#endif
++
+ namespace art HIDDEN {
+ namespace interpreter {
+ 
+@@ -2109,4 +2115,8 @@ void ExecuteSwitchImplCpp(SwitchImplContext* ctx) {
+ }  // namespace interpreter
+ }  // namespace art
+ 
++#if defined(GESHER)
++#pragma pop_macro("CONST")
++#endif
++
+ #endif  // ART_RUNTIME_INTERPRETER_INTERPRETER_SWITCH_IMPL_INL_H_
+diff --git a/runtime/thread.cc b/runtime/thread.cc
+index d6e4b6a..9ad0fc7 100644
+--- a/runtime/thread.cc
++++ b/runtime/thread.cc
+@@ -1540,7 +1540,7 @@ void Thread::GetThreadName(std::string& name) const {
+ }
+ 
+ uint64_t Thread::GetCpuMicroTime() const {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+   return Thread::GetCpuNanoTime() / 1000;
+ #else  // __APPLE__
+   UNIMPLEMENTED(WARNING);
+@@ -1549,7 +1549,7 @@ uint64_t Thread::GetCpuMicroTime() const {
+ }
+ 
+ uint64_t Thread::GetCpuNanoTime() const {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+   clockid_t cpu_clock_id;
+   pthread_getcpuclockid(tlsPtr_.pthread_self, &cpu_clock_id);
+   timespec now;

@@ -18,6 +18,15 @@ int gesher_rand(void);
 void gesher_srand(unsigned int seed);
 #define rand() gesher_rand()
 #define srand(seed) gesher_srand(seed)
+#ifdef __cplusplus
+}  // extern "C"
+// So that std::rand() and std::srand() find the redirected functions too.
+namespace std {
+using ::gesher_rand;
+using ::gesher_srand;
+}  // namespace std
+extern "C" {
+#endif
 
 char* realpath(const char* path, char* resolved_path);
 int posix_memalign(void** memptr, size_t alignment, size_t size);

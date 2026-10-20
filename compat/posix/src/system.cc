@@ -200,6 +200,13 @@ int sched_getaffinity(pid_t, size_t size, cpu_set_t* set) {
 
 int unshare(int) { return errno = ENOSYS, -1; }
 
+int sched_getparam(pid_t, struct sched_param* param) {
+  param->sched_priority = 0;
+  return 0;
+}
+
+int sched_setparam(pid_t, const struct sched_param*) { return 0; }
+
 // --- poll, ioctl, wait --------------------------------------------------------
 
 // Pipes report readable when data is buffered; files are always ready.
@@ -234,6 +241,7 @@ int ioctl(int, unsigned long, ...) { return errno = ENOTTY, -1; }
 
 pid_t waitpid(pid_t, int*, int) { return errno = ECHILD, -1; }
 pid_t wait(int*) { return errno = ECHILD, -1; }
+int waitid(idtype_t, id_t, siginfo_t*, int) { return errno = ECHILD, -1; }
 
 // --- fcntl and friends --------------------------------------------------------
 

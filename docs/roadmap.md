@@ -39,17 +39,29 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] LLP64: ART treats Windows x64 as 64-bit (patch 0002)
 - [x] Generated sources outside Soong: aconfig flags, `asm_defines.h`
       (computed for the Windows target), enum operators
-- [ ] **ART runtime compiles for Windows** — tracked per file by the
-      `runtime-port` CI job (96% at the time of writing)
+- [x] **ART runtime compiles for Windows**: all 237 files of libart-runtime,
+      plus libelffile, libprofile, libnativebridge, libnativeloader, liblzma,
+      lz4, cpu_features
 - [x] Implement the declared POSIX functions (`dlopen`,
       `sysconf`, `getrlimit`, `poll`, `uname`, futex via `syscall`, ...)
+- [x] **`dalvikvm.exe` links and starts** (`-showversion`), tested in CI on
+      Windows 2022 and 2025. JIT compiler and native unwinding are stubbed
+      for now (`compat/art/`)
+- [x] Calling convention and thread register decided
+      ([0006](decisions/0006-managed-abi.md)); gesher-base keeps `Thread*` in
+      a TLS slot reachable through `%gs`
+- [x] Assembly builds as COFF (nterp generated, `.type`/`.size`/`.hidden`/PLT
+      handled); `Thread*` loads ported
+- [ ] Remaining thread-register accesses in the assembly (`%gs:FIELD`,
+      nterp's `rSELF`), tracked by the `asm-port` CI job
+- [ ] `sysv_abi` on every C++ function called from assembly, and on the
+      assembly symbols called from C++; checked with `tools/coff-symbols.py`
+- [ ] `JNICALL` and the `JNIEnv`/`JavaVM` tables as System V (libnativehelper)
+- [ ] Android root, boot class path: libcore (`core-oj`, `core-libart`) and
+      its native libraries for Windows
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
-      `CONTEXT` ↔ `ucontext_t`) — needed for implicit null checks
+      `CONTEXT` ↔ `ucontext_t`), needed for implicit null checks
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
 - [ ] Executable file mappings (`.oat` code)
-- [ ] Thread register: ART on x86-64 points `%gs` at its `Thread`; on
-      Windows `%gs` is the TEB, so assembly stubs need another scheme
-- [ ] Assembly entrypoints: ELF/System V assembly → COFF, with C++ targets
-      called from assembly declared `sysv_abi`
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
 - [ ] `dalvikvm.exe` runs `Hello` with the interpreter

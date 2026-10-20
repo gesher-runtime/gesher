@@ -59,6 +59,11 @@ pid_t gettid(void) { return static_cast<pid_t>(GetCurrentThreadId()); }
 pid_t getppid(void) { return 1; }
 pid_t setsid(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 
+// One process group per process.
+int setpgid(pid_t, pid_t) { return 0; }
+pid_t getpgid(pid_t) { return static_cast<pid_t>(GetCurrentProcessId()); }
+pid_t getpgrp(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
+
 pid_t fork(void) { return errno = ENOSYS, -1; }
 
 int pipe2(int fds[2], int flags) {

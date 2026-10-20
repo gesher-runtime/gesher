@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(gesher LANGUAGES C CXX)
+project(gesher LANGUAGES C CXX ASM)
 
 # AOSP sources come from tools/fetch-aosp.sh, never from this repository.
 set(AOSP_DIR "${CMAKE_SOURCE_DIR}/third_party/aosp" CACHE PATH "AOSP checkout (tools/fetch-aosp.sh)")
@@ -29,8 +29,9 @@ add_compile_definitions(
   _POSIX_THREAD_SAFE_FUNCTIONS)
 add_compile_options(-mno-ms-bitfields -fno-exceptions
   $<$<COMPILE_LANGUAGE:CXX>:-fsized-deallocation>)
-# Everything links statically: one self-contained .exe per tool.
-add_link_options(-static)
+# Everything links statically: one self-contained .exe per tool. Executables
+# are stripped; objects keep their debug info.
+add_link_options(-static -s)
 
 # gesher-base: POSIX/Linux interfaces implemented on Win32.
 include(compat/posix/posix.cmake)

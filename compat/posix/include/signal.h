@@ -118,15 +118,41 @@ typedef struct {
       union sigval si_value;
     } _kill;
     struct {
+      pid_t si_pid;
+      uid_t si_uid;
+      int si_status;
+      long long si_utime;
+      long long si_stime;
+    } _sigchld;
+    struct {
       void* si_addr;
     } _sigfault;
+    struct {
+      void* si_call_addr;
+      int si_syscall;
+      unsigned int si_arch;
+    } _sigsys;
   } _sifields;
 } siginfo_t;
 
-#define si_pid   _sifields._kill.si_pid
-#define si_uid   _sifields._kill.si_uid
-#define si_value _sifields._kill.si_value
-#define si_addr  _sifields._sigfault.si_addr
+#define si_pid       _sifields._kill.si_pid
+#define si_uid       _sifields._kill.si_uid
+#define si_value     _sifields._kill.si_value
+#define si_status    _sifields._sigchld.si_status
+#define si_utime     _sifields._sigchld.si_utime
+#define si_stime     _sifields._sigchld.si_stime
+#define si_addr      _sifields._sigfault.si_addr
+#define si_call_addr _sifields._sigsys.si_call_addr
+#define si_syscall   _sifields._sigsys.si_syscall
+#define si_arch      _sifields._sigsys.si_arch
+
+// SIGCHLD si_code values.
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_DUMPED    3
+#define CLD_TRAPPED   4
+#define CLD_STOPPED   5
+#define CLD_CONTINUED 6
 
 typedef void (*sighandler_t)(int);
 
@@ -185,3 +211,6 @@ typedef sigset_t sigset64_t;
 #ifdef __cplusplus
 }
 #endif
+
+// Like bionic, <signal.h> provides ucontext_t.
+#include <sys/ucontext.h>
