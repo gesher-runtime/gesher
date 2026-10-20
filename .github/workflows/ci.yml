@@ -29,6 +29,9 @@ jobs:
       - name: Build
         run: ninja -C out
 
+      - name: Check assembly boundaries use the System V ABI
+        run: python3 tools/abi-check.py out third_party/aosp
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

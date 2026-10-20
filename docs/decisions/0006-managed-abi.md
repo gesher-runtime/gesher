@@ -22,10 +22,14 @@ Two of them clash with Windows:
 - **Managed code keeps the System V ABI.** The assembly's calls stay as they
   are. On the C++ side, every function called from assembly or compiled code,
   and every declaration of an assembly symbol called from C++, gets
-  `__attribute__((sysv_abi))` (clang supports it on Windows targets), through
-  GESHER-gated macros and `#pragma clang attribute` regions in patches. The
-  compiler then emits the conversion at each boundary, including floating
-  point arguments and two-word returns.
+  `__attribute__((sysv_abi))` (clang supports it on Windows targets), spelled
+  `ART_SYSV_ABI` (`libartbase/base/macros.h`, empty outside Gesher) and added
+  by patch. The compiler then emits the conversion at each boundary,
+  including floating point arguments and two-word returns. The few C library functions the assembly calls directly (`memcpy`,
+  `free`) are redirected to System V wrappers in gesher-base
+  (`gesher_sysv_*`). The same applies to C library functions that compiled
+  code calls through the entrypoint table (math functions), once there is
+  compiled code.
 - **JNI is System V too.** `JNICALL` is `__attribute__((sysv_abi))` in Gesher
   builds, and so are the function pointers of the `JNIEnv` and `JavaVM`
   tables (AOSP's `jni.h` declares them without `JNICALL`, so this is a
@@ -50,14 +54,15 @@ Two of them clash with Windows:
   code generators get the same rewrite later (phase 2+).
 - **Object format.** The assembly is built as COFF by clang. DWARF CFI
   directives work as is (they produce `.eh_frame`). `.type`, `.size`,
-  `.hidden` and `@PLT` get GESHER variants in `asm_support_x86.S`, as macOS
+  `.hidden` and `@PLT` get GESHER variants in `asm_support_x86_64.S`, as macOS
   already has.
 
 ## Consequences
 - The managed side of ART stays identical to Linux, so its assembly and code
   generators need only the thread-register change.
 - Every stub-to-C++ boundary must be annotated. A missed one corrupts
-  arguments silently, so the list of C++ symbols referenced from assembly is
-  checked by a build step against the annotated set.
+  arguments silently, so CI runs `tools/abi-check.py`: it reads the
+  assembly objects' undefined symbols, finds the C++ object and source that
+  define each, and requires the annotation there.
 - One `TlsAlloc` slot per process, and two loads instead of one to reach
   `Thread*`.
