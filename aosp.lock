@@ -15,6 +15,7 @@ external/tinyxml2
 external/fmtlib
 external/dlmalloc
 external/lz4
+external/lzma C/
 external/cpu_features
 system/unwinding libunwindstack/include/
 libcore libcore.aconfig

@@ -37,6 +37,7 @@ target_include_directories(art_runtime_headers INTERFACE
   ${_art}/libelffile
   ${_art}/libprofile
   ${_art}/sigchainlib
+  ${_art}/odrefresh/include
   ${_art}/libnativebridge/include
   ${_art}/libnativeloader/include
   ${_art}/tools/cpp-define-generator
@@ -77,11 +78,79 @@ art_operator_srcs(runtime_ops art/runtime
   reflective_value_visitor.h stack.h suspend_reason.h thread.h thread_state.h
   trace.h trace_profile.h verifier/verifier_enums.h)
 
+# nterp's assembly (genrule libart_mterp.x86_64ng).
+file(GLOB _nterp_in "${_rt}/interpreter/mterp/x86_64ng/*.S")
+list(SORT _nterp_in)
+set(_nterp "${_gen}/mterp/mterp_x86_64ng.S")
+add_custom_command(
+  OUTPUT "${_nterp}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_gen}/mterp"
+  COMMAND ${Python3_EXECUTABLE} "${_rt}/interpreter/mterp/gen_mterp.py" "${_nterp}" ${_nterp_in}
+  DEPENDS ${_nterp_in} "${_rt}/interpreter/mterp/gen_mterp.py"
+          "${_rt}/interpreter/mterp/common/gen_setup.py"
+          "${_art}/libdexfile/dex/dex_instruction_list.h"
+  VERBATIM)
+
 list(TRANSFORM LIBART_RUNTIME_SRCS PREPEND "${_rt}/")
-add_library(art_runtime STATIC ${LIBART_RUNTIME_SRCS} ${runtime_ops})
+list(TRANSFORM LIBART_RUNTIME_ASM_SRCS PREPEND "${_rt}/")
+add_library(art_runtime STATIC ${LIBART_RUNTIME_SRCS} ${runtime_ops}
+  ${LIBART_RUNTIME_ASM_SRCS} "${_nterp}")
 target_compile_definitions(art_runtime PRIVATE BUILDING_LIBART)
 target_compile_options(art_runtime PRIVATE -fno-delete-null-pointer-checks)
 target_link_libraries(art_runtime PUBLIC art_runtime_headers)
 add_dependencies(art_runtime art_asm_support_headers)
-# Not part of `all` until it compiles: build with `ninja -k 0 art_runtime`.
-set_target_properties(art_runtime PROPERTIES EXCLUDE_FROM_ALL ON)
+
+# --- libart-runtime's static dependencies -----------------------------------
+# libelffile (art/libelffile/Android.bp)
+add_library(art_elffile STATIC
+  ${_art}/libelffile/elf/xz_utils.cc
+  ${_art}/libelffile/stream/buffered_output_stream.cc
+  ${_art}/libelffile/stream/file_output_stream.cc
+  ${_art}/libelffile/stream/output_stream.cc
+  ${_art}/libelffile/stream/vector_output_stream.cc)
+target_include_directories(art_elffile PUBLIC ${_art}/libelffile)
+target_link_libraries(art_elffile PUBLIC artbase lzma)
+
+# libprofile (art/libprofile/Android.bp)
+add_library(art_profile STATIC
+  ${_art}/libprofile/profile/profile_boot_info.cc
+  ${_art}/libprofile/profile/profile_compilation_info.cc)
+target_include_directories(art_profile PUBLIC ${_art}/libprofile)
+target_link_libraries(art_profile PUBLIC dexfile)
+
+# libsigchain_fake: signal chaining is done by gesher-base itself.
+add_library(art_sigchain_fake STATIC ${_art}/sigchainlib/sigchain_fake.cc)
+target_include_directories(art_sigchain_fake PUBLIC ${_art}/sigchainlib)
+target_link_libraries(art_sigchain_fake PUBLIC art_defaults base log)
+
+# libnativebridge and libnativeloader (host configurations).
+add_library(art_nativebridge STATIC ${_art}/libnativebridge/native_bridge.cc)
+target_include_directories(art_nativebridge PUBLIC ${_art}/libnativebridge/include)
+target_link_libraries(art_nativebridge PUBLIC art_runtime_headers)
+add_library(art_nativeloader STATIC ${_art}/libnativeloader/native_loader.cpp)
+target_include_directories(art_nativeloader PUBLIC ${_art}/libnativeloader/include)
+target_link_libraries(art_nativeloader PUBLIC art_nativebridge art_runtime_headers)
+
+# libodrstatslog (host: no stats are uploaded).
+add_library(art_odrstatslog STATIC ${_art}/odrefresh/odr_statslog_host.cc)
+target_include_directories(art_odrstatslog PUBLIC ${_art}/odrefresh/include)
+target_link_libraries(art_odrstatslog PUBLIC art_defaults)
+
+# Gesher stand-ins for modules not built (yet): libunwindstack, parts of
+# libart-compiler, the aconfig rw-flag accessor (see compat/art/).
+add_library(art_runtime_glue STATIC
+  ${CMAKE_SOURCE_DIR}/compat/art/runtime_glue.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/unwindstack_stub.cc)
+target_link_libraries(art_runtime_glue PUBLIC art_runtime_headers)
+
+set(ART_RUNTIME_DEPS art_elffile art_profile art_sigchain_fake art_nativebridge
+  art_nativeloader art_odrstatslog art_runtime_glue cpu_features lz4 lzma)
+target_link_libraries(art_runtime PUBLIC ${ART_RUNTIME_DEPS})
+
+# --- dalvikvm (art/dalvikvm/Android.bp) -------------------------------------
+add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
+  # Gesher: in place of libnativehelper's dlopen-based JniInvocation.
+  ${CMAKE_SOURCE_DIR}/compat/art/jni_invocation_static.cc)
+target_include_directories(dalvikvm PRIVATE ${AOSP_DIR}/libnativehelper/include_platform
+  ${AOSP_DIR}/libnativehelper/include)
+target_link_libraries(dalvikvm PRIVATE art_runtime)

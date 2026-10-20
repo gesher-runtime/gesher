@@ -28,3 +28,38 @@ target_compile_options(fmtlib PRIVATE -UNDEBUG)
 # format.h uses malloc/free without <cstdlib>; Android's libc++ includes it
 # transitively, llvm-mingw's does not.
 target_compile_options(fmtlib PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdlib>")
+
+# --- liblzma (external/lzma, the LZMA SDK; Windows configuration) ----------
+set(_lz "${AOSP_DIR}/external/lzma/C")
+add_library(lzma STATIC
+  ${_lz}/7zAlloc.c ${_lz}/7zArcIn.c ${_lz}/7zBuf2.c ${_lz}/7zBuf.c ${_lz}/7zCrc.c
+  ${_lz}/7zCrcOpt.c ${_lz}/7zDec.c ${_lz}/7zFile.c ${_lz}/7zStream.c ${_lz}/Aes.c
+  ${_lz}/AesOpt.c ${_lz}/Alloc.c ${_lz}/Bcj2.c ${_lz}/Bra86.c ${_lz}/Bra.c
+  ${_lz}/BraIA64.c ${_lz}/CpuArch.c ${_lz}/Delta.c ${_lz}/LzFind.c ${_lz}/Lzma2Dec.c
+  ${_lz}/Lzma2Enc.c ${_lz}/Lzma86Dec.c ${_lz}/Lzma86Enc.c ${_lz}/LzmaDec.c
+  ${_lz}/LzmaEnc.c ${_lz}/LzmaLib.c ${_lz}/Ppmd7.c ${_lz}/Ppmd7Dec.c ${_lz}/Ppmd7Enc.c
+  ${_lz}/Sha256.c ${_lz}/Sha256Opt.c ${_lz}/Sort.c ${_lz}/Xz.c ${_lz}/XzCrc64.c
+  ${_lz}/XzCrc64Opt.c ${_lz}/XzDec.c ${_lz}/XzEnc.c ${_lz}/XzIn.c
+  # target.windows
+  ${_lz}/Bcj2Enc.c ${_lz}/DllSecur.c ${_lz}/LzFindMt.c ${_lz}/LzFindOpt.c
+  ${_lz}/Lzma2DecMt.c ${_lz}/MtCoder.c ${_lz}/MtDec.c ${_lz}/Threads.c)
+target_include_directories(lzma PUBLIC ${_lz})
+target_compile_definitions(lzma PRIVATE Z7_ST)
+target_compile_options(lzma PRIVATE -Wall -Wno-empty-body -Wno-enum-conversion
+  -Wno-logical-op-parentheses -Wno-self-assign)
+
+# --- liblz4 -----------------------------------------------------------------
+set(_l4 "${AOSP_DIR}/external/lz4/lib")
+add_library(lz4 STATIC ${_l4}/lz4.c ${_l4}/lz4hc.c ${_l4}/lz4frame.c ${_l4}/xxhash.c)
+target_include_directories(lz4 PUBLIC ${_l4})
+
+# --- cpu_features -----------------------------------------------------------
+# Android.bp builds impl_x86_linux_or_android.c for every x86-64 target, which
+# is empty on Windows; upstream's Windows implementation is used instead.
+set(_cf "${AOSP_DIR}/external/cpu_features")
+add_library(cpu_features STATIC
+  ${_cf}/src/filesystem.c ${_cf}/src/stack_line_reader.c ${_cf}/src/string_view.c
+  ${_cf}/src/impl_x86_windows.c)
+target_include_directories(cpu_features PUBLIC ${_cf}/include)
+target_compile_definitions(cpu_features PRIVATE STACK_LINE_READER_BUFFER_SIZE=1024)
+target_compile_options(cpu_features PRIVATE -Wno-gnu-designator -Wno-unused-variable)

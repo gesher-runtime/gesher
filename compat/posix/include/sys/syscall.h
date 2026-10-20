@@ -11,6 +11,7 @@ extern "C" {
 #define __NR_write           1
 #define __NR_mmap            9
 #define __NR_mprotect        10
+#define __NR_ioctl           16
 #define __NR_madvise         28
 #define __NR_getpid          39
 #define __NR_clone           56
@@ -32,6 +33,7 @@ extern "C" {
 #define SYS_read            __NR_read
 #define SYS_write           __NR_write
 #define SYS_mmap            __NR_mmap
+#define SYS_ioctl           __NR_ioctl
 #define SYS_mprotect        __NR_mprotect
 #define SYS_madvise         __NR_madvise
 #define SYS_getpid          __NR_getpid

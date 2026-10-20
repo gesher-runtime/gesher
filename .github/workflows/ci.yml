@@ -23,7 +23,8 @@ jobs:
 
       - uses: ./.github/actions/setup-build
         with:
-          ccache-key: build
+          # The former runtime-port job's cache already holds the runtime.
+          ccache-key: runtime
 
       - name: Build
         run: ninja -C out
@@ -47,33 +48,26 @@ jobs:
           name: windows-x64
           path: dist/
 
-  # The ART runtime does not fully compile for Windows yet. This job compiles
-  # every file it can and publishes a report; it fails only if the build
-  # setup itself breaks.
-  runtime-port:
+  # What is left of porting ART's x86-64 assembly to Windows; informational.
+  asm-port:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-build
+      - name: Cache AOSP sources
+        uses: actions/cache@v4
         with:
-          ccache-key: runtime
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
 
-      - name: Compile ART runtime
-        run: ninja -C out -k 0 art_runtime 2>&1 | tee runtime.log || true
+      - name: Fetch AOSP sources
+        run: tools/fetch-aosp.sh
 
       - name: Report
         run: |
-          python3 tools/compile-report.py runtime.log cmake/aosp/libart_srcs.cmake \
-            "ART runtime port status" out | tee runtime-report.md
-          cat runtime-report.md >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: runtime-port-report
-          path: |
-            runtime-report.md
-            runtime.log
+          python3 tools/asm-port-report.py third_party/aosp | tee asm-report.md
+          cat asm-report.md >> "$GITHUB_STEP_SUMMARY"
 
   test:
     needs: build

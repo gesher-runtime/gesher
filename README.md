@@ -6,7 +6,7 @@ Gesher (Hebrew: *bridge*) is to Android what Wine is to Windows: a compatibility
 layer. Double-click an `.apk`, and the app runs in an ordinary window, at native
 speed, with no hidden VM and no Android image to boot.
 
-> **Status: phase 1 — porting ART.** ART's DEX libraries run on Windows; nothing runs apps yet.
+> **Status: phase 1 — porting ART.** The ART runtime builds for Windows and `dalvikvm.exe` starts; it does not run Java code yet, and nothing runs apps yet.
 > See the [roadmap](docs/roadmap.md).
 
 ## How it works
@@ -70,4 +70,4 @@ Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
 
 ‏**גשר** מריץ אפליקציות אנדרואיד על Windows כתוכנות רגילות, בלי אמולטור ובלי
 מכונה וירטואלית. המטרה היא כלי קל שפותח קובצי ‎`.apk` בלחיצה כפולה ומכבד את
-הסינון שמותקן במחשב. הפרויקט בשלב 0 (מחקר ותשתית).
+הסינון שמותקן במחשב. הפרויקט בשלב 1: מנוע ה-ART נבנה ל-Windows ועולה, אך עדיין אינו מריץ קוד.

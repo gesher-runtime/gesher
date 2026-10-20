@@ -28,5 +28,8 @@ Check 'dexdump: read .dex from compressed .apk' { & "$Dir/dexdump.exe" -f "$Dir/
   "hello.apk', DEX version '038'",
   'class_defs_size     : 1')
 
+# The runtime starts; running code needs a boot class path (next step).
+Check 'dalvikvm: runtime starts' { & "$Dir/dalvikvm.exe" -showversion } @('ART version')
+
 Write-Host "`n$failed test(s) failed"
 exit $failed

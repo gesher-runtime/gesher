@@ -5,9 +5,11 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/dlfcn.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/internal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/signal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/thread_register.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc)
 target_link_libraries(gesher_posix PUBLIC synchronization psapi)
 target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)

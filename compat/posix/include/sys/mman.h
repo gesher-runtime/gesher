@@ -44,6 +44,7 @@ extern "C" {
 
 #define MREMAP_MAYMOVE 1
 #define MREMAP_FIXED   2
+#define MREMAP_DONTUNMAP 4
 
 #define MCL_CURRENT 1
 #define MCL_FUTURE  2
