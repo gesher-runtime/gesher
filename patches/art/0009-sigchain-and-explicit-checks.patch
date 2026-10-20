@@ -1,0 +1,56 @@
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+index 6c671da..8c70708 100644
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -1965,6 +1965,16 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+   implicit_null_checks_ = false;
+ #endif  // ART_USE_RESTRICTED_MODE
+ 
++#if defined(GESHER)
++  // Implicit checks turn faults into SIGSEGV for ART's fault handlers.
++  // gesher-base does not deliver signals from Windows exceptions yet, and the
++  // stack protection collides with Windows' own stack guard pages; use
++  // explicit checks until it does.
++  implicit_suspend_checks_ = false;
++  implicit_null_checks_ = false;
++  implicit_so_checks_ = false;
++#endif  // GESHER
++
+   fault_manager.Init(!no_sig_chain_);
+   if (!no_sig_chain_) {
+     if (HandlesSignalsInCompiledCode()) {
+diff --git a/sigchainlib/sigchain.cc b/sigchainlib/sigchain.cc
+index 01156ec..e0ee699 100644
+--- a/sigchainlib/sigchain.cc
++++ b/sigchainlib/sigchain.cc
+@@ -130,6 +130,22 @@ static decltype(&sigaction64) linked_sigaction64;
+ static decltype(&sigprocmask64) linked_sigprocmask64;
+ #endif
+ 
++#if defined(GESHER)
++// Statically linked: gesher-base's implementations, which this file's
++// sigaction() and sigprocmask() replace, are reachable under other names.
++template <typename T>
++static void lookup_libc_symbol(T* output, [[maybe_unused]] T wrapper, const char* name) {
++  void* sym = nullptr;
++  if (strcmp(name, "sigaction") == 0) {
++    sym = reinterpret_cast<void*>(&gesher_sigaction_raw);
++  } else if (strcmp(name, "sigprocmask") == 0) {
++    sym = reinterpret_cast<void*>(&gesher_sigprocmask_raw);
++  } else {
++    fatal("Unable to find next %s in signal chain", name);
++  }
++  *output = reinterpret_cast<T>(sym);
++}
++#else
+ template <typename T>
+ static void lookup_libc_symbol(T* output, T wrapper, const char* name) {
+ #if defined(__BIONIC__)
+@@ -162,6 +178,7 @@ static void lookup_libc_symbol(T* output, T wrapper, const char* name) {
+   }
+   *output = reinterpret_cast<T>(sym);
+ }
++#endif  // GESHER
+ 
+ __attribute__((constructor)) static void InitializeSignalChain() {
+   static std::once_flag once;

@@ -40,10 +40,13 @@ jobs:
       - name: Build test apps
         run: tests/build-test-apps.sh out/test-apps
 
+      - name: Build boot class path (core-oj, core-libart)
+        run: tools/build-boot-jars.sh out/boot-jars
+
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/test-apps/* dist/
+          cp out/*.exe out/test-apps/* out/boot-jars/*.jar dist/
           ls -la dist
 
       - uses: actions/upload-artifact@v4

@@ -1,5 +1,6 @@
 # AOSP projects Gesher builds from, all at one release tag.
-# Format: <project path> [sparse directories...]
+# Format: <project path>[=<repository>] [sparse directories...]
+# The repository defaults to platform/<project path>.
 # Fetched by tools/fetch-aosp.sh into $AOSP_DIR (default: third_party/aosp).
 
 tag android-16.0.0_r4
@@ -18,4 +19,8 @@ external/lz4
 external/lzma C/
 external/cpu_features
 system/unwinding libunwindstack/include/
-libcore libcore.aconfig
+libcore libcore.aconfig JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
+external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/
+external/okhttp Android.bp repackaged/
+frameworks/libs/modules-utils java/android/annotation/
+tools/platform-compat=tools/platform-compat java/android/compat/annotation/

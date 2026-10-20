@@ -30,8 +30,13 @@ add_compile_definitions(
 add_compile_options(-mno-ms-bitfields -fno-exceptions
   $<$<COMPILE_LANGUAGE:CXX>:-fsized-deallocation>)
 # Everything links statically: one self-contained .exe per tool. Executables
-# are stripped; objects keep their debug info.
-add_link_options(-static -s)
+# are stripped by default; objects keep their debug info. Local builds that
+# need symbols (addr2line on crash reports) turn GESHER_STRIP off.
+option(GESHER_STRIP "Strip executables" ON)
+add_link_options(-static)
+if(GESHER_STRIP)
+  add_link_options(-s)
+endif()
 
 # gesher-base: POSIX/Linux interfaces implemented on Win32.
 include(compat/posix/posix.cmake)

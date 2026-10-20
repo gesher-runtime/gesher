@@ -63,7 +63,10 @@ int sigismember(const sigset_t* set, int signum) {
   return (*set & Bit(signum)) != 0;
 }
 
-int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact) {
+// The raw implementations. sigaction() and sigprocmask() below are weak, so
+// that libsigchain, which interposes them as it does on Linux, can define
+// them and reach these through gesher_*_raw.
+int gesher_sigaction_raw(int signum, const struct sigaction* act, struct sigaction* oldact) {
   if (!Valid(signum) || (act != nullptr && (signum == SIGKILL || signum == SIGSTOP))) {
     return errno = EINVAL, -1;
   }
@@ -86,9 +89,18 @@ int pthread_sigmask(int how, const sigset_t* set, sigset_t* oldset) {
   return 0;
 }
 
-int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+int gesher_sigprocmask_raw(int how, const sigset_t* set, sigset_t* oldset) {
   int result = pthread_sigmask(how, set, oldset);
   return result == 0 ? 0 : (errno = result, -1);
+}
+
+__attribute__((weak)) int sigaction(int signum, const struct sigaction* act,
+                                    struct sigaction* oldact) {
+  return gesher_sigaction_raw(signum, act, oldact);
+}
+
+__attribute__((weak)) int sigprocmask(int how, const sigset_t* set, sigset_t* oldset) {
+  return gesher_sigprocmask_raw(how, set, oldset);
 }
 
 int sigaltstack(const stack_t* ss, stack_t* old_ss) {

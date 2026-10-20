@@ -1,0 +1,19 @@
+diff --git a/dlmalloc.c b/dlmalloc.c
+index 3eb761d..ff51809 100644
+--- a/dlmalloc.c
++++ b/dlmalloc.c
+@@ -530,7 +530,13 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
+ #define DLMALLOC_EXPORT extern
+ #endif
+ 
+-#ifndef WIN32
++#if defined(GESHER)
++/* Gesher: gesher-base provides the POSIX environment of dlmalloc's Unix
++   configuration. The WIN32 one would ignore the caller's MORECORE and
++   allocate with VirtualAlloc anywhere in the address space; MinGW
++   compilers predefine WIN32, so undo that. */
++#undef WIN32
++#elif !defined(WIN32)
+ #ifdef _WIN32
+ #define WIN32 1
+ #endif  /* _WIN32 */

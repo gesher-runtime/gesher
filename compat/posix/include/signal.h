@@ -195,6 +195,12 @@ int sigqueue(pid_t pid, int sig, const union sigval value);
 int sigwaitinfo(const sigset_t* set, siginfo_t* info);
 int sigtimedwait(const sigset_t* set, siginfo_t* info, const struct timespec* timeout);
 
+// gesher-base's own implementations, which libsigchain chains to (it
+// defines sigaction and sigprocmask itself, as on Linux).
+int gesher_sigaction_raw(int signum, const struct sigaction* act, struct sigaction* oldact);
+int gesher_sigprocmask_raw(int how, const sigset_t* set, sigset_t* oldset);
+sighandler_t bsd_signal(int signum, sighandler_t handler);
+
 // bionic's 64-bit-signal-set API; sigset_t already holds all 64 signals.
 typedef sigset_t sigset64_t;
 #define sigemptyset64 sigemptyset
