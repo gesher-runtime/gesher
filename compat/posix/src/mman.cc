@@ -17,6 +17,8 @@
 #include <errno.h>
 #include <io.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 
@@ -57,6 +59,13 @@ State& state() {
 }
 
 size_t RoundUp(size_t x, size_t n) { return (x + n - 1) / n * n; }
+
+// GESHER_TRACE_MMAP=1 logs every call to stderr.
+bool Tracing() {
+  static const bool on = getenv("GESHER_TRACE_MMAP") != nullptr;
+  return on;
+}
+#define TRACE(...) (Tracing() ? (void)fprintf(stderr, "gesher-mmap: " __VA_ARGS__) : (void)0)
 
 DWORD PageProtection(int prot) {
   switch (prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) {
@@ -221,10 +230,12 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   }
   length = RoundUp(length, s.page_size);
   std::lock_guard<std::mutex> guard(s.lock);
-  if ((flags & MAP_ANONYMOUS) != 0 || fd == -1) {
-    return MapAnonymous(s, addr, length, prot, flags);
-  }
-  return MapFile(s, addr, length, prot, flags, fd, offset);
+  void* result = ((flags & MAP_ANONYMOUS) != 0 || fd == -1)
+                     ? MapAnonymous(s, addr, length, prot, flags)
+                     : MapFile(s, addr, length, prot, flags, fd, offset);
+  TRACE("mmap(%p, 0x%zx, prot=%d, flags=0x%x, fd=%d) = %p\n", addr, length, prot, flags, fd,
+        result);
+  return result;
 }
 
 void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -239,6 +250,7 @@ int munmap(void* addr, size_t length) {
     return -1;
   }
   uintptr_t end = begin + RoundUp(length, s.page_size);
+  TRACE("munmap(%p, 0x%zx)\n", addr, length);
 
   std::lock_guard<std::mutex> guard(s.lock);
   auto it = FindRegion(s, begin);
@@ -274,6 +286,7 @@ int munmap(void* addr, size_t length) {
 }
 
 int mprotect(void* addr, size_t length, int prot) {
+  TRACE("mprotect(%p, 0x%zx, %d)\n", addr, length, prot);
   if (length == 0) return 0;
   DWORD protection = PageProtection(prot);
   // Copy-on-write views stay copy-on-write when made writable.
@@ -293,6 +306,7 @@ int mprotect(void* addr, size_t length, int prot) {
 }
 
 int madvise(void* addr, size_t length, int advice) {
+  TRACE("madvise(%p, 0x%zx, %d)\n", addr, length, advice);
   switch (advice) {
     case MADV_DONTNEED:
     case MADV_FREE:

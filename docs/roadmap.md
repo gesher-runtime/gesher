@@ -61,10 +61,23 @@ Each phase ends with something demonstrable, built and tested in CI.
       System V wrappers too (the Microsoft ABI's 32-byte shadow space);
       only matters once the JIT/AOT compiler runs
 - [ ] `JNICALL` and the `JNIEnv`/`JavaVM` tables as System V (libnativehelper)
-- [ ] Android root, boot class path: libcore (`core-oj`, `core-libart`) and
-      its native libraries for Windows
+- [x] Android root and data directories from the environment (patch 0008)
+- [x] Boot class path built from libcore in CI: `core-oj`, `core-libart`
+      ([0007](decisions/0007-boot-class-path.md))
+- [x] Real signal chain (libsigchain) on gesher-base; ART uses explicit
+      null, suspend and stack-overflow checks until signals are delivered
+- [x] dlmalloc in its POSIX configuration, so the non-moving space stays in
+      ART's low-4 GiB heap
+- [x] `dalvikvm.exe` links the core classes from the boot jars without a boot
+      image (tested in CI); stops at libcore's native libraries
+- [x] Crash reports: unhandled exceptions print a stack trace
+      (`tools/symbolize.py`, or `addr2line` on an unstripped build);
+      `GESHER_TRACE_MMAP=1` traces the mmap layer
+- [ ] libcore's native libraries (`libicu_jni`, `libjavacore`,
+      `libopenjdk`) linked in and initialized without `dlopen`
+- [ ] A path model for Windows paths in ART's `:`-separated lists
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
-      `CONTEXT` ↔ `ucontext_t`), needed for implicit null checks
+      `CONTEXT` ↔ `ucontext_t`), then implicit checks back on
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
 - [ ] Executable file mappings (`.oat` code)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows

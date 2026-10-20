@@ -118,10 +118,11 @@ add_library(art_profile STATIC
 target_include_directories(art_profile PUBLIC ${_art}/libprofile)
 target_link_libraries(art_profile PUBLIC dexfile)
 
-# libsigchain_fake: signal chaining is done by gesher-base itself.
-add_library(art_sigchain_fake STATIC ${_art}/sigchainlib/sigchain_fake.cc)
-target_include_directories(art_sigchain_fake PUBLIC ${_art}/sigchainlib)
-target_link_libraries(art_sigchain_fake PUBLIC art_defaults base log)
+# libsigchain: the real signal chain (Linux configuration), chaining to
+# gesher-base's sigaction/sigprocmask (ART patch: lookup_libc_symbol).
+add_library(art_sigchain STATIC ${_art}/sigchainlib/sigchain.cc)
+target_include_directories(art_sigchain PUBLIC ${_art}/sigchainlib)
+target_link_libraries(art_sigchain PUBLIC art_defaults base log gesher_posix)
 
 # libnativebridge and libnativeloader (host configurations).
 add_library(art_nativebridge STATIC ${_art}/libnativebridge/native_bridge.cc)
@@ -143,7 +144,7 @@ add_library(art_runtime_glue STATIC
   ${CMAKE_SOURCE_DIR}/compat/art/unwindstack_stub.cc)
 target_link_libraries(art_runtime_glue PUBLIC art_runtime_headers)
 
-set(ART_RUNTIME_DEPS art_elffile art_profile art_sigchain_fake art_nativebridge
+set(ART_RUNTIME_DEPS art_elffile art_profile art_sigchain art_nativebridge
   art_nativeloader art_odrstatslog art_runtime_glue cpu_features lz4 lzma)
 target_link_libraries(art_runtime PUBLIC ${ART_RUNTIME_DEPS})
 
@@ -154,3 +155,5 @@ add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
 target_include_directories(dalvikvm PRIVATE ${AOSP_DIR}/libnativehelper/include_platform
   ${AOSP_DIR}/libnativehelper/include)
 target_link_libraries(dalvikvm PRIVATE art_runtime)
+# A linker map, for tools/symbolize.py (the executable is stripped).
+target_link_options(dalvikvm PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dalvikvm.map)

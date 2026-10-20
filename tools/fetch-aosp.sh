@@ -15,8 +15,8 @@ lock=$root/aosp.lock
 tag=$(awk '$1 == "tag" { print $2 }' "$lock")
 mkdir -p "$dest"
 
-clone() {  # clone <project> <dir> [sparse dirs...]
-  local url=https://android.googlesource.com/platform/$1 dir=$2
+clone() {  # clone <repository> <dir> [sparse dirs...]
+  local url=https://android.googlesource.com/$1 dir=$2
   shift 2
   # Keep LF endings everywhere: AOSP generators parse sources with regexes.
   local git=(git -c advice.detachedHead=false -c core.autocrlf=false)
@@ -33,7 +33,11 @@ clone() {  # clone <project> <dir> [sparse dirs...]
   fi
 }
 
-grep -vE '^\s*(#|$|tag )' "$lock" | while read -r project sparse; do
+grep -vE '^\s*(#|$|tag )' "$lock" | while read -r entry sparse; do
+  # <path>[=<repository>]; the repository defaults to platform/<path>.
+  project=${entry%%=*}
+  repo=platform/$project
+  [[ $entry == *=* ]] && repo=${entry#*=}
   dir=$dest/$project
   stamp=$dir/.gesher-tag
   patches=("$root/patches/$project"/*.patch)
@@ -51,7 +55,7 @@ grep -vE '^\s*(#|$|tag )' "$lock" | while read -r project sparse; do
     echo "fetching $project @ $tag"
     rm -rf "$dir"
     # shellcheck disable=SC2086
-    clone "$project" "$dir" $sparse
+    clone "$repo" "$dir" $sparse
   fi
 
   for patch in "${patches[@]}"; do
