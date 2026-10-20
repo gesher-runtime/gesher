@@ -1,0 +1,579 @@
+diff --git a/runtime/arch/x86_64/asm_support_x86_64.S b/runtime/arch/x86_64/asm_support_x86_64.S
+index 09bf999..c90e324 100644
+--- a/runtime/arch/x86_64/asm_support_x86_64.S
++++ b/runtime/arch/x86_64/asm_support_x86_64.S
+@@ -291,6 +291,76 @@ MACRO1(LOAD_THREAD_SELF, reg)
+ #endif
+ END_MACRO
+ 
++// Gesher: one instruction that reads or writes a Thread field, with no
++// register to spare. r11 is saved on the stack, holds Thread* for that
++// instruction and is restored; push/pop/mov leave the flags alone, so a
++// following conditional jump sees the instruction's result. Operands must
++// not be r11 or rsp-relative. (CFI is not adjusted for these three
++// instructions.)
++//   THREAD_SRC op, offset, dst   ==  op %gs:offset, dst
++//   THREAD_DST op, src, offset   ==  op src, %gs:offset
++MACRO3(THREAD_SRC, op, offset, dst)
++#if defined(GESHER)
++    pushq %r11
++    LOAD_THREAD_SELF r11
++    \op \offset(%r11), \dst
++    popq %r11
++#else
++    \op %gs:\offset, \dst
++#endif
++END_MACRO
++
++MACRO3(THREAD_DST, op, src, offset)
++#if defined(GESHER)
++    pushq %r11
++    LOAD_THREAD_SELF r11
++    \op \src, \offset(%r11)
++    popq %r11
++#else
++    \op \src, %gs:\offset
++#endif
++END_MACRO
++
++// Thread field := rsp (the value at this point), all registers and flags kept.
++MACRO1(STORE_RSP_TO_THREAD, offset)
++#if defined(GESHER)
++    pushq %r11
++    pushq %r10
++    LOAD_THREAD_SELF r11
++    leaq 16(%rsp), %r10
++    movq %r10, \offset(%r11)
++    popq %r10
++    popq %r11
++#else
++    movq %rsp, %gs:\offset
++#endif
++END_MACRO
++
++// pushq %gs:offset, all registers and flags kept.
++MACRO1(PUSH_THREAD_FIELD, offset)
++#if defined(GESHER)
++    leaq -8(%rsp), %rsp
++    pushq %r11
++    LOAD_THREAD_SELF r11
++    movq \offset(%r11), %r11
++    movq %r11, 8(%rsp)
++    popq %r11
++#else
++    pushq %gs:\offset
++#endif
++END_MACRO
++
++// call *%gs:offset. r11 is caller-saved and not an argument register, so
++// it is free at a call.
++MACRO1(CALL_THREAD_FIELD, offset)
++#if defined(GESHER)
++    LOAD_THREAD_SELF r11
++    call *\offset(%r11)
++#else
++    call *%gs:\offset
++#endif
++END_MACRO
++
+ // reg := Thread::Current()->field (64-bit), clobbering only reg.
+ MACRO2(LOAD_THREAD_FIELD, offset, reg)
+ #if defined(GESHER)
+@@ -365,7 +435,7 @@ MACRO0(SETUP_SAVE_REFS_ONLY_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the stop quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    STORE_RSP_TO_THREAD THREAD_TOP_QUICK_FRAME_OFFSET
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+@@ -489,7 +559,7 @@ MACRO0(SETUP_SAVE_ALL_CALLEE_SAVES_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    STORE_RSP_TO_THREAD THREAD_TOP_QUICK_FRAME_OFFSET
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+diff --git a/runtime/arch/x86_64/jni_entrypoints_x86_64.S b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+index b26a82b..f91d1dc 100644
+--- a/runtime/arch/x86_64/jni_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+@@ -234,7 +234,7 @@ DEFINE_FUNCTION art_jni_dlsym_lookup_critical_stub
+     movq %r10, (%rbp)
+ 
+     // Place (maybe tagged) managed SP in Thread::Current()->top_quick_frame.
+-    movq %rax, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    THREAD_DST movq, %rax, THREAD_TOP_QUICK_FRAME_OFFSET
+ 
+     // Save our return PC in the padding.
+     movq %r11, __SIZEOF_POINTER__(%rbp)
+diff --git a/runtime/arch/x86_64/quick_entrypoints_x86_64.S b/runtime/arch/x86_64/quick_entrypoints_x86_64.S
+index 500b595..455db74 100644
+--- a/runtime/arch/x86_64/quick_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/quick_entrypoints_x86_64.S
+@@ -47,7 +47,7 @@ MACRO0(SETUP_SAVE_REFS_AND_ARGS_FRAME)
+     // Store ArtMethod* to bottom of stack.
+     movq %r10, 0(%rsp)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    STORE_RSP_TO_THREAD THREAD_TOP_QUICK_FRAME_OFFSET
+ #endif  // __APPLE__
+ END_MACRO
+ 
+@@ -56,7 +56,7 @@ MACRO0(SETUP_SAVE_REFS_AND_ARGS_FRAME_WITH_METHOD_IN_RDI)
+     // Store ArtMethod to bottom of stack.
+     movq %rdi, 0(%rsp)
+     // Store rsp as the stop quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    STORE_RSP_TO_THREAD THREAD_TOP_QUICK_FRAME_OFFSET
+ END_MACRO
+ 
+     /*
+@@ -109,7 +109,7 @@ MACRO1(SETUP_SAVE_EVERYTHING_FRAME_R14_R15_SAVED, runtime_method_offset = RUNTIM
+     pushq \runtime_method_offset(%r10)
+     CFI_ADJUST_CFA_OFFSET(8)
+     // Store rsp as the top quick frame.
+-    movq %rsp, %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    STORE_RSP_TO_THREAD THREAD_TOP_QUICK_FRAME_OFFSET
+ 
+     // Ugly compile-time check, but we only have the preprocessor.
+     // Last +8: implicit return address pushed on stack when caller made call.
+@@ -754,7 +754,7 @@ MACRO0(RETURN_REF_OR_DEOPT_OR_DELIVER_PENDING_EXCEPTION)
+ END_MACRO
+ 
+ MACRO1(DEOPT_OR_RETURN, is_ref = 0)
+-  cmpl LITERAL(0), %gs:THREAD_DEOPT_CHECK_REQUIRED_OFFSET
++  THREAD_DST cmpl, LITERAL(0), THREAD_DEOPT_CHECK_REQUIRED_OFFSET
+   jne 2f
+   ret
+ 2:
+@@ -780,7 +780,7 @@ MACRO1(DEOPT_OR_RETURN, is_ref = 0)
+ END_MACRO
+ 
+ MACRO1(DEOPT_OR_RESTORE_SAVE_EVERYTHING_FRAME_AND_RETURN_RAX, is_ref = 0)
+-  cmpl LITERAL(0), %gs:THREAD_DEOPT_CHECK_REQUIRED_OFFSET
++  THREAD_DST cmpl, LITERAL(0), THREAD_DEOPT_CHECK_REQUIRED_OFFSET
+   CFI_REMEMBER_STATE
+   jne 2f
+   RESTORE_SAVE_EVERYTHING_FRAME_KEEP_RAX
+@@ -1230,7 +1230,7 @@ DEFINE_FUNCTION art_quick_aput_obj
+     movl MIRROR_OBJECT_CLASS_OFFSET(%rdi), %ecx
+     UNPOISON_HEAP_REF ecx
+ #ifdef USE_READ_BARRIER
+-    cmpl LITERAL(0), %gs:THREAD_IS_GC_MARKING_OFFSET
++    THREAD_DST cmpl, LITERAL(0), THREAD_IS_GC_MARKING_OFFSET
+     CFI_REMEMBER_STATE
+     jnz .Laput_obj_gc_marking
+ #endif  // USE_READ_BARRIER
+@@ -1592,7 +1592,7 @@ DEFINE_FUNCTION art_quick_generic_jni_trampoline
+     jmp .Lcall_method_exit_hook_done
+ 
+ .Lexception_in_native:
+-    pushq %gs:THREAD_TOP_QUICK_FRAME_OFFSET
++    PUSH_THREAD_FIELD THREAD_TOP_QUICK_FRAME_OFFSET
+     addq LITERAL(-1), (%rsp)  // Remove the GenericJNI tag.
+     movq (%rsp), %rsp
+     call art_deliver_pending_exception
+@@ -2007,7 +2007,7 @@ DEFINE_FUNCTION art_quick_update_inline_cache
+ #error "INLINE_CACHE_SIZE not as expected."
+ #endif
+     // Don't update the cache if we are marking.
+-    cmpl LITERAL(0), %gs:THREAD_IS_GC_MARKING_OFFSET
++    THREAD_DST cmpl, LITERAL(0), THREAD_IS_GC_MARKING_OFFSET
+     jnz .Ldone
+ .Lentry1:
+     movl INLINE_CACHE_CLASSES_OFFSET(%r11), %eax
+diff --git a/runtime/interpreter/mterp/x86_64ng/array.S b/runtime/interpreter/mterp/x86_64ng/array.S
+index 7aa34c7..d906ae4 100644
+--- a/runtime/interpreter/mterp/x86_64ng/array.S
++++ b/runtime/interpreter/mterp/x86_64ng/array.S
+@@ -140,7 +140,7 @@
+     /* op vB, {vD, vE, vF, vG, vA}, class@CCCC */
+     /* op {vCCCC..v(CCCC+AA-1)}, type@BBBB */
+     EXPORT_PC
+-    movq    rSELF:THREAD_SELF_OFFSET, OUT_ARG0
++    LOAD_THREAD_SELF rdi
+     movq    (%rsp), OUT_ARG1
+     movq    rFP, OUT_ARG2
+     movq    rPC, OUT_ARG3
+diff --git a/runtime/interpreter/mterp/x86_64ng/control_flow.S b/runtime/interpreter/mterp/x86_64ng/control_flow.S
+index e6116dd..d37c26a 100644
+--- a/runtime/interpreter/mterp/x86_64ng/control_flow.S
++++ b/runtime/interpreter/mterp/x86_64ng/control_flow.S
+@@ -171,6 +171,6 @@
+ %def op_throw():
+   EXPORT_PC
+   GET_VREG %edi, rINSTq                   # edi<- vAA (exception object)
+-  movq rSELF:THREAD_SELF_OFFSET, %rsi
++  LOAD_THREAD_SELF rsi
+   call SYMBOL(art_quick_deliver_exception)
+   int3
+diff --git a/runtime/interpreter/mterp/x86_64ng/invoke.S b/runtime/interpreter/mterp/x86_64ng/invoke.S
+index b2174ca..dda1944 100644
+--- a/runtime/interpreter/mterp/x86_64ng/invoke.S
++++ b/runtime/interpreter/mterp/x86_64ng/invoke.S
+@@ -26,7 +26,7 @@
+    movl (%esi), %eax
+    jmp $helper
+ 2:
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -110,7 +110,7 @@
+    jmp 1b
+ 
+ %def op_invoke_interface_slow_path():
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -129,7 +129,7 @@
+ %  fetch_from_thread_cache("%rdi", miss_label="1f")
+    jmp $helper
+ 1:
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -166,7 +166,7 @@
+    movq MIRROR_CLASS_VTABLE_OFFSET_64(%edx, %edi, 8), %rdi
+    jmp $helper
+ 2:
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+diff --git a/runtime/interpreter/mterp/x86_64ng/main.S b/runtime/interpreter/mterp/x86_64ng/main.S
+index 55b1141..59264c6 100644
+--- a/runtime/interpreter/mterp/x86_64ng/main.S
++++ b/runtime/interpreter/mterp/x86_64ng/main.S
+@@ -231,7 +231,7 @@ DEFINE_FUNCTION \name
+   SETUP_SAVE_REFS_ONLY_FRAME
+   call \helper
+   RESTORE_SAVE_REFS_ONLY_FRAME
+-  cmpq LITERAL(0), %gs:THREAD_EXCEPTION_OFFSET
++  THREAD_DST cmpq, LITERAL(0), THREAD_EXCEPTION_OFFSET
+   jne nterp_deliver_pending_exception
+   ret
+ END_FUNCTION \name
+@@ -1426,7 +1426,7 @@ END_FUNCTION \name
+ 1:
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 3f
+ 4:
+    .if \wide
+@@ -1441,7 +1441,7 @@ END_FUNCTION \name
+ %  fetch_field_from_fast_path("NterpGetLocalStaticField", success_label="1b", fail_label="5f", is_static="1")
+ 5:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq $$0, %rcx
+@@ -1462,7 +1462,7 @@ END_FUNCTION \name
+ 1:
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 3f
+ 4:
+    .if \wide
+@@ -1476,7 +1476,7 @@ END_FUNCTION \name
+ %  fetch_field_from_fast_path("NterpGetLocalStaticField", success_label="1b", fail_label="7f", is_static="1")
+ 7:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq $$0, %rcx
+@@ -1488,7 +1488,7 @@ END_FUNCTION \name
+    CLEAR_VOLATILE_MARKER %rax
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 6f
+ 5:
+    .if \wide
+@@ -1534,7 +1534,7 @@ END_FUNCTION \name
+ %  fetch_field_from_fast_path("NterpGetLocalInstanceField", success_label="1b", fail_label="3f", is_static="0")
+ 3:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -1570,7 +1570,7 @@ END_FUNCTION \name
+ %  fetch_field_from_fast_path("NterpGetLocalInstanceField", success_label="1b", fail_label="3f", is_static="0")
+ 3:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -1606,16 +1606,16 @@ END_FUNCTION \name
+     // Intrinsics are always in the boot image and considered hot.
+     testl $$ART_METHOD_IS_INTRINSIC_FLAG, ART_METHOD_ACCESS_FLAGS_OFFSET(%rdi)
+     jnz \if_hot
+-    movzwl rSELF:THREAD_SHARED_METHOD_HOTNESS_OFFSET, %esi
++    THREAD_SRC movzwl, THREAD_SHARED_METHOD_HOTNESS_OFFSET, %esi
+     testl %esi, %esi
+     je \if_hot
+     addl $$-1, %esi
+-    movw %si, rSELF:THREAD_SHARED_METHOD_HOTNESS_OFFSET
++    THREAD_DST movw, %si, THREAD_SHARED_METHOD_HOTNESS_OFFSET
+     jmp \if_not_hot
+ .endm
+ 
+ .macro DO_SUSPEND_CHECK continue_label
+-    testl   $$(THREAD_SUSPEND_OR_CHECKPOINT_REQUEST), rSELF:THREAD_FLAGS_OFFSET
++    THREAD_DST testl, $$(THREAD_SUSPEND_OR_CHECKPOINT_REQUEST), THREAD_FLAGS_OFFSET
+     jz      \continue_label
+     EXPORT_PC
+     call    SYMBOL(art_quick_test_suspend)
+@@ -1641,7 +1641,7 @@ OAT_ENTRY ExecuteNterpWithClinitImpl
+     cmpl $$(MIRROR_CLASS_STATUS_INITIALIZING_SHIFTED), MIRROR_CLASS_STATUS_OFFSET(%r10d)
+     jb art_quick_resolution_trampoline
+     movl MIRROR_CLASS_CLINIT_THREAD_ID_OFFSET(%r10d), %r10d
+-    cmpl %r10d, rSELF:THREAD_TID_OFFSET
++    THREAD_DST cmpl, %r10d, THREAD_TID_OFFSET
+     je ExecuteNterpImpl
+     jmp art_quick_resolution_trampoline
+     .cfi_endproc
+@@ -1787,7 +1787,7 @@ OAT_ENTRY ExecuteNterpImpl
+ %def fetch_from_thread_cache(dest_reg, miss_label):
+    // Fetch some information from the thread cache.
+    // Uses rax, rdx, rcx as temporaries.
+-   movq rSELF:THREAD_SELF_OFFSET, %rax
++   LOAD_THREAD_SELF rax
+    movq rPC, %rdx
+    salq MACRO_LITERAL(THREAD_INTERPRETER_CACHE_SIZE_SHIFT), %rdx
+    andq MACRO_LITERAL(THREAD_INTERPRETER_CACHE_SIZE_MASK), %rdx
+@@ -1883,15 +1883,15 @@ NterpNewInstance:
+    EXPORT_PC
+    // Fast-path which gets the class from thread-local cache.
+ %  fetch_from_thread_cache("%rdi", miss_label="2f")
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 3f
+ 4:
+-   callq *rSELF:THREAD_ALLOC_OBJECT_ENTRYPOINT_OFFSET
++   CALL_THREAD_FIELD THREAD_ALLOC_OBJECT_ENTRYPOINT_OFFSET
+ 1:
+    SET_VREG_OBJECT %eax, rINSTq            # fp[A] <- value
+    ADVANCE_PC_FETCH_AND_GOTO_NEXT 2
+ 2:
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    call nterp_allocate_object
+@@ -1906,18 +1906,18 @@ NterpNewArray:
+    EXPORT_PC
+    // Fast-path which gets the class from thread-local cache.
+ %  fetch_from_thread_cache("%rdi", miss_label="2f")
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 3f
+ 1:
+    movzbl  rINSTbl,%esi
+    sarl    $$4,%esi                          # esi<- B
+    GET_VREG %esi %rsi                        # esi<- vB (array length)
+    andb    $$0xf,rINSTbl                     # rINST<- A
+-   callq *rSELF:THREAD_ALLOC_ARRAY_ENTRYPOINT_OFFSET
++   CALL_THREAD_FIELD THREAD_ALLOC_ARRAY_ENTRYPOINT_OFFSET
+    SET_VREG_OBJECT %eax, rINSTq            # fp[A] <- value
+    ADVANCE_PC_FETCH_AND_GOTO_NEXT 2
+ 2:
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    call nterp_get_class
+@@ -1943,7 +1943,7 @@ NterpPutObjectInstanceField:
+    movl %ecx, (rINSTq,%rax,1)
+    testl %ecx, %ecx
+    je 4f
+-   movq rSELF:THREAD_CARD_TABLE_OFFSET, %rax
++   LOAD_THREAD_FIELD THREAD_CARD_TABLE_OFFSET, rax
+    shrq $$CARD_TABLE_CARD_SHIFT, rINSTq
+    movb %al, (%rax, rINSTq, 1)
+ 4:
+@@ -1952,7 +1952,7 @@ NterpPutObjectInstanceField:
+ %  fetch_field_from_fast_path("NterpGetLocalInstanceFieldForIPutObject", success_label="1b", fail_label="3f", is_static="0")
+ 3:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -1971,7 +1971,7 @@ NterpPutObjectInstanceField:
+    movl %ecx, (rINSTq,%rax,1)
+    testl %ecx, %ecx
+    je 5f
+-   movq rSELF:THREAD_CARD_TABLE_OFFSET, %rax
++   LOAD_THREAD_FIELD THREAD_CARD_TABLE_OFFSET, rax
+    shrq $$CARD_TABLE_CARD_SHIFT, rINSTq
+    movb %al, (%rax, rINSTq, 1)
+ 5:
+@@ -1999,7 +1999,7 @@ NterpGetObjectInstanceField:
+ %  fetch_field_from_fast_path("NterpGetLocalInstanceField", success_label="1b", fail_label="5f", is_static="0")
+ 5:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq rFP, %rcx
+@@ -2023,14 +2023,14 @@ NterpPutObjectStaticField:
+ 1:
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 3f
+ 5:
+    POISON_HEAP_REF ebp
+    movl %ebp, (%eax, %edx, 1)
+    testl %ebp, %ebp
+    je 4f
+-   movq rSELF:THREAD_CARD_TABLE_OFFSET, %rcx
++   LOAD_THREAD_FIELD THREAD_CARD_TABLE_OFFSET, rcx
+    shrq $$CARD_TABLE_CARD_SHIFT, %rax
+    movb %cl, (%rax, %rcx, 1)
+ 4:
+@@ -2039,7 +2039,7 @@ NterpPutObjectStaticField:
+ %  fetch_field_from_fast_path("NterpGetLocalStaticFieldForSPutObject", success_label="1b", fail_label="9f", is_static="1")
+ 9:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq %rbp, %rcx
+@@ -2051,14 +2051,14 @@ NterpPutObjectStaticField:
+    CLEAR_VOLATILE_MARKER %rax
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 7f
+ 6:
+    POISON_HEAP_REF ebp
+    movl %ebp, (%eax, %edx, 1)
+    testl %ebp, %ebp
+    je 8f
+-   movq rSELF:THREAD_CARD_TABLE_OFFSET, %rcx
++   LOAD_THREAD_FIELD THREAD_CARD_TABLE_OFFSET, rcx
+    shrq $$CARD_TABLE_CARD_SHIFT, %rax
+    movb %cl, (%rax, %rcx, 1)
+ 8:
+@@ -2077,7 +2077,7 @@ NterpGetObjectStaticField:
+ 1:
+    movl ART_FIELD_OFFSET_OFFSET(%rax), %edx
+    movl ART_FIELD_DECLARING_CLASS_OFFSET(%rax), %eax
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 5f
+ 6:
+    testb $$READ_BARRIER_TEST_VALUE, GRAY_BYTE_OFFSET(%eax)
+@@ -2091,7 +2091,7 @@ NterpGetObjectStaticField:
+ %  fetch_field_from_fast_path("NterpGetLocalStaticField", success_label="1b", fail_label="7f", is_static="1")
+ 7:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    movq $$0, %rcx
+diff --git a/runtime/interpreter/mterp/x86_64ng/object.S b/runtime/interpreter/mterp/x86_64ng/object.S
+index 9edf4ec..78d328f 100644
+--- a/runtime/interpreter/mterp/x86_64ng/object.S
++++ b/runtime/interpreter/mterp/x86_64ng/object.S
+@@ -14,7 +14,7 @@
+    ADVANCE_PC_FETCH_AND_GOTO_NEXT 2
+ 2:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    call nterp_get_class
+@@ -37,7 +37,7 @@
+    testl %eax, %eax
+    jne 1b
+ 2:
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 4f
+ 3:
+    EXPORT_PC
+@@ -110,7 +110,7 @@
+    UNPOISON_HEAP_REF esi  // Unpoison class reference poisoned in main path.
+    // Go slow path if we are marking. Checking now allows
+    // not going to slow path if the super class hierarchy check fails.
+-   cmpq $$0, rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, $$0, THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 4f
+    testl $$MIRROR_CLASS_IS_INTERFACE_FLAG, MIRROR_CLASS_ACCESS_FLAGS_OFFSET(%rsi)
+    jne 5f
+@@ -158,7 +158,7 @@
+ 
+ .L${opcode}_init:
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    call nterp_get_class
+diff --git a/runtime/interpreter/mterp/x86_64ng/other.S b/runtime/interpreter/mterp/x86_64ng/other.S
+index 940d90e..010d053 100644
+--- a/runtime/interpreter/mterp/x86_64ng/other.S
++++ b/runtime/interpreter/mterp/x86_64ng/other.S
+@@ -32,7 +32,7 @@
+ %  slow_path = add_slow_path(op_const_object_slow_path, helper)
+    // Fast-path which gets the object from thread-local cache.
+ %  fetch_from_thread_cache("%rax", miss_label=slow_path)
+-   cmpq MACRO_LITERAL(0), rSELF:THREAD_READ_BARRIER_MARK_REG00_OFFSET
++   THREAD_DST cmpq, MACRO_LITERAL(0), THREAD_READ_BARRIER_MARK_REG00_OFFSET
+    jne 1f
+ .L${opcode}_resume:
+    SET_VREG_OBJECT %eax, rINSTq            # vAA <- value
+@@ -48,7 +48,7 @@
+ 
+ %def op_const_object_slow_path(helper):
+    EXPORT_PC
+-   movq rSELF:THREAD_SELF_OFFSET, %rdi
++   LOAD_THREAD_SELF rdi
+    movq 0(%rsp), %rsi
+    movq rPC, %rdx
+    call SYMBOL($helper)
+@@ -149,9 +149,9 @@
+ 
+ %def op_move_exception():
+     /* move-exception vAA */
+-    movl    rSELF:THREAD_EXCEPTION_OFFSET, %eax
++    THREAD_SRC movl, THREAD_EXCEPTION_OFFSET, %eax
+     SET_VREG_OBJECT %eax, rINSTq            # fp[AA] <- exception object
+-    movl    $$0, rSELF:THREAD_EXCEPTION_OFFSET
++    THREAD_DST movl, $$0, THREAD_EXCEPTION_OFFSET
+     ADVANCE_PC_FETCH_AND_GOTO_NEXT 1
+ 
+ %def op_move_from16(is_object="0"):
