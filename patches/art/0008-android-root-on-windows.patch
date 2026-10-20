@@ -1,0 +1,83 @@
+diff --git a/libartbase/base/file_utils.cc b/libartbase/base/file_utils.cc
+index 763d708..7164866 100644
+--- a/libartbase/base/file_utils.cc
++++ b/libartbase/base/file_utils.cc
+@@ -20,13 +20,13 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ 
+-#ifndef _WIN32
++#if !defined(_WIN32) || defined(GESHER)
+ #include <sys/wait.h>
+ #endif
+ #include <unistd.h>
+ 
+ // We need dladdr.
+-#if !defined(__APPLE__) && !defined(_WIN32)
++#if !defined(__APPLE__) && (!defined(_WIN32) || defined(GESHER))
+ #ifndef _GNU_SOURCE
+ #define _GNU_SOURCE
+ #define DEFINED_GNU_SOURCE
+@@ -121,7 +121,7 @@ static const char* GetAndroidDir(const char* env_var,
+ }
+ 
+ std::string GetAndroidRootSafe(std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(kAndroidRootEnvVar, kAndroidRootDefaultPath);
+   *error_msg = "GetAndroidRootSafe unsupported for Windows.";
+   return "";
+@@ -140,7 +140,7 @@ std::string GetAndroidRootSafe(std::string* error_msg) {
+         std::filesystem::path path(argv.substr(0, argv.find('\0')));
+         path = std::filesystem::absolute(path).parent_path();
+         if (path.has_relative_path()) {
+-          return path.parent_path();
++          return path.parent_path().string();
+         }
+       }
+     }
+@@ -160,7 +160,7 @@ std::string GetAndroidRoot() {
+ }
+ 
+ std::string GetSystemExtRootSafe(std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(kAndroidSystemExtRootEnvVar, kAndroidSystemExtRootDefaultPath);
+   *error_msg = "GetSystemExtRootSafe unsupported for Windows.";
+   return "";
+@@ -179,7 +179,7 @@ std::string GetSystemExtRoot() {
+ }
+ 
+ static std::string GetArtRootSafe(bool must_exist, /*out*/ std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(kAndroidArtRootEnvVar, kAndroidArtApexDefaultPath);
+   UNUSED(must_exist);
+   *error_msg = "GetArtRootSafe unsupported for Windows.";
+@@ -531,7 +531,7 @@ void GetDalvikCache(const char* subdir,
+                     bool* have_android_data,
+                     bool* dalvik_cache_exists,
+                     bool* is_global_cache) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(subdir);
+   UNUSED(create_if_absent);
+   UNUSED(dalvik_cache);
+@@ -813,7 +813,7 @@ std::string_view ApexNameFromLocation(std::string_view full_path) {
+ }
+ 
+ bool LocationIsOnSystem(const std::string& location) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(location);
+   LOG(FATAL) << "LocationIsOnSystem is unsupported on Windows.";
+   return false;
+@@ -823,7 +823,7 @@ bool LocationIsOnSystem(const std::string& location) {
+ }
+ 
+ bool LocationIsOnSystemExt(const std::string& location) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   UNUSED(location);
+   LOG(FATAL) << "LocationIsOnSystemExt is unsupported on Windows.";
+   return false;
