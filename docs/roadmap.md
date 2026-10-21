@@ -79,7 +79,13 @@ Each phase ends with something demonstrable, built and tested in CI.
       sockets, with a probe run in CI ([0009](decisions/0009-socket-fds.md))
 - [ ] libcore's native libraries (`libicu_jni`, `libjavacore`,
       `libopenjdk`) linked in and initialized without `dlopen`
-- [ ] A path model for Windows paths in ART's `:`-separated lists
+- [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
+      drive-less paths on the current drive, so ART's `:`-separated lists
+      need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
+      `/proc/self/cmdline` are emulated; `open` takes Linux's `O_*` flags
+      over `CreateFileW`; tested in CI
+- [ ] Paths on another drive in `:`-separated lists, and the rest of the
+      CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
       `CONTEXT` ↔ `ucontext_t`), then implicit checks back on
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)

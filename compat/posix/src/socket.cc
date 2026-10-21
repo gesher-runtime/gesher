@@ -9,6 +9,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <string>
 #include <vector>
 
 #include "internal.h"
@@ -42,6 +43,32 @@ int RegisterNew(ws::Socket s, bool nonblocking) {
 }
 
 constexpr int kTypeFlags = SOCK_NONBLOCK | SOCK_CLOEXEC;
+
+// An AF_UNIX name is a path (path.cc): the names under /dev and /proc are
+// not files on Windows. Abstract names (a leading NUL) pass unchanged, and
+// Winsock rejects them.
+bool MapUnixPath(ws::Address* address, bool binding) {
+  if (address->family != ws::Family::kUnix || address->data_len == 0 || address->data[0] == 0) {
+    return true;
+  }
+  const char* name = reinterpret_cast<const char*>(address->data);
+  std::string path(name, strnlen(name, address->data_len));
+  std::wstring windows;
+  switch (gesher::MapPath(path.c_str(), &windows)) {
+    case gesher::PathKind::kFile:
+      break;
+    case gesher::PathKind::kMissing:
+      return errno = ENOENT, false;
+    default:
+      return errno = binding ? EADDRINUSE : ECONNREFUSED, false;
+  }
+  std::string mapped = gesher::Narrow(windows.c_str());
+  if (mapped.size() >= sizeof(sockaddr_un::sun_path)) return errno = ENAMETOOLONG, false;
+  memset(address->data, 0, sizeof(address->data));
+  memcpy(address->data, mapped.data(), mapped.size());
+  if (address->data_len < mapped.size() + 1) address->data_len = mapped.size() + 1;
+  return true;
+}
 
 }  // namespace
 
@@ -139,14 +166,18 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
 int bind(int fd, const struct sockaddr* addr, socklen_t len) {
   SocketFd state;
   ws::Address address;
-  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address)) return -1;
+  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, true)) {
+    return -1;
+  }
   return ws::Bind(state.socket, address);
 }
 
 int connect(int fd, const struct sockaddr* addr, socklen_t len) {
   SocketFd state;
   ws::Address address;
-  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address)) return -1;
+  if (!Lookup(fd, &state) || !ToAddress(addr, len, &address) || !MapUnixPath(&address, false)) {
+    return -1;
+  }
   return ws::Connect(state.socket, address);
 }
 
@@ -224,7 +255,7 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   ws::Address to;
-  if (addr != nullptr && !ToAddress(addr, addrlen, &to)) return -1;
+  if (addr != nullptr && (!ToAddress(addr, addrlen, &to) || !MapUnixPath(&to, false))) return -1;
   if (WouldBlock(state, flags, ws::kPollOut)) return -1;
   return ws::Send(state.socket, buffers, count, ToMsgFlags(flags), addr != nullptr ? &to : nullptr);
 }

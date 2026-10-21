@@ -34,7 +34,16 @@ bool Start(DIR* dir) {
 extern "C" {
 
 DIR* opendir(const char* name) {
-  std::wstring path = gesher::Widen(name);
+  if (name == nullptr || name[0] == '\0') {
+    errno = name == nullptr ? EFAULT : ENOENT;
+    return nullptr;
+  }
+  std::wstring path;
+  gesher::PathKind kind = gesher::MapPath(name, &path);
+  if (kind != gesher::PathKind::kFile) {
+    errno = kind == gesher::PathKind::kMissing ? ENOENT : ENOTDIR;
+    return nullptr;
+  }
   DWORD attrs = GetFileAttributesW(path.c_str());
   if (attrs == INVALID_FILE_ATTRIBUTES) {
     gesher::FailWithLastError();

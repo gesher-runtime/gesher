@@ -63,7 +63,7 @@ is the one it connected, so another local process cannot take its place.
   non-blocking connect only on Windows 10 2004 and later.
 - After a receive timeout Winsock leaves a stream socket in an undefined
   state; Java usually closes it then.
-- `AF_UNIX` paths, and `/dev/null` (which libcore's `preClose0` opens), wait
-  for the Windows path model.
+- `AF_UNIX` paths and `/dev/null` (which libcore's `preClose0` opens) follow
+  the path model, [0010](0010-paths.md).
 - `gethostbyname` and the other legacy resolver functions are declared but
   not implemented.
