@@ -46,7 +46,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
           ls -la dist
 
       - uses: actions/upload-artifact@v4
