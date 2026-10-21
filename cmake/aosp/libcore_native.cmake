@@ -108,6 +108,10 @@ target_link_libraries(libcore_openjdk PUBLIC nativehelper base log fdlibm z)
 target_compile_definitions(libcore_openjdk PRIVATE _LARGEFILE64_SOURCE _GNU_SOURCE LINUX
   $<$<COMPILE_LANGUAGE:C>:__linux__>)
 target_compile_options(libcore_openjdk PRIVATE $<$<COMPILE_LANGUAGE:C>:-UWIN32>)
+# libjavacore and libopenjdk each have a class JniConstants, apart in their
+# .so files on Android; linked into one executable they would clash.
+target_compile_definitions(libcore_openjdk PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:JniConstants=OpenjdkJniConstants>)
 target_compile_options(libcore_openjdk PRIVATE ${_libcore_flags} -Wno-unused-variable
   -Wno-parentheses-equality -Wno-constant-logical-operand -Wno-sometimes-uninitialized)
 set_source_files_properties("${_lc}/ojluni/src/main/native/OnLoad.cpp" PROPERTIES
