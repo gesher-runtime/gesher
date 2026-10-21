@@ -1,0 +1,16 @@
+diff --git a/openjdkjvm/OpenjdkJvm.cc b/openjdkjvm/OpenjdkJvm.cc
+--- a/openjdkjvm/OpenjdkJvm.cc
++++ b/openjdkjvm/OpenjdkJvm.cc
+@@ -310,7 +310,12 @@
+ }
+ 
+ JNIEXPORT int JVM_GetHostName(char* name, int namelen) {
++#if defined(GESHER)
++  // Gesher: gethostname clashes with Winsock's; see gesher-base's <unistd.h>.
++  return TEMP_FAILURE_RETRY(gesher_gethostname(name, namelen));
++#else
+   return TEMP_FAILURE_RETRY(gethostname(name, namelen));
++#endif
+ }
+ 
+ JNIEXPORT jstring JVM_InternString(JNIEnv* env, jstring jstr) {

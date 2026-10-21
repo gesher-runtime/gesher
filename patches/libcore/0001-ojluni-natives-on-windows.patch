@@ -63,6 +63,32 @@ diff --git a/ojluni/src/main/native/FileChannelImpl.c b/ojluni/src/main/native/F
  }
  
  
+diff --git a/ojluni/src/main/native/jvm.h b/ojluni/src/main/native/jvm.h
+--- a/ojluni/src/main/native/jvm.h
++++ b/ojluni/src/main/native/jvm.h
+@@ -1268,16 +1268,18 @@
+  * BE CAREFUL! The following functions do not implement the
+  * full feature set of standard C printf formats.
+  */
+-int
++// Gesher: JNIEXPORT, as art/openjdkjvm defines them; on Windows it is
++// dllexport, which a later declaration cannot add.
++JNIEXPORT int
+ jio_vsnprintf(char *str, size_t count, const char *fmt, va_list args);
+ 
+-int
++JNIEXPORT int
+ jio_snprintf(char *str, size_t count, const char *fmt, ...);
+ 
+-int
++JNIEXPORT int
+ jio_fprintf(FILE *, const char *fmt, ...);
+ 
+-int
++JNIEXPORT int
+ jio_vfprintf(FILE *, const char *fmt, va_list args);
+ 
+ 
 diff --git a/ojluni/src/main/native/Inflater.c b/ojluni/src/main/native/Inflater.c
 --- a/ojluni/src/main/native/Inflater.c
 +++ b/ojluni/src/main/native/Inflater.c

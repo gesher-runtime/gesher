@@ -173,6 +173,12 @@ int symlink(const char* target, const char* linkpath);
 int link(const char* oldpath, const char* newpath);
 int nice(int inc);
 
+// gethostname under another name: <winsock2.h>, which some AOSP headers
+// include on Windows (android-base/endian.h), declares gethostname with an
+// int length, and ws2_32's symbol of that name would collide with one here.
+// The host's DNS name in UTF-8; ENAMETOOLONG if it does not fit.
+int gesher_gethostname(char* name, size_t len);
+
 // The CRT's rmdir reports ENOTEMPTY with its own number (see <errno.h>).
 int gesher_rmdir(const char* path);
 #define rmdir gesher_rmdir

@@ -215,6 +215,17 @@ int setreuid(uid_t ruid, uid_t euid) {
   return ok ? 0 : (errno = EPERM, -1);
 }
 
+int gesher_gethostname(char* name, size_t len) {
+  if (name == nullptr) return errno = EFAULT, -1;
+  wchar_t host[256];
+  DWORD size = static_cast<DWORD>(sizeof(host) / sizeof(host[0]));
+  if (!GetComputerNameExW(ComputerNameDnsHostname, host, &size)) return gesher::FailWithLastError();
+  std::string utf8 = gesher::Narrow(host);
+  if (utf8.size() + 1 > len) return errno = ENAMETOOLONG, -1;
+  memcpy(name, utf8.c_str(), utf8.size() + 1);
+  return 0;
+}
+
 int setregid(gid_t rgid, gid_t egid) {
   bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
             (egid == static_cast<gid_t>(-1) || egid == kAppUid);
