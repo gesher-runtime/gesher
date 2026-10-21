@@ -85,7 +85,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests
+          sparse-checkout: |
+            tests
+            tools/symbolize.py
 
       - uses: actions/download-artifact@v4
         with:
