@@ -73,6 +73,10 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] Crash reports: unhandled exceptions print a stack trace
       (`tools/symbolize.py`, or `addr2line` on an unstripped build);
       `GESHER_TRACE_MMAP=1` traces the mmap layer
+- [x] Linux errno numbering, translated from the CRT's and winpthreads'
+      ([0008](decisions/0008-linux-abi.md))
+- [x] Sockets as file descriptors over Winsock, `poll` over files, pipes and
+      sockets, with a probe run in CI ([0009](decisions/0009-socket-fds.md))
 - [ ] libcore's native libraries (`libicu_jni`, `libjavacore`,
       `libopenjdk`) linked in and initialized without `dlopen`
 - [ ] A path model for Windows paths in ART's `:`-separated lists

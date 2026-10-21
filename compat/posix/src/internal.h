@@ -21,6 +21,13 @@ inline int FailWithLastError() {
   return -1;
 }
 
+// Passes on a CRT call's result, translating the errno it set on failure
+// to Linux's numbering (see <errno.h>).
+inline int CrtResult(int result) {
+  if (result < 0) errno = gesher_errno_from_crt(errno);
+  return result;
+}
+
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 

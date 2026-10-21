@@ -50,3 +50,7 @@ include(cmake/aosp/art_runtime.cmake)
 add_executable(platform_probe probes/platform/platform_probe.c)
 target_compile_options(platform_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(platform_probe PRIVATE synchronization)
+
+# gesher-base's socket layer and fd overrides, run in CI on Windows.
+add_executable(socket_probe probes/posix/socket_probe.cc)
+target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)

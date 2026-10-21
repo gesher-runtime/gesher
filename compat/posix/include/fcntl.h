@@ -1,33 +1,60 @@
-// gesher-base: POSIX additions to mingw's <fcntl.h>.
+// gesher-base: <fcntl.h> with Linux's open flags.
 //
-// TODO(gesher): file descriptors still come from the CRT (_open), which
-// lacks Linux semantics such as deleting or renaming files that are open.
-// A gesher-base open() over CreateFileW is planned.
+// Android's Java libraries pass Linux's O_* numbers to native code
+// (OsConstants.O_CREAT == 64), so open() and fcntl() take Linux values and
+// gesher-base translates them for the CRT (src/fd.cc). The CRT's own names
+// (_O_CREAT, _O_BINARY, ...) keep their values. See
+// docs/decisions/0008-linux-abi.md.
 #pragma once
 
 #include_next <fcntl.h>
 
 #include <sys/types.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#undef O_RDONLY
+#undef O_WRONLY
+#undef O_RDWR
+#undef O_ACCMODE
+#undef O_APPEND
+#undef O_CREAT
+#undef O_TRUNC
+#undef O_EXCL
+#undef O_TEXT
+#undef O_BINARY
+#undef O_RAW
+#undef O_NOINHERIT
+#undef O_TEMPORARY
+#undef O_SHORT_LIVED
+#undef O_SEQUENTIAL
+#undef O_RANDOM
 
-#ifndef O_CLOEXEC
-#define O_CLOEXEC O_NOINHERIT
-#endif
-// Flags with no CRT equivalent. open() in gesher-base strips them before
-// calling the CRT.
-#define O_NONBLOCK  0x00100000
+#define O_ACCMODE   00000003
+#define O_RDONLY    00000000
+#define O_WRONLY    00000001
+#define O_RDWR      00000002
+#define O_CREAT     00000100
+#define O_EXCL      00000200
+#define O_NOCTTY    00000400
+#define O_TRUNC     00001000
+#define O_APPEND    00002000
+#define O_NONBLOCK  00004000
 #define O_NDELAY    O_NONBLOCK
-#define O_NOCTTY    0x00200000
-#define O_DIRECTORY 0x00400000
-#define O_NOFOLLOW  0x00800000
-#define O_SYNC      0x01000000
-#define O_DSYNC     O_SYNC
-#define O_NOATIME   0x02000000
-#define O_PATH      0x04000000
-#define O_LARGEFILE 0
+#define O_DSYNC     00010000
+#define O_ASYNC     00020000
+#define O_DIRECT    00040000
+#define O_LARGEFILE 00100000
+#define O_DIRECTORY 00200000
+#define O_NOFOLLOW  00400000
+#define O_NOATIME   01000000
+#define O_CLOEXEC   02000000
+#define O_SYNC      04010000
+#define O_RSYNC     O_SYNC
+#define O_PATH      010000000
+#define O_TMPFILE   020200000
+// Files are always opened in binary mode; Windows code that asks for it
+// explicitly still compiles.
+#define O_BINARY    0
+#define O_NOINHERIT O_CLOEXEC
 
 #define F_DUPFD         0
 #define F_GETFD         1
@@ -37,6 +64,11 @@ extern "C" {
 #define F_GETLK         5
 #define F_SETLK         6
 #define F_SETLKW        7
+#define F_GETLK64       F_GETLK
+#define F_SETLK64       F_SETLK
+#define F_SETLKW64      F_SETLKW
+#define F_SETOWN        8
+#define F_GETOWN        9
 #define F_DUPFD_CLOEXEC 1030
 #define F_ADD_SEALS     1033
 #define F_GET_SEALS     1034
@@ -56,6 +88,7 @@ extern "C" {
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR        0x200
+#define AT_SYMLINK_FOLLOW   0x400
 #define AT_EMPTY_PATH       0x1000
 
 #define POSIX_FADV_NORMAL     0
@@ -64,6 +97,10 @@ extern "C" {
 #define POSIX_FADV_WILLNEED   3
 #define POSIX_FADV_DONTNEED   4
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct flock {
   short l_type;
   short l_whence;
@@ -71,12 +108,16 @@ struct flock {
   off_t l_len;
   pid_t l_pid;
 };
+#define flock64 flock
 
 int fcntl(int fd, int cmd, ...);
 int openat(int dirfd, const char* path, int flags, ...);
 int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 int fallocate(int fd, int mode, off_t offset, off_t len);
 int posix_fallocate(int fd, off_t offset, off_t len);
+#define open64 open
+#define openat64 openat
+#define fcntl64 fcntl
 
 #ifdef __cplusplus
 }

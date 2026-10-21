@@ -1,5 +1,5 @@
 // gesher-base: smaller POSIX/Linux interfaces — uname, statvfs, resource
-// limits and priorities, scheduling, poll, ioctl, wait, fcntl, uio, extra
+// limits and priorities, scheduling, ioctl, wait, fcntl, uio, extra
 // stat calls, memfd, strsignal, and link.h.
 
 #include <dlfcn.h>
@@ -7,7 +7,6 @@
 #include <fcntl.h>
 #include <io.h>
 #include <link.h>
-#include <poll.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -26,8 +25,10 @@
 #include <windows.h>
 
 #include <string>
+#include <vector>
 
 #include "internal.h"
+#include "socket_internal.h"
 
 namespace {
 
@@ -207,37 +208,51 @@ int sched_getparam(pid_t, struct sched_param* param) {
 
 int sched_setparam(pid_t, const struct sched_param*) { return 0; }
 
-// --- poll, ioctl, wait --------------------------------------------------------
+// --- ioctl, wait --------------------------------------------------------------
 
-// Pipes report readable when data is buffered; files are always ready.
-int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
-  ULONGLONG deadline = timeout < 0 ? ~0ULL : GetTickCount64() + static_cast<ULONGLONG>(timeout);
-  for (;;) {
-    int ready = 0;
-    for (nfds_t i = 0; i < nfds; ++i) {
-      fds[i].revents = 0;
-      HANDLE h = gesher::HandleFromFd(fds[i].fd);
-      if (h == INVALID_HANDLE_VALUE) {
-        fds[i].revents = POLLNVAL;
-      } else if (GetFileType(h) == FILE_TYPE_PIPE) {
-        DWORD avail = 0;
-        if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) {
-          fds[i].revents = POLLHUP;
-        } else if (avail > 0) {
-          fds[i].revents = fds[i].events & POLLIN;
-        }
-        fds[i].revents |= fds[i].events & POLLOUT;
-      } else {
-        fds[i].revents = fds[i].events & (POLLIN | POLLOUT);
-      }
-      if (fds[i].revents != 0) ++ready;
+// FIONREAD and FIONBIO, the ioctls Android's Java libraries use on files,
+// pipes and sockets; there are no device ioctls (ENOTTY).
+int ioctl(int fd, unsigned long request, ...) {
+  va_list args;
+  va_start(args, request);
+  int* argp = va_arg(args, int*);
+  va_end(args);
+  gesher::SocketFd state;
+  if (gesher::LookupSocket(fd, &state)) {
+    if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
+    if (request == FIONBIO) {
+      state.nonblocking = *argp != 0;
+      if (gesher::ws::SetNonBlocking(state.socket, state.nonblocking) < 0) return -1;
+      gesher::UpdateSocket(fd, state);
+      return 0;
     }
-    if (ready > 0 || timeout == 0 || GetTickCount64() >= deadline) return ready;
-    Sleep(1);
+    return errno = ENOTTY, -1;
+  }
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (request != FIONREAD) return errno = ENOTTY, -1;
+  switch (GetFileType(h)) {
+    case FILE_TYPE_PIPE: {
+      DWORD avail = 0;
+      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
+      *argp = static_cast<int>(avail > 0x7FFFFFFF ? 0x7FFFFFFF : avail);
+      return 0;
+    }
+    case FILE_TYPE_DISK: {
+      // Bytes from the current position to the end, as Linux reports.
+      LARGE_INTEGER size, pos, zero = {};
+      if (!GetFileSizeEx(h, &size) || !SetFilePointerEx(h, zero, &pos, FILE_CURRENT)) {
+        return gesher::FailWithLastError();
+      }
+      long long remaining = size.QuadPart > pos.QuadPart ? size.QuadPart - pos.QuadPart : 0;
+      *argp = static_cast<int>(remaining > 0x7FFFFFFF ? 0x7FFFFFFF : remaining);
+      return 0;
+    }
+    default:
+      *argp = 0;
+      return 0;
   }
 }
-
-int ioctl(int, unsigned long, ...) { return errno = ENOTTY, -1; }
 
 pid_t waitpid(pid_t, int*, int) { return errno = ECHILD, -1; }
 pid_t wait(int*) { return errno = ECHILD, -1; }
@@ -252,6 +267,26 @@ int fcntl(int fd, int cmd, ...) {
   va_start(args, cmd);
   long arg = va_arg(args, long);
   va_end(args);
+  gesher::SocketFd state;
+  if (gesher::LookupSocket(fd, &state)) {
+    switch (cmd) {
+      case F_GETFL:
+        return O_RDWR | (state.nonblocking ? O_NONBLOCK : 0);
+      case F_SETFL:
+        if (((arg & O_NONBLOCK) != 0) != state.nonblocking) {
+          state.nonblocking = (arg & O_NONBLOCK) != 0;
+          if (gesher::ws::SetNonBlocking(state.socket, state.nonblocking) < 0) return -1;
+          gesher::UpdateSocket(fd, state);
+        }
+        return 0;
+      case F_GETFD:
+        return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)
+      case F_SETFD:
+        return 0;
+      default:
+        break;  // F_DUPFD and the rest below
+    }
+  }
   switch (cmd) {
     case F_GETFD: {
       DWORD flags = 0;
@@ -270,7 +305,7 @@ int fcntl(int fd, int cmd, ...) {
       return 0;
     case F_DUPFD:
     case F_DUPFD_CLOEXEC:
-      return _dup(fd);
+      return dup(fd);  // fd.cc; duplicates sockets too
     case F_ADD_SEALS:
     case F_GET_SEALS:
       return 0;  // seals are advisory here
@@ -287,7 +322,7 @@ int openat(int dirfd, const char* path, int flags, ...) {
   if (dirfd != AT_FDCWD && path[0] != '/' && !(path[0] != '\0' && path[1] == ':')) {
     return errno = ENOSYS, -1;
   }
-  return _open(path, (flags & 0xFFFF) | _O_BINARY, mode);
+  return gesher::CrtResult(_open(path, (flags & 0xFFFF) | _O_BINARY, mode));
 }
 
 int posix_fadvise(int, off_t, off_t, int) { return 0; }
@@ -295,7 +330,10 @@ int posix_fadvise(int, off_t, off_t, int) { return 0; }
 int posix_fallocate(int fd, off_t offset, off_t len) {
   long long size = _filelengthi64(fd);
   if (size < 0) return EBADF;
-  if (offset + len > size && _chsize_s(fd, offset + len) != 0) return errno;
+  if (offset + len > size) {
+    int result = _chsize_s(fd, offset + len);
+    if (result != 0) return gesher_errno_from_crt(result);
+  }
   return 0;
 }
 
@@ -307,10 +345,31 @@ int fallocate(int fd, int mode, off_t offset, off_t len) {
 
 // --- uio ---------------------------------------------------------------------
 
+namespace {
+
+// readv/writev on a socket fd: one gather/scatter call.
+bool SocketIo(int fd, const struct iovec* iov, int iovcnt, bool write, ssize_t* result) {
+  gesher::SocketFd state;
+  if (!gesher::LookupSocket(fd, &state)) return false;
+  if (iovcnt < 0) {
+    errno = EINVAL;
+    *result = -1;
+    return true;
+  }
+  std::vector<gesher::ws::Buffer> buffers;
+  for (int i = 0; i < iovcnt; ++i) buffers.push_back({iov[i].iov_base, iov[i].iov_len});
+  *result = write ? gesher::ws::Send(state.socket, buffers.data(), buffers.size(), 0, nullptr)
+                  : gesher::ws::Recv(state.socket, buffers.data(), buffers.size(), 0, nullptr);
+  return true;
+}
+
+}  // namespace
+
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
   ssize_t total = 0;
+  if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
-    int n = _read(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len));
+    int n = gesher::CrtResult(_read(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len)));
     if (n < 0) return total > 0 ? total : -1;
     total += n;
     if (static_cast<size_t>(n) < iov[i].iov_len) break;
@@ -320,8 +379,9 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
   ssize_t total = 0;
+  if (SocketIo(fd, iov, iovcnt, true, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
-    int n = _write(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len));
+    int n = gesher::CrtResult(_write(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len)));
     if (n < 0) return total > 0 ? total : -1;
     total += n;
     if (static_cast<size_t>(n) < iov[i].iov_len) break;
@@ -389,8 +449,8 @@ int memfd_create(const char* name, unsigned int flags) {
                          CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  int fd = _open_osfhandle(reinterpret_cast<intptr_t>(h),
-                           _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0));
+  int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
+                           _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
   if (fd < 0) CloseHandle(h);
   return fd;
 }
