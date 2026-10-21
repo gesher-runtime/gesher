@@ -112,3 +112,17 @@ target_compile_options(libcore_openjdk PRIVATE ${_libcore_flags} -Wno-unused-var
   -Wno-parentheses-equality -Wno-constant-logical-operand -Wno-sometimes-uninitialized)
 set_source_files_properties("${_lc}/ojluni/src/main/native/OnLoad.cpp" PROPERTIES
   COMPILE_DEFINITIONS "JNI_OnLoad=JNI_OnLoad_openjdk")
+
+# --- linked into dalvikvm -----------------------------------------------------
+# compat/libcore/builtins.cc registers the libraries with gesher-base's
+# dlopen; unported.cc stands in for the registration functions of the
+# sources listed above as not ported.
+add_library(libcore_builtins OBJECT
+  ${CMAKE_SOURCE_DIR}/compat/libcore/builtins.cc ${CMAKE_SOURCE_DIR}/compat/libcore/unported.cc)
+target_link_libraries(libcore_builtins PRIVATE nativehelper)
+foreach(f ${GESHER_LIBCORE_UNPORTED} ${GESHER_OPENJDK_UNPORTED})
+  get_filename_component(_name "${f}" NAME_WE)
+  target_compile_definitions(libcore_builtins PRIVATE GESHER_UNPORTED_${_name})
+endforeach()
+target_link_libraries(dalvikvm PRIVATE libcore_builtins libcore_javacore libcore_openjdk
+  art_openjdkjvm)
