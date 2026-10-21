@@ -1,0 +1,18 @@
+diff --git a/include_jni/jni.h b/include_jni/jni.h
+--- a/include_jni/jni.h
++++ b/include_jni/jni.h
+@@ -1102,7 +1102,13 @@
+ jint JNI_CreateJavaVM(JavaVM**, JNIEnv**, void*);
+ jint JNI_GetCreatedJavaVMs(JavaVM**, jsize, jsize*);
+ 
+-#ifdef _WIN32
++#if defined(GESHER)
++// Gesher links JNI libraries into the executable and registers their natives
++// (RegisterNatives, <gesher/builtin_library.h>), so nothing is exported or
++// imported; dllexport would also clash with declarations made without it.
++#define JNIIMPORT
++#define JNIEXPORT
++#elif defined(_WIN32)
+ #define JNIIMPORT  __declspec(dllimport)
+ #define JNIEXPORT  __declspec(dllexport)
+ #else

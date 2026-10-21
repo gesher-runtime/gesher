@@ -95,14 +95,6 @@ void* dlsym(void* handle, const char* symbol) {
     for (size_t i = 0; i < library->count; ++i) {
       if (strcmp(library->symbols[i].name, symbol) == 0) return library->symbols[i].address;
     }
-    // Then native methods among the executable's exports, where JNIEXPORT
-    // puts Java_* functions. Only those: other names, JNI_OnLoad above all,
-    // are not unique across the libraries linked in.
-    if (strncmp(symbol, "Java_", 5) == 0) {
-      if (FARPROC p = GetProcAddress(GetModuleHandleW(nullptr), symbol)) {
-        return reinterpret_cast<void*>(p);
-      }
-    }
     last_error = "dlsym " + std::string(symbol) + ": not in " + library->name;
     has_error = true;
     return nullptr;
