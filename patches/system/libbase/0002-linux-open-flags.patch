@@ -1,0 +1,51 @@
+--- a/utf8.cpp
++++ b/utf8.cpp
+@@ -205,11 +205,6 @@
+ }
+ 
+ int open(const char* name, int flags, ...) {
+-  std::wstring name_utf16;
+-  if (!UTF8PathToWindowsLongPath(name, &name_utf16)) {
+-    return -1;
+-  }
+-
+   int mode = 0;
+   if ((flags & O_CREAT) != 0) {
+     va_list args;
+@@ -218,7 +213,19 @@
+     va_end(args);
+   }
+ 
++#if defined(GESHER)
++  // Gesher: flags are Linux's O_* values, which _wopen reads as its own
++  // (Linux's O_CREAT is the CRT's _O_TEMPORARY). gesher-base's open takes
++  // them, and UTF-8 paths.
++  return ::open(name, flags, mode);
++#else
++  std::wstring name_utf16;
++  if (!UTF8PathToWindowsLongPath(name, &name_utf16)) {
++    return -1;
++  }
++
+   return _wopen(name_utf16.c_str(), flags, mode);
++#endif
+ }
+ 
+ int unlink(const char* name) {
+--- a/file.cpp
++++ b/file.cpp
+@@ -63,7 +63,14 @@
+ 
+   // Use open() to match the close() that TemporaryFile's destructor does.
+   // Use O_BINARY to match base file APIs.
++#if defined(GESHER)
++  // Gesher: as in utf8::open, these are Linux's O_* values.
++  std::string path_for_open;
++  CHECK(android::base::WideToUTF8(path, &path_for_open)) << "path can't be converted to utf8";
++  int fd = ::open(path_for_open.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
++#else
+   int fd = _wopen(path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_BINARY, S_IRUSR | S_IWUSR);
++#endif
+   if (fd < 0) {
+     return -1;
+   }
