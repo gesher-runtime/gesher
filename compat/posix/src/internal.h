@@ -31,4 +31,25 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// Where a Linux path leads on Windows (path.cc,
+// docs/decisions/0010-paths.md).
+enum class PathKind {
+  kFile,     // a file system path, in `windows`
+  kNull,     // /dev/null
+  kZero,     // /dev/zero
+  kRandom,   // /dev/random, /dev/urandom
+  kCmdline,  // /proc/self/cmdline
+  kMissing,  // any other name under /dev, /proc or /sys
+};
+PathKind MapPath(const char* path, std::wstring* windows);
+
+// A Windows path as Linux code sees it: '/' separators, and no drive when it
+// is the current one (getcwd, realpath).
+std::string LinuxPath(const wchar_t* windows);
+
+// Character devices Windows lacks: a CRT fd on NUL whose reads fd.cc serves.
+enum class Device { kZero, kRandom };
+// Takes over `fd`, which must be open on NUL.
+void RegisterDevice(int fd, Device device);
+
 }  // namespace gesher

@@ -1,7 +1,10 @@
-// gesher-base probe: the socket layer and the fd overrides (close, read,
-// write, dup, dup2, poll), built against gesher-base's Linux headers like
-// AOSP code. Prints "all passed" and exits 0 when every check holds.
+// gesher-base probe: the socket layer, the fd overrides (close, read,
+// write, dup, dup2, poll) and the path model (open, stat, mkdir, /dev),
+// built against gesher-base's Linux headers like AOSP code. Prints "all
+// passed" and exits 0 when every check holds.
 #include <arpa/inet.h>
+#include <direct.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -14,20 +17,24 @@
 #include <poll.h>
 #include <pwd.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/capability.h>
 #include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/xattr.h>
 #include <termios.h>
 #include <unistd.h>
 #include <windows.h>
 
 #include <atomic>
+#include <string>
 #include <thread>
 
 static int fails = 0;
@@ -166,12 +173,13 @@ int main(int, char** argv) {
     result = n;
   });
   Sleep(100);
-  int null_fd = open("NUL", O_RDWR);
+  int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
   CHECK(null_fd >= 0);
   CHECK(dup2(null_fd, sv[1]) == sv[1]);
   CHECK(gesher_is_socket(sv[1]) == 0);
   reader.join();
   CHECK(result == -1 || result == 0);
+  CHECK(read(sv[1], buf, sizeof(buf)) == 0);  // now /dev/null
   close(null_fd);
   close(sv[1]);
   close(sv[0]);
@@ -267,7 +275,7 @@ int main(int, char** argv) {
   // isatty: neither a socket nor NUL is a terminal.
   CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
   CHECK(isatty(sv[0]) == 0 && errno == ENOTTY);
-  null_fd = open("NUL", O_RDWR);
+  null_fd = open("/dev/null", O_RDWR);
   CHECK(isatty(null_fd) == 0);
   termios tio;
   CHECK(tcgetattr(null_fd, &tio) == -1 && errno == ENOTTY);
@@ -303,6 +311,109 @@ int main(int, char** argv) {
   FILE* mounts = setmntent("/proc/mounts", "r");
   CHECK(mounts != nullptr && getmntent(mounts) == nullptr);
   endmntent(mounts);
+
+  // Paths (docs/decisions/0010-paths.md). /dev and /proc names.
+  null_fd = open("/dev/null", O_WRONLY);
+  CHECK(null_fd >= 0 && write(null_fd, "x", 1) == 1);
+  close(null_fd);
+  struct stat st;
+  CHECK(stat("/dev/null", &st) == 0 && S_ISCHR(st.st_mode));
+  CHECK(open("/dev/no-such-device", O_RDONLY) == -1 && errno == ENOENT);
+  CHECK(stat("/proc/self/maps", &st) == -1 && errno == ENOENT);
+  CHECK(opendir("/proc/self/task") == nullptr && errno == ENOENT);
+  int zero = open("/dev/zero", O_RDONLY);
+  memset(buf, 1, sizeof(buf));
+  CHECK(zero >= 0 && read(zero, buf, 16) == 16 && buf[0] == 0 && buf[15] == 0);
+  int zero2 = dup(zero);
+  memset(buf, 1, sizeof(buf));
+  CHECK(zero2 >= 0 && read(zero2, buf, 8) == 8 && buf[7] == 0);
+  close(zero2);
+  close(zero);
+  int rnd = open("/dev/urandom", O_RDONLY);
+  unsigned char bytes[32] = {};
+  CHECK(rnd >= 0 && read(rnd, bytes, sizeof(bytes)) == static_cast<int>(sizeof(bytes)));
+  bool any = false;
+  for (unsigned char b : bytes) any = any || b != 0;
+  CHECK(any);
+  close(rnd);
+  int cmdline = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+  char args[4096] = {};
+  CHECK(cmdline >= 0 && read(cmdline, args, sizeof(args) - 1) > 0 &&
+        strstr(args, "socket_probe") != nullptr);
+  close(cmdline);
+  char* real = realpath("/dev/null", nullptr);
+  CHECK(real != nullptr && strcmp(real, "/dev/null") == 0);
+  free(real);
+
+  // Linux paths without a drive are on the current drive, and getcwd gives
+  // them so.
+  char temp[MAX_PATH];
+  CHECK(GetTempPathA(MAX_PATH, temp) > 0 && _chdir(temp) == 0);
+  char cwd[1024];
+  CHECK(getcwd(cwd, sizeof(cwd)) == cwd && cwd[0] == '/' && strchr(cwd, '\\') == nullptr);
+  real = realpath(".", nullptr);
+  CHECK(real != nullptr && real[0] == '/');
+  free(real);
+  std::string dir = std::string(cwd) + "/gesher-probe-" + std::to_string(GetCurrentProcessId());
+  CHECK(mkdir(dir.c_str(), 0755) == 0);
+  CHECK(mkdir(dir.c_str(), 0755) == -1 && errno == EEXIST);
+  CHECK(stat(dir.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+
+  // open takes Linux's O_* values. (Linux's O_CREAT is the CRT's
+  // _O_TEMPORARY: the file must outlive its fd.)
+  std::string file = dir + "/f";
+  f = open(file.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+  CHECK(f >= 0 && write(f, "abc", 3) == 3 && close(f) == 0);
+  CHECK(stat(file.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_size == 3);
+  CHECK(open(file.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644) == -1 && errno == EEXIST);
+  f = open(file.c_str(), O_WRONLY | O_APPEND);
+  CHECK(f >= 0 && write(f, "de", 2) == 2 && close(f) == 0);
+  CHECK(open(file.c_str(), O_RDONLY | O_DIRECTORY) == -1 && errno == ENOTDIR);
+  CHECK(open(dir.c_str(), O_WRONLY) == -1 && errno == EISDIR);
+
+  // The *at calls, relative to a directory fd.
+  int dir_fd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+  CHECK(dir_fd >= 0);
+  f = openat(dir_fd, "f", O_RDONLY);
+  CHECK(f >= 0 && read(f, buf, sizeof(buf)) == 5 && memcmp(buf, "abcde", 5) == 0);
+  CHECK(fstatat(dir_fd, "f", &st, 0) == 0 && st.st_size == 5);
+  CHECK(openat(f, "x", O_RDONLY) == -1 && errno == ENOTDIR);
+  close(f);
+  CHECK(openat(dir_fd, "missing", O_RDONLY) == -1 && errno == ENOENT);
+  CHECK(mkdirat(dir_fd, "sub", 0755) == 0 && rmdir((dir + "/sub").c_str()) == 0);
+  close(dir_fd);
+  CHECK(rmdir(dir.c_str()) == -1 && errno == ENOTEMPTY);
+  CHECK(rmdir("/dev/null") == -1 && errno == ENOTDIR);
+
+  // AF_UNIX names are paths too. Android's /dev/socket does not exist here.
+  int us = socket(AF_UNIX, SOCK_STREAM, 0);
+  sockaddr_un un = {};
+  un.sun_family = AF_UNIX;
+  strcpy(un.sun_path, "/dev/socket/logdw");
+  CHECK(us >= 0 && connect(us, reinterpret_cast<sockaddr*>(&un), sizeof(un)) == -1 &&
+        errno == ENOENT);
+  close(us);
+  std::string sock_path = dir + "/s";
+  CHECK(sock_path.size() < sizeof(un.sun_path));
+  snprintf(un.sun_path, sizeof(un.sun_path), "%s", sock_path.c_str());
+  int ul = socket(AF_UNIX, SOCK_STREAM, 0);
+  CHECK(ul >= 0 && bind(ul, reinterpret_cast<sockaddr*>(&un), sizeof(un)) == 0 &&
+        listen(ul, 1) == 0);
+  us = socket(AF_UNIX, SOCK_STREAM, 0);
+  CHECK(us >= 0 && connect(us, reinterpret_cast<sockaddr*>(&un), sizeof(un)) == 0);
+  int ua = accept(ul, nullptr, nullptr);
+  CHECK(ua >= 0 && write(us, "un", 2) == 2 && read(ua, buf, 2) == 2 && memcmp(buf, "un", 2) == 0);
+  close(ua);
+  close(us);
+  close(ul);
+
+  // Unlinking an open file, as Linux allows.
+  f = open(file.c_str(), O_RDONLY);
+  CHECK(f >= 0 && unlink(file.c_str()) == 0);
+  close(f);
+  CHECK(unlink(sock_path.c_str()) == 0);
+  CHECK(rmdir(dir.c_str()) == 0);
+  CHECK(stat(dir.c_str(), &st) == -1 && errno == ENOENT);
 
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);
   return fails != 0;

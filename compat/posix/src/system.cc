@@ -314,17 +314,6 @@ int fcntl(int fd, int cmd, ...) {
   }
 }
 
-int openat(int dirfd, const char* path, int flags, ...) {
-  va_list args;
-  va_start(args, flags);
-  int mode = va_arg(args, int);
-  va_end(args);
-  if (dirfd != AT_FDCWD && path[0] != '/' && !(path[0] != '\0' && path[1] == ':')) {
-    return errno = ENOSYS, -1;
-  }
-  return gesher::CrtResult(_open(path, (flags & 0xFFFF) | _O_BINARY, mode));
-}
-
 int posix_fadvise(int, off_t, off_t, int) { return 0; }
 
 int posix_fallocate(int fd, off_t offset, off_t len) {
@@ -369,7 +358,7 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
-    int n = gesher::CrtResult(_read(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len)));
+    int n = read(fd, iov[i].iov_base, static_cast<unsigned>(iov[i].iov_len));  // fd.cc
     if (n < 0) return total > 0 ? total : -1;
     total += n;
     if (static_cast<size_t>(n) < iov[i].iov_len) break;
@@ -416,22 +405,11 @@ ssize_t process_vm_readv(pid_t, const struct iovec*, unsigned long, const struct
   return errno = ENOSYS, -1;
 }
 
-// --- extra stat calls ---------------------------------------------------------
+// --- extra stat calls (lstat, fstatat, mkdirat: path.cc) ----------------------
 
-int lstat(const char* path, struct stat* buf) { return stat(path, buf); }
 int fchmod(int, mode_t) { return 0; }
 int fchown(int, uid_t, gid_t) { return 0; }
 int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }
-
-int fstatat(int dirfd, const char* path, struct stat* buf, int) {
-  if (dirfd != AT_FDCWD) return errno = ENOSYS, -1;
-  return stat(path, buf);
-}
-
-int mkdirat(int dirfd, const char* path, mode_t) {
-  if (dirfd != AT_FDCWD) return errno = ENOSYS, -1;
-  return mkdir(path);
-}
 
 int utimensat(int, const char*, const struct timespec[2], int) { return 0; }
 int futimens(int, const struct timespec[2]) { return 0; }

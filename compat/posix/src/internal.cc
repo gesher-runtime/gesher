@@ -24,6 +24,10 @@ int ErrnoFromWin32(DWORD error) {
   switch (error) {
     case ERROR_FILE_NOT_FOUND:
     case ERROR_PATH_NOT_FOUND:
+    case ERROR_INVALID_NAME:  // a name Windows does not allow, such as "a:b"
+    case ERROR_BAD_PATHNAME:
+    case ERROR_BAD_NETPATH:
+    case ERROR_BAD_NET_NAME:
     case ERROR_INVALID_DRIVE:
     case ERROR_MOD_NOT_FOUND:
     case ERROR_PROC_NOT_FOUND:
@@ -52,6 +56,14 @@ int ErrnoFromWin32(DWORD error) {
       return EPIPE;
     case ERROR_DIRECTORY:
       return ENOTDIR;
+    case ERROR_NOT_SAME_DEVICE:
+      return EXDEV;
+    case ERROR_WRITE_PROTECT:
+      return EROFS;
+    case ERROR_TOO_MANY_OPEN_FILES:
+      return EMFILE;
+    case ERROR_CANT_RESOLVE_FILENAME:
+      return ELOOP;
     case ERROR_FILENAME_EXCED_RANGE:
       return ENAMETOOLONG;
     case ERROR_NOT_SUPPORTED:

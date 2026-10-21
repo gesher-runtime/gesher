@@ -1,5 +1,6 @@
-// gesher-base: file descriptors that may be sockets (see socket_internal.h),
-// and poll() over files, pipes and sockets.
+// gesher-base: file descriptors that may be sockets (see socket_internal.h)
+// or /dev/zero and /dev/random (path.cc), and poll() over files, pipes and
+// sockets.
 //
 // close, read, write, dup and dup2 are defined here under the CRT's own
 // names: gesher-base is linked before the CRT, so every caller gets these.
@@ -8,8 +9,11 @@
 #include <fcntl.h>
 #include <io.h>
 #include <poll.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <windows.h>
+#include <bcrypt.h>
 
 #include <atomic>
 #include <mutex>
@@ -44,6 +48,35 @@ void Insert(int fd, const SocketFd& state) {
   if (table.insert_or_assign(fd, state).second) {
     socket_count.fetch_add(1, std::memory_order_release);
   }
+}
+
+// /dev/zero and /dev/random fds (path.cc), also guarded by table_mutex.
+std::unordered_map<int, Device> devices;
+std::atomic<size_t> device_count{0};
+
+bool LookupDevice(int fd, Device* device) {
+  if (device_count.load(std::memory_order_acquire) == 0) return false;
+  std::lock_guard<std::mutex> lock(table_mutex);
+  auto it = devices.find(fd);
+  if (it == devices.end()) return false;
+  *device = it->second;
+  return true;
+}
+
+void ForgetDevice(int fd) {
+  if (device_count.load(std::memory_order_acquire) == 0) return;
+  std::lock_guard<std::mutex> lock(table_mutex);
+  if (devices.erase(fd) != 0) device_count.fetch_sub(1, std::memory_order_release);
+}
+
+int ReadDevice(Device device, void* buf, unsigned int count) {
+  if (device == Device::kZero) {
+    memset(buf, 0, count);
+  } else if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, static_cast<PUCHAR>(buf), count,
+                                             BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+    return errno = EIO, -1;
+  }
+  return static_cast<int>(count);
 }
 
 // A CRT fd on NUL, to reserve a number for a socket.
@@ -85,8 +118,16 @@ void UpdateSocket(int fd, const SocketFd& state) {
   if (it != table.end()) it->second = state;
 }
 
+void RegisterDevice(int fd, Device device) {
+  std::lock_guard<std::mutex> lock(table_mutex);
+  if (devices.insert_or_assign(fd, device).second) {
+    device_count.fetch_add(1, std::memory_order_release);
+  }
+}
+
 }  // namespace gesher
 
+using gesher::Device;
 using gesher::SocketFd;
 
 extern "C" {
@@ -98,7 +139,10 @@ int gesher_is_socket(int fd) {
 
 int close(int fd) {
   SocketFd state;
-  if (!gesher::Remove(fd, &state)) return gesher::CrtResult(_close(fd));
+  if (!gesher::Remove(fd, &state)) {
+    gesher::ForgetDevice(fd);
+    return gesher::CrtResult(_close(fd));
+  }
   // Closing the socket first wakes threads blocked on it, as on Linux.
   int result = gesher::ws::Close(state.socket);
   int saved = errno;
@@ -109,7 +153,11 @@ int close(int fd) {
 
 int read(int fd, void* buf, unsigned int count) {
   SocketFd state;
-  if (!gesher::LookupSocket(fd, &state)) return gesher::CrtResult(_read(fd, buf, count));
+  if (!gesher::LookupSocket(fd, &state)) {
+    Device device;
+    if (gesher::LookupDevice(fd, &device)) return gesher::ReadDevice(device, buf, count);
+    return gesher::CrtResult(_read(fd, buf, count));
+  }
   gesher::ws::Buffer buffer = {buf, count};
   return static_cast<int>(gesher::ws::Recv(state.socket, &buffer, 1, 0, nullptr));
 }
@@ -123,7 +171,12 @@ int write(int fd, const void* buf, unsigned int count) {
 
 int dup(int fd) {
   SocketFd state;
-  if (!gesher::LookupSocket(fd, &state)) return gesher::CrtResult(_dup(fd));
+  if (!gesher::LookupSocket(fd, &state)) {
+    int fd2 = gesher::CrtResult(_dup(fd));
+    Device device;
+    if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
+    return fd2;
+  }
   state.socket = gesher::ws::Duplicate(state.socket);
   if (state.socket == gesher::ws::kInvalidSocket) return -1;
   // Linux shares O_NONBLOCK between duplicates; here each starts as a copy.
@@ -148,7 +201,13 @@ int dup2(int fd, int fd2) {
     if (source_is_socket) gesher::ws::Close(source.socket);
     return -1;
   }
-  if (source_is_socket) gesher::Insert(fd2, source);
+  gesher::ForgetDevice(fd2);
+  Device device;
+  if (source_is_socket) {
+    gesher::Insert(fd2, source);
+  } else if (gesher::LookupDevice(fd, &device)) {
+    gesher::RegisterDevice(fd2, device);
+  }
   return fd2;
 }
 

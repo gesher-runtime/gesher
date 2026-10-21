@@ -144,8 +144,29 @@ void gesher_srand(unsigned int seed) {
   rand_state.store(0x9E3779B97F4A7C15ULL ^ seed, std::memory_order_relaxed);
 }
 
+// The result is a Linux path (path.cc): without the drive when it is the
+// current one, and the names under /dev and /proc as they are.
 char* realpath(const char* path, char* resolved_path) {
-  std::wstring wpath = gesher::Widen(path);
+  if (path == nullptr) {
+    errno = EINVAL;
+    return nullptr;
+  }
+  std::wstring wpath;
+  gesher::PathKind kind = path[0] != '\0' ? gesher::MapPath(path, &wpath) : gesher::PathKind::kMissing;
+  if (kind != gesher::PathKind::kFile) {
+    if (kind == gesher::PathKind::kMissing) {
+      errno = ENOENT;
+      return nullptr;
+    }
+    // A device or /proc file: the name as given, repeated slashes folded.
+    std::string device;
+    for (const char* p = path; *p != '\0'; ++p) {
+      if (*p != '/' || device.empty() || device.back() != '/') device += *p;
+    }
+    if (resolved_path == nullptr) return _strdup(device.c_str());
+    memcpy(resolved_path, device.c_str(), device.size() + 1);
+    return resolved_path;
+  }
   HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
@@ -159,12 +180,7 @@ char* realpath(const char* path, char* resolved_path) {
     errno = ENAMETOOLONG;
     return nullptr;
   }
-  const wchar_t* p = buf;
-  if (wcsncmp(p, L"\\\\?\\", 4) == 0) p += 4;  // drop the \\?\ prefix
-  std::string out = gesher::Narrow(p);
-  for (char& c : out) {
-    if (c == '\\') c = '/';
-  }
+  std::string out = gesher::LinuxPath(buf);
   if (resolved_path == nullptr) return _strdup(out.c_str());
   if (out.size() >= 4096) {
     errno = ENAMETOOLONG;

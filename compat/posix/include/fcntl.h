@@ -2,7 +2,7 @@
 //
 // Android's Java libraries pass Linux's O_* numbers to native code
 // (OsConstants.O_CREAT == 64), so open() and fcntl() take Linux values and
-// gesher-base translates them for the CRT (src/fd.cc). The CRT's own names
+// gesher-base opens files with them (src/path.cc). The CRT's own names
 // (_O_CREAT, _O_BINARY, ...) keep their values. See
 // docs/decisions/0008-linux-abi.md.
 #pragma once
