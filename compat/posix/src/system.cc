@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "linux_socket.h"
 #include "socket_internal.h"
 
 namespace {
@@ -220,6 +221,8 @@ int ioctl(int fd, unsigned long request, ...) {
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
+    int result;
+    if (gesher::sock::InterfaceIoctl(request, argp, &result)) return result;
     if (request == FIONBIO) {
       state.nonblocking = *argp != 0;
       if (gesher::ws::SetNonBlocking(state.socket, state.nonblocking) < 0) return -1;
@@ -408,11 +411,25 @@ ssize_t process_vm_readv(pid_t, const struct iovec*, unsigned long, const struct
 // --- extra stat calls (lstat, fstatat, mkdirat: path.cc) ----------------------
 
 int fchmod(int, mode_t) { return 0; }
-int fchown(int, uid_t, gid_t) { return 0; }
+// fchown is in unistd.cc, with chown.
 int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }
 
-int utimensat(int, const char*, const struct timespec[2], int) { return 0; }
-int futimens(int, const struct timespec[2]) { return 0; }
+int mknod(const char* path, mode_t mode, dev_t) {
+  switch (mode & S_IFMT) {
+    case 0:
+    case S_IFREG: {
+      int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, mode & 07777);
+      return fd < 0 ? -1 : close(fd);
+    }
+    case S_IFIFO:
+      return mkfifo(path, mode);
+    default:
+      return errno = EPERM, -1;  // device nodes need CAP_MKNOD
+  }
+}
+
+ssize_t splice(int, off_t*, int, off_t*, size_t, unsigned int) { return errno = EINVAL, -1; }
+
 
 // --- memfd -------------------------------------------------------------------
 

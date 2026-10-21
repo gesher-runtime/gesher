@@ -91,7 +91,12 @@ int fstatat(int dirfd, const char* path, struct stat* buf, int flags);
 int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);
 int mkfifo(const char* path, mode_t mode);
+// Device nodes cannot be created (EPERM); regular files can (S_IFREG).
+int mknod(const char* path, mode_t mode, dev_t dev);
 int mkdirat(int dirfd, const char* path, mode_t mode);
+// Special tv_nsec values for utimensat and futimens.
+#define UTIME_NOW  ((1l << 30) - 1l)
+#define UTIME_OMIT ((1l << 30) - 2l)
 int utimensat(int dirfd, const char* path, const struct timespec times[2], int flags);
 int futimens(int fd, const struct timespec times[2]);
 

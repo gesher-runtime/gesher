@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 
 #include <string>
 #include <vector>
@@ -410,6 +411,43 @@ int getifaddrs(struct ifaddrs** ifap) {
   }
   return 0;
 }
+
+}  // extern "C"
+
+namespace gesher::sock {
+
+bool InterfaceIoctl(unsigned long request, void* arg, int* result) {
+  if (request != SIOCGIFFLAGS && request != SIOCGIFMTU) return false;
+  auto* req = static_cast<struct ifreq*>(arg);
+  if (req == nullptr) {
+    *result = (errno = EFAULT, -1);
+    return true;
+  }
+  std::vector<ws::Interface> interfaces;
+  if (!ListNamedInterfaces(&interfaces)) {
+    *result = -1;
+    return true;
+  }
+  char name[IFNAMSIZ];
+  memcpy(name, req->ifr_name, IFNAMSIZ);
+  name[IFNAMSIZ - 1] = '\0';
+  for (const ws::Interface& iface : interfaces) {
+    if (iface.name != name) continue;
+    if (request == SIOCGIFFLAGS) {
+      req->ifr_flags = static_cast<short>(ToIfFlags(iface.flags));
+    } else {
+      req->ifr_mtu = static_cast<int>(iface.mtu);
+    }
+    *result = 0;
+    return true;
+  }
+  *result = (errno = ENODEV, -1);
+  return true;
+}
+
+}  // namespace gesher::sock
+
+extern "C" {
 
 void freeifaddrs(struct ifaddrs* ifa) {
   while (ifa != nullptr) {

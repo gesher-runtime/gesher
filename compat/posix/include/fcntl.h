@@ -115,6 +115,15 @@ int openat(int dirfd, const char* path, int flags, ...);
 int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 int fallocate(int fd, int mode, off_t offset, off_t len);
 int posix_fallocate(int fd, off_t offset, off_t len);
+#define posix_fallocate64 posix_fallocate
+
+// Linux moves data between pipes in the kernel; here it fails with EINVAL,
+// as Linux does for fds it cannot splice, and callers copy instead.
+#define SPLICE_F_MOVE     1
+#define SPLICE_F_NONBLOCK 2
+#define SPLICE_F_MORE     4
+ssize_t splice(int fd_in, off_t* off_in, int fd_out, off_t* off_out, size_t len,
+               unsigned int flags);
 #define open64 open
 #define openat64 openat
 #define fcntl64 fcntl

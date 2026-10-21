@@ -440,6 +440,50 @@ int main(int, char** argv) {
     CHECK(fstat(-1, &by_fd) == -1 && errno == EBADF);
   }
 
+  // getline, file times, owners, limits, interface ioctls.
+  {
+    const char* tmp = "gesher_probe_tmp.txt";
+    FILE* out = fopen(tmp, "w");
+    CHECK(out != nullptr && fputs("one\r\ntwo\x1a" "three", out) >= 0 && fclose(out) == 0);
+    FILE* in = fopen(tmp, "r");  // binary by default: CRs and Ctrl-Z come back
+    char* line = nullptr;
+    size_t cap = 0;
+    CHECK(in != nullptr && getline(&line, &cap, in) == 5 && strcmp(line, "one\r\n") == 0);
+    CHECK(getline(&line, &cap, in) == 9 && memcmp(line, "two\x1a" "three", 9) == 0);
+    CHECK(getline(&line, &cap, in) == -1);
+    free(line);
+    fclose(in);
+
+    timeval tv[2] = {{1000000000, 0}, {1200000000, 500000}};
+    struct stat st;
+    CHECK(utimes(tmp, tv) == 0 && stat(tmp, &st) == 0 && st.st_mtime == 1200000000 &&
+          st.st_mtim.tv_nsec == 500000000);
+    int ro = open(tmp, O_RDONLY);  // Linux sets times through a read-only fd too
+    timespec ts[2] = {{0, UTIME_OMIT}, {1300000000, 0}};
+    CHECK(futimens(ro, ts) == 0 && fstat(ro, &st) == 0 && st.st_mtime == 1300000000);
+    close(ro);
+    CHECK(chown(tmp, static_cast<uid_t>(-1), getgid()) == 0);
+    CHECK(chown(tmp, 0, 0) == -1 && errno == EPERM);
+    CHECK(chown("no-such-file-here", 0, 0) == -1 && errno == ENOENT);
+    CHECK(pathconf(tmp, _PC_NAME_MAX) == 255 && sysconf(_SC_IOV_MAX) == 1024);
+    CHECK(sysconf(12345) == -1 && errno == EINVAL);
+    CHECK(unlink(tmp) == 0);
+
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    ifreq req = {};
+    ifaddrs* all = nullptr;
+    CHECK(getifaddrs(&all) == 0 && all != nullptr);
+    snprintf(req.ifr_name, sizeof(req.ifr_name), "%s", all->ifa_name);
+    unsigned expected_flags = all->ifa_flags;
+    freeifaddrs(all);
+    CHECK(ioctl(s, SIOCGIFFLAGS, &req) == 0 &&
+          static_cast<unsigned short>(req.ifr_flags) == (expected_flags & 0xFFFF));
+    CHECK(ioctl(s, SIOCGIFMTU, &req) == 0 && req.ifr_mtu > 0);
+    snprintf(req.ifr_name, sizeof(req.ifr_name), "no-such-if");
+    CHECK(ioctl(s, SIOCGIFMTU, &req) == -1 && errno == ENODEV);
+    close(s);
+  }
+
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);
   return fails != 0;
 }
