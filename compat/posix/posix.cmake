@@ -21,7 +21,8 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/users.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/winsock.cc)
-target_link_libraries(gesher_posix PUBLIC synchronization psapi ws2_32 iphlpapi bcrypt shell32)
+target_link_libraries(gesher_posix PUBLIC synchronization psapi ws2_32 iphlpapi bcrypt shell32
+  pthread)
 # Pull in the crash reporter (src/crash.cc), which nothing calls.
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_crash_reporter_anchor)
 target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
