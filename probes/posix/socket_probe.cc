@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/capability.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
@@ -482,6 +483,51 @@ int main(int, char** argv) {
     snprintf(req.ifr_name, sizeof(req.ifr_name), "no-such-if");
     CHECK(ioctl(s, SIOCGIFMTU, &req) == -1 && errno == ENODEV);
     close(s);
+  }
+
+  // mremap, as ART's CMC collector uses it without userfaultfd.
+  {
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    const size_t size = 4 * page;
+    auto fill = [](void* p, size_t n, unsigned char v) { memset(p, v, n); };
+    auto all = [](const void* p, size_t n, unsigned char v) {
+      const unsigned char* b = static_cast<const unsigned char*>(p);
+      for (size_t i = 0; i < n; ++i) {
+        if (b[i] != v) return false;
+      }
+      return true;
+    };
+    void* from = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* to = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(from != MAP_FAILED && to != MAP_FAILED);
+    fill(from, size, 0x5a);
+    // Moved onto another mapping, the source unmapped.
+    CHECK(mremap(from, size, size, MREMAP_MAYMOVE | MREMAP_FIXED, to) == to && all(to, size, 0x5a));
+    unsigned char vec[4] = {1, 1, 1, 1};
+    CHECK(mincore(from, size, vec) == 0 && vec[0] == 0 && vec[3] == 0);
+    // Moved back with MREMAP_DONTUNMAP: the source stays, as zero pages.
+    from = mmap(from, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    CHECK(from != MAP_FAILED);
+    CHECK(mremap(to, size, size, MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP, from) == from);
+    CHECK(all(from, size, 0x5a) && all(to, size, 0));
+    static_cast<unsigned char*>(to)[0] = 1;  // still writable
+    // ART's probe: MREMAP_DONTUNMAP without MREMAP_FIXED moves somewhere else.
+    void* moved = mremap(from, size, size, MREMAP_MAYMOVE | MREMAP_DONTUNMAP, nullptr);
+    CHECK(moved != MAP_FAILED && moved != from && all(moved, size, 0x5a) && all(from, size, 0));
+    // Growing moves (the extra pages are zero); shrinking stays.
+    void* grown = mremap(moved, size, 2 * size, MREMAP_MAYMOVE);
+    CHECK(grown != MAP_FAILED && all(grown, size, 0x5a) &&
+          all(static_cast<char*>(grown) + size, size, 0));
+    CHECK(mremap(grown, 2 * size, size, 0) == grown && all(grown, size, 0x5a));
+    CHECK(mremap(grown, size, 2 * size, 0) == MAP_FAILED && errno == ENOMEM);
+    CHECK(mremap(grown, size, size, MREMAP_FIXED, from) == MAP_FAILED && errno == EINVAL);
+    CHECK(mremap(grown, 2 * page, 2 * page, MREMAP_MAYMOVE | MREMAP_FIXED,
+                 static_cast<char*>(grown) + page) == MAP_FAILED &&
+          errno == EINVAL);  // overlapping ranges
+    CHECK(all(grown, size, 0x5a));  // and nothing moved
+    munmap(grown, size);
+    munmap(from, size);
+    munmap(to, size);
   }
 
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);
