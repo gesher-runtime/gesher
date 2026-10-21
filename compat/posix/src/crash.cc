@@ -8,8 +8,13 @@
 // Frames are unwound with the Windows unwind tables (.pdata), which clang
 // emits for C and C++; ART's assembly stubs have none, so a trace stops at
 // the first stub frame.
+//
+// GESHER_TRACE_FAULTS=1 also reports every access violation when it is
+// raised, before any handler sees it: for faults that something handles by
+// ending the process, which would otherwise leave no report.
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <windows.h>
 
 namespace {
@@ -29,10 +34,10 @@ void PrintAddress(const char* prefix, DWORD64 pc) {
   }
 }
 
-LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
+void Report(const char* what, EXCEPTION_POINTERS* info) {
   const EXCEPTION_RECORD* rec = info->ExceptionRecord;
   CONTEXT ctx = *info->ContextRecord;
-  fprintf(stderr, "\ngesher: unhandled exception 0x%08lx", rec->ExceptionCode);
+  fprintf(stderr, "\ngesher: %s 0x%08lx", what, rec->ExceptionCode);
   if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
     const char* op = rec->ExceptionInformation[0] == 0   ? "reading"
                      : rec->ExceptionInformation[0] == 1 ? "writing"
@@ -70,11 +75,25 @@ LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
                      &establisher, nullptr);
   }
   fflush(stderr);
+}
+
+LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
+  Report("unhandled exception", info);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
+LONG WINAPI TraceFault(EXCEPTION_POINTERS* info) {
+  if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+    Report("fault (GESHER_TRACE_FAULTS)", info);
+  }
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
 struct Installer {
-  Installer() { SetUnhandledExceptionFilter(ReportCrash); }
+  Installer() {
+    SetUnhandledExceptionFilter(ReportCrash);
+    if (getenv("GESHER_TRACE_FAULTS") != nullptr) AddVectoredExceptionHandler(1, TraceFault);
+  }
 } installer;
 
 }  // namespace

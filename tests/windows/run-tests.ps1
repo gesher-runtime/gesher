@@ -43,14 +43,21 @@ $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
 $bcp = (NoDrive "$Dir/core-oj.jar") + ':' + (NoDrive "$Dir/core-libart.jar")
+$env:GESHER_TRACE_FAULTS = '1'  # report a fault where it happens (crash.cc)
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
   -Xint '-Xusejit:false' '-verbose:jni' -cp (NoDrive "$Dir/hello.dex") gesher.Hello 2>&1 | Out-String
 $code = $LASTEXITCODE
+Remove-Item Env:GESHER_TRACE_FAULTS
 if ($out.Contains('LoadNativeLibrary failed for "libicu_jni.so"')) {
   Write-Host 'PASS  dalvikvm: links the core classes from the boot jars (stops at native libraries)'
 } else {
   Write-Host ('FAIL  dalvikvm: links the core classes from the boot jars (exit 0x{0:X8})' -f $code)
-  Write-Host $out
+  # Addresses as symbols, from the linker map (tools/symbolize.py).
+  if (Test-Path "$Dir/dalvikvm.map") {
+    $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+  } else {
+    Write-Host $out
+  }
   $failed++
 }
 
