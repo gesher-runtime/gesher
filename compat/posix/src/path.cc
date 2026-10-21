@@ -1,11 +1,10 @@
 // gesher-base: Linux paths on Windows (docs/decisions/0010-paths.md), and
-// the calls where paths enter: open, openat, stat, fstatat, mkdir, mkdirat,
-// getcwd.
+// the calls where paths enter: open, openat, fstatat, mkdir, mkdirat,
+// getcwd. stat (stat.cc) maps its path with MapPath too.
 //
-// open, mkdir, stat and getcwd are defined here under the CRT's own names,
-// like close and read in fd.cc: gesher-base is linked before the CRT, so
-// every caller gets these. (With _FILE_OFFSET_BITS=64 mingw's <sys/stat.h>
-// binds stat() to the symbol stat64.) open takes Linux's O_* values
+// open, mkdir and getcwd are defined here under the CRT's own names, like
+// close and read in fd.cc: gesher-base is linked before the CRT, so every
+// caller gets these. open takes Linux's O_* values
 // (<fcntl.h>) and opens files with CreateFileW, sharing delete access as
 // Linux allows unlinking an open file.
 #include <direct.h>
@@ -269,29 +268,7 @@ int openat(int dirfd, const char* path, int flags, ...) {
   return gesher::OpenPath(resolved.c_str(), flags);
 }
 
-// stat() under its symbol; struct stat and struct stat64 are the same with
-// _FILE_OFFSET_BITS=64.
-static_assert(sizeof(struct stat) == sizeof(struct stat64));
-static_assert(sizeof(struct _stat64) == sizeof(struct stat64));
-
-int stat64(const char* path, struct stat64* buf) {
-  if (path == nullptr || buf == nullptr) return errno = EFAULT, -1;
-  std::wstring windows;
-  PathKind kind = path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing;
-  if (kind == PathKind::kFile) {
-    struct _stat64 st;
-    if (_wstat64(windows.c_str(), &st) != 0) return gesher::CrtResult(-1);
-    memcpy(buf, &st, sizeof(st));
-    return 0;
-  }
-  if (kind == PathKind::kMissing) return errno = ENOENT, -1;
-  memset(buf, 0, sizeof(*buf));
-  buf->st_mode = kind == PathKind::kCmdline ? (S_IFREG | 0444) : (S_IFCHR | 0666);
-  buf->st_nlink = 1;
-  return 0;
-}
-
-int lstat(const char* path, struct stat* buf) { return stat(path, buf); }
+// stat, fstat and lstat are in stat.cc.
 
 int fstatat(int dirfd, const char* path, struct stat* buf, int flags) {
   if ((flags & AT_EMPTY_PATH) != 0 && path != nullptr && path[0] == '\0') return fstat(dirfd, buf);

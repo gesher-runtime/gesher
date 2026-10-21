@@ -54,8 +54,13 @@ come from the environment as such paths.
   directly, so gesher-base defines them under the CRT's names, as it does
   `close` and `read` ([0009](0009-socket-fds.md)): in the UCRT import
   library each is a member of its own, which the linker no longer pulls in.
-  `stat` is the symbol `stat64`, to which mingw's `<sys/stat.h>` binds it
-  under `_FILE_OFFSET_BITS=64`.
+  `stat`, `fstat` and `lstat` (`src/stat.cc`) fill Linux's `struct stat`
+  from Win32 file information: libcore reads `st_atim`/`st_mtim`/`st_ctim`
+  with nanoseconds, `st_blksize` and `st_blocks`, which mingw's struct
+  lacks, so gesher-base's `<sys/stat.h>` renames mingw's struct and
+  functions out of the way and defines Linux's. `st_ino` is the file index
+  and `st_dev` the volume serial number; `fstat` reports sockets as
+  `S_IFSOCK` and pipes as `S_IFIFO`.
 - **`open` takes Linux's `O_*` values** ([0008](0008-linux-abi.md)) and
   opens with `CreateFileW` rather than the CRT's `_open`. The CRT's flags
   have other meanings (Linux's `O_CREAT` is the CRT's `_O_TEMPORARY`, which

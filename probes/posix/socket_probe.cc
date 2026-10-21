@@ -415,6 +415,31 @@ int main(int, char** argv) {
   CHECK(rmdir(dir.c_str()) == 0);
   CHECK(stat(dir.c_str(), &st) == -1 && errno == ENOENT);
 
+  // stat: Linux's struct, with nanoseconds, inode and blocks; fstat knows
+  // sockets, pipes and devices.
+  {
+    struct stat by_path, by_fd;
+    CHECK(stat(argv[0], &by_path) == 0 && S_ISREG(by_path.st_mode) && by_path.st_size > 0);
+    CHECK(by_path.st_ino != 0 && by_path.st_blocks > 0 && by_path.st_mtime > 1600000000);
+    CHECK(by_path.st_mtim.tv_nsec >= 0 && by_path.st_mtim.tv_nsec < 1000000000);
+    int self = open(argv[0], O_RDONLY);
+    CHECK(fstat(self, &by_fd) == 0 && by_fd.st_ino == by_path.st_ino &&
+          by_fd.st_size == by_path.st_size && by_fd.st_dev == by_path.st_dev);
+    close(self);
+    CHECK(stat(".", &by_path) == 0 && S_ISDIR(by_path.st_mode));
+    CHECK(stat("no-such-file-here", &by_path) == -1 && errno == ENOENT);
+    CHECK(stat("/dev/null", &by_path) == 0 && S_ISCHR(by_path.st_mode));
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    CHECK(fstat(sv[0], &by_fd) == 0 && S_ISSOCK(by_fd.st_mode));
+    close(sv[0]);
+    close(sv[1]);
+    CHECK(pipe(pp) == 0);
+    CHECK(fstat(pp[0], &by_fd) == 0 && S_ISFIFO(by_fd.st_mode));
+    close(pp[0]);
+    close(pp[1]);
+    CHECK(fstat(-1, &by_fd) == -1 && errno == EBADF);
+  }
+
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);
   return fails != 0;
 }
