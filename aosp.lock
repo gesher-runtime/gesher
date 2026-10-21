@@ -19,8 +19,10 @@ external/lz4
 external/lzma C/
 external/cpu_features
 system/unwinding libunwindstack/include/
-libcore libcore.aconfig JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
-external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/
+libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
+external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ libicu/ndk_headers/
 external/okhttp Android.bp repackaged/
+external/fdlibm
+external/expat Android.bp expat_config.h expat/lib/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/

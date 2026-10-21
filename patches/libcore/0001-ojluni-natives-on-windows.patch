@@ -1,0 +1,81 @@
+diff --git a/ojluni/src/main/native/System.c b/ojluni/src/main/native/System.c
+--- a/ojluni/src/main/native/System.c
++++ b/ojluni/src/main/native/System.c
+@@ -35,7 +35,9 @@
+ #include "jni_util.h"
+ #include "jvm.h"
+ 
++#if !defined(GESHER)
+ #include "openssl/opensslv.h"
++#endif
+ #include "zlib.h"
+ #include <nativehelper/JNIHelp.h>
+ #include <nativehelper/jni_macros.h>
+@@ -193,7 +195,12 @@
+     if ((*env)->ExceptionCheck(env)) {
+         return NULL;
+     }
++#if defined(GESHER)
++    // Gesher: BoringSSL is not part of the build yet.
++    jstring ssl_str = (*env)->NewStringUTF(env, "android.openssl.version=unavailable");
++#else
+     jstring ssl_str = (*env)->NewStringUTF(env, "android.openssl.version=" OPENSSL_VERSION_TEXT);
++#endif
+     if ((*env)->ExceptionCheck(env)) {
+         return NULL;
+     }
+diff --git a/ojluni/src/main/native/jlong_md.h b/ojluni/src/main/native/jlong_md.h
+--- a/ojluni/src/main/native/jlong_md.h
++++ b/ojluni/src/main/native/jlong_md.h
+@@ -64,7 +64,9 @@
+ /* For static variables initialized to zero */
+ #define jlong_zero_init  ((jlong) 0L)
+ 
+-#ifdef _LP64
++// Gesher: Windows x64 is LLP64 and defines no _LP64, but its pointers are 64
++// bits; the 32-bit definitions below would truncate them.
++#if defined(_LP64) || defined(_WIN64)
+   #ifndef jlong_to_ptr
+     #define jlong_to_ptr(a) ((void*)(a))
+   #endif
+diff --git a/ojluni/src/main/native/net_util_md.h b/ojluni/src/main/native/net_util_md.h
+--- a/ojluni/src/main/native/net_util_md.h
++++ b/ojluni/src/main/native/net_util_md.h
+@@ -125,7 +125,7 @@
+ /*
+  * On 64-bit JDKs we use a much larger stack and heap buffer.
+  */
+-#ifdef _LP64
++#if defined(_LP64) || defined(_WIN64)  // Gesher: Windows x64 is 64-bit too
+ #define MAX_BUFFER_LEN 65536
+ #define MAX_HEAP_BUFFER_LEN 131072
+ #else
+diff --git a/ojluni/src/main/native/FileChannelImpl.c b/ojluni/src/main/native/FileChannelImpl.c
+--- a/ojluni/src/main/native/FileChannelImpl.c
++++ b/ojluni/src/main/native/FileChannelImpl.c
+@@ -117,7 +117,8 @@
+         return handle(env, -1, "Map failed");
+     }
+ 
+-    return ((jlong) (unsigned long) mapAddress);
++    // Gesher: uintptr_t, as long is 32 bits on Windows x64.
++    return ((jlong) (uintptr_t) mapAddress);
+ }
+ 
+ 
+diff --git a/ojluni/src/main/native/Inflater.c b/ojluni/src/main/native/Inflater.c
+--- a/ojluni/src/main/native/Inflater.c
++++ b/ojluni/src/main/native/Inflater.c
+@@ -47,8 +47,10 @@
+ static jfieldID inputConsumedID;
+ static jfieldID outputConsumedID;
+ 
+-JNIEXPORT void JNICALL
+-static Inflater_initIDs(JNIEnv *env)
++// Gesher: not JNIEXPORT, which is dllexport on Windows and needs external
++// linkage; the function is registered, not looked up.
++static void JNICALL
++Inflater_initIDs(JNIEnv *env)
+ {
+     jclass cls = (*env)->FindClass(env, "java/util/zip/Inflater");
+     inputConsumedID = (*env)->GetFieldID(env, cls, "inputConsumed", "I");
