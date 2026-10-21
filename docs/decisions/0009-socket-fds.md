@@ -54,7 +54,6 @@ is the one it connected, so another local process cannot take its place.
 `probes/posix/socket_probe.cc` tests all of this; CI runs it on Windows.
 
 ## Known gaps
-- `fstat` on a socket fd reports a character device, not `S_IFSOCK`.
 - Duplicated sockets do not share `O_NONBLOCK` as on Linux.
 - No ancillary data (`SCM_RIGHTS`, `IP_PKTINFO`), no `MSG_TRUNC` reporting,
   no `POLLPRI`; `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` sockets fail with
