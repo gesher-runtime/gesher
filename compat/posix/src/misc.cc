@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/capability.h>
 #include <sys/prctl.h>
@@ -231,6 +232,38 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
     if (p != nullptr) ++p;
   }
   return nullptr;
+}
+
+// --- getline -----------------------------------------------------------------------
+
+// Reads up to and including `delim` into *lineptr, growing it with realloc.
+ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
+  if (lineptr == nullptr || n == nullptr || stream == nullptr) return errno = EINVAL, -1;
+  if (*lineptr == nullptr || *n == 0) {
+    *n = 128;
+    *lineptr = static_cast<char*>(realloc(*lineptr, *n));
+    if (*lineptr == nullptr) return errno = ENOMEM, -1;
+  }
+  size_t length = 0;
+  for (;;) {
+    int c = getc(stream);
+    if (c == EOF) break;
+    if (length + 2 > *n) {  // room for c and the terminator
+      size_t bigger = *n * 2;
+      char* grown = static_cast<char*>(realloc(*lineptr, bigger));
+      if (grown == nullptr) return errno = ENOMEM, -1;
+      *lineptr = grown;
+      *n = bigger;
+    }
+    (*lineptr)[length++] = static_cast<char>(c);
+    if (c == delim) break;
+  }
+  (*lineptr)[length] = '\0';
+  return length > 0 ? static_cast<ssize_t>(length) : -1;  // -1 at end of file
+}
+
+ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
+  return getdelim(lineptr, n, '\n', stream);
 }
 
 // --- sendfile -----------------------------------------------------------------------

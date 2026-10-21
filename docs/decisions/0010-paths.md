@@ -48,7 +48,8 @@ come from the environment as such paths.
 - **Paths longer than `MAX_PATH`** are made full and given the `\\?\`
   prefix, so they work without a long-path manifest.
 - **Where paths enter gesher-base** (`src/path.cc`, `gesher::MapPath`):
-  `open`, `openat`, `stat`, `lstat`, `fstatat`, `mkdir`, `mkdirat`, `rmdir`,
+  `open`, `openat`, `stat`, `lstat`, `fstatat`, `utimensat`, `utimes`, `mkdir`,
+  `mkdirat`, `rmdir`,
   `opendir`, `realpath`, and `AF_UNIX` names in `bind`, `connect` and
   `sendto`. AOSP code calls `open`, `stat`, `mkdir` and `getcwd` in the CRT
   directly, so gesher-base defines them under the CRT's names, as it does

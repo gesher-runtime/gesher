@@ -7,6 +7,7 @@
 #include <io.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <windows.h>
 
 #include <atomic>
@@ -39,14 +40,185 @@ long sysconf(int name) {
       GlobalMemoryStatusEx(&status);
       return static_cast<long>(status.ullTotalPhys / si.dwPageSize);
     }
+    case _SC_AVPHYS_PAGES: {
+      MEMORYSTATUSEX status{};
+      status.dwLength = sizeof(status);
+      GlobalMemoryStatusEx(&status);
+      return static_cast<long>(status.ullAvailPhys / si.dwPageSize);
+    }
     case _SC_CLK_TCK:
       return 100;
     case _SC_OPEN_MAX:
       return 8192;
+    // Limits, as glibc reports them, except ARG_MAX: a Windows command line
+    // holds 32767 UTF-16 units.
+    case _SC_ARG_MAX:
+      return 32767;
+    case _SC_CHILD_MAX:
+      return -1;  // no limit (errno unchanged)
+    case _SC_NGROUPS_MAX:
+      return 65536;
+    case _SC_STREAM_MAX:
+      return 16;
+    case _SC_TZNAME_MAX:
+      return -1;
+    case _SC_LINE_MAX:
+      return 2048;
+    case _SC_RE_DUP_MAX:
+      return 0x7fff;
+    case _SC_IOV_MAX:
+      return 1024;
+    case _SC_GETGR_R_SIZE_MAX:
+    case _SC_GETPW_R_SIZE_MAX:
+      return 1024;
+    case _SC_LOGIN_NAME_MAX:
+      return 256;
+    case _SC_TTY_NAME_MAX:
+      return 32;
+    case _SC_HOST_NAME_MAX:
+      return 64;
+    case _SC_THREAD_DESTRUCTOR_ITERATIONS:
+      return 4;
+    case _SC_THREAD_KEYS_MAX:
+      return 1024;
+    case _SC_THREAD_STACK_MIN:
+      return 16384;
+    case _SC_THREAD_THREADS_MAX:
+      return -1;
+    case _SC_SEM_VALUE_MAX:
+      return 0x7fffffff;
+    case _SC_SIGQUEUE_MAX:
+    case _SC_RTSIG_MAX:
+      return 32;
+    // Supported POSIX options report the version they conform to.
+    case _SC_VERSION:
+    case _SC_THREADS:
+    case _SC_THREAD_SAFE_FUNCTIONS:
+    case _SC_THREAD_ATTR_STACKADDR:
+    case _SC_THREAD_ATTR_STACKSIZE:
+    case _SC_MAPPED_FILES:
+    case _SC_MEMORY_PROTECTION:
+    case _SC_FSYNC:
+    case _SC_MONOTONIC_CLOCK:
+    case _SC_TIMERS:
+      return 200809L;
+    case _SC_XOPEN_VERSION:
+      return 700;
+    case _SC_2_VERSION:
+    case _SC_2_C_BIND:
+      return 200809L;
+    // Options gesher-base does not support.
+    case _SC_JOB_CONTROL:
+    case _SC_SAVED_IDS:
+    case _SC_REALTIME_SIGNALS:
+    case _SC_PRIORITY_SCHEDULING:
+    case _SC_ASYNCHRONOUS_IO:
+    case _SC_PRIORITIZED_IO:
+    case _SC_SYNCHRONIZED_IO:
+    case _SC_MEMLOCK:
+    case _SC_MEMLOCK_RANGE:
+    case _SC_MESSAGE_PASSING:
+    case _SC_SEMAPHORES:
+    case _SC_SHARED_MEMORY_OBJECTS:
+    case _SC_THREAD_PRIORITY_SCHEDULING:
+    case _SC_THREAD_PRIO_INHERIT:
+    case _SC_THREAD_PRIO_PROTECT:
+    case _SC_THREAD_PROCESS_SHARED:
+    case _SC_XOPEN_UNIX:
+    case _SC_XOPEN_CRYPT:
+    case _SC_XOPEN_ENH_I18N:
+    case _SC_XOPEN_SHM:
+    case _SC_XOPEN_LEGACY:
+    case _SC_XOPEN_REALTIME:
+    case _SC_XOPEN_REALTIME_THREADS:
+      return -1;
     default:
       errno = EINVAL;
       return -1;
   }
+}
+
+namespace {
+
+long PathconfValue(int name) {
+  switch (name) {
+    case _PC_LINK_MAX: return 1024;  // NTFS hard links
+    case _PC_MAX_CANON:
+    case _PC_MAX_INPUT: return 255;
+    case _PC_NAME_MAX: return 255;
+    case _PC_PATH_MAX: return 4096;
+    case _PC_PIPE_BUF: return 4096;
+    case _PC_CHOWN_RESTRICTED: return 1;
+    case _PC_NO_TRUNC: return 1;
+    case _PC_VDISABLE: return 0;
+    case _PC_FILESIZEBITS: return 64;
+    case _PC_SYMLINK_MAX: return -1;
+    case _PC_SYNC_IO:
+    case _PC_ASYNC_IO:
+    case _PC_PRIO_IO:
+    case _PC_REC_INCR_XFER_SIZE:
+    case _PC_REC_MAX_XFER_SIZE:
+    case _PC_REC_MIN_XFER_SIZE:
+    case _PC_REC_XFER_ALIGN:
+    case _PC_ALLOC_SIZE_MIN:
+    case _PC_2_SYMLINKS:
+      return -1;  // no limit or not supported (errno unchanged)
+    default:
+      errno = EINVAL;
+      return -1;
+  }
+}
+
+// chown as a process without CAP_CHOWN: only "no change" is allowed.
+int CheckOwner(uid_t owner, gid_t group) {
+  bool same_owner = owner == static_cast<uid_t>(-1) || owner == kAppUid;
+  bool same_group = group == static_cast<gid_t>(-1) || group == kAppUid;
+  return same_owner && same_group ? 0 : (errno = EPERM, -1);
+}
+
+}  // namespace
+
+// The same values for every file system.
+long pathconf(const char* path, int name) {
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+  return PathconfValue(name);
+}
+
+long fpathconf(int fd, int name) {
+  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  return PathconfValue(name);
+}
+
+int chown(const char* path, uid_t owner, gid_t group) {
+  struct stat st;
+  if (stat(path, &st) != 0) return -1;
+  return CheckOwner(owner, group);
+}
+
+int lchown(const char* path, uid_t owner, gid_t group) { return chown(path, owner, group); }
+
+int fchown(int fd, uid_t owner, gid_t group) {
+  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  return CheckOwner(owner, group);
+}
+
+// The ids cannot change, but setting them to what they are succeeds.
+int setuid(uid_t uid) { return uid == kAppUid ? 0 : (errno = EPERM, -1); }
+int seteuid(uid_t uid) { return setuid(uid); }
+int setgid(gid_t gid) { return gid == kAppUid ? 0 : (errno = EPERM, -1); }
+int setegid(gid_t gid) { return setgid(gid); }
+
+int setreuid(uid_t ruid, uid_t euid) {
+  bool ok = (ruid == static_cast<uid_t>(-1) || ruid == kAppUid) &&
+            (euid == static_cast<uid_t>(-1) || euid == kAppUid);
+  return ok ? 0 : (errno = EPERM, -1);
+}
+
+int setregid(gid_t rgid, gid_t egid) {
+  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
+            (egid == static_cast<gid_t>(-1) || egid == kAppUid);
+  return ok ? 0 : (errno = EPERM, -1);
 }
 
 int getpagesize(void) { return static_cast<int>(sysconf(_SC_PAGESIZE)); }

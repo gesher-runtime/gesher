@@ -157,6 +157,7 @@ struct Interface {
   std::string name;
   uint32_t index = 0;
   unsigned flags = 0;
+  uint32_t mtu = 0;
   uint8_t hardware[8] = {};
   size_t hardware_len = 0;
   std::vector<InterfaceAddress> addresses;

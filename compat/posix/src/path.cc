@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <windows.h>
 #include <shellapi.h>
@@ -275,6 +276,106 @@ int fstatat(int dirfd, const char* path, struct stat* buf, int flags) {
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return stat(resolved.c_str(), buf);
+}
+
+// --- file times ---------------------------------------------------------------
+
+namespace {
+
+// 100 ns intervals between 1601-01-01 and 1970-01-01.
+constexpr long long kEpochDifference = 116444736000000000LL;
+
+// Sets access and modification times (times[0], times[1]) as utimensat
+// does: null means now, as do UTIME_NOW entries; UTIME_OMIT leaves one as
+// it is. The handle needs FILE_WRITE_ATTRIBUTES.
+int SetTimes(HANDLE h, const struct timespec times[2]) {
+  FILETIME now;
+  GetSystemTimePreciseAsFileTime(&now);
+  FILETIME values[2];
+  FILETIME* set[2];
+  for (int i = 0; i < 2; ++i) {
+    if (times == nullptr || times[i].tv_nsec == UTIME_NOW) {
+      values[i] = now;
+      set[i] = &values[i];
+    } else if (times[i].tv_nsec == UTIME_OMIT) {
+      set[i] = nullptr;
+    } else {
+      if (times[i].tv_nsec < 0 || times[i].tv_nsec >= 1000000000) return errno = EINVAL, -1;
+      long long t = static_cast<long long>(times[i].tv_sec) * 10000000 +
+                    times[i].tv_nsec / 100 + kEpochDifference;
+      if (t < 0) return errno = EINVAL, -1;  // before 1601
+      values[i].dwLowDateTime = static_cast<DWORD>(t);
+      values[i].dwHighDateTime = static_cast<DWORD>(static_cast<unsigned long long>(t) >> 32);
+      set[i] = &values[i];
+    }
+  }
+  return SetFileTime(h, nullptr, set[0], set[1]) ? 0 : gesher::FailWithLastError();
+}
+
+bool ToTimespecs(const struct timeval tv[2], struct timespec ts[2]) {
+  for (int i = 0; i < 2; ++i) {
+    if (tv[i].tv_usec < 0 || tv[i].tv_usec >= 1000000) return errno = EINVAL, false;
+    ts[i].tv_sec = tv[i].tv_sec;
+    ts[i].tv_nsec = tv[i].tv_usec * 1000;
+  }
+  return true;
+}
+
+}  // namespace
+
+// Symbolic links are followed even with AT_SYMLINK_NOFOLLOW, as by lstat
+// (stat.cc).
+int utimensat(int dirfd, const char* path, const struct timespec times[2], int) {
+  if (path == nullptr) return futimens(dirfd, times);  // Linux: the fd itself
+  std::string resolved;
+  if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
+  if (resolved.empty()) return errno = ENOENT, -1;
+  std::wstring windows;
+  switch (gesher::MapPath(resolved.c_str(), &windows)) {
+    case PathKind::kFile: {
+      HANDLE h = CreateFileW(windows.c_str(), FILE_WRITE_ATTRIBUTES,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+      int result = SetTimes(h, times);
+      DWORD error = GetLastError();
+      CloseHandle(h);
+      SetLastError(error);
+      return result;
+    }
+    case PathKind::kMissing:
+      return errno = ENOENT, -1;
+    default:
+      return errno = EPERM, -1;  // devices and /proc files
+  }
+}
+
+// Linux lets the owner set times through any fd, a read-only one included,
+// so this works on a second handle with the access it needs.
+int futimens(int fd, const struct timespec times[2]) {
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
+  HANDLE writable = ReOpenFile(h, FILE_WRITE_ATTRIBUTES,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+  if (writable == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  int result = SetTimes(writable, times);
+  CloseHandle(writable);
+  return result;
+}
+
+int utimes(const char* path, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv != nullptr && !ToTimespecs(tv, ts)) return -1;
+  return utimensat(AT_FDCWD, path, tv != nullptr ? ts : nullptr, 0);
+}
+
+int lutimes(const char* path, const struct timeval tv[2]) { return utimes(path, tv); }
+
+int futimes(int fd, const struct timeval tv[2]) {
+  struct timespec ts[2];
+  if (tv != nullptr && !ToTimespecs(tv, ts)) return -1;
+  return futimens(fd, tv != nullptr ? ts : nullptr);
 }
 
 int mkdir(const char* path) {

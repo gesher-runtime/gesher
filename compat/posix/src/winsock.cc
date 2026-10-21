@@ -665,6 +665,7 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
     if (ConvertInterfaceLuidToNameA(&a->Luid, name, sizeof(name)) != NO_ERROR) continue;
     iface.name = name;
     iface.index = a->IfIndex != 0 ? a->IfIndex : a->Ipv6IfIndex;
+    iface.mtu = a->Mtu;
     if (a->OperStatus == IfOperStatusUp) iface.flags |= kIfUp | kIfRunning;
     if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) iface.flags |= kIfLoopback;
     if ((a->Flags & IP_ADAPTER_NO_MULTICAST) == 0) iface.flags |= kIfMulticast;
