@@ -11,6 +11,15 @@ diff --git a/ojluni/src/main/native/System.c b/ojluni/src/main/native/System.c
  #include "zlib.h"
  #include <nativehelper/JNIHelp.h>
  #include <nativehelper/jni_macros.h>
+@@ -169,7 +171,7 @@
+     return (*env)->NewString(env, chars, len);
+ }
+ 
+-static jobjectArray System_specialProperties(JNIEnv* env, jclass ignored) {
++static jobjectArray JNICALL System_specialProperties(JNIEnv* env, jclass ignored) {
+     jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+     jobjectArray result = (*env)->NewObjectArray(env, 4, stringClass, NULL);
+ 
 @@ -193,7 +195,12 @@
      if ((*env)->ExceptionCheck(env)) {
          return NULL;
@@ -24,6 +33,109 @@ diff --git a/ojluni/src/main/native/System.c b/ojluni/src/main/native/System.c
      if ((*env)->ExceptionCheck(env)) {
          return NULL;
      }
+@@ -229,7 +236,7 @@
+     return result;
+ }
+ 
+-static void System_log(JNIEnv* env, jclass ignored, jchar type, jstring javaMessage, jthrowable exception) {
++static void JNICALL System_log(JNIEnv* env, jclass ignored, jchar type, jstring javaMessage, jthrowable exception) {
+     int priority;
+     switch (type) {
+     case 'D': case 'd': priority = ANDROID_LOG_DEBUG;   break;
+diff --git a/ojluni/src/main/native/UnixNativeDispatcher.c b/ojluni/src/main/native/UnixNativeDispatcher.c
+--- a/ojluni/src/main/native/UnixNativeDispatcher.c
++++ b/ojluni/src/main/native/UnixNativeDispatcher.c
+@@ -330,7 +330,7 @@
+     return result;
+ }
+ 
+-JNIEXPORT jbyteArray
++JNIEXPORT jbyteArray JNICALL
+ Java_sun_nio_fs_UnixNativeDispatcher_strerror(JNIEnv* env, jclass this, jint error)
+ {
+     char tmpbuf[1024];
+@@ -346,7 +346,7 @@
+     return bytes;
+ }
+ 
+-JNIEXPORT jint
++JNIEXPORT jint JNICALL
+ Java_sun_nio_fs_UnixNativeDispatcher_dup(JNIEnv* env, jclass this, jint fd) {
+ 
+     int res = -1;
+diff --git a/ojluni/src/main/native/jdk_internal_misc_VM.cpp b/ojluni/src/main/native/jdk_internal_misc_VM.cpp
+--- a/ojluni/src/main/native/jdk_internal_misc_VM.cpp
++++ b/ojluni/src/main/native/jdk_internal_misc_VM.cpp
+@@ -25,7 +25,8 @@
+ #include <nativehelper/JNIHelp.h>
+ #include <nativehelper/jni_macros.h>
+ 
+-JNIEXPORT jlong JNICALL VM_getNanoTimeAdjustment(jlong offsetInSeconds) {
++// Gesher: not JNICALL; CRITICAL_NATIVE_METHOD gives it a System V thunk.
++JNIEXPORT jlong VM_getNanoTimeAdjustment(jlong offsetInSeconds) {
+     return JVM_GetNanoTimeAdjustment(nullptr, nullptr, offsetInSeconds);
+ }
+ 
+diff --git a/ojluni/src/main/native/OnLoad.cpp b/ojluni/src/main/native/OnLoad.cpp
+--- a/ojluni/src/main/native/OnLoad.cpp
++++ b/ojluni/src/main/native/OnLoad.cpp
+@@ -41,7 +41,7 @@
+ extern "C" void register_java_io_ObjectOutputStream(JNIEnv* env);
+ extern "C" void register_java_io_ObjectInputStream(JNIEnv* env);
+ extern "C" void register_java_net_InetAddress(JNIEnv* env);
+-extern "C" jint net_JNI_OnLoad(JavaVM *vm, void* ignored);
++extern "C" jint JNICALL net_JNI_OnLoad(JavaVM *vm, void* ignored);  // as net_util.c defines it
+ extern "C" void register_sun_nio_ch_Net(JNIEnv* env);
+ extern "C" void register_java_nio_MappedByteBuffer(JNIEnv* env);
+ extern "C" void register_java_net_Inet6Address(JNIEnv* env);
+diff --git a/ojluni/src/main/native/UnixAsynchronousServerSocketChannelImpl.c b/ojluni/src/main/native/UnixAsynchronousServerSocketChannelImpl.c
+--- a/ojluni/src/main/native/UnixAsynchronousServerSocketChannelImpl.c
++++ b/ojluni/src/main/native/UnixAsynchronousServerSocketChannelImpl.c
+@@ -25,10 +25,10 @@
+ 
+ #include "sun_nio_ch_UnixAsynchronousServerSocketChannelImpl.h"
+ 
+-extern void Java_sun_nio_ch_ServerSocketChannelImpl_initIDs(JNIEnv* env,
++extern void JNICALL Java_sun_nio_ch_ServerSocketChannelImpl_initIDs(JNIEnv* env,
+     jclass c);
+ 
+-extern jint Java_sun_nio_ch_ServerSocketChannelImpl_accept0(JNIEnv* env,
++extern jint JNICALL Java_sun_nio_ch_ServerSocketChannelImpl_accept0(JNIEnv* env,
+     jobject this, jobject ssfdo, jobject newfdo, jobjectArray isaa);
+ 
+ JNIEXPORT void JNICALL
+diff --git a/ojluni/src/main/native/jni_util.h b/ojluni/src/main/native/jni_util.h
+--- a/ojluni/src/main/native/jni_util.h
++++ b/ojluni/src/main/native/jni_util.h
+@@ -362,8 +362,8 @@
+ 
+ void initializeEncoding();
+ 
+-extern size_t getLastErrorString(char *buf, size_t len);
+-extern int getErrorString(int err, char *buf, size_t len);
++extern size_t JNICALL getLastErrorString(char *buf, size_t len);  // as jni_util_md.c defines them
++extern int JNICALL getErrorString(int err, char *buf, size_t len);
+ 
+ #ifdef __cplusplus
+ } /* extern "C" */
+diff --git a/luni/src/main/native/libcore_io_Linux.cpp b/luni/src/main/native/libcore_io_Linux.cpp
+--- a/luni/src/main/native/libcore_io_Linux.cpp
++++ b/luni/src/main/native/libcore_io_Linux.cpp
+@@ -2764,8 +2764,14 @@
+     return IO_FAILURE_RETRY(env, ssize_t, writev, javaFd, ioVec.get(), ioVec.size());
+ }
+ 
++#if defined(GESHER)
++// Gesher: the System V entry point, as jni_macros.h gives NATIVE_METHOD's.
++#define NATIVE_METHOD_OVERLOAD(className, functionName, signature, variant) \
++    { #functionName, signature, NATIVEHELPER_SYSV_JNI_ENTRY(className ## _ ## functionName ## variant) }
++#else
+ #define NATIVE_METHOD_OVERLOAD(className, functionName, signature, variant) \
+     { #functionName, signature, reinterpret_cast<void*>(className ## _ ## functionName ## variant) }
++#endif
+ 
+ static JNINativeMethod gMethods[] = {
+     NATIVE_METHOD(Linux, accept, "(Ljava/io/FileDescriptor;Ljava/net/SocketAddress;)Ljava/io/FileDescriptor;"),
 diff --git a/ojluni/src/main/native/jlong_md.h b/ojluni/src/main/native/jlong_md.h
 --- a/ojluni/src/main/native/jlong_md.h
 +++ b/ojluni/src/main/native/jlong_md.h
