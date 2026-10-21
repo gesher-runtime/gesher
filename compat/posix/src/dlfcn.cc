@@ -2,13 +2,17 @@
 // Android ELF libraries will be handled by Gesher's ELF loader (phase 6).
 
 #include <dlfcn.h>
+#include <gesher/builtin_library.h>
 
 #include <stdio.h>
+#include <string.h>
 #include <windows.h>
 // psapi.h needs windows.h first.
 #include <psapi.h>
 
+#include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "internal.h"
@@ -26,12 +30,57 @@ void SetError(const char* what, const char* name) {
   has_error = true;
 }
 
+// --- built-in libraries (<gesher/builtin_library.h>) --------------------------
+
+struct BuiltinLibrary {
+  std::string name;
+  const gesher_builtin_symbol* symbols;
+  size_t count;
+};
+
+std::mutex builtins_mutex;
+// Never freed: handles point into it.
+std::vector<BuiltinLibrary*>& Builtins() {
+  static std::vector<BuiltinLibrary*> builtins;
+  return builtins;
+}
+
+// The file name in a path, '/' or '\' separated.
+std::string_view BaseName(std::string_view path) {
+  size_t slash = path.find_last_of("/\\");
+  return slash == std::string_view::npos ? path : path.substr(slash + 1);
+}
+
+BuiltinLibrary* FindBuiltin(const char* filename) {
+  std::string_view base = BaseName(filename);
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  for (BuiltinLibrary* library : Builtins()) {
+    if (library->name == base) return library;
+  }
+  return nullptr;
+}
+
+BuiltinLibrary* AsBuiltin(void* handle) {
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  for (BuiltinLibrary* library : Builtins()) {
+    if (library == handle) return library;
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 extern "C" {
 
+void gesher_register_builtin_library(const char* name, const gesher_builtin_symbol* symbols,
+                                     size_t count) {
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  Builtins().push_back(new BuiltinLibrary{name, symbols, count});
+}
+
 void* dlopen(const char* filename, int flags) {
   if (filename == nullptr) return GetModuleHandleW(nullptr);
+  if (BuiltinLibrary* library = FindBuiltin(filename)) return library;
   std::wstring path = gesher::Widen(filename);
   HMODULE module = (flags & RTLD_NOLOAD) != 0
       ? GetModuleHandleW(path.c_str())
@@ -42,6 +91,22 @@ void* dlopen(const char* filename, int flags) {
 }
 
 void* dlsym(void* handle, const char* symbol) {
+  if (BuiltinLibrary* library = AsBuiltin(handle)) {
+    for (size_t i = 0; i < library->count; ++i) {
+      if (strcmp(library->symbols[i].name, symbol) == 0) return library->symbols[i].address;
+    }
+    // Then native methods among the executable's exports, where JNIEXPORT
+    // puts Java_* functions. Only those: other names, JNI_OnLoad above all,
+    // are not unique across the libraries linked in.
+    if (strncmp(symbol, "Java_", 5) == 0) {
+      if (FARPROC p = GetProcAddress(GetModuleHandleW(nullptr), symbol)) {
+        return reinterpret_cast<void*>(p);
+      }
+    }
+    last_error = "dlsym " + std::string(symbol) + ": not in " + library->name;
+    has_error = true;
+    return nullptr;
+  }
   if (handle != RTLD_DEFAULT && handle != RTLD_NEXT) {
     FARPROC p = GetProcAddress(static_cast<HMODULE>(handle), symbol);
     if (p == nullptr) SetError("dlsym", symbol);
@@ -66,7 +131,7 @@ void* dlsym(void* handle, const char* symbol) {
 }
 
 int dlclose(void* handle) {
-  if (handle == GetModuleHandleW(nullptr)) return 0;
+  if (handle == GetModuleHandleW(nullptr) || AsBuiltin(handle) != nullptr) return 0;
   if (!FreeLibrary(static_cast<HMODULE>(handle))) {
     SetError("dlclose", nullptr);
     return -1;
