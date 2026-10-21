@@ -9,6 +9,16 @@ extern "C" {
 
 char* strsignal(int sig);
 
+// Messages for Linux errno values (see <errno.h>), in place of the CRT's.
+char* gesher_strerror(int errnum);
+int gesher_strerror_s(char* buf, size_t buflen, int errnum);
+#define strerror gesher_strerror
+#define strerror_s gesher_strerror_s
+
+// GNU strerror_r; __xpg_strerror_r is the XSI one.
+char* strerror_r(int errnum, char* buf, size_t buflen);
+int __xpg_strerror_r(int errnum, char* buf, size_t buflen);
+
 #ifdef __cplusplus
 }
 #endif

@@ -49,6 +49,10 @@ int symlink(const char* target, const char* linkpath);
 int link(const char* oldpath, const char* newpath);
 int nice(int inc);
 
+// The CRT's rmdir reports ENOTEMPTY with its own number (see <errno.h>).
+int gesher_rmdir(const char* path);
+#define rmdir gesher_rmdir
+
 #ifdef __cplusplus
 }
 #endif

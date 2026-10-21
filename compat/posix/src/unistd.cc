@@ -68,13 +68,13 @@ pid_t fork(void) { return errno = ENOSYS, -1; }
 
 int pipe2(int fds[2], int flags) {
   int mode = _O_BINARY | ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
-  return _pipe(fds, 64 * 1024, mode);
+  return gesher::CrtResult(_pipe(fds, 64 * 1024, mode));
 }
 
 int pipe(int fds[2]) { return pipe2(fds, 0); }
 
-int fsync(int fd) { return _commit(fd); }
-int fdatasync(int fd) { return _commit(fd); }
+int fsync(int fd) { return gesher::CrtResult(_commit(fd)); }
+int fdatasync(int fd) { return gesher::CrtResult(_commit(fd)); }
 
 // Note: unlike Linux, these move the file position (Windows has no positioned
 // I/O that leaves it alone on synchronous handles).
