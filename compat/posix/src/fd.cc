@@ -236,6 +236,11 @@ void IgnoreInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsi
 const bool invalid_parameter_handler_installed =
     (_set_invalid_parameter_handler(IgnoreInvalidParameter), true);
 
+// Linux has no text mode: files the CRT opens without an explicit mode
+// (fopen(path, "r"), _wopen without _O_TEXT) are binary, so reads return
+// the file's bytes, CRs and Ctrl-Z included.
+const bool binary_file_mode_set = (_set_fmode(_O_BINARY), true);
+
 }  // namespace
 
 // --- poll -----------------------------------------------------------------------
