@@ -33,9 +33,10 @@ Check 'dexdump: read .dex from compressed .apk' { & "$Dir/dexdump.exe" -f "$Dir/
 Check 'dalvikvm: runtime starts' { & "$Dir/dalvikvm.exe" -showversion } @('ART version')
 
 # Progress check, until dalvikvm runs Hello: with the boot jars, the runtime
-# defines and links the core classes without a boot image and gets as far as
-# loading libcore's native libraries (not ported yet). ART separates class
-# path entries with ':', so paths are given without the drive letter.
+# defines and links the core classes without a boot image, loads libcore's
+# native libraries and runs libopenjdk's JNI_OnLoad as far as System's static
+# initializer, which needs the ICU natives (not ported yet). ART separates
+# class path entries with ':', so paths are given without the drive letter.
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
 foreach ($d in 'system/framework', 'art', 'data') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
@@ -48,8 +49,9 @@ $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/sy
   -Xint '-Xusejit:false' '-verbose:jni' -cp (NoDrive "$Dir/hello.dex") gesher.Hello 2>&1 | Out-String
 $code = $LASTEXITCODE
 Remove-Item Env:GESHER_TRACE_FAULTS
-if ($out.Contains('LoadNativeLibrary failed for "libicu_jni.so"')) {
-  Write-Host 'PASS  dalvikvm: links the core classes from the boot jars (stops at native libraries)'
+if ($out.Contains('Calling JNI_OnLoad in "libopenjdk.so"') -and
+    $out.Contains('No implementation found for java.lang.String libcore.icu.ICU.getIcuVersion()')) {
+  Write-Host 'PASS  dalvikvm: links the core classes from the boot jars (stops at the ICU natives)'
 } else {
   Write-Host ('FAIL  dalvikvm: links the core classes from the boot jars (exit 0x{0:X8})' -f $code)
   # Addresses as symbols, from the linker map (tools/symbolize.py).
