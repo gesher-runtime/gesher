@@ -29,4 +29,12 @@ import sys, zipfile
 with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as z:
     z.write(sys.argv[1], "classes.dex")
 PY
+
+# libcore tests (tests/dex-libcore), apart from Hello, which the installer ships.
+javac --release 11 -d "$work/classes-libcore" "$root"/tests/dex-libcore/*.java
+mkdir -p "$work/dex-libcore"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-libcore" $(find "$work/classes-libcore" -name '*.class')
+cp "$work/dex-libcore/classes.dex" "$out/libcore-tests.dex"
+
 echo "test apps written to $out"
