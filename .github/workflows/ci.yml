@@ -59,6 +59,150 @@ jobs:
           name: windows-x64
           path: dist/
 
+  # The framework's host tools (aidl, hidl-gen, protoc and its Java plugins,
+  # stats-log-api-gen, expresscatalog-codegen, sysprop_java), built natively
+  # for the Linux build host from the pinned AOSP sources.
+  host-tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache host tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: dist-host
+          key: host-tools-${{ hashFiles('tools/host/**', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'aosp.lock', 'patches/**') }}
+
+      - name: Cache AOSP sources
+        if: steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-host-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: |
+            aosp-host-
+            aosp-
+
+      - name: Fetch AOSP sources
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: tools/fetch-aosp.sh
+
+      - name: Install build tools
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex
+
+      - name: Build
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          cmake -S tools/host -B out/host -G Ninja -DAOSP_DIR="$PWD/third_party/aosp"
+          ninja -C out/host
+          mkdir -p dist-host/protobuf
+          cp out/host/aidl out/host/hidl-gen out/host/stats-log-api-gen \
+             out/host/sysprop_java out/host/expresscatalog-codegen \
+             out/host/protoc-gen-javanano out/host/protoc-gen-javastream dist-host/
+          cp out/host/protobuf/protoc dist-host/protobuf/
+          ls -la dist-host
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-tools-linux
+          path: dist-host/
+
+  # framework.jar's pipeline: boot class path -> coremod, framework-res,
+  # then tools/framework/build.py (generators + one javac). The javac step
+  # itself is still being fixed (branch phase2/framework); everything before
+  # it is expected green.
+  framework:
+    needs: host-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The framework's AOSP tree has its own cache: build.py --checkout
+      # widens the sparse sets during the build (blobless clones then fetch
+      # the blobs), and that widened tree must be what gets saved, every run.
+      - name: Restore AOSP sources
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/aosp
+          key: aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}-${{ github.run_id }}
+          restore-keys: |
+            aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}-
+            aosp-framework-
+            aosp-
+
+      - name: Fetch AOSP sources
+        run: tools/fetch-aosp.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache build-tools and the framework's JVM tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/build-tools-36.1
+            out/framework/jvm-tools
+          key: framework-tools-36.1-v1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: host-tools-linux
+          path: host-tools
+
+      - name: Make host tools executable
+        run: find host-tools -type f -exec chmod +x {} +
+
+      - name: Build boot class path (core-oj, core-libart, core-icu4j)
+        run: WORK_DIR="$PWD/work/boot" tools/build-boot-jars.sh out/boot-jars
+
+      - name: Assemble the coremod (java.base for javac --system=none)
+        run: tools/make-coremod.sh work/boot out/coremod
+
+      - name: Build framework-res (R.java, framework-res.apk)
+        run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res
+
+      - name: Build framework sources (generators + javac)
+        id: fw
+        run: |
+          set +e
+          python3 tools/framework/build.py --aosp third_party/aosp --out out/framework \
+            --core-classes out/coremod --aidl "$PWD/host-tools/aidl" \
+            --host-tools "$PWD/host-tools" \
+            --framework-res-java out/framework-res/framework-res-java \
+            --checkout --javac-memory 5g --show 10 2>&1 | tee build-framework.log
+          code=${PIPESTATUS[0]}
+          {
+            echo "### framework build"
+            echo '```'
+            grep -E '^(plan:|generated:|sources left out:|javac:|javac exit)' build-framework.log
+            grep -E '^  (unsupported|skipped|[0-9 ]+ )' build-framework.log | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      - name: Save AOSP sources
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/aosp
+          key: aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}-${{ github.run_id }}
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-logs
+          path: |
+            build-framework.log
+            out/framework/javac.log
+            out/framework/*.sources.txt
+          if-no-files-found: ignore
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
