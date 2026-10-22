@@ -39,10 +39,14 @@ Check 'dalvikvm: runtime starts' { & "$Dir/dalvikvm.exe" -showversion } @('ART v
 # class path entries with ':', so paths are given without the drive letter.
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
-foreach ($d in 'system/framework', 'art', 'data') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+# ICU's data, where the i18n module keeps it on Android.
+Copy-Item "$Dir/icudt*l.dat" (Join-Path $root 'i18n/etc/icu')
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
+$env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
+$env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 $bcp = (NoDrive "$Dir/core-oj.jar") + ':' + (NoDrive "$Dir/core-libart.jar")
 $env:GESHER_TRACE_FAULTS = '1'  # report a fault where it happens (crash.cc)
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `

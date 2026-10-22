@@ -45,6 +45,7 @@ include(cmake/aosp/third_party.cmake)
 include(cmake/aosp/system.cmake)
 include(cmake/aosp/art.cmake)
 include(cmake/aosp/art_runtime.cmake)
+include(cmake/aosp/icu.cmake)
 include(cmake/aosp/libcore_native.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.

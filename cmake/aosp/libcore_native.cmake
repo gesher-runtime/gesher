@@ -63,13 +63,9 @@ libcore_bp_files(_javacore_srcs luni_native_srcs)
 libcore_bp_files(_androidio_srcs libandroidio_srcs)
 # Not ported yet; their natives are registered as missing (see
 # compat/libcore/unported.cc), so calling one throws UnsatisfiedLinkError.
-# ICU4C is not built yet (IcuUtilities, ICU, ExpatParser's UTF-8
-# conversion), nor BoringSSL (NativeBN).
+# BoringSSL (NativeBN) is not built yet.
 set(GESHER_LIBCORE_UNPORTED
-  luni/src/main/native/IcuUtilities.cpp
-  luni/src/main/native/libcore_icu_ICU.cpp
   luni/src/main/native/libcore_math_NativeBN.cpp
-  luni/src/main/native/org_apache_harmony_xml_ExpatParser.cpp
   CACHE STRING "libcore native sources not built yet")
 foreach(f ${GESHER_LIBCORE_UNPORTED})
   list(REMOVE_ITEM _javacore_srcs "${_lc}/${f}")
@@ -80,19 +76,20 @@ set(_libcore_flags -Wall -Wextra -Wno-unused-parameter
 
 add_library(libcore_javacore OBJECT ${_javacore_srcs} ${_androidio_srcs})
 target_include_directories(libcore_javacore PRIVATE ${_lc}/luni/src/main/native)
-target_link_libraries(libcore_javacore PUBLIC nativehelper base log expat z ziparchive)
+# ICU through the NDK's libicu, as on Android (cmake/aosp/icu.cmake).
+target_link_libraries(libcore_javacore PUBLIC nativehelper base log expat z ziparchive
+  icu_ndk_headers)
 target_compile_options(libcore_javacore PRIVATE ${_libcore_flags})
 set_source_files_properties("${_lc}/luni/src/main/native/Register.cpp" PROPERTIES
   COMPILE_DEFINITIONS "JNI_OnLoad=JNI_OnLoad_javacore;JNI_OnUnload=JNI_OnUnload_javacore")
 
 # --- libopenjdk -------------------------------------------------------------
 libcore_bp_files(_openjdk_srcs libopenjdk_native_srcs)
-# epoll and inotify have no Windows equivalent yet; Character needs ICU4C;
-# UNIXProcess starts processes with vfork.
+# epoll and inotify have no Windows equivalent yet; UNIXProcess starts
+# processes with vfork.
 set(GESHER_OPENJDK_UNPORTED
   ojluni/src/main/native/EPoll.c
   ojluni/src/main/native/LinuxWatchService.c
-  ojluni/src/main/native/Character.cpp
   ojluni/src/main/native/UNIXProcess_md.c
   CACHE STRING "libopenjdk native sources not built yet")
 foreach(f ${GESHER_OPENJDK_UNPORTED})
@@ -101,7 +98,7 @@ endforeach()
 add_library(libcore_openjdk OBJECT ${_openjdk_srcs})
 target_include_directories(libcore_openjdk PRIVATE ${_lc}/luni/src/main/native
   ${_lc}/ojluni/src/main/native)
-target_link_libraries(libcore_openjdk PUBLIC nativehelper base log fdlibm z)
+target_link_libraries(libcore_openjdk PUBLIC nativehelper base log fdlibm z icu_ndk_headers)
 # OpenJDK's native code chooses its Linux paths with __linux__ (and its
 # Windows ones with WIN32), and gesher-base provides Linux's interfaces. Only
 # for C: libc++'s headers test __linux__ too, and must not see it.
@@ -129,4 +126,4 @@ foreach(f ${GESHER_LIBCORE_UNPORTED} ${GESHER_OPENJDK_UNPORTED})
   target_compile_definitions(libcore_builtins PRIVATE GESHER_UNPORTED_${_name})
 endforeach()
 target_link_libraries(dalvikvm PRIVATE libcore_builtins libcore_javacore libcore_openjdk
-  art_openjdkjvm)
+  art_openjdkjvm icu_jni)

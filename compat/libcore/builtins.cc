@@ -4,19 +4,26 @@
 // in debug builds) at startup with dlopen and calls their JNI_OnLoad
 // (runtime.cc). Each is registered here as a built-in library of gesher-base's
 // dlopen (<gesher/builtin_library.h>), with its JNI_OnLoad under the name it
-// was compiled with (cmake/aosp/libcore_native.cmake).
+// was compiled with (cmake/aosp/libcore_native.cmake, cmake/aosp/icu.cmake).
 
 #include <gesher/builtin_library.h>
 
 #include <jni.h>
 
 extern "C" {
+jint JNI_OnLoad_icu_jni(JavaVM* vm, void* reserved);
+void JNI_OnUnload_icu_jni(JavaVM* vm, void* reserved);
 jint JNI_OnLoad_javacore(JavaVM* vm, void* reserved);
 void JNI_OnUnload_javacore(JavaVM* vm, void* reserved);
 jint JNI_OnLoad_openjdk(JavaVM* vm, void* reserved);
 }
 
 namespace {
+
+const gesher_builtin_symbol kIcuJni[] = {
+    {"JNI_OnLoad", reinterpret_cast<void*>(&JNI_OnLoad_icu_jni)},
+    {"JNI_OnUnload", reinterpret_cast<void*>(&JNI_OnUnload_icu_jni)},
+};
 
 const gesher_builtin_symbol kJavacore[] = {
     {"JNI_OnLoad", reinterpret_cast<void*>(&JNI_OnLoad_javacore)},
@@ -28,10 +35,7 @@ const gesher_builtin_symbol kOpenjdk[] = {
 };
 
 const bool registered = [] {
-  // ICU4C is not built yet, so libicu_jni has no symbols, not even a
-  // JNI_OnLoad: ART still finds the library it requires, and calling one of
-  // its natives throws UnsatisfiedLinkError.
-  gesher_register_builtin_library("libicu_jni.so", nullptr, 0);
+  gesher_register_builtin_library("libicu_jni.so", kIcuJni, sizeof(kIcuJni) / sizeof(kIcuJni[0]));
   gesher_register_builtin_library("libjavacore.so", kJavacore,
                                   sizeof(kJavacore) / sizeof(kJavacore[0]));
   gesher_register_builtin_library("libopenjdk.so", kOpenjdk, sizeof(kOpenjdk) / sizeof(kOpenjdk[0]));
