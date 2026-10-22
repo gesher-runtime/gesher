@@ -43,7 +43,9 @@ class Plan:
         self.include_dirs = set()  # directories generators search: checked out whole
         self.plugins = set()       # annotation processors the bundled libraries run
         self.jarjar = {}           # library -> its jarjar rules file (sources renamed)
-        self.jarjar_tasks = defaultdict(set)  # library -> generation tasks it renames
+        self.lib_files = {}        # library -> the Java files its srcs add
+        self.lib_tasks = {}        # library -> the generation tasks its srcs add
+        self.lib_static = {}       # library -> its static_libs
 
     def add_java(self, path, bundle):
         self.needed.add(path)
@@ -74,9 +76,7 @@ SDK_LIBRARY_VARIANT = re.compile(r'^(.+?)(\.impl|\.stubs(?:\.[a-z_]+)*|\.module_
 API_FILES = ('current.txt', 'system-current.txt', 'module-lib-current.txt')
 PROTO_RUNTIMES = {'lite': 'libprotobuf-java-lite', 'nano': 'libprotobuf-java-nano',
                   'micro': 'libprotobuf-java-micro'}
-# Libraries whose jarjar rules rename what their dependents compile against:
-# their generated sources are renamed before javac (tools/framework/build.py).
-JARJAR_BEFORE_DEPENDENTS = {'perfetto_trace_javastream_protos_jarjar'}
+
 
 AIDL_VERSIONED = re.compile(
     r'^(?P<name>.+?)(?:-V(?P<version>\d+))?(?P<suffix>-java-source|-java_static|-java|-java-shallow)$')
@@ -88,6 +88,7 @@ class Planner:
         self.tree, self.modules = tree, modules
         self.plan = Plan()
         self.done = {}  # (name, bundle) -> True
+        self.root = None  # the library being built
         self.hidl_roots = {}
         for mod in modules.by_name.values():
             if mod.type == 'hidl_package_root':
@@ -106,6 +107,8 @@ class Planner:
             self.library(lib, False, 'core_platform')
 
     def library(self, name, bundle=True, referrer=None):
+        if self.root is None:
+            self.root = name
         key = (name, bundle)
         if key in self.done or (name, True) in self.done:
             return
@@ -211,13 +214,18 @@ class Planner:
         self.plan.include_dirs.update(ctx.includes)
         if bundle:
             self.plan.plugins.update(as_list(props.get('plugins')))
+        self.plan.lib_files[mod.name] = ctx.files
+        self.plan.lib_tasks[mod.name] = ctx.tasks
+        self.plan.lib_static[mod.name] = as_list(props.get('static_libs'))
+        # A static library's jarjar rules rename it before its dependents
+        # compile against it; the library being built applies its own to the
+        # finished jar.
         rules = props.get('jarjar_rules')
-        if rules and mod.name in JARJAR_BEFORE_DEPENDENTS:
+        if rules and bundle and mod.name != self.root:
             path = self.expand(ctx, [rules], collect=False)
             if path:
                 self.plan.jarjar[mod.name] = path[0]
                 self.plan.needed.add(path[0])
-                self.plan.jarjar_tasks[mod.name].update(ctx.tasks)
         for dep in as_list(props.get('static_libs')):
             self.library(dep, bundle, mod.name)
         for dep in as_list(props.get('libs')):
@@ -257,6 +265,7 @@ class Planner:
         ext = path.rsplit('.', 1)[-1]
         if ext == 'java':
             self.plan.add_java(path, ctx.bundle)
+            ctx.files.add(path)
         elif ext == 'aidl':
             t = self.plan.task('aidl', f'aidl:{ctx.mod.name}', ctx.bundle,
                                files=[], flags=ctx.aidl_flags)
@@ -303,7 +312,7 @@ class Planner:
             return []
         props = self.modules.merged(mod)
         if mod.type == 'filegroup':
-            sub = Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags, ctx.tasks)
+            sub = Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags, ctx.tasks, ctx.files)
             files = self.expand(sub, as_list(props.get('srcs')) + as_list(props.get('device_common_srcs')))
             excluded = set(self.expand(sub, as_list(props.get('exclude_srcs')), collect=False))
             files = [f for f in files if f not in excluded]
@@ -313,7 +322,8 @@ class Planner:
         if not collect:
             return []
         if mod.type == 'aidl_interface':
-            self.aidl_interface(mod, props, None, ctx.bundle, ctx.mod.name, as_sources=True)
+            ctx.tasks.add(self.aidl_interface(mod, props, None, ctx.bundle, ctx.mod.name,
+                                              as_sources=True))
         elif mod.type == 'android_app' and name == 'framework-res':
             self.plan.task('framework-res', 'framework-res', ctx.bundle)
         elif mod.type == 'aconfig_declarations_group':
@@ -321,6 +331,7 @@ class Planner:
         elif mod.type in ('genrule', 'java_genrule', 'gensrcs'):
             return self.genrule(ctx, mod, props)
         elif mod.type == 'xsd_config':
+            ctx.tasks.add(f'xsd:{name}')
             self.plan.task('xsd', f'xsd:{name}', ctx.bundle, src=norm(f'{mod.dir}/{as_list(props.get("srcs"))[0]}'),
                            package=props.get('package_name'), props=props, moddir=mod.dir)
             self.plan.needed.update(self.tree.dir_files(mod.dir))
@@ -497,7 +508,8 @@ class Planner:
 
 
 class Context:
-    def __init__(self, mod, props, bundle, includes, aidl_flags, tasks=None):
+    def __init__(self, mod, props, bundle, includes, aidl_flags, tasks=None, files=None):
         self.mod, self.props, self.bundle = mod, props, bundle
         self.includes, self.aidl_flags = includes, aidl_flags
         self.tasks = tasks if tasks is not None else set()  # generation tasks of its srcs
+        self.files = files if files is not None else set()  # Java files of its srcs
