@@ -32,8 +32,10 @@ API stubs and Conscrypt's stubs, then splits and dexes the result.
 ## Consequences
 - Builds in about two minutes on a CI runner; 3,699 classes in `core-oj`,
   495 in `core-libart`.
-- ICU, okhttp and Conscrypt jars are separate work, as are libcore's native
-  libraries (`libjavacore`, `libopenjdk`, `libicu_jni`).
+- okhttp and Conscrypt jars are separate work. ICU4J came later: the same
+  javac run compiles `android.icu` and the libcore bridge, split out as
+  `core-icu4j` with ICU4J's resources
+  ([0011](0011-libcore-natives.md)).
 - Paths: ART separates class path entries with `:`, which Windows drive
   letters contain. For now Gesher passes drive-less absolute paths
   (`/Users/...`, resolved on the current drive); a proper path model belongs in
