@@ -96,10 +96,13 @@ jobs:
         if: steps.tools.outputs.cache-hit != 'true'
         run: |
           # clang, as Soong builds them: AOSP host sources use clang-only
-          # builtins (__builtin_available) gcc rejects.
+          # builtins (__builtin_available) gcc rejects. Soong's libc++ pulls
+          # in <algorithm> and <cstring> where libstdc++ does not, which
+          # libpropertyinfoserializer relies on.
           cmake -S tools/host -B out/host -G Ninja -DAOSP_DIR="$PWD/third_party/aosp" \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-          ninja -C out/host
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-include algorithm -include cstring"
+          ninja -C out/host -k 0
           mkdir -p dist-host/protobuf
           cp out/host/aidl out/host/hidl-gen out/host/stats-log-api-gen \
              out/host/sysprop_java out/host/expresscatalog-codegen \
