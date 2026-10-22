@@ -56,7 +56,10 @@ target_compile_options(icu_ndk PRIVATE ${_icu4c_flags})
 
 add_library(icu_ndk_headers INTERFACE)
 target_include_directories(icu_ndk_headers INTERFACE ${_icu}/libicu/ndk_headers)
-target_compile_definitions(icu_ndk_headers INTERFACE U_STATIC_IMPLEMENTATION)
+# uconfig.h reads uconfig_local.h (no renaming, the NDK's API only) when the
+# platform build defines ANDROID; Gesher does not define ANDROID, which would
+# switch on Android-only code elsewhere, so it asks for the file directly.
+target_compile_definitions(icu_ndk_headers INTERFACE U_STATIC_IMPLEMENTATION UCONFIG_USE_LOCAL)
 target_link_libraries(icu_ndk_headers INTERFACE icu_ndk log)  # uconfig_local.h: <android/log.h>
 
 # --- libcutils' tracing, as on the host (trace-host.cpp: no-ops) --------------
