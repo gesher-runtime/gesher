@@ -28,6 +28,10 @@ struct statvfs {
 int statvfs(const char* path, struct statvfs* buf);
 int fstatvfs(int fd, struct statvfs* buf);
 
+// The fields are 64-bit already.
+#define statvfs64 statvfs
+#define fstatvfs64 fstatvfs
+
 #ifdef __cplusplus
 }
 #endif

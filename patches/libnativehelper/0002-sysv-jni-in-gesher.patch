@@ -1,0 +1,68 @@
+diff --git a/include_jni/jni.h b/include_jni/jni.h
+--- a/include_jni/jni.h
++++ b/include_jni/jni.h
+@@ -1115,7 +1115,14 @@
+ #define JNIIMPORT
+ #define JNIEXPORT  __attribute__ ((visibility ("default")))
+ #endif
++#if defined(GESHER)
++// Gesher: natives are entered with the System V ABI, as on x86-64 Linux
++// (docs/decisions/0006-managed-abi.md); C++ natives registered through
++// <nativehelper/jni_macros.h> get a thunk instead.
++#define JNICALL __attribute__((sysv_abi))
++#else
+ #define JNICALL
++#endif
+ 
+ /*
+  * Prototypes for functions exported by loadable shared libs.  These are
+diff --git a/include_platform_header_only/nativehelper/jni_macros.h b/include_platform_header_only/nativehelper/jni_macros.h
+--- a/include_platform_header_only/nativehelper/jni_macros.h
++++ b/include_platform_header_only/nativehelper/jni_macros.h
+@@ -252,6 +252,38 @@
+ 
+ // C++14 or better, use compile-time checking.
+ #if defined(__cplusplus) && __cplusplus >= 201402L
++#if defined(GESHER)
++// Gesher: ART enters natives with the System V ABI, as on x86-64 Linux
++// (docs/decisions/0006-managed-abi.md), but C++ natives are compiled for the
++// Microsoft ABI and seldom say JNICALL. Each registered function gets a
++// System V thunk that calls it; the signature check sees the function itself.
++namespace nativehelper {
++namespace detail {
++template <auto F>
++struct GesherSysvJni;
++template <typename R, typename... A, R (*F)(A...)>
++struct GesherSysvJni<F> {
++  static R __attribute__((sysv_abi)) Call(A... args) { return F(args...); }
++};
++inline JNINativeMethod GesherSysvMethod(JNINativeMethod method, void* entry) {
++  method.fnPtr = entry;
++  return method;
++}
++}  // namespace detail
++}  // namespace nativehelper
++
++// The System V entry point for native function `fn`.
++#define NATIVEHELPER_SYSV_JNI_ENTRY(fn) \
++  reinterpret_cast<void*>(&::nativehelper::detail::GesherSysvJni<fn>::Call)
++
++#define _NATIVEHELPER_JNI_MAKE_METHOD(kind, name, sig, fn)                       \
++  ::nativehelper::detail::GesherSysvMethod(MAKE_CHECKED_JNI_NATIVE_METHOD(kind, name, sig, fn), \
++                                           NATIVEHELPER_SYSV_JNI_ENTRY(fn))
++
++#define _NATIVEHELPER_JNI_MAKE_METHOD_AUTOSIG(kind, name, function)                \
++  ::nativehelper::detail::GesherSysvMethod(MAKE_INFERRED_JNI_NATIVE_METHOD(kind, name, function), \
++                                           NATIVEHELPER_SYSV_JNI_ENTRY(function))
++#else
+ // Expands to a compound expression whose type is JNINativeMethod.
+ #define _NATIVEHELPER_JNI_MAKE_METHOD(kind, name, sig, fn) \
+   MAKE_CHECKED_JNI_NATIVE_METHOD(kind, name, sig, fn)
+@@ -259,6 +291,7 @@
+ // Expands to a compound expression whose type is JNINativeMethod.
+ #define _NATIVEHELPER_JNI_MAKE_METHOD_AUTOSIG(kind, name, function) \
+   MAKE_INFERRED_JNI_NATIVE_METHOD(kind, name, function)
++#endif  // GESHER
+ 
+ #else
+ // Older versions of C++ or C code get the regular macro that's unchecked.

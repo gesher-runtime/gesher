@@ -60,7 +60,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [ ] Math entrypoints (`sin`, `fmod`, ...) called by compiled code need
       System V wrappers too (the Microsoft ABI's 32-byte shadow space);
       only matters once the JIT/AOT compiler runs
-- [ ] `JNICALL` and the `JNIEnv`/`JavaVM` tables as System V (libnativehelper)
+- [x] Natives entered with the System V ABI: `JNICALL` is `sysv_abi`, and
+      `jni_macros.h` registers System V thunks; the `JNIEnv`/`JavaVM` tables
+      stay on the Microsoft ABI ([0011](decisions/0011-libcore-natives.md))
 - [x] Android root and data directories from the environment (patch 0008)
 - [x] Boot class path built from libcore in CI: `core-oj`, `core-libart`
       ([0007](decisions/0007-boot-class-path.md))
@@ -69,16 +71,38 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] dlmalloc in its POSIX configuration, so the non-moving space stays in
       ART's low-4 GiB heap
 - [x] `dalvikvm.exe` links the core classes from the boot jars without a boot
-      image (tested in CI); stops at libcore's native libraries
+      image (tested in CI)
 - [x] Crash reports: unhandled exceptions print a stack trace
       (`tools/symbolize.py`, or `addr2line` on an unstripped build);
       `GESHER_TRACE_MMAP=1` traces the mmap layer
-- [ ] libcore's native libraries (`libicu_jni`, `libjavacore`,
-      `libopenjdk`) linked in and initialized without `dlopen`
-- [ ] A path model for Windows paths in ART's `:`-separated lists
+- [x] Linux errno numbering, translated from the CRT's and winpthreads'
+      ([0008](decisions/0008-linux-abi.md))
+- [x] Sockets as file descriptors over Winsock, `poll` over files, pipes and
+      sockets, with a probe run in CI ([0009](decisions/0009-socket-fds.md))
+- [x] libcore's native libraries (`libicu_jni`, `libjavacore`,
+      `libopenjdk`) linked in and registered with `dlopen` by name
+      ([0011](decisions/0011-libcore-natives.md)), all three `JNI_OnLoad`s
+      run (tested in CI)
+- [x] ICU4C built from `external/icu`, its data mapped from
+      `ANDROID_I18N_ROOT` as on Android; `libicu_jni`, libcore's ICU natives
+      and `core-icu4j.jar` on the boot class path
+- [ ] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`)
+- [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+- [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
+      drive-less paths on the current drive, so ART's `:`-separated lists
+      need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
+      `/proc/self/cmdline` are emulated; `open` takes Linux's `O_*` flags
+      over `CreateFileW`; tested in CI
+- [ ] Paths on another drive in `:`-separated lists, and the rest of the
+      CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
+- [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
+      ART's signal catcher takes them
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
       `CONTEXT` ↔ `ucontext_t`), then implicit checks back on
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
 - [ ] Executable file mappings (`.oat` code)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
-- [ ] `dalvikvm.exe` runs `Hello` with the interpreter
+- [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
+- [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
+      `gesher` command for `.dex` programs, installed and tried on a clean
+      runner

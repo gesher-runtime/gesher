@@ -46,7 +46,9 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
+          # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -75,6 +77,58 @@ jobs:
           python3 tools/asm-port-report.py third_party/aosp | tee asm-report.md
           cat asm-report.md >> "$GITHUB_STEP_SUMMARY"
 
+  # The Windows installer (tools/package/gesher.iss), installed and tried on a
+  # clean runner: Hello through the installed `gesher` command, then uninstall.
+  package:
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/package
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: dist
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          $version = "0.1.${{ github.run_number }}"
+          & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem installer
+
+      - name: Install, run Hello, uninstall
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
+          $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows')) {
+            throw "Hello through the installed gesher failed (exit $code)"
+          }
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
+          # The uninstaller hands over to a copy of itself and returns at once.
+          for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
+          if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
+          'PASS  installer: installs, runs Hello, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gesher-setup
+          path: installer/*.exe
+
   test:
     needs: build
     strategy:
@@ -85,7 +139,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests
+          sparse-checkout: |
+            tests
+            tools/symbolize.py
 
       - uses: actions/download-artifact@v4
         with:

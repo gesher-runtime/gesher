@@ -20,6 +20,13 @@ typedef unsigned int nlink_t;
 typedef long long blkcnt_t;
 typedef long long blksize_t;
 
+// BSD names, which OpenJDK's native code uses.
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+typedef unsigned int u_int;
+typedef unsigned long u_long;
+typedef char* caddr_t;
+
 // mingw only exposes sigset_t under _POSIX.
 #ifndef _POSIX
 typedef _sigset_t sigset_t;

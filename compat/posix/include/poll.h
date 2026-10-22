@@ -1,5 +1,5 @@
-// gesher-base: <poll.h>. Values match both Linux and winsock2, so a file
-// that also includes <winsock2.h> sees consistent constants.
+// gesher-base: <poll.h>, Linux's values. poll() takes files, pipes and
+// sockets (src/fd.cc).
 #pragma once
 
 #ifdef __cplusplus
@@ -12,18 +12,24 @@ struct pollfd {
   short revents;
 };
 
-#ifndef POLLIN
-#define POLLIN   0x0001
-#define POLLPRI  0x0002
-#define POLLOUT  0x0004
-#define POLLERR  0x0008
-#define POLLHUP  0x0010
-#define POLLNVAL 0x0020
-#endif
+#define POLLIN     0x0001
+#define POLLPRI    0x0002
+#define POLLOUT    0x0004
+#define POLLERR    0x0008
+#define POLLHUP    0x0010
+#define POLLNVAL   0x0020
+#define POLLRDNORM 0x0040
+#define POLLRDBAND 0x0080
+#define POLLWRNORM 0x0100
+#define POLLWRBAND 0x0200
+#define POLLMSG    0x0400
+#define POLLRDHUP  0x2000
 
 typedef unsigned long nfds_t;
+struct timespec;
 
 int poll(struct pollfd* fds, nfds_t nfds, int timeout);
+int ppoll(struct pollfd* fds, nfds_t nfds, const struct timespec* timeout, const void* sigmask);
 
 #ifdef __cplusplus
 }
