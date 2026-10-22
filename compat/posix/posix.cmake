@@ -4,6 +4,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/crash.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dirent.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dlfcn.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/epoll.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/errno.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/fd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/internal.cc
