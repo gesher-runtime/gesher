@@ -81,9 +81,12 @@ Each phase ends with something demonstrable, built and tested in CI.
       sockets, with a probe run in CI ([0009](decisions/0009-socket-fds.md))
 - [x] libcore's native libraries (`libicu_jni`, `libjavacore`,
       `libopenjdk`) linked in and registered with `dlopen` by name
-      ([0011](decisions/0011-libcore-natives.md)); libopenjdk's `JNI_OnLoad`
-      runs Java code as far as the ICU natives (tested in CI)
-- [ ] ICU4C, and libcore's natives that use it (`libcore.icu.ICU` first)
+      ([0011](decisions/0011-libcore-natives.md)), all three `JNI_OnLoad`s
+      run (tested in CI)
+- [x] ICU4C built from `external/icu`, its data mapped from
+      `ANDROID_I18N_ROOT` as on Android; `libicu_jni`, libcore's ICU natives
+      and `core-icu4j.jar` on the boot class path
+- [ ] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`)
 - [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
@@ -92,9 +95,14 @@ Each phase ends with something demonstrable, built and tested in CI.
       over `CreateFileW`; tested in CI
 - [ ] Paths on another drive in `:`-separated lists, and the rest of the
       CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
+- [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
+      ART's signal catcher takes them
 - [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
       `CONTEXT` ↔ `ucontext_t`), then implicit checks back on
 - [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
 - [ ] Executable file mappings (`.oat` code)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
-- [ ] `dalvikvm.exe` runs `Hello` with the interpreter
+- [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
+- [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
+      `gesher` command for `.dex` programs, installed and tried on a clean
+      runner
