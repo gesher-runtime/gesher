@@ -5,15 +5,36 @@
 
 Only the read-only accessor API is generated: one constexpr function per flag
 in the package namespace, plus the COM_..._FLAG macros. Values come from a
-`name=true|false` file; unlisted flags are false, as in an unconfigured build.
+`[<package>.]<name>=true|false` file; unlisted flags are false, as in an
+unconfigured build.
 """
 import re
 import sys
 
 
 def parse_aconfig(text):
-    package = re.search(r'^package:\s*"([^"]+)"', text, re.M).group(1)
-    names = re.findall(r'flag\s*{[^}]*?\bname:\s*"([^"]+)"', text, re.S)
+    # Text-format protobuf: the top-level `package`, and the `name` of each
+    # top-level `flag` block (not of blocks nested in it).
+    tokens = re.findall(r'"(?:[^"\\]|\\.)*"|#[^\n]*|[{}:]|[\w.]+', text)
+    package, names, depth, field, block = None, [], 0, None, None
+    for tok in tokens:
+        if tok.startswith('#'):
+            continue
+        if tok == '{':
+            depth += 1
+            if depth == 1:
+                block = field
+        elif tok == '}':
+            depth -= 1
+        elif tok == ':':
+            pass
+        elif tok.startswith('"'):
+            if depth == 0 and field == 'package':
+                package = tok[1:-1]
+            elif depth == 1 and block == 'flag' and field == 'name':
+                names.append(tok[1:-1])
+        else:
+            field = tok
     return package, names
 
 
@@ -26,6 +47,10 @@ def parse_values(path):
                 name, value = (s.strip() for s in line.split('=', 1))
                 values[name] = value == 'true'
     return values
+
+
+def flag_value(values, package, name):
+    return values.get(f'{package}.{name}', values.get(name, False))
 
 
 def main():
@@ -41,7 +66,7 @@ def main():
     ]
     for name in names:
         out.append(f'#define {guard.upper()}_{name.upper()} '
-                   f'{"true" if values.get(name, False) else "false"}')
+                   f'{"true" if flag_value(values, package, name) else "false"}')
     out += ['', '#ifdef __cplusplus', f'namespace {namespace} {{', '']
     for name in names:
         out.append(f'constexpr inline bool {name}() {{ return {guard.upper()}_{name.upper()}; }}')

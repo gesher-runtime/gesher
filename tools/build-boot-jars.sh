@@ -35,10 +35,9 @@ fi
 gen=$work/gen
 rm -rf "$gen" && mkdir -p "$gen"
 values=$root/config/aconfig/art.values
-for decl in art/build/flags/art-flags.aconfig art/build/flags/art-rw-flags.aconfig \
-            libcore/libcore.aconfig external/icu/icu.aconfig; do
-  "$py" "$root/tools/gen/aconfig_java.py" "$aosp/$decl" "$values" "$gen"
-done
+"$py" "$root/tools/gen/aconfig_java.py" "$values" "$gen" \
+  "$aosp"/art/build/flags/{art-flags,art-rw-flags}.aconfig \
+  "$aosp"/libcore/libcore.aconfig "$aosp"/external/icu/icu.aconfig
 
 # --- Source lists ------------------------------------------------------------
 bps=("$lc/JavaLibrary.bp" "$lc/openjdk_java_files.bp" "$lc/non_openjdk_java_files.bp")
@@ -47,13 +46,13 @@ bps=("$lc/JavaLibrary.bp" "$lc/openjdk_java_files.bp" "$lc/non_openjdk_java_file
 "$py" "$root/tools/gen/bp_files.py" -o "$work/resources.txt" core-oj.java_resources "${bps[@]}"
 find "$gen" -name '*.java' > "$work/gen.txt"
 # core-libart's static_libs: the ART and libcore flag classes.
-grep -E '/com/android/(art/flags|libcore)/Flags\.java$' "$work/gen.txt" > "$work/core-libart-flags.txt"
+grep -E '/com/android/(art/flags|libcore)/(Flags|FeatureFlags|FeatureFlagsImpl)\.java$' "$work/gen.txt" > "$work/core-libart-flags.txt"
 echo "$lc/luni/src/module/java/module-info.java" > "$work/module.txt"
 # core-icu4j: core-repackaged-icu4j (android.icu) and the libcore bridge
 # (com.android.icu, com.android.i18n), with ICU's flag class.
 icu4j=$aosp/external/icu/android_icu4j
 { find "$icu4j/src/main/java/android/icu" "$icu4j/libcore_bridge/src/java" -name '*.java'
-  grep -E '/com/android/icu/Flags\.java$' "$work/gen.txt"; } | sort > "$work/core-icu4j.txt"
+  grep -E '/com/android/icu/(Flags|FeatureFlags|FeatureFlagsImpl)\.java$' "$work/gen.txt"; } | sort > "$work/core-icu4j.txt"
 find "$icu4j/resources" -type f | sort > "$work/core-icu4j-resources.txt"
 
 # --- core-all ----------------------------------------------------------------
