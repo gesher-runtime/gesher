@@ -1,0 +1,18 @@
+diff --git a/ojluni/src/main/native/Character.cpp b/ojluni/src/main/native/Character.cpp
+index ff56a9a..a58d7db 100644
+--- a/ojluni/src/main/native/Character.cpp
++++ b/ojluni/src/main/native/Character.cpp
+@@ -28,6 +28,13 @@
+ #include <math.h>
+ #include <stdio.h> // For BUFSIZ
+ 
++#if defined(GESHER)
++// Gesher: these natives are registered through jni_macros.h, which gives each
++// a System V thunk; the functions themselves stay on the Microsoft ABI.
++#undef JNICALL
++#define JNICALL
++#endif
++
+ JNIEXPORT jboolean JNICALL
+ Character_isLowerCaseImpl(JNIEnv* env, jclass, jint codePoint) {
+   return u_islower(codePoint);
