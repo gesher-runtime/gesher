@@ -15,6 +15,7 @@
 #include <netinet/tcp.h>
 #include <mntent.h>
 #include <poll.h>
+#include <pthread.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -568,6 +569,23 @@ int main(int, char** argv) {
     CHECK(sigtimedwait(&set, &info, &wait) == SIGUSR1 && info.si_code == SI_QUEUE &&
           info.si_value.sival_int == 42);
     CHECK(kill(getpid(), 0) == 0 && kill(getpid(), 12345) == -1 && errno == EINVAL);
+  }
+
+  // Key destructors run only for non-NULL values, as ART's thread-exit check
+  // expects of a thread that detached (and so cleared its key).
+  {
+    static std::atomic<int> calls{0}, nulls{0};
+    static pthread_key_t key;
+    CHECK(pthread_key_create(&key, [](void* v) { ++(v == nullptr ? nulls : calls); }) == 0);
+    std::thread cleared([] {
+      pthread_setspecific(key, &key);
+      pthread_setspecific(key, nullptr);
+    });
+    cleared.join();
+    std::thread kept([] { pthread_setspecific(key, &key); });
+    kept.join();
+    CHECK(calls == 1 && nulls == 0);
+    CHECK(pthread_key_delete(key) == 0);
   }
 
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);

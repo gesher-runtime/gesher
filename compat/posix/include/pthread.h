@@ -29,6 +29,14 @@ int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id);
 int pthread_attr_getguardsize(const pthread_attr_t* attr, size_t* guardsize);
 int pthread_attr_setguardsize(pthread_attr_t* attr, size_t guardsize);
 
+// winpthreads runs a key's destructor at thread exit whenever the key was
+// set, even back to NULL; POSIX runs it only for non-NULL values (ART's
+// thread-exit check relies on that). These wrap the destructor accordingly.
+int gesher_pthread_key_create(pthread_key_t* key, void (*destructor)(void*));
+int gesher_pthread_key_delete(pthread_key_t key);
+#define pthread_key_create gesher_pthread_key_create
+#define pthread_key_delete gesher_pthread_key_delete
+
 // winpthreads returns the CRT's errno numbers (ETIMEDOUT is 138, not 110);
 // these translate the results that can differ from Linux's (see <errno.h>).
 #define GESHER_PTHREAD_LINUX_ERRNO(name, params, args)                       static inline int gesher_##name params {                                    int result = name args;                                                   return result == 0 ? 0 : gesher_errno_from_crt(result);                 }
