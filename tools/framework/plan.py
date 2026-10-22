@@ -41,6 +41,7 @@ class Plan:
         self.missing = defaultdict(set)      # module name -> referrers
         self.aidl_includes = defaultdict(set)  # task key -> -I dirs
         self.include_dirs = set()  # directories generators search: checked out whole
+        self.plugins = set()       # annotation processors the bundled libraries run
         self.jarjar = {}           # library -> its jarjar rules file (sources renamed)
         self.jarjar_tasks = defaultdict(set)  # library -> generation tasks it renames
 
@@ -62,9 +63,17 @@ COMBINED_STUBS = {
     'framework-updatable-stubs-module_libs_api': 'frameworks-base-api',
 }
 # Already on the class path: libcore's, ICU's and Conscrypt's boot jars.
-CORE_APIS = {'art.module.public.api', 'conscrypt.module.public.api', 'i18n.module.public.api'}
+CORE_APIS = {'art.module.public.api', 'i18n.module.public.api'}
+# The core platform API of boot jars Gesher does not build yet, which
+# sdk_version: "core_platform" puts on the framework's class path.
+CORE_PLATFORM_API_FILES = ['external/conscrypt/api/platform/current.txt']
+# Boot jars Gesher does not build yet whose sources the framework compiles
+# against (compile only).
+CORE_PLATFORM_LIBRARIES = ['okhttp']
 SDK_LIBRARY_VARIANT = re.compile(r'^(.+?)(\.impl|\.stubs(?:\.[a-z_]+)*|\.module_lib)$')
 API_FILES = ('current.txt', 'system-current.txt', 'module-lib-current.txt')
+PROTO_RUNTIMES = {'lite': 'libprotobuf-java-lite', 'nano': 'libprotobuf-java-nano',
+                  'micro': 'libprotobuf-java-micro'}
 # Libraries whose jarjar rules rename what their dependents compile against:
 # their generated sources are renamed before javac (tools/framework/build.py).
 JARJAR_BEFORE_DEPENDENTS = {'perfetto_trace_javastream_protos_jarjar'}
@@ -86,6 +95,16 @@ class Planner:
                 self.hidl_roots[mod.name] = norm(path) if '/' in str(path) and not path.startswith(mod.dir) else norm(f'{mod.dir}/{path}') if mod.props.get('path') else mod.dir
 
     # --- entry points ---------------------------------------------------
+    def core_platform(self):
+        """What sdk_version: "core_platform" adds beyond Gesher's boot jars."""
+        files = [f for f in CORE_PLATFORM_API_FILES if self.tree.exists(f)]
+        if files:
+            t = self.plan.task('api-stubs', 'api-stubs', False, files=[])
+            t.args['files'] += [f for f in files if f not in t.args['files']]
+            self.plan.needed.update(files)
+        for lib in CORE_PLATFORM_LIBRARIES:
+            self.library(lib, False, 'core_platform')
+
     def library(self, name, bundle=True, referrer=None):
         key = (name, bundle)
         if key in self.done or (name, True) in self.done:
@@ -128,7 +147,9 @@ class Planner:
             return True
         m = SDK_LIBRARY_VARIANT.match(name)
         if m and self.modules.get(m.group(1)) is not None:
-            if m.group(2) == '.impl' and bundle:
+            if m.group(2) == '.impl':
+                # The implementation, hidden API included (compile only
+                # when it comes through `libs`).
                 self.library(m.group(1), bundle, referrer)
             else:
                 self.sdk_library_stubs(m.group(1), referrer)
@@ -188,6 +209,8 @@ class Planner:
             if item not in excluded:
                 self.source(ctx, item)
         self.plan.include_dirs.update(ctx.includes)
+        if bundle:
+            self.plan.plugins.update(as_list(props.get('plugins')))
         rules = props.get('jarjar_rules')
         if rules and mod.name in JARJAR_BEFORE_DEPENDENTS:
             path = self.expand(ctx, [rules], collect=False)
@@ -247,6 +270,9 @@ class Planner:
         elif ext == 'proto':
             proto = ctx.props.get('proto') or {}
             ctx.tasks.add(f'proto:{ctx.mod.name}')
+            runtime = PROTO_RUNTIMES.get(proto.get('type') or 'lite')
+            if runtime and not proto.get('plugin'):
+                self.library(runtime, ctx.bundle, ctx.mod.name)
             t = self.plan.task('proto', f'proto:{ctx.mod.name}', ctx.bundle, files=[],
                                type=proto.get('type', 'lite'),
                                includes=[norm(f'{ctx.mod.dir}/{d}') for d in as_list(proto.get('local_include_dirs'))]
@@ -313,9 +339,6 @@ class Planner:
         cmd = props.get('cmd') or ''
         srcs = self.expand(Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags, ctx.tasks),
                            as_list(props.get('srcs')))
-        # Copies (the release-selected and mock sources) are their inputs.
-        if re.fullmatch(r'\s*(mkdir -p [^;]+;\s*)?cp \$\(in\) \$\(out\);?\s*', cmd):
-            return [s for s in srcs if s.endswith('.java')]
         self.plan.needed.update(srcs)
         ctx.tasks.add(f'genrule:{mod.name}')
         self.plan.task('genrule', f'genrule:{mod.name}', ctx.bundle, module=mod.name,
@@ -402,7 +425,7 @@ class Planner:
         self.plan.include_dirs.update(includes)
         import_keys = []
         for imp in imports:
-            k = self.aidl_import(imp, bundle, mod.name)
+            k = self.aidl_import(imp, bundle, mod.name, java=java and not as_sources)
             if k:
                 import_keys.append(k)
                 includes += sorted(self.plan.aidl_includes.get(k, ()))
@@ -433,7 +456,7 @@ class Planner:
             self.aidl_library(dep, referrer)
         return [norm(f'{mod.dir}/{props.get("strip_import_prefix", "")}')]
 
-    def aidl_import(self, imp, bundle, referrer):
+    def aidl_import(self, imp, bundle, referrer, java=False):
         m = re.match(r'^(.+?)(?:-V(\d+))?$', imp)
         name, version = m.group(1), m.group(2)
         mod = self.modules.get(name)
@@ -441,7 +464,7 @@ class Planner:
             self.plan.missing[imp].add(referrer)
             return None
         return self.aidl_interface(mod, self.modules.merged(mod), version, bundle, referrer,
-                                   java=False)
+                                   java=java)
 
     # --- HIDL -------------------------------------------------------------
     def hidl(self, mod, constants, bundle, referrer):

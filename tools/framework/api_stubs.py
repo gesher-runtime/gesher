@@ -133,6 +133,8 @@ def parse(path, classes):
                     cls = classes[key] = Cls(package, name, m.group(2), mods,
                                              normalize_header(m.group(4).strip()))
                 continue
+            # Constants carry their value in hex as a trailing comment.
+            s = re.sub(r';\s*//[^"]*$', ';', s)
             m = re.match(r'^(ctor|method|field|enum_constant|property) (.*);$', s)
             if not m or m.group(1) == 'property':
                 continue
