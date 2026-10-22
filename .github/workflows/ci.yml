@@ -43,6 +43,9 @@ jobs:
       - name: Build boot class path (core-oj, core-libart)
         run: tools/build-boot-jars.sh out/boot-jars
 
+      - name: Build the framework's resources (framework-res.apk)
+        run: tools/build-framework-res.sh out/framework-res
+
       - name: Collect artifacts
         run: |
           mkdir -p dist

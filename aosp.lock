@@ -26,3 +26,5 @@ external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
+build/release release_configs/ aconfig/
+frameworks/base core/res/
