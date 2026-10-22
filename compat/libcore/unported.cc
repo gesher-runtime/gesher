@@ -6,21 +6,8 @@
 
 #include <jni.h>
 
-#if defined(GESHER_UNPORTED_libcore_icu_ICU)
-void register_libcore_icu_ICU(JNIEnv*) {}
-void unregister_libcore_icu_ICU() {}
-#endif
-
 #if defined(GESHER_UNPORTED_libcore_math_NativeBN)
 void register_libcore_math_NativeBN(JNIEnv*) {}
-#endif
-
-#if defined(GESHER_UNPORTED_org_apache_harmony_xml_ExpatParser)
-void register_org_apache_harmony_xml_ExpatParser(JNIEnv*) {}
-#endif
-
-#if defined(GESHER_UNPORTED_Character)
-void register_java_lang_Character(JNIEnv*) {}
 #endif
 
 #if defined(GESHER_UNPORTED_UNIXProcess_md)

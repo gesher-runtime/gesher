@@ -47,6 +47,8 @@ jobs:
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
+          # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           ls -la dist
 
       - uses: actions/upload-artifact@v4
