@@ -16,6 +16,7 @@
 #include <mntent.h>
 #include <poll.h>
 #include <pwd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -528,6 +529,45 @@ int main(int, char** argv) {
     munmap(grown, size);
     munmap(from, size);
     munmap(to, size);
+  }
+
+  // Signals sent to the process wait for sigwait, as ART's signal catcher
+  // takes SIGQUIT and SIGUSR1.
+  {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGQUIT);
+    sigaddset(&set, SIGUSR1);
+    CHECK(pthread_sigmask(SIG_BLOCK, &set, nullptr) == 0);
+    std::atomic<int> got{0};
+    std::atomic<int> code{1};
+    std::thread catcher([&] {
+      siginfo_t info = {};
+      got = sigwaitinfo(&set, &info);
+      code = info.si_code;
+    });
+    Sleep(50);
+    CHECK(got == 0);  // still waiting
+    CHECK(kill(getpid(), SIGUSR1) == 0);
+    catcher.join();
+    CHECK(got == SIGUSR1 && code == SI_USER);
+    // Pending until taken; sent twice, still one.
+    CHECK(kill(getpid(), SIGQUIT) == 0 && kill(getpid(), SIGQUIT) == 0);
+    sigset_t pending;
+    CHECK(sigpending(&pending) == 0 && sigismember(&pending, SIGQUIT) == 1);
+    int sig = 0;
+    CHECK(sigwait(&set, &sig) == 0 && sig == SIGQUIT);
+    timespec wait = {0, 50 * 1000 * 1000};
+    DWORD start = GetTickCount();
+    CHECK(sigtimedwait(&set, nullptr, &wait) == -1 && errno == EAGAIN);
+    CHECK(GetTickCount() - start >= 40);
+    union sigval value;
+    value.sival_int = 42;
+    siginfo_t info = {};
+    CHECK(sigqueue(getpid(), SIGUSR1, value) == 0);
+    CHECK(sigtimedwait(&set, &info, &wait) == SIGUSR1 && info.si_code == SI_QUEUE &&
+          info.si_value.sival_int == 42);
+    CHECK(kill(getpid(), 0) == 0 && kill(getpid(), 12345) == -1 && errno == EINVAL);
   }
 
   printf(fails != 0 ? "%d failures\n" : "all passed\n", fails);
