@@ -67,9 +67,9 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
   $failed++
 }
 
-# libopenjdk's EPoll natives over gesher-base's epoll (tests/dex/EPollTest.java).
+# libopenjdk's EPoll natives over gesher-base's epoll (tests/dex-libcore).
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/hello.dex") gesher.EPollTest 2>&1 | Out-String
+  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/libcore-tests.dex") gesher.EPollTest 2>&1 | Out-String
 if ($LASTEXITCODE -eq 0 -and $out.Contains('EPollTest all passed')) {
   Write-Host 'PASS  dalvikvm: EPollSelector over a pipe'
 } else {
