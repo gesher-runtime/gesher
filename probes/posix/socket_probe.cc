@@ -569,6 +569,19 @@ int main(int, char** argv) {
     CHECK(sigtimedwait(&set, &info, &wait) == SIGUSR1 && info.si_code == SI_QUEUE &&
           info.si_value.sival_int == 42);
     CHECK(kill(getpid(), 0) == 0 && kill(getpid(), 12345) == -1 && errno == EINVAL);
+    // ART stops its signal catcher with pthread_kill(SIGQUIT), then joins it.
+    static sigset_t wait_set;
+    static int woke = 0;
+    wait_set = set;
+    pthread_t waiter;
+    CHECK(pthread_create(&waiter, nullptr, [](void*) -> void* {
+            int s = 0;
+            if (sigwait(&wait_set, &s) == 0) woke = s;
+            return nullptr;
+          }, nullptr) == 0);
+    Sleep(50);
+    CHECK(pthread_kill(waiter, SIGQUIT) == 0 && pthread_join(waiter, nullptr) == 0);
+    CHECK(woke == SIGQUIT);
   }
 
   // Key destructors run only for non-NULL values, as ART's thread-exit check
