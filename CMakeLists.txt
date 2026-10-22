@@ -60,3 +60,9 @@ target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
+
+# libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
+# also run in CI on Windows.
+add_executable(libutils_probe probes/system/libutils_probe.cc)
+target_compile_options(libutils_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(libutils_probe PRIVATE utils)

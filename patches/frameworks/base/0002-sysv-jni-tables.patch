@@ -1,0 +1,230 @@
+diff --git a/core/jni/android_os_MessageQueue.cpp b/core/jni/android_os_MessageQueue.cpp
+--- a/core/jni/android_os_MessageQueue.cpp
++++ b/core/jni/android_os_MessageQueue.cpp
+@@ -252,15 +252,15 @@
+ 
+ static const JNINativeMethod gMessageQueueMethods[] = {
+         /* name, signature, funcPtr */
+-        {"nativeInit", "()J", (void*)android_os_MessageQueue_nativeInit},
+-        {"nativeDestroy", "(J)V", (void*)android_os_MessageQueue_nativeDestroy},
+-        {"nativePollOnce", "(JI)V", (void*)android_os_MessageQueue_nativePollOnce},
+-        {"nativeWake", "(J)V", (void*)android_os_MessageQueue_nativeWake},
+-        {"nativeIsPolling", "(J)Z", (void*)android_os_MessageQueue_nativeIsPolling},
++        {"nativeInit", "()J", GESHER_JNI(android_os_MessageQueue_nativeInit)},
++        {"nativeDestroy", "(J)V", GESHER_JNI(android_os_MessageQueue_nativeDestroy)},
++        {"nativePollOnce", "(JI)V", GESHER_JNI(android_os_MessageQueue_nativePollOnce)},
++        {"nativeWake", "(J)V", GESHER_JNI(android_os_MessageQueue_nativeWake)},
++        {"nativeIsPolling", "(J)Z", GESHER_JNI(android_os_MessageQueue_nativeIsPolling)},
+         {"nativeSetFileDescriptorEvents", "(JII)V",
+-         (void*)android_os_MessageQueue_nativeSetFileDescriptorEvents},
++         GESHER_JNI(android_os_MessageQueue_nativeSetFileDescriptorEvents)},
+         {"nativeSetSkipEpollWaitForZeroTimeout", "(J)V",
+-         (void*)android_os_MessageQueue_nativeSetSkipEpollWaitForZeroTimeout},
++         GESHER_JNI(android_os_MessageQueue_nativeSetSkipEpollWaitForZeroTimeout)},
+ };
+ 
+ int register_android_os_MessageQueue(JNIEnv* env) {
+diff --git a/core/jni/android_os_SystemClock.cpp b/core/jni/android_os_SystemClock.cpp
+--- a/core/jni/android_os_SystemClock.cpp
++++ b/core/jni/android_os_SystemClock.cpp
+@@ -77,18 +77,18 @@
+ static const JNINativeMethod gMethods[] = {
+     // All of these are @CriticalNative, so we can defer directly to SystemClock.h for
+     // some of these
+-    { "uptimeMillis", "()J", (void*) uptimeMillis },
+-    { "uptimeNanos", "()J", (void*) uptimeNanos },
+-    { "elapsedRealtime", "()J", (void*) elapsedRealtime },
+-    { "elapsedRealtimeNanos", "()J", (void*) elapsedRealtimeNano },
++    { "uptimeMillis", "()J", GESHER_JNI(uptimeMillis) },
++    { "uptimeNanos", "()J", GESHER_JNI(uptimeNanos) },
++    { "elapsedRealtime", "()J", GESHER_JNI(elapsedRealtime) },
++    { "elapsedRealtimeNanos", "()J", GESHER_JNI(elapsedRealtimeNano) },
+ 
+     // SystemClock doesn't have an implementation for these that we can directly call
+     { "currentThreadTimeMillis", "()J",
+-            (void*) android_os_SystemClock_currentThreadTimeMillis },
++            GESHER_JNI(android_os_SystemClock_currentThreadTimeMillis) },
+     { "currentThreadTimeMicro", "()J",
+-            (void*) android_os_SystemClock_currentThreadTimeMicro },
++            GESHER_JNI(android_os_SystemClock_currentThreadTimeMicro) },
+     { "currentTimeMicro", "()J",
+-            (void*) android_os_SystemClock_currentTimeMicro },
++            GESHER_JNI(android_os_SystemClock_currentTimeMicro) },
+ };
+ int register_android_os_SystemClock(JNIEnv* env)
+ {
+diff --git a/core/jni/android_os_SystemProperties.cpp b/core/jni/android_os_SystemProperties.cpp
+--- a/core/jni/android_os_SystemProperties.cpp
++++ b/core/jni/android_os_SystemProperties.cpp
+@@ -244,31 +244,31 @@
+     const JNINativeMethod method_table[] = {
+         { "native_get",
+           "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+-          (void*) SystemProperties_getSS },
++          GESHER_JNI(SystemProperties_getSS) },
+         { "native_get_int", "(Ljava/lang/String;I)I",
+-          (void*) SystemProperties_get_integral<jint> },
++          GESHER_JNI(SystemProperties_get_integral<jint>) },
+         { "native_get_long", "(Ljava/lang/String;J)J",
+-          (void*) SystemProperties_get_integral<jlong> },
++          GESHER_JNI(SystemProperties_get_integral<jlong>) },
+         { "native_get_boolean", "(Ljava/lang/String;Z)Z",
+-          (void*) SystemProperties_get_boolean },
++          GESHER_JNI(SystemProperties_get_boolean) },
+         { "native_find",
+           "(Ljava/lang/String;)J",
+-          (void*) SystemProperties_find },
++          GESHER_JNI(SystemProperties_find) },
+         { "native_get",
+           "(J)Ljava/lang/String;",
+-          (void*) SystemProperties_getH },
++          GESHER_JNI(SystemProperties_getH) },
+         { "native_get_int", "(JI)I",
+-          (void*) SystemProperties_get_integralH<jint> },
++          GESHER_JNI(SystemProperties_get_integralH<jint>) },
+         { "native_get_long", "(JJ)J",
+-          (void*) SystemProperties_get_integralH<jlong> },
++          GESHER_JNI(SystemProperties_get_integralH<jlong>) },
+         { "native_get_boolean", "(JZ)Z",
+-          (void*) SystemProperties_get_booleanH },
++          GESHER_JNI(SystemProperties_get_booleanH) },
+         { "native_set", "(Ljava/lang/String;Ljava/lang/String;)V",
+-          (void*) SystemProperties_set },
++          GESHER_JNI(SystemProperties_set) },
+         { "native_add_change_callback", "()V",
+-          (void*) SystemProperties_add_change_callback },
++          GESHER_JNI(SystemProperties_add_change_callback) },
+         { "native_report_sysprop_change", "()V",
+-          (void*) SystemProperties_report_sysprop_change },
++          GESHER_JNI(SystemProperties_report_sysprop_change) },
+     };
+     return RegisterMethodsOrDie(env, "android/os/SystemProperties",
+                                 method_table, NELEM(method_table));
+diff --git a/core/jni/android_os_Trace.cpp b/core/jni/android_os_Trace.cpp
+--- a/core/jni/android_os_Trace.cpp
++++ b/core/jni/android_os_Trace.cpp
+@@ -135,29 +135,29 @@
+ 
+ static const JNINativeMethod gTraceMethods[] = {
+         /* name, signature, funcPtr */
+-        {"nativeSetAppTracingAllowed", "(Z)V", (void*)android_os_Trace_nativeSetAppTracingAllowed},
+-        {"nativeSetTracingEnabled", "(Z)V", (void*)android_os_Trace_nativeSetTracingEnabled},
++        {"nativeSetAppTracingAllowed", "(Z)V", GESHER_JNI(android_os_Trace_nativeSetAppTracingAllowed)},
++        {"nativeSetTracingEnabled", "(Z)V", GESHER_JNI(android_os_Trace_nativeSetTracingEnabled)},
+ 
+         // ----------- @FastNative  ----------------
+ 
+         {"nativeTraceCounter", "(JLjava/lang/String;J)V",
+-         (void*)android_os_Trace_nativeTraceCounter},
+-        {"nativeTraceBegin", "(JLjava/lang/String;)V", (void*)android_os_Trace_nativeTraceBegin},
++         GESHER_JNI(android_os_Trace_nativeTraceCounter)},
++        {"nativeTraceBegin", "(JLjava/lang/String;)V", GESHER_JNI(android_os_Trace_nativeTraceBegin)},
+         {"nativeAsyncTraceBegin", "(JLjava/lang/String;I)V",
+-         (void*)android_os_Trace_nativeAsyncTraceBegin},
++         GESHER_JNI(android_os_Trace_nativeAsyncTraceBegin)},
+         {"nativeAsyncTraceEnd", "(JLjava/lang/String;I)V",
+-         (void*)android_os_Trace_nativeAsyncTraceEnd},
++         GESHER_JNI(android_os_Trace_nativeAsyncTraceEnd)},
+         {"nativeAsyncTraceForTrackBegin", "(JLjava/lang/String;Ljava/lang/String;I)V",
+-         (void*)android_os_Trace_nativeAsyncTraceForTrackBegin},
++         GESHER_JNI(android_os_Trace_nativeAsyncTraceForTrackBegin)},
+         {"nativeAsyncTraceForTrackEnd", "(JLjava/lang/String;I)V",
+-         (void*)android_os_Trace_nativeAsyncTraceForTrackEnd},
+-        {"nativeInstant", "(JLjava/lang/String;)V", (void*)android_os_Trace_nativeInstant},
++         GESHER_JNI(android_os_Trace_nativeAsyncTraceForTrackEnd)},
++        {"nativeInstant", "(JLjava/lang/String;)V", GESHER_JNI(android_os_Trace_nativeInstant)},
+         {"nativeInstantForTrack", "(JLjava/lang/String;Ljava/lang/String;)V",
+-         (void*)android_os_Trace_nativeInstantForTrack},
++         GESHER_JNI(android_os_Trace_nativeInstantForTrack)},
+ 
+         // ----------- @CriticalNative  ----------------
+-        {"nativeIsTagEnabled", "(J)Z", (void*)android_os_Trace_nativeIsTagEnabled},
+-        {"nativeTraceEnd", "(J)V", (void*)android_os_Trace_nativeTraceEnd},
++        {"nativeIsTagEnabled", "(J)Z", GESHER_JNI(android_os_Trace_nativeIsTagEnabled)},
++        {"nativeTraceEnd", "(J)V", GESHER_JNI(android_os_Trace_nativeTraceEnd)},
+ };
+ 
+ int register_android_os_Trace(JNIEnv* env) {
+diff --git a/core/jni/android_text_AndroidCharacter.cpp b/core/jni/android_text_AndroidCharacter.cpp
+--- a/core/jni/android_text_AndroidCharacter.cpp
++++ b/core/jni/android_text_AndroidCharacter.cpp
+@@ -184,15 +184,15 @@
+ 
+ static const JNINativeMethod gMethods[] = {
+ 	{ "getDirectionalities", "([C[BI)V",
+-        (void*) getDirectionalities },
++        GESHER_JNI(getDirectionalities) },
+ 	{ "getEastAsianWidth", "(C)I",
+-        (void*) getEastAsianWidth },
++        GESHER_JNI(getEastAsianWidth) },
+ 	{ "getEastAsianWidths", "([CII[B)V",
+-        (void*) getEastAsianWidths },
++        GESHER_JNI(getEastAsianWidths) },
+ 	{ "mirror", "([CII)Z",
+-        (void*) mirror },
++        GESHER_JNI(mirror) },
+ 	{ "getMirror", "(C)C",
+-        (void*) getMirror }
++        GESHER_JNI(getMirror) }
+ };
+ 
+ int register_android_text_AndroidCharacter(JNIEnv* env)
+diff --git a/core/jni/android_util_EventLog.cpp b/core/jni/android_util_EventLog.cpp
+--- a/core/jni/android_util_EventLog.cpp
++++ b/core/jni/android_util_EventLog.cpp
+@@ -68,18 +68,18 @@
+  */
+ static const JNINativeMethod gRegisterMethods[] = {
+     /* name, signature, funcPtr */
+-    { "writeEvent", "(II)I", (void*) ELog::writeEventInteger },
+-    { "writeEvent", "(IJ)I", (void*) ELog::writeEventLong },
+-    { "writeEvent", "(IF)I", (void*) ELog::writeEventFloat },
+-    { "writeEvent", "(ILjava/lang/String;)I", (void*) ELog::writeEventString },
+-    { "writeEvent", "(I[Ljava/lang/Object;)I", (void*) ELog::writeEventArray },
++    { "writeEvent", "(II)I", GESHER_JNI(ELog::writeEventInteger) },
++    { "writeEvent", "(IJ)I", GESHER_JNI(ELog::writeEventLong) },
++    { "writeEvent", "(IF)I", GESHER_JNI(ELog::writeEventFloat) },
++    { "writeEvent", "(ILjava/lang/String;)I", GESHER_JNI(ELog::writeEventString) },
++    { "writeEvent", "(I[Ljava/lang/Object;)I", GESHER_JNI(ELog::writeEventArray) },
+     { "readEvents",
+       "([ILjava/util/Collection;)V",
+-      (void*) android_util_EventLog_readEvents
++      GESHER_JNI(android_util_EventLog_readEvents)
+     },
+     { "readEventsOnWrapping",
+       "([IJLjava/util/Collection;)V",
+-      (void*) android_util_EventLog_readEventsOnWrapping
++      GESHER_JNI(android_util_EventLog_readEventsOnWrapping)
+     },
+ };
+ 
+diff --git a/core/jni/android_util_Log.cpp b/core/jni/android_util_Log.cpp
+--- a/core/jni/android_util_Log.cpp
++++ b/core/jni/android_util_Log.cpp
+@@ -115,9 +115,9 @@
+  */
+ static const JNINativeMethod gMethods[] = {
+     /* name, signature, funcPtr */
+-    { "isLoggable",      "(Ljava/lang/String;I)Z", (void*) android_util_Log_isLoggable },
+-    { "println_native",  "(IILjava/lang/String;Ljava/lang/String;)I", (void*) android_util_Log_println_native },
+-    { "logger_entry_max_payload_native",  "()I", (void*) android_util_Log_logger_entry_max_payload_native },
++    { "isLoggable",      "(Ljava/lang/String;I)Z", GESHER_JNI(android_util_Log_isLoggable) },
++    { "println_native",  "(IILjava/lang/String;Ljava/lang/String;)I", GESHER_JNI(android_util_Log_println_native) },
++    { "logger_entry_max_payload_native",  "()I", GESHER_JNI(android_util_Log_logger_entry_max_payload_native) },
+ };
+ 
+ int register_android_util_Log(JNIEnv* env)
+diff --git a/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp b/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp
+--- a/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp
++++ b/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp
+@@ -37,8 +37,8 @@
+ const char* const kClassPathName = "com/android/internal/util/VirtualRefBasePtr";
+ 
+ static const JNINativeMethod gMethods[] = {
+-    { "nIncStrong", "(J)V", (void*) incStrong },
+-    { "nDecStrong", "(J)V", (void*) decStrong },
++    { "nIncStrong", "(J)V", GESHER_JNI(incStrong) },
++    { "nDecStrong", "(J)V", GESHER_JNI(decStrong) },
+ };
+ 
+ int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env) {
