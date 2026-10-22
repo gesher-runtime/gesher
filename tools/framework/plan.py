@@ -41,6 +41,8 @@ class Plan:
         self.missing = defaultdict(set)      # module name -> referrers
         self.aidl_includes = defaultdict(set)  # task key -> -I dirs
         self.include_dirs = set()  # directories generators search: checked out whole
+        self.jarjar = {}           # library -> its jarjar rules file (sources renamed)
+        self.jarjar_tasks = defaultdict(set)  # library -> generation tasks it renames
 
     def add_java(self, path, bundle):
         self.needed.add(path)
@@ -63,6 +65,9 @@ COMBINED_STUBS = {
 CORE_APIS = {'art.module.public.api', 'conscrypt.module.public.api', 'i18n.module.public.api'}
 SDK_LIBRARY_VARIANT = re.compile(r'^(.+?)(\.impl|\.stubs(?:\.[a-z_]+)*|\.module_lib)$')
 API_FILES = ('current.txt', 'system-current.txt', 'module-lib-current.txt')
+# Libraries whose jarjar rules rename what their dependents compile against:
+# their generated sources are renamed before javac (tools/framework/build.py).
+JARJAR_BEFORE_DEPENDENTS = {'perfetto_trace_javastream_protos_jarjar'}
 
 AIDL_VERSIONED = re.compile(
     r'^(?P<name>.+?)(?:-V(?P<version>\d+))?(?P<suffix>-java-source|-java_static|-java|-java-shallow)$')
@@ -183,6 +188,13 @@ class Planner:
             if item not in excluded:
                 self.source(ctx, item)
         self.plan.include_dirs.update(ctx.includes)
+        rules = props.get('jarjar_rules')
+        if rules and mod.name in JARJAR_BEFORE_DEPENDENTS:
+            path = self.expand(ctx, [rules], collect=False)
+            if path:
+                self.plan.jarjar[mod.name] = path[0]
+                self.plan.needed.add(path[0])
+                self.plan.jarjar_tasks[mod.name].update(ctx.tasks)
         for dep in as_list(props.get('static_libs')):
             self.library(dep, bundle, mod.name)
         for dep in as_list(props.get('libs')):
@@ -234,11 +246,13 @@ class Planner:
             self.plan.needed.add(path)
         elif ext == 'proto':
             proto = ctx.props.get('proto') or {}
+            ctx.tasks.add(f'proto:{ctx.mod.name}')
             t = self.plan.task('proto', f'proto:{ctx.mod.name}', ctx.bundle, files=[],
                                type=proto.get('type', 'lite'),
                                includes=[norm(f'{ctx.mod.dir}/{d}') for d in as_list(proto.get('local_include_dirs'))]
                                + [norm(d) for d in as_list(proto.get('include_dirs'))],
                                canonical=proto.get('canonical_path_from_root', True),
+                               output_params=as_list(proto.get('output_params')),
                                moddir=ctx.mod.dir)
             t.args['files'].append(path)
             self.plan.needed.add(path)
@@ -263,7 +277,7 @@ class Planner:
             return []
         props = self.modules.merged(mod)
         if mod.type == 'filegroup':
-            sub = Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags)
+            sub = Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags, ctx.tasks)
             files = self.expand(sub, as_list(props.get('srcs')) + as_list(props.get('device_common_srcs')))
             excluded = set(self.expand(sub, as_list(props.get('exclude_srcs')), collect=False))
             files = [f for f in files if f not in excluded]
@@ -287,6 +301,8 @@ class Planner:
         elif mod.type == 'java_system_features_srcs':
             self.plan.task('systemfeatures', f'systemfeatures:{name}', ctx.bundle,
                            cls=props.get('full_class_name'))
+            self.plan.needed.add('frameworks/base/tools/systemfeatures/src/com/android/'
+                                 'systemfeatures/SystemFeaturesGenerator.kt')
         elif mod.type in JAVA_LIB_TYPES:
             self.library(name, ctx.bundle, ctx.mod.name)
         else:
@@ -295,16 +311,19 @@ class Planner:
 
     def genrule(self, ctx, mod, props):
         cmd = props.get('cmd') or ''
-        srcs = self.expand(Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags),
+        srcs = self.expand(Context(mod, props, ctx.bundle, ctx.includes, ctx.aidl_flags, ctx.tasks),
                            as_list(props.get('srcs')))
         # Copies (the release-selected and mock sources) are their inputs.
         if re.fullmatch(r'\s*(mkdir -p [^;]+;\s*)?cp \$\(in\) \$\(out\);?\s*', cmd):
             return [s for s in srcs if s.endswith('.java')]
         self.plan.needed.update(srcs)
+        ctx.tasks.add(f'genrule:{mod.name}')
         self.plan.task('genrule', f'genrule:{mod.name}', ctx.bundle, module=mod.name,
                        type=mod.type, cmd=cmd, srcs=srcs, out=props.get('out'),
-                       tools=as_list(props.get('tools')) + as_list(props.get('tool_files')),
+                       tools=as_list(props.get('tools')),
+                       tool_files=[norm(f'{mod.dir}/{f}') for f in as_list(props.get('tool_files'))],
                        moddir=mod.dir, output_extension=props.get('output_extension'))
+        self.plan.needed.update(norm(f'{mod.dir}/{f}') for f in as_list(props.get('tool_files')))
         return []
 
     def module_files(self, mod, props):
@@ -348,7 +367,7 @@ class Planner:
             versions.setdefault(v, as_list(props.get('imports')))
         return versions
 
-    def aidl_interface(self, mod, props, version, bundle, referrer, as_sources=False):
+    def aidl_interface(self, mod, props, version, bundle, referrer, as_sources=False, java=True):
         versions = self.aidl_versions(props)
         frozen = sorted(versions, key=int)
         latest = frozen[-1] if frozen else None
@@ -358,7 +377,10 @@ class Planner:
             version = latest if (props.get('frozen') and latest) else (None if unstable else nxt)
         key = f'aidl-interface:{mod.name}-V{version}'
         if key in self.plan.tasks:
-            self.plan.tasks[key].bundle |= bundle
+            t = self.plan.tasks[key]
+            if java:
+                t.bundle |= bundle
+                t.args['java'] = True
             return key
         if version is not None and version in versions:
             root = f'{mod.dir}/aidl_api/{mod.name}/{version}'
@@ -390,7 +412,9 @@ class Planner:
         t = self.plan.task('aidl-interface', key, bundle, files=files, version=version,
                            structured=not unstable, hash_file=hash_file, name=mod.name,
                            stability=props.get('stability'), root=root, imports=import_keys,
-                           flags=['-t'] if props.get('gen_trace') else [])
+                           flags=['-t'] if props.get('gen_trace') else [], java=java)
+        if not java:
+            t.bundle = False
         self.plan.aidl_includes[key].update(includes)
         java = (props.get('backend') or {}).get('java') or {}
         for lib in as_list(java.get('additional_libs')):
@@ -416,7 +440,8 @@ class Planner:
         if mod is None or mod.type != 'aidl_interface':
             self.plan.missing[imp].add(referrer)
             return None
-        return self.aidl_interface(mod, self.modules.merged(mod), version, bundle, referrer)
+        return self.aidl_interface(mod, self.modules.merged(mod), version, bundle, referrer,
+                                   java=False)
 
     # --- HIDL -------------------------------------------------------------
     def hidl(self, mod, constants, bundle, referrer):
@@ -429,13 +454,27 @@ class Planner:
         self.plan.needed.update(files)
         self.plan.task('hidl', key, bundle, fqname=mod.name, root=props.get('root'),
                        constants=constants)
-        if not constants:
-            for dep in as_list(props.get('interfaces')):
-                pkg, ver = dep.split('@')
+        for dep in as_list(props.get('interfaces')):
+            pkg, ver = dep.split('@')
+            if not constants:
                 self.library(f'{pkg}-V{ver}-java', bundle, mod.name)
+            else:
+                self.hidl_files(dep)
+
+    def hidl_files(self, fqname, seen=None):
+        seen = seen if seen is not None else set()
+        mod = self.modules.get(fqname)
+        if mod is None or fqname in seen:
+            return
+        seen.add(fqname)
+        props = self.modules.merged(mod)
+        self.plan.needed.update(self.module_files(mod, props))
+        for dep in as_list(props.get('interfaces')):
+            self.hidl_files(dep, seen)
 
 
 class Context:
-    def __init__(self, mod, props, bundle, includes, aidl_flags):
+    def __init__(self, mod, props, bundle, includes, aidl_flags, tasks=None):
         self.mod, self.props, self.bundle = mod, props, bundle
         self.includes, self.aidl_flags = includes, aidl_flags
+        self.tasks = tasks if tasks is not None else set()  # generation tasks of its srcs
