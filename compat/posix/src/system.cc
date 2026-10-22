@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
@@ -288,6 +289,13 @@ int fcntl(int fd, int cmd, ...) {
         return 0;
       default:
         break;  // F_DUPFD and the rest below
+    }
+  }
+  if (std::shared_ptr<gesher::EventFd> e = gesher::LookupEventFd(fd)) {
+    if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
+    if (cmd == F_SETFL) {
+      gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
+      return 0;
     }
   }
   switch (cmd) {

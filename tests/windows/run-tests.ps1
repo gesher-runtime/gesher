@@ -19,6 +19,7 @@ function Check([string] $Name, [scriptblock] $Run, [string[]] $Expect) {
 
 Check 'platform probe' { & "$Dir/platform_probe.exe" } @('0 probe(s) failed')
 Check 'socket probe' { & "$Dir/socket_probe.exe" } @('all passed')
+Check 'epoll probe' { & "$Dir/epoll_probe.exe" } @('all passed')
 
 Check 'dexdump: disassemble .dex' { & "$Dir/dexdump.exe" -d "$Dir/hello.dex" } @(
   "Class descriptor  : 'Lgesher/Hello;'",

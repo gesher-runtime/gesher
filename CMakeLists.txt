@@ -56,3 +56,7 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 # gesher-base's socket layer and fd overrides, run in CI on Windows.
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
+
+# eventfd and epoll, for libutils' Looper; also run in CI on Windows.
+add_executable(epoll_probe probes/posix/epoll_probe.cc)
+target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)

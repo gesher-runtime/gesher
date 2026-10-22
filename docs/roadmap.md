@@ -122,7 +122,8 @@ needs: [framework-build.md](framework-build.md).
 - [ ] Code generation for the framework: AIDL, HIDL, protos, statslog,
       sysprop, XSD, event log tags
 - [ ] `framework.jar` compiles (javac), then joins the boot class path
-- [ ] `epoll` and `eventfd` in gesher-base, for `Looper`
+- [x] `epoll` and `eventfd` in gesher-base, for `Looper`
+      (`probes/posix/epoll_probe.cc`)
 - [ ] libutils, libcutils and libandroidfw in full
 - [ ] `libandroid_runtime`'s host natives linked in: assets, resources,
       `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
