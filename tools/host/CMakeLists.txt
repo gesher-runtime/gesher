@@ -77,3 +77,141 @@ target_include_directories(aidl PRIVATE ${_a} ${_a}/include ${CMAKE_CURRENT_BINA
 # Soong's platform_sdk_version for the pinned release.
 target_compile_definitions(aidl PRIVATE PLATFORM_SDK_VERSION=36)
 target_link_libraries(aidl PRIVATE host_base host_gtest)
+
+# --- protoc, libprotobuf, libprotoc (external/protobuf, with abseil) --------
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
+set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+set(protobuf_ABSL_PROVIDER module CACHE STRING "" FORCE)
+set(ABSL_ROOT_DIR ${AOSP_DIR}/external/abseil-cpp CACHE PATH "" FORCE)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+set(ABSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+add_subdirectory(${AOSP_DIR}/external/protobuf protobuf EXCLUDE_FROM_ALL)
+add_custom_target(host_protoc ALL DEPENDS protoc)
+
+set(_pn ${AOSP_DIR}/external/protobuf/src/google/protobuf/compiler/javanano)
+add_executable(protoc-gen-javanano
+  ${_pn}/javanano_enum.cc ${_pn}/javanano_enum_field.cc ${_pn}/javanano_extension.cc
+  ${_pn}/javanano_field.cc ${_pn}/javanano_file.cc ${_pn}/javanano_generator.cc
+  ${_pn}/javanano_helpers.cc ${_pn}/javanano_main.cc ${_pn}/javanano_map_field.cc
+  ${_pn}/javanano_message.cc ${_pn}/javanano_message_field.cc
+  ${_pn}/javanano_primitive_field.cc)
+target_include_directories(protoc-gen-javanano PRIVATE ${AOSP_DIR}/external/protobuf/src)
+target_link_libraries(protoc-gen-javanano PRIVATE libprotoc libprotobuf)
+
+set(_sp ${AOSP_DIR}/frameworks/base/tools/streaming_proto)
+add_executable(protoc-gen-javastream
+  ${_sp}/java/main.cpp ${_sp}/java/java_proto_stream_code_generator.cpp
+  ${_sp}/Errors.cpp ${_sp}/stream_proto_utils.cpp ${_sp}/string_utils.cpp)
+target_include_directories(protoc-gen-javastream PRIVATE ${_sp})
+target_link_libraries(protoc-gen-javastream PRIVATE libprotoc libprotobuf)
+
+# --- Protos compiled to C++ (proto: { type: "full" }) ----------------------
+# Paths are canonical from the AOSP root, as Soong's: "frameworks/.../x.pb.h".
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+function(bp_srcs out dir module)
+  execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/bp_srcs.py ${AOSP_DIR} ${dir} ${module}
+    OUTPUT_VARIABLE _srcs RESULT_VARIABLE _rc)
+  if(NOT _rc EQUAL 0)
+    message(FATAL_ERROR "bp_srcs.py failed for ${module}")
+  endif()
+  set(${out} "${_srcs}" PARENT_SCOPE)
+endfunction()
+
+set(_pgen ${CMAKE_CURRENT_BINARY_DIR}/proto)
+function(aosp_proto_library name)
+  set(_srcs)
+  foreach(proto ${ARGN})
+    file(RELATIVE_PATH _rel ${AOSP_DIR} ${proto})
+    string(REGEX REPLACE "\.proto$" "" _stem ${_rel})
+    add_custom_command(
+      OUTPUT ${_pgen}/${_stem}.pb.cc ${_pgen}/${_stem}.pb.h
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${_pgen}
+      COMMAND $<TARGET_FILE:protoc> --cpp_out=${_pgen} -I${AOSP_DIR}
+              -I${AOSP_DIR}/external/protobuf/src ${_rel}
+      WORKING_DIRECTORY ${AOSP_DIR}
+      DEPENDS protoc ${proto})
+    list(APPEND _srcs ${_pgen}/${_stem}.pb.cc)
+  endforeach()
+  add_library(${name} STATIC ${_srcs})
+  target_include_directories(${name} PUBLIC ${_pgen})
+  target_link_libraries(${name} PUBLIC libprotobuf)
+endfunction()
+
+# --- stats-log-api-gen ------------------------------------------------------
+set(_st ${AOSP_DIR}/frameworks/proto_logging/stats)
+bp_srcs(_stats_protos frameworks/proto_logging/stats libstats_proto_host)
+aosp_proto_library(host_stats_proto ${_stats_protos})
+add_executable(stats-log-api-gen
+  ${_st}/stats_log_api_gen/Collation.cpp ${_st}/stats_log_api_gen/settings_provider.cpp
+  ${_st}/stats_log_api_gen/utils.cpp ${_st}/stats_log_api_gen/java_writer.cpp
+  ${_st}/stats_log_api_gen/java_writer_q.cpp ${_st}/stats_log_api_gen/java_writer_vendor.cpp
+  ${_st}/stats_log_api_gen/main.cpp ${_st}/stats_log_api_gen/native_writer.cpp
+  ${_st}/stats_log_api_gen/native_writer_vendor.cpp ${_st}/stats_log_api_gen/rust_writer.cpp)
+target_compile_definitions(stats-log-api-gen PRIVATE WITH_VENDOR
+  JAVA_INCLUDE_SRCS_DIR="java/" CC_INCLUDE_HDRS_DIR="cc_hdrs/" CC_INCLUDE_SRCS_DIR="cc_srcs/")
+target_link_libraries(stats-log-api-gen PRIVATE host_stats_proto host_base)
+
+# --- expresscatalog-codegen -------------------------------------------------
+set(_ex ${_st}/express)
+aosp_proto_library(host_express_proto ${_ex}/express_config.proto)
+set(GFLAGS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(GFLAGS_NAMESPACE google CACHE STRING "" FORCE)  # as AOSP's gflags is configured
+add_subdirectory(${AOSP_DIR}/external/gflags gflags EXCLUDE_FROM_ALL)
+add_executable(expresscatalog-codegen
+  ${_ex}/expresscatalog-code-gen/codegen.cpp ${_ex}/expresscatalog-code-gen/codegen_java.cpp
+  ${_ex}/expresscatalog-code-gen/main.cpp ${_ex}/libexpresscatalog/catalog.cpp
+  ${AOSP_DIR}/external/libtextclassifier/native/utils/hash/farmhash.cc)
+target_include_directories(expresscatalog-codegen PRIVATE
+  ${_ex}/libexpresscatalog/include ${_ex}/libexpresscatalog-utils/include
+  ${AOSP_DIR}/external/libtextclassifier/native)
+target_compile_definitions(expresscatalog-codegen PRIVATE NAMESPACE_FOR_HASH_FUNCTIONS=farmhash)
+target_link_libraries(expresscatalog-codegen PRIVATE host_express_proto host_base gflags::gflags)
+
+# --- sysprop_java -----------------------------------------------------------
+set(_sy ${AOSP_DIR}/system/tools/sysprop)
+set(_pis ${AOSP_DIR}/system/core/property_service/libpropertyinfoserializer)
+aosp_proto_library(host_sysprop_proto ${_sy}/sysprop.proto)
+add_executable(sysprop_java ${_sy}/JavaGen.cpp ${_sy}/JavaMain.cpp ${_sy}/Common.cpp
+  ${_sy}/CodeWriter.cpp
+  ${_pis}/property_info_file.cpp ${_pis}/property_info_serializer.cpp
+  ${_pis}/trie_builder.cpp ${_pis}/trie_serializer.cpp)
+target_include_directories(sysprop_java PRIVATE ${_sy}/include ${_pis}/include
+  ${AOSP_DIR}/system/core/property_service/libpropertyinfoparser/include
+  ${_pgen}/system/tools/sysprop)
+target_link_libraries(sysprop_java PRIVATE host_sysprop_proto host_base)
+
+# --- hidl-gen ---------------------------------------------------------------
+set(_h ${AOSP_DIR}/system/tools/hidl)
+set(_js ${AOSP_DIR}/external/jsoncpp)
+add_library(host_jsoncpp STATIC ${_js}/src/lib_json/json_reader.cpp
+  ${_js}/src/lib_json/json_value.cpp ${_js}/src/lib_json/json_writer.cpp)
+target_include_directories(host_jsoncpp PUBLIC ${_js}/include)
+bison_target(hidl_parser ${_h}/hidl-gen_y.yy ${CMAKE_CURRENT_BINARY_DIR}/hidl-gen_y.cpp
+  DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/hidl-gen_y.h)
+flex_target(hidl_lexer ${_h}/hidl-gen_l.ll ${CMAKE_CURRENT_BINARY_DIR}/hidl-gen_l.cpp)
+add_flex_bison_dependency(hidl_lexer hidl_parser)
+add_executable(hidl-gen ${_h}/main.cpp
+  ${_h}/Annotation.cpp ${_h}/ArrayType.cpp ${_h}/CompoundType.cpp ${_h}/ConstantExpression.cpp
+  ${_h}/DeathRecipientType.cpp ${_h}/DocComment.cpp ${_h}/EnumType.cpp ${_h}/FmqType.cpp
+  ${_h}/HandleType.cpp ${_h}/HidlTypeAssertion.cpp ${_h}/Interface.cpp ${_h}/Location.cpp
+  ${_h}/MemoryType.cpp ${_h}/Method.cpp ${_h}/NamedType.cpp ${_h}/PointerType.cpp
+  ${_h}/ScalarType.cpp ${_h}/Scope.cpp ${_h}/StringType.cpp ${_h}/Type.cpp ${_h}/TypeDef.cpp
+  ${_h}/VectorType.cpp
+  ${_h}/AST.cpp ${_h}/Coordinator.cpp ${_h}/generateCpp.cpp ${_h}/generateCppImpl.cpp
+  ${_h}/generateDependencies.cpp ${_h}/generateFormattedHidl.cpp
+  ${_h}/generateInheritanceHierarchy.cpp ${_h}/generateJava.cpp ${_h}/generateJavaImpl.cpp
+  ${_h}/generateVts.cpp
+  ${_h}/hashing/Hash.cpp ${_h}/host_utils/Formatter.cpp ${_h}/host_utils/StringHelper.cpp
+  ${_h}/utils/FQName.cpp ${_h}/utils/FqInstance.cpp
+  ${BISON_hidl_parser_OUTPUTS} ${FLEX_hidl_lexer_OUTPUTS})
+target_include_directories(hidl-gen PRIVATE ${_h} ${CMAKE_CURRENT_BINARY_DIR}
+  ${_h}/hashing/include ${_h}/host_utils/include ${_h}/host_utils/include/hidl-util
+  ${_h}/utils/include ${_h}/utils/include/hidl-util
+  ${AOSP_DIR}/system/libhwbinder/include ${AOSP_DIR}/system/core/libutils/include
+  ${AOSP_DIR}/system/core/libutils/binder/include ${CMAKE_CURRENT_SOURCE_DIR}/shim)
+target_link_libraries(hidl-gen PRIVATE host_base host_jsoncpp)

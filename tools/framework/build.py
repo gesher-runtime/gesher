@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -26,7 +27,7 @@ sys.path.insert(0, os.path.join(HERE, '..', 'gen'))
 from blueprint import Config  # noqa: E402
 from checkout import checkout  # noqa: E402
 from plan import Planner  # noqa: E402
-from tree import Modules, Tree  # noqa: E402
+from tree import Modules, Tree, as_list, norm  # noqa: E402
 
 
 def run(cmd, **kw):
@@ -147,6 +148,8 @@ class Builder:
         return out
 
     def gen_aidl_interface(self, task, includes):
+        if not task.args.get('java', True):
+            return  # only imported: its preprocessed form is made on demand
         d = self.task_dir(task)
         files = [self.path(f) for f in task.args['files']]
         if files:
@@ -179,10 +182,240 @@ class Builder:
         run([sys.executable, os.path.join(HERE, 'api_stubs.py'), d]
             + [self.path(f) for f in task.args['files']] + ['--known'] + known)
 
+    def tool(self, name):
+        """A host tool by its Soong module name (tools/host builds them)."""
+        if name in ('aprotoc', 'protoc'):
+            return os.path.join(self.args.host_tools, 'protobuf', 'protoc')
+        if name == 'soong_zip':
+            return os.path.join(HERE, 'soong_zip.py')
+        return os.path.join(self.args.host_tools, name)
+
+    def jarjar_sources(self, plan):
+        """Applies a library's jarjar rules to its generated sources, for the
+        libraries whose dependents compile against the renamed packages
+        (Soong renames their classes before the dependents compile)."""
+        for key, rules in plan.jarjar.items():
+            task_keys = [k for k in plan.jarjar_tasks.get(key, ())]
+            renames = []
+            for line in open(self.path(rules)):
+                m = re.match(r'^rule\s+([\w.]+)\.\*\*\s+([\w.]+)\.@1\s*$', line.strip())
+                if m:
+                    renames.append((m.group(1), m.group(2)))
+            for tk in task_keys:
+                d = os.path.join(self.gen, safe(tk))
+                for dp, _, fs in os.walk(d):
+                    for f in fs:
+                        if not f.endswith('.java'):
+                            continue
+                        path = os.path.join(dp, f)
+                        with open(path, encoding='utf-8') as fh:
+                            text = fh.read()
+                        new = text
+                        for old_pkg, new_pkg in renames:
+                            new = re.sub(r'(?<![\w.])' + re.escape(old_pkg) + r'(?=[.;])', new_pkg, new)
+                        if new != text:
+                            with open(path, 'w', encoding='utf-8') as fh:
+                                fh.write(new)
+
+    def gen_proto(self, task):
+        d = self.task_dir(task)
+        kind = task.args['type']
+        out_flag = {'nano': '--javanano_out', 'stream': '--javastream_out',
+                    'micro': '--javamicro_out'}.get(kind, '--java_out')
+        params = (['lite'] if kind in ('lite', None, '') else []) + task.args.get('output_params', [])
+        flags = []
+        if kind in ('nano', 'stream', 'micro'):
+            flags.append(f'--plugin=protoc-gen-java{kind}={self.tool("protoc-gen-java" + kind)}')
+        flags += [f'-I{i}' for i in task.args.get('includes', [])]
+        for f in sorted(task.args['files']):
+            base = '.' if task.args.get('canonical', True) else task.args['moddir']
+            run([self.tool('aprotoc'), f'{out_flag}={",".join(params)}:{d}', '-I', base]
+                + flags + [f], cwd=self.aosp)
+
+    # Host tools' data files, where Soong installs them (out/host/.../etc),
+    # as the tools find them from a genrule's sandbox.
+    TOOL_DATA = {
+        'stats-log-api-gen/java': 'frameworks/proto_logging/stats/stats_log_api_gen/include_java',
+        'stats-log-api-gen/cc_hdrs': 'frameworks/proto_logging/stats/stats_log_api_gen/include_cc_hdrs',
+        'stats-log-api-gen/cc_srcs': 'frameworks/proto_logging/stats/stats_log_api_gen/include_cc_srcs',
+    }
+
+    def sandbox(self):
+        """A genrule's working directory, laid out like Soong's sandbox: the
+        source tree, and the host tools' data under tools/out/etc."""
+        box = os.path.join(self.out, 'sandbox')
+        if not os.path.isdir(box):
+            os.makedirs(box)
+            for name in os.listdir(self.aosp):
+                if name != 'tools':
+                    os.symlink(os.path.join(self.aosp, name), os.path.join(box, name))
+            tools = os.path.join(box, 'tools')
+            os.makedirs(tools)
+            if os.path.isdir(self.path('tools')):
+                for name in os.listdir(self.path('tools')):
+                    os.symlink(self.path(f'tools/{name}'), os.path.join(tools, name))
+            for rel, src in self.TOOL_DATA.items():
+                dst = os.path.join(tools, 'out', 'etc', rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                os.symlink(self.path(src), dst)
+        return box
+
+    def gen_genrule(self, task):
+        a = task.args
+        outs = as_list(a.get('out'))
+        if outs and not any(o.endswith(('.java', '.srcjar')) for o in outs):
+            return  # e.g. a mock initializer turned off by the release
+        d = self.task_dir(task)
+        gen_dir = os.path.join(self.out, 'genrule', safe(task.key))
+        shutil.rmtree(gen_dir, ignore_errors=True)
+        os.makedirs(gen_dir)
+
+        def expand(cmd, ins, outs_):
+            def location(m):
+                name = m.group(2)
+                if name in a.get('tools', []):
+                    return self.tool(name)
+                for f in a.get('tool_files', []):
+                    if f == name or f.endswith('/' + name):
+                        return f
+                return self.tool(name)
+            cmd = re.sub(r'\$\((locations?) ([^)]+)\)', location, cmd)
+            cmd = cmd.replace('$(in)', ' '.join(ins)).replace('$(out)', ' '.join(outs_))
+            cmd = cmd.replace('$(genDir)', gen_dir)
+            return cmd
+
+        if a.get('type') == 'gensrcs':
+            ext = a.get('output_extension') or 'java'
+            jobs = [([src], [os.path.join(gen_dir, os.path.splitext(src)[0] + '.' + ext)])
+                    for src in a['srcs']]
+        else:
+            jobs = [(a['srcs'], [os.path.join(gen_dir, o) for o in outs])]
+        env = {**os.environ, 'PATH': os.path.dirname(sys.executable) + os.pathsep + os.environ['PATH']}
+        sandbox = self.sandbox()
+        for ins, outs_ in jobs:
+            for o in outs_:
+                os.makedirs(os.path.dirname(o), exist_ok=True)
+            cmd = expand(a['cmd'], ins, outs_)
+            cmd = cmd.replace(self.tool('soong_zip'), f'{sys.executable} {self.tool("soong_zip")}')
+            run(['bash', '-c', cmd], cwd=sandbox, env=env)
+            for o in outs_:
+                if o.endswith('.srcjar'):
+                    with zipfile.ZipFile(o) as z:
+                        z.extractall(d)
+                elif o.endswith('.java'):
+                    shutil.copy(o, os.path.join(d, os.path.basename(o)))
+
+    def gen_sysprop(self, task):
+        # The framework's sysprop libraries are the platform's own, on the
+        # system partition: Soong generates their "internal" scope.
+        d = self.task_dir(task)
+        for f in task.args['files']:
+            run([self.tool('sysprop_java'), '--scope', 'internal', '--java-output-dir', d,
+                 self.path(f)])
+
+    XSDC_COMMONS_CLI = 'https://repo1.maven.org/maven2/commons-cli/commons-cli/1.2/commons-cli-1.2.jar'
+
+    def xsdc(self):
+        """system/tools/xsdc, a Java tool, compiled on first use."""
+        jar_dir = os.path.join(self.out, 'xsdc')
+        classes = os.path.join(jar_dir, 'classes')
+        cli = os.path.join(jar_dir, 'commons-cli-1.2.jar')
+        if not os.path.isdir(classes):
+            os.makedirs(jar_dir, exist_ok=True)
+            if not os.path.isfile(cli):
+                run(['curl', '-fsSL', '-o', cli, self.XSDC_COMMONS_CLI])
+            srcs = []
+            for dp, _, fs in os.walk(self.path('system/tools/xsdc/src/main/java')):
+                srcs += [os.path.join(dp, f) for f in fs if f.endswith('.java')]
+            tmp = classes + '.tmp'
+            shutil.rmtree(tmp, ignore_errors=True)
+            run([os.path.join(self.args.java_home, 'bin', 'javac'), '-nowarn', '-encoding', 'UTF-8',
+                 '-cp', cli, '-d', tmp] + srcs)
+            os.rename(tmp, classes)
+        return [os.path.join(self.args.java_home, 'bin', 'java'), '-cp',
+                os.pathsep.join([classes, cli]), 'com.android.xsdc.Main']
+
+    def gen_xsd(self, task):
+        d = self.task_dir(task)
+        props = task.args['props']
+        args = []
+        for prop, flag in (('gen_writer', '-w'), ('nullability', '-n'), ('gen_has', '-g'),
+                           ('enums_only', '-e'), ('parser_only', '-x'),
+                           ('boolean_getter', '-b'), ('tinyxml', '-t')):
+            if props.get(prop):
+                args.append(flag)
+        for elem in as_list(props.get('root_elements')):
+            args += ['-r', elem]
+        run(self.xsdc() + [self.path(task.args['src']), '-p', task.args['package'],
+                           '-o', d, '-j'] + args)
+
+    KOTLINC = 'https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip'
+    JAVAPOET = 'https://repo1.maven.org/maven2/com/squareup/javapoet/1.13.0/javapoet-1.13.0.jar'
+
+    def systemfeatures_tool(self):
+        """frameworks/base/tools/systemfeatures' generator (Kotlin), compiled
+        on first use with JetBrains' kotlinc against JavaPoet."""
+        d = os.path.join(self.out, 'systemfeatures-tool')
+        jar = os.path.join(d, 'systemfeatures-gen.jar')
+        kotlinc = os.path.join(d, 'kotlinc')
+        javapoet = os.path.join(d, 'javapoet.jar')
+        if not os.path.isfile(jar):
+            os.makedirs(d, exist_ok=True)
+            if not os.path.isdir(kotlinc):
+                z = os.path.join(d, 'kotlinc.zip')
+                run(['curl', '-fsSL', '-o', z, self.KOTLINC])
+                with zipfile.ZipFile(z) as f:
+                    f.extractall(d)
+                os.chmod(os.path.join(kotlinc, 'bin', 'kotlinc'), 0o755)
+            if not os.path.isfile(javapoet):
+                run(['curl', '-fsSL', '-o', javapoet, self.JAVAPOET])
+            src = self.path('frameworks/base/tools/systemfeatures/src/com/android/systemfeatures/'
+                            'SystemFeaturesGenerator.kt')
+            run([os.path.join(kotlinc, 'bin', 'kotlinc'), src, '-cp', javapoet,
+                 '-include-runtime', '-d', jar],
+                env={**os.environ, 'JAVA_HOME': self.args.java_home})
+        return [os.path.join(self.args.java_home, 'bin', 'java'), '-cp',
+                os.pathsep.join([jar, javapoet]), 'com.android.systemfeatures.SystemFeaturesGenerator']
+
+    def gen_systemfeatures(self, task):
+        # As java_system_features_srcs does: features from RELEASE_SYSTEM_FEATURE_*
+        # build flags (none in Gesher's builds), read-only per
+        # RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS, and no device feature files.
+        d = self.task_dir(task)
+        flags = self.config.flags
+        features = sorted(f'{k[len("RELEASE_SYSTEM_FEATURE_"):]}:{v}' for k, v in flags.items()
+                          if k.startswith('RELEASE_SYSTEM_FEATURE_'))
+        readonly = 'true' if flags.get('RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS') else 'false'
+        cls = task.args['cls']
+        r = run(self.systemfeatures_tool() + [cls] + [f'--feature={f}' for f in features]
+                + [f'--readonly={readonly}', '--metadata-only=false'])
+        out = os.path.join(d, *cls.split('.')) + '.java'
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, 'w') as f:
+            f.write(r.stdout)
+
+    def hidl_roots(self):
+        """-r<package root>:<path> for every hidl_package_root, as hidl-gen
+        resolves imported packages through them."""
+        roots = []
+        for mod in self.modules.by_name.values():
+            if mod.type == 'hidl_package_root':
+                path = mod.props.get('path')
+                path = norm(f'{mod.dir}/{path}') if path else mod.dir
+                roots.append(f'-r{mod.name}:{self.path(path)}')
+        return sorted(roots)
+
+    def gen_hidl(self, task):
+        d = self.task_dir(task)
+        lang = 'java-constants' if task.args.get('constants') else 'java'
+        run([self.tool('hidl-gen'), '-o', d, '-L', lang] + self.hidl_roots()
+            + [task.args['fqname']], cwd=self.aosp)
+
     # --- the build ------------------------------------------------------------
     def build(self):
         tree = Tree(self.aosp)
-        modules = Modules(tree, Config(self.path('build/release'), self.args.release))
+        self.config = Config(self.path('build/release'), self.args.release)
+        modules = self.modules = Modules(tree, self.config)
         planner = Planner(tree, modules)
         planner.library(self.args.module)
         plan = self.plan = planner.plan
@@ -213,6 +446,7 @@ class Builder:
                 first = next((ln for ln in str(e).splitlines() if 'ERROR' in ln or 'rror:' in ln),
                              str(e)[:400])
                 self.skipped[f'{task.kind} failed'].append(f'{task.key}: {first[:600]}')
+        self.jarjar_sources(plan)
         print('generated:', dict(counts))
         for why, keys in sorted(self.skipped.items()):
             print(f'  skipped ({why}): {len(keys)}')
@@ -245,7 +479,8 @@ class Builder:
         cmd = [os.path.join(self.args.java_home, 'bin', 'javac'), f'-J-Xmx{self.args.javac_memory}',
                '-source', '21', '-target', '21', '--system=none', '--module-path', core,
                '-encoding', 'UTF-8', '-nowarn', '-proc:none', '-Xmaxerrs', str(self.args.max_errors),
-               '-XDstringConcat=inline', '-cp', os.pathsep.join(self.args.classpath),
+               '-XDstringConcat=inline',
+               '-cp', os.pathsep.join(self.args.classpath + [self.path(j) for j in sorted(plan.jars)]),
                '-d', classes]
         for pkg in exports:
             if pkg != '.':
@@ -276,6 +511,7 @@ def main():
     ap.add_argument('--core-classes', required=True)
     ap.add_argument('--classpath', action='append', default=[])
     ap.add_argument('--aidl', default='aidl')
+    ap.add_argument('--host-tools', default='out/host', help='tools/host build directory')
     ap.add_argument('--framework-res-java')
     ap.add_argument('--java-home', default=os.environ.get('JAVA_HOME', '/usr'))
     ap.add_argument('--javac-memory', default='6g')
