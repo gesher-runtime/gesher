@@ -7,6 +7,8 @@
 //   - unmapping part of a file view makes those pages inaccessible;
 //   - when no live page remains, the allocation or view is released.
 //
+// mremap moves anonymous mappings by copying (see mremap below).
+//
 // Not supported yet (fails with EINVAL):
 //   - MAP_FIXED over memory this layer does not own, or over a file view
 //     (needs placeholder mappings: VirtualAlloc2 / MapViewOfFile3);
@@ -16,6 +18,7 @@
 
 #include <errno.h>
 #include <io.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -364,13 +367,126 @@ int munlock(const void* addr, size_t length) {
   return VirtualUnlock(const_cast<void*>(addr), length) ? 0 : (errno = ENOMEM, -1);
 }
 
+// mremap for this layer's anonymous mappings. ART's CMC collector, without
+// userfaultfd, moves its whole space aside (MREMAP_MAYMOVE | MREMAP_FIXED,
+// often with MREMAP_DONTUNMAP) before compacting it back. Windows cannot move
+// pages to another address, so moving copies them: the destination gets the
+// source's contents and protection, and the source is unmapped, or with
+// MREMAP_DONTUNMAP stays mapped and reads back as zeros (private anonymous
+// memory). Shrinking in place unmaps the tail; growing in place fails with
+// ENOMEM, as on Linux when the next pages are taken. File views cannot move.
 void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...) {
-  (void)old_address;
-  (void)old_size;
-  (void)new_size;
-  (void)flags;
-  errno = ENOSYS;  // TODO(gesher): only needed by the CMC collector's fast path
-  return MAP_FAILED;
+  void* fixed_address = nullptr;
+  if ((flags & MREMAP_FIXED) != 0) {
+    va_list args;
+    va_start(args, flags);
+    fixed_address = va_arg(args, void*);
+    va_end(args);
+  }
+  State& s = state();
+  TRACE("mremap(%p, 0x%zx, 0x%zx, flags=0x%x, %p)\n", old_address, old_size, new_size, flags,
+        fixed_address);
+  uintptr_t old_begin = reinterpret_cast<uintptr_t>(old_address);
+  bool may_move = (flags & MREMAP_MAYMOVE) != 0;
+  bool dont_unmap = (flags & MREMAP_DONTUNMAP) != 0;
+  if (old_begin % s.page_size != 0 || new_size == 0 ||
+      (flags & ~(MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP)) != 0 ||
+      ((flags & MREMAP_FIXED) != 0 && !may_move) || (dont_unmap && !may_move) ||
+      (dont_unmap && old_size != new_size)) {
+    errno = EINVAL;
+    return MAP_FAILED;
+  }
+  old_size = RoundUp(old_size, s.page_size);
+  new_size = RoundUp(new_size, s.page_size);
+
+  std::unique_lock<std::mutex> guard(s.lock);
+  // The source: live pages of one anonymous region.
+  auto source = FindRegion(s, old_begin);
+  if (source == s.regions.end() || old_begin + old_size > source->first + source->second.size) {
+    errno = EFAULT;
+    return MAP_FAILED;
+  }
+  if (!source->second.anonymous) {
+    errno = EINVAL;  // a file view stays where Windows put it
+    return MAP_FAILED;
+  }
+  for (size_t i = (old_begin - source->first) / s.page_size, n = i + old_size / s.page_size; i < n;
+       ++i) {
+    if (!source->second.live[i]) {
+      errno = EFAULT;
+      return MAP_FAILED;
+    }
+  }
+
+  // In place, unless asked to move: MREMAP_FIXED and MREMAP_DONTUNMAP always
+  // move, MREMAP_MAYMOVE alone only to grow.
+  if (!may_move || (!dont_unmap && (flags & MREMAP_FIXED) == 0 && new_size <= old_size)) {
+    if (new_size > old_size) {
+      errno = ENOMEM;  // growing in place is not supported
+      return MAP_FAILED;
+    }
+    if (new_size < old_size) {
+      guard.unlock();
+      munmap(reinterpret_cast<void*>(old_begin + new_size), old_size - new_size);
+    }
+    return old_address;
+  }
+
+  // The destination: fresh pages, at fixed_address or anywhere.
+  uintptr_t new_begin = reinterpret_cast<uintptr_t>(fixed_address);
+  if (fixed_address != nullptr) {
+    if (new_begin % s.page_size != 0 ||
+        (new_begin < old_begin + old_size && old_begin < new_begin + new_size)) {
+      errno = EINVAL;  // the ranges may not overlap
+      return MAP_FAILED;
+    }
+  }
+  void* destination = MapAnonymous(s, fixed_address, new_size, PROT_READ | PROT_WRITE,
+                                   fixed_address != nullptr ? MAP_FIXED : 0);
+  if (destination == MAP_FAILED) return MAP_FAILED;
+  if (fixed_address != nullptr && destination != fixed_address) {
+    errno = EINVAL;
+    return MAP_FAILED;
+  }
+
+  // Copy, run by run of equal protection; unreadable runs are read through a
+  // temporary protection, then get it back.
+  size_t copy_size = std::min(old_size, new_size);
+  uint8_t* from = reinterpret_cast<uint8_t*>(old_begin);
+  uint8_t* to = static_cast<uint8_t*>(destination);
+  for (size_t done = 0; done < copy_size;) {
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(from + done, &info, sizeof(info)) == 0) break;
+    size_t run = std::min(copy_size - done,
+                          static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
+                                              info.RegionSize - (from + done)));
+    DWORD protection = info.Protect & ~(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
+    DWORD old_protection;
+    bool readable = protection != PAGE_NOACCESS;
+    if (!readable) VirtualProtect(from + done, run, PAGE_READONLY, &old_protection);
+    memcpy(to + done, from + done, run);
+    if (!readable) VirtualProtect(from + done, run, old_protection, &old_protection);
+    VirtualProtect(to + done, run, protection, &old_protection);
+    done += run;
+  }
+
+  if (dont_unmap) {
+    // The source stays mapped, as zero pages with its protections.
+    for (size_t done = 0; done < old_size;) {
+      MEMORY_BASIC_INFORMATION info;
+      if (VirtualQuery(from + done, &info, sizeof(info)) == 0) break;
+      size_t run = std::min(old_size - done,
+                            static_cast<size_t>(static_cast<uint8_t*>(info.BaseAddress) +
+                                                info.RegionSize - (from + done)));
+      VirtualFree(from + done, run, MEM_DECOMMIT);
+      VirtualAlloc(from + done, run, MEM_COMMIT, info.Protect);
+      done += run;
+    }
+  } else {
+    guard.unlock();
+    munmap(old_address, old_size);
+  }
+  return destination;
 }
 
 }  // extern "C"

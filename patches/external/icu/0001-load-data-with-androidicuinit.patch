@@ -1,0 +1,16 @@
+diff --git a/icu4c/source/common/udata.cpp b/icu4c/source/common/udata.cpp
+index 29326d7..e6f7e5d 100644
+--- a/icu4c/source/common/udata.cpp
++++ b/icu4c/source/common/udata.cpp
+@@ -129,6 +129,11 @@ static UDataFileAccess  gDataFileAccess = UDATA_NO_FILES;
+     #define AOSP_ICU_INIT 1
+   #endif
+ #endif
++#if defined(GESHER)
++  // Gesher: on Windows too, the data file is loaded as on Android and the ART
++  // host (libandroidicuinit, from ANDROID_I18N_ROOT), through gesher-base.
++  #define AOSP_ICU_INIT 1
++#endif
+ 
+ #ifdef AOSP_ICU_INIT
+   #include "androidicuinit/android_icu_init.h"

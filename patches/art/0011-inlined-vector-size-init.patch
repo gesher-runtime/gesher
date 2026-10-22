@@ -1,0 +1,16 @@
+diff --git a/libartbase/base/inlined_vector.h b/libartbase/base/inlined_vector.h
+index 8d4680b..7dbc3fc 100644
+--- a/libartbase/base/inlined_vector.h
++++ b/libartbase/base/inlined_vector.h
+@@ -55,7 +55,10 @@ class InlinedVector {
+  private:
+   T stack_entries_[kMaxStackEntries];
+   std::vector<T> heap_entries_;
+-  size_t size_;
++  // Gesher: zero, as nothing else sets it: no constructor does, and a default-
++  // initialized InlinedVector (as in Class::GetDeclaredFields) leaves it
++  // indeterminate. On Windows the stack slot is rarely zero.
++  size_t size_ = 0;
+ };
+ 
+ }  // namespace art
