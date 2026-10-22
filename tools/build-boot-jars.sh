@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Build ART's boot class path jars (core-oj, core-libart) from libcore.
+# Build ART's boot class path jars (core-oj, core-libart, core-icu4j) from
+# libcore and ICU.
 #
 #   tools/build-boot-jars.sh <out-dir>
 #
 # Mirrors libcore/JavaLibrary.bp: one `core-all` javac compile of libcore as
 # the java.base module, split into core-oj and core-libart by Soong's file
-# lists, each dexed with D8 into a jar with its resources. Needs JDK 21
+# lists, each dexed with D8 into a jar with its resources. ICU4J
+# (external/icu/android_icu4j/Android.bp's core-icu4j: android.icu and the
+# libcore bridge) is compiled in the same javac run and split out too. Needs JDK 21
 # (JAVA_HOME or PATH) and the AOSP sources from tools/fetch-aosp.sh.
 set -euo pipefail
 
@@ -46,6 +49,12 @@ find "$gen" -name '*.java' > "$work/gen.txt"
 # core-libart's static_libs: the ART and libcore flag classes.
 grep -E '/com/android/(art/flags|libcore)/Flags\.java$' "$work/gen.txt" > "$work/core-libart-flags.txt"
 echo "$lc/luni/src/module/java/module-info.java" > "$work/module.txt"
+# core-icu4j: core-repackaged-icu4j (android.icu) and the libcore bridge
+# (com.android.icu, com.android.i18n), with ICU's flag class.
+icu4j=$aosp/external/icu/android_icu4j
+{ find "$icu4j/src/main/java/android/icu" "$icu4j/libcore_bridge/src/java" -name '*.java'
+  grep -E '/com/android/icu/Flags\.java$' "$work/gen.txt"; } | sort > "$work/core-icu4j.txt"
+find "$icu4j/resources" -type f | sort > "$work/core-icu4j-resources.txt"
 
 # --- core-all ----------------------------------------------------------------
 # Libraries libcore compiles against: javac takes from these source roots
@@ -68,7 +77,7 @@ for r in "${roots[@]}"; do patch+="${patch:+$sep}$(native "$r")"; done
 
 argfile=$work/javac.args
 : > "$argfile"
-for list in core-oj core-libart gen module; do
+for list in core-oj core-libart core-icu4j gen module; do
   while read -r f; do native "$f"; done < "$work/$list.txt" >> "$argfile"
 done
 
@@ -85,7 +94,7 @@ split=$work/split
 rm -rf "$split"
 "$py" "$root/tools/gen/split_classes.py" "$classes" "$split" \
   core-oj="$work/core-oj.txt" core-libart="$work/core-libart.txt" \
-  core-libart="$work/core-libart-flags.txt"
+  core-libart="$work/core-libart-flags.txt" core-icu4j="$work/core-icu4j.txt"
 
 r8=${R8_JAR:-$work/r8-$R8_VERSION.jar}
 if [[ ! -f $r8 ]]; then
@@ -93,7 +102,7 @@ if [[ ! -f $r8 ]]; then
     "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
 fi
 
-for jar in core-oj core-libart; do
+for jar in core-oj core-libart core-icu4j; do
   dex=$work/dex/$jar
   rm -rf "$dex" && mkdir -p "$dex"
   find "$split/$jar" -name '*.class' > "$work/$jar.classes"
@@ -103,6 +112,8 @@ for jar in core-oj core-libart; do
     --output "$(native "$dex")" "@$(native "$work/$jar.d8args")"
   res=()
   [[ $jar == core-oj ]] && res=(--resources "$work/resources.txt")
+  [[ $jar == core-icu4j ]] && res=(--resources "$work/core-icu4j-resources.txt"
+                                   --resource-dir "$icu4j/resources")
   "$py" "$root/tools/gen/make_jar.py" "$out/$jar.jar" "$dex" "${res[@]}"
 done
 ls -la "$out"
