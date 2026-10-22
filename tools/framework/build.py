@@ -351,6 +351,7 @@ class Builder:
 
     KOTLINC = 'https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip'
     JAVAPOET = 'https://repo1.maven.org/maven2/com/squareup/javapoet/1.13.0/javapoet-1.13.0.jar'
+    GUAVA = 'https://repo1.maven.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar'
 
     def systemfeatures_tool(self):
         """frameworks/base/tools/systemfeatures' generator (Kotlin), compiled
@@ -359,6 +360,7 @@ class Builder:
         jar = os.path.join(d, 'systemfeatures-gen.jar')
         kotlinc = os.path.join(d, 'kotlinc')
         javapoet = os.path.join(d, 'javapoet.jar')
+        guava = os.path.join(d, 'guava.jar')
         if not os.path.isfile(jar):
             os.makedirs(d, exist_ok=True)
             if not os.path.isdir(kotlinc):
@@ -369,13 +371,15 @@ class Builder:
                 os.chmod(os.path.join(kotlinc, 'bin', 'kotlinc'), 0o755)
             if not os.path.isfile(javapoet):
                 run(['curl', '-fsSL', '-o', javapoet, self.JAVAPOET])
+            if not os.path.isfile(guava):
+                run(['curl', '-fsSL', '-o', guava, self.GUAVA])
             src = self.path('frameworks/base/tools/systemfeatures/src/com/android/systemfeatures/'
                             'SystemFeaturesGenerator.kt')
-            run([os.path.join(kotlinc, 'bin', 'kotlinc'), src, '-cp', javapoet,
+            run([os.path.join(kotlinc, 'bin', 'kotlinc'), src, '-cp', os.pathsep.join([javapoet, guava]),
                  '-include-runtime', '-d', jar],
                 env={**os.environ, 'JAVA_HOME': self.args.java_home})
         return [os.path.join(self.args.java_home, 'bin', 'java'), '-cp',
-                os.pathsep.join([jar, javapoet]), 'com.android.systemfeatures.SystemFeaturesGenerator']
+                os.pathsep.join([jar, javapoet, guava]), 'com.android.systemfeatures.SystemFeaturesGenerator']
 
     def gen_systemfeatures(self, task):
         # As java_system_features_srcs does: features from RELEASE_SYSTEM_FEATURE_*
@@ -411,19 +415,62 @@ class Builder:
         run([self.tool('hidl-gen'), '-o', d, '-L', lang] + self.hidl_roots()
             + [task.args['fqname']], cwd=self.aosp)
 
+    # Annotation processors that generate code the framework compiles
+    # against (java_plugin modules); the others in `plugins` only check it.
+    PROCESSORS = {
+        'cached-property-annotation-processor': {
+            'class': 'android.processor.property_cache.CachedPropertyProcessor',
+            'srcs': ['frameworks/base/tools/processors/property_cache/src/java'],
+            'files': ['frameworks/libs/modules-utils/java/com/android/internal/annotations/CacheModifier.java',
+                      'frameworks/libs/modules-utils/java/com/android/internal/annotations/CachedProperty.java',
+                      'frameworks/libs/modules-utils/java/com/android/internal/annotations/'
+                      'CachedPropertyDefaults.java'],
+        },
+    }
+
+    def processors(self, plan):
+        """-processorpath and -processor for the plugins that generate code."""
+        used = [p for p in sorted(plan.plugins) if p in self.PROCESSORS]
+        if not used:
+            return ['-proc:none']
+        guava = os.path.join(self.out, 'systemfeatures-tool', 'guava.jar')
+        if not os.path.isfile(guava):
+            os.makedirs(os.path.dirname(guava), exist_ok=True)
+            run(['curl', '-fsSL', '-o', guava, self.GUAVA])
+        paths, classes = [guava], []
+        for name in used:
+            spec = self.PROCESSORS[name]
+            out = os.path.join(self.out, 'processors', name)
+            if not os.path.isdir(out):
+                srcs = [self.path(f) for f in spec['files']]
+                for d in spec['srcs']:
+                    srcs += [os.path.join(dp, f) for dp, _, fs in os.walk(self.path(d))
+                             for f in fs if f.endswith('.java')]
+                tmp = out + '.tmp'
+                shutil.rmtree(tmp, ignore_errors=True)
+                run([os.path.join(self.args.java_home, 'bin', 'javac'), '-nowarn', '-proc:none',
+                     '-cp', guava, '-d', tmp] + srcs)
+                os.rename(tmp, out)
+            paths.append(out)
+            classes.append(spec['class'])
+        return ['-processorpath', os.pathsep.join(paths), '-processor', ','.join(classes),
+                '-s', os.path.join(self.out, 'apt')]
+
     # --- the build ------------------------------------------------------------
     def build(self):
         tree = Tree(self.aosp)
         self.config = Config(self.path('build/release'), self.args.release)
         modules = self.modules = Modules(tree, self.config)
         planner = Planner(tree, modules)
+        planner.core_platform()
         planner.library(self.args.module)
         plan = self.plan = planner.plan
         if self.args.checkout:
             checkout(tree, plan.needed | {
                 'frameworks/base/core/api/current.txt', 'libcore/api/current.txt',
-                'build/make/tools/java-event-log-tags.py', 'build/make/tools/event_log_tags.py'},
-                     plan.include_dirs)
+                'build/make/tools/java-event-log-tags.py', 'build/make/tools/event_log_tags.py'}
+                     | {f for spec in self.PROCESSORS.values() for f in spec['files']},
+                     plan.include_dirs | {d for spec in self.PROCESSORS.values() for d in spec['srcs']})
         print(f'plan: {len(plan.bundle)} bundled + {len(plan.compile)} compile-only sources, '
               f'{len(plan.tasks)} generation tasks; missing {len(plan.missing)}, '
               f'unsupported {len(plan.unsupported)}')
@@ -454,13 +501,46 @@ class Builder:
                 print(f'    {k}')
         self.javac(plan)
 
+    @staticmethod
+    def class_name(path):
+        with open(path, encoding='utf-8', errors='replace') as f:
+            m = re.search(r'^\s*package\s+([\w.]+)\s*;', f.read(), re.M)
+        return (m.group(1) if m else ''), os.path.splitext(os.path.basename(path))[0]
+
     def javac(self, plan):
-        sources = {True: sorted(self.path(f) for f in plan.bundle),
-                   False: sorted(self.path(f) for f in plan.compile - plan.bundle)}
+        bundled = [self.path(f) for f in sorted(plan.bundle)]
+        stubs, others = [], [self.path(f) for f in sorted(plan.compile - plan.bundle)]
         for bundle, dirs in self.java_dirs.items():
             for d in dirs:
-                for dirpath, _, files in os.walk(d):
-                    sources[bundle] += [os.path.join(dirpath, f) for f in files if f.endswith('.java')]
+                files = [os.path.join(dp, f) for dp, _, fs in os.walk(d) for f in sorted(fs)
+                         if f.endswith('.java')]
+                if bundle:
+                    bundled += files
+                elif os.path.basename(d) == 'api-stubs':
+                    stubs += files
+                else:
+                    others += files
+        # One source per class, as one jar holds one class: what the jar
+        # bundles, then the API stubs of libraries it compiles against, then
+        # other compile-only sources. Packages libcore's java.base already
+        # has (its aconfig flag classes) come from there.
+        core = self.args.core_classes
+        seen, sources = set(), {True: [], False: []}
+        dropped = collections.Counter()
+        core_packages = {os.path.relpath(dp, core).replace(os.sep, '.')
+                         for dp, _, fs in os.walk(core) if any(f.endswith('.class') for f in fs)}
+        for bundle, files in ((True, bundled), (False, stubs), (False, others)):
+            for f in files:
+                pkg, cls = self.class_name(f)
+                if pkg in core_packages:
+                    dropped['in java.base'] += 1
+                    continue
+                if (pkg, cls) in seen:
+                    dropped['duplicate'] += 1
+                    continue
+                seen.add((pkg, cls))
+                sources[bundle].append(f)
+        print(f'sources left out: {dict(dropped)}')
         lists = {}
         for bundle, files in sources.items():
             name = 'bundle' if bundle else 'compile'
@@ -478,10 +558,12 @@ class Builder:
                           for dp, _, fs in os.walk(core) if any(x.endswith('.class') for x in fs)})
         cmd = [os.path.join(self.args.java_home, 'bin', 'javac'), f'-J-Xmx{self.args.javac_memory}',
                '-source', '21', '-target', '21', '--system=none', '--module-path', core,
-               '-encoding', 'UTF-8', '-nowarn', '-proc:none', '-Xmaxerrs', str(self.args.max_errors),
+               '-encoding', 'UTF-8', '-nowarn', '-Xmaxerrs', str(self.args.max_errors),
                '-XDstringConcat=inline',
                '-cp', os.pathsep.join(self.args.classpath + [self.path(j) for j in sorted(plan.jars)]),
                '-d', classes]
+        cmd += self.processors(plan)
+        os.makedirs(os.path.join(self.out, 'apt'), exist_ok=True)
         for pkg in exports:
             if pkg != '.':
                 cmd += ['--add-exports', f'java.base/{pkg}=ALL-UNNAMED']

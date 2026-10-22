@@ -15,7 +15,9 @@ import sys
 def parse_aconfig(text):
     # Text-format protobuf: the top-level `package`, and the `name` of each
     # top-level `flag` block (not of blocks nested in it).
-    tokens = re.findall(r'"(?:[^"\\]|\\.)*"|#[^\n]*|[{}:]|[\w.]+', text)
+    # Strings may be double- or single-quoted, and escape line ends.
+    tokens = re.findall(r'''"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|#[^\n]*|[{}:]|[\w.]+''', text,
+                        re.S)
     package, names, depth, field, block = None, [], 0, None, None
     for tok in tokens:
         if tok.startswith('#'):
@@ -28,7 +30,7 @@ def parse_aconfig(text):
             depth -= 1
         elif tok == ':':
             pass
-        elif tok.startswith('"'):
+        elif tok[0] in '"\'':
             if depth == 0 and field == 'package':
                 package = tok[1:-1]
             elif depth == 1 and block == 'flag' and field == 'name':
