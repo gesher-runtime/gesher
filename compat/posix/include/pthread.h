@@ -37,6 +37,12 @@ int gesher_pthread_key_delete(pthread_key_t key);
 #define pthread_key_create gesher_pthread_key_create
 #define pthread_key_delete gesher_pthread_key_delete
 
+// A signal sent to a thread is pending for the process, where sigwait takes
+// it (see signal.cc); winpthreads' pthread_kill only checks the thread.
+int gesher_pthread_kill(pthread_t thread, int sig);
+#undef pthread_kill
+#define pthread_kill gesher_pthread_kill
+
 // winpthreads returns the CRT's errno numbers (ETIMEDOUT is 138, not 110);
 // these translate the results that can differ from Linux's (see <errno.h>).
 #define GESHER_PTHREAD_LINUX_ERRNO(name, params, args)                       static inline int gesher_##name params {                                    int result = name args;                                                   return result == 0 ? 0 : gesher_errno_from_crt(result);                 }

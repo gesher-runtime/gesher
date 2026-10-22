@@ -1,23 +1,28 @@
 // gesher-base: Linux signal API on Windows.
 //
 // Status: signal sets, masks and handler registration work. Signals sent to
-// this process (kill, tgkill, sigqueue) are kept pending until a thread takes
-// them with sigwait, sigwaitinfo or sigtimedwait, as ART's signal catcher
-// does with SIGQUIT and SIGUSR1; handlers are not run for them. Delivery of
-// synchronous signals from Windows exceptions is the next step (needs the
-// CONTEXT <-> ucontext_t translation from <sys/ucontext.h>).
+// this process (kill, tgkill, pthread_kill, sigqueue) are kept pending until
+// a thread takes them with sigwait, sigwaitinfo or sigtimedwait, as ART's
+// signal catcher does with SIGQUIT and SIGUSR1; handlers are not run for
+// them. Delivery of synchronous signals from Windows exceptions is the next
+// step (needs the CONTEXT <-> ucontext_t translation from <sys/ucontext.h>).
 
 #include <signal.h>
 
 #include <errno.h>
 #include <windows.h>
 
+#include <pthread.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+
+// winpthreads' own, which gesher_pthread_kill calls; <pthread.h> routes
+// everyone else to gesher_pthread_kill.
+#undef pthread_kill
 
 namespace {
 
@@ -185,6 +190,13 @@ int kill(pid_t pid, int sig) { return Send(pid, sig, SI_USER, nullptr); }
 // The thread is not singled out: a signal sent to one of this process's
 // threads is pending for the process, which is what sigwait sees.
 int tgkill(pid_t tgid, pid_t, int sig) { return Send(tgid, sig, SI_TKILL, nullptr); }
+
+int gesher_pthread_kill(pthread_t thread, int sig) {
+  // winpthreads checks that the thread exists (and handles signal 0).
+  int rc = pthread_kill(thread, 0);
+  if (rc != 0 || sig == 0) return rc;
+  return Send(getpid(), sig, SI_TKILL, nullptr) == 0 ? 0 : errno;
+}
 
 int sigqueue(pid_t pid, int sig, const union sigval value) {
   return Send(pid, sig, SI_QUEUE, &value);
