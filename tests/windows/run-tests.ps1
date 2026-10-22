@@ -32,11 +32,11 @@ Check 'dexdump: read .dex from compressed .apk' { & "$Dir/dexdump.exe" -f "$Dir/
 # The runtime starts.
 Check 'dalvikvm: runtime starts' { & "$Dir/dalvikvm.exe" -showversion } @('ART version')
 
-# Progress check, until dalvikvm runs Hello: with the boot jars, the runtime
-# defines and links the core classes without a boot image and loads libcore's
-# native libraries; libicu_jni's JNI_OnLoad maps ICU's data and registers its
-# natives. ART separates class path entries with ':', so paths are given
-# without the drive letter.
+# dalvikvm runs Hello with the interpreter: without a boot image, the runtime
+# defines and links the core classes from the boot jars, loads libcore's
+# native libraries (libicu_jni maps ICU's data) and runs gesher.Hello.main.
+# ART separates class path entries with ':', so paths are given without the
+# drive letter.
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
@@ -53,10 +53,10 @@ $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/sy
   -Xint '-Xusejit:false' '-verbose:jni' -cp (NoDrive "$Dir/hello.dex") gesher.Hello 2>&1 | Out-String
 $code = $LASTEXITCODE
 Remove-Item Env:GESHER_TRACE_FAULTS
-if ($out.Contains('Returned successfully from JNI_OnLoad in "libicu_jni.so"')) {
-  Write-Host 'PASS  dalvikvm: links the core classes from the boot jars and loads ICU'
+if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
+  Write-Host 'PASS  dalvikvm: runs Hello with the interpreter'
 } else {
-  Write-Host ('FAIL  dalvikvm: links the core classes from the boot jars (exit 0x{0:X8})' -f $code)
+  Write-Host ('FAIL  dalvikvm: runs Hello with the interpreter (exit 0x{0:X8})' -f $code)
   # Addresses as symbols, from the linker map (tools/symbolize.py).
   if (Test-Path "$Dir/dalvikvm.map") {
     $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host

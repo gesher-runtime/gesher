@@ -1,6 +1,9 @@
 // gesher-base: Linux signal API on Windows.
 //
-// Status: signal sets, masks and handler registration work. Delivery of
+// Status: signal sets, masks and handler registration work. Signals sent to
+// this process (kill, tgkill, sigqueue) are kept pending until a thread takes
+// them with sigwait, sigwaitinfo or sigtimedwait, as ART's signal catcher
+// does with SIGQUIT and SIGUSR1; handlers are not run for them. Delivery of
 // synchronous signals from Windows exceptions is the next step (needs the
 // CONTEXT <-> ucontext_t translation from <sys/ucontext.h>).
 
@@ -9,7 +12,11 @@
 #include <errno.h>
 #include <windows.h>
 
+#include <unistd.h>
+
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <mutex>
 
 namespace {
@@ -19,6 +26,11 @@ constexpr int kMaxSignal = NSIG - 1;
 struct State {
   std::mutex lock;
   struct sigaction actions[NSIG] = {};
+  // Signals sent to the process and not taken yet; Linux keeps one of each
+  // standard signal pending, as here.
+  sigset_t pending = 0;
+  siginfo_t info[NSIG] = {};
+  std::condition_variable sent;
 };
 
 State& state() {
@@ -31,6 +43,53 @@ thread_local stack_t alt_stack = {nullptr, SS_DISABLE, 0};
 
 bool Valid(int signum) { return signum >= 1 && signum <= kMaxSignal; }
 sigset_t Bit(int signum) { return static_cast<sigset_t>(1) << (signum - 1); }
+
+// Makes `signum` pending for the process. Signal 0 only checks the target.
+int Send(pid_t pid, int signum, int code, const union sigval* value) {
+  if (signum != 0 && !Valid(signum)) return errno = EINVAL, -1;
+  if (pid != getpid() && pid != 0) {
+    // Other processes would need a channel of their own.
+    return errno = ENOSYS, -1;
+  }
+  if (signum == 0) return 0;
+  State& s = state();
+  {
+    std::lock_guard<std::mutex> guard(s.lock);
+    if ((s.pending & Bit(signum)) == 0) {
+      s.pending |= Bit(signum);
+      siginfo_t& info = s.info[signum];
+      info = {};
+      info.si_signo = signum;
+      info.si_code = code;
+      info.si_pid = getpid();
+      if (value != nullptr) info.si_value = *value;
+    }
+  }
+  s.sent.notify_all();
+  return 0;
+}
+
+// Takes the lowest pending signal in `set`, waiting until `deadline` (none:
+// forever). Returns the signal, or -1 with errno EAGAIN when it times out.
+int Take(const sigset_t* set, siginfo_t* info,
+         const std::chrono::steady_clock::time_point* deadline) {
+  State& s = state();
+  std::unique_lock<std::mutex> guard(s.lock);
+  auto ready = [&] { return (s.pending & *set) != 0; };
+  if (deadline == nullptr) {
+    s.sent.wait(guard, ready);
+  } else if (!s.sent.wait_until(guard, *deadline, ready)) {
+    return errno = EAGAIN, -1;
+  }
+  for (int signum = 1; signum <= kMaxSignal; ++signum) {
+    if ((s.pending & *set & Bit(signum)) != 0) {
+      s.pending &= ~Bit(signum);
+      if (info != nullptr) *info = s.info[signum];
+      return signum;
+    }
+  }
+  return errno = EAGAIN, -1;  // not reached: ready() held
+}
 
 }  // namespace
 
@@ -115,17 +174,41 @@ int sigaltstack(const stack_t* ss, stack_t* old_ss) {
 }
 
 int sigpending(sigset_t* set) {
-  *set = 0;
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  *set = s.pending;
   return 0;
 }
 
-// Asynchronous signals between threads/processes are not delivered yet.
-int sigwait(const sigset_t*, int*) { return ENOSYS; }
+int kill(pid_t pid, int sig) { return Send(pid, sig, SI_USER, nullptr); }
+
+// The thread is not singled out: a signal sent to one of this process's
+// threads is pending for the process, which is what sigwait sees.
+int tgkill(pid_t tgid, pid_t, int sig) { return Send(tgid, sig, SI_TKILL, nullptr); }
+
+int sigqueue(pid_t pid, int sig, const union sigval value) {
+  return Send(pid, sig, SI_QUEUE, &value);
+}
+
+int sigwaitinfo(const sigset_t* set, siginfo_t* info) { return Take(set, info, nullptr); }
+
+int sigtimedwait(const sigset_t* set, siginfo_t* info, const struct timespec* timeout) {
+  if (timeout == nullptr) return Take(set, info, nullptr);
+  if (timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000) return errno = EINVAL, -1;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout->tv_sec) +
+                  std::chrono::nanoseconds(timeout->tv_nsec);
+  return Take(set, info, &deadline);
+}
+
+int sigwait(const sigset_t* set, int* sig) {
+  int signum = Take(set, nullptr, nullptr);
+  if (signum < 0) return errno;
+  *sig = signum;
+  return 0;
+}
+
+// Handlers are not run for asynchronous signals yet, so nothing would end
+// the wait.
 int sigsuspend(const sigset_t*) { return errno = ENOSYS, -1; }
-int kill(pid_t, int) { return errno = ENOSYS, -1; }
-int tgkill(pid_t, pid_t, int) { return errno = ENOSYS, -1; }
-int sigqueue(pid_t, int, const union sigval) { return errno = ENOSYS, -1; }
-int sigwaitinfo(const sigset_t*, siginfo_t*) { return errno = ENOSYS, -1; }
-int sigtimedwait(const sigset_t*, siginfo_t*, const struct timespec*) { return errno = ENOSYS, -1; }
 
 }  // extern "C"
