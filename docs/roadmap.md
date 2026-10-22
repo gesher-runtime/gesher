@@ -109,12 +109,18 @@ Each phase ends with something demonstrable, built and tested in CI.
 
 ## Phase 2 checklist
 
-Approach: [0012](decisions/0012-headless-framework.md).
+Approach: [0012](decisions/0012-headless-framework.md); what framework.jar
+needs: [framework-build.md](framework-build.md).
 
 - [x] `framework-res.apk`, and its `R` and `Manifest`, built with aapt2
       (`tools/build-framework-res.sh`, with release BP4A's flag values)
-- [ ] Code generation for the framework: AIDL, protos, aconfig flags,
-      event log tags, statslog
+- [x] The framework's dependency graph mapped (`tools/gen/bp_deps.py`)
+- [x] aconfig flag classes as `java_aconfig_library` makes them
+      (`Flags`, `FeatureFlags`, `FeatureFlagsImpl`)
+- [ ] Host tools built in CI: hidl-gen, protoc's javanano and javastream
+      plugins, stats-log-api-gen, sysprop, xsdc, systemfeatures
+- [ ] Code generation for the framework: AIDL, HIDL, protos, statslog,
+      sysprop, XSD, event log tags
 - [ ] `framework.jar` compiles (javac), then joins the boot class path
 - [ ] `epoll` and `eventfd` in gesher-base, for `Looper`
 - [ ] libutils, libcutils and libandroidfw in full
