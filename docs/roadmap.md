@@ -106,3 +106,20 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
+
+## Phase 2 checklist
+
+Approach: [0012](decisions/0012-headless-framework.md).
+
+- [x] `framework-res.apk`, and its `R` and `Manifest`, built with aapt2
+      (`tools/build-framework-res.sh`, with release BP4A's flag values)
+- [ ] Code generation for the framework: AIDL, protos, aconfig flags,
+      event log tags, statslog
+- [ ] `framework.jar` compiles (javac), then joins the boot class path
+- [ ] `epoll` and `eventfd` in gesher-base, for `Looper`
+- [ ] libutils, libcutils and libandroidfw in full
+- [ ] `libandroid_runtime`'s host natives linked in: assets, resources,
+      `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
+- [ ] In-process stand-ins for the services the lifecycle calls
+- [ ] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
+      resources and manifest loaded (tested in CI)
