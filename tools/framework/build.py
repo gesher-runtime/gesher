@@ -190,32 +190,81 @@ class Builder:
             return os.path.join(HERE, 'soong_zip.py')
         return os.path.join(self.args.host_tools, name)
 
+    @staticmethod
+    def jarjar_rules(path):
+        """(pattern, replacement) pairs of a jarjar rules file's `rule`s:
+        `a.b.**` packages and single classes."""
+        rules = []
+        for line in open(path):
+            parts = line.split()
+            if len(parts) == 3 and parts[0] == 'rule':
+                rules.append((parts[1], parts[2]))
+        return rules
+
+    @staticmethod
+    def rename(text, rules):
+        for pattern, replacement in rules:
+            if pattern.endswith('.**') and replacement.endswith('.@1'):
+                old, new = pattern[:-3], replacement[:-3]
+                text = re.sub(r'(?<![\w.])' + re.escape(old) + r'(?=\.)', new, text)
+            elif pattern.endswith('*') and replacement.endswith('@1'):
+                old, new = pattern[:-1], replacement[:-2]
+                text = re.sub(r'(?<![\w.])' + re.escape(old) + r'(?=\w)', new, text)
+            elif '*' not in pattern:
+                text = re.sub(r'(?<![\w.])' + re.escape(pattern) + r'(?![\w])', replacement, text)
+        return text
+
     def jarjar_sources(self, plan):
-        """Applies a library's jarjar rules to its generated sources, for the
-        libraries whose dependents compile against the renamed packages
-        (Soong renames their classes before the dependents compile)."""
-        for key, rules in plan.jarjar.items():
-            task_keys = [k for k in plan.jarjar_tasks.get(key, ())]
-            renames = []
-            for line in open(self.path(rules)):
-                m = re.match(r'^rule\s+([\w.]+)\.\*\*\s+([\w.]+)\.@1\s*$', line.strip())
-                if m:
-                    renames.append((m.group(1), m.group(2)))
-            for tk in task_keys:
-                d = os.path.join(self.gen, safe(tk))
-                for dp, _, fs in os.walk(d):
-                    for f in fs:
-                        if not f.endswith('.java'):
-                            continue
-                        path = os.path.join(dp, f)
-                        with open(path, encoding='utf-8') as fh:
-                            text = fh.read()
-                        new = text
-                        for old_pkg, new_pkg in renames:
-                            new = re.sub(r'(?<![\w.])' + re.escape(old_pkg) + r'(?=[.;])', new_pkg, new)
-                        if new != text:
-                            with open(path, 'w', encoding='utf-8') as fh:
-                                fh.write(new)
+        """A static library with jarjar rules is renamed before its
+        dependents compile against it, as Soong jars it first: its sources
+        and its own static libraries', and the code generated for them, are
+        compiled renamed (copies; a source other libraries use as it is
+        stays too)."""
+        def closure(lib, seen):
+            if lib in seen or lib not in plan.lib_files:
+                return
+            seen.add(lib)
+            for dep in plan.lib_static.get(lib, []):
+                closure(dep, seen)
+
+        renamed_libs = {}
+        for lib, rules_file in plan.jarjar.items():
+            libs = set()
+            closure(lib, libs)
+            renamed_libs[lib] = libs
+        in_closures = set().union(*renamed_libs.values()) if renamed_libs else set()
+        plain_users = set()
+        for lib, files in plan.lib_files.items():
+            if lib not in in_closures:
+                plain_users |= files
+        self.renamed_out = set()
+        for lib, libs in sorted(renamed_libs.items()):
+            rules = self.jarjar_rules(self.path(plan.jarjar[lib]))
+            out = os.path.join(self.gen, 'jarjar', safe(lib))
+            shutil.rmtree(out, ignore_errors=True)
+            for name in sorted(libs):
+                for f in sorted(plan.lib_files[name]):
+                    with open(self.path(f), encoding='utf-8') as fh:
+                        text = self.rename(fh.read(), rules)
+                    dst = os.path.join(out, f)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    with open(dst, 'w', encoding='utf-8') as fh:
+                        fh.write(text)
+                    if f not in plain_users:
+                        self.renamed_out.add(f)
+                for key in plan.lib_tasks.get(name, ()):
+                    d = os.path.join(self.gen, safe(key))
+                    for dp, _, fs in os.walk(d):
+                        for fn in fs:
+                            if fn.endswith('.java'):
+                                path = os.path.join(dp, fn)
+                                with open(path, encoding='utf-8') as fh:
+                                    text = fh.read()
+                                new = self.rename(text, rules)
+                                if new != text:
+                                    with open(path, 'w', encoding='utf-8') as fh:
+                                        fh.write(new)
+            self.java_dirs[True].append(out)
 
     def gen_proto(self, task):
         d = self.task_dir(task)
@@ -353,33 +402,85 @@ class Builder:
     JAVAPOET = 'https://repo1.maven.org/maven2/com/squareup/javapoet/1.13.0/javapoet-1.13.0.jar'
     GUAVA = 'https://repo1.maven.org/maven2/com/google/guava/guava/33.3.1-jre/guava-33.3.1-jre.jar'
 
-    def systemfeatures_tool(self):
-        """frameworks/base/tools/systemfeatures' generator (Kotlin), compiled
-        on first use with JetBrains' kotlinc against JavaPoet."""
-        d = os.path.join(self.out, 'systemfeatures-tool')
-        jar = os.path.join(d, 'systemfeatures-gen.jar')
+    def jvm_tools(self):
+        """kotlinc (JetBrains' release), JavaPoet and Guava: what AOSP's
+        Kotlin and Java build tools are compiled with. Fetched once."""
+        d = os.path.join(self.out, 'jvm-tools')
+        os.makedirs(d, exist_ok=True)
         kotlinc = os.path.join(d, 'kotlinc')
-        javapoet = os.path.join(d, 'javapoet.jar')
-        guava = os.path.join(d, 'guava.jar')
-        if not os.path.isfile(jar):
-            os.makedirs(d, exist_ok=True)
-            if not os.path.isdir(kotlinc):
-                z = os.path.join(d, 'kotlinc.zip')
-                run(['curl', '-fsSL', '-o', z, self.KOTLINC])
-                with zipfile.ZipFile(z) as f:
-                    f.extractall(d)
-                os.chmod(os.path.join(kotlinc, 'bin', 'kotlinc'), 0o755)
-            if not os.path.isfile(javapoet):
-                run(['curl', '-fsSL', '-o', javapoet, self.JAVAPOET])
-            if not os.path.isfile(guava):
-                run(['curl', '-fsSL', '-o', guava, self.GUAVA])
-            src = self.path('frameworks/base/tools/systemfeatures/src/com/android/systemfeatures/'
-                            'SystemFeaturesGenerator.kt')
-            run([os.path.join(kotlinc, 'bin', 'kotlinc'), src, '-cp', os.pathsep.join([javapoet, guava]),
-                 '-include-runtime', '-d', jar],
+        if not os.path.isdir(kotlinc):
+            z = os.path.join(d, 'kotlinc.zip')
+            run(['curl', '-fsSL', '-o', z, self.KOTLINC])
+            with zipfile.ZipFile(z) as f:
+                f.extractall(d)
+            os.chmod(os.path.join(kotlinc, 'bin', 'kotlinc'), 0o755)
+        jars = {}
+        for name, url in (('javapoet', self.JAVAPOET), ('guava', self.GUAVA)):
+            jars[name] = os.path.join(d, f'{name}.jar')
+            if not os.path.isfile(jars[name]):
+                run(['curl', '-fsSL', '-o', jars[name], url])
+        jars['kotlin-stdlib'] = os.path.join(kotlinc, 'lib', 'kotlin-stdlib.jar')
+        return os.path.join(kotlinc, 'bin', 'kotlinc'), jars
+
+    def compile_jvm(self, out, java=(), kotlin=(), classpath=()):
+        """Compiles a host tool's Java, then its Kotlin, into `out`."""
+        if os.path.isdir(out):
+            return out
+        tmp = out + '.tmp'
+        shutil.rmtree(tmp, ignore_errors=True)
+        os.makedirs(tmp)
+        kotlinc, _ = self.jvm_tools()
+        cp = os.pathsep.join(list(classpath) + [tmp])
+        if java:
+            run([os.path.join(self.args.java_home, 'bin', 'javac'), '-nowarn', '-proc:none',
+                 '-encoding', 'UTF-8', '-cp', cp, '-d', tmp] + list(java))
+        if kotlin:
+            run([kotlinc] + list(kotlin) + ['-cp', cp, '-d', tmp, '-jvm-target', '17'],
                 env={**os.environ, 'JAVA_HOME': self.args.java_home})
+        os.rename(tmp, out)
+        return out
+
+    def systemfeatures_lookup(self, out_dir):
+        """SystemFeaturesLookup.java, as systemfeatures-lookup-srcs makes it
+        from the non-updatable API files: PackageManager's FEATURE_* string
+        constants by value."""
+        sys.path.insert(0, HERE)
+        import api_stubs
+        classes = {}
+        for n in ('current.txt', 'module-lib-current.txt', 'system-current.txt', 'test-current.txt'):
+            path = self.path(f'frameworks/base/core/api/{n}')
+            if os.path.isfile(path):
+                api_stubs.parse(path, classes)
+        pm = classes.get('android.content.pm.PackageManager')
+        cases = []
+        for m in pm.members if pm else []:
+            mm = re.match(r'^(String|java\.lang\.String) (FEATURE_\w+) = (".*")$', m.text)
+            if m.kind == 'field' and mm and 'static' in m.mods:
+                cases.append(f'            case {mm.group(3)}: return "{mm.group(2)}";')
+        path = os.path.join(out_dir, 'com', 'android', 'systemfeatures', 'SystemFeaturesLookup.java')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', newline='\n') as f:
+            f.write('// This file is auto-generated. DO NOT MODIFY.\n'
+                    'package com.android.systemfeatures;\n\n'
+                    '/** @hide */\npublic final class SystemFeaturesLookup {\n'
+                    '    public static String getDeclaredFeatureVarNameFromValue(String featureVarValue) {\n'
+                    '        switch (featureVarValue) {\n' + '\n'.join(dict.fromkeys(cases)) +
+                    '\n            default: return null;\n        }\n    }\n}\n')
+        return path
+
+    def systemfeatures_tool(self):
+        """frameworks/base/tools/systemfeatures' generator (Kotlin)."""
+        _, jars = self.jvm_tools()
+        d = os.path.join(self.out, 'systemfeatures-tool')
+        lookup_src = os.path.join(d, 'lookup-src')
+        lookup = self.compile_jvm(os.path.join(d, 'lookup'),
+                                  java=[self.systemfeatures_lookup(lookup_src)])
+        src = self.path('frameworks/base/tools/systemfeatures/src/com/android/systemfeatures/'
+                        'SystemFeaturesGenerator.kt')
+        cp = [lookup, jars['javapoet'], jars['guava'], jars['kotlin-stdlib']]
+        gen = self.compile_jvm(os.path.join(d, 'classes'), kotlin=[src], classpath=cp)
         return [os.path.join(self.args.java_home, 'bin', 'java'), '-cp',
-                os.pathsep.join([jar, javapoet, guava]), 'com.android.systemfeatures.SystemFeaturesGenerator']
+                os.pathsep.join([gen] + cp), 'com.android.systemfeatures.SystemFeaturesGenerator']
 
     def gen_systemfeatures(self, task):
         # As java_system_features_srcs does: features from RELEASE_SYSTEM_FEATURE_*
@@ -387,8 +488,10 @@ class Builder:
         # RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS, and no device feature files.
         d = self.task_dir(task)
         flags = self.config.flags
-        features = sorted(f'{k[len("RELEASE_SYSTEM_FEATURE_"):]}:{v}' for k, v in flags.items()
-                          if k.startswith('RELEASE_SYSTEM_FEATURE_'))
+        # A flag declared without a value is "" in Soong's BuildFlags: the
+        # feature's status is left to run time.
+        features = sorted(f'{k[len("RELEASE_SYSTEM_FEATURE_"):]}:{"" if v is None else v}'
+                          for k, v in flags.items() if k.startswith('RELEASE_SYSTEM_FEATURE_'))
         readonly = 'true' if flags.get('RELEASE_USE_SYSTEM_FEATURE_BUILD_FLAGS') else 'false'
         cls = task.args['cls']
         r = run(self.systemfeatures_tool() + [cls] + [f'--feature={f}' for f in features]
@@ -425,6 +528,16 @@ class Builder:
                       'frameworks/libs/modules-utils/java/com/android/internal/annotations/CachedProperty.java',
                       'frameworks/libs/modules-utils/java/com/android/internal/annotations/'
                       'CachedPropertyDefaults.java'],
+            'jars': ['guava'],
+        },
+        'systemfeatures-metadata-processor': {
+            'class': 'com.android.systemfeatures.SystemFeaturesMetadataProcessor',
+            'srcs': [],
+            # framework-metalava-annotations' SdkConstant, which it reads.
+            'files': ['frameworks/libs/modules-utils/java/android/annotation/SdkConstant.java'],
+            'kotlin': ['frameworks/base/tools/systemfeatures/src/com/android/systemfeatures/'
+                       'SystemFeaturesMetadataProcessor.kt'],
+            'jars': ['javapoet', 'guava', 'kotlin-stdlib'],
         },
     }
 
@@ -433,25 +546,19 @@ class Builder:
         used = [p for p in sorted(plan.plugins) if p in self.PROCESSORS]
         if not used:
             return ['-proc:none']
-        guava = os.path.join(self.out, 'systemfeatures-tool', 'guava.jar')
-        if not os.path.isfile(guava):
-            os.makedirs(os.path.dirname(guava), exist_ok=True)
-            run(['curl', '-fsSL', '-o', guava, self.GUAVA])
-        paths, classes = [guava], []
+        _, jars = self.jvm_tools()
+        paths, classes = [], []
         for name in used:
             spec = self.PROCESSORS[name]
-            out = os.path.join(self.out, 'processors', name)
-            if not os.path.isdir(out):
-                srcs = [self.path(f) for f in spec['files']]
-                for d in spec['srcs']:
-                    srcs += [os.path.join(dp, f) for dp, _, fs in os.walk(self.path(d))
-                             for f in fs if f.endswith('.java')]
-                tmp = out + '.tmp'
-                shutil.rmtree(tmp, ignore_errors=True)
-                run([os.path.join(self.args.java_home, 'bin', 'javac'), '-nowarn', '-proc:none',
-                     '-cp', guava, '-d', tmp] + srcs)
-                os.rename(tmp, out)
-            paths.append(out)
+            java = [self.path(f) for f in spec['files']]
+            for d in spec['srcs']:
+                java += [os.path.join(dp, f) for dp, _, fs in os.walk(self.path(d))
+                         for f in fs if f.endswith('.java')]
+            deps = [jars[j] for j in spec.get('jars', [])]
+            out = self.compile_jvm(os.path.join(self.out, 'processors', name), java=java,
+                                   kotlin=[self.path(k) for k in spec.get('kotlin', [])],
+                                   classpath=deps)
+            paths += [out] + [d for d in deps if d not in paths]
             classes.append(spec['class'])
         return ['-processorpath', os.pathsep.join(paths), '-processor', ','.join(classes),
                 '-s', os.path.join(self.out, 'apt')]
@@ -469,7 +576,8 @@ class Builder:
             checkout(tree, plan.needed | {
                 'frameworks/base/core/api/current.txt', 'libcore/api/current.txt',
                 'build/make/tools/java-event-log-tags.py', 'build/make/tools/event_log_tags.py'}
-                     | {f for spec in self.PROCESSORS.values() for f in spec['files']},
+                     | {f for spec in self.PROCESSORS.values()
+                        for f in spec['files'] + spec.get('kotlin', [])},
                      plan.include_dirs | {d for spec in self.PROCESSORS.values() for d in spec['srcs']})
         print(f'plan: {len(plan.bundle)} bundled + {len(plan.compile)} compile-only sources, '
               f'{len(plan.tasks)} generation tasks; missing {len(plan.missing)}, '
@@ -508,7 +616,7 @@ class Builder:
         return (m.group(1) if m else ''), os.path.splitext(os.path.basename(path))[0]
 
     def javac(self, plan):
-        bundled = [self.path(f) for f in sorted(plan.bundle)]
+        bundled = [self.path(f) for f in sorted(plan.bundle - getattr(self, 'renamed_out', set()))]
         stubs, others = [], [self.path(f) for f in sorted(plan.compile - plan.bundle)]
         for bundle, dirs in self.java_dirs.items():
             for d in dirs:

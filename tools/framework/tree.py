@@ -166,7 +166,12 @@ class Modules:
             dm = self.get(d)
             if dm is not None:
                 props = merge(props, self.merged(dm))
-        return merge(props, {k: v for k, v in mod.props.items() if k != 'defaults'})
+        props = merge(props, {k: v for k, v in mod.props.items() if k != 'defaults'})
+        # A device build: the `android` target's properties apply.
+        target = props.get('target')
+        if isinstance(target, dict) and isinstance(target.get('android'), dict):
+            props = merge(props, target['android'])
+        return props
 
 
 def is_prebuilt(mod):

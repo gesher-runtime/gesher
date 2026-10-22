@@ -39,7 +39,9 @@ if [[ ! -d $tools ]]; then
   curl -fsSL -o "$work/build-tools.zip" \
     "https://dl.google.com/android/repository/build-tools_r${BUILD_TOOLS}_$host.zip"
   rm -rf "$work/build-tools.tmp" && mkdir -p "$work/build-tools.tmp"
-  (cd "$work/build-tools.tmp" && unzip -q ../build-tools.zip)
+  "$py" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+    "$(native "$work/build-tools.zip")" "$(native "$work/build-tools.tmp")"
+  chmod +x "$work/build-tools.tmp"/*/aapt2* "$work/build-tools.tmp"/*/aidl* 2>/dev/null || true
   mv "$work/build-tools.tmp"/* "$tools" && rmdir "$work/build-tools.tmp"
 fi
 aapt2=$tools/aapt2$exe
@@ -55,7 +57,7 @@ compile() {
 
 # --- Remote-views colors ----------------------------------------------------
 colors=$work/remote-colors
-rm -rf "$colors" && mkdir -p "$colors/flat" "$colors/raw/res/raw"
+rm -rf "$colors" && mkdir -p "$colors/flat" "$colors/raw/res/raw" "$colors/raw/res/values"
 for f in public colors; do
   compile "$res/remote_color_resources_res" "$colors/flat" "$(native values/$f.xml)"
 done
@@ -63,14 +65,17 @@ done
   --manifest "$(native "$res/RemoteThemeColorsAndroidManifest.xml")" \
   "$(native "$colors/flat/values_public.arsc.flat")" \
   "$(native "$colors/flat/values_colors.arsc.flat")"
-(cd "$colors/raw/res/raw" && unzip -q -o "$colors/remote-colors.apk" resources.arsc &&
-  mv resources.arsc remote_views_color_resources.arsc)
+"$py" -c 'import sys, zipfile; open(sys.argv[2], "wb").write(zipfile.ZipFile(sys.argv[1]).read("resources.arsc"))' \
+  "$(native "$colors/remote-colors.apk")" "$(native "$colors/raw/res/raw/remote_views_color_resources.arsc")"
 
 # --- framework-res ----------------------------------------------------------
 flat=$work/framework-res-flat
 rm -rf "$flat" && mkdir -p "$flat"
 compile "$res" "$flat/res.zip" --dir res --feature-flags "$flags"
+# With its java-symbol declaration, as remote-color-resources-arsc-zip has it.
+cp "$res/remote_color_resources_res/symbols.xml" "$colors/raw/res/values/"
 compile "$colors/raw" "$flat" "$(native res/raw/remote_views_color_resources.arsc)"
+compile "$colors/raw" "$flat" "$(native res/values/symbols.xml)"
 
 java=$out/framework-res-java
 rm -rf "$java" && mkdir -p "$java"
@@ -79,6 +84,7 @@ rm -rf "$java" && mkdir -p "$java"
   --private-symbols com.android.internal --no-auto-version --auto-add-overlay \
   --enable-sparse-encoding --min-sdk-version 36 --target-sdk-version 36 \
   --feature-flags "$flags" --java "$(native "$java")" \
-  "$(native "$flat/res.zip")" "$(native "$flat/raw_remote_views_color_resources.arsc.flat")"
+  "$(native "$flat/res.zip")" "$(native "$flat/raw_remote_views_color_resources.arsc.flat")" \
+  "$(native "$flat/values_symbols.arsc.flat")"
 ls -la "$out"
 find "$java" -name '*.java'

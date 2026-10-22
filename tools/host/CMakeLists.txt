@@ -137,7 +137,9 @@ function(aosp_proto_library name)
       DEPENDS protoc ${proto})
     list(APPEND _srcs ${_pgen}/${_stem}.pb.cc)
   endforeach()
-  add_library(${name} STATIC ${_srcs})
+  # Objects, not an archive: Soong links these as shared libraries, and the
+  # tools find proto extensions (atoms) through their static registration.
+  add_library(${name} OBJECT ${_srcs})
   target_include_directories(${name} PUBLIC ${_pgen})
   target_link_libraries(${name} PUBLIC libprotobuf)
 endfunction()
