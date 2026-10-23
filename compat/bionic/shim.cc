@@ -673,6 +673,58 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
   });
 }
 
+// syscall(2), for what libc++/libc++abi use it for: futex waits and wakes
+// (static-local guards, std::atomic::wait) and gettid. A variadic call passes
+// the arguments in the same registers as this fixed signature reads.
+int64_t BIONIC_SYSV Syscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                            int64_t /*a5*/, int64_t /*a6*/) {
+  constexpr int64_t kSysGettid = 186, kSysFutex = 202;
+  if (nr == kSysGettid) return GetCurrentThreadId();
+  if (nr != kSysFutex) {
+    errno = kENOSYS;
+    return -1;
+  }
+  // futex(uaddr, op, val, timeout): FUTEX_PRIVATE_FLAG (128) changes nothing
+  // here; FUTEX_CLOCK_REALTIME (256) picks the clock of a *_BITSET timeout.
+  auto* addr = reinterpret_cast<volatile int32_t*>(a1);
+  int op = static_cast<int>(a2) & ~(128 | 256);
+  bool realtime = (a2 & 256) != 0;
+  auto* timeout = reinterpret_cast<const LinuxTimespec*>(a4);
+  constexpr int kWait = 0, kWake = 1, kWaitBitset = 9, kWakeBitset = 10;
+  if (op == kWait || op == kWaitBitset) {
+    int32_t expect = static_cast<int32_t>(a3);
+    DWORD ms = INFINITE;
+    if (timeout != nullptr) {
+      if (op == kWait) {  // relative
+        int64_t t = timeout->tv_sec * 1000 + (timeout->tv_nsec + 999999) / 1000000;
+        ms = t < 0 ? 0 : t > 0x7ffffffe ? 0x7ffffffe : static_cast<DWORD>(t);
+      } else {  // absolute
+        ms = MillisUntil(timeout, !realtime);
+      }
+    }
+    if (*addr != expect) {
+      errno = kEAGAIN;
+      return -1;
+    }
+    if (!WaitOnAddress(const_cast<int32_t*>(addr), &expect, sizeof(expect), ms) &&
+        GetLastError() == ERROR_TIMEOUT) {
+      errno = kETIMEDOUT;
+      return -1;
+    }
+    return 0;
+  }
+  if (op == kWake || op == kWakeBitset) {
+    if (a3 == 1) {
+      WakeByAddressSingle(const_cast<int32_t*>(addr));
+    } else {
+      WakeByAddressAll(const_cast<int32_t*>(addr));
+    }
+    return 0;
+  }
+  errno = kENOSYS;
+  return -1;
+}
+
 void ReportUnresolved(const char* name) {
   std::fprintf(stderr, "gesher bionic: the .so called '%s', which the bionic shim lacks\n", name);
   std::fflush(stderr);
@@ -894,6 +946,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("dladdr", DlAddr);
   ENTRY("dl_iterate_phdr", DlIteratePhdr);
   // C runtime support.
+  ENTRY("syscall", Syscall);
   ENTRY("__stack_chk_fail", StackChkFail);
   ENTRY("__stack_chk_guard", &g_stack_chk_guard);
   ENTRY("__cxa_atexit", CxaAtexit);
@@ -909,6 +962,7 @@ SymbolTable& Table() {
     RegisterLibc(*table);
     RegisterStdio(*table);
     RegisterPthread(*table);
+    RegisterLocale(*table);
     return table;
   }();
   return *t;
@@ -920,6 +974,8 @@ void* LookupBionicSymbol(const char* name) {
   auto it = table.find(name);
   return it != table.end() ? it->second : nullptr;
 }
+
+void AddBionicSymbol(const char* name, void* address) { Table()[name] = address; }
 
 void InstallBionicShim() {
   Table();
