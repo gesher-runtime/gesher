@@ -200,21 +200,25 @@ static const struct {
   const char* className;
   int (*registerFunction)(JNIEnv*);
 } gRegJNI[] = {
+    // AndroidRuntime.cpp's order: the logging, clock and property natives
+    // first, as other registrations initialize classes (StrictMode, from
+    // Binder's) whose static initializers call them.
     {"android_os_SystemClock", "android/os/SystemClock", register_android_os_SystemClock},
+    {"android_util_EventLog", "android/util/EventLog", register_android_util_EventLog},
+    {"android_util_Log", "android/util/Log", register_android_util_Log},
     {"android_os_SystemProperties", "android/os/SystemProperties",
      register_android_os_SystemProperties},
     {"android_os_Trace", "android/os/Trace", register_android_os_Trace},
+    {"android_os_Process", "android/os/Process", register_android_os_Process},
+    {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
+     register_android_text_AndroidCharacter},
+    {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",
+     register_com_android_internal_util_VirtualRefBasePtr},
+    {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
+     register_android_util_jar_StrictJarFile},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
     {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
-    {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
-     register_android_text_AndroidCharacter},
-    {"android_util_EventLog", "android/util/EventLog", register_android_util_EventLog},
-    {"android_util_Log", "android/util/Log", register_android_util_Log},
-    {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
-     register_android_util_jar_StrictJarFile},
-    {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",
-     register_com_android_internal_util_VirtualRefBasePtr},
     {"android_content_res_ApkAssets", "android/content/res/ApkAssets",
      register_android_content_res_ApkAssets},
     {"android_content_AssetManager", "android/content/res/AssetManager",
@@ -224,7 +228,6 @@ static const struct {
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
-    {"android_os_Process", "android/os/Process", register_android_os_Process},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
