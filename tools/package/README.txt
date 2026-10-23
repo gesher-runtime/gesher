@@ -28,13 +28,26 @@ Running your own program
 
 The .dex file must be on the same drive as Gesher (usually C:).
 
+Running an Android app, headless (gesher-app)
+---------------------------------------------
+Android's framework (framework.jar, framework-res.apk) comes with Gesher.
+gesher-app starts an app's launcher Activity without a window: the app's
+manifest and resources are loaded, and the Activity is created, started and
+resumed, then the program exits. The bundled test app:
+
+    gesher-app "%LOCALAPPDATA%\Programs\Gesher\lifecycle.apk"
+
+Another Activity than the launcher one: gesher-app my.apk --activity .Other
+
 What works, and what doesn't yet
 --------------------------------
-- Console programs only: Android apps (.apk) need Android's framework,
-  graphics and input on top of the runtime, the next phases of the project.
+- No windows yet: Android apps run headless (gesher-app); drawing and input
+  are the next phase of the project. Only apps without native (.so) code.
+  The framework's native side is still being filled in, so apps beyond the
+  bundled test app may stop at a missing native method.
 - Interpreter only (no JIT and no boot image), so startup takes a few seconds.
 - java.lang, collections, strings, ICU (text, locales), basic file I/O.
-- Not yet: starting processes (ProcessBuilder), Selector/WatchService,
+- Not yet: starting processes (ProcessBuilder), WatchService,
   BigInteger/crypto through BoringSSL, full time zones (no tzdata).
 
 The runtime keeps the directories Android expects in %LOCALAPPDATA%\Gesher;
