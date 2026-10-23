@@ -1,3 +1,46 @@
+diff --git a/core/jni/android_content_res_ApkAssets.cpp b/core/jni/android_content_res_ApkAssets.cpp
+--- a/core/jni/android_content_res_ApkAssets.cpp
++++ b/core/jni/android_content_res_ApkAssets.cpp
+@@ -601,27 +601,27 @@
+ // JNI registration.
+ static const JNINativeMethod gApkAssetsMethods[] = {
+         {"nativeLoad", "(ILjava/lang/String;ILandroid/content/res/loader/AssetsProvider;)J",
+-         (void*)NativeLoad},
++         GESHER_JNI(NativeLoad)},
+         {"nativeLoadEmpty", "(ILandroid/content/res/loader/AssetsProvider;)J",
+-         (void*)NativeLoadEmpty},
++         GESHER_JNI(NativeLoadEmpty)},
+         {"nativeLoadFd",
+          "(ILjava/io/FileDescriptor;Ljava/lang/String;ILandroid/content/res/loader/"
+          "AssetsProvider;)J",
+-         (void*)NativeLoadFromFd},
++         GESHER_JNI(NativeLoadFromFd)},
+         {"nativeLoadFdOffsets",
+          "(ILjava/io/FileDescriptor;Ljava/lang/String;JJILandroid/content/res/loader/"
+          "AssetsProvider;)J",
+-         (void*)NativeLoadFromFdOffset},
+-        {"nativeDestroy", "(J)V", (void*)NativeDestroy},
+-        {"nativeGetAssetPath", "(J)Ljava/lang/String;", (void*)NativeGetAssetPath},
+-        {"nativeGetDebugName", "(J)Ljava/lang/String;", (void*)NativeGetDebugName},
+-        {"nativeGetStringBlock", "(J)J", (void*)NativeGetStringBlock},
++         GESHER_JNI(NativeLoadFromFdOffset)},
++        {"nativeDestroy", "(J)V", GESHER_JNI(NativeDestroy)},
++        {"nativeGetAssetPath", "(J)Ljava/lang/String;", GESHER_JNI(NativeGetAssetPath)},
++        {"nativeGetDebugName", "(J)Ljava/lang/String;", GESHER_JNI(NativeGetDebugName)},
++        {"nativeGetStringBlock", "(J)J", GESHER_JNI(NativeGetStringBlock)},
+         // @CriticalNative
+-        {"nativeIsUpToDate", "(J)I", (void*)NativeIsUpToDate},
+-        {"nativeOpenXml", "(JLjava/lang/String;)J", (void*)NativeOpenXml},
++        {"nativeIsUpToDate", "(J)I", GESHER_JNI(NativeIsUpToDate)},
++        {"nativeOpenXml", "(JLjava/lang/String;)J", GESHER_JNI(NativeOpenXml)},
+         {"nativeGetOverlayableInfo", "(JLjava/lang/String;)Landroid/content/om/OverlayableInfo;",
+-         (void*)NativeGetOverlayableInfo},
+-        {"nativeDefinesOverlayable", "(J)Z", (void*)NativeDefinesOverlayable},
++         GESHER_JNI(NativeGetOverlayableInfo)},
++        {"nativeDefinesOverlayable", "(J)Z", GESHER_JNI(NativeDefinesOverlayable)},
+ };
+ 
+ int register_android_content_res_ApkAssets(JNIEnv* env) {
 diff --git a/core/jni/android_os_MessageQueue.cpp b/core/jni/android_os_MessageQueue.cpp
 --- a/core/jni/android_os_MessageQueue.cpp
 +++ b/core/jni/android_os_MessageQueue.cpp
@@ -169,6 +212,166 @@ diff --git a/core/jni/android_text_AndroidCharacter.cpp b/core/jni/android_text_
  };
  
  int register_android_text_AndroidCharacter(JNIEnv* env)
+diff --git a/core/jni/android_util_AssetManager.cpp b/core/jni/android_util_AssetManager.cpp
+--- a/core/jni/android_util_AssetManager.cpp
++++ b/core/jni/android_util_AssetManager.cpp
+@@ -1550,98 +1550,98 @@
+ // JNI registration.
+ static const JNINativeMethod gAssetManagerMethods[] = {
+         // AssetManager setup methods.
+-        {"nativeCreate", "()J", (void*)NativeCreate},
+-        {"nativeDestroy", "(J)V", (void*)NativeDestroy},
+-        {"nativeSetApkAssets", "(J[Landroid/content/res/ApkAssets;ZZ)V", (void*)NativeSetApkAssets},
++        {"nativeCreate", "()J", GESHER_JNI(NativeCreate)},
++        {"nativeDestroy", "(J)V", GESHER_JNI(NativeDestroy)},
++        {"nativeSetApkAssets", "(J[Landroid/content/res/ApkAssets;ZZ)V", GESHER_JNI(NativeSetApkAssets)},
+         {"nativeSetConfiguration", "(JIILjava/lang/String;[Ljava/lang/String;IIIIIIIIIIIIIIIIIZ)V",
+-         (void*)NativeSetConfiguration},
+-        {"nativeSetOverlayConstraints", "(JII)V", (void*)NativeSetOverlayConstraints},
++         GESHER_JNI(NativeSetConfiguration)},
++        {"nativeSetOverlayConstraints", "(JII)V", GESHER_JNI(NativeSetOverlayConstraints)},
+         {"nativeGetAssignedPackageIdentifiers", "(JZZ)Landroid/util/SparseArray;",
+-         (void*)NativeGetAssignedPackageIdentifiers},
++         GESHER_JNI(NativeGetAssignedPackageIdentifiers)},
+ 
+         // AssetManager file methods.
+-        {"nativeContainsAllocatedTable", "(J)Z", (void*)ContainsAllocatedTable},
+-        {"nativeList", "(JLjava/lang/String;)[Ljava/lang/String;", (void*)NativeList},
+-        {"nativeOpenAsset", "(JLjava/lang/String;I)J", (void*)NativeOpenAsset},
++        {"nativeContainsAllocatedTable", "(J)Z", GESHER_JNI(ContainsAllocatedTable)},
++        {"nativeList", "(JLjava/lang/String;)[Ljava/lang/String;", GESHER_JNI(NativeList)},
++        {"nativeOpenAsset", "(JLjava/lang/String;I)J", GESHER_JNI(NativeOpenAsset)},
+         {"nativeOpenAssetFd", "(JLjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;",
+-         (void*)NativeOpenAssetFd},
+-        {"nativeOpenNonAsset", "(JILjava/lang/String;I)J", (void*)NativeOpenNonAsset},
++         GESHER_JNI(NativeOpenAssetFd)},
++        {"nativeOpenNonAsset", "(JILjava/lang/String;I)J", GESHER_JNI(NativeOpenNonAsset)},
+         {"nativeOpenNonAssetFd", "(JILjava/lang/String;[J)Landroid/os/ParcelFileDescriptor;",
+-         (void*)NativeOpenNonAssetFd},
+-        {"nativeOpenXmlAsset", "(JILjava/lang/String;)J", (void*)NativeOpenXmlAsset},
+-        {"nativeOpenXmlAssetFd", "(JILjava/io/FileDescriptor;)J", (void*)NativeOpenXmlAssetFd},
++         GESHER_JNI(NativeOpenNonAssetFd)},
++        {"nativeOpenXmlAsset", "(JILjava/lang/String;)J", GESHER_JNI(NativeOpenXmlAsset)},
++        {"nativeOpenXmlAssetFd", "(JILjava/io/FileDescriptor;)J", GESHER_JNI(NativeOpenXmlAssetFd)},
+ 
+         // AssetManager resource methods.
+         {"nativeGetResourceValue", "(JISLandroid/util/TypedValue;Z)I",
+-         (void*)NativeGetResourceValue},
++         GESHER_JNI(NativeGetResourceValue)},
+         {"nativeGetResourceBagValue", "(JIILandroid/util/TypedValue;)I",
+-         (void*)NativeGetResourceBagValue},
+-        {"nativeGetStyleAttributes", "(JI)[I", (void*)NativeGetStyleAttributes},
++         GESHER_JNI(NativeGetResourceBagValue)},
++        {"nativeGetStyleAttributes", "(JI)[I", GESHER_JNI(NativeGetStyleAttributes)},
+         {"nativeGetResourceStringArray", "(JI)[Ljava/lang/String;",
+-         (void*)NativeGetResourceStringArray},
+-        {"nativeGetResourceStringArrayInfo", "(JI)[I", (void*)NativeGetResourceStringArrayInfo},
+-        {"nativeGetResourceIntArray", "(JI)[I", (void*)NativeGetResourceIntArray},
+-        {"nativeGetResourceArraySize", "(JI)I", (void*)NativeGetResourceArraySize},
+-        {"nativeGetResourceArray", "(JI[I)I", (void*)NativeGetResourceArray},
+-        {"nativeGetParentThemeIdentifier", "(JI)I", (void*)NativeGetParentThemeIdentifier},
++         GESHER_JNI(NativeGetResourceStringArray)},
++        {"nativeGetResourceStringArrayInfo", "(JI)[I", GESHER_JNI(NativeGetResourceStringArrayInfo)},
++        {"nativeGetResourceIntArray", "(JI)[I", GESHER_JNI(NativeGetResourceIntArray)},
++        {"nativeGetResourceArraySize", "(JI)I", GESHER_JNI(NativeGetResourceArraySize)},
++        {"nativeGetResourceArray", "(JI[I)I", GESHER_JNI(NativeGetResourceArray)},
++        {"nativeGetParentThemeIdentifier", "(JI)I", GESHER_JNI(NativeGetParentThemeIdentifier)},
+ 
+         // AssetManager resource name/ID methods.
+         {"nativeGetResourceIdentifier",
+          "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+-         (void*)NativeGetResourceIdentifier},
+-        {"nativeGetResourceName", "(JI)Ljava/lang/String;", (void*)NativeGetResourceName},
++         GESHER_JNI(NativeGetResourceIdentifier)},
++        {"nativeGetResourceName", "(JI)Ljava/lang/String;", GESHER_JNI(NativeGetResourceName)},
+         {"nativeGetResourcePackageName", "(JI)Ljava/lang/String;",
+-         (void*)NativeGetResourcePackageName},
+-        {"nativeGetResourceTypeName", "(JI)Ljava/lang/String;", (void*)NativeGetResourceTypeName},
+-        {"nativeGetResourceEntryName", "(JI)Ljava/lang/String;", (void*)NativeGetResourceEntryName},
++         GESHER_JNI(NativeGetResourcePackageName)},
++        {"nativeGetResourceTypeName", "(JI)Ljava/lang/String;", GESHER_JNI(NativeGetResourceTypeName)},
++        {"nativeGetResourceEntryName", "(JI)Ljava/lang/String;", GESHER_JNI(NativeGetResourceEntryName)},
+         {"nativeSetResourceResolutionLoggingEnabled", "(JZ)V",
+-         (void*)NativeSetResourceResolutionLoggingEnabled},
++         GESHER_JNI(NativeSetResourceResolutionLoggingEnabled)},
+         {"nativeGetLastResourceResolution", "(J)Ljava/lang/String;",
+-         (void*)NativeGetLastResourceResolution},
+-        {"nativeGetLocales", "(JZ)[Ljava/lang/String;", (void*)NativeGetLocales},
++         GESHER_JNI(NativeGetLastResourceResolution)},
++        {"nativeGetLocales", "(JZ)[Ljava/lang/String;", GESHER_JNI(NativeGetLocales)},
+         {"nativeGetSizeConfigurations", "(J)[Landroid/content/res/Configuration;",
+-         (void*)NativeGetSizeConfigurations},
++         GESHER_JNI(NativeGetSizeConfigurations)},
+         {"nativeGetSizeAndUiModeConfigurations", "(J)[Landroid/content/res/Configuration;",
+-         (void*)NativeGetSizeAndUiModeConfigurations},
++         GESHER_JNI(NativeGetSizeAndUiModeConfigurations)},
+ 
+         // Style attribute related methods.
+-        {"nativeAttributeResolutionStack", "(JJIII)[I", (void*)NativeAttributeResolutionStack},
+-        {"nativeApplyStyle", "(JJIIJ[IJJ)V", (void*)NativeApplyStyle},
+-        {"nativeApplyStyleWithArray", "(JJIIJ[I[I[I)V", (void*)NativeApplyStyleWithArray},
+-        {"nativeResolveAttrs", "(JJII[I[I[I[I)Z", (void*)NativeResolveAttrs},
+-        {"nativeRetrieveAttributes", "(JJ[I[I[I)Z", (void*)NativeRetrieveAttributes},
++        {"nativeAttributeResolutionStack", "(JJIII)[I", GESHER_JNI(NativeAttributeResolutionStack)},
++        {"nativeApplyStyle", "(JJIIJ[IJJ)V", GESHER_JNI(NativeApplyStyle)},
++        {"nativeApplyStyleWithArray", "(JJIIJ[I[I[I)V", GESHER_JNI(NativeApplyStyleWithArray)},
++        {"nativeResolveAttrs", "(JJII[I[I[I[I)Z", GESHER_JNI(NativeResolveAttrs)},
++        {"nativeRetrieveAttributes", "(JJ[I[I[I)Z", GESHER_JNI(NativeRetrieveAttributes)},
+ 
+         // Theme related methods.
+-        {"nativeThemeCreate", "(J)J", (void*)NativeThemeCreate},
+-        {"nativeGetThemeFreeFunction", "()J", (void*)NativeGetThemeFreeFunction},
+-        {"nativeThemeApplyStyle", "(JJIZ)V", (void*)NativeThemeApplyStyle},
+-        {"nativeThemeRebase", "(JJ[I[ZI)V", (void*)NativeThemeRebase},
+-
+-        {"nativeThemeCopy", "(JJJJ)V", (void*)NativeThemeCopy},
++        {"nativeThemeCreate", "(J)J", GESHER_JNI(NativeThemeCreate)},
++        {"nativeGetThemeFreeFunction", "()J", GESHER_JNI(NativeGetThemeFreeFunction)},
++        {"nativeThemeApplyStyle", "(JJIZ)V", GESHER_JNI(NativeThemeApplyStyle)},
++        {"nativeThemeRebase", "(JJ[I[ZI)V", GESHER_JNI(NativeThemeRebase)},
++
++        {"nativeThemeCopy", "(JJJJ)V", GESHER_JNI(NativeThemeCopy)},
+         {"nativeThemeGetAttributeValue", "(JJILandroid/util/TypedValue;Z)I",
+-         (void*)NativeThemeGetAttributeValue},
+-        {"nativeThemeDump", "(JJILjava/lang/String;Ljava/lang/String;)V", (void*)NativeThemeDump},
++         GESHER_JNI(NativeThemeGetAttributeValue)},
++        {"nativeThemeDump", "(JJILjava/lang/String;Ljava/lang/String;)V", GESHER_JNI(NativeThemeDump)},
+         {"nativeThemeGetChangingConfigurations", "(J)I",
+-         (void*)NativeThemeGetChangingConfigurations},
++         GESHER_JNI(NativeThemeGetChangingConfigurations)},
+ 
+         // AssetInputStream methods.
+-        {"nativeAssetDestroy", "(J)V", (void*)NativeAssetDestroy},
+-        {"nativeAssetReadChar", "(J)I", (void*)NativeAssetReadChar},
+-        {"nativeAssetRead", "(J[BII)I", (void*)NativeAssetRead},
+-        {"nativeAssetSeek", "(JJI)J", (void*)NativeAssetSeek},
+-        {"nativeAssetGetLength", "(J)J", (void*)NativeAssetGetLength},
+-        {"nativeAssetGetRemainingLength", "(J)J", (void*)NativeAssetGetRemainingLength},
++        {"nativeAssetDestroy", "(J)V", GESHER_JNI(NativeAssetDestroy)},
++        {"nativeAssetReadChar", "(J)I", GESHER_JNI(NativeAssetReadChar)},
++        {"nativeAssetRead", "(J[BII)I", GESHER_JNI(NativeAssetRead)},
++        {"nativeAssetSeek", "(JJI)J", GESHER_JNI(NativeAssetSeek)},
++        {"nativeAssetGetLength", "(J)J", GESHER_JNI(NativeAssetGetLength)},
++        {"nativeAssetGetRemainingLength", "(J)J", GESHER_JNI(NativeAssetGetRemainingLength)},
+ 
+         // System/idmap related methods.
+         {"nativeGetOverlayableMap", "(JLjava/lang/String;)Ljava/util/Map;",
+-         (void*)NativeGetOverlayableMap},
++         GESHER_JNI(NativeGetOverlayableMap)},
+         {"nativeGetOverlayablesToString", "(JLjava/lang/String;)Ljava/lang/String;",
+-         (void*)NativeGetOverlayablesToString},
++         GESHER_JNI(NativeGetOverlayablesToString)},
+ 
+         // Global management/debug methods.
+-        {"getGlobalAssetCount", "()I", (void*)NativeGetGlobalAssetCount},
+-        {"getAssetAllocations", "()Ljava/lang/String;", (void*)NativeGetAssetAllocations},
+-        {"getGlobalAssetManagerCount", "()I", (void*)NativeGetGlobalAssetManagerCount},
++        {"getGlobalAssetCount", "()I", GESHER_JNI(NativeGetGlobalAssetCount)},
++        {"getAssetAllocations", "()Ljava/lang/String;", GESHER_JNI(NativeGetAssetAllocations)},
++        {"getGlobalAssetManagerCount", "()I", GESHER_JNI(NativeGetGlobalAssetManagerCount)},
+ };
+ 
+ int register_android_content_AssetManager(JNIEnv* env) {
 diff --git a/core/jni/android_util_EventLog.cpp b/core/jni/android_util_EventLog.cpp
 --- a/core/jni/android_util_EventLog.cpp
 +++ b/core/jni/android_util_EventLog.cpp
@@ -214,6 +417,99 @@ diff --git a/core/jni/android_util_Log.cpp b/core/jni/android_util_Log.cpp
  };
  
  int register_android_util_Log(JNIEnv* env)
+diff --git a/core/jni/android_util_StringBlock.cpp b/core/jni/android_util_StringBlock.cpp
+--- a/core/jni/android_util_StringBlock.cpp
++++ b/core/jni/android_util_StringBlock.cpp
+@@ -157,15 +157,15 @@
+ static const JNINativeMethod gStringBlockMethods[] = {
+     /* name, signature, funcPtr */
+     { "nativeCreate",      "([BII)J",
+-            (void*) android_content_StringBlock_nativeCreate },
++            GESHER_JNI(android_content_StringBlock_nativeCreate) },
+     { "nativeGetSize",      "(J)I",
+-            (void*) android_content_StringBlock_nativeGetSize },
++            GESHER_JNI(android_content_StringBlock_nativeGetSize) },
+     { "nativeGetString",    "(JI)Ljava/lang/String;",
+-            (void*) android_content_StringBlock_nativeGetString },
++            GESHER_JNI(android_content_StringBlock_nativeGetString) },
+     { "nativeGetStyle",    "(JI)[I",
+-            (void*) android_content_StringBlock_nativeGetStyle },
++            GESHER_JNI(android_content_StringBlock_nativeGetStyle) },
+     { "nativeDestroy",      "(J)V",
+-            (void*) android_content_StringBlock_nativeDestroy },
++            GESHER_JNI(android_content_StringBlock_nativeDestroy) },
+ };
+ 
+ int register_android_content_StringBlock(JNIEnv* env)
+diff --git a/core/jni/android_util_XmlBlock.cpp b/core/jni/android_util_XmlBlock.cpp
+--- a/core/jni/android_util_XmlBlock.cpp
++++ b/core/jni/android_util_XmlBlock.cpp
+@@ -363,42 +363,42 @@
+  */
+ static const JNINativeMethod gXmlBlockMethods[] = {
+         /* name, signature, funcPtr */
+-        {"nativeCreate", "([BII)J", (void*)android_content_XmlBlock_nativeCreate},
+-        {"nativeGetStringBlock", "(J)J", (void*)android_content_XmlBlock_nativeGetStringBlock},
+-        {"nativeCreateParseState", "(JI)J", (void*)android_content_XmlBlock_nativeCreateParseState},
++        {"nativeCreate", "([BII)J", GESHER_JNI(android_content_XmlBlock_nativeCreate)},
++        {"nativeGetStringBlock", "(J)J", GESHER_JNI(android_content_XmlBlock_nativeGetStringBlock)},
++        {"nativeCreateParseState", "(JI)J", GESHER_JNI(android_content_XmlBlock_nativeCreateParseState)},
+         {"nativeDestroyParseState", "(J)V",
+-         (void*)android_content_XmlBlock_nativeDestroyParseState},
+-        {"nativeDestroy", "(J)V", (void*)android_content_XmlBlock_nativeDestroy},
++         GESHER_JNI(android_content_XmlBlock_nativeDestroyParseState)},
++        {"nativeDestroy", "(J)V", GESHER_JNI(android_content_XmlBlock_nativeDestroy)},
+ 
+         // ------------------- @FastNative ----------------------
+ 
+-        {"nativeNext", "(J)I", (void*)android_content_XmlBlock_nativeNext},
+-        {"nativeGetNamespace", "(J)I", (void*)android_content_XmlBlock_nativeGetNamespace},
+-        {"nativeGetName", "(J)I", (void*)android_content_XmlBlock_nativeGetName},
+-        {"nativeGetText", "(J)I", (void*)android_content_XmlBlock_nativeGetText},
+-        {"nativeGetLineNumber", "(J)I", (void*)android_content_XmlBlock_nativeGetLineNumber},
++        {"nativeNext", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeNext)},
++        {"nativeGetNamespace", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetNamespace)},
++        {"nativeGetName", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetName)},
++        {"nativeGetText", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetText)},
++        {"nativeGetLineNumber", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetLineNumber)},
+         {"nativeGetAttributeCount", "(J)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeCount},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeCount)},
+         {"nativeGetAttributeNamespace", "(JI)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeNamespace},
+-        {"nativeGetAttributeName", "(JI)I", (void*)android_content_XmlBlock_nativeGetAttributeName},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeNamespace)},
++        {"nativeGetAttributeName", "(JI)I", GESHER_JNI(android_content_XmlBlock_nativeGetAttributeName)},
+         {"nativeGetAttributeResource", "(JI)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeResource},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeResource)},
+         {"nativeGetAttributeDataType", "(JI)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeDataType},
+-        {"nativeGetAttributeData", "(JI)I", (void*)android_content_XmlBlock_nativeGetAttributeData},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeDataType)},
++        {"nativeGetAttributeData", "(JI)I", GESHER_JNI(android_content_XmlBlock_nativeGetAttributeData)},
+         {"nativeGetAttributeStringValue", "(JI)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeStringValue},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeStringValue)},
+         {"nativeGetAttributeIndex", "(JLjava/lang/String;Ljava/lang/String;)I",
+-         (void*)android_content_XmlBlock_nativeGetAttributeIndex},
+-        {"nativeGetIdAttribute", "(J)I", (void*)android_content_XmlBlock_nativeGetIdAttribute},
++         GESHER_JNI(android_content_XmlBlock_nativeGetAttributeIndex)},
++        {"nativeGetIdAttribute", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetIdAttribute)},
+         {"nativeGetClassAttribute", "(J)I",
+-         (void*)android_content_XmlBlock_nativeGetClassAttribute},
++         GESHER_JNI(android_content_XmlBlock_nativeGetClassAttribute)},
+         {"nativeGetStyleAttribute", "(J)I",
+-         (void*)android_content_XmlBlock_nativeGetStyleAttribute},
+-        {"nativeGetSourceResId", "(J)I", (void*)android_content_XmlBlock_nativeGetSourceResId},
++         GESHER_JNI(android_content_XmlBlock_nativeGetStyleAttribute)},
++        {"nativeGetSourceResId", "(J)I", GESHER_JNI(android_content_XmlBlock_nativeGetSourceResId)},
+         {"nativeGetFlagInfo", "(J)Landroid/content/res/XmlBlock$FlagInfo;",
+-         (void*)android_content_XmlBlock_nativeGetFlagInfo},
++         GESHER_JNI(android_content_XmlBlock_nativeGetFlagInfo)},
+ };
+ 
+ int register_android_content_XmlBlock(JNIEnv* env)
 diff --git a/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp b/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp
 --- a/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp
 +++ b/core/jni/com_android_internal_util_VirtualRefBasePtr.cpp

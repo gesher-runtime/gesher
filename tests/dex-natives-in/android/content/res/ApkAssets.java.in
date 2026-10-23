@@ -1,0 +1,21 @@
+package android.content.res;
+
+/** Stand-in for the framework class; the natives come from its JNI table (tests/gen_jni_standins.py). */
+public final class ApkAssets {
+  public static final int FORMAT_APK = 0;
+
+  // NativeSetApkAssets reads it.
+  final long mNativePtr;
+
+  public ApkAssets(long nativePtr) {
+    mNativePtr = nativePtr;
+  }
+
+  // The native loader asks for the values of the feature flags resources name;
+  // none is set here.
+  private static boolean[] getFlagValuesForNative(String[] flags) {
+    return new boolean[flags.length];
+  }
+
+  // @natives core/jni/android_content_res_ApkAssets.cpp gApkAssetsMethods
+}

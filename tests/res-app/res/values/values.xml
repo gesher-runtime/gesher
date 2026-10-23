@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="greeting">Hello from resources</string>
+    <integer name="answer">42</integer>
+    <attr name="label" format="string|reference" />
+    <attr name="gesherColor" format="color" />
+    <attr name="gesherSize" format="integer" />
+    <style name="GesherTheme">
+        <item name="gesherColor">#ff112233</item>
+        <item name="gesherSize">7</item>
+    </style>
+</resources>

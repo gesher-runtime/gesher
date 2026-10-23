@@ -21,13 +21,17 @@ import subprocess
 import sys
 
 FILES = [
+    'core/jni/android_content_res_ApkAssets.cpp',
     'core/jni/android_os_MessageQueue.cpp',
     'core/jni/android_os_SystemClock.cpp',
     'core/jni/android_os_SystemProperties.cpp',
     'core/jni/android_os_Trace.cpp',
     'core/jni/android_text_AndroidCharacter.cpp',
+    'core/jni/android_util_AssetManager.cpp',
     'core/jni/android_util_EventLog.cpp',
     'core/jni/android_util_Log.cpp',
+    'core/jni/android_util_StringBlock.cpp',
+    'core/jni/android_util_XmlBlock.cpp',
     'core/jni/com_android_internal_util_VirtualRefBasePtr.cpp',
 ]
 

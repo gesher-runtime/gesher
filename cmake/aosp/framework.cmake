@@ -13,28 +13,67 @@
 set(_fw "${AOSP_DIR}/frameworks/base")
 set(_fwjni "${_fw}/core/jni")
 
+# --- libincfs-utils (system/incremental_delivery/incfs/Android.bp) -----------
+# map_ptr over plain memory: without __ANDROID__ there is no incfs to check.
+set(_incfs "${AOSP_DIR}/system/incremental_delivery/incfs")
+add_library(incfs_utils STATIC ${_incfs}/util/map_ptr.cpp)
+target_include_directories(incfs_utils PUBLIC ${_incfs}/util/include)
+target_link_libraries(incfs_utils PUBLIC utils base)
+target_compile_options(incfs_utils PRIVATE -Wall -Werror)
+
+# --- libandroidfw (frameworks/base/libs/androidfw/Android.bp) ----------------
+# The host/Windows source set (with libandroidfw_pathutils), less what needs
+# libraries Gesher does not build: the PNG files (libpng; aapt2's) and
+# CursorWindow (libbinder's Parcel; SQLite is left out until views).
+set(_afw "${_fw}/libs/androidfw")
+add_library(androidfw STATIC
+  ${_afw}/ApkAssets.cpp ${_afw}/ApkParsing.cpp ${_afw}/Asset.cpp ${_afw}/AssetDir.cpp
+  ${_afw}/AssetManager.cpp ${_afw}/AssetManager2.cpp ${_afw}/AssetsProvider.cpp
+  ${_afw}/AttributeResolution.cpp ${_afw}/BigBuffer.cpp ${_afw}/BigBufferStream.cpp
+  ${_afw}/ChunkIterator.cpp ${_afw}/ConfigDescription.cpp ${_afw}/FileStream.cpp
+  ${_afw}/Idmap.cpp ${_afw}/LoadedArsc.cpp ${_afw}/Locale.cpp ${_afw}/LocaleData.cpp
+  ${_afw}/LocaleDataLookup.cpp ${_afw}/misc.cpp ${_afw}/NinePatch.cpp ${_afw}/ObbFile.cpp
+  ${_afw}/PosixUtils.cpp ${_afw}/ResourceTimer.cpp ${_afw}/ResourceTypes.cpp
+  ${_afw}/ResourceUtils.cpp ${_afw}/StreamingZipInflater.cpp ${_afw}/StringPool.cpp
+  ${_afw}/TypeWrappers.cpp ${_afw}/Util.cpp ${_afw}/ZipFileRO.cpp ${_afw}/ZipUtils.cpp
+  ${_afw}/PathUtils.cpp)
+target_include_directories(androidfw PUBLIC ${_afw}/include ${_afw}/include_pathutils
+  # native_headers: <android/configuration.h>
+  ${AOSP_DIR}/frameworks/native/include
+  PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework/include)
+target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z)
+target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
+# libandroidfw_defaults: gnu++2b, -Werror -Wunreachable-code, and on Windows
+# -Wno-missing-field-initializers.
+set_target_properties(androidfw PROPERTIES CXX_STANDARD 23)
+target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
+  -Wno-missing-field-initializers)
+
 add_library(framework_runtime OBJECT
+  ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_SystemClock.cpp
   ${_fwjni}/android_os_SystemProperties.cpp
   ${_fwjni}/android_os_Trace.cpp
   ${_fwjni}/android_text_AndroidCharacter.cpp
+  ${_fwjni}/android_util_AssetManager.cpp
   ${_fwjni}/android_util_EventLog.cpp
   ${_fwjni}/android_util_Log.cpp
+  ${_fwjni}/android_util_StringBlock.cpp
+  ${_fwjni}/android_util_XmlBlock.cpp
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include)
 # AndroidCharacter uses ICU4C directly, as the platform build does.
-target_link_libraries(framework_runtime PUBLIC nativehelper utils cutils log base
+target_link_libraries(framework_runtime PUBLIC androidfw nativehelper utils cutils log base
   icu_headers icuuc)
 # Android.bp's libandroid_runtime warning set.
 target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
   -Wno-unused-parameter -Wno-non-virtual-dtor)
-# cutils/trace.h includes C's <stdatomic.h>; libc++ allows it next to
-# <atomic> only from C++23 on.
-set_source_files_properties(${_fwjni}/android_os_Trace.cpp PROPERTIES
-  COMPILE_OPTIONS "-std=gnu++23")
+# utils/Trace.h includes cutils/trace.h and so C's <stdatomic.h>; libc++
+# allows it next to <atomic> only from C++23 on (bionic's allows it always).
+set_target_properties(framework_runtime PROPERTIES CXX_STANDARD 23)
 
 target_link_libraries(dalvikvm PRIVATE framework_runtime)

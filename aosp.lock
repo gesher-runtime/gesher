@@ -27,4 +27,6 @@ external/expat Android.bp expat_config.h expat/lib/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/
+frameworks/base core/res/ core/jni/ libs/androidfw/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/
+frameworks/native include/android/
+system/incremental_delivery incfs/util/
