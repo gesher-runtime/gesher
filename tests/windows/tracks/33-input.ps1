@@ -9,3 +9,10 @@
 Check 'input: Win32 messages to MotionEvent/KeyEvent over an InputChannel (InputPublisher/InputConsumer)' {
   & "$Dir/input_probe.exe"
 } @('all passed')
+
+# The framework's input natives on framework.jar (KeyEvent, MotionEvent,
+# VelocityTracker, KeyCharacterMap with Generic.kcm, InputChannel,
+# InputEventSender/Receiver on a Looper), then a Gesher window attached to an
+# InputChannel (com.gesher.app.input.WindowInput): posted Win32 messages and
+# injected window events reach a Java InputEventReceiver, which finishes them.
+GraphicsDex 'input: Win32 window messages to a Java InputEventReceiver (MotionEvent, KeyEvent, Generic.kcm)' InputTest
