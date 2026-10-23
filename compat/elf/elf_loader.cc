@@ -281,7 +281,7 @@ int ProtFor(uint32_t p_flags) {
 
 // Maps the PT_LOAD segments of `data` into a fresh reservation. Fills base,
 // load_bias, map_size. Returns false on error.
-bool MapSegments(Library* lib, const uint8_t* data, size_t size, std::string* error) {
+bool MapSegments(Library* lib, const uint8_t* data, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
 
@@ -564,7 +564,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
 
   auto* lib = new Library();
   lib->name = name;
-  if (!MapSegments(lib, data, size, error)) {
+  if (!MapSegments(lib, data, error)) {
     delete lib;
     return nullptr;
   }
