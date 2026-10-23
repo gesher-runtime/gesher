@@ -134,4 +134,16 @@ public final class PackageManagerService extends IPackageManager.Default {
     public String getInstallerPackageName(String packageName) {
         return null;
     }
+
+    @Override
+    public void notifyDexLoad(String loadingPackageName,
+            java.util.Map<String, String> classLoaderContextMap, String loaderIsa) {
+        // No dexopt to schedule.
+    }
+
+    @Override
+    public ParceledListSlice queryProperty(String propertyName, int componentType) {
+        // Manifest <property> tags are not indexed: none is found.
+        return new ParceledListSlice<>(java.util.Collections.emptyList());
+    }
 }

@@ -10,7 +10,9 @@
 # Android: binderd (the binder driver) and servicemanager for a binder device
 # of this run, then com.gesher.server.SystemServer with the APK, then the app
 # in another process, which gets the package and every service through
-# servicemanager; the three are stopped when the app exits.
+# servicemanager and attaches to the server, which drives its activity
+# (docs/decisions/0024-services-app-process.md); the three are stopped when
+# the app exits.
 #
 # gesher-app.cmd runs this script. Like gesher.ps1, the APK must be on the same
 # drive as Gesher (ART's class paths are ':'-separated, so paths go without the

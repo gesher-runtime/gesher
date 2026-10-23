@@ -54,11 +54,13 @@ public final class ApkPackage {
     private final List<String> mLauncherActivities = new ArrayList<>();
     private final long mInstallTime = System.currentTimeMillis();
     private String mDataDir;
+    private final boolean mHasCode;
 
     private ApkPackage(String apkPath, ParsedPackage parsed) {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
+        mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
         for (ParsedActivity a : parsed.getActivities()) {
             for (ParsedIntentInfo info : a.getIntents()) {
                 IntentFilter filter = info.getIntentFilter();
@@ -254,6 +256,10 @@ public final class ApkPackage {
         ai.uid = Process.myUid();  // every gesher process has the same uid
         ai.enabled = true;
         ai.flags |= ApplicationInfo.FLAG_INSTALLED;
+        if (mHasCode) {
+            // As installed packages carry it: LoadedApk loads code only with it.
+            ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
+        }
         ai.dataDir = mDataDir;
         ai.credentialProtectedDataDir = mDataDir;
         ai.deviceProtectedDataDir = mDataDir;
@@ -265,6 +271,15 @@ public final class ApkPackage {
         c.packageName = ai.packageName;
         if (c.processName == null) {
             c.processName = ai.processName;
+        }
+    }
+
+    /** Whether the APK carries code: a classes.dex. */
+    private static boolean hasDex(String apkPath) {
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(apkPath)) {
+            return zip.getEntry("classes.dex") != null;
+        } catch (java.io.IOException e) {
+            return false;
         }
     }
 
