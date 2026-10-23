@@ -30,7 +30,7 @@ jobs:
           ccache-key: libs
 
       - name: Build the tests
-        run: ninja -C out core_libs_tests
+        run: ninja -C out -k 0 core_libs_tests
 
       - uses: actions/upload-artifact@v4
         with:
