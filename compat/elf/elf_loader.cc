@@ -20,6 +20,7 @@
 
 #include <windows.h>
 
+#include "fs_rewrite.h"
 #include "tls.h"
 
 // DT_RELR's entry type; this elf.h predates it.
@@ -111,6 +112,9 @@ struct Library {
 
   // TLS (PT_TLS).
   TlsModule tls{};
+
+  // What the %fs rewrite did (fs_rewrite.h).
+  FsRewriteStats fs{};
 
   // The program headers inside the mapping, for dl_iterate_phdr.
   const Elf64_Phdr* phdr = nullptr;
@@ -569,6 +573,11 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
         if (rs.lib) def = rs.lib;
         sym_value = rs.sym ? rs.sym->st_value : 0;
       }
+      if (!def->tls.is_static) {
+        Fail(error, lib->name + ": initial-exec TLS of " + def->name +
+                        ", whose TLS did not fit the static TLS reserve");
+        return false;
+      }
       int64_t tp_off = TlsTpOffset(def->tls) + static_cast<int64_t>(sym_value) + r.r_addend;
       *where = static_cast<uint64_t>(tp_off);
       break;
@@ -650,6 +659,13 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   }
   ParseDynamic(lib, data);
 
+  // %fs accesses become %gs ones before any of the object's code runs (IFUNC
+  // resolvers run during relocation).
+  if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, &lib->fs, error)) {
+    delete lib;
+    return nullptr;
+  }
+
   {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (lib->tls.present) TlsAssignModule(&lib->tls);
@@ -663,6 +679,8 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   if (!Relocate(lib, error)) {
     return nullptr;
   }
+  // The relocated TLS image goes into threads that already have a block.
+  if (lib->tls.present) TlsPublishModule(&lib->tls);
   if (!ProtectSegments(lib, data, error)) {
     return nullptr;
   }
@@ -836,5 +854,18 @@ void Close(Library* library) {
 }
 
 bool SetupThreadTls() { return TlsSetupThread(); }
+
+FsRewriteCounts FsRewrites(Library* library) {
+  FsRewriteCounts c;
+  if (library == nullptr) return c;
+  c.stack_guard = library->fs.stack_guard;
+  c.thread_pointer = library->fs.thread_ptr;
+  c.stubbed = library->fs.stubbed;
+  c.trapped = library->fs.trapped;
+  c.decode_errors = library->fs.decode_errors;
+  c.bytes_decoded = library->fs.bytes_decoded;
+  c.used_unwind_info = library->fs.used_fdes;
+  return c;
+}
 
 }  // namespace gesher::elf
