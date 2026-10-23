@@ -18,6 +18,7 @@
 
 #include <pthread.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include <android_runtime/AndroidRuntime.h>
@@ -143,6 +144,82 @@ static const JNINativeMethod gProcessMethods[] = {
     {"sendSignalQuiet", "(II)V", GESHER_JNI(Process_sendSignal)},
 };
 
+// --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------
+// The real android_os_PerfettoTrace.cpp is the perfetto SDK, which Gesher does
+// not build (tracing_perfetto_stub.cc). These natives keep the Java side
+// working with tracing off: categories exist but are never enabled, and
+// sessions record nothing. MessageQueue builds PerfettoTrace's categories on
+// its first message.
+
+static void PerfettoCategory_free(void* ptr) {
+  free(ptr);
+}
+
+static jlong PerfettoCategory_init(JNIEnv*, jclass, jstring, jstring, jstring) {
+  return reinterpret_cast<jlong>(calloc(1, 16));
+}
+
+static jlong PerfettoCategory_delete() {
+  return reinterpret_cast<jlong>(&PerfettoCategory_free);
+}
+
+static void PerfettoCategory_register(jlong) {}
+
+static jboolean PerfettoCategory_isEnabled(jlong) {
+  return JNI_FALSE;
+}
+
+static jlong PerfettoCategory_getExtraPtr(jlong) {
+  return 0;
+}
+
+static const JNINativeMethod gPerfettoCategoryMethods[] = {
+    {"native_init", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)J",
+     GESHER_JNI(PerfettoCategory_init)},
+    {"native_delete", "()J", GESHER_JNI(PerfettoCategory_delete)},
+    {"native_register", "(J)V", GESHER_JNI(PerfettoCategory_register)},
+    {"native_unregister", "(J)V", GESHER_JNI(PerfettoCategory_register)},
+    {"native_is_enabled", "(J)Z", GESHER_JNI(PerfettoCategory_isEnabled)},
+    {"native_get_extra_ptr", "(J)J", GESHER_JNI(PerfettoCategory_getExtraPtr)},
+};
+
+static jlong PerfettoTrace_getProcessTrackUuid() {
+  return 0;
+}
+
+static jlong PerfettoTrace_getThreadTrackUuid(jlong) {
+  return 0;
+}
+
+static void PerfettoTrace_activateTrigger(JNIEnv*, jclass, jstring, jint) {}
+
+static void PerfettoTrace_register(JNIEnv*, jclass, jboolean) {}
+
+static jlong PerfettoTrace_startSession(JNIEnv*, jclass, jboolean, jbyteArray) {
+  return 0;
+}
+
+static jbyteArray PerfettoTrace_stopSession(JNIEnv* env, jclass, jlong) {
+  return env->NewByteArray(0);
+}
+
+static const JNINativeMethod gPerfettoTraceMethods[] = {
+    {"native_get_process_track_uuid", "()J", GESHER_JNI(PerfettoTrace_getProcessTrackUuid)},
+    {"native_get_thread_track_uuid", "(J)J", GESHER_JNI(PerfettoTrace_getThreadTrackUuid)},
+    {"native_activate_trigger", "(Ljava/lang/String;I)V",
+     GESHER_JNI(PerfettoTrace_activateTrigger)},
+    {"native_register", "(Z)V", GESHER_JNI(PerfettoTrace_register)},
+    {"native_start_session", "(Z[B)J", GESHER_JNI(PerfettoTrace_startSession)},
+    {"native_stop_session", "(J)[B", GESHER_JNI(PerfettoTrace_stopSession)},
+};
+
+static int register_android_os_PerfettoTrace(JNIEnv* env) {
+  RegisterMethodsOrDie(env, "android/os/PerfettoTrace", gPerfettoTraceMethods,
+                       NELEM(gPerfettoTraceMethods));
+  return RegisterMethodsOrDie(env, "android/os/PerfettoTrace$Category", gPerfettoCategoryMethods,
+                              NELEM(gPerfettoCategoryMethods));
+}
+
 // --- gesher.NativeCanary --------------------------------------------------------
 // @CriticalNative ABI canaries for the managed-code boundary: enough integer
 // and floating-point arguments that a System V / Microsoft calling-convention
@@ -209,6 +286,9 @@ static const struct {
     {"android_os_SystemProperties", "android/os/SystemProperties",
      register_android_os_SystemProperties},
     {"android_os_Trace", "android/os/Trace", register_android_os_Trace},
+    // Needs a class the tests' PerfettoTrace stand-in lacks.
+    {"android_os_PerfettoTrace", "android/os/PerfettoTrackEventExtra",
+     register_android_os_PerfettoTrace},
     {"android_os_Process", "android/os/Process", register_android_os_Process},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
