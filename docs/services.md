@@ -23,74 +23,75 @@ every transaction on stderr.
 ## Status and next steps
 
 ### Done and verified
-- **Locally** (WinLibs g++, Windows 11; not the CI toolchain): `binder_probe`
-  passes end to end against `binderd` — context manager, a call with a Binder
-  object, the nested call back into the waiting client thread, the server's
-  object and the client's own object in the reply (the latter arriving as the
-  client's pointer), `BR_INCREFS`/`BR_ACQUIRE` to the owner, death
-  notification after the server exits, `BR_DEAD_REPLY` afterwards,
-  `BC_CLEAR_DEATH_NOTIFICATION`. Local harness: scratchpad shims for
-  open/ioctl/mmap (not committed).
-- **CI, compile only**: run 39941566620 compiled gesher-base with binder.cc,
-  binderd, binder_probe and servicemanager's sources with clang -Werror; it
-  failed linking servicemanager (`androidSetThreadName`, fixed since by
-  `compat/binder/thread_name.cc`). Run 39942847956: the framework job passed
-  (so `services-tests.dex`, BinderTest, compiles against framework.jar's
-  classes); the build job failed linking **dalvikvm.exe** (below). No
-  Windows test of this track has run yet.
-
-### Half-done: the build is broken on this branch
-- dalvikvm.exe fails to link: `android::execute(...)`,
-  `android::CommandResult::toString()`, `~CommandResult()` undefined. They
-  come from libbinder's `ServiceManagerHost.cpp` (RPC service manager over
-  adb, BINDER_SERVICEMANAGEMENT_DELEGATION_SUPPORT off bionic), now pulled
-  into dalvikvm by the newly registered `android_os_ServiceManagerNative`
-  (→ `getJavaServicemanagerImpl...` → `BackendUnifiedServiceManager` →
-  `IServiceManager.cpp`). Fix: add libbinder's `UtilsHost.cpp` to
-  `cmake/aosp/binder.cmake` (it defines `execute`/`CommandResult`; check it
-  builds on gesher-base: it uses fork/pipe/poll), or drop the
-  ServiceManagerNative registration and set
-  `ServiceManager.sServiceManager = IServiceManager.Stub.asInterface(
-  BinderInternal.getContextObject())` from Java instead. Until then the
-  branch does not build; the last commit that builds dalvikvm is
-  78b4ad8 (phase3/base) — revert the `android_runtime.cc`/`framework.cmake`
-  registration lines to get a building tree with only the native pieces.
+- **CI run 39954786992** (ci, both windows-2022 and windows-2025; commit 9ba0f5e):
+  the branch builds again, every Phase 2 check still passes (gesher-app takes
+  lifecycle.apk to onResume, installer job included), and the three checks of
+  `50-services.ps1` pass:
+  - `PASS  binder: /dev/binder across processes (binderd, raw ioctls)`
+  - `PASS  binder: servicemanager and libbinder across processes`
+  - `PASS  binder: two dalvikvm processes, ServiceManager, a Binder passed back, death`
+  The first two already passed in run 39945861311 (which failed only on
+  BinderTest, below).
+- The dalvikvm link fix: libbinder's `UtilsHost.cpp` is built
+  (`cmake/aosp/binder.cmake`), defining `execute`/`CommandResult` for
+  `ServiceManagerHost.cpp` (pulled into dalvikvm by the registered
+  `android_os_ServiceManagerNative`). `execute` is never reached (it serves
+  the adb RPC service manager); fork fails with ENOSYS on gesher-base, so it
+  would just return nothing. gesher-base's `sys/wait.h` gained
+  `WIFCONTINUED`. This keeps the framework's own Java path
+  (`ServiceManagerProxy` → native `getNativeServiceManager` →
+  `BackendUnifiedServiceManager`, patch 0002) rather than overriding
+  `ServiceManager.sServiceManager` from Java.
+- BinderTest loads `$ANDROID_ROOT/build.prop` into the system properties
+  first, as gesher-app does: the first `BinderProxy.transact` initializes
+  `android.os.Build` (through AppOpsManager → ActivityThread), whose static
+  initializer needs the ABI list (run 39945861311 died there with
+  `ArrayIndexOutOfBoundsException` at Build.java:325 in both processes).
+  `50-services.ps1` copies build.prop into `$root/system` itself.
+- Local runs of `50-services.ps1` against CI's binaries (windows-x64 of run
+  39945861311, framework artifact of run 39947844568) pass all three checks
+  on Windows 11 too.
 
 ### Next steps
-1. Get the three 50-services checks green (binder_probe, libbinder_probe,
-   BinderTest). Likely trouble spots: clang -Werror in the new files; the
-   libbinder_probe's AIDL usage (`checkService2`/`Service` union); the Java
-   client's `ServiceManagerProxy` → `getNativeServiceManager` →
-   `BackendUnifiedServiceManager` path (patch 0002); thread attach for
-   `BR_SPAWN_LOOPER` threads (`_beginthreadex` threads attaching to ART).
-2. Then tick the roadmap's "Binder across processes" box (only after CI).
-3. System services (roadmap item 2), incremental, each verified:
-   a. Real APK parsing: replace `app/java/com/gesher/app/AppManifest.java`
-      with `com.android.internal.pm.parsing.PackageParser2` /
-      `com.android.internal.pm.pkg.parsing.ParsingPackageUtils` (in
-      framework.jar) and `PackageInfoCommonUtils`/`AppInfoUtils` to build
-      PackageInfo/ApplicationInfo/ActivityInfo; keep lifecycle.apk's onResume
-      check green.
+1. System services (roadmap item 2), incremental, each verified in CI:
+   a. Real APK parsing: replace `app/java/com/gesher/app/AppManifest.java`'s
+      reader with `com.android.internal.pm.parsing.PackageParser2`
+      (`ParsingPackageUtils`, in framework.jar) and
+      `PackageInfoCommonUtils.generate` for PackageInfo/ApplicationInfo/
+      ActivityInfo; keep lifecycle.apk's onResume check green. A draft
+      (untested, never built) is commit 7ac0162 on this branch, reverted in
+      837cac7 when the scope of this relay was cut: a `PackageParser2.Callback`
+      enforcing no compat change, the launcher activity from the parsed
+      intent filters, `PackageInfoCommonUtils.generate` with every
+      component, the old reader kept as a fallback that says so on stderr,
+      and a `parsed by PackageParser2` log line a check can look for.
    b. A system_server-lite process (Java, in gesher-app.jar, e.g.
       `com.gesher.server.SystemServer`) registering `package`, `activity`,
       `activity_task`, `window`, `display`, `user` with servicemanager over
-      binderd, moving the `StandIn*` implementations there.
-   c. The app process via `ActivityThread.main`-like attach:
+      binderd, moving the `StandIn*` implementations there. The stand-ins
+      are `IFoo.Default` subclasses behind a `java.lang.reflect.Proxy`; to
+      serve them across processes they need a concrete `IFoo.Stub` (abstract,
+      so it can't be proxied): e.g. a build-time generator in app/build.sh
+      that reflects over the AIDL interfaces in framework.jar's classes and
+      writes `class FooStub extends IFoo.Stub` delegating every method.
+   c. The app process via `ActivityThread.attach(false, startSeq)`:
       `IActivityManager.attachApplication` → `bindApplication` → the server
       schedules `ClientTransaction` (`LaunchActivityItem`,
       `ResumeActivityItem`) on `IApplicationThread.scheduleTransaction`, so the
-      real `handleLaunchActivity` path runs. Real AMS/ATMS (services.jar) are
-      out of reach for now (they need most of system_server); the server side
+      real `handleBindApplication`/`handleLaunchActivity` path runs. Expect
+      trouble in the real `handleBindApplication` (LoadedApk's class loader
+      goes through `ClassLoaderFactory`'s native
+      `createClassloaderNamespace`, not registered; hwui and ddm setup).
+      Real AMS/ATMS (services.jar) are out of reach for now; the server side
       is Gesher's, the client side the framework's.
    d. A launcher (`gesher-app.cmd` multi-process mode) that starts binderd,
       servicemanager and the server.
-4. `.apk` file association (roadmap item 3): `tools/package/gesher.iss`
-   `[Registry]` entries under HKCU\Software\Classes (`.apk` →
-   `Gesher.Apk`, open command `"{app}\gesher-app.cmd" "%1"`,
-   `uninsdeletekey`), and in ci.yml's package job: check the keys after
-   install, run the command line from the registry on lifecycle.apk and
-   expect `gesher-app: done`, check the keys are gone after uninstall. Not
-   started.
+2. `.apk` file association (roadmap item 3): moved to a separate branch by
+   the coordinator. A draft is commit 25bc4b1 on this branch (reverted in
+   837cac7): `[Registry]` in `tools/package/gesher.iss` (`.apk` →
+   `Gesher.Apk` and `OpenWithProgids` under HKCU\Software\Classes, open
+   command `"{app}\gesher-app.cmd" "%1"`, `ChangesAssociations=yes`) and
+   package-job checks in ci.yml; never run in CI.
 
 ### Open problems, dead ends ruled out
 - `access("/dev/binder")` uses the CRT's `_access` (gesher-base has no

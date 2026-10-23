@@ -149,7 +149,7 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 4 checklist
 
-- [ ] Binder across processes: `/dev/binder` over Windows IPC, with
+- [x] Binder across processes: `/dev/binder` over Windows IPC, with
       `servicemanager`
 - [ ] The framework's own system services (PackageManager parses the APK,
       ActivityManager starts the Activity) in place of gesher-app's stand-ins
