@@ -33,15 +33,16 @@ small reader of Gesher's own.
 - **The client side is the framework's**: `gesher-app --system-server` uses
   `ServiceManager` → servicemanager → the server, with no service cache of
   its own. One exception, `DisplayManagerGlobal` without
-  `getOverlaySupport` (OverlayProperties' natives are missing).
+  `getOverlaySupport` (OverlayProperties' natives are missing); removed in
+  0018, which gives those natives stand-ins.
 - **Opt-in multi-process mode**: the single-process mode stays the default
   of `gesher-app.cmd` (and the `.apk` association); `--system-server` makes
   the launcher start binderd, servicemanager and the server for the run.
 
 ## Consequences
-- An app's lifecycle is still driven by gesher-app (`GesherAppDriver`), not
-  by the server: attaching the app (`attachApplication`, `bindApplication`,
-  `ClientTransaction`s) is the next step.
+- An app's lifecycle was still driven by gesher-app (`GesherAppDriver`), not
+  by the server; attaching the app (`attachApplication`, `bindApplication`,
+  `ClientTransaction`s) followed in [0018](0018-services-app-process.md).
 - Every service call of the app is a binder round trip through binderd in
   multi-process mode; lifecycle.apk launches in about the same time.
 - Building gesher-app needs JDK 21 (framework.jar's class files) for the

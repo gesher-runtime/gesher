@@ -160,9 +160,10 @@ needs: [framework-build.md](framework-build.md).
         `gesher-app --system-server` uses them across processes, and the
         launcher starts binderd, servicemanager and the server (ci runs
         39984218373, 39986921774)
-  - [ ] The app attached to the server (`attachApplication`,
+  - [x] The app attached to the server (`attachApplication`,
         `bindApplication`, `ClientTransaction`s), the server driving the
-        lifecycle
+        lifecycle to onResume and finishing it (pause, stop, destroy) in
+        `gesher-app --system-server` (ci run 40001194804)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 
