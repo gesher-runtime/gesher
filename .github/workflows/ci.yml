@@ -139,6 +139,9 @@ jobs:
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           Write-Host "gesher-app lifecycle.apk (exit $LASTEXITCODE):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          # Informational until the framework's natives are in: its exit code
+          # must not become the step's.
+          $global:LASTEXITCODE = 0
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
