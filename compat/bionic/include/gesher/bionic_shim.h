@@ -13,4 +13,9 @@ void InstallBionicShim();
 // The shim's System V entry point (or data object) for `name`, or nullptr.
 void* LookupBionicSymbol(const char* name);
 
+// Adds (or replaces) a symbol the shim provides, e.g. JNI_GetCreatedJavaVMs
+// from the JNI bridge (compat/bionic/jni_bridge.cc). Call before the .so that
+// imports it is loaded.
+void AddBionicSymbol(const char* name, void* address);
+
 }  // namespace gesher::bionic

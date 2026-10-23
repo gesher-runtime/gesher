@@ -921,6 +921,8 @@ void* LookupBionicSymbol(const char* name) {
   return it != table.end() ? it->second : nullptr;
 }
 
+void AddBionicSymbol(const char* name, void* address) { Table()[name] = address; }
+
 void InstallBionicShim() {
   Table();
   gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
