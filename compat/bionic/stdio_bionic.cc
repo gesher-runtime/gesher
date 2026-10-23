@@ -471,6 +471,22 @@ int BIONIC_SYSV Fputc(int c, void* f) { return std::fputc(c, F(f)); }
 int BIONIC_SYSV Putchar(int c) { return std::putchar(c); }
 int BIONIC_SYSV Puts(const char* s) { return std::puts(s); }
 char* BIONIC_SYSV Fgets(char* s, int n, void* f) { return std::fgets(s, n, F(f)); }
+[[noreturn]] void StdioFortify(const char* what) {
+  std::fprintf(stderr, "gesher bionic: FORTIFY: %s: prevented buffer overflow\n", what);
+  std::abort();
+}
+char* BIONIC_SYSV FgetsChk(char* s, int n, void* f, size_t buf_size) {
+  if (n < 0 || static_cast<size_t>(n) > buf_size) StdioFortify("fgets");
+  return std::fgets(s, n, F(f));
+}
+size_t BIONIC_SYSV FreadChk(void* buf, size_t size, size_t n, void* f, size_t buf_size) {
+  if (size != 0 && n > buf_size / size) StdioFortify("fread");
+  return std::fread(buf, size, n, F(f));
+}
+size_t BIONIC_SYSV FwriteChk(const void* buf, size_t size, size_t n, void* f, size_t buf_size) {
+  if (size != 0 && n > buf_size / size) StdioFortify("fwrite");
+  return std::fwrite(buf, size, n, F(f));
+}
 int BIONIC_SYSV Fgetc(void* f) { return std::fgetc(F(f)); }
 int BIONIC_SYSV Getchar() { return std::getchar(); }
 int BIONIC_SYSV Ungetc(int c, void* f) { return std::ungetc(c, F(f)); }
@@ -823,6 +839,9 @@ void RegisterStdio(SymbolTable& t) {
   E("putchar", Putchar);
   E("puts", Puts);
   E("fgets", Fgets);
+  E("__fgets_chk", FgetsChk);
+  E("__fread_chk", FreadChk);
+  E("__fwrite_chk", FwriteChk);
   E("fgetc", Fgetc);
   E("getc", Fgetc);
   E("getchar", Getchar);
