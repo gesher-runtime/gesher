@@ -232,8 +232,8 @@ Socket Open(Family family, Type type, int protocol) {
     // Linux's default (net.ipv6.bindv6only = 0): an IPv6 socket also takes
     // IPv4 peers as v4-mapped addresses. Windows defaults to IPv6 only.
     DWORD v6only = 0;
-    setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&v6only),
-               sizeof(v6only));
+    Api().setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&v6only),
+                     sizeof(v6only));
   }
   if (win_type == SOCK_DGRAM) {
     // Windows fails the next recv with WSAECONNRESET when an ICMP "port
