@@ -1,0 +1,50 @@
+diff --git a/libs/minikin/Hyphenator.cpp b/libs/minikin/Hyphenator.cpp
+--- a/libs/minikin/Hyphenator.cpp
++++ b/libs/minikin/Hyphenator.cpp
+@@ -27,7 +27,10 @@
+ #include "FeatureFlags.h"
+ #include "MinikinInternal.h"
+ #include "minikin/Characters.h"
++// Gesher: no Rust toolchain; hyphenation patterns are read by the C++ code.
++#ifndef GESHER
+ #include "minikin_cxx_bridge.rs.h"
++#endif
+ 
+ namespace minikin {
+ 
+@@ -99,6 +102,7 @@
+     }
+ };
+ 
++#ifndef GESHER
+ class HyphenatorRust : public Hyphenator {
+ public:
+     HyphenatorRust(const uint8_t* patternData, size_t dataSize, size_t minPrefix, size_t minSuffix,
+@@ -116,20 +120,27 @@
+ private:
+     ::rust::Box<rust::Hyphenator> mHyphenator;
+ };
++#endif  // GESHER
+ 
+ // static
+ Hyphenator* Hyphenator::loadBinary(const uint8_t* patternData, size_t dataSize, size_t minPrefix,
+                                    size_t minSuffix, const std::string& locale) {
++#ifndef GESHER
+     if (features::rust_hyphenator()) {
+         return new HyphenatorRust(patternData, dataSize, minPrefix, minSuffix, locale);
+     }
++#endif
+     return HyphenatorCXX::loadBinary(patternData, dataSize, minPrefix, minSuffix, locale);
+ }
+ 
+ Hyphenator* Hyphenator::loadBinaryForRust(const uint8_t* patternData, size_t dataSize,
+                                           size_t minPrefix, size_t minSuffix,
+                                           const std::string& locale) {
++#ifdef GESHER
++    return HyphenatorCXX::loadBinary(patternData, dataSize, minPrefix, minSuffix, locale);
++#else
+     return new HyphenatorRust(patternData, dataSize, minPrefix, minSuffix, locale);
++#endif
+ }
+ 
+ // static

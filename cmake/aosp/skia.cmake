@@ -13,7 +13,7 @@ set(GESHER_GRAPHICS_TARGETS)
 macro(gesher_graphics_lib target)
   list(APPEND GESHER_GRAPHICS_TARGETS ${target})
   target_compile_options(${target} PRIVATE -g0)
-  # Built by .github/workflows/graphics.yml (target gesher_graphics), or as
+  # Built by .github/workflows/graphics.yml (target graphics_all), or as
   # what dalvikvm links needs them; not by every `ninja`.
   set_target_properties(${target} PROPERTIES EXCLUDE_FROM_ALL ON)
 endmacro()
@@ -84,6 +84,9 @@ target_include_directories(skia BEFORE PUBLIC "${CMAKE_BINARY_DIR}/gen/skia")
 # Soong's Windows toolchain does not define NOGDI; Skia's Windows ports use GDI.
 target_compile_options(skia PRIVATE -UNOGDI
   "SHELL:-include ${CMAKE_SOURCE_DIR}/compat/hwui/skia_prefix.h")
+# skcms's AVX2 and AVX-512 paths, off as on Android (their sources are not in
+# Android.bp; skcms_internals.h turns them off only for ANDROID).
+target_compile_definitions(skia PRIVATE SKCMS_DISABLE_HSW=1 SKCMS_DISABLE_SKX=1)
 # Skia's headers have MSVC pragmas (#pragma warning) clang does not know.
 target_compile_options(skia INTERFACE -Wno-unknown-pragmas)
 target_link_libraries(skia PUBLIC ft2 png jpeg webp_decode webp_encode wuffs expat z cutils log
@@ -98,4 +101,3 @@ target_link_libraries(skia_probe PRIVATE skia)
 target_compile_options(skia_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(skia_probe PROPERTIES EXCLUDE_FROM_ALL ON)
 
-add_custom_target(gesher_graphics DEPENDS ${GESHER_GRAPHICS_TARGETS} skia_probe)
