@@ -137,3 +137,21 @@ shutdown` (the device's three processes gone), the `.apk` open command (which
 starts the device again) and checks that the device still runs after that
 command's console is gone; after uninstalling, that its processes are gone and
 `%LOCALAPPDATA%\Gesher` removed.
+
+The Start menu shortcuts (ci run 40024847287, package job on windows-2022):
+the first `gesher-app lifecycle.apk` makes `Gesher Apps\Gesher Lifecycle.lnk`
+and the app process reports its AppUserModelID; `gesher-app uninstall
+com.gesher.lifecycle` removes the shortcut and the icon; `gesher-app install
+lifecycle.apk` makes it again, and the job reads it with `WScript.Shell`
+(target `gesher-app.cmd`, arguments `launch com.gesher.lifecycle`, working
+folder, icon) and its `System.AppUserModel.ID` through the link's
+`IPropertyStore` (`tests/windows/shell/ShellChecks.ps1`), checks the `.ico`
+(ten sizes, DIBs and PNGs, System.Drawing reads them, the xxxhdpi picture's
+red at 256 pixels and transparent corners), runs the shortcut's command line
+(`gesher-app: done`), installs components.apk (an adaptive icon: white
+foreground, blue background, masked corners) and checks `Gesher.Apk`'s
+`DefaultIcon` and the Gesher Hello entry's icon. After uninstalling Gesher,
+`Gesher Apps` is gone and a file of the job's in the Start menu is still
+there. `tests/windows/tracks/55-shell.ps1` checks the label and the icon of
+lifecycle.apk, components.apk and peer.apk (the framework's default icon) on
+both test runners.
