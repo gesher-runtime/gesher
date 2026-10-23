@@ -39,6 +39,7 @@ enum class PathKind {
   kZero,     // /dev/zero
   kRandom,   // /dev/random, /dev/urandom
   kCmdline,  // /proc/self/cmdline
+  kBinder,   // /dev/binder, when a binderd serves $GESHER_BINDER (binder.cc)
   kMissing,  // any other name under /dev, /proc or /sys
 };
 PathKind MapPath(const char* path, std::wstring* windows);

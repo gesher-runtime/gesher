@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
@@ -213,12 +214,15 @@ int sched_setparam(pid_t, const struct sched_param*) { return 0; }
 // --- ioctl, wait --------------------------------------------------------------
 
 // FIONREAD and FIONBIO, the ioctls Android's Java libraries use on files,
-// pipes and sockets; there are no device ioctls (ENOTTY).
+// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc),
+// others fail with ENOTTY.
 int ioctl(int fd, unsigned long request, ...) {
   va_list args;
   va_start(args, request);
   int* argp = va_arg(args, int*);
   va_end(args);
+  int binder_result;
+  if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);

@@ -30,6 +30,8 @@
 #include <mutex>
 #include <vector>
 
+#include "binder_internal.h"
+
 namespace {
 
 struct Region {
@@ -233,9 +235,17 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   }
   length = RoundUp(length, s.page_size);
   std::lock_guard<std::mutex> guard(s.lock);
-  void* result = ((flags & MAP_ANONYMOUS) != 0 || fd == -1)
-                     ? MapAnonymous(s, addr, length, prot, flags)
-                     : MapFile(s, addr, length, prot, flags, fd, offset);
+  void* result;
+  if ((flags & MAP_ANONYMOUS) != 0 || fd == -1) {
+    result = MapAnonymous(s, addr, length, prot, flags);
+  } else if (gesher::IsBinderFd(fd)) {
+    // /dev/binder's receive buffer: memory binder.cc copies the process's
+    // incoming transactions into, read-only to the process on Linux.
+    result = MapAnonymous(s, addr, length, PROT_READ | PROT_WRITE, flags & ~MAP_SHARED);
+    if (result != MAP_FAILED) gesher::SetBinderMapping(fd, result, length);
+  } else {
+    result = MapFile(s, addr, length, prot, flags, fd, offset);
+  }
   TRACE("mmap(%p, 0x%zx, prot=%d, flags=0x%x, fd=%d) = %p\n", addr, length, prot, flags, fd,
         result);
   return result;
