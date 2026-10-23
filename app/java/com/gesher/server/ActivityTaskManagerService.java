@@ -33,6 +33,8 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.view.Display;
 import android.window.ActivityWindowInfo;
+import android.window.IWindowContainerToken;
+import android.window.WindowContainerToken;
 
 import com.gesher.app.DeviceProfile;
 
@@ -98,6 +100,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String launchedFromPackage;
         final long startTime = SystemClock.uptimeMillis();
         ProcessRecord app;
+        /** What TaskInfo calls the task's WindowContainerToken; nothing stands behind it. */
+        final WindowContainerToken taskToken =
+                new WindowContainerToken(new IWindowContainerToken.Stub() {});
         State state = State.INITIALIZING;
         boolean idle;
         boolean finishing;
@@ -244,6 +249,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 t.isRunning = r.app != null;
                 t.displayId = Display.DEFAULT_DISPLAY;
                 t.userId = 0;
+                t.configuration.setTo(DeviceProfile.configuration());
+                t.token = r.taskToken;  // the task's window container (none of its own)
                 tasks.add(t);
             }
         }
@@ -545,7 +552,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     // --- reports from the app (ActivityClientController) --------------------------------
 
     void activityResumed(ActivityRecord r) {
-        setState(r, State.RESUMED);
+        synchronized (this) {
+            // A finish may already be on its way (finish() in onResume).
+            if (r.state == State.LAUNCHING) r.state = State.RESUMED;
+            notifyAll();
+        }
         SystemServer.log("activityResumed: " + r.name());
     }
 

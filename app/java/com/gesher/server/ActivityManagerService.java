@@ -66,6 +66,26 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     @Override
+    public boolean handleApplicationWtf(android.os.IBinder app, String tag, boolean system,
+            android.app.ApplicationErrorReport.ParcelableCrashInfo crashInfo,
+            int immediateCallerPid) {
+        SystemServer.log("wtf from pid " + Binder.getCallingPid() + ": " + tag + ": "
+                + (crashInfo != null ? crashInfo.exceptionMessage : ""));
+        return false;  // the process is not killed
+    }
+
+    @Override
+    public void setRenderThread(int tid) {
+        // No scheduling policies to apply.
+    }
+
+    @Override
+    public void reportOptimizationInfo(android.os.IBinder app, String compilerFilter,
+            String compilationReason) {
+        // Nothing records dexopt state.
+    }
+
+    @Override
     public void attachApplication(IApplicationThread app, long startSeq) {
         mAtm.attachApplication(app, Binder.getCallingPid());
     }

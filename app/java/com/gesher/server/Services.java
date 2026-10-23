@@ -178,6 +178,12 @@ public final class Services {
      * call answers its default (no IME, nothing shown).
      */
     public static final class InputMethodManager extends IInputMethodManager.Default {
+        @Override
+        public void addClient(com.android.internal.inputmethod.IInputMethodClient client,
+                com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
+                int untrustedDisplayId) {
+            // No input method will ever bind to it.
+        }
     }
 
     /** user: UserManagerService, with the system user, running and unlocked. */
