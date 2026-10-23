@@ -123,7 +123,7 @@ needs: [framework-build.md](framework-build.md).
 - [x] Code generation for the framework: AIDL, HIDL, protos, statslog,
       sysprop, XSD, event log tags
 - [x] `framework.jar` compiles (javac, no errors) and is dexed (D8), in CI
-- [ ] `framework.jar` on the boot class path, tested on Windows
+- [x] `framework.jar` on the boot class path, tested on Windows (FrameworkSmoke)
 - [x] `epoll` and `eventfd` in gesher-base, for `Looper`
       (`probes/posix/epoll_probe.cc`)
 - [ ] libutils, libcutils and libandroidfw in full
