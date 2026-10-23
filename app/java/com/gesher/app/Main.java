@@ -203,7 +203,10 @@ public final class Main {
             }
             log("starting " + intent.toShortString(false, true, true, false)
                     + " through the system server");
-            GesherAppProcess.run(intent, appInfo.targetSdkVersion, !keepTask);
+            // With a window the run ends when it is closed (the task stays).
+            GesherAppProcess.run(intent, appInfo.targetSdkVersion, !keepTask && !window,
+                    !window ? WindowMode.HEADLESS
+                            : showWindow ? WindowMode.WINDOW : WindowMode.HIDDEN);
             log("done");
             return 0;
         } else {

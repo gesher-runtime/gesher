@@ -89,6 +89,8 @@ public final class WindowSession extends IWindowSession.Stub {
         int requestedVisibleTypes = WindowInsets.Type.defaultVisible();
         NativeWindow nativeWindow;
         SurfaceControl surfaceControl;
+        /** The window's end of its input channel pair (the client has the other), or null. */
+        InputChannel inputChannel;
         MessageQueue queue;
         FileDescriptor eventFd;
         boolean drawn;
@@ -224,8 +226,66 @@ public final class WindowSession extends IWindowSession.Stub {
         // Sizes follow the app's layout (relayout), not the user's dragging.
         nw.setResizable(false);
         w.nativeWindow = nw;
+        String icon = appIcon(w.attrs.packageName);
+        boolean iconSet = icon != null && nw.setIcon(icon);
+        attachInput(w);
+        String id = nw.getAppUserModelId();
+        log("window \"" + w.title() + "\": Win32 window 0x" + Long.toHexString(nw.getHwnd())
+                + " in process " + android.os.Process.myPid() + ", AppUserModelID "
+                + (id != null ? id : "none") + ", icon " + (iconSet ? icon : "none"));
         listenForEvents(w);
         return true;
+    }
+
+    /**
+     * The package's icon as a .ico: its Start menu shortcut's (com.gesher.app.shell.AppShell
+     * records it, in the package's data directory under gesher-shell), else null.
+     */
+    private static String appIcon(String packageName) {
+        if (packageName == null) packageName = ActivityThread.currentPackageName();
+        if (packageName == null) return null;
+        try {
+            java.util.Properties shortcut =
+                    com.gesher.app.shell.AppShell.shortcutOf(packageName);
+            String icon = shortcut != null ? shortcut.getProperty("icon") : null;
+            if (icon != null && !icon.isEmpty()) return icon;
+            java.io.File ico = new java.io.File(com.gesher.server.Device.dataDir(),
+                    "data/" + packageName + "/gesher-shell/icon.ico");
+            return ico.isFile() ? com.gesher.server.Zygote.windowsPath(ico.getPath()) : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * The window's input channel pair, as WindowState.openInputChannel makes it: the client's
+     * end goes to ViewRootImpl ({@code outInputChannel}, its WindowInputEventReceiver reads
+     * it), this side keeps the other ({@link AppWindow#inputChannel}) to write the window's
+     * input into. With the stand-in InputChannel natives (no pair) {@code outInputChannel}
+     * stays empty, which they accept.
+     */
+    private static void openInputChannel(AppWindow w, InputChannel outInputChannel) {
+        InputChannel[] pair;
+        try {
+            pair = InputChannel.openInputChannelPair(w.title());
+        } catch (RuntimeException | LinkageError e) {
+            pair = null;
+        }
+        if (pair == null || pair.length != 2 || pair[0] == null || pair[1] == null) return;
+        pair[1].copyTo(outInputChannel);  // ownership moves to the client's InputChannel
+        w.inputChannel = pair[0];
+    }
+
+    /**
+     * INPUT HOOK (docs/graphics.md, "Input", for the input track): once the window has its
+     * Win32 window, its input goes into {@link AppWindow#inputChannel}:
+     * {@code com.gesher.app.input.WindowInput.attach(w.nativeWindow.getHwnd(),
+     * w.inputChannel, options)} (closed in {@link #closeNativeWindow}). Once attached it is
+     * the only reader of the window's event queue: {@link #listenForEvents} must then not
+     * be started, and close/resize/focus come through the options' listener (close →
+     * {@code mCloseHandler.onClose}). Until then nothing writes to the channel.
+     */
+    private void attachInput(AppWindow w) {
     }
 
     private void listenForEvents(AppWindow w) {
@@ -285,6 +345,10 @@ public final class WindowSession extends IWindowSession.Stub {
             w.surfaceControl.release();
             w.surfaceControl = null;
         }
+        if (w.inputChannel != null) {
+            w.inputChannel.dispose();
+            w.inputChannel = null;
+        }
         w.shown = false;
     }
 
@@ -311,8 +375,11 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             mWindows.put(window.asBinder(), w);
         }
-        // No input channel yet: InputDispatcher's channels are not there (outInputChannel
-        // stays empty).
+        // The window's input channel pair (input reaches it once the input track's
+        // WindowInput is attached: attachInput).
+        if (outInputChannel != null) {
+            openInputChannel(w, outInputChannel);
+        }
         if (result != null) {
             layout(w, WindowLayout.UNSPECIFIED_LENGTH, WindowLayout.UNSPECIFIED_LENGTH, result);
         }
