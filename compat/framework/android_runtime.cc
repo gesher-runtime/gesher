@@ -28,6 +28,10 @@ namespace android {
 
 // The register_* functions of the frameworks/base sources built so far
 // (cmake/aosp/framework.cmake); each dies on failure.
+int register_android_content_AssetManager(JNIEnv* env);
+int register_android_content_res_ApkAssets(JNIEnv* env);
+int register_android_content_StringBlock(JNIEnv* env);
+int register_android_content_XmlBlock(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
 int register_android_os_SystemProperties(JNIEnv* env);
@@ -144,33 +148,42 @@ static int register_android_os_Process(JNIEnv* env) {
   return RegisterMethodsOrDie(env, "android/os/Process", gProcessMethods, NELEM(gProcessMethods));
 }
 
-// The canary class exists only in the test dex; with the real framework on
-// the class path there is nothing to register on, which is not an error.
 static int register_gesher_NativeCanary(JNIEnv* env) {
-  jclass clazz = env->FindClass("gesher/NativeCanary");
-  if (clazz == nullptr) {
-    env->ExceptionClear();
-    return 0;
-  }
   return RegisterMethodsOrDie(env, "gesher/NativeCanary", gCanaryMethods, NELEM(gCanaryMethods));
 }
 
+// Each registration with the class it registers on. A class that is not on
+// the class path is skipped, with a log line: the framework's register
+// functions abort when their classes are missing, which with framework.jar
+// never happens, but the tests load stand-ins for a few classes only
+// (tests/dex-natives), and the canary class is never in the framework.
 static const struct {
   const char* name;
+  const char* className;
   int (*registerFunction)(JNIEnv*);
 } gRegJNI[] = {
-    {"android_os_MessageQueue", register_android_os_MessageQueue},
-    {"android_os_SystemClock", register_android_os_SystemClock},
-    {"android_os_SystemProperties", register_android_os_SystemProperties},
-    {"android_os_Trace", register_android_os_Trace},
-    {"android_text_AndroidCharacter", register_android_text_AndroidCharacter},
-    {"android_util_EventLog", register_android_util_EventLog},
-    {"android_util_Log", register_android_util_Log},
-    {"com_android_internal_util_VirtualRefBasePtr",
+    {"android_os_SystemClock", "android/os/SystemClock", register_android_os_SystemClock},
+    {"android_os_SystemProperties", "android/os/SystemProperties",
+     register_android_os_SystemProperties},
+    {"android_os_Trace", "android/os/Trace", register_android_os_Trace},
+    {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
+    {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
+     register_android_text_AndroidCharacter},
+    {"android_util_EventLog", "android/util/EventLog", register_android_util_EventLog},
+    {"android_util_Log", "android/util/Log", register_android_util_Log},
+    {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",
      register_com_android_internal_util_VirtualRefBasePtr},
-    {"android_app_Activity", register_android_app_Activity},
-    {"android_os_Process", register_android_os_Process},
-    {"gesher_NativeCanary", register_gesher_NativeCanary},
+    {"android_content_res_ApkAssets", "android/content/res/ApkAssets",
+     register_android_content_res_ApkAssets},
+    {"android_content_AssetManager", "android/content/res/AssetManager",
+     register_android_content_AssetManager},
+    {"android_content_StringBlock", "android/content/res/StringBlock",
+     register_android_content_StringBlock},
+    {"android_content_XmlBlock", "android/content/res/XmlBlock",
+     register_android_content_XmlBlock},
+    {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
+    {"android_os_Process", "android/os/Process", register_android_os_Process},
+    {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
 }  // namespace android
@@ -182,6 +195,13 @@ extern "C" jint JNI_OnLoad_android_runtime(JavaVM* vm, void*) {
     return JNI_ERR;
   }
   for (const auto& r : android::gRegJNI) {
+    jclass clazz = env->FindClass(r.className);
+    if (clazz == nullptr) {
+      env->ExceptionClear();
+      ALOGI("libandroid_runtime: %s not on the class path; %s skipped", r.className, r.name);
+      continue;
+    }
+    env->DeleteLocalRef(clazz);
     if (r.registerFunction(env) < 0) {
       ALOGE("libandroid_runtime: registering %s failed", r.name);
       return JNI_ERR;

@@ -70,9 +70,9 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
 
 # Runs a class from natives.dex with the interpreter; passes when it exits 0
 # and prints "all passed" (tests/dex-natives).
-function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @()) {
+function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @(), [string[]] $Arguments = @()) {
   $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main 2>&1 | Out-String
+    -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main @Arguments 2>&1 | Out-String
   if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
     Write-Host "PASS  dalvikvm: $Name"
   } else {
@@ -89,10 +89,12 @@ function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @()) {
 # The framework natives (docs/framework-natives.md): libandroid_runtime's
 # registrations and the @CriticalNative ABI canary (step 2), then the
 # framework's message loop over its MessageQueue natives with both queue
-# implementations (step 3).
+# implementations (step 3), then libandroidfw through the asset natives on
+# res.apk (step 4).
 RunDex 'framework natives (libandroid_runtime)' gesher.NativeTest
 RunDex 'Looper, Handler, HandlerThread (legacy MessageQueue)' gesher.LooperTest
 RunDex 'Looper, Handler, HandlerThread (concurrent MessageQueue)' gesher.LooperTest @('-Dgesher.mq.concurrent=true')
+RunDex 'resources: ApkAssets, AssetManager, XmlBlock on res.apk' gesher.ResourcesTest @() @(NoDrive "$Dir/res.apk")
 
 Write-Host "`n$failed test(s) failed"
 exit $failed

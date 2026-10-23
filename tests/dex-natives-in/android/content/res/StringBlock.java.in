@@ -1,0 +1,6 @@
+package android.content.res;
+
+/** Stand-in for the framework class; the natives come from its JNI table (tests/gen_jni_standins.py). */
+public final class StringBlock {
+  // @natives core/jni/android_util_StringBlock.cpp gStringBlockMethods
+}
