@@ -46,7 +46,18 @@ public final class FrameworkNativesTest {
     }
   }
 
-  public static void main(String[] args) throws Exception {
+  public static void main(String[] args) {
+    // A failure must end the process: the HandlerThread would keep it alive.
+    try {
+      run(args);
+    } catch (Throwable t) {
+      t.printStackTrace();
+      System.out.println("FAIL: " + t);
+      System.exit(1);
+    }
+  }
+
+  private static void run(String[] args) throws Exception {
     System.loadLibrary("android_runtime");
     check(Binder.class.getClassLoader() == Object.class.getClassLoader(),
         "android.os.Binder is framework.jar's");
