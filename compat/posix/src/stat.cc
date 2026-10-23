@@ -94,6 +94,7 @@ int stat(const char* path, struct stat* buf) {
     case gesher::PathKind::kNull:
     case gesher::PathKind::kZero:
     case gesher::PathKind::kRandom:
+    case gesher::PathKind::kBinder:
       Clear(buf);
       buf->st_mode = S_IFCHR | 0666;
       return 0;

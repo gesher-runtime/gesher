@@ -1,6 +1,7 @@
 # gesher-base: the Linux/POSIX interfaces AOSP code expects, on Win32.
 # Headers in include/ shadow or extend mingw's; implementations in src/.
 add_library(gesher_posix STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/src/binder.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/crash.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dirent.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dlfcn.cc
@@ -32,3 +33,7 @@ target_include_directories(gesher_posix BEFORE PUBLIC ${CMAKE_CURRENT_LIST_DIR}/
 include_directories(BEFORE ${CMAKE_CURRENT_LIST_DIR}/include)
 link_libraries(gesher_posix)
 target_compile_options(gesher_posix PRIVATE -Wall -Wextra -Werror)
+# /dev/binder (src/binder.cc) speaks the kernel driver's ABI, from bionic's
+# uapi header; searched last, so gesher-base's <linux/*.h> come first.
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
+  COMPILE_OPTIONS "-idirafter;${AOSP_DIR}/bionic/libc/kernel/uapi")

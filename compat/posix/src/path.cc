@@ -24,6 +24,7 @@
 #include <string_view>
 #include <vector>
 
+#include "binder_internal.h"
 #include "internal.h"
 
 namespace gesher {
@@ -54,6 +55,7 @@ PathKind VirtualKind(std::string_view path) {
     if (parts[1] == "null") return PathKind::kNull;
     if (parts[1] == "zero") return PathKind::kZero;
     if (parts[1] == "random" || parts[1] == "urandom") return PathKind::kRandom;
+    if (parts[1] == "binder") return BinderDeviceExists() ? PathKind::kBinder : PathKind::kMissing;
   }
   if (parts.size() == 3 && parts[0] == "proc" && parts[2] == "cmdline" &&
       (parts[1] == "self" || parts[1] == std::to_string(GetCurrentProcessId()))) {
@@ -213,6 +215,7 @@ int OpenPath(const char* path, int flags) {
     case PathKind::kZero:
     case PathKind::kRandom: return OpenDevice(kind, flags);
     case PathKind::kCmdline: return OpenCmdline(flags);
+    case PathKind::kBinder: return OpenBinder(flags);
     case PathKind::kMissing: break;
   }
   return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
