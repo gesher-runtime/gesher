@@ -51,46 +51,60 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   with `ninja -k 0`, printing the errors; job `probe` runs the probe on
   windows-2022 when the workflow runs on its own. Graphics targets are
   `EXCLUDE_FROM_ALL`, so `ninja -C out` in ci.yml's build job does not build
-  them yet. `tests/windows/tracks/30-graphics.ps1` runs skia_probe in
-  ci.yml's test job — but ci.yml does not download the `graphics` artifact
-  yet (see next steps), so do not run ci on this branch before wiring it.
+  them yet. ci.yml runs graphics.yml as its `graphics` job; the test and
+  package jobs `need` it and download artifact `graphics` into `dist`, and
+  `tests/windows/tracks/30-graphics.ps1` runs skia_probe from there.
+- **libc++ strictness** (`gesher_graphics_cxx` in `cmake/aosp/hwui.cmake`):
+  ui_types, hostgraphics and hwui build as C++23 (utils/Trace.h mixes C's
+  `<stdatomic.h>` with `<atomic>`) with `<new>` and `<cmath>` force-included
+  (StrongPointer.h's `std::nothrow`, ui/Rect.h's `std::round`), and without
+  `-Winvalid-specialization`/`-Wdeprecated-declarations` (math/half.h).
+  `surface_control_private.h` comes from frameworks/native/include/private;
+  `compat/hwui/include-native/hardware/hardware.h` stands in for
+  libhardware's header (ui/PixelFormat.h needs only `<system/graphics.h>`).
+  frameworks/base patch 0102: PathIterator's `nextHost` calls the
+  @CriticalNative `next` without JNIEnv/jclass under GESHER, as on a device.
 
 ## Status and next steps
 
 ### Done and CI-verified
 
 - Skia + FreeType/libpng/libjpeg-turbo/libwebp/wuffs compile and link for
-  Windows with llvm-mingw: graphics run 39941675902 built `skia_probe.exe`
-  (artifact `graphics`). Earlier runs: 39940386438 (2 compile errors, fixed),
-  39940952986 (skcms link error, fixed). The probe passes on windows-2022
-  (run 39941675902, job `probe`): raster surface, filled rect, antialiased
-  circle, path, FreeType text (473 glyph pixels), PNG/JPEG/WebP round trips
-  — "all passed".
-- HarfBuzz and minikin (with patch 0001) compile in that run; libhostgraphics
-  is not reached yet (it needs ui_types).
+  Windows with llvm-mingw, and the probe passes on windows-2022: graphics run
+  39941675902 (job `probe`): raster surface, filled rect, antialiased circle,
+  path, FreeType text (473 glyph pixels), PNG/JPEG/WebP round trips — "all
+  passed". Earlier runs: 39940386438, 39940952986.
+- **`graphics_all` compiles** (goal 1): HarfBuzz, minikin, libui-types,
+  libhostgraphics and hwui (with core/jni's host Surface natives,
+  `SharedLib.cc`, `graphics_runtime.cc`) all build as static libraries:
+  graphics run 39947396734, jobs `build` and `probe` green (commit 216f203 on
+  wip/graphics, "Graphics: a Win32 window and its probe, written, not built
+  yet"). Run 39945930947 had the last two errors (math/half.h under C++23).
+  Nothing links hwui yet, so unresolved symbols in it are still unknown.
 
 ### In progress / half-done
 
-- **hwui, minikin, HarfBuzz, libui-types, libhostgraphics** (step 2): the
-  CMake (`cmake/aosp/hwui.cmake`), shims (`compat/hwui/include`),
-  `SharedLib.cc` and `graphics_runtime.cc` are written and committed; the
-  first compile (run 39941675902) has 30 failed edges, all in ui_types and
-  hwui, from four causes:
-  - `surface_control_private.h` not found (RenderThread.h, 15 files): it is
-    in frameworks/native/libs/nativewindow/include-private? or
-    frameworks/base/native/android/include_platform — locate it, add to the
-    sparse set / include path (or a shim declaring the few ASurfaceControl
-    function types RenderThread.h names).
-  - `hardware/hardware.h` not found (ui/PixelFormat.h): libhardware's header,
-    hardware/libhardware/include — add `hardware/libhardware include/` to
-    aosp.lock, or a shim.
-  - libc++ strictness of llvm-mingw's newer libc++: `std::nothrow`
-    (StrongPointer.h needs `<new>`), `std::round` (ui/Rect.h needs `<cmath>`),
-    `std::__c11_atomic_thread_fence`/`memory_order_acquire` (LightRefBase.h,
-    `<atomic>` vs C's `<stdatomic.h>` mixing, see framework.cmake's C++23
-    note: build ui_types and hwui as C++23), `is_floating_point` specialization
-    in math/half.h (`-Wno-invalid-specialization`). Force-include `<new>`,
-    `<cmath>` for those targets, or patch.
+- **ci.yml wiring** (goal 2): job `graphics` (`uses: ./.github/workflows/graphics.yml`),
+  `test` and `package` `needs: [build, framework, graphics]` and download
+  artifact `graphics` into `dist`. Committed and pushed; a full `ci` run on
+  wip/graphics was not started yet when this was written (the GitHub API
+  was rate-limited) — see "CI runs" below for the outcome. When `ci` is green
+  with `PASS  skia: CPU raster, FreeType text, PNG/JPEG/WebP codecs` on both
+  runners, tick the first Phase 3 box in docs/roadmap.md.
+- **Win32 window, written but never compiled**: `compat/hwui/window/gesher_window.{h,cc}`
+  (`gesher::Window`: a thread per HWND running its message loop; a BGRA
+  top-down back buffer in system memory, `Lock`/`UnlockAndPost`; WM_PAINT and
+  WM_PRINTCLIENT copy it with `SetDIBitsToDevice`, so `PrintWindow` reads it
+  off-screen; per-monitor DPI aware; WM_GETMINMAXINFO allows large windows;
+  mouse/wheel/key/char/resize/focus/close become `WindowEvent`s in a queue,
+  with a gesher-base eventfd readable while it is not empty; WM_CLOSE is only
+  an event) and `probes/graphics/window_probe.cc` (Skia draws into the back
+  buffer, PrintWindow + pixel checks, posted mouse/key messages come out of
+  the queue, resize). `cmake/aosp/window.cmake` builds both but is **not
+  included** from graphics.cmake yet. To wire: include it, build
+  `window_probe` in graphics.yml's probes step and copy it to
+  `dist-graphics`, run it in the `probe` job, and add a Check in
+  30-graphics.ps1 expecting "all passed".
 - Not linked into dalvikvm yet: `compat/framework/android_runtime.cc` still
   registers the Phase 2 stand-ins (`hwui_standins.cc`, its ColorSpace stub).
 - aosp.lock changes (one cache churn): external/skia (sparse),
@@ -103,22 +117,31 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   gui/TraceUtils.h), hardware/interfaces (graphics/common/aidl/),
   frameworks/av (media/ndk/include/).
 
+### CI runs
+
+- graphics 39945930947: 2 failed edges (ui_types: half.h deprecations).
+- graphics 39947396734: green (graphics_all + skia_probe on windows-2022).
+- ci on wip/graphics: not run yet (see above).
+
 ### Next concrete steps
 
-1. Get `graphics_all` compiling (graphics.yml loop, `gh run view --log-failed`).
+1. Run `ci` on wip/graphics (`gh workflow run ci --ref wip/graphics`), check
+   `PASS  skia: ...` on windows-2022 and windows-2025 and that the rest stays
+   green; tick roadmap Phase 3's first item.
 2. Link hwui into dalvikvm: `target_link_libraries(dalvikvm PRIVATE gesher_graphics)`
    (or framework_runtime), and in `compat/framework/android_runtime.cc`
    replace the `android_graphics_ColorSpace` and `gesher_hwui_standins` rows by
    one `{"gesher_graphics", "android/graphics/RenderNode", register_gesher_graphics}`.
+   Expect unresolved symbols on the first link (hwui has never been linked).
+   ci's `build` job then compiles Skia and hwui too (ccache key `runtime`).
    Re-purpose `hwui_standins.cc` / `gen_hwui_standins.py` (zero-answer tables
    from a JNI source + SPECIALS) for device-only classes: SurfaceControl
    (core/jni/android_view_SurfaceControl.cpp, table `sSurfaceControlMethods`),
    BLASTBufferQueue (`android_graphics_BLASTBufferQueue.cpp`, `gMethods`).
-   Wire graphics into ci.yml: a `graphics` job (`uses: ./.github/workflows/graphics.yml`),
-   test job `needs` it and downloads artifact `graphics` into dist. Check that
-   gesher-app lifecycle.apk still reaches onResume with the real natives.
-3. Window (design worked out, not written):
-   - Native (compat/hwui): `GesherWindow` (one thread per HWND, DIB-section
+   Check that gesher-app lifecycle.apk still reaches onResume with the real
+   natives (test job and the installer check in `package`).
+3. Window (design worked out; the native window is written, see above):
+   - Native (compat/hwui): `GesherWindow` (one thread per HWND, system-memory
      BGRA back buffer, mutex, WM_PAINT and WM_PRINTCLIENT blit it so
      `PrintWindow` works off-screen; WM_GETMINMAXINFO allows large sizes;
      per-monitor DPI aware; mouse/key messages queued, an eventfd signals them);
@@ -130,6 +153,13 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
      Transaction create+finalizer (NativeAllocationRegistry rejects 0);
      BLASTBufferQueue nativeCreate/Update/GetSurface (Java Surface over the
      Win32Surface via android_view_Surface_createFromSurface)/IsSameSurfaceControl.
+     ViewRootImpl.relayoutWindow reaches the Surface through
+     `updateBlastSurfaceIfNeeded` (`new BLASTBufferQueue`, `update`,
+     `createSurfaceWithHandle` → nativeGetSurface, `mSurface.transferFrom`),
+     and calls SurfaceControl.setTransformHint and Transaction natives
+     (setRecoverableFromBufferStuffing, applyAsyncUnsafe, setWindowCrop): the
+     zero-answer tables cover those. `mSurfaceControl.isValid()` needs a
+     non-zero handle from nativeCopyFromSurfaceControl.
    - Java (app/java/com/gesher/app/window, new): an `IWindowSession.Default`
      subclass (addToDisplayAsUser → ADD_OKAY|ADD_FLAG_APP_VISIBLE with frames;
      relayout → fills WindowRelayoutResult frames/config/insets, builds a
