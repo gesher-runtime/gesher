@@ -38,6 +38,8 @@ int register_android_os_Binder(JNIEnv* env);
 // Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
 int register_gesher_graphics(JNIEnv* env);
 int register_gesher_attach_standins(JNIEnv* env);
+// android.os.SharedMemory over memfds: compat/framework/shared_memory.cc.
+int register_gesher_shared_memory(JNIEnv* env);
 
 namespace android {
 
@@ -340,6 +342,7 @@ static const struct {
     {"android_os_PerfettoTrace", "android/os/PerfettoTrackEventExtra",
      register_android_os_PerfettoTrace},
     {"android_os_Process", "android/os/Process", register_android_os_Process},
+    {"gesher_shared_memory", "android/os/SharedMemory", ::register_gesher_shared_memory},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
     {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",

@@ -180,9 +180,11 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, of
     view_access = FILE_MAP_READ;
   }
 
-  // A view may not extend past the end of the file (mmap rounds the length up
-  // to pages; a file such as an ashmem region need not be); length 0 maps up
-  // to the end instead (the tail of the last page reads as zeros).
+  // A view may not extend past the end of the file (the mapping is the
+  // file's size); length 0 maps up to the end instead (the tail of the last
+  // page reads as zeros). mmap rounds the length up to whole pages, so a
+  // writable shared map of a file whose size is not a page multiple (a
+  // SharedMemory region) needs this too.
   LARGE_INTEGER file_length;
   if (!GetFileSizeEx(file, &file_length)) {
     errno = EACCES;
