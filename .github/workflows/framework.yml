@@ -254,19 +254,18 @@ jobs:
           path: out/framework-res
           key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
 
-      # aapt2 for framework-res, from Google's build-tools, where
+      # aapt2 for framework-res and lifecycle.apk, from Google's build-tools, where
       # tools/build-framework-res.sh looks for it (WORK_DIR); fetched here,
       # with retries, as dl.google.com fails now and then.
       - name: Restore build-tools
         id: bt
-        if: steps.res.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v4
         with:
           path: work/build-tools-36.1
           key: build-tools-36.1-linux
 
       - name: Fetch build-tools
-        if: steps.res.outputs.cache-hit != 'true' && steps.bt.outputs.cache-hit != 'true'
+        if: steps.bt.outputs.cache-hit != 'true'
         run: |
           mkdir -p work
           curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o work/build-tools.zip \
@@ -279,7 +278,7 @@ jobs:
           rm work/build-tools.zip
 
       - name: Save build-tools
-        if: steps.res.outputs.cache-hit != 'true' && steps.bt.outputs.cache-hit != 'true'
+        if: steps.bt.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: work/build-tools-36.1
