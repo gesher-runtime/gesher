@@ -37,14 +37,50 @@ follow it. It builds in steps, each verified in CI
   `sysv_abi` too.
 
 - **TLS and `%fs`** ([0014](decisions/0014-native-libs-fs-base.md)). Each
-  thread that runs loaded code gets a bionic variant-II TLS block, with `%fs`
-  pointed at it by `WRFSBASE`. The `fsbase` probe proves on the CI runners that
-  Windows allows and preserves this.
+  thread that runs loaded code gets a bionic variant-II TLS block
+  (`compat/elf/tls.cc`). Pointing `%fs` at it with `WRFSBASE` was the plan,
+  but the `fsbase` probe showed Windows does **not** preserve the user `%fs`
+  base across kernel entry, so this is still open (see "Status and next
+  steps").
 
-- **The bionic shim** (`compat/bionic/`, later steps): the libc/libm/libdl/
-  liblog (and libandroid, libc++_shared) symbols an app `.so` imports,
-  implemented as System V entry points over gesher-base, with bionic's
-  Linux struct layouts ([0008](decisions/0008-linux-abi.md)).
+- **The bionic shim** (`compat/bionic/`, CMake target `gesher_bionic`,
+  `gesher/bionic_shim.h`): the libc/libm/libdl/liblog/pthread symbols an app
+  `.so` imports, as System V entry points over gesher-base and the CRT, with
+  bionic's LP64 types and Linux struct layouts
+  ([0008](decisions/0008-linux-abi.md)). `InstallBionicShim()` registers it
+  with the loader.
+  - `shim.cc`: memory (CRT malloc; over-aligned blocks from
+    `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them),
+    strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
+    64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
+    errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`
+    with Linux clock ids and a 64-bit `tv_nsec`), fd-level files, `stat`
+    (gesher-base's Linux-layout struct with widened `tv_nsec`), `mmap`, libm,
+    `qsort`/`bsearch` with a System V comparator, libdl over the loader
+    (`dlopen`, `dlsym`, `dladdr`, `dl_iterate_phdr`), `__cxa_atexit`/
+    `__cxa_finalize`, `__stack_chk_fail`, `__tls_get_addr`.
+  - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
+    the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
+    `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
+    `__android_log_assert`, `__sprintf_chk`, `__snprintf_chk` — through an
+    assembly trampoline per function that spills the argument registers into
+    a System V register save area, builds a System V `va_list` over it and
+    calls the `va_list` form. The formatter takes each argument from that
+    `va_list` by its conversion and formats one conversion at a time with the
+    CRT (`%ld` is 64-bit, `%p` is `0x...`, `%m`, `%ls` from UTF-32, `%Lf`
+    narrowed from binary128). `vsnprintf` & co. take the `.so`'s `va_list`
+    directly.
+  - `pthread_bionic.cc`: bionic's pthread ABI over Windows threads and
+    `WaitOnAddress` futexes on 32-bit words inside the bionic-sized objects,
+    honouring bionic's static initializers (recursive/error-check type in
+    bits 14-15 of the mutex's first word): attrs, create/join/detach/exit,
+    mutexes (normal/recursive/error-check, timed), condition variables
+    (timed, monotonic), rwlocks, once, keys with destructors at thread exit,
+    `__cxa_thread_atexit_impl`.
+  - Imports nothing defines: the loader binds a function import it cannot
+    resolve to a stub that names the symbol and aborts **when called**, so a
+    `.so` with unused missing imports still loads (`LoadOptions::
+    stub_unresolved_functions`).
 
 - **The runtime hook** (later steps): the host `OpenNativeLibrary`/`dlopen`
   path so `System.loadLibrary`/`System.load` find the app's `.so` through the
@@ -56,12 +92,15 @@ follow it. It builds in steps, each verified in CI
    the NDK with `-nostdlib` (no `DT_NEEDED`, no TLS, no stack guard);
    `elf_load_test` loads it, checks the constructor ran, and calls its exports.
    Exercises mapping, `RELATIVE`/`RELR` and the init array, and the `fsbase`
-   probe decides the `%fs` approach. **(this step)**
+   probe decides the `%fs` approach. **Done.**
 2. The bionic shim: libc/libm/libdl/liblog symbols; a `.so` that uses
-   `malloc`, `stdio`, `pthread`, `errno`.
-3. The JNI path: `System.loadLibrary`, `JNI_OnLoad`, `RegisterNatives`,
+   `malloc`, `stdio`, `pthread`, `errno` (`tests/native/libc_test.c`).
+   **Done.**
+3. `%fs` for bionic TLS and the stack guard: a stack-protected /
+   `thread_local` `.so`. **Next.**
+4. The JNI path: `System.loadLibrary`, `JNI_OnLoad`, `RegisterNatives`,
    `Java_*`, and `JNIEnv` calls from the `.so` back into ART.
-4. libc++_shared and a C++ exception; a test APK under `lib/x86_64`, run
+5. libc++_shared and a C++ exception; a test APK under `lib/x86_64`, run
    through gesher-app in CI.
 
 ## Building the test libraries
@@ -74,103 +113,144 @@ Android NDK (r27c, `27.2.12479018`) on the Linux runner and uploads them as the
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`._
+`wip/native-libs` off `phase3/base`. This session finished goal 1 (the bionic
+shim) and stopped there by the coordinator's instruction; the next agent
+starts with `%fs` (step 3 below)._
 
 ### Done and CI-verified
 
-- **Step 1 — loader on a self-contained object.** The ELF loader
-  (`compat/elf/`), the `fsbase` probe and `elf_load_test` are built and the
-  track checks (`tests/windows/tracks/40-native-libs.ps1`) run on Windows
-  2022/2025. The NDK builds `trivial.so` with `-nostdlib`; the loader maps it,
-  applies RELATIVE/RELR, runs its constructor and calls its exports; the
-  `fsbase` probe proves `WRFSBASE` works and the `%fs` base survives
-  scheduling. **Verification run: `39942420552`** (trigger
-  `gh run view 39942420552 -R gesher-runtime/gesher`). The first attempt,
-  `39941328906`, failed on a `-Werror` unused parameter, now fixed; the
-  `native-libs` NDK-build job passed in both.
-  - If `39942420552` shows a failing track line, read it from the `test` job's
-    log and fix before building on step 1. The loader logic is syntax-checked
-    with the local WinLibs `g++` (see below) but only CI runs it.
+- **Step 1 — loader on a self-contained object.** `compat/elf/`, the
+  `fsbase` probe and `elf_load_test`; the NDK builds `trivial.so` with
+  `-nostdlib`; the loader maps it, applies RELATIVE/RELR, runs its constructor
+  and calls its exports. First green: ci `39944128455`
+  (`PASS  ELF loader: load a trivial .so and call it`, both runners).
+- **Step 2 — the bionic shim.** `compat/bionic/` is the `gesher_bionic`
+  target (`compat/bionic/bionic.cmake`, `include()`d from `CMakeLists.txt`),
+  linked into `elf_load_test`, which calls `InstallBionicShim()` before
+  loading. `native-libs.yml` builds `tests/native/libc_test.so` with the NDK
+  (API 26, `DT_NEEDED` libc/libm/libdl/liblog, GNU hash only,
+  `-fno-stack-protector`, no `thread_local`), and
+  `tracks/40-native-libs.ps1` runs it: **ci `39948261535`, green on
+  windows-2022 and windows-2025**:
+  `PASS  bionic shim: a libc/pthread .so runs its checks` (and the step-1
+  line). The `.so`'s own checks (each printed through the shim's `printf`)
+  cover malloc/realloc/calloc/`posix_memalign(256)` + `free`, strings and
+  64-bit `strtol`, `snprintf` (ints, `%ld`, widths, doubles, `%zu`/`%lld`/
+  `%hhd`, `*` width/precision, `%p`, 18 arguments so some come from the
+  stack, truncation), `sscanf`, `errno == ENOENT` from `open`, `fwrite` to
+  `stdout`, `nanosleep`/`CLOCK_MONOTONIC`/`CLOCK_REALTIME`, libm, `qsort`/
+  `bsearch` with a `.so` comparator, 4 threads on a mutex, a condition
+  variable handshake, `pthread_once`, keys and their destructors at thread
+  exit, a recursive mutex (and `trylock` from another thread gives `EBUSY`),
+  `pthread_cond_timedwait` timing out, `dlsym(RTLD_DEFAULT)`/`dlerror`,
+  `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr`, and
+  `__android_log_print`.
+  - The first attempt, ci `39947567513`, failed on a `-Werror` unused constant
+    in `pthread_bionic.cc`, fixed in the next commit.
 
-### In progress / half-done
+### Not done / stand-ins in what exists
 
-- **Step 2 — the bionic shim** (`compat/bionic/`). Written and syntax-checked
-  but **deliberately not in CMake yet**, so it cannot break step 1's CI:
-  - `abi_types.h` — bionic's LP64 pthread/type layouts (fixed-width, since the
-    `.so` has 64-bit `long` and mingw has 32-bit).
-  - `pthread_bionic.cc` — bionic's pthread ABI over Windows threads and
-    `WaitOnAddress` futexes (mutex/cond/once/keys/create/join); each created
-    thread calls `elf::SetupThreadTls()` for `%fs`.
-  - `shim.cc` — a System V symbol table (libc mem/str/stdio, libm, a core of
-    unistd, pthread, liblog, libdl, `__stack_chk_*`, `__cxa_atexit/finalize`,
-    `__tls_get_addr`) and `InstallBionicShim()`, which registers the resolver
-    with the loader.
-  - **Next concrete steps:** add `compat/bionic/bionic.cmake` (a `gesher_bionic`
-    static lib) and `include()` it from `CMakeLists.txt`; link it into
-    `elf_load_test` and call `InstallBionicShim()` there; add a `libc.so`-using
-    test to `native-libs.yml` (NDK, *with* libc, pthread, malloc, non-variadic
-    stdio) and a track check that loads it. Verify under llvm-mingw — the local
-    `g++` check does not cover `posix_memalign`/`strdup`/`strnlen`/`aligned_alloc`
-    signature differences, so expect a few CRT-availability fixes there.
+- No roadmap box is ticked yet: the loader cannot yet run a normal NDK `.so`
+  (they are built with `-fstack-protector-strong` by default, which reads
+  `%fs:0x28`), and the bionic box also names libandroid, which the shim does
+  not have.
+- Shim gaps (none needed by the test): `opendir`/`readdir` (bionic's
+  `struct dirent` differs), sockets, `select`/`poll`, signals, `fork`/`exec`,
+  locale and wide-char functions, `getline`, `scanf`/`fscanf` from a `FILE*`,
+  `%Lf` in `scanf`, `strtold`, `localtime`/`strftime`, `getauxval`.
+  Missing **function** imports load as stubs that print the name and abort
+  when called; missing **data** imports still fail the load.
+- Threads ART creates (not through the shim's `pthread_create`) do not run
+  bionic key destructors or `thread_local` destructors when they exit.
+- `__system_property_get` returns "" for everything; `__android_log_*` writes
+  `P/tag: text` to stderr.
 
-### Next steps after that (not started)
+### Next: step 3 — `%fs` for bionic TLS (the track's main open problem)
 
-- **Step 3 — JNI path.** Hook the host `OpenNativeLibrary`/`dlopen`
-  (`art/libnativeloader/native_loader.cpp` `!ART_TARGET_ANDROID` branch, which
-  already calls plain `dlopen`/`dlsym`) so `System.loadLibrary` routes a `.so`
-  through the ELF loader, and `JNI_OnLoad`/`RegisterNatives`/`Java_*` resolve
-  through `elf::Lookup`. `JNIEnv`/`JavaVM` tables are MS-ABI
-  ([0006](decisions/0006-managed-abi.md)); calls from the `.so` into them must
-  go MS-ABI while the `.so`'s own natives are entered System V — reuse the
-  `jni-sysv` machinery (`tools/jni-sysv-patch.py`, `NATIVEHELPER_SYSV_JNI_ENTRY`).
-  The minimal edit to `native_loader.cpp` must be noted in the report (shared
-  file / other track's domain is `libnativeloader`? — it is ART, not another
-  track's; confirm with the coordinator).
-- **Step 4 — libc++_shared and a C++ exception; a test APK under `lib/x86_64`,
-  run through gesher-app.** Open problem: C++ exception unwinding needs
-  `dl_iterate_phdr` to report the loaded `.so`'s program headers (the unwinder
-  in libc++_shared reads `PT_GNU_EH_FRAME` that way); gesher-base's
-  `dl_iterate_phdr` currently reports nothing. The loader must register each
-  loaded object's phdrs and gesher-base's `dl_iterate_phdr` must enumerate them.
+The `fsbase` probe (an INFO line in every run) still shows that `WRFSBASE`
+executes but the base is lost on kernel entry, so ADR 0014's decision needs
+replacing; update the ADR with the outcome. What a successor should know:
+
+- **Where `%fs` shows up in NDK code.** `native-libs.yml` now prints, per
+  `.so`, how many instructions use `%fs:` (`llvm-objdump -d | grep -c '%fs:'`);
+  `trivial.so` and `libc_test.so` should report 0. In NDK output:
+  - the stack guard, in every `-fstack-protector-strong` function:
+    `mov %fs:0x28,%rax` (`64 48 8b 04 25 28 00 00 00`) in the prologue, and a
+    `mov`/`cmp`/`sub`/`xor` with `%fs:0x28` in the epilogue: absolute
+    `[disp32]` addressing (ModRM mod=00 rm=100, SIB 0x25);
+  - `thread_local`: for **API < 29** clang uses *emulated* TLS
+    (`__emutls_get_address`, linked into the `.so` from compiler-rt and built
+    on `pthread_key_*`/`pthread_once`/`malloc`, all in the shim), so no `%fs`;
+    for **API 29 and up**, ELF TLS in a shared object is general-dynamic
+    (`__tls_get_addr`, in the shim) unless built with
+    `-ftls-model=initial-exec`, which gives `mov %fs:0,%rax` (absolute) or
+    `mov %fs:(%rax),%eax` (register-based) forms.
+- **A load-time rewrite that keeps instruction lengths** (to be proven in
+  CI): Windows keeps `%gs` at the TEB, so an absolute `%fs:[d]` can become
+  `%gs:[d']` by changing only the prefix byte `0x64` to `0x65` and the 4-byte
+  displacement:
+  - `%fs:0x28` to `%gs:0x30` (`NT_TIB.Self`: per-thread, non-zero, constant
+    for the thread's life; any stable value works as a stack cookie, since the
+    prologue and epilogue read the same slot);
+  - `%fs:0` (the thread pointer) to `%gs:[0x1480 + 8*i]`, a `TlsAlloc` slot
+    (`TEB.TlsSlots[i]`, i < 64) holding the thread's variant-II block pointer,
+    set by `SetupThreadTls` (so it must run on a thread before IE code does);
+  - register-based forms (`%fs:(%reg)`) cannot be rewritten in place; trap
+    them (e.g. `int3` and a vectored handler that emulates the `mov`) or reject
+    the `.so` with a clear message; they only appear with initial-exec TLS.
+  - Match only complete encodings (prefix 0x64, REX.W, a read opcode with a
+    ModRM, SIB 0x25, disp32 0x28 or 0), and patch before `ProtectSegments`
+    makes `.text` read-only. A linear-sweep decoder is more robust than byte
+    matching if false positives (the pattern inside other instructions'
+    immediates) turn up.
+- `TlsGetAddr`/`BuildArena` (`compat/elf/tls.cc`) build a thread's block
+  **once**; a `PT_TLS` module loaded after that gets a `tp_offset` outside the
+  block. Give `__tls_get_addr` a per-thread, per-module fallback (allocated on
+  first use) before relying on API 29+ libraries.
+- The CI check for step 3: a `.so` built with the default stack protector and
+  an emulated-TLS `thread_local` (API 26), and a second with ELF TLS
+  (API 29), each used from several shim threads.
+
+### After that (not started)
+
+- **Step 4 — JNI path.** Hook the host `OpenNativeLibrary`/`dlopen`
+  (`art/libnativeloader/native_loader.cpp`'s `!ART_TARGET_ANDROID` branch,
+  which calls plain `dlopen`/`dlsym`; on Windows that is gesher-base's
+  `dlopen` in `compat/posix/src/dlfcn.cc`, which knows builtin libraries and
+  PE DLLs) so `System.loadLibrary` routes an ELF `.so` through the loader,
+  and `JNI_OnLoad`/`RegisterNatives`/`Java_*` resolve through `elf::Lookup`.
+  JNI is System V on both sides already (JNICALL is `sysv_abi`, GESHER_JNI
+  wraps the JNIEnv/JavaVM tables for System V callers;
+  [0006](decisions/0006-managed-abi.md), `tools/jni-sysv-patch.py`), so a
+  `.so`'s `Java_*` functions and its calls through `JNIEnv` should need no
+  extra bridging; verify. Any edit in `art/libnativeloader` patches must be
+  listed in the final report.
+- **Step 5 — libc++_shared and a C++ exception; a test APK under
+  `lib/x86_64`, run through gesher-app.** libc++_shared's unwinder finds
+  `.eh_frame_hdr` through `dl_iterate_phdr`, which the shim now provides
+  (System V, over `elf::ForEachLoaded`, verified by `libc_test`);
+  libc++_shared is stack-protected, so it needs step 3 first.
 
 ### Open problems and decisions
 
-- **%fs for bionic TLS — the track's main open problem.**
-  [0014](decisions/0014-native-libs-fs-base.md) chose `WRFSBASE`, but the first
-  CI run (`39942420552`) showed it **does not hold on windows-2022/2025**:
-  `WRFSBASE` executes (FSGSBASE is on) but Windows does not preserve the user
-  `%fs` base across a kernel transition, so a later `%fs` load faulted. The
-  probe is now crash-safe and the track check is informational, so step 1 is
-  not blocked, but **a `%fs`-using `.so` (libc++_shared, any stack-protected or
-  `thread_local` code) will not work until this is solved**. Options, in the
-  ADR's Finding: re-arm `WRFSBASE` at each `.so` entry (fragile), patch the
-  `.so`'s `%fs` accesses at load time (the real fallback, like ART's `%gs`), or
-  another mechanism. Resolve this before step 4; the trivial step-1/step-2
-  (libc, pthread) `.so`s can avoid `%fs` by building with
-  `-fno-stack-protector` and no `thread_local`.
-- **Variadic System V entry points** (`printf` family, `__android_log_print`):
-  cannot be forwarded to the MS-ABI CRT, because `va_start` is not allowed in a
-  `sysv_abi` function on Windows ([0011](decisions/0011-libcore-natives.md)).
-  The shim offers non-variadic stdio/logging and a fixed-argument
-  `__android_log_print`; a general sysv→ms vararg bridge (an assembly trampoline
-  that rebuilds the register save area) is future work. Keep the test `.so`
-  clear of `printf`/variadic logging until then.
+- `%fs`: above.
 - **Static-only TLS**: every load-time module gets a static (initial-exec)
-  offset, so a `PT_TLS` module loaded after a thread starts is absent from that
-  thread's block. Fine while all `.so`s load before app threads start; a
-  growable per-thread DTV is the fix when that changes.
+  offset; see the `TlsGetAddr` note above.
+- The variadic bridge saves all six argument GPRs and eight XMMs regardless
+  of `%al`, and assumes a `va_list` the `.so` passes is bionic's (a pointer to
+  the 24-byte struct); both hold for NDK clang output.
 
 ### Dead ends ruled out
 
-- **Load-time patching of `%fs` accesses** (the `%gs` approach from
-  [0006](decisions/0006-managed-abi.md)) was considered and set aside for
-  `WRFSBASE`: the app `.so` is prebuilt and the `%fs` prefix sits on
-  variable-length instructions, so in-place rewriting is far more invasive than
-  one `WRFSBASE` per thread. Kept only as the documented fallback.
-- **Forwarding bionic pthread to winpthreads**: impossible — bionic's
+- **`WRFSBASE` per thread** (ADR 0014's first decision): the base does not
+  survive kernel entry on windows-2022/2025 (the probe, every run).
+- **Forwarding bionic pthread to winpthreads**: impossible; bionic's
   `pthread_mutex_t` is 40 bytes with a different layout than winpthreads', and
   the `.so` allocates the bionic-sized object. The shim implements the ABI
   directly instead.
+- **`va_start` in a `sysv_abi` function** (to forward `printf`): not allowed
+  on Windows targets; the assembly trampolines in `stdio_bionic.cc` replace
+  it.
 - **File-backed fixed segment mappings** for `PT_LOAD`: avoided; the loader
   reserves one anonymous range and copies segment contents, since file-backed
   `MAP_FIXED` over a reservation needs placeholder mappings gesher-base does not
@@ -181,9 +261,16 @@ _Last updated 2026-10-23 by the native-libraries track; branch
 - Loader/shim logic can be syntax-checked locally without AOSP or WSL with the
   WinLibs UCRT `g++` already on the machine:
   `g++ -std=gnu++20 -fsyntax-only -Wall -Wextra -Werror -mfsgsbase -DGESHER
-  -I compat/elf/include -I compat/bionic -I compat/posix/include <file.cc>`.
-  It is not the CI toolchain (llvm-mingw) but catches most `-Werror` issues
-  cheaply before a full CI build.
+  -D_FILE_OFFSET_BITS=64 -D_WIN32_WINNT=0x0A00 -I compat/elf/include
+  -I compat/elf -I compat/bionic/include -I compat/bionic
+  -I compat/posix/include <file.cc>`.
+  It is not the CI toolchain (llvm-mingw clang) but catches most `-Werror`
+  issues cheaply before a full CI build; clang still finds a few more (e.g.
+  `-Wunused-const-variable`).
+- Poll CI gently (`gh run watch -i 90`, or the unauthenticated
+  `https://api.github.com/repos/gesher-runtime/gesher/actions/runs/<id>`):
+  several agents share the token and GitHub's secondary rate limit has
+  blocked `gh run view` for minutes at a time.
 - Full verification is CI only: `gh workflow run ci --ref wip/native-libs`
   (the reusable `native-libs.yml` runs because `ci` calls it; it cannot be
   dispatched on its own until it reaches the default branch).
