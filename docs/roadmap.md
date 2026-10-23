@@ -157,7 +157,7 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 6 checklist
 
-- [ ] ELF loader for x86-64 Android `.so` files on Windows
+- [x] ELF loader for x86-64 Android `.so` files on Windows
 - [ ] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base
 - [ ] `System.loadLibrary` of an app's NDK library from its APK's
