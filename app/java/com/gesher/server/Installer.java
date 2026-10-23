@@ -272,6 +272,13 @@ final class Installer {
         if (children != null) {
             for (File c : children) deleteTree(c);
         }
-        return !f.exists() || f.delete();
+        // Not File.delete: that is remove(3), which removes no directory on Windows' C
+        // runtime; java.nio's delete calls rmdir for one.
+        try {
+            Files.deleteIfExists(f.toPath());
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 }
