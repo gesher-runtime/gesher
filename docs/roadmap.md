@@ -132,3 +132,33 @@ needs: [framework-build.md](framework-build.md).
 - [x] In-process stand-ins for the services the lifecycle calls
 - [x] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
       resources and manifest loaded (tested in CI, and through the installer)
+
+## Phase 3 checklist
+
+- [ ] Skia for Windows (CPU raster first), built in CI
+- [ ] hwui's natives on Skia (Canvas, Paint, Path, Matrix, RenderNode,
+      Bitmap) in place of the Phase 2 stand-ins
+- [ ] ANGLE: EGL and GLES over Direct3D 11, built in CI
+- [ ] A Win32 window as the Activity's surface (`ANativeWindow`), opened
+      through a window manager stand-in
+- [ ] A simple Activity drawn in a Win32 window, tested in CI by reading
+      back its pixels (WARP)
+- [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
+      and `KeyEvent`; a click reaches `onClick`, tested in CI
+- [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+
+## Phase 4 checklist
+
+- [ ] Binder across processes: `/dev/binder` over Windows IPC, with
+      `servicemanager`
+- [ ] The framework's own system services (PackageManager parses the APK,
+      ActivityManager starts the Activity) in place of gesher-app's stand-ins
+- [ ] `.apk` file association from the installer
+
+## Phase 6 checklist
+
+- [ ] ELF loader for x86-64 Android `.so` files on Windows
+- [ ] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
+      over gesher-base
+- [ ] `System.loadLibrary` of an app's NDK library from its APK's
+      `lib/x86_64`, with JNI calls both ways, tested in CI
