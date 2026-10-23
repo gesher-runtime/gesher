@@ -7,7 +7,13 @@ import android.os.Parcel;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.os.SystemProperties;
 
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -34,6 +40,9 @@ public final class BinderTest {
 
   public static void main(String[] args) throws Exception {
     System.loadLibrary("android_runtime");
+    // android.os.Build reads the system properties once (its ABI list must not be
+    // empty); binder calls initialize it (AppOpsManager -> ActivityThread -> Build).
+    loadBuildProps(System.getenv("ANDROID_ROOT") + "/build.prop");
     if (args.length > 0 && args[0].equals("service")) {
       service();
     } else {
@@ -178,6 +187,26 @@ public final class BinderTest {
     check(dead, "a call to the dead service throws DeadObjectException");
     System.out.println("BinderTest all passed");
     System.exit(0);
+  }
+
+  /** $ANDROID_ROOT/build.prop into the system properties, as gesher-app's BuildProps. */
+  static void loadBuildProps(String path) throws IOException {
+    try (BufferedReader r = new BufferedReader(
+        new InputStreamReader(new FileInputStream(path), StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = r.readLine()) != null) {
+        line = line.trim();
+        int eq = line.indexOf('=');
+        if (line.startsWith("#") || eq <= 0) continue;
+        String key = line.substring(0, eq).trim();
+        if (key.endsWith("?")) key = key.substring(0, key.length() - 1).trim();
+        try {
+          SystemProperties.set(key, line.substring(eq + 1).trim());
+        } catch (RuntimeException e) {
+          // Too long for a property, or read-only and already set: as init, skip it.
+        }
+      }
+    }
   }
 
   static void sleep(long ms) {
