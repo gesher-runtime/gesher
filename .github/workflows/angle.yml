@@ -1,0 +1,143 @@
+name: angle
+
+# ANGLE (docs/angle.md): libEGL.dll and libGLESv2.dll, OpenGL ES and EGL over
+# Direct3D 11, built from source with ANGLE's own GN build on a Windows
+# runner, at the ANGLE commit AOSP android-16.0.0_r4's external/angle ships
+# (ADR 0018). The build is cached by commit and build inputs; on a hit this
+# workflow takes a few minutes. The probe is built with llvm-mingw like the
+# rest of Gesher.
+#
+#   gh workflow run angle --ref <branch>
+#
+# ci.yml calls this workflow too; its artifact "angle" (the DLLs, their
+# license notices and angle_probe.exe) is downloaded by the test and package
+# jobs. Artifact "angle-sdk" adds the import libraries and headers.
+on:
+  push:
+    branches: ['wip/angle']
+    paths:
+      - 'compat/angle/**'
+      - 'probes/angle/**'
+      - '.github/workflows/angle.yml'
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  # github.workflow is the caller's ("ci") when ci.yml runs this one.
+  group: ${{ github.workflow }}-angle-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # chromium.googlesource.com/angle/angle: the upstream commit AOSP's
+  # external/angle was rolled to at android-16.0.0_r4 ("Roll ANGLE from
+  # 238eaf1dd4d3 to ab6a82e0ed14", merged as 620766820606).
+  ANGLE_COMMIT: ab6a82e0ed1425316da0ba9a0b1c715a58a0b725
+  # depot_tools as pinned by that commit's DEPS (third_party/depot_tools).
+  DEPOT_TOOLS_COMMIT: 3accee0833540add4e5e608d222e01a768d9f94e
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  # ANGLE's DLLs, import libraries and headers (compat/angle/build-angle.ps1).
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: compat/angle
+
+      - name: Cache the ANGLE build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: angle-sdk
+          key: angle-sdk-${{ env.ANGLE_COMMIT }}-${{ hashFiles('compat/angle/args.gn', 'compat/angle/build-angle.ps1') }}
+
+      - name: Build ANGLE (libEGL, libGLESv2)
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File compat/angle/build-angle.ps1 -Commit $env:ANGLE_COMMIT `
+            -DepotTools $env:DEPOT_TOOLS_COMMIT -Work C:\angle -Out "$PWD\angle-sdk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: angle-sdk
+          path: angle-sdk/
+
+  # angle_probe.exe, cross-compiled with the project's llvm-mingw against the
+  # import libraries, and the artifact the test and package jobs install.
+  probe-build:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: probes/angle
+
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle-sdk
+          path: angle-sdk
+
+      - name: Build angle_probe
+        run: |
+          set -euo pipefail
+          cc="$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang"
+          "$cc" --version | head -1
+          mkdir -p dist-angle
+          "$cc" -std=c11 -O2 -Wall -Wextra -Werror -Iangle-sdk/include \
+            -o dist-angle/angle_probe.exe probes/angle/angle_probe.c \
+            angle-sdk/lib/libEGL.dll.lib angle-sdk/lib/libGLESv2.dll.lib
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-objdump" -p dist-angle/angle_probe.exe | grep 'DLL Name'
+          cp angle-sdk/bin/libEGL.dll angle-sdk/bin/libGLESv2.dll dist-angle/
+          cp angle-sdk/NOTICES.txt dist-angle/ANGLE-NOTICES.txt
+          echo "ANGLE $(cat angle-sdk/ANGLE_COMMIT.txt)"
+          ls -la dist-angle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: angle
+          path: dist-angle/
+
+  # The probe on both runner images, when this workflow runs on its own;
+  # ci.yml's test jobs run it from tests/windows/tracks/31-angle.ps1.
+  probe:
+    if: github.workflow == 'angle' && !cancelled()
+    needs: probe-build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
+          path: dist
+
+      - name: ANGLE probe
+        shell: pwsh
+        run: |
+          & dist/angle_probe.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/angle_probe.exe --warp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
