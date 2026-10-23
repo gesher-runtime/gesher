@@ -148,7 +148,7 @@ final class BroadcastController {
             Intent delivered = new Intent(intent);
             delivered.setComponent(new android.content.ComponentName(info.packageName,
                     info.name));
-            mAtm.withProcess(info.packageName, app -> {
+            mAtm.withProcess(info.packageName, "broadcast to " + info.name, app -> {
                 SystemServer.log("scheduleReceiver " + info.packageName + "/" + info.name
                         + " in " + app);
                 try {
