@@ -53,6 +53,14 @@ Installed apps stay installed (%LOCALAPPDATA%\Gesher\data\app):
     gesher-app uninstall com.example.app
     gesher-app status
 
+Each installed app gets a Start menu entry, in the "Gesher Apps" folder, with
+its name and icon; it starts the app as
+
+    gesher-app launch com.example.app
+
+Uninstalling the app removes its entry; uninstalling Gesher removes the
+folder.
+
 Other options: --activity .Other (another Activity), --keep-task (let the
 app run until it finishes), --ez KEY true|false (an extra in the intent).
 The logs are in %LOCALAPPDATA%\Gesher\logs (<package>.log for an app).

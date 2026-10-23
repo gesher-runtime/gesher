@@ -236,7 +236,7 @@ is what `gesher-app` runs by default:
 
 ```
 dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Launcher COMMAND
-  launch APK [--activity CLASS] [--ez KEY true|false]... [--keep-task]
+  launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]... [--keep-task]
   install APK | uninstall PACKAGE | list | status | start | shutdown
 ```
 
@@ -274,6 +274,14 @@ in a job that ends them with it.
 - The control calls without a framework API (install, uninstall, status, shutdown, a
   package's last exit code) go to the system server's `gesher` service
   (`com.gesher.server.GesherService`).
+- `launch PACKAGE` starts an installed package without its APK. After `install` (and
+  `launch APK`'s install step) the launcher makes the package's Start menu shortcut,
+  `Gesher Apps\<label>.lnk` running `gesher-app launch PACKAGE`, with the app's icon
+  drawn by the framework into a `.ico` and the AppUserModelID `Gesher.App.<package>`
+  that the system server also gives the package's processes
+  (`GESHER_APP_USER_MODEL_ID`; `GesherAppProcess` sets it); `uninstall` removes it
+  (`com.gesher.app.shell`, [docs/installer.md](../docs/installer.md),
+  [0028](../docs/decisions/0028-shell-start-menu-apps.md)).
 
 ## Classes framework.jar does not have
 
