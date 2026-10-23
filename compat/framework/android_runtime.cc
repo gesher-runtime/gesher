@@ -29,10 +29,14 @@
 
 #include "core_jni_helpers.h"
 
+#include "gesher_device_standins.h"
+
 // android_util_Binder.cpp defines its register function outside the namespace,
-// as hwui_standins.cc does.
+// as compat/hwui/graphics_runtime.cc does.
 int register_android_os_Binder(JNIEnv* env);
-int register_gesher_hwui_standins(JNIEnv* env);
+// hwui's natives (android.graphics, RenderNode, HardwareRenderer) and
+// Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
+int register_gesher_graphics(JNIEnv* env);
 
 namespace android {
 
@@ -259,45 +263,6 @@ static int register_android_os_PerfettoTrace(JNIEnv* env) {
                               NELEM(gPerfettoCategoryMethods));
 }
 
-// --- android.graphics (Gesher stubs until hwui) ----------------------------------
-// hwui and Skia are left out until views (docs/framework-natives.md). The
-// headless lifecycle still builds a few graphics objects whose natives only
-// hold data: DisplayManagerGlobal creates ColorSpace's named spaces. Their
-// native side keeps the transfer parameters and the D50 transform, as hwui's
-// SkColorSpace would, and nothing reads them yet.
-
-struct GesherColorSpace {
-  float transfer[7];
-  float xyz[9];
-};
-
-static void ColorSpace_free(void* ptr) {
-  delete static_cast<GesherColorSpace*>(ptr);
-}
-
-static jlong ColorSpace_getNativeFinalizer(JNIEnv*, jclass) {
-  return reinterpret_cast<jlong>(&ColorSpace_free);
-}
-
-static jlong ColorSpace_create(JNIEnv* env, jclass, jfloat a, jfloat b, jfloat c, jfloat d,
-                               jfloat e, jfloat f, jfloat g, jfloatArray xyz) {
-  auto* space = new GesherColorSpace{{a, b, c, d, e, f, g}, {}};
-  if (xyz != nullptr && env->GetArrayLength(xyz) >= 9) {
-    env->GetFloatArrayRegion(xyz, 0, 9, space->xyz);
-  }
-  return reinterpret_cast<jlong>(space);
-}
-
-static const JNINativeMethod gColorSpaceRgbMethods[] = {
-    {"nativeGetNativeFinalizer", "()J", GESHER_JNI(ColorSpace_getNativeFinalizer)},
-    {"nativeCreate", "(FFFFFFF[F)J", GESHER_JNI(ColorSpace_create)},
-};
-
-static int register_android_graphics_ColorSpace(JNIEnv* env) {
-  return RegisterMethodsOrDie(env, "android/graphics/ColorSpace$Rgb$Native",
-                              gColorSpaceRgbMethods, NELEM(gColorSpaceRgbMethods));
-}
-
 // --- gesher.NativeCanary --------------------------------------------------------
 // @CriticalNative ABI canaries for the managed-code boundary: enough integer
 // and floating-point arguments that a System V / Microsoft calling-convention
@@ -387,9 +352,10 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
-    {"android_graphics_ColorSpace", "android/graphics/ColorSpace$Rgb$Native",
-     register_android_graphics_ColorSpace},
-    {"gesher_hwui_standins", "android/graphics/RenderNode", ::register_gesher_hwui_standins},
+    // hwui (AndroidRuntime.cpp registers it through libhwui's
+    // register_android_graphics_classes), then the device-only stand-ins.
+    {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
+    {"gesher_device_standins", "android/view/SurfaceControl", ::register_gesher_device_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
