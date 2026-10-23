@@ -82,3 +82,61 @@ if ($failed -ne $failedBefore) {
   }
 }
 Remove-Item Env:GESHER_BINDER
+
+# gesher-app parses the APK with the framework's own parser (PackageParser2,
+# com.gesher.server.ApkPackage) in its single-process mode, the installer's.
+CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (single process)' "$Dir/dalvikvm.exe" @(
+  "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
+  'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
+  'gesher-app: stand-in services in this process: activity, activity_task, display, package, user, window',
+  'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
+  'gesher-app: done') 300
+
+# system_server-lite: com.gesher.server.SystemServer parses lifecycle.apk and
+# registers the system services with servicemanager over binderd; gesher-app
+# --system-server, in another process, gets the package and every service
+# through ServiceManager and takes the app to onResume.
+$device = "apps-$PID"
+$env:GESHER_BINDER = $device
+$binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$logs/apps-binderd.out" -RedirectStandardError "$logs/apps-binderd.log"
+$servicemanager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$logs/apps-servicemanager.out" -RedirectStandardError "$logs/apps-servicemanager.log"
+$dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false')
+$server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
+  -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk")) `
+  -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
+$failedBefore = $failed
+CheckTimed 'services: gesher-app --system-server, lifecycle.apk to onResume with the services in system_server' "$Dir/dalvikvm.exe" `
+  ($dvmApp + 'com.gesher.app.Main', '--system-server', (NoDrive "$Dir/lifecycle.apk")) @(
+  'gesher-app: system services from servicemanager: ',
+  ' (in another process)',
+  'gesher-app: package com.gesher.lifecycle from the system server''s package manager',
+  'LifecycleApplication onCreate, package=com.gesher.lifecycle',
+  'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
+  'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
+  'gesher-app: done') 400
+foreach ($p in $server, $servicemanager, $binderd) {
+  if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+}
+Start-Sleep -Milliseconds 500
+$serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
+$missing = @(
+  'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
+  'system_server: registered package, activity, activity_task, window, display, user with servicemanager'
+) | Where-Object { -not $serverOut.Contains($_) }
+if (-not $missing) {
+  Write-Host 'PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user'
+} else {
+  Write-Host "FAIL  services: system_server parses lifecycle.apk and registers its services (missing: $($missing -join ', '))"
+  $failed++
+}
+if ($failed -ne $failedBefore) {
+  foreach ($f in 'system_server.out', 'system_server.err', 'apps-servicemanager.log', 'apps-binderd.log') {
+    Write-Host "--- $f"
+    Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
+  }
+}
+Remove-Item Env:GESHER_BINDER
