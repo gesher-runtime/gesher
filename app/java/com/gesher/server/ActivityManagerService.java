@@ -8,6 +8,12 @@ import android.app.ApplicationThreadConstants;
 import android.app.ContentProviderHolder;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.IServiceConnection;
+import android.app.Notification;
+import android.content.ComponentName;
+import android.content.IIntentReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.FeatureInfo;
 import android.content.pm.PackageManager;
@@ -18,6 +24,7 @@ import android.content.pm.UserInfo;
 import android.content.res.CompatibilityInfo;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.SystemClock;
 import android.system.Os;
 import android.util.ArrayMap;
@@ -27,7 +34,7 @@ import com.gesher.app.DeviceProfile;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.util.List;
 
 /**
  * {@code activity}: ActivityManagerService, lite. Answers what an app's lifecycle asks of
@@ -37,17 +44,186 @@ import java.util.ArrayList;
  */
 public final class ActivityManagerService extends IActivityManager.Default {
     private final ActivityTaskManagerService mAtm;
+    private final ActiveServices mServices;
+    private final BroadcastController mBroadcasts;
+    private final ContentProviders mProviders;
     private ApplicationSharedMemory mSharedMemory;  // created on the first bind
 
-    ActivityManagerService(ActivityTaskManagerService atm) {
+    ActivityManagerService(ActivityTaskManagerService atm, PackageManagerService pm,
+            NotificationManagerService notifications) {
         mAtm = atm;
+        mServices = new ActiveServices(atm, pm, notifications);
+        mBroadcasts = new BroadcastController(atm, pm);
+        mProviders = new ContentProviders(pm);
         atm.setActivityManager(this);
     }
 
+    /** An app process is gone: its services, receivers and providers too. */
+    void processDied(ActivityTaskManagerService.ProcessRecord app) {
+        mServices.processDied(app);
+        mBroadcasts.processDied(app);
+        mProviders.processDied(app);
+    }
+
+    // --- content providers (ContentProviders) -------------------------------------------
+
     @Override
-    public ContentProviderHolder getContentProvider(android.app.IApplicationThread caller,
+    public ContentProviderHolder getContentProvider(IApplicationThread caller,
             String callingPackage, String name, int userId, boolean stable) {
-        return null;  // No providers yet: Settings and friends fall back to defaults.
+        return mProviders.getContentProvider(caller, callingPackage, name, userId, stable);
+    }
+
+    @Override
+    public ContentProviderHolder getContentProviderExternal(String name, int userId,
+            IBinder token, String tag) {
+        return mProviders.getContentProvider(null, tag, name, userId, true);
+    }
+
+    @Override
+    public void publishContentProviders(IApplicationThread caller,
+            List<ContentProviderHolder> providers) {
+        ActivityTaskManagerService.ProcessRecord app =
+                mAtm.callerProcess(Binder.getCallingPid());
+        if (app != null) mProviders.publishContentProviders(app, providers);
+    }
+
+    @Override
+    public boolean refContentProvider(IBinder connection, int stable, int unstable) {
+        return mProviders.refContentProvider(connection, stable, unstable);
+    }
+
+    @Override
+    public void removeContentProvider(IBinder connection, boolean stable) {
+    }
+
+    // --- services (ActiveServices) -------------------------------------------------------
+
+    @Override
+    public ComponentName startService(IApplicationThread caller, Intent service,
+            String resolvedType, boolean requireForeground, String callingPackage,
+            String callingFeatureId, int userId) {
+        return mServices.startService(caller, service, resolvedType, requireForeground,
+                callingPackage);
+    }
+
+    @Override
+    public int stopService(IApplicationThread caller, Intent service, String resolvedType,
+            int userId) {
+        return mServices.stopService(caller, service, resolvedType);
+    }
+
+    @Override
+    public boolean stopServiceToken(ComponentName className, IBinder token, int startId) {
+        return mServices.stopServiceToken(className, token, startId);
+    }
+
+    @Override
+    public int bindService(IApplicationThread caller, IBinder token, Intent service,
+            String resolvedType, IServiceConnection connection, long flags,
+            String callingPackage, int userId) {
+        return mServices.bindService(caller, service, resolvedType, connection, flags,
+                callingPackage);
+    }
+
+    @Override
+    public int bindServiceInstance(IApplicationThread caller, IBinder token, Intent service,
+            String resolvedType, IServiceConnection connection, long flags,
+            String instanceName, String callingPackage, int userId) {
+        return mServices.bindService(caller, service, resolvedType, connection, flags,
+                callingPackage);
+    }
+
+    @Override
+    public void publishService(IBinder token, IBinder bindToken, IBinder service) {
+        mServices.publishService(token, bindToken, service);
+    }
+
+    @Override
+    public boolean unbindService(IServiceConnection connection) {
+        return mServices.unbindService(connection);
+    }
+
+    @Override
+    public void unbindFinished(IBinder token, IBinder bindToken) {
+        mServices.unbindFinished(token, bindToken);
+    }
+
+    @Override
+    public void serviceDoneExecuting(IBinder token, int type, int startId, int res) {
+        mServices.serviceDoneExecuting(token, type, startId, res);
+    }
+
+    @Override
+    public void setServiceForeground(ComponentName className, IBinder token, int id,
+            Notification notification, int flags, int foregroundServiceType) {
+        mServices.setServiceForeground(className, token, id, notification, flags,
+                foregroundServiceType);
+    }
+
+    @Override
+    public int getForegroundServiceType(ComponentName className, IBinder token) {
+        return mServices.getForegroundServiceType(className, token);
+    }
+
+    @Override
+    public IBinder peekService(Intent service, String resolvedType, String callingPackage) {
+        return mServices.peekService(service, resolvedType);
+    }
+
+    @Override
+    public void updateServiceGroup(IServiceConnection connection, int group, int importance) {
+        // No process groups to put the service's process in.
+    }
+
+    // --- broadcasts (BroadcastController) ------------------------------------------------
+
+    @Override
+    public Intent registerReceiverWithFeature(IApplicationThread caller, String callerPackage,
+            String callingFeatureId, String receiverId, IIntentReceiver receiver,
+            IntentFilter filter, String requiredPermission, int userId, int flags) {
+        return mBroadcasts.registerReceiver(caller, callerPackage, receiver, filter,
+                Binder.getCallingPid());
+    }
+
+    @Override
+    public Intent registerReceiver(IApplicationThread caller, String callerPackage,
+            IIntentReceiver receiver, IntentFilter filter, String requiredPermission,
+            int userId, int flags) {
+        return mBroadcasts.registerReceiver(caller, callerPackage, receiver, filter,
+                Binder.getCallingPid());
+    }
+
+    @Override
+    public void unregisterReceiver(IIntentReceiver receiver) {
+        mBroadcasts.unregisterReceiver(receiver);
+    }
+
+    @Override
+    public int broadcastIntentWithFeature(IApplicationThread caller, String callingFeatureId,
+            Intent intent, String resolvedType, IIntentReceiver resultTo, int resultCode,
+            String resultData, Bundle map, String[] requiredPermissions,
+            String[] excludePermissions, String[] excludePackages, int appOp, Bundle options,
+            boolean serialized, boolean sticky, int userId) {
+        ActivityTaskManagerService.ProcessRecord app =
+                mAtm.callerProcess(Binder.getCallingPid());
+        return mBroadcasts.broadcastIntent(intent, resolvedType,
+                app != null ? app.packageName : null, Binder.getCallingPid());
+    }
+
+    @Override
+    public int broadcastIntent(IApplicationThread caller, Intent intent, String resolvedType,
+            IIntentReceiver resultTo, int resultCode, String resultData, Bundle map,
+            String[] requiredPermissions, int appOp, Bundle options, boolean serialized,
+            boolean sticky, int userId) {
+        return broadcastIntentWithFeature(caller, null, intent, resolvedType, resultTo,
+                resultCode, resultData, map, requiredPermissions, null, null, appOp, options,
+                serialized, sticky, userId);
+    }
+
+    @Override
+    public void finishReceiver(IBinder who, int resultCode, String resultData, Bundle map,
+            boolean abortBroadcast, int flags) {
+        mBroadcasts.finishReceiver(who, resultCode, resultData, map, abortBroadcast, flags);
     }
 
     @Override
@@ -97,7 +273,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     /**
      * IApplicationThread.bindApplication, with what ActivityManagerService's
-     * attachApplicationLocked sends: the configuration, no providers, no instrumentation,
+     * attachApplicationLocked sends: the configuration, the package's content providers
+     * (installed by the process before Application.onCreate), no instrumentation,
      * no services map (the app asks servicemanager), no font map (Typeface loads the
      * preinstalled one) and the shared memory region with the system features.
      */
@@ -109,7 +286,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         thread.bindApplication(ai.processName != null ? ai.processName : ai.packageName, ai,
                 null /* sdkSandboxClientAppVolumeUuid */, null /* sdkSandboxClientAppPackage */,
                 false /* isSdkInSandbox */,
-                ProviderInfoList.fromList(new ArrayList<ProviderInfo>()),
+                ProviderInfoList.fromList(mProviders.providersFor(ai)),
                 null /* instrumentationName */, null /* profilerInfo */,
                 null /* instrumentationArgs */, null /* instrumentationWatcher */,
                 null /* instrumentationUiConnection */, ApplicationThreadConstants.DEBUG_OFF,

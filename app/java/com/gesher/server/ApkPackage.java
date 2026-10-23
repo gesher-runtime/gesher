@@ -12,13 +12,16 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.ComponentInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 import android.os.Process;
 
 import com.android.internal.pm.parsing.PackageInfoCommonUtils;
 import com.android.internal.pm.parsing.PackageParser2;
 import com.android.internal.pm.parsing.pkg.ParsedPackage;
 import com.android.internal.pm.pkg.component.ParsedActivity;
+import com.android.internal.pm.pkg.component.ParsedComponent;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 
 import java.io.File;
@@ -220,26 +223,147 @@ public final class ApkPackage {
             }
             return result;
         }
+        for (Match m : match(parsed.getActivities(), intent, resolvedType, flags)) {
+            ActivityInfo a = activityInfo(m.name, flags);
+            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        }
+        return result;
+    }
+
+    /**
+     * The services whose intent filters match {@code intent} (an explicit component matches
+     * itself), as PackageManager.queryIntentServices answers.
+     */
+    public List<ResolveInfo> queryIntentServices(Intent intent, String resolvedType,
+            long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        if (intent.getPackage() != null && !intent.getPackage().equals(packageName)) {
+            return result;
+        }
+        ComponentName component = intent.getComponent();
+        if (component != null) {
+            ServiceInfo s = component.getPackageName().equals(packageName)
+                    ? serviceInfo(component.getClassName(), flags) : null;
+            if (s != null) {
+                ResolveInfo ri = new ResolveInfo();
+                ri.serviceInfo = s;
+                result.add(ri);
+            }
+            return result;
+        }
+        for (Match m : match(parsed.getServices(), intent, resolvedType, flags)) {
+            ServiceInfo s = serviceInfo(m.name, flags);
+            if (s != null) result.add(m.resolveInfo(flags, null, s));
+        }
+        return result;
+    }
+
+    /**
+     * The manifest receivers {@code intent} reaches: the explicit component, or the ones
+     * whose intent filters match it (PackageManager.queryBroadcastReceivers).
+     */
+    public List<ResolveInfo> queryIntentReceivers(Intent intent, String resolvedType,
+            long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        if (intent.getPackage() != null && !intent.getPackage().equals(packageName)) {
+            return result;
+        }
+        ComponentName component = intent.getComponent();
+        if (component != null) {
+            ActivityInfo a = component.getPackageName().equals(packageName)
+                    ? receiverInfo(component.getClassName(), flags) : null;
+            if (a != null) {
+                ResolveInfo ri = new ResolveInfo();
+                ri.activityInfo = a;
+                result.add(ri);
+            }
+            return result;
+        }
+        for (Match m : match(parsed.getReceivers(), intent, resolvedType, flags)) {
+            ActivityInfo a = receiverInfo(m.name, flags);
+            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        }
+        return result;
+    }
+
+    /** The service named {@code className}, or null. */
+    public ServiceInfo serviceInfo(String className, long flags) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_SERVICES);
+        if (pi.services != null) {
+            for (ServiceInfo s : pi.services) {
+                if (s.name.equals(className)) return s;
+            }
+        }
+        return null;
+    }
+
+    /** The manifest receiver named {@code className}, or null. */
+    public ActivityInfo receiverInfo(String className, long flags) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_RECEIVERS);
+        if (pi.receivers != null) {
+            for (ActivityInfo a : pi.receivers) {
+                if (a.name.equals(className)) return a;
+            }
+        }
+        return null;
+    }
+
+    /** The content providers the manifest declares. */
+    public List<ProviderInfo> providers(long flags) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS);
+        List<ProviderInfo> result = new ArrayList<>();
+        if (pi.providers != null) Collections.addAll(result, pi.providers);
+        return result;
+    }
+
+    /** A component whose intent filter matched, and how. */
+    private static final class Match {
+        final String name;
+        final IntentFilter filter;
+        final ParsedIntentInfo info;
+        final int match;
+
+        Match(String name, IntentFilter filter, ParsedIntentInfo info, int match) {
+            this.name = name;
+            this.filter = filter;
+            this.info = info;
+            this.match = match;
+        }
+
+        ResolveInfo resolveInfo(long flags, ActivityInfo activity, ServiceInfo service) {
+            ResolveInfo ri = new ResolveInfo();
+            ri.activityInfo = activity;
+            ri.serviceInfo = service;
+            if ((flags & PackageManager.GET_RESOLVED_FILTER) != 0) {
+                ri.filter = new IntentFilter(filter);
+            }
+            ri.match = match;
+            ri.priority = filter.getPriority();
+            ri.isDefault = filter.hasCategory(Intent.CATEGORY_DEFAULT);
+            ri.labelRes = info.getLabelRes();
+            ri.icon = info.getIcon();
+            return ri;
+        }
+    }
+
+    /**
+     * The components whose intent filters match {@code intent}, the first matching filter of
+     * each, as PackageManagerService's IntentResolver matches them ({@code
+     * MATCH_DEFAULT_ONLY}: only filters with CATEGORY_DEFAULT).
+     */
+    private static List<Match> match(List<? extends ParsedComponent> components,
+            Intent intent, String resolvedType, long flags) {
+        List<Match> result = new ArrayList<>();
         String type = resolvedType != null ? resolvedType : intent.getType();
-        for (ParsedActivity pa : parsed.getActivities()) {
-            for (ParsedIntentInfo info : pa.getIntents()) {
+        boolean defaultOnly = (flags & PackageManager.MATCH_DEFAULT_ONLY) != 0;
+        for (ParsedComponent c : components) {
+            for (ParsedIntentInfo info : c.getIntents()) {
                 IntentFilter filter = info.getIntentFilter();
+                if (defaultOnly && !filter.hasCategory(Intent.CATEGORY_DEFAULT)) continue;
                 int match = filter.match(intent.getAction(), type, intent.getScheme(),
                         intent.getData(), intent.getCategories(), "gesher");
                 if (match < 0) continue;
-                ActivityInfo a = activityInfo(pa.getName(), flags);
-                if (a == null) break;
-                ResolveInfo ri = new ResolveInfo();
-                ri.activityInfo = a;
-                if ((flags & PackageManager.GET_RESOLVED_FILTER) != 0) {
-                    ri.filter = new IntentFilter(filter);
-                }
-                ri.match = match;
-                ri.priority = filter.getPriority();
-                ri.isDefault = filter.hasCategory(Intent.CATEGORY_DEFAULT);
-                ri.labelRes = info.getLabelRes();
-                ri.icon = info.getIcon();
-                result.add(ri);
+                result.add(new Match(c.getName(), filter, info, match));
                 break;
             }
         }

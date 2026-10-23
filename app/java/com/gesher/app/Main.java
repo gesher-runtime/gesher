@@ -49,6 +49,9 @@ import java.util.List;
  *                         instead of parsing the APK and serving stand-ins in this process
  *   --ez KEY true|false   a boolean extra in the launch intent (--system-server), as am
  *                         start's
+ *   --keep-task           (--system-server) the launcher does not remove the task once the
+ *                         activity is idle: the run ends when the app's last activity
+ *                         finishes
  * </pre>
  *
  * <p>The driver runs from the boot class path (it is in {@code android.app} to reach
@@ -97,6 +100,7 @@ public final class Main {
         String activity = null;
         String dataDir = null;
         boolean systemServer = false;
+        boolean keepTask = false;
         java.util.Map<String, Boolean> extras = new java.util.LinkedHashMap<>();
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
@@ -107,6 +111,7 @@ public final class Main {
                 case "--data-dir": dataDir = value(args, ++i, a); break;
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--system-server": systemServer = true; break;
+                case "--keep-task": keepTask = true; break;
                 case "--ez": {
                     String key = value(args, ++i, a);
                     extras.put(key, Boolean.parseBoolean(value(args, ++i, a)));
@@ -169,7 +174,7 @@ public final class Main {
             }
             log("starting " + intent.toShortString(false, true, true, false)
                     + " through the system server");
-            GesherAppProcess.run(intent, true /* removeTaskWhenIdle */);
+            GesherAppProcess.run(intent, appInfo.targetSdkVersion, !keepTask);
             log("done");
             return 0;
         } else {
@@ -319,6 +324,6 @@ public final class Main {
     private static void usage() {
         System.err.println("usage: gesher-app [--build-prop FILE] [--framework-res FILE]"
                 + " [--activity CLASS] [--data-dir DIR] [--strict-services] [--system-server"
-                + " [--ez KEY true|false]...] <app.apk>");
+                + " [--ez KEY true|false]... [--keep-task]] <app.apk>");
     }
 }

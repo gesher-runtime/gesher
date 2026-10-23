@@ -6,6 +6,7 @@ package com.gesher.server;
 
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
+import android.app.INotificationManager;
 import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.UserInfo;
@@ -51,7 +52,8 @@ public final class Services {
         Map<String, IBinder> services = new LinkedHashMap<>();
         PackageManagerService pm = new PackageManagerService(packages);
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
-        ActivityManagerService am = new ActivityManagerService(atm);
+        NotificationManagerService notifications = new NotificationManagerService();
+        ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
         services.put(Context.ACTIVITY_SERVICE,
                 StandIn.of(IActivityManager.class, am).asBinder());
@@ -65,6 +67,8 @@ public final class Services {
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManager()).asBinder());
+        services.put(Context.NOTIFICATION_SERVICE,
+                StandIn.of(INotificationManager.class, notifications).asBinder());
         return services;
     }
 
