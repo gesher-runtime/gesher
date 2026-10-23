@@ -36,6 +36,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a branch supersedes its running framework build.
+concurrency:
+  # github.workflow is the caller's ("ci") when ci.yml runs this one.
+  group: ${{ github.workflow }}-framework-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # aidl, hidl-gen, protoc and its Java plugins, stats-log-api-gen,
   # expresscatalog-codegen, sysprop_java: tools/host, built natively for the
@@ -60,7 +66,8 @@ jobs:
           lines=$(grep -E "^($projects)(\s|$)" aosp.lock)
           echo "$lines"
           lock=$(echo "$lines" | sha256sum | cut -c1-16)
-          echo "key=host-tools-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**', '.github/workflows/framework.yml') }}" >> "$GITHUB_OUTPUT"
+          # v: the build recipe below (compiler, flags); bump it when it changes.
+          echo "key=host-tools-v1-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**') }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache host tools
         id: tools
@@ -85,12 +92,13 @@ jobs:
         if: steps.tools.outputs.cache-hit != 'true'
         run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
-      - name: Cache compiler output
+      # Restored and saved separately, so a failed build keeps its objects.
+      - name: Restore compiler output
         if: steps.tools.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-host-tools-${{ github.sha }}
+          key: ccache-host-tools-${{ github.run_id }}
           restore-keys: ccache-host-tools-
 
       - name: Build
@@ -117,6 +125,13 @@ jobs:
           cp out/host/protobuf/protoc dist-host/protobuf/
           ls -la dist-host dist-host/protobuf
 
+      - name: Save compiler output
+        if: always() && steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-host-tools-${{ github.run_id }}
+
       - name: Smoke-test the tools
         run: |
           ls -la dist-host dist-host/protobuf
@@ -138,6 +153,14 @@ jobs:
           path: dist-host
           key: ${{ needs.host-tools.outputs.key }}
           fail-on-cache-miss: true
+
+      # The tools are linked against libc++, as Soong links them.
+      - name: Install the host tools' runtime
+        run: |
+          sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
+          missing=$(for t in $(find dist-host -type f); do ldd "$t" | sed -n "s|^|$t: |; /not found/p"; done)
+          if [[ -n $missing ]]; then echo "$missing"; echo "::error::host tools miss shared libraries"; exit 1; fi
+          dist-host/protobuf/protoc --version
 
       # build.py --checkout widens the sparse sets to the files the plan
       # needs (blobless clones fetch them then). The tree is saved again,
