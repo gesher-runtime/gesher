@@ -37,4 +37,11 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-libcore" $(find "$work/classes-libcore" -name '*.class')
 cp "$work/dex-libcore/classes.dex" "$out/libcore-tests.dex"
 
+# framework.jar on the boot class path (tests/dex-framework).
+javac --release 11 -d "$work/classes-framework" "$root"/tests/dex-framework/*.java
+mkdir -p "$work/dex-framework"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-framework" $(find "$work/classes-framework" -name '*.class')
+cp "$work/dex-framework/classes.dex" "$out/framework-tests.dex"
+
 echo "test apps written to $out"

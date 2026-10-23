@@ -140,7 +140,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: build
+    needs: [build, framework]
     strategy:
       fail-fast: false
       matrix:
@@ -158,6 +158,11 @@ jobs:
           name: windows-x64
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -165,6 +170,6 @@ jobs:
           $code = $LASTEXITCODE
           "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
-          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)|failed' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
