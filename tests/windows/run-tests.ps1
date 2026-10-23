@@ -147,5 +147,12 @@ if ($code -eq 0 -and -not $missing) {
   $failed++
 }
 
+# Each line of work keeps its checks in a file of its own (graphics, native
+# libraries, services, ...), run here in this script's scope: Check, RunDex,
+# NoDrive, $root, $bcp and $failed are theirs to use.
+foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name) {
+  . $t.FullName
+}
+
 Write-Host "`n$failed test(s) failed"
 exit $failed
