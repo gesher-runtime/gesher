@@ -32,8 +32,7 @@ void LoadBuildProp() {
   if (root == nullptr) return;
   std::string text;
   if (!android::base::ReadFileToString(std::string(root) + "/build.prop", &text)) return;
-  for (const std::string& raw : android::base::Split(text, "
-")) {
+  for (const std::string& raw : android::base::Split(text, "\n")) {
     std::string line = android::base::Trim(raw);
     if (line.empty() || line[0] == '#') continue;
     size_t eq = line.find('=');
