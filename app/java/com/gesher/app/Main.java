@@ -136,6 +136,12 @@ public final class Main {
             manifest.setDataDir(env("ANDROID_DATA", "/data") + "/data/" + appInfo.packageName);
         }
         new File(appInfo.dataDir).mkdirs();
+        // The APK's lib/x86_64 into nativeLibraryDir, for System.loadLibrary (NativeLibs).
+        int libs = NativeLibs.extract(apk, appInfo.nativeLibraryDir);
+        if (libs > 0) {
+            log("extracted " + libs + " native " + (libs == 1 ? "library" : "libraries")
+                    + " (" + NativeLibs.ABI + ") to " + appInfo.nativeLibraryDir);
+        }
         log("package " + appInfo.packageName + " (targetSdk " + appInfo.targetSdkVersion
                 + "), launching " + launch.name);
 

@@ -64,3 +64,17 @@ Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java
 Check 'native libs: libc++_shared through the loader; C++ exceptions thrown and caught in the .so' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libcxx_test.so") (NoDrive "$Dir")
 } @('libcxx_test: all passed', 'elf_load_test all passed')
+
+# Step 5, the test APK: gesher-app runs nativeapp.apk (tests/apps/nativeapp),
+# extracts its lib/x86_64 (libnativeapp.so and libc++_shared.so) into the app's
+# native library directory, and the Activity's onCreate loads the library with
+# System.loadLibrary and calls into it: C++ with an exception caught inside,
+# and a call back into the Activity. onResume prints the native result.
+$bcpNative = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'native libs: gesher-app runs nativeapp.apk; lib/x86_64 loaded from the APK, native result checked in onResume' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpNative" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/nativeapp.apk")
+} @('extracted 2 native libraries (x86_64)',
+    'NativeActivity onResume, native=Hello from C++, caught std::out_of_range, callBack(12)=145',
+    'gesher-app: com.gesher.nativeapp.NativeActivity onResume',
+    'gesher-app: done')
