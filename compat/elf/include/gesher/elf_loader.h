@@ -81,4 +81,9 @@ void Close(Library* library);
 // Returns false if %fs cannot be set up on this host (see the fsbase probe).
 bool SetupThreadTls();
 
+// __tls_get_addr's worker: the address of loaded module `module_id`'s TLS
+// variable at `offset` in the current thread. The bionic shim wraps this as the
+// System V __tls_get_addr the loaded code calls for general-dynamic TLS.
+void* TlsGetAddr(size_t module_id, size_t offset);
+
 }  // namespace gesher::elf
