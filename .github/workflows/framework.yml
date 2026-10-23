@@ -340,13 +340,16 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/uiapp/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
 
       - name: Collect framework artifacts
         run: |
           mkdir -p dist-framework
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
-            out/app/lifecycle.apk dist-framework/
+            out/app/lifecycle.apk out/app/uiapp.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework

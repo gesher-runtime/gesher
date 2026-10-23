@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- At 160 dpi (1 dp = 1 px) on a 400x800 window: red 0-200, green and blue halves
+     200-400, yellow 400-520 with black text, white below. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFFFF">
+    <View
+        android:id="@+id/red"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:background="#FFFF0000" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:orientation="horizontal">
+        <View
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="#FF00FF00" />
+        <View
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="#FF0000FF" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/text"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:background="#FFFFFF00"
+        android:gravity="center"
+        android:text="@string/greeting"
+        android:textColor="#FF000000"
+        android:textSize="48sp" />
+</LinearLayout>
