@@ -121,7 +121,8 @@ int main() {
     close(efd);
   }
 
-  sp<Looper> looper = Looper::prepare(0);
+  // ALLOW_NON_CALLBACKS: the ident test below adds an fd with no callback.
+  sp<Looper> looper = Looper::prepare(Looper::PREPARE_ALLOW_NON_CALLBACKS);
   CHECK(looper != nullptr);
   CHECK(Looper::getForThread() == looper);
 

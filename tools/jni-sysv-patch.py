@@ -12,7 +12,8 @@ thunk under GESHER.
 
 The sources are read from the checkout's HEAD, so the patch is made against
 the pristine files whatever is applied to the working tree. FILES lists the
-sources cmake/aosp/framework.cmake compiles; add to both together.
+sources cmake/aosp/framework.cmake compiles (plus those of the next step);
+add to both together.
 """
 import difflib
 import re

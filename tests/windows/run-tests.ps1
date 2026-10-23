@@ -20,6 +20,7 @@ function Check([string] $Name, [scriptblock] $Run, [string[]] $Expect) {
 Check 'platform probe' { & "$Dir/platform_probe.exe" } @('0 probe(s) failed')
 Check 'socket probe' { & "$Dir/socket_probe.exe" } @('all passed')
 Check 'epoll probe' { & "$Dir/epoll_probe.exe" } @('all passed')
+Check 'libutils probe' { & "$Dir/libutils_probe.exe" } @('all passed')
 
 Check 'dexdump: disassemble .dex' { & "$Dir/dexdump.exe" -d "$Dir/hello.dex" } @(
   "Class descriptor  : 'Lgesher/Hello;'",
@@ -59,6 +60,22 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
 } else {
   Write-Host ('FAIL  dalvikvm: runs Hello with the interpreter (exit 0x{0:X8})' -f $code)
   # Addresses as symbols, from the linker map (tools/symbolize.py).
+  if (Test-Path "$Dir/dalvikvm.map") {
+    $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+  } else {
+    Write-Host $out
+  }
+  $failed++
+}
+
+# The framework natives: libandroid_runtime's registrations and the
+# @CriticalNative ABI canary (docs/framework-natives.md, step 2).
+$out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/natives.dex") gesher.NativeTest 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
+  Write-Host 'PASS  dalvikvm: framework natives (libandroid_runtime)'
+} else {
+  Write-Host ('FAIL  dalvikvm: framework natives (exit 0x{0:X8})' -f $LASTEXITCODE)
   if (Test-Path "$Dir/dalvikvm.map") {
     $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
   } else {
