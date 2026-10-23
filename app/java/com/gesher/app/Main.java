@@ -5,13 +5,30 @@
 package com.gesher.app;
 
 import android.app.GesherAppDriver;
+import android.content.ComponentName;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.IPackageManager;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.pm.parsing.ApkLite;
+import android.content.pm.parsing.ApkLiteParseUtils;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
 import android.content.res.AssetManager;
+import android.os.Binder;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
+import android.os.ServiceManager;
+
+import com.gesher.server.ApkPackage;
+import com.gesher.server.Services;
+import com.gesher.server.StandIn;
 
 import java.io.File;
+import java.util.List;
 
 /**
  * {@code gesher-app [options] <app.apk>}: runs an APK's launcher Activity through attach,
@@ -25,6 +42,10 @@ import java.io.File;
  *   --data-dir DIR        the app's data directory (default $ANDROID_DATA/data/PACKAGE)
  *   --strict-services     a stand-in service method that is not implemented throws
  *                         instead of returning a default value
+ *   --system-server       get the package and the system services from a running
+ *                         com.gesher.server.SystemServer (given the APK), through
+ *                         servicemanager over binderd ($GESHER_BINDER), instead of
+ *                         parsing the APK and serving stand-ins in this process
  * </pre>
  *
  * <p>The driver runs from the boot class path (it is in {@code android.app} to reach
@@ -36,7 +57,6 @@ public final class Main {
     private Main() {
     }
 
-    /** Prints a line on stdout, prefixed {@code gesher-app: }. */
     /** Ends the main Looper's loop (see run). */
     private static final class EndLoop extends RuntimeException {
         EndLoop() {
@@ -44,6 +64,7 @@ public final class Main {
         }
     }
 
+    /** Prints a line on stdout, prefixed {@code gesher-app: }. */
     public static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
@@ -72,6 +93,7 @@ public final class Main {
         String frameworkRes = null;
         String activity = null;
         String dataDir = null;
+        boolean systemServer = false;
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             switch (a) {
@@ -79,7 +101,8 @@ public final class Main {
                 case "--framework-res": frameworkRes = value(args, ++i, a); break;
                 case "--activity": activity = value(args, ++i, a); break;
                 case "--data-dir": dataDir = value(args, ++i, a); break;
-                case "--strict-services": StandIn.sStrict = true; break;
+                case "--strict-services": StandIn.setStrict(true); break;
+                case "--system-server": systemServer = true; break;
                 case "-h":
                 case "--help":
                     usage();
@@ -97,44 +120,56 @@ public final class Main {
             return 2;
         }
         if (System.getenv("GESHER_APP_STRICT_SERVICES") != null) {
-            StandIn.sStrict = true;
+            StandIn.setStrict(true);
         }
         String androidRoot = env("ANDROID_ROOT", "/system");
         if (buildProp == null) buildProp = androidRoot + "/build.prop";
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
         apk = new File(apk).getAbsolutePath();
 
-        // 0. JCA providers that exist on Gesher's boot class path, and digests
-        //    (Digests): before anything uses JCA.
-        Digests.install();
+        // 0-4. The runtime: JCA, the framework's natives, the system properties, the main
+        //      Looper, the framework's resources.
+        bootstrap(TAG, buildProp, frameworkRes);
 
-        // 1. The framework's natives (a builtin library of the runtime on Windows).
-        System.loadLibrary("android_runtime");
-
-        // 2. System properties, before anything reads Build.
-        int props = BuildProps.load(buildProp);
-        log("loaded " + props + " properties from " + buildProp);
-
-        // 3. The main Looper; everything below runs on this thread.
-        Looper.prepareMainLooper();
-
-        // 4. The framework's resources. AssetManager's own path is the device's
-        //    /system/framework/framework-res.apk; on Windows that is a path on the current
-        //    drive, so the system assets are created here from $ANDROID_ROOT's copy first.
-        if (!new File(frameworkRes).isFile()) {
-            throw new IllegalStateException("framework-res.apk not found: " + frameworkRes);
-        }
-        AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
-
-        // 5. The APK's manifest.
-        AppManifest manifest = AppManifest.read(apk);
-        ActivityInfo launch = manifest.launcherActivity(activity);
-        ApplicationInfo appInfo = manifest.applicationInfo;
-        if (dataDir != null) {
-            manifest.setDataDir(new File(dataDir).getAbsolutePath());
+        // 5-6. The package and the system services: parsed and served in this process, or
+        //      asked of a SystemServer process over binder.
+        ApplicationInfo appInfo;
+        ActivityInfo launch;
+        if (systemServer) {
+            IPackageManager pm = remotePackageManager();
+            String packageName = packageName(apk);
+            appInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA
+                    | PackageManager.GET_SHARED_LIBRARY_FILES, 0);
+            if (appInfo == null) {
+                throw new IllegalStateException("the system server does not know "
+                        + packageName + " (start com.gesher.server.SystemServer with " + apk
+                        + ")");
+            }
+            launch = remoteLauncherActivity(pm, packageName, activity);
+            RemoteServices.installDisplayManagerGlobal();
+            log("package " + packageName + " from the system server's package manager: "
+                    + appInfo.sourceDir);
+            if (dataDir != null) {
+                String d = new File(dataDir).getAbsolutePath();
+                appInfo.dataDir = d;
+                appInfo.credentialProtectedDataDir = d;
+                appInfo.deviceProtectedDataDir = d;
+                appInfo.nativeLibraryDir = d + "/lib";
+            }
         } else {
-            manifest.setDataDir(env("ANDROID_DATA", "/data") + "/data/" + appInfo.packageName);
+            ApkPackage pkg = ApkPackage.parse(apk);
+            log(pkg.describe());
+            if (dataDir != null) {
+                pkg.setDataDir(new File(dataDir).getAbsolutePath());
+            }
+            appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
+                    | PackageManager.GET_SHARED_LIBRARY_FILES);
+            launch = pkg.launcherActivity(activity);
+            Services.installInProcess(Services.create(List.of(pkg)));
+            log("stand-in services in this process: "
+                    + String.join(", ", ServiceManager.listServices()));
         }
+        launch.applicationInfo = appInfo;
         new File(appInfo.dataDir).mkdirs();
         // The APK's lib/x86_64 into nativeLibraryDir, for System.loadLibrary (NativeLibs).
         int libs = NativeLibs.extract(apk, appInfo.nativeLibraryDir);
@@ -145,18 +180,17 @@ public final class Main {
         log("package " + appInfo.packageName + " (targetSdk " + appInfo.targetSdkVersion
                 + "), launching " + launch.name);
 
-        // 6. Stand-in system services, through ServiceManager.
-        StandInServices.install(manifest);
-
         // 7. The app and its Activity, on the main Looper. The main Looper may not
         //    quit (Looper.prepareMainLooper), so the launch ends the loop the way
         //    quitSafely would: a message posted after it, once the messages it left
         //    behind have run, throws EndLoop out of Looper.loop().
+        final ApplicationInfo app = appInfo;
+        final ActivityInfo target = launch;
         final Throwable[] failure = new Throwable[1];
         final Handler main = new Handler(Looper.getMainLooper());
         main.post(() -> {
             try {
-                GesherAppDriver.launch(manifest.applicationInfo, launch);
+                GesherAppDriver.launch(app, target);
             } catch (Throwable t) {
                 failure[0] = t;
             } finally {
@@ -177,6 +211,94 @@ public final class Main {
         return 0;
     }
 
+    /**
+     * Steps 0-4 of starting a process, shared with com.gesher.server.SystemServer: JCA
+     * providers and digests, the framework's natives, the system properties, the main
+     * Looper and the framework's resources. {@code tag} prefixes the log line.
+     */
+    public static void bootstrap(String tag, String buildProp, String frameworkRes)
+            throws Exception {
+        // 0. JCA providers that exist on Gesher's boot class path, and digests
+        //    (Digests): before anything uses JCA.
+        Digests.install();
+
+        // 1. The framework's natives (a builtin library of the runtime on Windows).
+        System.loadLibrary("android_runtime");
+
+        // 2. System properties, before anything reads Build.
+        int props = BuildProps.load(buildProp);
+        System.out.println(tag + ": loaded " + props + " properties from " + buildProp);
+        System.out.flush();
+
+        // 3. The main Looper.
+        Looper.prepareMainLooper();
+
+        // 4. The framework's resources. AssetManager's own path is the device's
+        //    /system/framework/framework-res.apk; on Windows that is a path on the current
+        //    drive, so the system assets are created here from $ANDROID_ROOT's copy first.
+        if (!new File(frameworkRes).isFile()) {
+            throw new IllegalStateException("framework-res.apk not found: " + frameworkRes);
+        }
+        AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
+    }
+
+    /** The system server's package manager, waited for through servicemanager. */
+    private static IPackageManager remotePackageManager() throws InterruptedException {
+        if (System.getenv("GESHER_BINDER") == null) {
+            throw new IllegalStateException("--system-server needs $GESHER_BINDER (binderd,"
+                    + " servicemanager and com.gesher.server.SystemServer serving it)");
+        }
+        IBinder binder = null;
+        for (int i = 0; i < 600 && binder == null; i++) {
+            binder = ServiceManager.checkService("package");
+            if (binder == null) Thread.sleep(100);
+        }
+        if (binder == null) {
+            throw new IllegalStateException("no package service in servicemanager after 60 s");
+        }
+        log("system services from servicemanager: "
+                + String.join(", ", ServiceManager.listServices())
+                + (binder instanceof Binder ? " (in this process)" : " (in another process)"));
+        return IPackageManager.Stub.asInterface(binder);
+    }
+
+    /** The package name in the APK's manifest (ApkLiteParseUtils, as installers read it). */
+    private static String packageName(String apk) {
+        ParseResult<ApkLite> lite = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), new File(apk), 0);
+        if (lite.isError()) {
+            throw new IllegalStateException("reading " + apk + ": " + lite.getErrorMessage(),
+                    lite.getException());
+        }
+        return lite.getResult().getPackageName();
+    }
+
+    /**
+     * The Activity to launch, from the package manager: {@code requested}, or what
+     * MAIN/LAUNCHER resolves to in the package (as getLaunchIntentForPackage finds it).
+     */
+    private static ActivityInfo remoteLauncherActivity(IPackageManager pm, String packageName,
+            String requested) throws Exception {
+        if (requested != null) {
+            String name = requested.startsWith(".") ? packageName + requested
+                    : requested.indexOf('.') < 0 ? packageName + "." + requested : requested;
+            ActivityInfo a = pm.getActivityInfo(new ComponentName(packageName, name), 0, 0);
+            if (a == null) {
+                throw new IllegalStateException(packageName + " declares no activity " + name);
+            }
+            return a;
+        }
+        Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                .setPackage(packageName);
+        @SuppressWarnings("unchecked")
+        List<ResolveInfo> found = pm.queryIntentActivities(intent, null, 0, 0).getList();
+        if (found == null || found.isEmpty()) {
+            throw new IllegalStateException(packageName + " has no MAIN/LAUNCHER activity;"
+                    + " name one with --activity");
+        }
+        return found.get(0).activityInfo;
+    }
+
     private static String value(String[] args, int i, String option) {
         if (i >= args.length) {
             throw new IllegalArgumentException(option + " needs a value");
@@ -191,6 +313,7 @@ public final class Main {
 
     private static void usage() {
         System.err.println("usage: gesher-app [--build-prop FILE] [--framework-res FILE]"
-                + " [--activity CLASS] [--data-dir DIR] [--strict-services] <app.apk>");
+                + " [--activity CLASS] [--data-dir DIR] [--strict-services] [--system-server]"
+                + " <app.apk>");
     }
 }

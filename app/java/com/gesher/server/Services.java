@@ -2,19 +2,15 @@
  * Copyright (C) 2026 The Gesher Authors
  * SPDX-License-Identifier: Apache-2.0
  */
-package com.gesher.app;
+package com.gesher.server;
 
 import android.app.ContentProviderHolder;
 import android.app.IActivityClientController;
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
 import android.app.IApplicationThread;
-import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.ActivityInfo;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
 import android.graphics.Point;
@@ -29,69 +25,85 @@ import android.os.ServiceWithMetadata;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindowManager;
-import android.view.IWindowSession;
-import android.view.IWindowSessionCallback;
+
+import com.gesher.app.DeviceProfile;
 
 import java.lang.reflect.Field;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
 /**
  * The system services an app process looks up through {@link ServiceManager}, as
- * in-process stand-ins (Ravenwood's RavenwoodSystemServer does the same for its tests).
- * Each overrides only what the headless lifecycle calls; see {@link StandIn} for the
- * rest. There is no system_server: these answer for one app, the one being launched.
+ * stand-ins (Ravenwood's RavenwoodSystemServer does the same for its tests). Each
+ * overrides only what the headless lifecycle calls; see {@link StandIn} for the rest.
+ *
+ * <p>{@link SystemServer} registers them with servicemanager, for app processes to reach
+ * over Binder; {@link #installInProcess} serves them in the app's own process instead,
+ * with no binder driver (gesher-app's single-process mode).
  */
-public final class StandInServices {
-    private static final Map<String, IBinder> sServices = new TreeMap<>();
-
-    private StandInServices() {
+public final class Services {
+    private Services() {
     }
 
-    static void install(AppManifest app) throws ReflectiveOperationException {
-        add(Context.ACTIVITY_SERVICE,
-                StandIn.of(IActivityManager.class, new ActivityManager()));
-        add(Context.ACTIVITY_TASK_SERVICE,
-                StandIn.of(IActivityTaskManager.class, new ActivityTaskManager()));
-        add("package", StandIn.of(IPackageManager.class, new PackageManagerService(app)));
-        add(Context.WINDOW_SERVICE, StandIn.of(IWindowManager.class, new WindowManager()));
-        add(Context.DISPLAY_SERVICE, StandIn.of(IDisplayManager.class, new DisplayManager()));
-        add(Context.USER_SERVICE, StandIn.of(IUserManager.class, new UserManager()));
+    /** The services, by name, for the given packages. */
+    public static Map<String, IBinder> create(Collection<ApkPackage> packages) {
+        Map<String, IBinder> services = new LinkedHashMap<>();
+        services.put("package", StandIn.of(IPackageManager.class,
+                new PackageManagerService(packages)).asBinder());
+        services.put(Context.ACTIVITY_SERVICE,
+                StandIn.of(IActivityManager.class, new ActivityManager()).asBinder());
+        services.put(Context.ACTIVITY_TASK_SERVICE,
+                StandIn.of(IActivityTaskManager.class, new ActivityTaskManager()).asBinder());
+        services.put(Context.WINDOW_SERVICE,
+                StandIn.of(IWindowManager.class, new WindowManagerService()).asBinder());
+        services.put(Context.DISPLAY_SERVICE,
+                StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
+        services.put(Context.USER_SERVICE,
+                StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        return services;
+    }
 
-        // The service manager itself: ServiceManager asks it for anything not in its
-        // cache. Without a binder driver BinderInternal.getContextObject() has no
-        // servicemanager to return, so the stand-in replaces the proxy it would build.
+    /**
+     * Serves {@code services} in this process: a stand-in servicemanager that knows them
+     * replaces {@code ServiceManager.sServiceManager} (without a binder driver
+     * BinderInternal.getContextObject() has no servicemanager to return), and they are
+     * put in ServiceManager's cache, as bindApplication does on a device.
+     */
+    public static void installInProcess(Map<String, IBinder> services)
+            throws ReflectiveOperationException {
+        Map<String, IBinder> all = new TreeMap<>(services);
         StandIn<IServiceManager> sm =
-                StandIn.of(IServiceManager.class, new ServiceManagerStandIn());
+                StandIn.of(IServiceManager.class, new ServiceManagerStandIn(all));
         Field f = ServiceManager.class.getDeclaredField("sServiceManager");
         f.setAccessible(true);
         f.set(null, sm.asInterface());
-
-        // What bindApplication hands an app process on a device.
-        ServiceManager.initServiceCache(new TreeMap<>(sServices));
-        Main.log("stand-in services: " + sServices.keySet());
+        ServiceManager.initServiceCache(new TreeMap<>(all));
     }
 
-    private static void add(String name, StandIn<?> service) {
-        sServices.put(name, service.asBinder());
-    }
-
-    /** servicemanager: the stand-ins above, and nothing else. */
+    /** servicemanager in a single process: the services above, and nothing else. */
     public static final class ServiceManagerStandIn extends IServiceManager.Default {
+        private final Map<String, IBinder> mServices;
+
+        ServiceManagerStandIn(Map<String, IBinder> services) {
+            mServices = services;
+        }
+
         @Override
         public IBinder getService(String name) {
-            return sServices.get(name);
+            return mServices.get(name);
         }
 
         @Override
         public IBinder checkService(String name) {
-            return sServices.get(name);
+            return mServices.get(name);
         }
 
         @Override
         public Service getService2(String name) {
             ServiceWithMetadata s = new ServiceWithMetadata();
-            s.service = sServices.get(name);
+            s.service = mServices.get(name);
             return Service.serviceWithMetadata(s);
         }
 
@@ -103,12 +115,12 @@ public final class StandInServices {
         @Override
         public void addService(String name, IBinder service, boolean allowIsolated,
                 int dumpPriority) {
-            sServices.put(name, service);
+            mServices.put(name, service);
         }
 
         @Override
         public String[] listServices(int dumpPriority) {
-            return sServices.keySet().toArray(new String[0]);
+            return mServices.keySet().toArray(new String[0]);
         }
 
         @Override
@@ -157,95 +169,6 @@ public final class StandInServices {
         @Override
         public int getTaskForActivity(IBinder token, boolean onlyRoot) {
             return 1;
-        }
-    }
-
-    /** package: PackageManagerService, knowing one package. */
-    public static final class PackageManagerService extends IPackageManager.Default {
-        private final AppManifest mApp;
-
-        PackageManagerService(AppManifest app) {
-            mApp = app;
-        }
-
-        private boolean isApp(String packageName) {
-            return mApp.applicationInfo.packageName.equals(packageName);
-        }
-
-        @Override
-        public PackageInfo getPackageInfo(String packageName, long flags, int userId) {
-            return isApp(packageName) ? mApp.packageInfo() : null;
-        }
-
-        @Override
-        public ApplicationInfo getApplicationInfo(String packageName, long flags,
-                int userId) {
-            return isApp(packageName) ? new ApplicationInfo(mApp.applicationInfo) : null;
-        }
-
-        @Override
-        public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
-            if (!isApp(className.getPackageName())) {
-                return null;
-            }
-            ActivityInfo a = mApp.findActivity(className.getClassName());
-            return a == null ? null : new ActivityInfo(a);
-        }
-
-        @Override
-        public boolean hasSystemFeature(String name, int version) {
-            return false;
-        }
-
-        @Override
-        public String getNameForUid(int uid) {
-            return mApp.applicationInfo.packageName;
-        }
-
-        @Override
-        public String[] getPackagesForUid(int uid) {
-            return new String[] {mApp.applicationInfo.packageName};
-        }
-
-        @Override
-        public String getInstallerPackageName(String packageName) {
-            return null;
-        }
-    }
-
-    /** window: WindowManagerService. No windows are added while headless. */
-    public static final class WindowManager extends IWindowManager.Default {
-        private final StandIn<IWindowSession> mSession =
-                StandIn.of(IWindowSession.class, new IWindowSession.Default());
-
-        @Override
-        public IWindowSession openSession(IWindowSessionCallback callback) {
-            return mSession.asInterface();
-        }
-
-        @Override
-        public void getInitialDisplaySize(int displayId, Point size) {
-            size.set(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        }
-
-        @Override
-        public void getBaseDisplaySize(int displayId, Point size) {
-            size.set(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        }
-
-        @Override
-        public boolean hasNavigationBar(int displayId) {
-            return false;
-        }
-
-        @Override
-        public float getCurrentAnimatorScale() {
-            return 1f;
-        }
-
-        @Override
-        public float[] getAnimationScales() {
-            return new float[] {1f, 1f, 1f};
         }
     }
 
