@@ -48,3 +48,35 @@ CheckTimed 'binder: /dev/binder across processes (binderd, raw ioctls)' "$Dir/bi
 # libbinder over it, with frameworks/native's servicemanager.
 CheckTimed 'binder: servicemanager and libbinder across processes' "$Dir/libbinder_probe.exe" @() @(
   'libbinder probe: all passed')
+
+# The framework's Binder between two dalvikvm processes: binderd and
+# servicemanager for a device of this run's own, a service process that
+# registers itself with ServiceManager, and a client (tests/dex-services).
+$device = "tests-$PID"
+$logs = Join-Path $root 'services-logs'
+New-Item -ItemType Directory -Force $logs | Out-Null
+$env:GESHER_BINDER = $device
+$env:GESHER_BINDER_TRACE = '1'
+$binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$logs/binderd.out" -RedirectStandardError "$logs/binderd.log"
+Remove-Item Env:GESHER_BINDER_TRACE
+$servicemanager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$logs/servicemanager.out" -RedirectStandardError "$logs/servicemanager.log"
+$bcpServices = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$dvm = @("-Xbootclasspath:$bcpServices", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+  '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/services-tests.dex"))
+$service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.services.BinderTest', 'service') `
+  -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
+$failedBefore = $failed
+CheckTimed 'binder: two dalvikvm processes, ServiceManager, a Binder passed back, death' "$Dir/dalvikvm.exe" `
+  ($dvm + 'gesher.services.BinderTest', 'client') @('BinderTest all passed') 240
+foreach ($p in $service, $servicemanager, $binderd) {
+  if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+}
+if ($failed -ne $failedBefore) {
+  foreach ($f in 'service.out', 'service.err', 'servicemanager.log', 'binderd.log') {
+    Write-Host "--- $f"
+    Get-Content "$logs/$f" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
+  }
+}
+Remove-Item Env:GESHER_BINDER

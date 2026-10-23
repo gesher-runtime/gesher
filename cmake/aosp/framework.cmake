@@ -80,6 +80,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_Parcel.cpp
+  ${_fwjni}/android_os_ServiceManagerNative.cpp
   ${_fwjni}/android_os_SystemClock.cpp
   ${_fwjni}/android_os_SystemProperties.cpp
   ${_fwjni}/android_os_Trace.cpp
