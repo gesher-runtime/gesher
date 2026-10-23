@@ -1,6 +1,6 @@
 // gesher-base: fnmatch (<fnmatch.h>), POSIX shell patterns: '*', '?',
 // bracket expressions ("[a-z]", "[!...]" or "[^...]", and the character
-// classes "[:alpha:]" and friends), '\' escapes, and the GNU flags bionic
+// classes "[:alpha:]" and friends), backslash escapes, and the GNU flags bionic
 // supports (FNM_LEADING_DIR, FNM_CASEFOLD). Matching is on bytes, as in the
 // C locale.
 #include <ctype.h>
@@ -54,13 +54,13 @@ int MatchBracket(const char** pattern, int c, int flags) {
       }
     }
     int lo;
-    if (*p == '\' && (flags & FNM_NOESCAPE) == 0 && p[1] != '\0') ++p;
+    if (*p == '\\' && (flags & FNM_NOESCAPE) == 0 && p[1] != '\0') ++p;
     lo = static_cast<unsigned char>(*p++);
     if ((flags & FNM_PATHNAME) != 0 && lo == '/') return 0;
     int hi = lo;
     if (*p == '-' && p[1] != ']' && p[1] != '\0') {
       ++p;
-      if (*p == '\' && (flags & FNM_NOESCAPE) == 0 && p[1] != '\0') ++p;
+      if (*p == '\\' && (flags & FNM_NOESCAPE) == 0 && p[1] != '\0') ++p;
       hi = static_cast<unsigned char>(*p++);
     }
     if (lo <= c && c <= hi) matched = true;
@@ -127,11 +127,11 @@ int Match(const char* p, const char* s, const char* start, int flags, int depth)
         ++s;
         break;
       }
-      case '\':
+      case '\\':
         if ((flags & FNM_NOESCAPE) == 0) {
           pc = static_cast<unsigned char>(*p++);
           if (pc == '\0') {
-            pc = '\';
+            pc = '\\';
             --p;
           }
         }
