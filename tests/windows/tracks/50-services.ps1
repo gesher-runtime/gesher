@@ -52,6 +52,8 @@ CheckTimed 'binder: servicemanager and libbinder across processes' "$Dir/libbind
 # The framework's Binder between two dalvikvm processes: binderd and
 # servicemanager for a device of this run's own, a service process that
 # registers itself with ServiceManager, and a client (tests/dex-services).
+# BinderTest reads $ANDROID_ROOT/build.prop, as gesher-app does.
+Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $device = "tests-$PID"
 $logs = Join-Path $root 'services-logs'
 New-Item -ItemType Directory -Force $logs | Out-Null
