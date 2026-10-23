@@ -18,6 +18,7 @@ import android.content.pm.PackageManager;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 
+import com.gesher.app.shell.AppShell;
 import com.gesher.server.Device;
 import com.gesher.server.GesherService;
 import com.gesher.server.SystemServer;
@@ -41,7 +42,7 @@ import java.util.Properties;
  *
  * <pre>
  *   Launcher [--build-prop FILE] [--framework-res FILE] COMMAND
- *     launch APK [--activity CLASS] [--ez KEY true|false]... [--keep-task]
+ *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]... [--keep-task]
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W), show the app's output, and once the
  *                       activity is idle remove its task (the app is headless; with
@@ -123,9 +124,12 @@ public final class Launcher {
             case "uninstall": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
+                // Its Start menu shortcut, recorded in its data directory, which goes too.
+                Properties shortcut = AppShell.shortcutOf(rest.get(0));
                 boolean removed = gesher().uninstall(rest.get(0));
                 log(removed ? "uninstalled " + rest.get(0)
                         : rest.get(0) + " is not installed");
+                if (removed) AppShell.unregisterQuietly(rest.get(0), shortcut);
                 return removed ? 0 : 1;
             }
             case "list": return list();
@@ -148,7 +152,7 @@ public final class Launcher {
     }
 
     private static int usage() {
-        System.err.println("usage: gesher-app launch APK [--activity CLASS] [--ez KEY"
+        System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
                 + " true|false]... [--keep-task] | install APK | uninstall PACKAGE | list"
                 + " | status | start | shutdown");
         return 2;
@@ -316,6 +320,8 @@ public final class Launcher {
             default:
                 log(r[1] + " " + r[0] + " (version " + r[3] + ") in " + r[2]);
         }
+        // Its Start menu shortcut (docs/installer.md), made or updated.
+        AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         return r[0];
     }
 
@@ -368,7 +374,21 @@ public final class Launcher {
         if (apk == null) return usage();
         ensureDevice(true);
         GesherService.Client gesher = gesher();
-        String pkg = install(gesher, apk);
+        // An APK is installed or updated first; a package name (a Start menu shortcut's
+        // `launch <package>`) must be installed.
+        String pkg;
+        if (new File(apk).isFile()) {
+            pkg = install(gesher, apk);
+        } else {
+            pkg = apk;
+            IPackageManager pm = IPackageManager.Stub.asInterface(
+                    ServiceManager.getService("package"));
+            if (pm.getPackageInfo(pkg, 0L, 0) == null) {
+                log(pkg + " is not installed (gesher-app install APK)");
+                return 1;
+            }
+            log("launching the installed package " + pkg);
+        }
 
         Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

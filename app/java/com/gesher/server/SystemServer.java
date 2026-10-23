@@ -198,7 +198,10 @@ public final class SystemServer {
             logFile.getParentFile().mkdirs();
             return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), List.of("GESHER_BINDER=" + binder),
+                    String.valueOf(targetSdk))), List.of("GESHER_BINDER=" + binder,
+                    // The package's AppUserModelID, its Start menu shortcut's (shell track).
+                    com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
+                            + com.gesher.app.shell.AppShell.appUserModelId(packageName)),
                     logFile.getPath(), false);
         });
     }
