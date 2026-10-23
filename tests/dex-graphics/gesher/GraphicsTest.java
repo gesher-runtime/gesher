@@ -15,6 +15,8 @@ import android.view.Surface;
 import com.gesher.app.window.NativeWindow;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 
 /**
@@ -147,13 +149,24 @@ public final class GraphicsTest {
       check(false, "font file " + fontPath + " exists");
       return;
     }
+    // Typeface.CustomFallbackBuilder falls back to the system's default
+    // typeface, and there are no system fonts yet (docs/graphics.md, "Fonts"):
+    // the Typeface is made the way build() makes it, without a fallback.
     Typeface typeface;
     try {
       Font font = new Font.Builder(file).build();
-      typeface = new Typeface.CustomFallbackBuilder(new FontFamily.Builder(font).build()).build();
+      FontFamily family = new FontFamily.Builder(font).build();
+      Method fromArray = Typeface.class.getDeclaredMethod(
+          "nativeCreateFromArray", long[].class, long.class, int.class, int.class);
+      fromArray.setAccessible(true);
+      long nativeTypeface =
+          (Long) fromArray.invoke(null, new long[] {family.getNativePtr()}, 0L, 400, 0);
+      Constructor<Typeface> make = Typeface.class.getDeclaredConstructor(long.class, String.class);
+      make.setAccessible(true);
+      typeface = make.newInstance(nativeTypeface, null);
     } catch (Exception e) {
       e.printStackTrace();
-      check(false, "Font.Builder, Typeface.CustomFallbackBuilder (" + fontPath + ")");
+      check(false, "Font.Builder, FontFamily.Builder, a Typeface over them (" + fontPath + ")");
       return;
     }
     Paint paint = new Paint();
