@@ -39,9 +39,6 @@ resumed, then the program exits. The bundled test app:
 
 Another Activity than the launcher one: gesher-app my.apk --activity .Other
 
-The installer also opens .apk files with gesher-app (for your user only):
-double-clicking an APK in Explorer runs it as above, in a console window.
-
 What works, and what doesn't yet
 --------------------------------
 - No windows yet: Android apps run headless (gesher-app); drawing and input
