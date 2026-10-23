@@ -28,6 +28,7 @@ namespace android {
 
 // The register_* functions of the frameworks/base sources built so far
 // (cmake/aosp/framework.cmake); each dies on failure.
+int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
 int register_android_os_SystemProperties(JNIEnv* env);
 int register_android_os_Trace(JNIEnv* env);
@@ -158,6 +159,7 @@ static const struct {
   const char* name;
   int (*registerFunction)(JNIEnv*);
 } gRegJNI[] = {
+    {"android_os_MessageQueue", register_android_os_MessageQueue},
     {"android_os_SystemClock", register_android_os_SystemClock},
     {"android_os_SystemProperties", register_android_os_SystemProperties},
     {"android_os_Trace", register_android_os_Trace},

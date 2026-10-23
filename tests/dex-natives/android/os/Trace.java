@@ -7,7 +7,21 @@ public final class Trace {
   public static final long TRACE_TAG_ALWAYS = 1L << 0;
   public static final long TRACE_TAG_APP = 1L << 12;
 
+  public static final long TRACE_TAG_VIEW = 1L << 3;
+
   private Trace() {}
+
+  public static boolean isTagEnabled(long traceTag) {
+    return nativeIsTagEnabled(traceTag);
+  }
+
+  public static void traceBegin(long traceTag, String methodName) {
+    if (isTagEnabled(traceTag)) nativeTraceBegin(traceTag, methodName);
+  }
+
+  public static void traceEnd(long traceTag) {
+    if (isTagEnabled(traceTag)) nativeTraceEnd(traceTag);
+  }
 
   public static native void nativeSetAppTracingAllowed(boolean allowed);
 

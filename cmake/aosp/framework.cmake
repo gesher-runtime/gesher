@@ -14,6 +14,7 @@ set(_fw "${AOSP_DIR}/frameworks/base")
 set(_fwjni "${_fw}/core/jni")
 
 add_library(framework_runtime OBJECT
+  ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_SystemClock.cpp
   ${_fwjni}/android_os_SystemProperties.cpp
   ${_fwjni}/android_os_Trace.cpp
