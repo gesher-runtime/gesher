@@ -136,7 +136,8 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 3 checklist
 
-- [ ] Skia for Windows (CPU raster first), built in CI
+- [x] Skia for Windows (CPU raster first), built in CI (ci run 39953186255:
+      skia_probe on windows-2022 and windows-2025)
 - [ ] hwui's natives on Skia (Canvas, Paint, Path, Matrix, RenderNode,
       Bitmap) in place of the Phase 2 stand-ins
 - [ ] ANGLE: EGL and GLES over Direct3D 11, built in CI
