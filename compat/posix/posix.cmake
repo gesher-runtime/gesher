@@ -7,12 +7,14 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/epoll.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/errno.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/fd.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/fnmatch.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/internal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/path.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/select.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/signal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/socket.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
