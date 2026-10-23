@@ -27,6 +27,16 @@ typedef struct {
 #define CPU_CLR(cpu, set) ((set)->__bits[(cpu) / 64] &= ~(1ULL << ((cpu) % 64)))
 #define CPU_ISSET(cpu, set) (((set)->__bits[(cpu) / 64] >> ((cpu) % 64)) & 1)
 #define CPU_COUNT(set) gesher_cpu_count(set)
+#define __GESHER_CPU_OP(dst, a, b, op)                           \
+  do {                                                           \
+    for (unsigned __i = 0; __i < CPU_SETSIZE / 64; ++__i) {      \
+      (dst)->__bits[__i] = (a)->__bits[__i] op (b)->__bits[__i]; \
+    }                                                            \
+  } while (0)
+#define CPU_AND(dst, a, b) __GESHER_CPU_OP(dst, a, b, &)
+#define CPU_OR(dst, a, b) __GESHER_CPU_OP(dst, a, b, |)
+#define CPU_XOR(dst, a, b) __GESHER_CPU_OP(dst, a, b, ^)
+#define CPU_EQUAL(a, b) (__builtin_memcmp((a), (b), sizeof(cpu_set_t)) == 0)
 
 int gesher_cpu_count(const cpu_set_t* set);
 int sched_getcpu(void);

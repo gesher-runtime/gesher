@@ -47,9 +47,13 @@ and hwui). `compat/framework/android_runtime.cc` holds the host
 ## Libraries
 
 - Already built: libbase, liblog, libziparchive, zlib, libnativehelper, ICU4C.
-- New: libcutils (Windows set plus host trace and ashmem), libutils and
-  libutils_binder (Windows set plus `Looper.cpp`), libandroidfw (without the
-  PNG files), libincfs-utils (`map_ptr`), the `android.content.res.flags` C++
+- New: libcutils, libutils, libutils_binder and libandroidfw in full: each
+  builds its Android.bp device source set (libcutils with host trace and
+  ashmem, libutils with its pthread threading under `GESHER`), plus
+  libutilscallstack (CallStack over a Windows x64 unwinder) and libpng; AOSP's
+  own gtests of these libraries run on Windows. Details, exclusions and CI
+  runs: [core-libs.md](core-libs.md).
+- Also new: libincfs-utils (`map_ptr`), the `android.content.res.flags` C++
   aconfig, libbinder (built without `__ANDROID__`, so a missing
   `/dev/binder` only logs), a `hwbinder/IPCThreadState.h` shim.
 

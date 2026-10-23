@@ -31,6 +31,15 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// Microseconds on a monotonic clock (QueryPerformanceCounter). Timeouts keep
+// their deadline on it: GetTickCount64 moves in 15.6 ms steps, and a wait
+// that ends a step early would return before Linux's would.
+ULONGLONG MonotonicMicros();
+// A deadline `timeout_ms` from now, or ~0 for a negative (infinite) timeout.
+ULONGLONG DeadlineAfter(int timeout_ms);
+// Milliseconds left until `deadline`, rounded up; 0 once it has passed.
+int MillisUntil(ULONGLONG deadline);
+
 // Where a Linux path leads on Windows (path.cc,
 // docs/decisions/0010-paths.md).
 enum class PathKind {

@@ -63,3 +63,16 @@ add_library(cpu_features STATIC
 target_include_directories(cpu_features PUBLIC ${_cf}/include)
 target_compile_definitions(cpu_features PRIVATE STACK_LINE_READER_BUFFER_SIZE=1024)
 target_compile_options(cpu_features PRIVATE -Wno-gnu-designator -Wno-unused-variable)
+
+# --- libpng (external/libpng; host configuration, which leaves the SSE
+# filters to Android's x86 targets) -----------------------------------------
+set(_png "${AOSP_DIR}/external/libpng")
+add_library(png STATIC
+  ${_png}/png.c ${_png}/pngerror.c ${_png}/pngget.c ${_png}/pngmem.c ${_png}/pngpread.c
+  ${_png}/pngread.c ${_png}/pngrio.c ${_png}/pngrtran.c ${_png}/pngrutil.c ${_png}/pngset.c
+  ${_png}/pngtrans.c ${_png}/pngwio.c ${_png}/pngwrite.c ${_png}/pngwtran.c ${_png}/pngwutil.c
+  # x86_64
+  ${_png}/intel/filter_sse2_intrinsics.c ${_png}/intel/intel_init.c)
+target_include_directories(png PUBLIC ${_png})
+target_link_libraries(png PUBLIC z)
+target_compile_options(png PRIVATE -std=gnu89 -Wall -Werror -Wno-unused-parameter)

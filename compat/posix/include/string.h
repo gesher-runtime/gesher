@@ -9,6 +9,11 @@ extern "C" {
 
 char* strsignal(int sig);
 
+// <strings.h>'s bzero, which glibc's and bionic's <string.h> declare too.
+static inline void bzero(void* s, size_t n) {
+  memset(s, 0, n);
+}
+
 // Messages for Linux errno values (see <errno.h>), in place of the CRT's.
 char* gesher_strerror(int errnum);
 int gesher_strerror_s(char* buf, size_t buflen, int errnum);

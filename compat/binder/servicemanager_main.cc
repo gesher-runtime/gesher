@@ -7,7 +7,7 @@
 // and a timerfd for lazy services' client callbacks; binderd does not support
 // polling, so here the main thread joins the binder thread pool instead, as
 // servicemanager did before Android 11, and lazy-service callbacks are not
-// sent. See docs/services.md and docs/decisions/0014-services-binder-ipc.md.
+// sent. See docs/services.md and docs/decisions/0015-services-binder-ipc.md.
 //
 //   servicemanager [binder driver]     (default /dev/binder; the device is
 //                                       $GESHER_BINDER's binderd)

@@ -12,7 +12,7 @@
 // BR_ACQUIRE, BR_RELEASE and BR_DECREFS, how a reply finds its caller, oneway
 // ordering per node, BR_SPAWN_LOOPER, and BR_DEAD_BINDER when a process dies.
 // The wire format is in binder_wire.h; the design in
-// docs/decisions/0014-services-binder-ipc.md.
+// docs/decisions/0015-services-binder-ipc.md.
 //
 //   binderd [device]      (default: $GESHER_BINDER, else "default")
 //

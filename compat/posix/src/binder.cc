@@ -8,7 +8,7 @@
 // transaction data the commands point to, and copies each transaction the
 // broker returns into the process's binder mapping (the fd's mmap), as the
 // kernel driver does, so libbinder sees the same pointers and the same
-// BC_FREE_BUFFER protocol. See docs/decisions/0014-services-binder-ipc.md.
+// BC_FREE_BUFFER protocol. See docs/decisions/0015-services-binder-ipc.md.
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>

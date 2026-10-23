@@ -1,0 +1,68 @@
+diff --git a/libs/androidfw/CursorWindow.cpp b/libs/androidfw/CursorWindow.cpp
+index 395fd10f..ac837c2a 100644
+--- a/libs/androidfw/CursorWindow.cpp
++++ b/libs/androidfw/CursorWindow.cpp
+@@ -138,7 +138,8 @@ fail_silent:
+     return UNKNOWN_ERROR;
+ }
+ 
+-#ifdef __linux__
++// Gesher: libbinder's Parcel builds for Windows (frameworks/native patch 0001).
++#if defined(__linux__) || defined(GESHER)
+ status_t CursorWindow::createFromParcel(Parcel* parcel, CursorWindow** outWindow) {
+     *outWindow = nullptr;
+ 
+diff --git a/libs/androidfw/include/androidfw/CursorWindow.h b/libs/androidfw/include/androidfw/CursorWindow.h
+index a6b51ccd..2093ed5c 100644
+--- a/libs/androidfw/include/androidfw/CursorWindow.h
++++ b/libs/androidfw/include/androidfw/CursorWindow.h
+@@ -24,7 +24,8 @@
+ 
+ #include "android-base/mapped_file.h"
+ #include "android-base/stringprintf.h"
+-#ifdef __linux__
++// Gesher: libbinder's Parcel builds for Windows (frameworks/native patch 0001).
++#if defined(__linux__) || defined(GESHER)
+ #include "binder/Parcel.h"
+ #endif
+ #include "utils/String8.h"
+@@ -83,7 +84,8 @@ public:
+     ~CursorWindow();
+ 
+     static status_t create(const String8& name, size_t size, CursorWindow** outCursorWindow);
+-#ifdef __linux__
++// Gesher: libbinder's Parcel builds for Windows (frameworks/native patch 0001).
++#if defined(__linux__) || defined(GESHER)
+     static status_t createFromParcel(Parcel* parcel, CursorWindow** outCursorWindow);
+ 
+     status_t writeToParcel(Parcel* parcel);
+diff --git a/libs/androidfw/tests/CursorWindow_test.cpp b/libs/androidfw/tests/CursorWindow_test.cpp
+index 47e198ac..83981191 100644
+--- a/libs/androidfw/tests/CursorWindow_test.cpp
++++ b/libs/androidfw/tests/CursorWindow_test.cpp
+@@ -257,7 +257,8 @@ TEST(CursorWindowTest, Inflate) {
+     ASSERT_ALIGNED(w);
+ }
+ 
+-#ifdef __linux__
++// Gesher: libbinder's Parcel builds for Windows (frameworks/native patch 0001).
++#if defined(__linux__) || defined(GESHER)
+ TEST(CursorWindowTest, ParcelEmpty) {
+     CREATE_WINDOW_2M;
+ 
+diff --git a/libs/androidfw/tests/ZipUtils_test.cpp b/libs/androidfw/tests/ZipUtils_test.cpp
+index 7293843e..4ac00164 100644
+--- a/libs/androidfw/tests/ZipUtils_test.cpp
++++ b/libs/androidfw/tests/ZipUtils_test.cpp
+@@ -62,8 +62,11 @@ TEST_F(ZipUtilsTest, ZipTimeConvertSuccess) {
+ 
+     // We don't have enough information to determine timezone related info.
+     EXPECT_EQ(-1, t.tm_isdst);
++#if !defined(_WIN32)
++    // Gesher: the Windows CRT's struct tm has no tm_gmtoff and tm_zone.
+     EXPECT_EQ(0, t.tm_gmtoff);
+     EXPECT_EQ(nullptr, t.tm_zone);
++#endif
+ }
+ 
+ }

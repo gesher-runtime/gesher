@@ -299,7 +299,7 @@ bool PollFile(pollfd* p) {
 namespace gesher {
 
 int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
-  ULONGLONG deadline = timeout < 0 ? ~0ULL : GetTickCount64() + static_cast<ULONGLONG>(timeout);
+  ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<ws::PollEntry> sockets;
   std::vector<nfds_t> socket_index;
   // Held so that their events stay open while waited on.
@@ -346,8 +346,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
       if (timeout < 0) {
         wait_ms = -1;
       } else {
-        ULONGLONG now = GetTickCount64();
-        wait_ms = now >= deadline ? 0 : static_cast<int>(deadline - now);
+        wait_ms = gesher::MillisUntil(deadline);
       }
       if (sliced && (wait_ms < 0 || wait_ms > 10)) wait_ms = 10;
     }
@@ -412,7 +411,7 @@ int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* inter
     }
     ready = count_ready();
     if (ready > 0 || *interrupted || timeout == 0 ||
-        (timeout > 0 && GetTickCount64() >= deadline)) {
+        (timeout > 0 && gesher::MonotonicMicros() >= deadline)) {
       return ready;
     }
   }

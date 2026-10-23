@@ -55,6 +55,8 @@ include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
+include(cmake/aosp/googletest.cmake)
+include(cmake/aosp/core_libs_tests.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
