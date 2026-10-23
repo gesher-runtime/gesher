@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build lifecycle.apk, gesher-app's test app (tests/apps/lifecycle).
+# Build lifecycle.apk, gesher-app's test app (tests/apps/lifecycle), or with APP_DIR another
+# test app (<dir name>.apk).
 #
 #   tests/apps/lifecycle/build.sh <out-dir> --framework-res <framework-res.apk> \
 #       --framework-classes <dir|jar> [--core-classes <dir>]
@@ -17,7 +18,9 @@ set -euo pipefail
 
 BUILD_TOOLS=36.1
 R8_VERSION=9.5.26
-app=$(cd "$(dirname "$0")" && pwd)
+# APP_DIR: another app directory to build with this script (tests/apps/components).
+app=${APP_DIR:-$(cd "$(dirname "$0")" && pwd)}
+name=$(basename "$app")
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
 framework_res= framework= core=
@@ -91,5 +94,5 @@ javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-optio
 
 # The dex into the APK, then 4-byte alignment.
 (cd "$work/dex" && jar -u -M -f "$(native "$work/unaligned.apk")" classes.dex)
-"$zipalign" -f -p 4 "$(native "$work/unaligned.apk")" "$(native "$out/lifecycle.apk")"
-echo "lifecycle.apk written to $out"
+"$zipalign" -f -p 4 "$(native "$work/unaligned.apk")" "$(native "$out/$name.apk")"
+echo "$name.apk written to $out"

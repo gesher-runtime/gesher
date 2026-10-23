@@ -3,7 +3,9 @@
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
 ; PATH, adds a Start menu entry that runs the bundled Hello and opens `.apk`
-; files with gesher-app (docs/installer.md).
+; files with gesher-app (docs/installer.md). Apps installed with gesher-app get
+; Start menu shortcuts in {userprograms}\Gesher Apps (com.gesher.app.shell),
+; which the uninstaller removes.
 
 #ifndef BuildDir
   #error Pass /DBuildDir=<build output directory>
@@ -32,6 +34,10 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Gesher {#AppVersion}
+; Gesher's icon (tools/icons/make-icons.py): Setup, Add/Remove Programs, the
+; Start menu entries and the .apk file type.
+SetupIconFile=gesher.ico
+UninstallDisplayIcon={app}\gesher.ico
 
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -52,14 +58,20 @@ Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; The system fonts and fonts.xml (docs/fonts.md): Roboto and DroidSansMono
+; (Apache 2.0), Noto Sans Hebrew and Noto Serif (OFL 1.1); gesher-app.ps1
+; installs them as $ANDROID_ROOT/fonts and $ANDROID_ROOT/etc/fonts.xml.
+Source: "{#BuildDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
+Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"
+Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 
 [Registry]
@@ -71,12 +83,22 @@ Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
 Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico,0"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
 
+[UninstallRun]
+; The Gesher device (binderd, servicemanager, the system server and app
+; processes, docs/services.md) runs from {app} and keeps files of
+; {localappdata}\Gesher open: it is stopped first.
+Filename: "{cmd}"; Parameters: "/d /c """"{app}\gesher-app.cmd"" shutdown"""; Flags: runhidden waituntilterminated; RunOnceId: "GesherDeviceShutdown"
+
 [UninstallDelete]
-; The runtime's directories (gesher.ps1).
+; The runtime's directories (gesher.ps1), the installed packages and the logs.
 Type: filesandordirs; Name: "{localappdata}\Gesher"
+; The installed apps' Start menu shortcuts (gesher-app install; their icons are
+; in the packages' data directories, above).
+Type: filesandordirs; Name: "{userprograms}\Gesher Apps"
 
 [Code]
 const
@@ -94,6 +116,19 @@ begin
   if not RegQueryStringValue(HKEY_CLASSES_ROOT, '.apk', '', ProgId) then
     ProgId := '';
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
+end;
+
+// An update replaces files a running Gesher device uses: it is stopped first.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Launcher: String;
+  Code: Integer;
+begin
+  Launcher := ExpandConstant('{app}\gesher-app.cmd');
+  if FileExists(Launcher) then
+    Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
+      ewWaitUntilTerminated, Code);
+  Result := '';
 end;
 
 function PathEntries(): String;

@@ -180,15 +180,17 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, of
     view_access = FILE_MAP_READ;
   }
 
-  // A read-only view may not extend past the end of the file; length 0 maps
-  // up to the end instead (the tail of the last page reads as zeros).
+  // A view may not extend past the end of the file (the mapping is the
+  // file's size); length 0 maps up to the end instead (the tail of the last
+  // page reads as zeros). mmap rounds the length up to whole pages, so a
+  // writable shared map of a file whose size is not a page multiple (a
+  // SharedMemory region) needs this too.
   LARGE_INTEGER file_length;
   if (!GetFileSizeEx(file, &file_length)) {
     errno = EACCES;
     return MAP_FAILED;
   }
-  if (map_access == PAGE_READONLY &&
-      file_offset + view_length > static_cast<uint64_t>(file_length.QuadPart)) {
+  if (file_offset + view_length > static_cast<uint64_t>(file_length.QuadPart)) {
     if (file_offset >= static_cast<uint64_t>(file_length.QuadPart)) {
       errno = ENXIO;
       return MAP_FAILED;

@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Gesher's system font configuration, installed as $ANDROID_ROOT/etc/fonts.xml
+    with the font files in $ANDROID_ROOT/fonts (docs/fonts.md).
+
+    A subset of AOSP's frameworks/base/data/fonts/fonts.xml at android-16.0.0_r4
+    (Apache License 2.0): the families whose fonts Gesher ships, unchanged.
+      sans-serif (+ condensed)  Roboto-Regular.ttf, Roboto 3.011 variable (wght, wdth, ital)
+      serif                     NotoSerif-{Regular,Bold,Italic,BoldItalic}.ttf
+      monospace                 DroidSansMono.ttf
+      fallback und-Hebr         NotoSansHebrew-{Regular,Bold}.ttf (1.040)
+    Left out: the other families and every other script's fallback, emoji,
+    serif-monospace, casual, cursive, smallcaps, source-sans-pro, roboto-flex.
+    In this file, all fonts without names are added to the default list.
+-->
+<familyset version="23">
+    <!-- first font is default -->
+    <family name="sans-serif">
+        <font weight="100" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="normal">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="0" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="900" />
+        </font>
+        <font weight="100" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="100" />
+        </font>
+        <font weight="200" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="200" />
+        </font>
+        <font weight="300" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="300" />
+        </font>
+        <font weight="400" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="400" />
+        </font>
+        <font weight="500" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="500" />
+        </font>
+        <font weight="600" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="600" />
+        </font>
+        <font weight="700" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="700" />
+        </font>
+        <font weight="800" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="800" />
+        </font>
+        <font weight="900" style="italic">Roboto-Regular.ttf
+          <axis tag="ital" stylevalue="1" />
+          <axis tag="wdth" stylevalue="100" />
+          <axis tag="wght" stylevalue="900" />
+        </font>
+   </family>
+
+
+    <!-- Note that aliases must come after the fonts they reference. -->
+    <alias name="sans-serif-thin" to="sans-serif" weight="100" />
+    <alias name="sans-serif-light" to="sans-serif" weight="300" />
+    <alias name="sans-serif-medium" to="sans-serif" weight="500" />
+    <alias name="sans-serif-black" to="sans-serif" weight="900" />
+    <alias name="arial" to="sans-serif" />
+    <alias name="helvetica" to="sans-serif" />
+    <alias name="tahoma" to="sans-serif" />
+    <alias name="verdana" to="sans-serif" />
+
+    <family name="sans-serif-condensed">
+      <font weight="100" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="100" />
+      </font>
+      <font weight="200" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="200" />
+      </font>
+      <font weight="300" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="300" />
+      </font>
+      <font weight="400" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="400" />
+      </font>
+      <font weight="500" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="500" />
+      </font>
+      <font weight="600" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="600" />
+      </font>
+      <font weight="700" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="700" />
+      </font>
+      <font weight="800" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="800" />
+      </font>
+      <font weight="900" style="normal">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="0" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="900" />
+      </font>
+      <font weight="100" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="100" />
+      </font>
+      <font weight="200" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="200" />
+      </font>
+      <font weight="300" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="300" />
+      </font>
+      <font weight="400" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="400" />
+      </font>
+      <font weight="500" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="500" />
+      </font>
+      <font weight="600" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="600" />
+      </font>
+      <font weight="700" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="700" />
+      </font>
+      <font weight="800" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="800" />
+      </font>
+      <font weight="900" style="italic">Roboto-Regular.ttf
+        <axis tag="ital" stylevalue="1" />
+        <axis tag="wdth" stylevalue="75" />
+        <axis tag="wght" stylevalue="900" />
+      </font>
+    </family>
+    <alias name="sans-serif-condensed-light" to="sans-serif-condensed" weight="300" />
+    <alias name="sans-serif-condensed-medium" to="sans-serif-condensed" weight="500" />
+
+    <family name="serif">
+        <font weight="400" style="normal" postScriptName="NotoSerif">NotoSerif-Regular.ttf</font>
+        <font weight="700" style="normal">NotoSerif-Bold.ttf</font>
+        <font weight="400" style="italic">NotoSerif-Italic.ttf</font>
+        <font weight="700" style="italic">NotoSerif-BoldItalic.ttf</font>
+    </family>
+    <alias name="serif-bold" to="serif" weight="700" />
+    <alias name="times" to="serif" />
+    <alias name="times new roman" to="serif" />
+    <alias name="palatino" to="serif" />
+    <alias name="georgia" to="serif" />
+    <alias name="baskerville" to="serif" />
+    <alias name="goudy" to="serif" />
+    <alias name="fantasy" to="serif" />
+    <alias name="ITC Stone Serif" to="serif" />
+
+    <family name="monospace">
+        <font weight="400" style="normal">DroidSansMono.ttf</font>
+    </family>
+    <alias name="sans-serif-monospace" to="monospace" />
+    <alias name="monaco" to="monospace" />
+
+    <!-- fallback fonts -->
+    <family lang="und-Hebr">
+        <font weight="400" style="normal" postScriptName="NotoSansHebrew">
+            NotoSansHebrew-Regular.ttf
+        </font>
+        <font weight="700" style="normal">NotoSansHebrew-Bold.ttf</font>
+    </family>
+</familyset>

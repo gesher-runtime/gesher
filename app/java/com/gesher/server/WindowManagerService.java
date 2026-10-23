@@ -14,16 +14,16 @@ import com.gesher.app.DeviceProfile;
 import java.util.function.Function;
 
 /**
- * {@code window}: WindowManagerService, minimal. No windows are added while headless:
- * {@link #openSession} hands out a stand-in {@link IWindowSession} whose methods all
- * answer defaults, unless a session factory is set ({@link #setSessionFactory}): that is
- * where a real window session (the graphics side's) plugs in.
+ * {@code window}: WindowManagerService, minimal. {@link #openSession} hands out
+ * {@link StandInWindowSession} (windows are added headless: ADD_OKAY, the display's
+ * frame, no surface), unless a session factory is set ({@link #setSessionFactory}): that
+ * is where a real window session (the graphics side's) plugs in.
  */
 public final class WindowManagerService extends IWindowManager.Default {
     private static volatile Function<IWindowSessionCallback, IWindowSession> sSessionFactory;
 
     private final StandIn<IWindowSession> mSession =
-            StandIn.of(IWindowSession.class, new IWindowSession.Default());
+            StandIn.of(IWindowSession.class, new StandInWindowSession());
 
     /**
      * Makes {@link #openSession} answer {@code factory.apply(callback)}. The session it
