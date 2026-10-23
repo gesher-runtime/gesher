@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher Lifecycle</string>
+    <string name="activity_label">Lifecycle Activity</string>
+    <string name="greeting">Hello from a resource</string>
+</resources>
