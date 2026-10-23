@@ -22,26 +22,31 @@ target_link_libraries(incfs_utils PUBLIC utils base)
 target_compile_options(incfs_utils PRIVATE -Wall -Werror)
 
 # --- libandroidfw (frameworks/base/libs/androidfw/Android.bp) ----------------
-# The host/Windows source set (with libandroidfw_pathutils), less what needs
-# libraries Gesher does not build: the PNG files (libpng; aapt2's) and
-# CursorWindow (libbinder's Parcel; SQLite is left out until views).
+# The device's source set (docs/core-libs.md), with libandroidfw_pathutils:
+# the PNG files over external/libpng, CursorWindow over libbinder's Parcel,
+# and the android-only BackupData and BackupHelpers.
 set(_afw "${_fw}/libs/androidfw")
 add_library(androidfw STATIC
   ${_afw}/ApkAssets.cpp ${_afw}/ApkParsing.cpp ${_afw}/Asset.cpp ${_afw}/AssetDir.cpp
   ${_afw}/AssetManager.cpp ${_afw}/AssetManager2.cpp ${_afw}/AssetsProvider.cpp
   ${_afw}/AttributeResolution.cpp ${_afw}/BigBuffer.cpp ${_afw}/BigBufferStream.cpp
-  ${_afw}/ChunkIterator.cpp ${_afw}/ConfigDescription.cpp ${_afw}/FileStream.cpp
-  ${_afw}/Idmap.cpp ${_afw}/LoadedArsc.cpp ${_afw}/Locale.cpp ${_afw}/LocaleData.cpp
-  ${_afw}/LocaleDataLookup.cpp ${_afw}/misc.cpp ${_afw}/NinePatch.cpp ${_afw}/ObbFile.cpp
-  ${_afw}/PosixUtils.cpp ${_afw}/ResourceTimer.cpp ${_afw}/ResourceTypes.cpp
+  ${_afw}/ChunkIterator.cpp ${_afw}/ConfigDescription.cpp ${_afw}/CursorWindow.cpp
+  ${_afw}/FileStream.cpp ${_afw}/Idmap.cpp ${_afw}/LoadedArsc.cpp ${_afw}/Locale.cpp
+  ${_afw}/LocaleData.cpp ${_afw}/LocaleDataLookup.cpp ${_afw}/misc.cpp ${_afw}/NinePatch.cpp
+  ${_afw}/ObbFile.cpp ${_afw}/PosixUtils.cpp ${_afw}/Png.cpp ${_afw}/PngChunkFilter.cpp
+  ${_afw}/PngCrunch.cpp ${_afw}/ResourceTimer.cpp ${_afw}/ResourceTypes.cpp
   ${_afw}/ResourceUtils.cpp ${_afw}/StreamingZipInflater.cpp ${_afw}/StringPool.cpp
   ${_afw}/TypeWrappers.cpp ${_afw}/Util.cpp ${_afw}/ZipFileRO.cpp ${_afw}/ZipUtils.cpp
+  # android
+  ${_afw}/BackupData.cpp ${_afw}/BackupHelpers.cpp
+  # libandroidfw_pathutils
   ${_afw}/PathUtils.cpp)
 target_include_directories(androidfw PUBLIC ${_afw}/include ${_afw}/include_pathutils
   # native_headers: <android/configuration.h>
   ${AOSP_DIR}/frameworks/native/include
   PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework/include)
-target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z)
+target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z
+  PRIVATE png binder)
 target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
 # libandroidfw_defaults: gnu++2b, -Werror -Wunreachable-code, and on Windows
 # -Wno-missing-field-initializers. Soong's global flags let these pass too: a
