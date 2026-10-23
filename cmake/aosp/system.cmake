@@ -52,6 +52,8 @@ add_library(cutils STATIC
   ${_cu}/sockets.cpp ${_cu}/socket_inaddr_any_server_windows.cpp
   ${_cu}/socket_network_client_windows.cpp ${_cu}/sockets_windows.cpp)
 target_include_directories(cutils PUBLIC ${_cu}/include ${_core}/libprocessgroup/include)
+# ashmem-host.cpp includes utils/Compat.h (headers only; no link dependency).
+target_include_directories(cutils PRIVATE ${_core}/libutils/include)
 target_link_libraries(cutils PUBLIC base log)
 target_compile_definitions(cutils PRIVATE _GNU_SOURCE)
 target_compile_options(cutils PRIVATE -Wall -Wextra -Wno-exit-time-destructors)

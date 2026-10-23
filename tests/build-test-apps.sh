@@ -18,7 +18,7 @@ if [[ ! -f $r8 ]]; then
     "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
 fi
 
-javac --release 11 -d "$work/classes" "$root"/tests/dex/*.java
+javac -encoding UTF-8 --release 11 -d "$work/classes" "$root"/tests/dex/*.java
 mkdir -p "$work/dex"
 java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex" $(find "$work/classes" -name '*.class')
@@ -29,4 +29,13 @@ import sys, zipfile
 with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as z:
     z.write(sys.argv[1], "classes.dex")
 PY
+
+# The framework-natives test (tests/dex-natives): gesher.NativeTest plus
+# stand-ins for the framework classes libandroid_runtime registers on.
+mkdir -p "$work/classes-natives" "$work/dex-natives"
+javac -encoding UTF-8 --release 11 -d "$work/classes-natives" $(find "$root/tests/dex-natives" -name '*.java')
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-natives" $(find "$work/classes-natives" -name '*.class')
+cp "$work/dex-natives/classes.dex" "$out/natives.dex"
+
 echo "test apps written to $out"

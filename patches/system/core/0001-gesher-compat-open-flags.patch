@@ -1,0 +1,16 @@
+diff --git a/libutils/include/utils/Compat.h b/libutils/include/utils/Compat.h
+index 3221899..7783298 100644
+--- a/libutils/include/utils/Compat.h
++++ b/libutils/include/utils/Compat.h
+@@ -52,8 +52,11 @@ static inline int ftruncate64(int fd, off64_t length) {
+ #endif /* __APPLE__ */
+ 
+ #if defined(_WIN32)
++/* Gesher: gesher-base's fcntl.h defines Linux's O_CLOEXEC and O_NOFOLLOW. */
++#if !defined(GESHER)
+ #define O_CLOEXEC O_NOINHERIT
+ #define O_NOFOLLOW 0
++#endif
+ #define DEFFILEMODE 0666
+ #endif /* _WIN32 */
+ 

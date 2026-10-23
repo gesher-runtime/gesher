@@ -8,10 +8,12 @@
 #include <sched.h>
 #include <errno.h>
 
-// winpthreads defines these as macros that expand to ENOTSUP.
+// winpthreads defines these as macros that expand to ENOTSUP (or, for
+// pthread_atfork, to 0, which hides the call).
 #undef pthread_getcpuclockid
 #undef pthread_attr_getguardsize
 #undef pthread_attr_setguardsize
+#undef pthread_atfork
 
 #ifdef __cplusplus
 extern "C" {
