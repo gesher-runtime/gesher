@@ -17,6 +17,9 @@
 // - android.app.ActivityThread's two natives (android_app_ActivityThread.cpp):
 //   nPurgePendingResources (hwui's caches and SQLite's memory, none here) and
 //   nInitZygoteChildHeapProfiling (heapprofd, which does not exist), no-ops.
+// - com.android.internal.os.DebugStore (ActivityThread records its lifecycle
+//   events there when the debug_store flag is on): the native store
+//   (libdebugstore, for dumpsys) is not built; events are dropped.
 
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
@@ -85,6 +88,23 @@ static const JNINativeMethod gActivityThreadMethods[] = {
 int register_gesher_ActivityThread(JNIEnv* env) {
     return RegisterMethodsOrDie(env, "android/app/ActivityThread", gActivityThreadMethods,
                                 NELEM(gActivityThreadMethods));
+}
+
+static jlong DebugStore_beginEvent(JNIEnv*, jclass, jstring, jobject) { return 0; }
+static void DebugStore_endEvent(JNIEnv*, jclass, jlong, jobject) {}
+static void DebugStore_recordEvent(JNIEnv*, jclass, jstring, jobject) {}
+
+static const JNINativeMethod gDebugStoreMethods[] = {
+    {"beginEventNative", "(Ljava/lang/String;Ljava/util/List;)J",
+     GESHER_JNI(DebugStore_beginEvent)},
+    {"endEventNative", "(JLjava/util/List;)V", GESHER_JNI(DebugStore_endEvent)},
+    {"recordEventNative", "(Ljava/lang/String;Ljava/util/List;)V",
+     GESHER_JNI(DebugStore_recordEvent)},
+};
+
+int register_gesher_DebugStore(JNIEnv* env) {
+    return RegisterMethodsOrDie(env, "com/android/internal/os/DebugStore", gDebugStoreMethods,
+                                NELEM(gDebugStoreMethods));
 }
 
 }  // namespace android
