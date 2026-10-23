@@ -60,6 +60,11 @@ framework.jar lacks (below), which must never shadow real ones.
    `PackageInfo` PackageManagerService would. (Splits, shared libraries,
    permissions, providers, services, receivers, aliases and meta-data are not
    read; `ParsingPackageUtils` can replace it later.)
+   The APK's native libraries, `lib/x86_64/*.so`, are copied into
+   `ApplicationInfo.nativeLibraryDir` (`<data-dir>/lib`, `NativeLibs`), the
+   app class loader's library path, as the package manager does for
+   `extractNativeLibs`; dalvikvm loads them with Gesher's ELF loader
+   ([native-libs.md](../docs/native-libs.md)).
 6. Installs the stand-in services (below) through
    `ServiceManager.initServiceCache`.
 7. Posts the launch to the main Looper and runs `Looper.loop()`. The main

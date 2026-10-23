@@ -46,3 +46,36 @@ Check 'native libs: stack-protected .so with emulated TLS (API 26) under the %fs
 Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a late TLS library' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
 } @('fs_test: all passed', 'elf_load_test all passed')
+
+# Step 4, the JNI path: dalvikvm runs gesher.JniTest (tests/native/java), whose
+# System.load of jni_test.so goes through ART's host libnativeloader path to
+# gesher-base's dlopen, the ELF loader and the JNI bridge
+# (compat/bionic/jni_bridge.cc): JNI_OnLoad and RegisterNatives, natives found
+# by name, arguments on the stack, and the .so's calls back into ART through
+# the System V JNIEnv/JavaVM proxies, from ART's threads and its own.
+# System.load takes an absolute path.
+Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java_* and JNIEnv calls into ART' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
+} @('JNI_OnLoad ran: ok', 'JniTest all passed')
+
+# Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the
+# loader loads from the same directory; C++ exceptions are thrown and caught
+# inside the loaded code (libunwind finds .eh_frame through dl_iterate_phdr).
+Check 'native libs: libc++_shared through the loader; C++ exceptions thrown and caught in the .so' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libcxx_test.so") (NoDrive "$Dir")
+} @('libcxx_test: all passed', 'elf_load_test all passed')
+
+# Step 5, the test APK: gesher-app runs nativeapp.apk (tests/apps/nativeapp),
+# extracts its lib/x86_64 (libnativeapp.so and libc++_shared.so) into the app's
+# native library directory, and the Activity's onCreate loads the library with
+# System.loadLibrary and calls into it: C++ with an exception caught inside,
+# and a call back into the Activity. onResume prints the native result.
+$bcpNative = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'native libs: gesher-app runs nativeapp.apk; lib/x86_64 loaded from the APK, native result checked in onResume' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpNative" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/nativeapp.apk")
+} @('extracted 2 native libraries (x86_64)',
+    'NativeActivity onResume, native=Hello from C++, caught std::out_of_range, callBack(12)=145',
+    'gesher-app: com.gesher.nativeapp.NativeActivity onResume',
+    'gesher-app: done')
