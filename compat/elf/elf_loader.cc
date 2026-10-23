@@ -12,10 +12,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#include <windows.h>
 
 #include "tls.h"
 
@@ -109,6 +112,13 @@ struct Library {
   // TLS (PT_TLS).
   TlsModule tls{};
 
+  // The program headers inside the mapping, for dl_iterate_phdr.
+  const Elf64_Phdr* phdr = nullptr;
+  uint16_t phnum = 0;
+
+  // LoadOptions::stub_unresolved_functions for this load.
+  bool stub_unresolved = true;
+
   std::vector<std::string> needed;
   std::vector<Library*> dependencies;
 };
@@ -121,6 +131,48 @@ std::vector<Library*>& Loaded() {
   return v;
 }
 SymbolResolver g_resolver;
+uint64_t g_load_count = 0;  // under g_mutex
+UnresolvedHandler g_unresolved_handler = nullptr;
+
+// --- stubs for unresolved function imports ---------------------------------
+
+// Called by a stub, System V, with the symbol's name.
+void SYSV UnresolvedCalled(const char* name) {
+  if (g_unresolved_handler != nullptr) g_unresolved_handler(name);
+  std::fprintf(stderr, "gesher elf: called unresolved function '%s'\n", name);
+  std::fflush(stderr);
+  std::abort();
+}
+
+// A stub is `mov rdi, imm64(name); mov rax, imm64(UnresolvedCalled); jmp rax`.
+constexpr size_t kStubSize = 32;
+std::mutex g_stub_mutex;
+uint8_t* g_stub_page = nullptr;
+size_t g_stub_used = 0;
+constexpr size_t kStubPageSize = 0x10000;
+
+void* MakeUnresolvedStub(const char* name) {
+  std::lock_guard<std::mutex> lock(g_stub_mutex);
+  if (g_stub_page == nullptr || g_stub_used + kStubSize > kStubPageSize) {
+    g_stub_page = static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, kStubPageSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (g_stub_page == nullptr) return nullptr;
+    g_stub_used = 0;
+  }
+  uint8_t* p = g_stub_page + g_stub_used;
+  g_stub_used += kStubSize;
+  // The name must outlive the object's strtab only as long as the object; it
+  // lives in the mapping, which is never unmapped.
+  uint64_t name_ptr = reinterpret_cast<uint64_t>(name);
+  uint64_t target = reinterpret_cast<uint64_t>(&UnresolvedCalled);
+  p[0] = 0x48; p[1] = 0xBF;  // mov rdi, imm64
+  std::memcpy(p + 2, &name_ptr, 8);
+  p[10] = 0x48; p[11] = 0xB8;  // mov rax, imm64
+  std::memcpy(p + 12, &target, 8);
+  p[20] = 0xFF; p[21] = 0xE0;  // jmp rax
+  FlushInstructionCache(GetCurrentProcess(), p, kStubSize);
+  return p;
+}
 
 bool SymbolDefined(const Elf64_Sym* sym) {
   return sym->st_shndx != SHN_UNDEF;
@@ -346,6 +398,21 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
   const Elf64_Dyn* dyn = nullptr;
 
+  // The program headers as mapped: PT_PHDR, else the PT_LOAD holding e_phoff.
+  lib->phnum = ehdr->e_phnum;
+  for (int i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type == PT_PHDR) {
+      lib->phdr = reinterpret_cast<const Elf64_Phdr*>(lib->load_bias + phdr[i].p_vaddr);
+    }
+  }
+  for (int i = 0; i < ehdr->e_phnum && lib->phdr == nullptr; ++i) {
+    if (phdr[i].p_type == PT_LOAD && phdr[i].p_offset <= ehdr->e_phoff &&
+        ehdr->e_phoff + ehdr->e_phnum * sizeof(Elf64_Phdr) <= phdr[i].p_offset + phdr[i].p_filesz) {
+      lib->phdr = reinterpret_cast<const Elf64_Phdr*>(lib->load_bias + phdr[i].p_vaddr +
+                                                      (ehdr->e_phoff - phdr[i].p_offset));
+    }
+  }
+
   for (int i = 0; i < ehdr->e_phnum; ++i) {
     if (phdr[i].p_type == PT_DYNAMIC) {
       dyn = reinterpret_cast<const Elf64_Dyn*>(lib->load_bias + phdr[i].p_vaddr);
@@ -434,6 +501,18 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
         rs->address = nullptr;
         rs->found = true;
         return true;
+      }
+      // An unresolved function: a stub that reports the call, so imports the
+      // object never calls do not stop it loading.
+      if (lib->stub_unresolved &&
+          (type == R_X86_64_JUMP_SLOT || ELF64_ST_TYPE(sym->st_info) == STT_FUNC)) {
+        rs->address = MakeUnresolvedStub(name);
+        rs->found = rs->address != nullptr;
+        if (rs->found) {
+          std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
+                       lib->name.c_str(), name);
+          return true;
+        }
       }
       Fail(error, lib->name + ": unresolved symbol '" + name + "'");
       return false;
@@ -564,6 +643,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
 
   auto* lib = new Library();
   lib->name = name;
+  lib->stub_unresolved = options.stub_unresolved_functions;
   if (!MapSegments(lib, data, error)) {
     delete lib;
     return nullptr;
@@ -574,6 +654,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
     std::lock_guard<std::mutex> lock(g_mutex);
     if (lib->tls.present) TlsAssignModule(&lib->tls);
     Loaded().push_back(lib);
+    ++g_load_count;
   }
 
   if (!ResolveNeeded(lib, options, error)) {
@@ -627,6 +708,69 @@ bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error)
 }
 
 }  // namespace
+
+void SetUnresolvedHandler(UnresolvedHandler handler) { g_unresolved_handler = handler; }
+
+int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
+  std::vector<PhdrInfo> infos;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    for (Library* lib : Loaded()) {
+      if (lib->is_closed || lib->phdr == nullptr) continue;
+      PhdrInfo info;
+      info.addr = reinterpret_cast<uintptr_t>(lib->load_bias);
+      info.name = lib->soname.c_str();
+      info.phdr = lib->phdr;
+      info.phnum = lib->phnum;
+      info.tls_modid = lib->tls.present ? lib->tls.module_id : 0;
+      info.adds = g_load_count;
+      infos.push_back(info);
+    }
+  }
+  // Called without the lock: the callback may itself look symbols up.
+  for (const PhdrInfo& info : infos) {
+    if (int r = fn(info)) return r;
+  }
+  return 0;
+}
+
+bool FindAddress(const void* addr, AddressInfo* info) {
+  auto a = reinterpret_cast<const uint8_t*>(addr);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  for (Library* lib : Loaded()) {
+    if (a < lib->base || a >= lib->base + lib->map_size) continue;
+    info->soname = lib->soname.c_str();
+    info->base = lib->base;
+    info->symbol = nullptr;
+    info->symbol_addr = nullptr;
+    // The symbol count: SysV hash's nchain, else scan the GNU hash chains.
+    size_t count = lib->has_sysv_hash ? lib->sysv_nchain : 0;
+    if (count == 0 && lib->has_gnu_hash) {
+      uint32_t last = 0;
+      for (uint32_t b = 0; b < lib->gnu_nbucket; ++b) last = std::max(last, lib->gnu_buckets[b]);
+      if (last >= lib->gnu_symndx) {
+        while ((lib->gnu_chain[last - lib->gnu_symndx] & 1) == 0) ++last;
+      }
+      count = last + 1;
+    }
+    const uint8_t* best = nullptr;
+    for (size_t i = 1; i < count; ++i) {
+      const Elf64_Sym* sym = &lib->symtab[i];
+      if (sym->st_shndx == SHN_UNDEF || sym->st_value == 0) continue;
+      int t = ELF64_ST_TYPE(sym->st_info);
+      if (t != STT_FUNC && t != STT_OBJECT && t != STT_GNU_IFUNC) continue;
+      const uint8_t* s = lib->load_bias + sym->st_value;
+      if (s <= a && (a < s + std::max<uint64_t>(sym->st_size, 1) || sym->st_size == 0) &&
+          (best == nullptr || s > best)) {
+        best = s;
+        info->symbol = lib->strtab + sym->st_name;
+        info->symbol_addr = const_cast<uint8_t*>(s);
+      }
+    }
+    return true;
+  }
+  return false;
+}
 
 void SetBionicResolver(SymbolResolver resolver) {
   std::lock_guard<std::mutex> lock(g_mutex);

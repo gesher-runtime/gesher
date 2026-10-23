@@ -22,3 +22,12 @@ if ($fsOut -match 'all passed') {
 Check 'ELF loader: load a trivial .so and call it' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/trivial.so")
 } @('elf_load_test all passed')
+
+# The bionic shim: a .so built against bionic's libc, libm, libdl, liblog and
+# pthread (tests/native/libc_test.c) loads through the ELF loader and passes
+# its own checks: memory, strings, printf/scanf through the System V vararg
+# bridge, errno, time, qsort, threads, mutexes, condition variables, keys,
+# dlsym and dl_iterate_phdr.
+Check 'bionic shim: a libc/pthread .so runs its checks' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libc_test.so")
+} @('libc_test: all passed', 'elf_load_test all passed')
