@@ -1,0 +1,11 @@
+package android.content.res;
+
+/** Stand-in for the framework class; the natives come from its JNI table (tests/gen_jni_standins.py). */
+public final class AssetManager {
+  public static final int ACCESS_STREAMING = 2;
+
+  // The natives' AssetManager2, read through gAssetManagerOffsets.mObject.
+  long mObject;
+
+  // @natives core/jni/android_util_AssetManager.cpp gAssetManagerMethods
+}

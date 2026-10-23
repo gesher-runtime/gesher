@@ -1,0 +1,57 @@
+diff --git a/core/jni/android_util_AssetManager.cpp b/core/jni/android_util_AssetManager.cpp
+index a931c521..c4ac4f0c 100644
+--- a/core/jni/android_util_AssetManager.cpp
++++ b/core/jni/android_util_AssetManager.cpp
+@@ -273,7 +273,8 @@ static jobject ReturnParcelFileDescriptor(JNIEnv* env, std::unique_ptr<Asset> as
+ 
+   jobject fdescObj =
+           env->NewObject(gFileDescriptorOffsets.mClass, gFileDescriptorOffsets.mConstructor, fd);
+-#ifdef _WIN32
++// Gesher: Android's FileDescriptor has no Windows handle; the fd is all there is.
++#if defined(_WIN32) && !defined(GESHER)
+   env->SetLongField(fdescObj, gFileDescriptorOffsets.mHandle, _get_osfhandle(fd));
+ #endif
+ 
+@@ -1696,7 +1697,7 @@ int register_android_content_AssetManager(JNIEnv* env) {
+   gFileDescriptorOffsets.mClass = MakeGlobalRefOrDie(env, fdClass);
+   gFileDescriptorOffsets.mConstructor =
+           GetMethodIDOrDie(env, gFileDescriptorOffsets.mClass, "<init>", "(I)V");
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher: no FileDescriptor.handle
+   gFileDescriptorOffsets.mHandle =
+           GetFieldIDOrDie(env, gFileDescriptorOffsets.mClass, "handle", "J");
+ #endif
+diff --git a/core/jni/core_jni_helpers.h b/core/jni/core_jni_helpers.h
+index 8b0b7754..720ccce4 100644
+--- a/core/jni/core_jni_helpers.h
++++ b/core/jni/core_jni_helpers.h
+@@ -28,7 +28,8 @@
+ // and they need all the JNI methods to have JNIEnv* and jclass/jobject as their first two arguments.
+ // The following macro allows to have those arguments when compiling for host while omitting them when
+ // compiling for Android.
+-#ifdef __ANDROID__
++// Gesher: ART honours @CriticalNative, so the arguments are dropped as on Android.
++#if defined(__ANDROID__) || defined(GESHER)
+ #define CRITICAL_JNI_PARAMS
+ #define CRITICAL_JNI_PARAMS_COMMA
+ #else
+@@ -36,6 +37,19 @@
+ #define CRITICAL_JNI_PARAMS_COMMA JNIEnv*, jclass,
+ #endif
+ 
++// The entry point a JNI table registers for native function `fn`. Gesher: ART
++// enters natives with the System V ABI (docs/decisions/0006-managed-abi.md),
++// so each function is registered through a System V thunk; patch 0002 turns
++// the tables' `(void*) fn` into this.
++#if defined(GESHER)
++#include <nativehelper/jni_macros.h>
++#define GESHER_JNI(fn) NATIVEHELPER_SYSV_JNI_ENTRY(fn)
++#else
++#define GESHER_JNI(fn) reinterpret_cast<void*>(fn)
++#endif
++// A function declared JNICALL, which is System V under GESHER already.
++#define GESHER_JNI_SYSV(fn) reinterpret_cast<void*>(fn)
++
+ namespace android {
+ 
+ /**

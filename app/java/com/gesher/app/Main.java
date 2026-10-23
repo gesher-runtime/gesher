@@ -37,6 +37,13 @@ public final class Main {
     }
 
     /** Prints a line on stdout, prefixed {@code gesher-app: }. */
+    /** Ends the main Looper's loop (see run). */
+    private static final class EndLoop extends RuntimeException {
+        EndLoop() {
+            super(null, null, false, false);
+        }
+    }
+
     public static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
@@ -97,6 +104,10 @@ public final class Main {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
         apk = new File(apk).getAbsolutePath();
 
+        // 0. JCA providers that exist on Gesher's boot class path, and digests
+        //    (Digests): before anything uses JCA.
+        Digests.install();
+
         // 1. The framework's natives (a builtin library of the runtime on Windows).
         System.loadLibrary("android_runtime");
 
@@ -131,18 +142,28 @@ public final class Main {
         // 6. Stand-in system services, through ServiceManager.
         StandInServices.install(manifest);
 
-        // 7. The app and its Activity, on the main Looper.
+        // 7. The app and its Activity, on the main Looper. The main Looper may not
+        //    quit (Looper.prepareMainLooper), so the launch ends the loop the way
+        //    quitSafely would: a message posted after it, once the messages it left
+        //    behind have run, throws EndLoop out of Looper.loop().
         final Throwable[] failure = new Throwable[1];
-        new Handler(Looper.getMainLooper()).post(() -> {
+        final Handler main = new Handler(Looper.getMainLooper());
+        main.post(() -> {
             try {
                 GesherAppDriver.launch(manifest.applicationInfo, launch);
             } catch (Throwable t) {
                 failure[0] = t;
             } finally {
-                Looper.myLooper().quitSafely();
+                main.post(() -> {
+                    throw new EndLoop();
+                });
             }
         });
-        Looper.loop();
+        try {
+            Looper.loop();
+        } catch (EndLoop expected) {
+            // The launch and the messages it left behind ran.
+        }
         if (failure[0] != null) {
             throw new RuntimeException("launching " + launch.name + " failed", failure[0]);
         }

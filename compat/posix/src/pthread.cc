@@ -99,4 +99,11 @@ int pthread_attr_setguardsize(pthread_attr_t* attr, size_t guardsize) {
   return 0;
 }
 
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  (void)prepare;
+  (void)parent;
+  (void)child;
+  return 0;
+}
+
 }  // extern "C"
