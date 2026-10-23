@@ -1,0 +1,45 @@
+diff --git a/libcutils/ashmem_base_test.cpp b/libcutils/ashmem_base_test.cpp
+index d9013aa..abc6fa3 100644
+--- a/libcutils/ashmem_base_test.cpp
++++ b/libcutils/ashmem_base_test.cpp
+@@ -29,7 +29,8 @@
+  * platforms (Linux, Mac, Windows).
+  */
+ 
+-#if defined(_WIN32)
++// Gesher: gesher-base's <unistd.h> declares getpagesize.
++#if defined(_WIN32) && !defined(GESHER)
+ static inline size_t getpagesize() {
+     return 4096;
+ }
+diff --git a/libutils/Timers_test.cpp b/libutils/Timers_test.cpp
+index c0a6d49..9745b72 100644
+--- a/libutils/Timers_test.cpp
++++ b/libutils/Timers_test.cpp
+@@ -18,14 +18,24 @@
+ 
+ #include <gtest/gtest.h>
+ 
++#if defined(_WIN32)
++// Gesher: Windows processes do not die of signals; the CRT's abort ends the
++// process with a nonzero exit status (3, or a fast-fail status).
++static bool KilledByAbort(int status) {
++    return status != 0;
++}
++#else
++#define KilledByAbort testing::KilledBySignal(SIGABRT)
++#endif
++
+ TEST(Timers, systemTime_invalid) {
+-    EXPECT_EXIT(systemTime(-1), testing::KilledBySignal(SIGABRT), "");
++    EXPECT_EXIT(systemTime(-1), KilledByAbort, "");
+     systemTime(SYSTEM_TIME_REALTIME);
+     systemTime(SYSTEM_TIME_MONOTONIC);
+     systemTime(SYSTEM_TIME_PROCESS);
+     systemTime(SYSTEM_TIME_THREAD);
+     systemTime(SYSTEM_TIME_BOOTTIME);
+-    EXPECT_EXIT(systemTime(SYSTEM_TIME_BOOTTIME + 1), testing::KilledBySignal(SIGABRT), "");
++    EXPECT_EXIT(systemTime(SYSTEM_TIME_BOOTTIME + 1), KilledByAbort, "");
+ }
+ 
+ TEST(Timers, toMillisecondTimeoutDelay) {

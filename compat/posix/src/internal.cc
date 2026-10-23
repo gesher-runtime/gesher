@@ -80,4 +80,28 @@ HANDLE HandleFromFd(int fd) {
   return reinterpret_cast<HANDLE>(_get_osfhandle(fd));
 }
 
+ULONGLONG MonotonicMicros() {
+  static const LONGLONG frequency = [] {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return f.QuadPart;
+  }();
+  LARGE_INTEGER now;
+  QueryPerformanceCounter(&now);
+  return static_cast<ULONGLONG>(now.QuadPart / frequency * 1000000 +
+                                now.QuadPart % frequency * 1000000 / frequency);
+}
+
+ULONGLONG DeadlineAfter(int timeout_ms) {
+  if (timeout_ms < 0) return ~0ULL;
+  return MonotonicMicros() + static_cast<ULONGLONG>(timeout_ms) * 1000;
+}
+
+int MillisUntil(ULONGLONG deadline) {
+  ULONGLONG now = MonotonicMicros();
+  if (now >= deadline) return 0;
+  ULONGLONG ms = (deadline - now + 999) / 1000;
+  return ms > 0x7fffffff ? 0x7fffffff : static_cast<int>(ms);
+}
+
 }  // namespace gesher

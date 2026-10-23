@@ -1,0 +1,23 @@
+diff --git a/libutils/FileMap.cpp b/libutils/FileMap.cpp
+index 3acbce9..63b31e8 100644
+--- a/libutils/FileMap.cpp
++++ b/libutils/FileMap.cpp
+@@ -150,6 +150,18 @@ bool FileMap::create(const char* origFileName, int fd, off64_t offset, size_t le
+     DWORD  protect = readOnly ? PAGE_READONLY : PAGE_READWRITE;
+ 
+     mFileHandle  = (HANDLE) _get_osfhandle(fd);
++#if defined(GESHER)
++    // Like mmap()'s EINVAL in the branch below (b/119818070): a zero-length
++    // region maps nothing. CreateFileMapping fails on an empty file.
++    if (length == 0) {
++        mFileName = origFileName != nullptr ? strdup(origFileName) : nullptr;
++        mBaseLength = 0;
++        mDataOffset = offset;
++        mDataPtr = nullptr;
++        mDataLength = 0;
++        return true;
++    }
++#endif
+     mFileMapping = CreateFileMapping( mFileHandle, NULL, protect, 0, 0, NULL);
+     if (mFileMapping == NULL) {
+         ALOGE("CreateFileMapping(%p, %lx) failed with error %lu\n",

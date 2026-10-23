@@ -17,6 +17,7 @@ external/fmtlib
 external/dlmalloc
 external/lz4
 external/lzma C/
+external/libpng
 external/cpu_features
 system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
@@ -42,7 +43,7 @@ external/conscrypt *.bp
 external/cronet *.bp
 external/error_prone *.bp
 external/gflags
-external/googletest googletest/
+external/googletest googletest/ googlemock/
 external/javapoet *.bp
 external/jsoncpp
 external/jsr305 *.bp

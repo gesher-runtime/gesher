@@ -1,0 +1,91 @@
+name: libs
+
+# The core libraries' own unit tests (docs/core-libs.md): AOSP's cc_test
+# modules of libutils, libcutils and libandroidfw, with googletest, built by
+# cmake/aosp/core_libs_tests.cmake with the project's toolchain. ci.yml calls
+# this workflow and its test job runs them on Windows
+# (tests/windows/tracks/20-libs.ps1). Run on its own (a push to the core
+# libraries' branch, or `gh workflow run libs --ref <branch>`), it runs them
+# too.
+on:
+  push:
+    branches: ['wip/libs-full']
+    paths:
+      - 'cmake/aosp/**'
+      - 'compat/**'
+      - 'patches/**'
+      - 'aosp.lock'
+      - 'CMakeLists.txt'
+      - 'tests/windows/tracks/20-libs.ps1'
+      - '.github/workflows/libs.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A newer push supersedes a running build (github.workflow is the caller's,
+# "ci", when ci.yml runs this one).
+concurrency:
+  group: ${{ github.workflow }}-libs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: libs
+
+      - name: Build the tests
+        run: ninja -C out -k 0 core_libs_tests
+
+      # libandroidfw_tests' test apps, linked against framework-res.apk.
+      - name: Build libandroidfw's test apps
+        run: |
+          tools/build-framework-res.sh out/framework-res
+          tests/build-androidfw-test-apps.sh out/build-tools-36.1/aapt2 out/framework-res/framework-res.apk out/core-libs-tests
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libs-tests
+          path: out/core-libs-tests/
+
+  # Only when run on its own: under ci.yml, its test job runs them.
+  test:
+    if: github.workflow == 'libs'
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libs-tests
+          path: dist/libs-tests
+
+      - name: Run the tests
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -Command '$Dir = "dist"; $failed = 0; . ./tests/windows/tracks/20-libs.ps1; exit $failed' |
+            Tee-Object -FilePath results.txt
+          $code = $LASTEXITCODE
+          "### Core library tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)' >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          exit $code

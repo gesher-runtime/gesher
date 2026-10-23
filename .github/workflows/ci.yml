@@ -71,6 +71,11 @@ jobs:
   native-libs:
     uses: ./.github/workflows/native-libs.yml
 
+  # The core libraries' own unit tests (AOSP's cc_test modules), built for
+  # the test job: .github/workflows/libs.yml.
+  libs:
+    uses: ./.github/workflows/libs.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -186,7 +191,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: [build, framework, native-libs]
+    needs: [build, framework, native-libs, libs]
     strategy:
       fail-fast: false
       matrix:
@@ -213,6 +218,11 @@ jobs:
         with:
           name: native-libs
           path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libs-tests
+          path: dist/libs-tests
 
       - name: Run tests
         shell: pwsh

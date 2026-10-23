@@ -377,9 +377,18 @@ bool SocketIo(int fd, const struct iovec* iov, int iovcnt, bool write, ssize_t* 
   return true;
 }
 
+// Linux checks the fd and the count before transferring anything, so a bad
+// fd fails even with no buffers.
+bool BadVector(int fd, int iovcnt) {
+  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, true;
+  if (iovcnt < 0 || iovcnt > IOV_MAX) return errno = EINVAL, true;
+  return false;
+}
+
 }  // namespace
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
@@ -392,6 +401,7 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, true, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
@@ -404,6 +414,7 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
@@ -415,6 +426,7 @@ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 }
 
 ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pwrite(fd, iov[i].iov_base, iov[i].iov_len, offset + total);

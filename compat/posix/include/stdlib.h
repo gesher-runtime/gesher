@@ -31,6 +31,9 @@ extern "C" {
 char* realpath(const char* path, char* resolved_path);
 int posix_memalign(void** memptr, size_t alignment, size_t size);
 int setenv(const char* name, const char* value, int overwrite);
+// BSD's random()/srandom(), over the same generator as rand() (0..2^31-1).
+long random(void);
+void srandom(unsigned int seed);
 int unsetenv(const char* name);
 
 #ifdef __cplusplus

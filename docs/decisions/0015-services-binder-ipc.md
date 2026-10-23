@@ -1,4 +1,4 @@
-# 0014 — Binder across processes: /dev/binder over a broker process
+# 0015 — Binder across processes: /dev/binder over a broker process
 
 **Status:** accepted, 2026-10-23 (services track)
 

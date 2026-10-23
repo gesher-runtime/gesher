@@ -54,12 +54,9 @@ int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
 
-// --- libutils' androidSetThreadName ----------------------------------------------
-// libutils' Windows Threads.cpp leaves it out; libbinder's ProcessState names
-// its pooled threads with it.
-extern "C" void androidSetThreadName(const char* name) {
-  pthread_setname_np(pthread_self(), name);
-}
+// libutils' androidSetThreadName, which libbinder's ProcessState names its
+// pooled threads with, comes from libutils' pthread Threads.cpp (system/core
+// 0003, docs/core-libs.md).
 
 // --- AndroidRuntime statics ---------------------------------------------------
 // There is no AndroidRuntime instance (no Zygote; ART is started by dalvikvm
