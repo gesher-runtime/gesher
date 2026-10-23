@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build gesher-app.jar: the app driver (app/java), dexed for the boot class path.
 #
-#   app/build.sh <out-dir> --framework-classes <dir|jar> --core-classes <dir>
+#   app/build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]
 #
 # --framework-classes: framework.jar's classes, to compile against (the javac output
 #   of tools/framework/build.py, or a jar of them).
 # --core-classes: libcore's java.base as an exploded module (module-info.class at its
-#   root), as tools/framework/build.py takes it.
+#   root), as tools/framework/build.py takes it. Without it the JDK's java.base stands
+#   in, which is enough to compile but not a check against Android's libcore.
 #
 # Writes <out-dir>/gesher-app.jar (classes.dex) and <out-dir>/build.prop. gesher-app.jar
 # goes on -Xbootclasspath after framework.jar (see app/README.md). Needs a JDK 17+ and
@@ -26,8 +27,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-if [[ -z $framework || -z $core ]]; then
-  echo "usage: app/build.sh <out-dir> --framework-classes <dir|jar> --core-classes <dir>" >&2
+if [[ -z $framework ]]; then
+  echo "usage: app/build.sh <out-dir> --framework-classes <dir|jar> [--core-classes <dir>]" >&2
   exit 2
 fi
 
@@ -58,16 +59,18 @@ javac --release 11 -nowarn -d "$(native "$work/compat")" @"$(native "$work/compa
 
 # The driver, against framework.jar's classes and libcore's java.base, as framework.jar
 # itself is compiled (tools/framework/build.py).
-exports=()
-while IFS= read -r pkg; do
-  exports+=(--add-exports "java.base/$pkg=ALL-UNNAMED")
-done < <(cd "$core" && find . -name '*.class' ! -name module-info.class -printf '%h\n' \
-           | sed 's|^\./||; s|/|.|g' | sort -u)
+system=()
+if [[ -n $core ]]; then
+  system=(--system=none --module-path "$(native "$core")")
+  while IFS= read -r pkg; do
+    system+=(--add-exports "java.base/$pkg=ALL-UNNAMED")
+  done < <(cd "$core" && find . -name '*.class' ! -name module-info.class -printf '%h\n' \
+             | sed 's|^\./||; s|/|.|g' | sort -u)
+fi
 mkdir -p "$work/classes"
 find "$root/app/java" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
-javac -source 17 -target 17 --system=none --module-path "$(native "$core")" \
-  "${exports[@]}" -encoding UTF-8 -nowarn -Xlint:-options \
+javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 
 # One dex for both, into a jar.
