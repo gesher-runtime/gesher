@@ -154,6 +154,31 @@ void Window::Show() {
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_SHOWNORMAL);
 }
 
+void Window::Hide() {
+  ShowWindowAsync(static_cast<HWND>(hwnd_), SW_HIDE);
+}
+
+void Window::SetResizable(bool resizable) {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  const LONG_PTR frame = WS_THICKFRAME | WS_MAXIMIZEBOX;
+  style = resizable ? (style | frame) : (style & ~frame);
+  SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+  SetClientSize(width(), height());  // the frame changed; keep the client area
+}
+
+void Window::SetClientSize(int width, int height) {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  RECT r = {0, 0, width, height};
+  AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
+                           static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
+                           GetDpiForWindow(hwnd));
+  // SetWindowPos from another thread waits for the window's thread, which
+  // handles WM_SIZE (the new client size) before it returns.
+  SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
 void Window::SetTitle(const std::string& title_utf8) {
   // SetWindowTextW from another thread sends WM_SETTEXT to the window's
   // thread and waits; the title is copied there.

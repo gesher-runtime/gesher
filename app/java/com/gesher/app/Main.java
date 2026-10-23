@@ -4,6 +4,7 @@
  */
 package com.gesher.app;
 
+import android.app.Activity;
 import android.app.GesherAppDriver;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -23,6 +24,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.ServiceManager;
 
+import com.gesher.app.window.WindowMode;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.Services;
 import com.gesher.server.StandIn;
@@ -46,6 +48,11 @@ import java.util.List;
  *                         com.gesher.server.SystemServer (given the APK), through
  *                         servicemanager over binderd ($GESHER_BINDER), instead of
  *                         parsing the APK and serving stand-ins in this process
+ *   --window              show the Activity's UI in a Win32 window and run until the
+ *                         window is closed (closing it finishes the Activity)
+ *   --hidden-window       the same with the window never shown (tests read it back)
+ *   --display WxH[@DPI]   the display (and window) size; with a window the default is
+ *                         com.gesher.app.window.WindowMode.DEFAULT_DISPLAY
  * </pre>
  *
  * <p>The driver runs from the boot class path (it is in {@code android.app} to reach
@@ -94,6 +101,9 @@ public final class Main {
         String activity = null;
         String dataDir = null;
         boolean systemServer = false;
+        boolean window = false;
+        boolean showWindow = true;
+        String display = null;
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             switch (a) {
@@ -103,6 +113,9 @@ public final class Main {
                 case "--data-dir": dataDir = value(args, ++i, a); break;
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--system-server": systemServer = true; break;
+                case "--window": window = true; break;
+                case "--hidden-window": window = true; showWindow = false; break;
+                case "--display": display = value(args, ++i, a); break;
                 case "-h":
                 case "--help":
                     usage();
@@ -126,6 +139,12 @@ public final class Main {
         if (buildProp == null) buildProp = androidRoot + "/build.prop";
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
         apk = new File(apk).getAbsolutePath();
+
+        if (window) {
+            WindowMode.setUpDisplay(display);
+        } else if (display != null) {
+            com.gesher.app.DeviceProfile.parseAndSet(display);
+        }
 
         // 0-4. The runtime: JCA, the framework's natives, the system properties, the main
         //      Looper, the framework's resources.
@@ -170,6 +189,10 @@ public final class Main {
                     + String.join(", ", ServiceManager.listServices()));
         }
         launch.applicationInfo = appInfo;
+        if (window) {
+            // The app's windows are Win32 windows drawn in this process (WindowSession).
+            WindowMode.install(showWindow);
+        }
         new File(appInfo.dataDir).mkdirs();
         // The APK's lib/x86_64 into nativeLibraryDir, for System.loadLibrary (NativeLibs).
         int libs = NativeLibs.extract(apk, appInfo.nativeLibraryDir);
@@ -188,15 +211,26 @@ public final class Main {
         final ActivityInfo target = launch;
         final Throwable[] failure = new Throwable[1];
         final Handler main = new Handler(Looper.getMainLooper());
+        final boolean windowed = window;
         main.post(() -> {
+            boolean ended = !windowed;
             try {
-                GesherAppDriver.launch(app, target);
+                Activity launched = GesherAppDriver.launch(app, target);
+                if (windowed) {
+                    // Runs until the window is closed: then the loop ends as below.
+                    WindowMode.show(launched, () -> main.post(() -> {
+                        throw new EndLoop();
+                    }));
+                }
             } catch (Throwable t) {
                 failure[0] = t;
+                ended = true;
             } finally {
-                main.post(() -> {
-                    throw new EndLoop();
-                });
+                if (ended) {
+                    main.post(() -> {
+                        throw new EndLoop();
+                    });
+                }
             }
         });
         try {
@@ -314,6 +348,6 @@ public final class Main {
     private static void usage() {
         System.err.println("usage: gesher-app [--build-prop FILE] [--framework-res FILE]"
                 + " [--activity CLASS] [--data-dir DIR] [--strict-services] [--system-server]"
-                + " <app.apk>");
+                + " [--window | --hidden-window] [--display WxH[@DPI]] <app.apk>");
     }
 }
