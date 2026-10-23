@@ -9,9 +9,10 @@ work both ways.
 
 This is the native-libraries track; its decisions are
 [0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS),
-[0017](decisions/0017-native-libs-jni-bridge.md) (JNI) and
+[0017](decisions/0017-native-libs-jni-bridge.md) (JNI),
 [0020](decisions/0020-native-libs-libandroid.md) (libandroid, the rest of
-libc, signals). It builds in steps, each verified in CI
+libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
+(ANativeWindow, EGL/GLES over ANGLE). It builds in steps, each verified in CI
 (`tracks/40-native-libs.ps1`, `.github/workflows/native-libs.yml`).
 
 ## Pieces
@@ -165,8 +166,44 @@ libc, signals). It builds in steps, each verified in CI
     file with androidfw's `ObbFile`;
   - `ASharedMemory_create`/`getSize`/`setProt` over gesher-base's
     `memfd_create`;
-  - `ANativeWindow_*` and `ANativeActivity_*`: stand-ins for the graphics
-    track (below).
+  - `ANativeWindow_fromSurface`/`toSurface` over libandroid_runtime's, with
+    the runtime's `JNIEnv`; the other `ANativeWindow_*` are in
+    `libandroid_window.cc` ("Graphics" below);
+  - `ANativeActivity_*`: stand-ins (no NativeActivity natives yet; below).
+- **Graphics** ([0023](decisions/0023-native-libs-ndk-graphics.md),
+  `compat/bionic/ndk_graphics.cmake`: the OBJECT library
+  `gesher_ndk_graphics`, linked into dalvikvm and `gl_window_test`):
+  - `libandroid_window.cc`: `ANativeWindow_acquire`/`release`/`getWidth`/
+    `getHeight`/`getFormat`/`setBuffersGeometry`/`lock`/`unlockAndPost`/
+    `setBuffersTransform`/`setBuffersDataSpace`/`getBuffersDataSpace`/
+    `getBuffersDefaultDataSpace`/`setFrameRate`/
+    `setFrameRateWithChangeStrategy`/`tryAllocateBuffers` as System V thunks
+    over dalvikvm's Microsoft-ABI functions
+    (`compat/hwui/window/gesher_native_window.h`: hostgraphics' and the
+    graphics track's), which work on any hostgraphics `Surface` — a
+    `Win32Surface` for a Gesher window. `ANativeWindow_clearFrameRate` is
+    inline in the NDK's header.
+  - `egl_gles.cc` + `gen_gl_thunks.py`: every function of AOSP's
+    `frameworks/native/opengl/include` (EGL 1.5 and extensions, GLES 1.x,
+    2.0, 3.0-3.2 and extensions: 1,182, 14 of them handwritten) as a System V
+    thunk to ANGLE's `libEGL.dll`/`libGLESv2.dll` (loaded from the
+    executable's directory on first use; a function ANGLE lacks aborts naming
+    itself), so an app's `libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so`/
+    `libGLESv3.so` imports and `eglGetProcAddress` all resolve.
+    `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
+    adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
+    printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`
+    (and the platform forms) takes the `ANativeWindow*` and creates ANGLE's
+    window surface on its HWND (`gesher_window_hwnd`), holding a reference
+    to the window until `eglDestroySurface`. Android-only config attributes
+    are dropped/answered, `EGL_NATIVE_VISUAL_ID` is a HAL pixel format,
+    callbacks get Microsoft-ABI trampolines.
+  - **Presenting when GL owns the HWND**: the Gesher window paints its CPU
+    back buffer on `WM_PAINT`; while an EGL window surface is on it,
+    `egl_gles.cc` subclasses the HWND so `WM_PAINT` only validates (the
+    swap chain presents), and restores it with the last surface. Nothing in
+    `compat/hwui/window` changed.
+
 - **Unresolved data imports** no longer fail a load: the loader binds each to
   its own slot in a reserved, inaccessible region and prints "data '...' is
   not provided"; touching it is caught by a vectored handler that names the
