@@ -71,7 +71,7 @@ external/tagsoup *.bp
 frameworks/av *.bp media/ndk/include/
 frameworks/hardware/interfaces *.bp
 frameworks/libs/systemui *.bp
-frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/
+frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ libs/attestation/
 bionic libc/kernel/uapi/linux/android/
 frameworks/opt/telephony *.bp
 frameworks/proto_logging

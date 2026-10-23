@@ -1,0 +1,33 @@
+diff --git a/libs/hwui/jni/graphics_jni_helpers.h b/libs/hwui/jni/graphics_jni_helpers.h
+--- a/libs/hwui/jni/graphics_jni_helpers.h
++++ b/libs/hwui/jni/graphics_jni_helpers.h
+@@ -28,12 +28,28 @@
+ // and they need all the JNI methods to have JNIEnv* and jclass/jobject as their first two arguments.
+ // The following macro allows to have those arguments when compiling for host while omitting them when
+ // compiling for Android.
+-#ifdef __ANDROID__
++// Gesher: ART honours @CriticalNative, so the arguments are dropped as on Android.
++#if defined(__ANDROID__) || defined(GESHER)
+ #define CRITICAL_JNI_PARAMS
+ #define CRITICAL_JNI_PARAMS_COMMA
+ #else
+ #define CRITICAL_JNI_PARAMS JNIEnv*, jclass
+ #define CRITICAL_JNI_PARAMS_COMMA JNIEnv*, jclass,
++#endif
++
++// The entry point a JNI table registers for native function `fn`. Gesher: ART
++// enters natives with the System V ABI (docs/decisions/0006-managed-abi.md),
++// so each function is registered through a System V thunk; patch 0101 turns
++// the tables' `(void*) fn` into this. core_jni_helpers.h has the same.
++#ifndef GESHER_JNI
++#if defined(GESHER)
++#include <nativehelper/jni_macros.h>
++#define GESHER_JNI(fn) NATIVEHELPER_SYSV_JNI_ENTRY(fn)
++#else
++#define GESHER_JNI(fn) reinterpret_cast<void*>(fn)
++#endif
++// A function declared JNICALL, which is System V under GESHER already.
++#define GESHER_JNI_SYSV(fn) reinterpret_cast<void*>(fn)
+ #endif
+ 
+ namespace android {
