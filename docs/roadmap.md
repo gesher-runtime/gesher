@@ -192,6 +192,13 @@ needs: [framework-build.md](framework-build.md).
         use it (ci run 40019524773)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
+- [x] Installed apps in the Start menu: a shortcut per launchable package
+      (`Gesher Apps\<label>.lnk`, `gesher-app launch <package>`) with the
+      app's label and launcher icon (PNG/WebP mipmaps, adaptive icons, the
+      framework's default) as a multi-size `.ico`, and an AppUserModelID the
+      app's processes set too; removed by `gesher-app uninstall` and with
+      Gesher; Gesher's own icon for Setup, its entries and `.apk` files
+      (ci run 40024847287; docs/installer.md, ADR 0028)
 
 ## Phase 6 checklist
 
