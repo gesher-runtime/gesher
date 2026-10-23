@@ -276,7 +276,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $s = 'system_server: '
 $null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
-  ,@("${s}com.gesher.components parsed by PackageParser2: 3 activities, 3 services, 1 receivers, 1 providers",
+  ,@("${s}com.gesher.components parsed by PackageParser2: 4 activities, 3 services, 1 receivers, 1 providers",
     "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
     "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
     "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
@@ -315,3 +315,288 @@ if ($failed -ne $failedBefore) {
   }
 }
 Remove-Item Env:GESHER_BINDER
+
+# The Gesher device (docs/services.md, ADR 0026): binderd, servicemanager and a
+# persistent system server that every launch shares, started detached by the
+# first launcher (com.gesher.app.Launcher, what gesher-app runs) and found by
+# the next ones through data/system/gesher-device under a named mutex;
+# installed packages (data/app/<package>-<n>/base.apk, data/system/packages.list);
+# app processes the system server starts on demand (android.app.GesherAppProcess,
+# paired by their start sequence number) and ends when nothing keeps them.
+$launcher = $dvmApp + 'com.gesher.app.Launcher'
+$deviceLogs = Join-Path $root 'logs'
+$stateFile = Join-Path $root 'data/system/gesher-device'
+
+# The device's state file (Java properties).
+function DeviceState {
+  if (-not (Test-Path $stateFile)) { return $null }
+  $state = @{}
+  foreach ($line in Get-Content $stateFile) {
+    if ($line -match '^\s*[#!]' -or $line -notmatch '=') { continue }
+    $k, $v = $line -split '=', 2
+    $state[$k.Trim()] = ($v -replace '\\(.)', '$1')
+  }
+  return $state
+}
+
+# The device's processes that still run, as "name pid" strings.
+function DeviceAlive($state) {
+  $alive = @()
+  foreach ($n in 'system_server', 'servicemanager', 'binderd') {
+    $id = [int]$state[$n]
+    if ($id -gt 0 -and (Get-Process -Id $id -ErrorAction SilentlyContinue)) { $alive += "$n $id" }
+  }
+  return $alive
+}
+
+function DeviceLogs {
+  foreach ($f in Get-ChildItem $deviceLogs -Filter *.log -ErrorAction SilentlyContinue) {
+    Write-Host "--- $($f.Name)"
+    Get-Content $f.FullName -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+  }
+}
+
+# Starts a program like RunTimed, without waiting; WaitTimed collects it.
+function StartTimed([string] $Exe, [string[]] $Arguments) {
+  $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
+  foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $p = [Diagnostics.Process]::Start($psi)
+  return @{ Process = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
+}
+
+function WaitTimed($t, [int] $Seconds) {
+  $timedOut = -not $t.Process.WaitForExit($Seconds * 1000)
+  if ($timedOut) { $t.Process.Kill($true); $t.Process.WaitForExit() }
+  $null = $t.Out.Wait(10000), $t.Err.Wait(10000)
+  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $t.Process.ExitCode }
+  $out = $t.Out.Result + $t.Err.Result
+  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+  return $out
+}
+
+function ServerPid([string] $out) {
+  if ($out -match 'system server pid (\d+)') { return [int]$Matches[1] }
+  return 0
+}
+
+$failedBefore = $failed
+Remove-Item $stateFile -ErrorAction SilentlyContinue
+
+# Two launchers at once, with no device running: one starts it, the other waits
+# on the mutex and connects to it.
+$a = StartTimed "$Dir/dalvikvm.exe" ($launcher + 'start')
+$b = StartTimed "$Dir/dalvikvm.exe" ($launcher + 'start')
+$outA = WaitTimed $a 400
+$codeA = $LASTEXITCODE
+$outB = WaitTimed $b 400
+$codeB = $LASTEXITCODE
+$both = $outA + "`n" + $outB
+$started = ([regex]::Matches($both, 'gesher-app: started the Gesher device ')).Count
+$connected = ([regex]::Matches($both, 'gesher-app: connected to the running Gesher device ')).Count
+$serverPid = ServerPid $outA
+if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -and $serverPid -gt 0 -and
+    (ServerPid $outB) -eq $serverPid -and (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
+  Write-Host 'PASS  services: two launchers at once: one starts the Gesher device (binderd, servicemanager, system server, detached), the other waits for it and connects'
+} else {
+  Write-Host "FAIL  services: two launchers at once start one Gesher device (exit $codeA, $codeB; started $started, connected $connected)"
+  Write-Host $both
+  $failed++
+}
+
+# Installed packages: install (copied into data/app/<package>-1/base.apk,
+# listed in packages.list), the same APK again (unchanged), list
+# (IPackageManager.getInstalledPackages and getPackageInfo across processes).
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive "$Dir/lifecycle.apk")) 300
+$code = $LASTEXITCODE
+$out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive "$Dir/peer.apk")) 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+$out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'install', (NoDrive "$Dir/lifecycle.apk")) 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+$list = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+$registry = Get-Content (Join-Path $root 'data/system/packages.list') -Raw -ErrorAction SilentlyContinue
+$ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/<package>-<n>, packages.list, getInstalledPackages and getPackageInfo from the system server' ($out + $list) @(
+  'gesher-app: connected to the running Gesher device ',
+  'gesher-app: installed com.gesher.lifecycle (version 1) in ',
+  '/app/com.gesher.lifecycle-1',
+  'gesher-app: installed com.gesher.peer (version 1) in ',
+  'gesher-app: com.gesher.lifecycle is installed and unchanged',
+  'gesher-app: 2 installed packages',
+  'package:com.gesher.lifecycle version 1.0 (1) ',
+  '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
+  'package:com.gesher.peer version 1.0 (1) ',
+  '/app/com.gesher.peer-1/base.apk, 1 activities, 0 services, 1 providers') $code
+if ($ok -and -not ((Test-Path (Join-Path $root 'data/app/com.gesher.peer-1/base.apk')) -and $registry -match "com\.gesher\.lifecycle`t" -and $registry -match "com\.gesher\.peer`t")) {
+  Write-Host "FAIL  services: installed files (data/app, packages.list): $registry"
+  $failed++
+  $ok = $false
+}
+if (-not $ok) { Write-Host ($out + $list) }
+
+# A launch through the device: lifecycle.apk (installed, unchanged), its
+# process started by the system server, the activity to onResume, the task
+# removed once idle, the process ended; the app's output comes from its log.
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/lifecycle.apk")) 400
+$code = $LASTEXITCODE
+$pidLifecycle = ServerPid $out
+# The launcher's lines and the app's (copied from its log) interleave: each in order.
+if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system server starts its process (GesherAppProcess, start seq), onResume, the task removed, the process ended' $out @(
+  @('gesher-app: connected to the running Gesher device ',
+    'gesher-app: com.gesher.lifecycle is installed and unchanged',
+    'gesher-app: startActivityAndWait: result 0, com.gesher.lifecycle/.LifecycleActivity',
+    'gesher-app: removing task ',
+    'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)',
+    'gesher-app: done'),
+  @('gesher-app: app process for com.gesher.lifecycle: pid ',
+    'gesher-app: attached to the system server',
+    'LifecycleApplication onCreate, package=com.gesher.lifecycle',
+    'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
+    'LifecycleActivity onDestroy',
+    'gesher-app: the system server ended the process (scheduleExit)',
+    'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)')
+) $code)) { Write-Host $out }
+
+# A second app on the same device (installed by its first launch):
+# components.apk runs its activities, services, broadcasts and providers to the
+# end (--keep-task).
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--keep-task') 500
+$code = $LASTEXITCODE
+$ok = CheckOrdered 'services: gesher-app launch components.apk --keep-task: installed on first launch, its own process, every step' $out @(
+  'gesher-app: connected to the running Gesher device ',
+  'gesher-app: installed com.gesher.components (version 1) in ',
+  'gesher-app: app process for com.gesher.components: pid ',
+  "${c}MainActivity onResume #1", "${c}MainActivity onActivityResult: request 1, result RESULT_OK, answer 42",
+  "${c}LocalService onDestroy", "${c}ManifestReceiver onReceive com.gesher.components.HELLO",
+  "${c}query content://com.gesher.components.items/items: 2 rows: apple, banana", "${c}all steps ran",
+  'gesher-app: the process of com.gesher.components ended (exit code 0)', 'gesher-app: done') $code
+if (-not $ok) { Write-Host $out }
+if ($ok -and $serverPid -gt 0 -and $pidLifecycle -eq $serverPid -and (ServerPid $out) -eq $serverPid) {
+  Write-Host "PASS  services: launches share one system server (pid $serverPid): lifecycle.apk and components.apk, each in a process it started"
+} elseif ($ok) {
+  Write-Host "FAIL  services: launches share one system server (pids $serverPid, $pidLifecycle, $(ServerPid $out))"
+  $failed++
+}
+
+# Cross-package (tests/apps/peer): components' CrossActivity starts
+# com.gesher.peer.SHOW, an implicit intent another package handles, for a
+# result: the system server starts peer's process for the activity; then its
+# ContentResolver uses peer's provider (insert, getType, call), and the server
+# starts peer's process again for it, as peer's first process ended with its
+# activity.
+$peerLog = Join-Path $deviceLogs 'com.gesher.peer.log'
+$peerBefore = if (Test-Path $peerLog) { (Get-Item $peerLog).Length } else { 0 }
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/components.apk"), '--activity', '.CrossActivity', '--keep-task') 500
+$code = $LASTEXITCODE
+# peer's second process ends after components' (its provider's last client).
+$peerOut = ''
+for ($i = 0; $i -lt 60; $i++) {
+  $peerOut = if (Test-Path $peerLog) { (Get-Content $peerLog -Raw).Substring($peerBefore) } else { '' }
+  if (([regex]::Matches($peerOut, 'the system server ended the process')).Count -ge 2) { break }
+  Start-Sleep 1
+}
+$serverOut = (Get-Content (Join-Path $deviceLogs 'system_server.log') -Raw -ErrorAction SilentlyContinue) + ''
+$ok = CheckOrdered 'services: cross-package: an implicit intent from components starts peer''s activity in a process of peer''s, and the result comes back' $out @(
+  "${c}CrossActivity (pid ", ' starts com.gesher.peer.SHOW (implicit, another package) for a result',
+  "${c}CrossActivity onPause",
+  "${c}CrossActivity onActivityResult: request 2, result RESULT_OK, the peer's pid ",
+  ', another process: true', "${c}CrossActivity onResume #2", "${c}the peer's process ended") $code
+$ok = (CheckOrdered 'services: cross-package: components'' ContentResolver reaches peer''s provider (insert, getType, call), the system server starting peer''s process for it' $out @(
+  "${c}peer provider insert: content://com.gesher.peer.notes/notes/1",
+  "${c}peer provider getType: vnd.android.cursor.dir/vnd.gesher.note",
+  "${c}peer provider call describe: notes [hello from components], in another process: true",
+  "${c}cross-package steps ran", 'gesher-app: done') $code) -and $ok
+$ok = (CheckSequences 'services: processes on demand: peer started for its activity, ended with it, started again for its provider, ended with its last client' ($peerOut + "`n" + $serverOut) @(
+  @('gesher-app: app process for com.gesher.peer: pid ',
+    'peer: PeerActivity onCreate in process com.gesher.peer (pid ', 'started by com.gesher.components/.CrossActivity',
+    'peer: PeerActivity onDestroy', 'gesher-app: the system server ended the process (scheduleExit)',
+    'gesher-app: app process for com.gesher.peer: pid ', 'peer: NotesProvider onCreate in process com.gesher.peer',
+    'peer: NotesProvider insert hello from components', 'peer: NotesProvider call describe',
+    'gesher-app: the system server ended the process (scheduleExit)'),
+  @("${s}starting a process for com.gesher.peer (activity com.gesher.peer/com.gesher.peer.PeerActivity): pid ",
+    "${s}attachApplication: process ", "${s}bindApplication: process ",
+    "${s}scheduleExit: process ", ' (com.gesher.peer) has no activities, services or provider clients left',
+    "${s}getContentProvider com.gesher.peer.notes from com.gesher.components: declared by com.gesher.peer, waiting for its process",
+    "${s}starting a process for com.gesher.peer (provider com.gesher.peer.notes): pid ",
+    "${s}publishContentProviders: com.gesher.peer.notes (com.gesher.peer.NotesProvider) in process ",
+    ' (com.gesher.peer) has a client, process ',
+    "${s}scheduleExit: process ", ' (com.gesher.peer) has no activities, services or provider clients left')
+)) -and $ok
+if (-not $ok) { Write-Host $out; Write-Host "--- com.gesher.peer.log"; Write-Host $peerOut }
+
+# Uninstall: the package's code, data and entry go; list no longer has it.
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'uninstall', 'com.gesher.peer') 300
+$code = $LASTEXITCODE
+$out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
+$code = [Math]::Max($code, $LASTEXITCODE)
+$ok = CheckOrdered 'services: gesher-app uninstall: the package''s code, data and entry removed' $out @(
+  'gesher-app: uninstalled com.gesher.peer', 'gesher-app: 2 installed packages',
+  'package:com.gesher.lifecycle ', 'package:com.gesher.components ') $code
+if ($ok -and ($out.Contains('package:com.gesher.peer') -or (Test-Path (Join-Path $root 'data/app/com.gesher.peer-1')) -or
+    (Get-Content (Join-Path $root 'data/system/packages.list') -Raw) -match 'com\.gesher\.peer')) {
+  Write-Host 'FAIL  services: uninstall left com.gesher.peer behind'
+  $failed++
+  $ok = $false
+}
+if (-not $ok) { Write-Host $out }
+
+# Shutdown: the system server ends its app processes and itself; binderd and
+# servicemanager, in its job, go with it; the state file is removed.
+$state = DeviceState
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
+$code = $LASTEXITCODE
+Start-Sleep 1
+$left = if ($state) { DeviceAlive $state } else { @('no state file') }
+if ($code -eq 0 -and $out.Contains('gesher-app: the Gesher device ') -and $out.Contains(' stopped') -and -not $left -and -not (Test-Path $stateFile) -and
+    (Get-Content (Join-Path $deviceLogs 'system_server.log') -Raw).Contains('system_server: the Gesher device stopped')) {
+  Write-Host 'PASS  services: gesher-app shutdown: the system server ends its app processes, then itself, binderd and servicemanager (one job)'
+} else {
+  Write-Host "FAIL  services: gesher-app shutdown (exit $code; still running: $($left -join ', '))"
+  Write-Host $out
+  $failed++
+}
+
+# Idle: a device whose GESHER_IDLE_TIMEOUT passes with no app process stops by itself.
+$env:GESHER_IDLE_TIMEOUT = '20'
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'start') 400
+Remove-Item Env:GESHER_IDLE_TIMEOUT
+$state = DeviceState
+$left = @('no state file')
+for ($i = 0; $i -lt 90 -and $state; $i++) {
+  $left = DeviceAlive $state
+  if (-not $left) { break }
+  Start-Sleep 1
+}
+if ($state -and -not $left -and -not (Test-Path $stateFile) -and
+    (Get-Content (Join-Path $deviceLogs 'system_server.log') -Raw).Contains('shutting down: idle: no app process for 20 s')) {
+  Write-Host 'PASS  services: an idle device stops by itself (GESHER_IDLE_TIMEOUT)'
+} else {
+  Write-Host "FAIL  services: an idle device stops by itself (still running: $($left -join ', '))"
+  Write-Host $out
+  $failed++
+}
+
+# Crash safety: a killed system server takes binderd and servicemanager with
+# it (its job); the next launcher finds the state stale and cleans it up.
+$out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'start') 400
+$state = DeviceState
+if ($state) { Stop-Process -Id ([int]$state['system_server']) -Force -ErrorAction SilentlyContinue }
+$left = @('no state file')
+for ($i = 0; $i -lt 30 -and $state; $i++) {
+  $left = DeviceAlive $state
+  if (-not $left) { break }
+  Start-Sleep 1
+}
+$status = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'status') 300
+if ($state -and -not $left -and $status.Contains('gesher-app: cleaning up the Gesher device ') -and
+    $status.Contains('gesher-app: no Gesher device is running') -and -not (Test-Path $stateFile)) {
+  Write-Host 'PASS  services: a killed system server takes binderd and servicemanager with it; the next launcher cleans up the stale state'
+} else {
+  Write-Host "FAIL  services: crash safety (still running: $($left -join ', '))"
+  Write-Host ($out + $status)
+  $failed++
+}
+if ($state) { foreach ($n in DeviceAlive $state) { Stop-Process -Id ([int]($n -split ' ')[1]) -Force -ErrorAction SilentlyContinue } }
+if ($failed -ne $failedBefore) { DeviceLogs }
