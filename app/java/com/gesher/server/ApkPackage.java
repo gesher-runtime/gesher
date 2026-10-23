@@ -108,8 +108,15 @@ public final class ApkPackage {
 
     /** One line about what was parsed, for logs (and the tests' checks). */
     public String describe() {
+        int activities = 0;
+        for (ParsedActivity a : parsed.getActivities()) {
+            // The parser adds the system's AppDetailsActivity to every package.
+            if (!PackageManager.APP_DETAILS_ACTIVITY_CLASS_NAME.equals(a.getName())) {
+                activities++;
+            }
+        }
         return packageName + " parsed by PackageParser2: "
-                + parsed.getActivities().size() + " activities, "
+                + activities + " activities, "
                 + parsed.getServices().size() + " services, "
                 + parsed.getReceivers().size() + " receivers, "
                 + parsed.getProviders().size() + " providers, targetSdk "
