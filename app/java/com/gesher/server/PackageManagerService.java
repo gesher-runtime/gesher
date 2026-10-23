@@ -12,7 +12,9 @@ import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -85,6 +87,83 @@ public final class PackageManagerService extends IPackageManager.Default {
             result.addAll(p.queryIntentActivities(intent, resolvedType, flags));
         }
         return result;
+    }
+
+    /** The services {@code intent} resolves to, in every package. */
+    List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        for (ApkPackage p : mPackages.values()) {
+            result.addAll(p.queryIntentServices(intent, resolvedType, flags));
+        }
+        return result;
+    }
+
+    /** The manifest receivers {@code intent} reaches, in every package. */
+    List<ResolveInfo> receivers(Intent intent, String resolvedType, long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        for (ApkPackage p : mPackages.values()) {
+            result.addAll(p.queryIntentReceivers(intent, resolvedType, flags));
+        }
+        return result;
+    }
+
+    /** The provider with authority {@code authority} (one of its authorities), or null. */
+    ProviderInfo provider(String authority, long flags) {
+        for (ApkPackage p : mPackages.values()) {
+            for (ProviderInfo info : p.providers(flags)) {
+                if (info.authority == null) continue;
+                for (String a : info.authority.split(";")) {
+                    if (a.equals(authority)) return info;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public ResolveInfo resolveService(Intent intent, String resolvedType, long flags,
+            int userId) {
+        List<ResolveInfo> all = services(intent, resolvedType, flags);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    @Override
+    public ParceledListSlice queryIntentServices(Intent intent, String resolvedType,
+            long flags, int userId) {
+        return new ParceledListSlice<>(services(intent, resolvedType, flags));
+    }
+
+    @Override
+    public ParceledListSlice queryIntentReceivers(Intent intent, String resolvedType,
+            long flags, int userId) {
+        return new ParceledListSlice<>(receivers(intent, resolvedType, flags));
+    }
+
+    @Override
+    public ServiceInfo getServiceInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        return p == null ? null : p.serviceInfo(className.getClassName(), flags);
+    }
+
+    @Override
+    public ActivityInfo getReceiverInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        return p == null ? null : p.receiverInfo(className.getClassName(), flags);
+    }
+
+    @Override
+    public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
+        return provider(name, flags);
+    }
+
+    @Override
+    public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        if (p == null) return null;
+        for (ProviderInfo info : p.providers(flags)) {
+            if (info.name.equals(className.getClassName())) return info;
+        }
+        return null;
     }
 
     @Override
