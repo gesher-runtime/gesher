@@ -35,6 +35,11 @@ SPECIALS = {
     # A display event receiver that never delivers events (vsync is off,
     # debug.choreographer.vsync=false), but exists.
     ('android/view/DisplayEventReceiver', 'nativeInit'): 'create',
+    # ViewRootImpl's WindowInputEventReceiver hands this to the real
+    # HardwareRenderer.nAddObserver, which takes a strong reference to it
+    # (sp::fromExisting) and has the render thread call it: a real observer
+    # that drops the metrics (compat/hwui/graphics_runtime.cc), not 0.
+    ('android/view/InputEventReceiver', 'nativeGetFrameMetricsObserver'): 'frameMetricsObserver',
 }
 
 
@@ -90,6 +95,9 @@ def main():
         '',
         '#define SYSV __attribute__((sysv_abi))',
         '',
+        '// compat/hwui/graphics_runtime.cc: a FrameMetricsObserver of hwui that drops the metrics.',
+        'extern "C" jlong gesher_standin_frame_metrics_observer();',
+        '',
         'namespace {',
         '',
         'void FreeBlock(void* ptr) { free(ptr); }',
@@ -98,6 +106,7 @@ def main():
         'SYSV jdouble Standin_zeroFloat() { return 0.0; }',
         'SYSV jlong Standin_create() { return reinterpret_cast<jlong>(calloc(1, 64)); }',
         'SYSV jlong Standin_freeFunction() { return reinterpret_cast<jlong>(&FreeBlock); }',
+        'SYSV jlong Standin_frameMetricsObserver() { return gesher_standin_frame_metrics_observer(); }',
         '',
     ]
     tables = []

@@ -13,6 +13,7 @@
 
 #include <log/log.h>
 
+#include "FrameMetricsObserver.h"
 #include "GraphicsJNI.h"
 #include "Properties.h"
 #include "include/core/SkGraphics.h"
@@ -175,4 +176,32 @@ int register_gesher_graphics(JNIEnv* env) {
     }
   }
   return 0;
+}
+
+namespace {
+
+// Frame metrics nobody reads.
+class DroppingFrameMetricsObserver : public android::uirenderer::FrameMetricsObserver {
+ public:
+  DroppingFrameMetricsObserver() : FrameMetricsObserver(/*waitForPresentTime=*/false) {}
+  void notify(const android::uirenderer::FrameInfoBuffer&) override {}
+};
+
+}  // namespace
+
+// The stand-in for InputEventReceiver.nativeGetFrameMetricsObserver
+// (compat/framework/attach_standins.cc), while the app process's input is a
+// stand-in: ViewRootImpl hands the answer to HardwareRenderer.nAddObserver,
+// whose render thread calls it, so it must be an observer (0 crashes
+// CanvasContext::addFrameMetricsObserver). One for the process, with a strong
+// reference that is never dropped: nAddObserver takes another with
+// sp::fromExisting, which needs one, and nRemoveObserver later passes the
+// same pointer.
+extern "C" jlong gesher_standin_frame_metrics_observer() {
+  static android::uirenderer::FrameMetricsObserver* const observer = [] {
+    auto* o = new DroppingFrameMetricsObserver();
+    o->incStrong(nullptr);
+    return o;
+  }();
+  return reinterpret_cast<jlong>(observer);
 }

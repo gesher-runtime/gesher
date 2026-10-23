@@ -14,8 +14,9 @@ import subprocess
 import sys
 
 # lld map lines: "<address> <size> <align> <name>"; symbols are the
-# deepest-indented entries (no "(...)" section or file name).
-LINE = re.compile(r'^\s*([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+(\S.*)$')
+# entries with alignment 0 (output and input sections have one). Not by the
+# name: C++ names end in ')' (parameter lists) and may contain '/'.
+LINE = re.compile(r'^\s*([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s+(\S.*)$')
 
 
 def load_map(path):
@@ -24,10 +25,10 @@ def load_map(path):
         m = LINE.match(line)
         if not m:
             continue
-        addr, name = int(m.group(1), 16), m.group(2).strip()
+        addr, name = int(m.group(1), 16), m.group(3).strip()
         if name.startswith('__ImageBase'):
             image_base = addr
-        if name.startswith('.') or ':(' in name or name.endswith(')') or '/' in name or '\\' in name:
+        if int(m.group(2), 16) != 0 or name.startswith('.') or ':(' in name:
             continue
         syms.append((addr, name))
     syms.sort()
