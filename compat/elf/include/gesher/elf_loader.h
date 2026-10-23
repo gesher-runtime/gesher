@@ -44,8 +44,10 @@ struct LoadOptions {
   // libc++_shared.so provided by the shim) are not an error.
   bool allow_shimmed_needed = true;
   // When true, an undefined function import that nothing defines is bound to
-  // a stub that reports it when called (SetUnresolvedHandler) instead of
-  // failing the load. Data imports must always resolve.
+  // a stub that reports it when called (SetUnresolvedHandler), and an
+  // undefined data import to a placeholder in an inaccessible region whose
+  // use names the symbol and aborts, instead of failing the load. TLS imports
+  // must always resolve.
   bool stub_unresolved_functions = true;
 };
 

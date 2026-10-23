@@ -88,10 +88,33 @@ void RegisterLibc(SymbolTable& table);     // shim.cc
 void RegisterStdio(SymbolTable& table);    // stdio_bionic.cc
 void RegisterPthread(SymbolTable& table);  // pthread_bionic.cc
 void RegisterLocale(SymbolTable& table);   // locale_bionic.cc
+void RegisterPosix(SymbolTable& table);    // posix_bionic.cc
+void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
+void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
+void RegisterTime(SymbolTable& table);     // time_bionic.cc
+
+// Runs the handlers of signals sent to this thread that it no longer blocks
+// (signal_bionic.cc). Called where Linux would deliver them: blocking waits
+// and sleeps, and wherever the signal mask is lowered. Cheap when none are
+// pending.
+void DeliverPendingSignals();
+
+// bionic's pthread_t of the calling thread (pthread_bionic.cc).
+uint64_t PthreadSelfId();
+
+// IEEE binary128 (bionic's x86-64 long double) from a double, as 16 bytes.
+void DoubleToBinary128(double d, void* out);
 
 // Linux errno values the shim returns where the CRT's numbering differs
 // (gesher-base's <errno.h> already uses Linux's; these are for clarity).
 constexpr int kEPERM = 1;
+constexpr int kENOENT = 2;
+constexpr int kEINTR = 4;
+constexpr int kEBADF = 9;
+constexpr int kEFAULT = 14;
+constexpr int kENOTDIR = 20;
+constexpr int kERANGE = 34;
+constexpr int kEOPNOTSUPP = 95;
 constexpr int kESRCH = 3;
 constexpr int kEAGAIN = 11;
 constexpr int kENOMEM = 12;
