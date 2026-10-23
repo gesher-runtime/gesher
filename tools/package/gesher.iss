@@ -1,8 +1,8 @@
 ; Gesher's Windows installer (Inno Setup 6), built in CI by the package job:
 ;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
 ; Installs per user (no administrator rights) into
-; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` on the user's PATH and adds a
-; Start menu entry that runs the bundled Hello.
+; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
+; PATH and adds a Start menu entry that runs the bundled Hello.
 
 #ifndef BuildDir
   #error Pass /DBuildDir=<build output directory>
@@ -38,8 +38,15 @@ Source: "{#BuildDir}\core-libart.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-icu4j.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\icudt*l.dat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\hello.dex"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\framework.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\framework-res.apk"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\build.prop"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]

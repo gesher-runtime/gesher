@@ -23,7 +23,7 @@ foreach ($p in $apkFull, $root) {
   }
 }
 Set-Location $here
-function NoDrive([string] $p) { ($p -replace '\', '/') -replace '^[A-Za-z]:', '' }
+function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
   New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null
