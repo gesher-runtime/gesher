@@ -4,6 +4,13 @@
 #
 #   gesher-app my.apk
 #   gesher-app my.apk --activity .OtherActivity
+#   gesher-app my.apk --system-server
+#
+# --system-server runs the system services in a process of their own, as on
+# Android: binderd (the binder driver) and servicemanager for a binder device
+# of this run, then com.gesher.server.SystemServer with the APK, then the app
+# in another process, which gets the package and every service through
+# servicemanager; the three are stopped when the app exits.
 #
 # gesher-app.cmd runs this script. Like gesher.ps1, the APK must be on the same
 # drive as Gesher (ART's class paths are ':'-separated, so paths go without the
@@ -50,6 +57,33 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 # framework.jar lacks must not shadow real ones.
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
-& (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system/framework/boot.art")" `
-  -Xint '-Xusejit:false' com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
-exit $LASTEXITCODE
+$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")", '-Xint', '-Xusejit:false')
+$dalvikvm = Join-Path $here 'dalvikvm.exe'
+if ($DriverArgs -notcontains '--system-server') {
+  & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+  exit $LASTEXITCODE
+}
+
+# Multi-process: binderd, servicemanager and the system server, then the app.
+$logs = Join-Path $root 'logs'
+New-Item -ItemType Directory -Force $logs | Out-Null
+$env:GESHER_BINDER = "gesher-app-$PID"
+$started = @()
+try {
+  $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
+    -RedirectStandardOutput "$logs/binderd.out" -RedirectStandardError "$logs/binderd.log"
+  $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
+    -RedirectStandardOutput "$logs/servicemanager.out" -RedirectStandardError "$logs/servicemanager.log"
+  $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
+    -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (NoDrive $apkFull)) `
+    -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.log"
+  & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
+  $code = $LASTEXITCODE
+  if ($code -ne 0) { Write-Host "gesher-app: the system server's logs are in $logs" }
+} finally {
+  foreach ($p in $started) {
+    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  }
+  Remove-Item Env:GESHER_BINDER
+}
+exit $code

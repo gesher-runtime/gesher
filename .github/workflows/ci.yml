@@ -163,6 +163,18 @@ jobs:
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
             throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
           }
+          # Multi-process: binderd, servicemanager and the system server
+          # (com.gesher.server.SystemServer) started by the launcher, the app
+          # in a process of its own.
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --system-server 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
+          }
+          'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The .apk association: run the open command the installer registered,
           # with %1 set to the bundled APK, as Explorer would.
           $cls = 'HKCU:\Software\Classes'

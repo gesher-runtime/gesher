@@ -44,6 +44,8 @@ Source: "{#BuildDir}\framework.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\framework-res.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\build.prop"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion

@@ -67,8 +67,22 @@ if [[ -n $core ]]; then
   done < <(cd "$core" && find . -name '*.class' ! -name module-info.class -printf '%h\n' \
              | sed 's|^\./||; s|/|.|g' | sort -u)
 fi
+# Concrete IFoo.Stub classes for the system services gesher serves over binder
+# (com.gesher.server.StandIn), generated from framework.jar's interfaces.
+gencp=$(native "$framework")
+if [[ -n $core ]]; then
+  if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then gencp+=";"; else gencp+=":"; fi
+  gencp+=$(native "$core")
+fi
+java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp" "$(native "$root/app/gen/StubGen.java")" \
+  "$(native "$work/gen")" com.gesher.server.stub \
+  android.app.IActivityManager android.app.IActivityTaskManager \
+  android.app.IActivityClientController android.content.pm.IPackageManager \
+  android.view.IWindowManager android.view.IWindowSession \
+  android.hardware.display.IDisplayManager android.os.IUserManager
+
 mkdir -p "$work/classes"
-find "$root/app/java" -name '*.java' > "$work/sources.txt"
+find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
