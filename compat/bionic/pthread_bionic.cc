@@ -156,7 +156,8 @@ bionic_pthread_t SelfId() {
 // Word 0: bionic's type bits (14-15); word 1: the lock (0 free, 1 locked,
 // 2 locked with waiters); word 2: the owner's tid; word 3: recursion count.
 
-constexpr int kMutexNormal = 0, kMutexRecursive = 1, kMutexErrorCheck = 2;
+// Types: 0 normal, 1 recursive, 2 error-check (bionic's PTHREAD_MUTEX_*).
+constexpr int kMutexNormal = 0, kMutexRecursive = 1;
 
 int MutexType(bionic_pthread_mutex_t* m) { return (W(m, 0)->load() >> 14) & 3; }
 

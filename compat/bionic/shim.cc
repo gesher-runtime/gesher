@@ -146,9 +146,9 @@ uint64_t BIONIC_SYSV Strtoul(const char* s, char** end, int base) {
 int64_t BIONIC_SYSV Atol(const char* s) { return std::atoll(s); }
 int64_t BIONIC_SYSV Labs(int64_t v) { return v < 0 ? -v : v; }
 int64_t BIONIC_SYSV Lround(double v) { return std::llround(v); }
-int64_t BIONIC_SYSV Lroundf(float v) { return std::llroundf(v); }
+int64_t BIONIC_SYSV Lroundf(float v) { return ::llroundf(v); }
 int64_t BIONIC_SYSV Lrint(double v) { return std::llrint(v); }
-int64_t BIONIC_SYSV Lrintf(float v) { return std::llrintf(v); }
+int64_t BIONIC_SYSV Lrintf(float v) { return ::llrintf(v); }
 double BIONIC_SYSV Ldexp(double v, int e) { return std::ldexp(v, e); }
 double BIONIC_SYSV Frexp(double v, int* e) { return std::frexp(v, e); }
 double BIONIC_SYSV Modf(double v, double* i) { return std::modf(v, i); }
@@ -559,13 +559,14 @@ struct AtExitEntry {
   void (BIONIC_SYSV* func)(void*);
   void* arg;
   void* dso;
+  void (BIONIC_SYSV* plain)(void);  // atexit's, which takes no argument
 };
 std::mutex g_atexit_mutex;
 std::vector<AtExitEntry> g_atexit;
 
 int BIONIC_SYSV CxaAtexit(void (BIONIC_SYSV* func)(void*), void* arg, void* dso) {
   std::lock_guard<std::mutex> lock(g_atexit_mutex);
-  g_atexit.push_back({func, arg, dso});
+  g_atexit.push_back({func, arg, dso, nullptr});
   return 0;
 }
 void BIONIC_SYSV CxaFinalize(void* dso) {
@@ -580,10 +581,13 @@ void BIONIC_SYSV CxaFinalize(void* dso) {
       g_atexit.erase(std::next(it).base());
     }
     if (e.func) e.func(e.arg);
+    if (e.plain) e.plain();
   }
 }
 int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
-  return CxaAtexit(reinterpret_cast<void (BIONIC_SYSV*)(void*)>(func), nullptr, nullptr);
+  std::lock_guard<std::mutex> lock(g_atexit_mutex);
+  g_atexit.push_back({nullptr, nullptr, nullptr, func});
+  return 0;
 }
 
 // --- libdl (through the ELF loader) ----------------------------------------
