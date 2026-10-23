@@ -87,6 +87,7 @@ using SymbolTable = std::unordered_map<std::string, void*>;
 void RegisterLibc(SymbolTable& table);     // shim.cc
 void RegisterStdio(SymbolTable& table);    // stdio_bionic.cc
 void RegisterPthread(SymbolTable& table);  // pthread_bionic.cc
+void RegisterLocale(SymbolTable& table);   // locale_bionic.cc
 
 // Linux errno values the shim returns where the CRT's numbering differs
 // (gesher-base's <errno.h> already uses Linux's; these are for clarity).

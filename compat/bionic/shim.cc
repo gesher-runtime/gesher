@@ -909,6 +909,7 @@ SymbolTable& Table() {
     RegisterLibc(*table);
     RegisterStdio(*table);
     RegisterPthread(*table);
+    RegisterLocale(*table);
     return table;
   }();
   return *t;
