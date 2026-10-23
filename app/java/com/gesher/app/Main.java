@@ -145,6 +145,16 @@ public final class Main {
         //      Looper, the framework's resources.
         bootstrap(TAG, buildProp, frameworkRes);
 
+        // 4b. The system fonts ($ANDROID_ROOT/etc/fonts.xml), which the app process gets
+        //     from the system server in bindApplication on a device (docs/fonts.md).
+        try {
+            String fonts = com.gesher.app.fonts.SystemFontMap.load();
+            log("system fonts: " + (fonts != null ? fonts
+                    : "none (no " + com.gesher.app.fonts.SystemFontMap.fontsXml() + ")"));
+        } catch (Exception e) {
+            log("system fonts: not loaded: " + e);
+        }
+
         // 5-6. The package and the system services: parsed and served in this process, or
         //      asked of a SystemServer process over binder.
         ApplicationInfo appInfo;

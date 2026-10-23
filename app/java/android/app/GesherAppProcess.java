@@ -171,14 +171,16 @@ public final class GesherAppProcess {
     }
 
     /**
-     * WORKAROUND until system fonts are installed (graphics track): with no fonts.xml,
+     * WORKAROUND for a Gesher without system fonts: with no fonts.xml,
      * handleBindApplication's {@code Typeface.setSystemFontMap} gets an empty font map and
      * no default typeface, and fails. Here, as when a font map is loaded, the default
-     * family ({@code sans-serif}) gets a typeface first: one made of no font family (by
-     * the Typeface natives, stand-ins until hwui's are linked). Nothing is drawn with it.
+     * family ({@code sans-serif}) gets a typeface first: one made of no font family.
+     * Nothing is drawn with it. When gesher-app has loaded the installed fonts
+     * ($ANDROID_ROOT/etc/fonts.xml, com.gesher.app.fonts.SystemFontMap), it does nothing.
      */
     private static void withoutSystemFonts() throws ReflectiveOperationException {
-        if (new java.io.File(android.graphics.fonts.SystemFonts.LEGACY_FONTS_XML).exists()) {
+        if (new java.io.File(android.graphics.fonts.SystemFonts.LEGACY_FONTS_XML).exists()
+                || android.graphics.Typeface.getSystemFontMap().containsKey("sans-serif")) {
             return;
         }
         java.lang.reflect.Method create = android.graphics.Typeface.class.getDeclaredMethod(

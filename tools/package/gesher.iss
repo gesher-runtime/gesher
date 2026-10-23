@@ -52,6 +52,11 @@ Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; The system fonts and fonts.xml (docs/fonts.md): Roboto and DroidSansMono
+; (Apache 2.0), Noto Sans Hebrew and Noto Serif (OFL 1.1); gesher-app.ps1
+; installs them as $ANDROID_ROOT/fonts and $ANDROID_ROOT/etc/fonts.xml.
+Source: "{#BuildDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
+Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
