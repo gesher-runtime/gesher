@@ -218,6 +218,48 @@ void Window::Paint(void* hdc_ptr) {
                     pixels_.data(), &bmi, DIB_RGB_COLORS);
 }
 
+bool Window::PrintClient(std::vector<uint32_t>* out, int* width, int* height) {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  RECT rc;
+  if (!GetClientRect(hwnd, &rc)) return false;
+  int w = rc.right - rc.left, h = rc.bottom - rc.top;
+  if (w < 1 || h < 1) return false;
+  HDC screen = GetDC(nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  BITMAPINFO bmi = {};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = w;
+  bmi.bmiHeader.biHeight = -h;  // top-down
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  bool ok = false;
+  if (bmp != nullptr) {
+    HGDIOBJ old = SelectObject(dc, bmp);
+    std::memset(bits, 0, static_cast<size_t>(w) * h * 4);
+    ok = PrintWindow(hwnd, dc, PW_CLIENTONLY) != 0;
+    GdiFlush();
+    out->assign(static_cast<uint32_t*>(bits), static_cast<uint32_t*>(bits) + static_cast<size_t>(w) * h);
+    SelectObject(dc, old);
+    DeleteObject(bmp);
+  }
+  DeleteDC(dc);
+  ReleaseDC(nullptr, screen);
+  *width = w;
+  *height = h;
+  return ok;
+}
+
+void Window::ReadBackBuffer(std::vector<uint32_t>* out, int* width, int* height) {
+  std::lock_guard<std::mutex> lock(buffer_mutex_);
+  const uint32_t* p = reinterpret_cast<const uint32_t*>(pixels_.data());
+  out->assign(p, p + static_cast<size_t>(buffer_width_) * buffer_height_);
+  *width = buffer_width_;
+  *height = buffer_height_;
+}
+
 void Window::Queue(const WindowEvent& event) {
   {
     std::lock_guard<std::mutex> lock(event_mutex_);

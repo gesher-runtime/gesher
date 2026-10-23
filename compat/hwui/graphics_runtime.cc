@@ -3,7 +3,7 @@
 // hwui's apex/jni_runtime.cpp on a device (ColorSpace before Graphics, which
 // looks up ColorSpace.get()), less the device-only classes (TextureLayer,
 // Movie, PdfDocument, PdfEditor) and YuvImage (libultrahdr), plus Surface,
-// whose natives libandroid_runtime has. hwui renders with its CPU pipeline
+// whose natives libandroid_runtime has, and gesher-app's Win32 window. hwui renders with its CPU pipeline
 // (SkiaCpu) until the GL one runs over ANGLE (docs/graphics.md).
 //
 // Each registration is skipped, with a log line, when its class is not on the
@@ -72,6 +72,9 @@ extern int register_android_graphics_HardwareBufferRenderer(JNIEnv* env);
 extern int register_android_view_Surface(JNIEnv* env);
 }  // namespace android
 
+// compat/hwui/window/window_jni.cc: gesher-app's window (Win32Surface).
+extern int register_com_gesher_app_window_NativeWindow(JNIEnv* env);
+
 namespace {
 
 using namespace android;
@@ -138,6 +141,7 @@ const Registration kRegistrations[] = {
     {"android/graphics/HardwareBufferRenderer", register_android_graphics_HardwareBufferRenderer},
     {"android/graphics/HardwareRenderer", register_android_view_ThreadedRenderer},
     {"android/view/Surface", register_android_view_Surface},
+    {"com/gesher/app/window/NativeWindow", register_com_gesher_app_window_NativeWindow},
 };
 
 bool HasClass(JNIEnv* env, const char* name) {

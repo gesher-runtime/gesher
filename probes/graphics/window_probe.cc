@@ -1,6 +1,9 @@
 // Gesher's Win32 window (compat/hwui/window): Skia draws into its back
 // buffer, PrintWindow reads the window back (no visible desktop needed), and
-// mouse and key messages come out of its event queue. Run in CI on Windows
+// mouse and key messages come out of its event queue; then Win32Surface, the
+// ANativeWindow over a window: Skia draws RGBA (Android's order) through
+// ANativeWindow_lock and through dequeueBuffer/queueBuffer (hwui's CPU
+// pipeline), and the window shows it. Run in CI on Windows
 // (tests/windows/tracks/30-graphics.ps1); prints "all passed" when every check
 // holds, and writes what PrintWindow read to window_probe.png.
 //
@@ -14,6 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <system/window.h>
+
+#include "gesher_native_window.h"
 #include "gesher_window.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
@@ -80,12 +86,98 @@ static bool capture(HWND hwnd, int w, int h, std::vector<uint32_t>* out) {
   return ok;
 }
 
+// What WM_PRINTCLIENT paints into a memory DC: the back buffer, whatever the
+// desktop (PrintWindow goes through the window's paint path too).
+static void printClient(HWND hwnd, int w, int h, std::vector<uint32_t>* out) {
+  HDC screen = GetDC(nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  BITMAPINFO bmi = {};
+  bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bmi.bmiHeader.biWidth = w;
+  bmi.bmiHeader.biHeight = -h;
+  bmi.bmiHeader.biPlanes = 1;
+  bmi.bmiHeader.biBitCount = 32;
+  bmi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  HGDIOBJ old = SelectObject(dc, bmp);
+  std::memset(bits, 0, static_cast<size_t>(w) * h * 4);
+  SendMessageW(hwnd, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+  GdiFlush();
+  out->assign(static_cast<uint32_t*>(bits), static_cast<uint32_t*>(bits) + w * h);
+  SelectObject(dc, old);
+  DeleteObject(bmp);
+  DeleteDC(dc);
+  ReleaseDC(nullptr, screen);
+}
+
 static bool waitFor(gesher::Window* window, int type, gesher::WindowEvent* e) {
   for (int i = 0; i < 50; i++) {
     if (!window->WaitEvent(e, 100)) continue;
     if (e->type == type) return true;
   }
   return false;
+}
+
+// Win32Surface through the NDK's functions, as libandroid's callers and
+// android.view.Surface's natives use it.
+static void surfaceChecks() {
+  const int kW = 200, kH = 100;
+  ANativeWindow* anw = gesher_window_create("Gesher surface probe", kW, kH);
+  HWND hwnd = anw != nullptr ? static_cast<HWND>(gesher_window_hwnd(anw)) : nullptr;
+  check(hwnd != nullptr, "surface: gesher_window_create");
+  if (hwnd == nullptr) return;
+  gesher_window_show(anw);
+  check(ANativeWindow_getWidth(anw) == kW && ANativeWindow_getHeight(anw) == kH &&
+            ANativeWindow_getFormat(anw) == WINDOW_FORMAT_RGBA_8888,
+        "surface: 200x100, RGBA_8888");
+
+  // Software drawing (Surface.lockCanvas, ANativeWindow_lock): RGBA bytes.
+  ANativeWindow_Buffer buffer;
+  ARect dirty = {0, 0, 0, 0};
+  bool locked = ANativeWindow_lock(anw, &buffer, &dirty) == 0;
+  check(locked && buffer.width == kW && buffer.height == kH && buffer.stride >= kW &&
+            buffer.format == WINDOW_FORMAT_RGBA_8888 && dirty.right == kW && dirty.bottom == kH,
+        "surface: ANativeWindow_lock (whole buffer dirty)");
+  if (!locked) return;
+  const SkColor kColor = SkColorSetRGB(0x20, 0x60, 0xc0);
+  {
+    SkImageInfo info = SkImageInfo::Make(kW, kH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    auto canvas = SkCanvas::MakeRasterDirect(info, buffer.bits, buffer.stride * 4);
+    canvas->clear(SK_ColorWHITE);
+    SkPaint paint;
+    paint.setColor(SK_ColorRED);
+    canvas->drawRect(SkRect::MakeXYWH(0, 0, kW / 2.0f, kH), paint);
+    paint.setColor(kColor);
+    canvas->drawRect(SkRect::MakeXYWH(kW / 2.0f, 0, kW / 2.0f, kH), paint);
+  }
+  check(ANativeWindow_unlockAndPost(anw) == 0, "surface: ANativeWindow_unlockAndPost");
+  Sleep(200);
+  std::vector<uint32_t> px;
+  bool printed = capture(hwnd, kW, kH, &px);
+  check(printed && near(px[10 * kW + 10], SK_ColorRED) && near(px[10 * kW + kW - 10], kColor),
+        "surface: the window shows the RGBA frame (red, 0x2060c0)");
+
+  // hwui's CPU pipeline: dequeueBuffer's reserved[0] is the pixels it draws
+  // into; queueBuffer presents them.
+  ANativeWindowBuffer* b = nullptr;
+  int fence = 0;
+  bool dequeued = anw->dequeueBuffer(anw, &b, &fence) == 0 && b != nullptr;
+  check(dequeued && b->width == kW && b->height == kH && b->reserved[0] != nullptr && fence == -1,
+        "surface: dequeueBuffer");
+  if (!dequeued) return;
+  {
+    SkImageInfo info = SkImageInfo::Make(kW, kH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    auto canvas = SkCanvas::MakeRasterDirect(info, b->reserved[0], b->stride * 4);
+    canvas->clear(SK_ColorGREEN);
+  }
+  check(anw->queueBuffer(anw, b, -1) == 0, "surface: queueBuffer");
+  Sleep(200);
+  printed = capture(hwnd, kW, kH, &px);
+  check(printed && near(px[50 * kW + 100], SK_ColorGREEN), "surface: the window shows the queued buffer");
+
+  ANativeWindow_release(anw);
+  check(!IsWindow(hwnd), "surface: the window goes with the last reference");
 }
 
 int main(int argc, char** argv) {
@@ -106,6 +198,10 @@ int main(int argc, char** argv) {
   check(near(px[10 * kW + 10], SK_ColorRED) && near(px[10 * kW + kW - 10], SK_ColorBLUE) &&
             near(px[(kH / 2) * kW + kW / 2], SK_ColorGREEN),
         "window: PrintWindow reads back what Skia drew (red, blue, green)");
+  std::vector<uint32_t> pc;
+  printClient(hwnd, kW, kH, &pc);
+  check(near(pc[10 * kW + 10], SK_ColorRED) && near(pc[10 * kW + kW - 10], SK_ColorBLUE),
+        "window: WM_PRINTCLIENT paints the back buffer");
   {
     // What PrintWindow read, for the CI artifact.
     SkImageInfo info = SkImageInfo::Make(kW, kH, kBGRA_8888_SkColorType, kOpaque_SkAlphaType);
@@ -154,6 +250,8 @@ int main(int argc, char** argv) {
 
   delete window;
   check(!IsWindow(hwnd), "window: destroyed");
+
+  surfaceChecks();
   if (failures == 0) std::printf("all passed\n");
   return failures == 0 ? 0 : 1;
 }
