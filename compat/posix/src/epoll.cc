@@ -363,7 +363,7 @@ int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
   if (ep == nullptr) {
     return errno = gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ? EBADF : EINVAL, -1;
   }
-  ULONGLONG deadline = timeout < 0 ? ~0ULL : GetTickCount64() + static_cast<ULONGLONG>(timeout);
+  ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   std::vector<pollfd> fds;
   std::vector<uint64_t> ids;
   for (;;) {
@@ -379,8 +379,7 @@ int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
     }
     int wait_ms = -1;
     if (timeout >= 0) {
-      ULONGLONG now = GetTickCount64();
-      wait_ms = now >= deadline ? 0 : static_cast<int>(deadline - now);
+      wait_ms = gesher::MillisUntil(deadline);
     }
     bool interrupted = false;
     int ready = gesher::PollFds(fds.data(), fds.size(), wait_ms, ep->changed, &interrupted);
@@ -409,7 +408,7 @@ int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout)
       }
     }
     if (count > 0) return count;
-    if (timeout == 0 || (timeout > 0 && GetTickCount64() >= deadline)) return 0;
+    if (timeout == 0 || (timeout > 0 && gesher::MonotonicMicros() >= deadline)) return 0;
     // The list changed, or what was ready is no longer reportable: again.
   }
 }
