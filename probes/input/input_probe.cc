@@ -395,9 +395,9 @@ void TestChannel() {
   // The window's own WM_POINTER handling, with a synthetic touch device:
   // informational, as it needs an interactive desktop (touch_inject.cc).
   unsigned long inject_error = ProbeInjectTouch(hwnd, 50, 60);
-  bool touch_down = false, touch_move = false, touch_up = false;
+  bool touch_down = false, touch_move = false, touch_lifted = false;
   if (inject_error == 0) {
-    for (int i = 0; i < 60 && !touch_up; i++) {
+    for (int i = 0; i < 60 && !touch_lifted; i++) {
       clientChannel->waitForMessage(std::chrono::milliseconds(50));
       uint32_t seq_no = 0;
       android::InputEvent* event = nullptr;
@@ -411,7 +411,7 @@ void TestChannel() {
             touch_down = true;
           }
           if (a == AMOTION_EVENT_ACTION_MOVE && Near(m->getX(0), 70)) touch_move = true;
-          if (a == AMOTION_EVENT_ACTION_UP) touch_up = true;
+          if (a == AMOTION_EVENT_ACTION_UP) touch_lifted = true;
         }
         consumer.sendFinishedSignal(seq_no, true);
         event = nullptr;
@@ -420,11 +420,11 @@ void TestChannel() {
   }
   std::printf("INFO  WM_POINTER touch through InjectSyntheticPointerInput: %s\n",
               inject_error != 0 ? ("not injected, error " + std::to_string(inject_error)).c_str()
-              : touch_down && touch_move && touch_up
+              : touch_down && touch_move && touch_lifted
                   ? "DOWN at (50, 60), MOVE, UP on SOURCE_TOUCHSCREEN"
                   : (std::string("injected; seen: down ") + (touch_down ? "yes" : "no") +
                      ", move " + (touch_move ? "yes" : "no") + ", up " +
-                     (touch_up ? "yes" : "no")).c_str());
+                     (touch_lifted ? "yes" : "no")).c_str());
 
   gesher_input_detach(connection);
   delete window;
