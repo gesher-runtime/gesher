@@ -60,7 +60,8 @@ target_link_libraries(android_input PUBLIC ui_types graphics_native_headers bind
 target_compile_definitions(android_input PUBLIC ANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION)
 gesher_graphics_cxx(android_input)
 # libinput's cflags are -Wall -Wextra -Werror; AOSP code is built here without -Werror.
-target_compile_options(android_input PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-error)
+target_compile_options(android_input PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-error
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${_cin}/libinput/chrono_literals.h>")
 
 # --- The virtual keyboard's map, built in ------------------------------------------
 # compat/input/keychars/Generic.kcm is frameworks/base/data/keyboards/Generic.kcm
@@ -127,7 +128,8 @@ target_include_directories(input_jni PRIVATE
 target_link_libraries(input_jni PUBLIC gesher_input android_input hwui nativehelper androidfw
   binder utils cutils log base)
 gesher_graphics_cxx(input_jni)
-target_compile_options(input_jni PRIVATE -Wall -Wno-unused-parameter -Wno-error)
+target_compile_options(input_jni PRIVATE -Wall -Wno-unused-parameter -Wno-error
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${_cin}/libinput/chrono_literals.h>")
 
 target_link_libraries(dalvikvm PRIVATE input_jni)
 
