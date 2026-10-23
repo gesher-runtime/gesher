@@ -42,7 +42,7 @@ public class GlActivity extends Activity {
             Method capture = nw.getMethod("capture");
             Method close = nw.getMethod("close");
 
-            Object window = create.invoke(null, "glapp: ANativeWindow_lock", 96, 64);
+            Object window = create.invoke(null, "glapp: ANativeWindow_lock", 160, 96);
             show.invoke(window);
             Surface surface = (Surface) getSurface.invoke(window);
             cpu = cpuDraw(surface);
@@ -50,7 +50,7 @@ public class GlActivity extends Activity {
             surface.release();
             close.invoke(window);
 
-            Object glWindow = create.invoke(null, "glapp: EGL", 96, 64);
+            Object glWindow = create.invoke(null, "glapp: EGL", 160, 96);
             show.invoke(glWindow);
             Surface glSurface = (Surface) getSurface.invoke(glWindow);
             es3 = glDraw(glSurface, 3);
