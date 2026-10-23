@@ -143,13 +143,39 @@ jobs:
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
             throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
           }
+          # .apk files open with gesher-app: the per-user association is
+          # registered, and its command line, run as Explorer would on the
+          # bundled APK, takes it to onResume.
+          $classes = 'HKCU:\Software\Classes'
+          if ((Get-ItemProperty "$classes\.apk").'(default)' -ne 'Gesher.Apk') { throw '.apk is not associated with Gesher.Apk' }
+          $open = (Get-ItemProperty "$classes\Gesher.Apk\shell\open\command").'(default)'
+          Write-Host "Gesher.Apk open command: $open"
+          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe')
+          $psi.Arguments = '/d /s /c "' + $open.Replace('%1', "$app\lifecycle.apk") + '"'
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $p = [Diagnostics.Process]::Start($psi)
+          $stderr = $p.StandardError.ReadToEndAsync()
+          $out = $p.StandardOutput.ReadToEnd() + $stderr.Result
+          $p.WaitForExit()
+          Write-Host "lifecycle.apk through the association (exit $($p.ExitCode)):"
+          Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
+          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
+            throw "Opening lifecycle.apk through the .apk association failed (exit $($p.ExitCode))"
+          }
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
+          if (Test-Path "$classes\Gesher.Apk") { throw 'Uninstall left the Gesher.Apk class' }
+          if ((Test-Path "$classes\.apk") -and (Get-ItemProperty "$classes\.apk").'(default)' -eq 'Gesher.Apk') {
+            throw 'Uninstall left .apk associated with Gesher.Apk'
+          }
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: .apk opens with gesher-app (HKCU association), removed on uninstall' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
         with:

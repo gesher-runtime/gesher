@@ -2,7 +2,8 @@
 ;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
-; PATH and adds a Start menu entry that runs the bundled Hello.
+; PATH, adds a Start menu entry that runs the bundled Hello and opens .apk
+; files with gesher-app (for this user, under HKCU\Software\Classes).
 
 #ifndef BuildDir
   #error Pass /DBuildDir=<build output directory>
@@ -25,6 +26,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ChangesEnvironment=yes
+ChangesAssociations=yes
 OutputBaseFilename=gesher-setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
@@ -52,6 +54,16 @@ Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 [Icons]
 Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"
 Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
+
+[Registry]
+; .apk files open with gesher-app: the extension names the Gesher.Apk class,
+; whose open verb runs gesher-app.cmd on the file. Uninstalling removes the
+; class and the extension's default value (and its key, if nothing else is
+; left in it).
+Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
 
 [UninstallDelete]
 ; The runtime's directories (gesher.ps1).
