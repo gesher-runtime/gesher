@@ -519,6 +519,125 @@ uint64_t BIONIC_SYSV Getauxval(uint64_t type) {
   }
 }
 
+// --- FORTIFY variants of the fd and FILE calls, and string functions ---------------
+
+[[noreturn]] void FortifyFailure(const char* what) {
+  std::fprintf(stderr, "gesher bionic: FORTIFY: %s: prevented buffer overflow\n", what);
+  std::fflush(stderr);
+  std::abort();
+}
+int64_t BIONIC_SYSV ReadChk(int fd, void* buf, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("read");
+  return read(fd, buf, static_cast<unsigned>(n > 0x7fffffff ? 0x7fffffff : n));
+}
+int64_t BIONIC_SYSV WriteChk(int fd, const void* buf, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("write");
+  return write(fd, buf, static_cast<unsigned>(n > 0x7fffffff ? 0x7fffffff : n));
+}
+int64_t BIONIC_SYSV PreadChk(int fd, void* buf, size_t n, int64_t off, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("pread");
+  return pread(fd, buf, n, static_cast<off_t>(off));
+}
+int64_t BIONIC_SYSV PwriteChk(int fd, const void* buf, size_t n, int64_t off, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("pwrite");
+  return pwrite(fd, buf, n, static_cast<off_t>(off));
+}
+char* BIONIC_SYSV GetcwdChk(char* buf, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("getcwd");
+  return Getcwd(buf, n);
+}
+int64_t BIONIC_SYSV ReadlinkChk(const char* path, char* buf, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("readlink");
+  return readlink(path, buf, n);
+}
+int64_t BIONIC_SYSV ReadlinkatChk(int dirfd, const char* path, char* buf, size_t n,
+                                  size_t buf_size) {
+  if (n > buf_size) FortifyFailure("readlinkat");
+  return Readlinkat(dirfd, path, buf, n);
+}
+uint32_t BIONIC_SYSV UmaskChk(uint32_t mask) { return Umask(mask); }
+
+char* BIONIC_SYSV Stpcpy(char* d, const char* s) {
+  size_t n = std::strlen(s);
+  std::memcpy(d, s, n + 1);
+  return d + n;
+}
+char* BIONIC_SYSV Stpncpy(char* d, const char* s, size_t n) {
+  size_t len = strnlen(s, n);
+  std::memcpy(d, s, len);
+  std::memset(d + len, 0, n - len);
+  return d + len;
+}
+char* BIONIC_SYSV StpcpyChk(char* d, const char* s, size_t dn) {
+  if (std::strlen(s) >= dn) FortifyFailure("stpcpy");
+  return Stpcpy(d, s);
+}
+char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
+  if (n > dn) FortifyFailure("stpncpy");
+  return Stpncpy(d, s, n);
+}
+void* BIONIC_SYSV Memrchr(const void* s, int c, size_t n) {
+  auto p = static_cast<const uint8_t*>(s);
+  while (n-- > 0) {
+    if (p[n] == static_cast<uint8_t>(c)) return const_cast<uint8_t*>(p + n);
+  }
+  return nullptr;
+}
+void* BIONIC_SYSV MemchrChk(const void* s, int c, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("memchr");
+  return const_cast<void*>(std::memchr(s, c, n));
+}
+void* BIONIC_SYSV MemrchrChk(const void* s, int c, size_t n, size_t buf_size) {
+  if (n > buf_size) FortifyFailure("memrchr");
+  return Memrchr(s, c, n);
+}
+char* BIONIC_SYSV Strsep(char** sp, const char* delim) {
+  char* s = *sp;
+  if (s == nullptr) return nullptr;
+  char* end = s + std::strcspn(s, delim);
+  if (*end != 0) {
+    *end = 0;
+    *sp = end + 1;
+  } else {
+    *sp = nullptr;
+  }
+  return s;
+}
+char* BIONIC_SYSV Strcasestr(const char* h, const char* n) {
+  size_t len = std::strlen(n);
+  for (; *h; ++h) {
+    if (_strnicmp(h, n, len) == 0) return const_cast<char*>(h);
+  }
+  return len == 0 ? const_cast<char*>(h) : nullptr;
+}
+char* BIONIC_SYSV Strchrnul(const char* s, int c) {
+  while (*s && *s != static_cast<char>(c)) ++s;
+  return const_cast<char*>(s);
+}
+char* BIONIC_SYSV Strtok(char* s, const char* delim) { return std::strtok(s, delim); }
+// basename/dirname (POSIX: they may modify and return their argument or a
+// static buffer; bionic's never modify it).
+thread_local char t_path_buf[4096];
+char* BIONIC_SYSV Basename(const char* path) {
+  if (path == nullptr || *path == 0) return std::strcpy(t_path_buf, ".");
+  std::string p(path);
+  while (p.size() > 1 && p.back() == '/') p.pop_back();
+  size_t slash = p.find_last_of('/');
+  std::string b = slash == std::string::npos || p == "/" ? p : p.substr(slash + 1);
+  std::snprintf(t_path_buf, sizeof(t_path_buf), "%s", b.c_str());
+  return t_path_buf;
+}
+char* BIONIC_SYSV Dirname(const char* path) {
+  if (path == nullptr || *path == 0) return std::strcpy(t_path_buf, ".");
+  std::string p(path);
+  while (p.size() > 1 && p.back() == '/') p.pop_back();
+  size_t slash = p.find_last_of('/');
+  std::string d = slash == std::string::npos ? "." : slash == 0 ? "/" : p.substr(0, slash);
+  while (d.size() > 1 && d.back() == '/') d.pop_back();
+  std::snprintf(t_path_buf, sizeof(t_path_buf), "%s", d.c_str());
+  return t_path_buf;
+}
+
 // environ: the CRT's (narrow) environment as it is when the shim starts.
 char** g_environ = nullptr;
 const char* g_progname = "app_process";
@@ -608,6 +727,30 @@ void RegisterPosix(SymbolTable& t) {
   E("getpriority", Getpriority);
   E("setpriority", Setpriority);
   E("getauxval", Getauxval);
+  E("__read_chk", ReadChk);
+  E("__write_chk", WriteChk);
+  E("__pread_chk", PreadChk);
+  E("__pread64_chk", PreadChk);
+  E("__pwrite_chk", PwriteChk);
+  E("__pwrite64_chk", PwriteChk);
+  E("__getcwd_chk", GetcwdChk);
+  E("__readlink_chk", ReadlinkChk);
+  E("__readlinkat_chk", ReadlinkatChk);
+  E("__umask_chk", UmaskChk);
+  E("stpcpy", Stpcpy);
+  E("stpncpy", Stpncpy);
+  E("__stpcpy_chk", StpcpyChk);
+  E("__stpncpy_chk", StpncpyChk);
+  E("memrchr", Memrchr);
+  E("__memchr_chk", MemchrChk);
+  E("__memrchr_chk", MemrchrChk);
+  E("strsep", Strsep);
+  E("strcasestr", Strcasestr);
+  E("strchrnul", Strchrnul);
+  E("strtok", Strtok);
+  E("basename", Basename);
+  E("__gnu_basename", Basename);
+  E("dirname", Dirname);
 #undef E
   t["environ"] = &g_environ;
   t["__progname"] = &g_progname;

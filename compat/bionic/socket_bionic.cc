@@ -100,6 +100,23 @@ int64_t BIONIC_SYSV Sendto(int fd, const void* buf, size_t n, int flags, const s
                            uint32_t an) {
   return sendto(fd, buf, n, flags, a, an);
 }
+// bionic's FORTIFY forms carry the buffer's size after the length.
+int64_t BIONIC_SYSV SendtoChk(int fd, const void* buf, size_t n, size_t buf_size, int flags,
+                              const sockaddr* a, uint32_t an) {
+  if (n > buf_size) {
+    std::fprintf(stderr, "gesher bionic: FORTIFY: sendto: prevented buffer overread%c", 10);
+    std::abort();
+  }
+  return sendto(fd, buf, n, flags, a, an);
+}
+int64_t BIONIC_SYSV RecvfromChk(int fd, void* buf, size_t n, size_t buf_size, int flags,
+                                sockaddr* a, uint32_t* an) {
+  if (n > buf_size) {
+    std::fprintf(stderr, "gesher bionic: FORTIFY: recvfrom: prevented buffer overflow%c", 10);
+    std::abort();
+  }
+  return recvfrom(fd, buf, n, flags, a, an);
+}
 int64_t BIONIC_SYSV Sendmsg(int fd, const msghdr* m, int flags) { return sendmsg(fd, m, flags); }
 int64_t BIONIC_SYSV Recv(int fd, void* buf, size_t n, int flags) { return recv(fd, buf, n, flags); }
 int64_t BIONIC_SYSV Recvfrom(int fd, void* buf, size_t n, int flags, sockaddr* a, uint32_t* an) {
@@ -418,8 +435,8 @@ void RegisterSocket(SymbolTable& t) {
   E("recv", Recv);
   E("recvfrom", Recvfrom);
   E("recvmsg", Recvmsg);
-  E("__sendto_chk", Sendto);
-  E("__recvfrom_chk", Recvfrom);
+  E("__sendto_chk", SendtoChk);
+  E("__recvfrom_chk", RecvfromChk);
   E("getaddrinfo", Getaddrinfo);
   E("freeaddrinfo", Freeaddrinfo);
   E("gai_strerror", GaiStrerror);
@@ -446,6 +463,8 @@ void RegisterSocket(SymbolTable& t) {
   E("__poll_chk", Poll);
   E("ppoll", Ppoll);
   E("ppoll64", Ppoll);
+  E("__ppoll_chk", Ppoll);
+  E("__ppoll64_chk", Ppoll);
   E("select", Select);
   E("pselect", Pselect);
   E("pselect64", Pselect);
