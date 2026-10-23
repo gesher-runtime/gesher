@@ -50,3 +50,19 @@ index 47e198ac..83981191 100644
  TEST(CursorWindowTest, ParcelEmpty) {
      CREATE_WINDOW_2M;
  
+diff --git a/libs/androidfw/tests/ZipUtils_test.cpp b/libs/androidfw/tests/ZipUtils_test.cpp
+index 7293843e..4ac00164 100644
+--- a/libs/androidfw/tests/ZipUtils_test.cpp
++++ b/libs/androidfw/tests/ZipUtils_test.cpp
+@@ -62,8 +62,11 @@ TEST_F(ZipUtilsTest, ZipTimeConvertSuccess) {
+ 
+     // We don't have enough information to determine timezone related info.
+     EXPECT_EQ(-1, t.tm_isdst);
++#if !defined(_WIN32)
++    // Gesher: the Windows CRT's struct tm has no tm_gmtoff and tm_zone.
+     EXPECT_EQ(0, t.tm_gmtoff);
+     EXPECT_EQ(nullptr, t.tm_zone);
++#endif
+ }
+ 
+ }

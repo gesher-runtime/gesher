@@ -48,6 +48,12 @@ jobs:
       - name: Build the tests
         run: ninja -C out -k 0 core_libs_tests
 
+      # libandroidfw_tests' test apps, linked against framework-res.apk.
+      - name: Build libandroidfw's test apps
+        run: |
+          tools/build-framework-res.sh out/framework-res
+          tests/build-androidfw-test-apps.sh out/build-tools-36.1/aapt2 out/framework-res/framework-res.apk out/core-libs-tests
+
       - uses: actions/upload-artifact@v4
         with:
           name: libs-tests

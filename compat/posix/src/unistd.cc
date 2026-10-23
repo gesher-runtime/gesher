@@ -327,6 +327,10 @@ void gesher_srand(unsigned int seed) {
   rand_state.store(0x9E3779B97F4A7C15ULL ^ seed, std::memory_order_relaxed);
 }
 
+long random(void) { return gesher_rand(); }
+
+void srandom(unsigned int seed) { gesher_srand(seed); }
+
 // The result is a Linux path (path.cc): without the drive when it is the
 // current one, and the names under /dev and /proc as they are.
 char* realpath(const char* path, char* resolved_path) {

@@ -5,10 +5,13 @@
 set(_gt "${AOSP_DIR}/external/googletest/googletest")
 set(_gm "${AOSP_DIR}/external/googletest/googlemock")
 
-# libgtest_defaults: -Wall -Werror -Wno-unused-private-field; rtti.
+# libgtest_defaults: -Wall -Werror -Wno-unused-private-field; rtti. The
+# toolchain's clang is newer than Soong's and warns of char8_t to char32_t
+# conversions in gtest-printers.h (-Wcharacter-conversion).
 add_library(gtest STATIC EXCLUDE_FROM_ALL ${_gt}/src/gtest-all.cc)
 target_include_directories(gtest PUBLIC ${_gt}/include PRIVATE ${_gt})
 target_compile_options(gtest PRIVATE -Wall -Werror -Wno-unused-private-field)
+target_compile_options(gtest PUBLIC -Wno-character-conversion)
 
 add_library(gtest_main STATIC EXCLUDE_FROM_ALL ${_gt}/src/gtest_main.cc)
 target_link_libraries(gtest_main PUBLIC gtest)
