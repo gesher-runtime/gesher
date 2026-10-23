@@ -18,6 +18,8 @@ public final class HardwareRendererTest {
   private static int failures;
 
   public static void main(String[] args) throws Exception {
+    // libandroid_runtime (with hwui's natives), as gesher-app's Main loads it.
+    System.loadLibrary("android_runtime");
     final int w = 200;
     final int h = 120;
     NativeWindow window = NativeWindow.create("Gesher HardwareRenderer test", w, h);

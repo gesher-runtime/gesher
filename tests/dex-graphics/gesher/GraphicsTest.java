@@ -30,6 +30,8 @@ public final class GraphicsTest {
   private static int failures;
 
   public static void main(String[] args) throws Exception {
+    // libandroid_runtime (with hwui's natives), as gesher-app's Main loads it.
+    System.loadLibrary("android_runtime");
     String fontPath = args.length > 0 ? args[0] : "/Windows/Fonts/arial.ttf";
     File outDir = args.length > 1 ? new File(args[1]) : null;
     bitmapAndCanvas();
