@@ -183,6 +183,13 @@ needs: [framework-build.md](framework-build.md).
         foreground services, registered and manifest broadcast receivers,
         the app's content providers and a settings stand-in (ci run
         40007889523)
+  - [x] A persistent Gesher device: one system server shared by every
+        launch (started detached by the first, found under a mutex, stopped
+        by `gesher-app shutdown`, when idle or with its job), installed
+        packages (`install`, `uninstall`, `list`), app processes the server
+        starts on demand and ends; another package's activity and provider
+        in its own process; `gesher-app my.apk` and the `.apk` association
+        use it (ci run 40019524773)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 

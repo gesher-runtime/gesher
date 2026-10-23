@@ -43,7 +43,9 @@ import com.android.internal.content.ReferrerIntent;
 import com.gesher.app.DeviceProfile;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -67,17 +69,18 @@ import java.util.function.Consumer;
  * activity finishes, the activity under it in the task is resumed (with the results sent
  * to it, {@code ActivityResultItem}), then the finished one is stopped and destroyed.
  *
- * <p>Processes: Gesher's system server cannot fork app processes (there is no zygote).
- * An app process is started by gesher-app's launcher and attaches itself
- * ({@code ActivityThread.attach} → {@link ActivityManagerService#attachApplication});
- * an activity start for a package with no process takes such a process, the one that
- * asked for the start if it is one (gesher-app asks for its own launch, as {@code am
- * start} would), else the first unassigned one, and binds it to the package
- * ({@code IApplicationThread.bindApplication}), as ActivityManagerService binds a process
- * zygote forked for it. Either may come first. The activities start once the process
- * reports {@code finishAttachApplication}, as with ActivityManagerService. A process whose
- * last activity is destroyed is told to exit ({@code scheduleExit}), as ActivityManager
- * kills the process of a removed task.
+ * <p>Processes: an activity start, a service, a broadcast or a provider for a package with
+ * no process starts one ({@link #startProcess}, ProcessList.startProcessLocked): a new
+ * dalvikvm running {@code android.app.GesherAppProcess} for the package ({@link Zygote}: no
+ * fork on Windows), which attaches with the start sequence number it was given
+ * ({@code ActivityThread.attach} → {@link ActivityManagerService#attachApplication}) and is
+ * bound to the package ({@code IApplicationThread.bindApplication}). A process may also
+ * start by itself and offer itself (gesher-app {@code --system-server}): a start asked by
+ * such a process goes to it. The activities start once the process reports
+ * {@code finishAttachApplication}, as with ActivityManagerService. A process with no
+ * activity, service or provider client left is told to exit ({@code scheduleExit},
+ * {@link #maybeExit}), as ActivityManager kills the process of a removed task or an empty
+ * cached process.
  */
 public final class ActivityTaskManagerService extends IActivityTaskManager.Default {
     /** How long startActivityAndWait waits for the activity to be idle. */
@@ -93,6 +96,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         String packageName;  // null until a start binds it to a package
         boolean ready;       // finishAttachApplication came
         boolean exiting;
+        boolean spawned;     // started by this server (startProcess), not by itself
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -175,6 +179,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private int mNextTaskId = 1;
+    /** Processes started for a package and not attached yet, by start sequence number. */
+    private final Map<Long, PendingProcess> mStarting = new HashMap<>();
+    private long mNextStartSeq = 1;
+    /** How app processes are started; null: they start by themselves and attach. */
+    private volatile ProcessStarter mStarter;
+    /** The exit code of each package's last process, once it is known. */
+    private final Map<String, Integer> mLastExit = new HashMap<>();
+    /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
+    private long mIdleSince = SystemClock.uptimeMillis();
+
+    /** Starts a process for a package and returns its pid (ProcessList's zygote request). */
+    interface ProcessStarter {
+        int start(String packageName, long startSeq, int targetSdkVersion) throws Exception;
+    }
+
+    private static final class PendingProcess {
+        final String packageName;
+        final String reason;
+        int pid;
+
+        PendingProcess(String packageName, String reason) {
+            this.packageName = packageName;
+            this.reason = reason;
+        }
+    }
 
     private static final class PendingWork {
         final String packageName;
@@ -192,6 +221,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void setActivityManager(ActivityManagerService am) {
         mAm = am;
+    }
+
+    /** Lets the server start app processes on demand ({@link #startProcess}). */
+    void setProcessStarter(ProcessStarter starter) {
+        mStarter = starter;
     }
 
     // --- IActivityTaskManager --------------------------------------------------------
@@ -340,6 +374,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord pause = null;
         ProcessRecord bind = null;
         boolean launchNow = false;
+        boolean needProcess = false;
         synchronized (this) {
             int taskId = source != null && (launchFlags & Intent.FLAG_ACTIVITY_NEW_TASK) == 0
                     ? source.taskId : mNextTaskId++;
@@ -363,7 +398,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         bind = app;
                     }
                 }
-                if (app != null) attach(r, app);
+                if (app != null) {
+                    attach(r, app);
+                } else {
+                    needProcess = true;
+                }
                 if (front != null) {
                     r.waitingFor = front;
                     if (front.state != State.PAUSING) pause = front;
@@ -387,6 +426,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 + (r.resultTo != null ? ", result to " + r.resultTo.name() + " (request "
                         + r.requestCode + ")" : ""));
         if (bind != null) bindApplication(bind);
+        if (needProcess) startProcess(info.packageName, "activity " + r.name());
         if (pause != null) pause(pause, false);
         if (launchNow) realStartActivity(r);
         return ActivityManager.START_SUCCESS;
@@ -453,6 +493,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
+    /**
+     * A process that attached by itself and has no package yet: the one that asked
+     * ({@code preferredPid}), else, when this server cannot start processes, the first.
+     */
     private ProcessRecord unassignedProcess(int preferredPid) {
         ProcessRecord first = null;
         for (ProcessRecord p : mProcesses) {
@@ -460,7 +504,203 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (p.pid == preferredPid) return p;
             if (first == null) first = p;
         }
-        return first;
+        return mStarter == null ? first : null;
+    }
+
+    /** Whether a process for the package is being started. Guarded by this. */
+    private boolean starting(String packageName) {
+        for (PendingProcess p : mStarting.values()) {
+            if (p.packageName.equals(packageName)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * ProcessList.startProcessLocked: starts a process for {@code packageName} unless one
+     * runs or is starting. The process attaches with its start sequence number
+     * ({@link #attachApplication}). Without a process starter, a process has to attach by
+     * itself.
+     */
+    void startProcess(String packageName, String reason) {
+        ProcessStarter starter = mStarter;
+        if (starter == null) return;
+        long seq;
+        PendingProcess pending;
+        synchronized (this) {
+            if (processFor(packageName) != null || starting(packageName)) return;
+            seq = mNextStartSeq++;
+            pending = new PendingProcess(packageName, reason);
+            mStarting.put(seq, pending);
+            updateIdle();
+        }
+        ApplicationInfo ai = mPm.getApplicationInfo(packageName, 0, 0);
+        int pid;
+        try {
+            pid = starter.start(packageName, seq, ai != null ? ai.targetSdkVersion : 0);
+        } catch (Throwable t) {
+            SystemServer.log("starting a process for " + packageName + " (" + reason
+                    + ") failed: " + t);
+            startFailed(seq, pending);
+            return;
+        }
+        synchronized (this) {
+            pending.pid = pid;
+        }
+        SystemServer.log("starting a process for " + packageName + " (" + reason + "): pid "
+                + pid + ", start seq " + seq);
+        // A process that dies before it attaches fails what waited for it.
+        Thread watch = new Thread(() -> {
+            while (true) {
+                synchronized (this) {
+                    if (mStarting.get(seq) != pending) return;  // attached
+                }
+                int code = Zygote.exitCode(pid);
+                if (code != Zygote.STILL_ACTIVE) {
+                    SystemServer.log("process " + pid + " for " + packageName
+                            + " exited before attaching (exit code " + code + ")");
+                    synchronized (this) {
+                        mLastExit.put(packageName, code);
+                    }
+                    startFailed(seq, pending);
+                    return;
+                }
+                SystemClock.sleep(250);
+            }
+        }, "start-watch " + pid);
+        watch.setDaemon(true);
+        watch.start();
+    }
+
+    private void startFailed(long seq, PendingProcess pending) {
+        synchronized (this) {
+            if (mStarting.get(seq) != pending) return;
+            mStarting.remove(seq);
+            for (int i = mActivities.size() - 1; i >= 0; i--) {
+                ActivityRecord r = mActivities.get(i);
+                if (r.app == null && r.info.packageName.equals(pending.packageName)) {
+                    r.state = State.DESTROYED;
+                    mActivities.remove(i);
+                }
+            }
+            mPendingWork.removeIf(w -> w.packageName.equals(pending.packageName));
+            updateIdle();
+            notifyAll();
+        }
+    }
+
+    /** Notes since when no process runs or starts. Guarded by this. */
+    private void updateIdle() {
+        if (mProcesses.isEmpty() && mStarting.isEmpty()) {
+            if (mIdleSince == 0) mIdleSince = SystemClock.uptimeMillis();
+        } else {
+            mIdleSince = 0;
+        }
+    }
+
+    /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
+    synchronized long idleSince() {
+        return mIdleSince;
+    }
+
+    /** The exit code of the package's last process, or null if none ended (or unknown). */
+    synchronized Integer lastExitCode(String packageName) {
+        return mLastExit.get(packageName);
+    }
+
+    /** The app processes, for getRunningAppProcesses. */
+    synchronized List<ProcessRecord> processes() {
+        return new ArrayList<>(mProcesses);
+    }
+
+    /**
+     * Ends the process if nothing keeps it: no activity, no work waiting for it, nothing the
+     * activity manager knows of (services, provider clients). It is told to exit.
+     */
+    void maybeExit(ProcessRecord app) {
+        if (app == null) return;
+        synchronized (this) {
+            if (app.exiting || !app.ready || !app.activities.isEmpty()) return;
+            for (PendingWork w : mPendingWork) {
+                if (w.packageName.equals(app.packageName)) return;
+            }
+        }
+        if (mAm.keepsAlive(app)) return;
+        synchronized (this) {
+            if (app.exiting || !app.activities.isEmpty()) return;
+            app.exiting = true;
+        }
+        mAm.processExiting(app);
+        SystemServer.log("scheduleExit: " + app + " has no activities, services or provider"
+                + " clients left");
+        try {
+            app.thread.scheduleExit();
+        } catch (RemoteException e) {
+            SystemServer.log("scheduleExit: " + e);
+        }
+    }
+
+    /**
+     * Ends the package's processes (an update or an uninstall, as
+     * ActivityManagerService.forceStopPackage): the ones this server started are killed,
+     * others told to exit; waits up to 5 s for them to go.
+     */
+    void forceStopPackage(String packageName) {
+        List<ProcessRecord> stop = new ArrayList<>();
+        synchronized (this) {
+            for (ProcessRecord p : mProcesses) {
+                if (packageName.equals(p.packageName)) stop.add(p);
+            }
+            for (PendingProcess p : mStarting.values()) {
+                if (p.packageName.equals(packageName) && p.pid > 0) Zygote.kill(p.pid);
+            }
+        }
+        if (stop.isEmpty()) return;
+        SystemServer.log("force-stopping " + packageName);
+        endProcesses(stop, 5000);
+    }
+
+    /** Ends every app process (the device shuts down), waiting up to {@code waitMs}. */
+    void endAllProcesses(long waitMs) {
+        List<ProcessRecord> all;
+        synchronized (this) {
+            all = new ArrayList<>(mProcesses);
+            for (PendingProcess p : mStarting.values()) {
+                if (p.pid > 0) Zygote.kill(p.pid);
+            }
+        }
+        endProcesses(all, waitMs);
+    }
+
+    private void endProcesses(List<ProcessRecord> processes, long waitMs) {
+        for (ProcessRecord p : processes) {
+            synchronized (this) {
+                p.exiting = true;
+            }
+            if (p.spawned) {
+                Zygote.kill(p.pid);
+            } else {
+                try {
+                    p.thread.scheduleExit();
+                } catch (RemoteException e) {
+                    // gone already
+                }
+            }
+        }
+        long deadline = SystemClock.uptimeMillis() + waitMs;
+        synchronized (this) {
+            while (true) {
+                boolean left = false;
+                for (ProcessRecord p : processes) left |= mProcesses.contains(p);
+                long wait = deadline - SystemClock.uptimeMillis();
+                if (!left || wait <= 0) break;
+                try {
+                    wait(wait);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
     }
 
     private void attach(ActivityRecord r, ProcessRecord app) {
@@ -470,25 +710,40 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     // --- processes (from ActivityManagerService) ---------------------------------------
 
-    /** IActivityManager.attachApplication: a process offers itself. */
-    void attachApplication(IApplicationThread thread, int pid) {
+    /**
+     * IActivityManager.attachApplication: a process this server started for a package
+     * ({@code startSeq}), or one that offers itself.
+     */
+    void attachApplication(IApplicationThread thread, int pid, long startSeq) {
         ProcessRecord app = new ProcessRecord(pid, thread);
         boolean bind = false;
         synchronized (this) {
             mProcesses.add(app);
-            // A start waiting for a process: the one asked by this process, else the first.
+            updateIdle();
+            PendingProcess started = startSeq > 0 ? mStarting.remove(startSeq) : null;
             String waiting = null;
-            for (ActivityRecord r : mActivities) {
-                if (r.app != null || r.state != State.INITIALIZING) continue;
-                if (r.launchedFromPid == pid) {
-                    waiting = r.info.packageName;
-                    break;
+            if (started != null) {
+                app.spawned = true;
+                waiting = started.packageName;
+            } else {
+                // A start waiting for a process (none being started for its package): the
+                // one asked by this process, else the first.
+                for (ActivityRecord r : mActivities) {
+                    if (r.app != null || r.state != State.INITIALIZING
+                            || starting(r.info.packageName)) {
+                        continue;
+                    }
+                    if (r.launchedFromPid == pid) {
+                        waiting = r.info.packageName;
+                        break;
+                    }
+                    if (waiting == null) waiting = r.info.packageName;
                 }
-                if (waiting == null) waiting = r.info.packageName;
-            }
-            // Else other work waiting for a package's process (a service, a broadcast).
-            if (waiting == null && !mPendingWork.isEmpty()) {
-                waiting = mPendingWork.get(0).packageName;
+                // Else other work waiting for a package's process (a service, a broadcast).
+                for (PendingWork w : mPendingWork) {
+                    if (waiting != null) break;
+                    if (!starting(w.packageName)) waiting = w.packageName;
+                }
             }
             if (waiting != null && processFor(waiting) == null) {
                 app.packageName = waiting;
@@ -543,16 +798,24 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * process; here it waits for one to attach).
      */
     void withProcess(String packageName, Consumer<ProcessRecord> work) {
+        withProcess(packageName, "work for " + packageName, work);
+    }
+
+    /** {@link #withProcess(String, Consumer)}, starting a process if none runs. */
+    void withProcess(String packageName, String reason, Consumer<ProcessRecord> work) {
         ProcessRecord app;
         synchronized (this) {
             app = processFor(packageName);
             if (app == null || !app.ready) {
                 mPendingWork.add(new PendingWork(packageName, work));
                 SystemServer.log("waiting for a process of " + packageName);
-                return;
             }
         }
-        work.accept(app);
+        if (app == null) {
+            startProcess(packageName, reason);
+        } else if (app.ready) {
+            work.accept(app);
+        }
     }
 
     /** The process with this pid (a caller), or null. */
@@ -584,10 +847,29 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 r.state = State.DESTROYED;
                 mActivities.remove(r);
             }
+            updateIdle();
             notifyAll();
         }
         SystemServer.log(app + " died");
         mAm.processDied(app);
+        if (app.spawned && app.packageName != null) {
+            // Its exit code, once Windows has it (binder may tell first).
+            Thread t = new Thread(() -> {
+                int code = Zygote.STILL_ACTIVE;
+                for (int i = 0; i < 40 && code == Zygote.STILL_ACTIVE; i++) {
+                    code = Zygote.exitCode(app.pid);
+                    if (code == Zygote.STILL_ACTIVE) SystemClock.sleep(250);
+                }
+                if (code != Zygote.STILL_ACTIVE) {
+                    synchronized (this) {
+                        mLastExit.put(app.packageName, code);
+                    }
+                    SystemServer.log(app + " exited with code " + code);
+                }
+            }, "exit-code " + app.pid);
+            t.setDaemon(true);
+            t.start();
+        }
     }
 
     private ProcessRecord processByPid(int pid) {
@@ -747,7 +1029,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void remove(ActivityRecord r) {
-        ProcessRecord exit = null;
+        ProcessRecord check = null;
         synchronized (this) {
             r.state = State.DESTROYED;
             mActivities.remove(r);
@@ -756,23 +1038,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             if (r.app != null) {
                 r.app.activities.remove(r);
-                if (r.app.activities.isEmpty() && r.finishing) {
-                    // ActivityManagerService kills the process of a removed task; here the
-                    // process is told to exit.
-                    r.app.exiting = true;
-                    exit = r.app;
-                }
+                // ActivityManagerService kills the process of a removed task; here the
+                // process is told to exit, unless something else keeps it.
+                if (r.app.activities.isEmpty() && r.finishing) check = r.app;
             }
             notifyAll();
         }
-        if (exit != null) {
-            SystemServer.log("scheduleExit: " + exit + " has no activities left");
-            try {
-                exit.thread.scheduleExit();
-            } catch (RemoteException e) {
-                SystemServer.log("scheduleExit: " + e);
-            }
-        }
+        maybeExit(check);
     }
 
     /** The record of a token, or null for a token this server did not hand out. */

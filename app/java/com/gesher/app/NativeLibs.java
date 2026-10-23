@@ -20,15 +20,15 @@ import java.util.zip.ZipFile;
  * where {@code System.loadLibrary} finds them; dalvikvm loads them with Gesher's ELF
  * loader (docs/native-libs.md).
  */
-final class NativeLibs {
+public final class NativeLibs {
     /** The ABI Gesher runs: x86-64 Android code. */
-    static final String ABI = "x86_64";
+    public static final String ABI = "x86_64";
 
     private NativeLibs() {
     }
 
     /** Copies the APK's {@code lib/<ABI>/*.so} into {@code dir}; returns how many. */
-    static int extract(String apk, String dir) throws IOException {
+    public static int extract(String apk, String dir) throws IOException {
         String prefix = "lib/" + ABI + "/";
         int count = 0;
         byte[] buffer = new byte[64 * 1024];

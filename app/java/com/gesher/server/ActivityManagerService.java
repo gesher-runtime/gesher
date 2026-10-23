@@ -54,7 +54,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         mAtm = atm;
         mServices = new ActiveServices(atm, pm, notifications);
         mBroadcasts = new BroadcastController(atm, pm);
-        mProviders = new ContentProviders(pm);
+        mProviders = new ContentProviders(pm, atm);
         atm.setActivityManager(this);
     }
 
@@ -62,7 +62,43 @@ public final class ActivityManagerService extends IActivityManager.Default {
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         mServices.processDied(app);
         mBroadcasts.processDied(app);
-        mProviders.processDied(app);
+        // Providers it used: their processes may have no other client left.
+        for (ActivityTaskManagerService.ProcessRecord p : mProviders.processDied(app)) {
+            mAtm.maybeExit(p);
+        }
+    }
+
+    /** The process is told to exit: its providers are not handed out any more. */
+    void processExiting(ActivityTaskManagerService.ProcessRecord app) {
+        mProviders.unpublish(app);
+    }
+
+    /**
+     * Whether something keeps the process although it has no activity: a service of it,
+     * or a provider of it that a process of another package uses.
+     */
+    boolean keepsAlive(ActivityTaskManagerService.ProcessRecord app) {
+        return mServices.hasServices(app) || mProviders.hasClients(app);
+    }
+
+    @Override
+    public List<android.app.ActivityManager.RunningAppProcessInfo> getRunningAppProcesses() {
+        List<android.app.ActivityManager.RunningAppProcessInfo> result =
+                new java.util.ArrayList<>();
+        for (ActivityTaskManagerService.ProcessRecord p : mAtm.processes()) {
+            if (p.packageName == null) continue;
+            android.app.ActivityManager.RunningAppProcessInfo info =
+                    new android.app.ActivityManager.RunningAppProcessInfo(p.packageName, p.pid,
+                            new String[] {p.packageName});
+            info.uid = android.os.Process.myUid();
+            info.importance = !p.activities.isEmpty()
+                    ? android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                    : mServices.hasServices(p)
+                            ? android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE
+                            : android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED;
+            result.add(info);
+        }
+        return result;
     }
 
     // --- content providers (ContentProviders) -------------------------------------------
@@ -70,13 +106,14 @@ public final class ActivityManagerService extends IActivityManager.Default {
     @Override
     public ContentProviderHolder getContentProvider(IApplicationThread caller,
             String callingPackage, String name, int userId, boolean stable) {
-        return mProviders.getContentProvider(caller, callingPackage, name, userId, stable);
+        return mProviders.getContentProvider(mAtm.callerProcess(Binder.getCallingPid()),
+                callingPackage, name);
     }
 
     @Override
     public ContentProviderHolder getContentProviderExternal(String name, int userId,
             IBinder token, String tag) {
-        return mProviders.getContentProvider(null, tag, name, userId, true);
+        return mProviders.getContentProvider(null, tag, name);
     }
 
     @Override
@@ -224,6 +261,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
     public void finishReceiver(IBinder who, int resultCode, String resultData, Bundle map,
             boolean abortBroadcast, int flags) {
         mBroadcasts.finishReceiver(who, resultCode, resultData, map, abortBroadcast, flags);
+        // A process started for the broadcast may have nothing else to do.
+        mAtm.maybeExit(mAtm.callerProcess(Binder.getCallingPid()));
     }
 
     @Override
@@ -263,7 +302,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     @Override
     public void attachApplication(IApplicationThread app, long startSeq) {
-        mAtm.attachApplication(app, Binder.getCallingPid());
+        mAtm.attachApplication(app, Binder.getCallingPid(), startSeq);
     }
 
     @Override

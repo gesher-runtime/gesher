@@ -20,6 +20,9 @@
 // - com.android.internal.os.DebugStore (ActivityThread records its lifecycle
 //   events there when the debug_store flag is on): the native store
 //   (libdebugstore, for dumpsys) is not built; events are dropped.
+// - com.gesher.server.Zygote (gesher-app.jar): the Gesher device's processes
+//   (services_zygote.cc): starting them detached, their liveness, a job that
+//   ends them with the system server, a named mutex and event.
 
 #include <jni.h>
 #include <log/log.h>
@@ -27,6 +30,7 @@
 #include <unistd.h>
 
 #include "core_jni_helpers.h"
+#include "services_zygote.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
 // let pass (-Wno-invalid-offsetof).
@@ -123,6 +127,106 @@ static const JNINativeMethod gDebugStoreMethods[] = {
 int register_gesher_DebugStore(JNIEnv* env) {
     return RegisterGesherNatives(env, "com/android/internal/os/DebugStore", gDebugStoreMethods,
                                 NELEM(gDebugStoreMethods));
+}
+
+// --- com.gesher.server.Zygote ---------------------------------------------------------
+
+static std::u16string ZygoteString(JNIEnv* env, jstring s) {
+    if (s == nullptr) return std::u16string();
+    const jchar* chars = env->GetStringChars(s, nullptr);
+    std::u16string result(reinterpret_cast<const char16_t*>(chars), env->GetStringLength(s));
+    env->ReleaseStringChars(s, chars);
+    return result;
+}
+
+static std::vector<std::u16string> ZygoteStrings(JNIEnv* env, jobjectArray array) {
+    std::vector<std::u16string> result;
+    if (array == nullptr) return result;
+    for (jsize i = 0, n = env->GetArrayLength(array); i < n; i++) {
+        jstring s = static_cast<jstring>(env->GetObjectArrayElement(array, i));
+        result.push_back(ZygoteString(env, s));
+        env->DeleteLocalRef(s);
+    }
+    return result;
+}
+
+static jstring ZygoteJavaString(JNIEnv* env, const std::u16string& s) {
+    return env->NewString(reinterpret_cast<const jchar*>(s.data()),
+                          static_cast<jsize>(s.size()));
+}
+
+static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
+                         jobjectArray unset, jstring logPath, jboolean breakaway) {
+    return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
+                                 ZygoteStrings(env, unset), ZygoteString(env, logPath),
+                                 breakaway == JNI_TRUE);
+}
+
+static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::StartTime(pid);
+}
+
+static jint Zygote_exitCode(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::ExitCode(pid);
+}
+
+static jboolean Zygote_kill(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::Kill(pid) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jboolean Zygote_joinJob(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::JoinJob(pid) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jlong Zygote_lock(JNIEnv* env, jclass, jstring name, jint timeoutMs) {
+    return gesher::zygote::Lock(ZygoteString(env, name), timeoutMs);
+}
+
+static void Zygote_unlock(JNIEnv*, jclass, jlong handle) {
+    gesher::zygote::Unlock(static_cast<intptr_t>(handle));
+}
+
+static jlong Zygote_createEvent(JNIEnv* env, jclass, jstring name) {
+    return gesher::zygote::MakeEvent(ZygoteString(env, name));
+}
+
+static jboolean Zygote_waitEvent(JNIEnv*, jclass, jlong handle, jint timeoutMs) {
+    return gesher::zygote::WaitEvent(static_cast<intptr_t>(handle), timeoutMs) ? JNI_TRUE
+                                                                               : JNI_FALSE;
+}
+
+static jboolean Zygote_signalEvent(JNIEnv* env, jclass, jstring name) {
+    return gesher::zygote::SignalEvent(ZygoteString(env, name)) ? JNI_TRUE : JNI_FALSE;
+}
+
+static jstring Zygote_commandLine(JNIEnv* env, jclass) {
+    return ZygoteJavaString(env, gesher::zygote::CommandLine());
+}
+
+static jstring Zygote_exePath(JNIEnv* env, jclass) {
+    return ZygoteJavaString(env, gesher::zygote::ExePath());
+}
+
+static const JNINativeMethod gZygoteMethods[] = {
+    {"nativeSpawn",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
+     GESHER_JNI(Zygote_spawn)},
+    {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
+    {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},
+    {"nativeKill", "(I)Z", GESHER_JNI(Zygote_kill)},
+    {"nativeJoinJob", "(I)Z", GESHER_JNI(Zygote_joinJob)},
+    {"nativeLock", "(Ljava/lang/String;I)J", GESHER_JNI(Zygote_lock)},
+    {"nativeUnlock", "(J)V", GESHER_JNI(Zygote_unlock)},
+    {"nativeCreateEvent", "(Ljava/lang/String;)J", GESHER_JNI(Zygote_createEvent)},
+    {"nativeWaitEvent", "(JI)Z", GESHER_JNI(Zygote_waitEvent)},
+    {"nativeSignalEvent", "(Ljava/lang/String;)Z", GESHER_JNI(Zygote_signalEvent)},
+    {"nativeCommandLine", "()Ljava/lang/String;", GESHER_JNI(Zygote_commandLine)},
+    {"nativeExePath", "()Ljava/lang/String;", GESHER_JNI(Zygote_exePath)},
+};
+
+int register_gesher_Zygote(JNIEnv* env) {
+    return RegisterGesherNatives(env, "com/gesher/server/Zygote", gZygoteMethods,
+                                NELEM(gZygoteMethods));
 }
 
 }  // namespace android

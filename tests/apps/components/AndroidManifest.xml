@@ -23,6 +23,9 @@
             </intent-filter>
         </activity>
         <activity android:name=".SecondActivity" android:exported="false" />
+        <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
+             starts it explicitly. -->
+        <activity android:name=".CrossActivity" android:exported="true" />
         <activity
             android:name=".SingleTopActivity"
             android:launchMode="singleTop"

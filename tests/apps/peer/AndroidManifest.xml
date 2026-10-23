@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The other package of the system server's cross-package tests (tests/apps/components'
+     CrossActivity is the first): an activity other apps start through an implicit intent,
+     and a provider other apps use, each in this package's own process, which the system
+     server starts when they need it. No action bar: no text to lay out while app processes
+     have no system fonts. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.peer"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name=".PeerActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.gesher.peer.SHOW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <provider
+            android:name=".NotesProvider"
+            android:authorities="com.gesher.peer.notes"
+            android:exported="true" />
+    </application>
+</manifest>

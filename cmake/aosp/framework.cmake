@@ -102,6 +102,7 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/attach_standins.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/shared_memory.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)

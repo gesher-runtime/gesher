@@ -55,8 +55,10 @@ public final class ApkPackage {
     public final ParsedPackage parsed;
     public final String packageName;
     private final List<String> mLauncherActivities = new ArrayList<>();
-    private final long mInstallTime = System.currentTimeMillis();
+    private long mInstallTime = System.currentTimeMillis();
+    private long mUpdateTime = mInstallTime;
     private String mDataDir;
+    private String mNativeLibraryDir;  // null: <data dir>/lib
     private final boolean mHasCode;
 
     private ApkPackage(String apkPath, ParsedPackage parsed) {
@@ -137,6 +139,32 @@ public final class ApkPackage {
         return mDataDir;
     }
 
+    /**
+     * Where the package's native libraries are (an installed package's
+     * {@code <code path>/lib/x86_64}); by default {@code <data dir>/lib}.
+     */
+    public void setNativeLibraryDir(String dir) {
+        mNativeLibraryDir = dir;
+    }
+
+    public String nativeLibraryDir() {
+        return mNativeLibraryDir != null ? mNativeLibraryDir : mDataDir + "/lib";
+    }
+
+    /** When it was first installed and last updated (PackageInfo's times). */
+    public void setInstallTimes(long firstInstallTime, long lastUpdateTime) {
+        mInstallTime = firstInstallTime;
+        mUpdateTime = lastUpdateTime;
+    }
+
+    public long firstInstallTime() {
+        return mInstallTime;
+    }
+
+    public long versionCode() {
+        return parsed.getLongVersionCode();
+    }
+
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
         if ((flags & DIRECT_BOOT) == 0) {
@@ -151,7 +179,8 @@ public final class ApkPackage {
                 component(c, pi.applicationInfo);
             }
         }
-        pi.firstInstallTime = pi.lastUpdateTime = mInstallTime;
+        pi.firstInstallTime = mInstallTime;
+        pi.lastUpdateTime = mUpdateTime;
         return pi;
     }
 
@@ -387,7 +416,7 @@ public final class ApkPackage {
         ai.dataDir = mDataDir;
         ai.credentialProtectedDataDir = mDataDir;
         ai.deviceProtectedDataDir = mDataDir;
-        ai.nativeLibraryDir = mDataDir + "/lib";
+        ai.nativeLibraryDir = nativeLibraryDir();
     }
 
     private static void component(ComponentInfo c, ApplicationInfo ai) {
