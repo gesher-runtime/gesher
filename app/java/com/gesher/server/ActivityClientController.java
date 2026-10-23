@@ -7,6 +7,7 @@ package com.gesher.server;
 import android.app.ActivityManager;
 import android.app.HandoffActivityData;
 import android.app.IActivityClientController;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
@@ -54,7 +55,7 @@ public final class ActivityClientController extends IActivityClientController.De
     public void activityStopped(IBinder token, Bundle state, PersistableBundle persistentState,
             HandoffActivityData handoffActivityData, CharSequence description) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        if (r != null) mAtm.activityStopped(r);
+        if (r != null) mAtm.activityStopped(r, state);
     }
 
     @Override
@@ -72,7 +73,7 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public boolean finishActivity(IBinder token, int code, Intent data, int finishTask) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r != null && mAtm.finish(r, "app-request");
+        return r != null && mAtm.finish(r, "app-request", code, data);
     }
 
     @Override
@@ -89,5 +90,42 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void setTaskDescription(IBinder token, ActivityManager.TaskDescription values) {
         // No recents screen to show it in.
+    }
+
+    @Override
+    public boolean isTopOfTask(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r == null || mAtm.isTopOfTask(r);
+    }
+
+    @Override
+    public boolean willActivityBeVisible(IBinder token) {
+        // The top activity of its task is shown when it resumes (one task at a time).
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r == null || (!r.finishing && mAtm.isTopOfTask(r));
+    }
+
+    @Override
+    public ComponentName getCallingActivity(IBinder token) {
+        // Who will get this activity's result (startActivityForResult), if anyone.
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && r.resultTo != null ? r.resultTo.component() : null;
+    }
+
+    @Override
+    public String getCallingPackage(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && r.resultTo != null ? r.resultTo.info.packageName : null;
+    }
+
+    @Override
+    public String getLaunchedFromPackage(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null ? r.launchedFromPackage : null;
+    }
+
+    @Override
+    public int getLaunchedFromUid(IBinder token) {
+        return android.os.Process.myUid();  // every gesher process has the same uid
     }
 }
