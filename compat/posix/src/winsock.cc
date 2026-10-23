@@ -228,6 +228,13 @@ Socket Open(Family family, Type type, int protocol) {
   if (win_type == 0) return errno = ESOCKTNOSUPPORT, kInvalidSocket;
   SOCKET s = WSASocketW(win_family, win_type, protocol, nullptr, 0, kSocketFlags);
   if (s == INVALID_SOCKET) return Fail(), kInvalidSocket;
+  if (win_family == AF_INET6) {
+    // Linux's default (net.ipv6.bindv6only = 0): an IPv6 socket also takes
+    // IPv4 peers as v4-mapped addresses. Windows defaults to IPv6 only.
+    DWORD v6only = 0;
+    setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&v6only),
+               sizeof(v6only));
+  }
   if (win_type == SOCK_DGRAM) {
     // Windows fails the next recv with WSAECONNRESET when an ICMP "port
     // unreachable" arrives for an earlier send; Linux ignores it on

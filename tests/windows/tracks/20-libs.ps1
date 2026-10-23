@@ -56,8 +56,20 @@ foreach ($t in 'libutils_binder_test', 'libutils_binder_test_custom_allocator') 
 # libutils_test (libutils).
 if (-not (Invoke-CoreLibsTest 'libutils_test')) { $failed++ }
 
-# libcutils_test (libcutils).
-if (-not (Invoke-CoreLibsTest 'libcutils_test')) { $failed++ }
+# libcutils_test (libcutils). android_get_control_socket binds under
+# /dev/socket, init's socket directory, which gesher-base's paths do not have.
+if (-not (Invoke-CoreLibsTest 'libcutils_test' -Exclude @('SocketsTest.android_get_control_socket'))) {
+  $failed++
+}
 
 # libandroidfw_tests (frameworks/base/libs/androidfw), on its tests/data.
-if (-not (Invoke-CoreLibsTest 'libandroidfw_tests')) { $failed++ }
+# ObbFile_test writes into $EXTERNAL_STORAGE, which Android sets for apps.
+$externalStorage = Join-Path ([IO.Path]::GetTempPath()) "gesher-libs-sdcard-$PID"
+New-Item -ItemType Directory -Force $externalStorage | Out-Null
+$env:EXTERNAL_STORAGE = $externalStorage.Replace([char]92, [char]47)
+try {
+  if (-not (Invoke-CoreLibsTest 'libandroidfw_tests')) { $failed++ }
+} finally {
+  Remove-Item Env:EXTERNAL_STORAGE
+  Remove-Item -Recurse -Force $externalStorage -ErrorAction SilentlyContinue
+}
