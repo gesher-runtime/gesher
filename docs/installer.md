@@ -21,9 +21,29 @@ Everything is per user, under `HKCU\Software\Classes`:
 `ChangesAssociations=yes` makes Setup and the uninstaller notify the shell
 (`SHChangeNotify`), so Explorer picks up the change without a sign-out.
 
-Opening an APK this way runs it the way `gesher-app my.apk` does: headless,
-in a console window, to the launcher Activity's `onResume` (see
-`app/README.md`). The APK must be on the same drive as Gesher.
+Opening an APK this way runs it the way `gesher-app my.apk` does: it is
+installed (or updated) on the user's Gesher device and its launcher Activity
+started through the device's system server, headless, with the app's output in
+a console window (see `app/README.md` and
+[0026](decisions/0026-services-persistent-device.md)). The first launch starts
+the device (binderd, servicemanager, the system server) in the background; it
+outlives the console and serves later launches until `gesher-app shutdown` or
+10 minutes without an app. The APK must be on the same drive as Gesher.
+
+## The Gesher device and (un)installing
+
+The device runs `dalvikvm.exe`, `binderd.exe` and `servicemanager.exe` from the
+install folder and keeps files of `%LOCALAPPDATA%\Gesher` open, so:
+
+- the uninstaller runs `gesher-app shutdown` first (`[UninstallRun]`), then
+  removes `%LOCALAPPDATA%\Gesher` with the installed packages, their data and the
+  logs;
+- Setup runs `gesher-app shutdown` before it replaces the files of an earlier
+  version (`PrepareToInstall`).
+
+`gesher-app shutdown` needs no runtime: `gesher-app.ps1` reads the device's
+state file (`%LOCALAPPDATA%\Gesher\data\system\gesher-device`), sets the system
+server's shutdown event, waits for it to exit and ends whatever is left.
 
 ### Not taking over another app's association
 
@@ -53,3 +73,11 @@ command line through `cmd.exe` as Explorer would, and expects
 `.apk`'s default and the `OpenWithProgids` entry are gone.
 
 Verified in ci run 39946705097 (package job on windows-2022).
+
+With the Gesher device (ci run 40019524773), the package job also runs the
+installed `gesher-app lifecycle.apk` (the device starts, the APK is installed
+and run; `gesher-app list` shows it), `--single-process`, `gesher-app
+shutdown` (the device's three processes gone), the `.apk` open command (which
+starts the device again) and checks that the device still runs after that
+command's console is gone; after uninstalling, that its processes are gone and
+`%LOCALAPPDATA%\Gesher` removed.

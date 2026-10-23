@@ -51,6 +51,22 @@ public final class Services {
     private Services() {
     }
 
+    /** The services {@link #create} made last: for the system server's own use. */
+    static final class Created {
+        final PackageManagerService pm;
+        final ActivityTaskManagerService atm;
+        final ActivityManagerService am;
+
+        Created(PackageManagerService pm, ActivityTaskManagerService atm,
+                ActivityManagerService am) {
+            this.pm = pm;
+            this.atm = atm;
+            this.am = am;
+        }
+    }
+
+    static volatile Created sLast;
+
     /** The services, by name, for the given packages. */
     public static Map<String, IBinder> create(Collection<ApkPackage> packages) {
         Map<String, IBinder> services = new LinkedHashMap<>();
@@ -58,6 +74,7 @@ public final class Services {
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
+        sLast = new Created(pm, atm, am);
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
         services.put(Context.ACTIVITY_SERVICE,
                 StandIn.of(IActivityManager.class, am).asBinder());
@@ -228,6 +245,34 @@ public final class Services {
         @Override
         public int getForceInvertState(int userId) {
             return UiModeManager.FORCE_INVERT_TYPE_OFF;
+        }
+    }
+
+    /**
+     * permission_checker: PermissionCheckerService, granting everything (every app runs as
+     * one uid; no permission is enforced). A provider's Transport asks it before it
+     * answers another process (getType, query...).
+     */
+    public static final class PermissionChecker
+            extends android.permission.IPermissionChecker.Default {
+        @Override
+        public int checkPermission(String permission,
+                android.content.AttributionSourceState attributionSource, String message,
+                boolean forDataDelivery, boolean startDataDelivery, boolean fromDatasource,
+                int attributedOp) {
+            return android.content.PermissionChecker.PERMISSION_GRANTED;
+        }
+
+        @Override
+        public void finishDataDelivery(int op,
+                android.content.AttributionSourceState attributionSource,
+                boolean fromDatasource) {
+        }
+
+        @Override
+        public int checkOp(int op, android.content.AttributionSourceState attributionSource,
+                String message, boolean forDataDelivery, boolean startDataDelivery) {
+            return android.content.PermissionChecker.PERMISSION_GRANTED;
         }
     }
 

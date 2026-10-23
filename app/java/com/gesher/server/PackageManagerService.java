@@ -23,16 +23,40 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code package}: PackageManagerService, knowing the APKs it was given (parsed with
- * PackageParser2, {@link ApkPackage}). All of them run as the same uid.
+ * {@code package}: PackageManagerService, knowing the APKs it was given and the installed
+ * packages ({@link Installer}; parsed with PackageParser2, {@link ApkPackage}). All of them
+ * run as the same uid. Packages come and go while it serves (install, uninstall): readers
+ * see one version of the map, replaced as a whole.
  */
 public final class PackageManagerService extends IPackageManager.Default {
-    private final Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
 
     public PackageManagerService(Collection<ApkPackage> packages) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
-            mPackages.put(p.packageName, p);
+            map.put(p.packageName, p);
         }
+        mPackages = map;
+    }
+
+    /** Adds or replaces a package (an install or an update). */
+    synchronized void add(ApkPackage p) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
+        map.put(p.packageName, p);
+        mPackages = map;
+    }
+
+    /** Removes a package (an uninstall); returns it, or null. */
+    synchronized ApkPackage remove(String packageName) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
+        ApkPackage p = map.remove(packageName);
+        mPackages = map;
+        return p;
+    }
+
+    /** The packages, now. */
+    Collection<ApkPackage> packages() {
+        return mPackages.values();
     }
 
     public ApkPackage get(String packageName) {
@@ -201,7 +225,8 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        return mPackages.isEmpty() ? null : mPackages.keySet().iterator().next();
+        Map<String, ApkPackage> packages = mPackages;
+        return packages.isEmpty() ? null : packages.keySet().iterator().next();
     }
 
     @Override

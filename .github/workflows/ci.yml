@@ -175,17 +175,52 @@ jobs:
           foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
             if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
           }
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
           $code = $LASTEXITCODE
-          Write-Host "gesher-app lifecycle.apk (exit $code):"
+          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
-            throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
+            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
           }
           $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
           Write-Host $fonts
           if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
           'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The default: the Gesher device (binderd, servicemanager and a
+          # persistent system server, detached), the APK installed, its
+          # process started by the system server (docs/services.md).
+          $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
+          function DevicePids {
+            if (-not (Test-Path $device)) { return @() }
+            $pids = @()
+            foreach ($line in Get-Content $device) {
+              if ($line -match '^(system_server|servicemanager|binderd)=(\d+)$') { $pids += [int]$Matches[2] }
+            }
+            return @($pids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          }
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
+              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+            throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
+          }
+          if ((DevicePids).Count -ne 3) { throw "The Gesher device is not running after the launch: $(DevicePids)" }
+          $list = & "$app\gesher-app.cmd" list 2>&1 | Out-String
+          Write-Host $list
+          if ($list -notmatch 'connected to the running Gesher device' -or $list -notmatch 'package:com\.gesher\.lifecycle ') {
+            throw "gesher-app list does not show the installed lifecycle.apk"
+          }
+          'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" shutdown 2>&1 | Out-String
+          Write-Host $out
+          Start-Sleep 1
+          if ($LASTEXITCODE -ne 0 -or (DevicePids).Count -ne 0 -or (Test-Path $device)) {
+            throw "gesher-app shutdown left the Gesher device running: $(DevicePids)"
+          }
+          'PASS  installer: gesher-app shutdown stops the Gesher device''s processes' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Multi-process: binderd, servicemanager and the system server
           # (com.gesher.server.SystemServer) started by the launcher, the app
           # in a process of its own.
@@ -194,7 +229,7 @@ jobs:
           Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
-            Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
             throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
           }
           'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -214,13 +249,21 @@ jobs:
           $out = $p.StandardOutput.ReadToEnd()
           $p.WaitForExit()
           Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
-            throw "The .apk open command did not take lifecycle.apk to onResume (exit $($p.ExitCode))"
+          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
+            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The device outlives the console that started it.
+          $running = DevicePids
+          if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
+          'PASS  installer: the Gesher device started by a double-click keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
+          $left = @($running | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
+          if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
+          'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }

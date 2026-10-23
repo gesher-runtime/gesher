@@ -19,7 +19,9 @@ Options: `--build-prop FILE` (default `$ANDROID_ROOT/build.prop`),
 `--activity CLASS` (default: the MAIN/LAUNCHER activity), `--data-dir DIR`
 (default `$ANDROID_DATA/data/<package>`), `--strict-services` (see below),
 `--system-server` (an app process attached to a system server process, the
-framework's way, below), `--ez KEY true|false` (a boolean extra in the launch
+framework's way, below; the Gesher device, a persistent system server that
+starts app processes itself, is `com.gesher.app.Launcher`'s, further below),
+`--ez KEY true|false` (a boolean extra in the launch
 intent, as `am start --ez`; with `--system-server`), `--keep-task` (with
 `--system-server`: the launcher does not remove the task once the activity is
 idle; the run ends when the app's last activity finishes).
@@ -223,8 +225,55 @@ app's main Looper dispatches.
 On Windows, `gesher-app my.apk --system-server` (`tools/package/gesher-app.ps1`)
 starts binderd and servicemanager for a binder device of its own and the
 system server with the APK, runs the app, and stops the three when it exits
-(their logs: `%LOCALAPPDATA%\Gesher\logs`). Without `--system-server`,
-`gesher-app.cmd` runs the single-process mode.
+(their logs: `%LOCALAPPDATA%\Gesher\logs\run-*`). `gesher-app my.apk
+--single-process` runs the single-process mode. Without either, gesher-app
+runs the app on the Gesher device (below).
+
+## The Gesher device: a persistent system server
+
+`com.gesher.app.Launcher` ([0026](../docs/decisions/0026-services-persistent-device.md))
+is what `gesher-app` runs by default:
+
+```
+dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Launcher COMMAND
+  launch APK [--activity CLASS] [--ez KEY true|false]... [--keep-task]
+  install APK | uninstall PACKAGE | list | status | start | shutdown
+```
+
+The first command starts the user's Gesher device, detached (no console window;
+it outlives the console): binderd and servicemanager on a binder device of its
+own, and `com.gesher.server.SystemServer --persistent`. Later commands find it
+(`$ANDROID_DATA/system/gesher-device`, under a named mutex) and use it; one
+whose system server is gone is cleaned up and replaced. It stops on
+`shutdown` or after `$GESHER_IDLE_TIMEOUT` seconds (default 600) with no app
+process; the system server keeps binderd, servicemanager and the app processes
+in a job that ends them with it.
+
+- `install` copies the APK into `$ANDROID_DATA/app/<package>-<n>/base.apk`
+  (`lib/x86_64` extracted next to it), lists it in
+  `$ANDROID_DATA/system/packages.list` and adds it to the running package
+  manager; the system server loads the list at start (`com.gesher.server.Installer`).
+  The same APK again changes nothing; another one updates the package (its
+  processes stopped first). `uninstall` removes code, data and entry. `list` asks
+  the package manager (`getInstalledPackages`, `getPackageInfo`).
+- `launch` installs or updates the APK, then plays the launcher: `startActivityAndWait`
+  with the MAIN/LAUNCHER intent from no app process. The system server starts the
+  package's process: a dalvikvm with its own runtime options running
+  `android.app.GesherAppProcess --package P --start-seq N --target-sdk S`
+  (`com.gesher.server.Zygote`), whose output goes to `logs/<package>.log`; it attaches
+  with its start sequence number and is driven as above. The launcher copies the log
+  to the console, removes the task once the activity is idle (unless `--keep-task`),
+  waits until the package's process is gone and exits with its exit code
+  (`gesher-app: done` when it is 0).
+- The system server starts a package's process whenever something needs it: an
+  activity (also from another app, through an implicit intent), a service, a manifest
+  receiver, a content provider (`getContentProvider` waits until the new process
+  publishes it). A process exits when it has no activity, service or client of its
+  providers left. `tests/apps/peer` and components' `CrossActivity` exercise it across
+  two packages.
+- The control calls without a framework API (install, uninstall, status, shutdown, a
+  package's last exit code) go to the system server's `gesher` service
+  (`com.gesher.server.GesherService`).
 
 ## Classes framework.jar does not have
 
@@ -246,8 +295,10 @@ app-process path reaches a few more module classes; `app/java` has
 placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
 `android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
-`ActivityContextInfo` (no intent starts an SDK sandbox activity), and
-`android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped). When
+`ActivityContextInfo` (no intent starts an SDK sandbox activity),
+`android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped), and
+`android.health.connect.HealthConnectManager` (`AppOpsManager.permissionToOp` asks it
+whether a permission is a health permission: none is). When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
 

@@ -79,8 +79,14 @@ Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName:
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
 
+[UninstallRun]
+; The Gesher device (binderd, servicemanager, the system server and app
+; processes, docs/services.md) runs from {app} and keeps files of
+; {localappdata}\Gesher open: it is stopped first.
+Filename: "{cmd}"; Parameters: "/d /c """"{app}\gesher-app.cmd"" shutdown"""; Flags: runhidden waituntilterminated; RunOnceId: "GesherDeviceShutdown"
+
 [UninstallDelete]
-; The runtime's directories (gesher.ps1).
+; The runtime's directories (gesher.ps1), the installed packages and the logs.
 Type: filesandordirs; Name: "{localappdata}\Gesher"
 
 [Code]
@@ -99,6 +105,19 @@ begin
   if not RegQueryStringValue(HKEY_CLASSES_ROOT, '.apk', '', ProgId) then
     ProgId := '';
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
+end;
+
+// An update replaces files a running Gesher device uses: it is stopped first.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Launcher: String;
+  Code: Integer;
+begin
+  Launcher := ExpandConstant('{app}\gesher-app.cmd');
+  if FileExists(Launcher) then
+    Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
+      ewWaitUntilTerminated, Code);
+  Result := '';
 end;
 
 function PathEntries(): String;
