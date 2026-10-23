@@ -180,21 +180,21 @@ public final class FontsTest {
   private static void styles() {
     Paint regular = paint(Typeface.DEFAULT);
     Paint bold = paint(Typeface.DEFAULT_BOLD);
-    // Without subpixel text the advances are whole pixels, which rounds Roboto's
-    // 400 and 700 instances of "Gesher" (100.7 and 102.5 px) to the same 102.
-    Paint regularSubpixel = paint(Typeface.DEFAULT);
-    Paint boldSubpixel = paint(Typeface.DEFAULT_BOLD);
-    regularSubpixel.setSubpixelText(true);
-    boldSubpixel.setSubpixelText(true);
-    float regularWidth = regularSubpixel.measureText(LATIN);
-    float boldWidth = boldSubpixel.measureText(LATIN);
+    // Advances are whole pixels (hinted), which at 32 px rounds Roboto's 400 and 700
+    // instances of "Gesher" (100.7 and 102.5 px) to the same 102: widths at 200 px.
+    Paint regularLarge = paint(Typeface.DEFAULT);
+    Paint boldLarge = paint(Typeface.DEFAULT_BOLD);
+    regularLarge.setTextSize(200);
+    boldLarge.setTextSize(200);
+    float regularWidth = regularLarge.measureText(LATIN);
+    float boldWidth = boldLarge.measureText(LATIN);
     int regularDark = darkPixels(draw(regular, LATIN));
     int boldDark = darkPixels(draw(bold, LATIN));
-    check(boldWidth > regularWidth + 1 && boldDark > regularDark * 1.15,
-        "bold differs from regular (width " + boldWidth + " > " + regularWidth + ", "
+    check(boldWidth > regularWidth + 5 && boldDark > regularDark * 1.15,
+        "bold differs from regular (at 200 px " + boldWidth + " > " + regularWidth + " wide, "
             + boldDark + " > " + regularDark + " dark pixels)");
     Paint createdBoldPaint = paint(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-    createdBoldPaint.setSubpixelText(true);
+    createdBoldPaint.setTextSize(200);
     float createdBold = createdBoldPaint.measureText(LATIN);
     check(Math.abs(createdBold - boldWidth) < 0.01f,
         "Typeface.create(DEFAULT, BOLD) is DEFAULT_BOLD's face (" + createdBold + ")");
