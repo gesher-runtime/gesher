@@ -110,11 +110,25 @@ bool FindAddress(const void* addr, AddressInfo* info);
 using UnresolvedHandler = void (*)(const char* name);
 void SetUnresolvedHandler(UnresolvedHandler handler);
 
-// Per-thread setup: makes %fs point at this thread's bionic TLS block, so the
-// loaded code's thread-local and stack-protector accesses work. Call on every
-// thread that will enter loaded native code. Safe to call more than once.
-// Returns false if %fs cannot be set up on this host (see the fsbase probe).
+// Per-thread setup: builds this thread's bionic TLS block and stores its
+// thread pointer in the TEB slot that the loaded code's rewritten %fs:0
+// accesses read (ADR 0014). Call on every thread that will enter loaded native
+// code with initial-exec TLS; the stack guard (%fs:0x28, rewritten to the TEB)
+// and __tls_get_addr work without it. Safe to call more than once. Returns
+// false only if no inline TLS slot or memory is available.
 bool SetupThreadTls();
+
+// What the loader's %fs rewrite did to an object (fs_rewrite.h).
+struct FsRewriteCounts {
+  size_t stack_guard = 0;      // %fs:0x28 -> %gs:0x30
+  size_t thread_pointer = 0;   // %fs:0 -> %gs:<TLS slot>
+  size_t stubbed = 0;          // %fs:(%reg) replayed out of line
+  size_t trapped = 0;          // not rewritable: int3 + diagnostic if reached
+  size_t decode_errors = 0;    // bytes skipped while decoding code
+  size_t bytes_decoded = 0;
+  bool used_unwind_info = false;  // code found through .eh_frame_hdr FDEs
+};
+FsRewriteCounts FsRewrites(Library* library);
 
 // __tls_get_addr's worker: the address of loaded module `module_id`'s TLS
 // variable at `offset` in the current thread. The bionic shim wraps this as the
