@@ -336,7 +336,6 @@ int BIONIC_SYSV Unsetenv(const char* name) { return _putenv_s(name, "") == 0 ? 0
 
 int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
-int64_t BIONIC_SYSV Sysconf(int name) { return sysconf(name); }
 int BIONIC_SYSV Getpagesize() { return 4096; }
 
 // Android system properties: none are set; reads return the empty string.
@@ -455,16 +454,22 @@ int64_t BIONIC_SYSV Time(int64_t* out) {
 }
 int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
   int64_t ms = req->tv_sec * 1000 + (req->tv_nsec + 999999) / 1000000;
+  DeliverPendingSignals();
   Sleep(static_cast<DWORD>(ms));
   if (rem) *rem = {0, 0};
+  DeliverPendingSignals();
   return 0;
 }
 int BIONIC_SYSV Usleep(uint32_t us) {
+  DeliverPendingSignals();
   Sleep((us + 999) / 1000);
+  DeliverPendingSignals();
   return 0;
 }
 unsigned BIONIC_SYSV SleepSeconds(unsigned s) {
+  DeliverPendingSignals();
   Sleep(s * 1000);
+  DeliverPendingSignals();
   return 0;
 }
 int64_t BIONIC_SYSV Clock() { return ProcessCpuNanos() / 1000; }  // CLOCKS_PER_SEC 1e6
@@ -858,7 +863,6 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("unsetenv", Unsetenv);
   ENTRY("getpid", Getpid);
   ENTRY("gettid", Gettid);
-  ENTRY("sysconf", Sysconf);
   ENTRY("getpagesize", Getpagesize);
   ENTRY("__system_property_get", SystemPropertyGet);
   ENTRY("rand", Rand);
@@ -963,6 +967,10 @@ SymbolTable& Table() {
     RegisterStdio(*table);
     RegisterPthread(*table);
     RegisterLocale(*table);
+    RegisterPosix(*table);
+    RegisterSocket(*table);
+    RegisterSignal(*table);
+    RegisterTime(*table);
     return table;
   }();
   return *t;
