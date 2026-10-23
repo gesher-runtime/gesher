@@ -273,9 +273,10 @@ gesher-app.
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`. Steps 1-6 are done and CI-verified
-(latest: ci `39987881014`, green on windows-2022 and windows-2025); see
-"After that" for what is left._
+`wip/native-libs` (on the integration branch with the graphics track's
+window and ANGLE). Steps 1-7 are done and CI-verified (latest: ci
+`40013029994`, green on windows-2022 and windows-2025); `ANativeActivity`
+waits for Activity windows; see "After that" for what is left._
 
 ### Done and CI-verified
 
@@ -419,14 +420,54 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   The first run of this check (ci `39987006747`) failed only on `remove_all`
   (`ENOTEMPTY`: Windows' delete-pending names), which led to the POSIX
   delete disposition and the share-delete `fopen`.
+- **Step 7 — ANativeWindow and EGL/GLES** ([0023](decisions/0023-native-libs-ndk-graphics.md)).
+  `libandroid_window.cc`, `egl_gles.cc`, `gen_gl_thunks.py`
+  (`ndk_graphics.cmake`); `tests/apps/glapp` (`libglapp.so`, C, `DT_NEEDED`
+  libandroid/libEGL/libGLESv3) and `tests/native/gl_window_test.cc`.
+  **ci `40013029994` (commit a6b8891), green on windows-2022 and
+  windows-2025**:
+  `PASS  native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read back with PrintWindow`,
+  `PASS  native libs: EGL/GLES 3 and 2 from an NDK .so through ANGLE onto a window surface; glReadPixels`,
+  `PASS  native libs: the GLES 3 and 2 frames presented in the window, read back with PrintWindow`,
+  `PASS  native libs: the same EGL/GLES window surfaces on WARP`,
+  `PASS  native libs: gesher-app runs glapp.apk; ANativeWindow_fromSurface and lock into a Surface, read back`,
+  `PASS  native libs: gesher-app runs glapp.apk; EGL/GLES 3 and 2 on a Surface's window from the .so`
+  (and every earlier line). `gl_window_test` makes 160x96 windows with
+  `gesher_window_create`, shows them and loads `libglapp.so` through the
+  loader: the library checks `getWidth`/`getHeight`/`getFormat`, sets RGBA_8888
+  with `setBuffersGeometry`, locks (160x96, stride 160, format 1), writes four
+  colored quadrants and posts; PrintWindow reads all 15,360 pixels back
+  correct. Then, per window, EGL on `EGL_DEFAULT_DISPLAY` ("gesher EGL:
+  default display: ANGLE, Direct3D 11 hardware device"; the runners'
+  hardware adapter is the Basic Render Driver), `eglChooseConfig` with
+  `EGL_RECORDABLE_ANDROID`, `EGL_NATIVE_VISUAL_ID` 1 into
+  `setBuffersGeometry`, `eglCreateWindowSurface` on the `ANativeWindow*`, an
+  ES 3 (then ES 2) context, `eglGetProcAddress("glClearColor")` called, a
+  blue clear and a green triangle (GLSL ES 3.00 with a VAO, then GLSL ES
+  1.00), `glReadPixels`: 1,920 green, 13,440 blue, 0 other, `eglSwapBuffers`;
+  `PrintWindow(PW_RENDERFULLCONTENT)` then reads the presented frame back
+  from the window (center green, corners blue, 1,920 green). The same again
+  with `GESHER_EGL_DEVICE=warp` ("Direct3D 11 WARP device"). Through
+  gesher-app, `glapp.apk`'s Activity makes windows with gesher-app's
+  `NativeWindow` (reflection; Activities have no windows yet), passes their
+  `android.view.Surface` to the library (`ANativeWindow_fromSurface`), reads
+  the locked frame back with `NativeWindow.capture()` and gets ES 3 and ES 2
+  frames checked by `glReadPixels`. ES 2 contexts report "OpenGL ES 3.0.0"
+  (ANGLE gives the newest compatible version, as Android drivers may). The
+  first runs found that Windows widens a captioned window's client area to
+  about 120 pixels (a 96-pixel request gave a 120-pixel window while
+  `ANativeWindow_getWidth` said 96: noted for the graphics track), and that
+  on windows-2022 a shown window's read-back can precede its repaint (the
+  test retries for up to 2 s); copying the screen under the window never
+  sees it on the runners.
 - Roadmap: the "ELF loader" box (ci `39955700023`), the
   "`System.loadLibrary` of an app's NDK library from its APK's `lib/x86_64`,
   with JNI calls both ways" box (ci `39981957010`) and the bionic box
   (libc, libm, libdl, liblog and libandroid's non-graphics APIs, ci
   `39987881014`; `libc_test.so` covers libm, libdl and liblog, the app covers
-  libc and libandroid) are ticked. libandroid's graphics half
-  (`ANativeWindow`, `ANativeActivity`, `AChoreographer`, `AInputQueue`) is
-  the graphics track's, noted on the box.
+  libc and libandroid) are ticked, and the NDK graphics box (`ANativeWindow`
+  and EGL/GLES from an app's `.so`, ci `40013029994`). `ANativeActivity`,
+  `AChoreographer` and `AInputQueue` are not done.
 
 ### Not done / stand-ins in what exists
 
