@@ -170,6 +170,11 @@ needs: [framework-build.md](framework-build.md).
         `bindApplication`, `ClientTransaction`s), the server driving the
         lifecycle to onResume and finishing it (pause, stop, destroy) in
         `gesher-app --system-server` (ci run 40001194804)
+  - [x] The rest of the app model through the server: activities starting
+        activities (results, standard, singleTop), started, bound and
+        foreground services, registered and manifest broadcast receivers,
+        the app's content providers and a settings stand-in (ci run
+        40007889523)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 

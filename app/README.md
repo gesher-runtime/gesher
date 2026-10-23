@@ -20,7 +20,9 @@ Options: `--build-prop FILE` (default `$ANDROID_ROOT/build.prop`),
 (default `$ANDROID_DATA/data/<package>`), `--strict-services` (see below),
 `--system-server` (an app process attached to a system server process, the
 framework's way, below), `--ez KEY true|false` (a boolean extra in the launch
-intent, as `am start --ez`; with `--system-server`).
+intent, as `am start --ez`; with `--system-server`), `--keep-task` (with
+`--system-server`: the launcher does not remove the task once the activity is
+idle; the run ends when the app's last activity finishes).
 On Windows, `tools/package/gesher-app.cmd` sets up the directories and the
 boot class path and runs it.
 
@@ -196,12 +198,26 @@ calls `finish()` goes through the same three steps. `GesherAppDriver` is not
 used in this mode. Every `ServiceManager.getService` of the app goes to
 servicemanager.
 
+The rest of the app model runs through the server too
+([0025](../docs/decisions/0025-services-app-components.md)): activities
+starting activities (explicit or through the manifest's intent filters, the
+one in front paused first, results, standard and singleTop), started and
+bound services (the Binder from `onBind` reaches clients in the same process
+as itself), foreground services (the notification goes to a stand-in
+`notification` service), registered and manifest broadcast receivers, the
+app's own content providers (installed at `bindApplication`) and a stand-in
+`settings` provider for `Settings.System/Secure/Global`.
+`tests/apps/components` exercises them (`--keep-task`).
+
 Headless stand-ins on this path, until the graphics track's: the graphics and
 view natives the window code reaches (`compat/framework/attach_standins.cc`),
 the window session, frames timed by messages
-(`debug.choreographer.vsync=false`: no vsync source), and an empty `sans-serif`
-typeface when there is no `/system/etc/fonts.xml` (`handleBindApplication`
-needs a default family). `GESHER_APP_TRACE_LOOPER=1` prints each message the
+(`debug.choreographer.vsync=false`: no vsync source), no hardware renderer
+(the window session gives no surface; `GESHER_APP_HWUI=1` keeps it), and an
+empty `sans-serif` typeface when there is no `/system/etc/fonts.xml`
+(`handleBindApplication` needs a default family; text cannot be measured with
+it, so a test app's theme has no action bar). The app process sets the
+runtime's target SDK from the app's, as the zygote does. `GESHER_APP_TRACE_LOOPER=1` prints each message the
 app's main Looper dispatches.
 
 On Windows, `gesher-app my.apk --system-server` (`tools/package/gesher-app.ps1`)
