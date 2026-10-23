@@ -43,6 +43,12 @@ final class BuildProps {
                 if (key.endsWith("?")) {
                     key = key.substring(0, key.length() - 1).trim();
                 }
+                // dalvikvm loads $ANDROID_ROOT/build.prop before the runtime starts
+                // (compat/art/jni_invocation_static.cc); ro.* cannot be set twice.
+                if (value.equals(SystemProperties.get(key))) {
+                    count++;
+                    continue;
+                }
                 try {
                     SystemProperties.set(key, value);
                     count++;
