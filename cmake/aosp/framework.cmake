@@ -45,11 +45,13 @@ target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparch
 target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
 # libandroidfw_defaults: gnu++2b, -Werror -Wunreachable-code, and on Windows
 # -Wno-missing-field-initializers. Soong's global flags let these pass too: a
-# variable-length array (LocaleData) and a variable unused while the
-# resource_readwrite_flags flag is off (LoadedArsc).
+# variable-length array (LocaleData), a variable unused while the
+# resource_readwrite_flags flag is off (LoadedArsc), and bitwise operations
+# between unnamed enums (ResourceTypes.h, deprecated in C++20).
 set_target_properties(androidfw PROPERTIES CXX_STANDARD 23)
 target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
-  -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable)
+  -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable
+  -Wno-deprecated-anon-enum-enum-conversion)
 
 add_library(framework_runtime OBJECT
   ${_fwjni}/android_content_res_ApkAssets.cpp
@@ -73,7 +75,7 @@ target_link_libraries(framework_runtime PUBLIC androidfw nativehelper utils cuti
   icu_headers icuuc)
 # Android.bp's libandroid_runtime warning set.
 target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
-  -Wno-unused-parameter -Wno-non-virtual-dtor)
+  -Wno-unused-parameter -Wno-non-virtual-dtor -Wno-deprecated-anon-enum-enum-conversion)
 # utils/Trace.h includes cutils/trace.h and so C's <stdatomic.h>; libc++
 # allows it next to <atomic> only from C++23 on (bionic's allows it always).
 set_target_properties(framework_runtime PROPERTIES CXX_STANDARD 23)
