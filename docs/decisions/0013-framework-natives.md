@@ -19,10 +19,12 @@ natives with the System V ABI ([0006](0006-managed-abi.md)).
   `JNI_OnLoad_android_runtime`, registered with gesher-base's `dlopen` as
   `libandroid_runtime.so`, so `System.loadLibrary("android_runtime")` finds it.
   `AndroidRuntime.cpp` is not used (its table names every host source and
-  hwui). Each registration names a class it needs; when that class is not on
-  the class path the registration is skipped with a log line. With
-  framework.jar every class is there; the tests load stand-ins for a few
-  (below).
+  hwui). The registrations run in `AndroidRuntime.cpp`'s order, logging,
+  clock and properties first: others initialize classes (`StrictMode`, from
+  Binder's) whose static initializers call those. Each registration names a
+  class it needs; when that class is not on the class path the registration
+  is skipped with a log line. With framework.jar every class is there; the
+  tests load stand-ins for a few (below).
 - **The sources as Soong lists them**, built in `cmake/aosp/framework.cmake`,
   `system.cmake` and `binder.cmake`: libcutils (the Windows set with the host
   trace and ashmem, and the Unix socket sources, as gesher-base's sockets are
@@ -46,9 +48,21 @@ natives with the System V ABI ([0006](0006-managed-abi.md)).
   `android.os.Process` by the framework's own names (`setThreadPriorityNative`,
   `setArgV0Native`, thread and process groups accepted and ignored, signals
   through gesher-base's `kill`, CPU time). Perfetto is a stub with every tag
-  off (`tracing_perfetto_stub.cc`); the `android.content.res` aconfig flag
-  libandroidfw reads is fixed at its release value
+  off (`tracing_perfetto_stub.cc`, and `android.os.PerfettoTrace`'s natives,
+  whose categories are never enabled); the `android.content.res` aconfig
+  flag libandroidfw reads is fixed at its release value
   (`compat/framework/include/android_content_res.h`).
+- **hwui stands in until views are drawn.** View and Drawable constructors
+  call hwui (`RenderNode`, `Paint`, `Matrix`, `Path`); ColorSpace's named
+  spaces are built by `DisplayManagerGlobal`. ColorSpace keeps its parameters
+  (`android_runtime.cc`); the others' tables are generated from hwui's own JNI
+  sources (`compat/framework/gen_hwui_standins.py`), so names and signatures
+  match framework.jar. Every native answers through one System V function
+  that takes no parameters (System V's caller pops the arguments): zero,
+  false, null or 0.0 by return type; those that create an object return a
+  zeroed block that their finalizer frees, and a few getters return a fresh
+  object's non-zero defaults (scale and alpha 1, identity matrix). A class is
+  added when the lifecycle reaches it.
 - **libbinder without a driver.** Built without `__ANDROID__`, so
   `ProcessState`'s open of `/dev/binder` fails and only logs; local Binder
   objects, Parcel and in-process transactions work. The binder observer is off,
@@ -66,6 +80,13 @@ natives with the System V ABI ([0006](0006-managed-abi.md)).
   path, the same library registers on the framework's classes
   (`FrameworkNativesTest`: MessageQueue, Parcel, Binder), and gesher-app runs
   the lifecycle.
+
+- **gesher-app's own gaps** are its business ([app/README.md](../../app/README.md)):
+  JCA providers that exist on the boot class path, with SHA-1, SHA-256 and
+  MD5 digests until BouncyCastle or Conscrypt are boot jars (the framework
+  digests partition fingerprints with SHA-1 from its first steps); the
+  system features cache; placeholders for classes framework.jar references
+  but lacks (`TelephonyServicesInitializer`).
 
 ## Consequences
 - A registration added to the table needs its sources in `framework.cmake`,

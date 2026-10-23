@@ -20,10 +20,19 @@ Needed, all from `frameworks/base/core/jni`:
 | `android_os_Binder`, `android_os_Parcel` | libbinder |
 | `android_text_AndroidCharacter` | ICU4C |
 | `com_android_internal_util_VirtualRefBasePtr` | libutils |
+| `android_util_jar_StrictJarFile` | libziparchive |
 
 Gesher-owned: an `android.app.Activity` stub (`getDlWarning` returns null)
 and a small `android.os.Process` set (thread priority, argv0, CPU time),
-grown as `UnsatisfiedLinkError`s appear.
+grown as `UnsatisfiedLinkError`s appear. The lifecycle also reached, and
+Gesher stands in for: `android.os.PerfettoTrace` (categories never enabled;
+MessageQueue builds them), `android.graphics.ColorSpace$Rgb`
+(DisplayManagerGlobal creates the named color spaces), and hwui's
+`RenderNode`, `Paint`, `Matrix` and `Path`, which View and Drawable
+constructors call: their tables are generated from hwui's JNI sources
+(`compat/framework/gen_hwui_standins.py`) and answer zero, or a fresh
+object, as nothing is drawn yet. See
+[0013](decisions/0013-framework-natives.md).
 
 Left out until views: hwui and `android.graphics.*`, Surface, input,
 SQLite, CursorWindow, minikin, FileObserver, HwBinder. ART resolves natives
@@ -55,16 +64,24 @@ and hwui). `compat/framework/android_runtime.cc` holds the host
 3. `android_util_AssetManager.cpp`'s `_WIN32` branches read
    `FileDescriptor.handle`, which Android's libcore lacks; they are skipped
    under `GESHER`.
+4. libandroidfw (frameworks/base 0003): two `_WIN32` blocks that redefine
+   `O_CLOEXEC` and the byte-order macros, which gesher-base has.
+5. libbinder (frameworks/native 0001): LLP64 size assertions, libbase's
+   `Pipe`, `uid_t`; libcutils' `sockets.h` takes its Unix branch
+   (system/core 0002), as gesher-base's sockets are descriptors.
 
 ## POSIX
 
-epoll and eventfd are done. Still needed: `pthread_atfork` (a no-op
-returning 0; `ProcessState::init` aborts otherwise), `fcntl(F_DUPFD_CLOEXEC)`,
-and later ashmem over `memfd_create`. `/dev/binder` must fail with ENOENT.
+epoll, eventfd, `pthread_atfork` (a no-op returning 0; `ProcessState::init`
+aborts otherwise), `fcntl(F_DUPFD_CLOEXEC)` and an ENOENT for `/dev/binder`
+are done; gesher-base also gained `<syslog.h>` and the `<linux/*.h>` uapi
+pieces libbinder includes. Later: ashmem over `memfd_create`.
 
 ## Order of work
 
-Each step has a test run in CI on Windows.
+Each step has a test run in CI on Windows (`tests/windows/run-tests.ps1`;
+the tests are in `tests/dex-natives`, see
+[0013](decisions/0013-framework-natives.md)).
 
 1. libcutils, libutils (with Looper), libutils_binder.
 2. The android_runtime skeleton and the patches; SystemProperties,
