@@ -46,7 +46,18 @@ public class GlActivity extends Activity {
             show.invoke(window);
             Surface surface = (Surface) getSurface.invoke(window);
             cpu = cpuDraw(surface);
-            cpuReadBack = checkQuadrants((int[]) capture.invoke(window));
+            // The window repaints on its own thread after the post: retry.
+            for (int attempt = 0; attempt < 20; attempt++) {
+                cpuReadBack = checkQuadrants((int[]) capture.invoke(window));
+                if (cpuReadBack.startsWith("ok")) {
+                    break;
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
             surface.release();
             close.invoke(window);
 
@@ -79,7 +90,8 @@ public class GlActivity extends Activity {
             }
         }
         return (wrong == 0 ? "ok: " : "FAIL: ") + w + "x" + h + ", " + wrong
-                + " pixels not red/green/blue/white by quadrant";
+                + " pixels not red/green/blue/white by quadrant (top left "
+                + Integer.toHexString(capture[2 + (h / 4) * w + w / 4]) + ")";
     }
 
     @Override

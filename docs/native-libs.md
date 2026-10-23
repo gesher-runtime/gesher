@@ -253,6 +253,11 @@ libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
    `*at()` calls, sockets, poll/select, signals, time, `fscanf`, wide stdio,
    the libc++ imports `std::filesystem` needs); the test APK's native code
    uses them through gesher-app. **Done.**
+7. libandroid's graphics half and EGL/GLES: an NDK library draws into a
+   Gesher window with `ANativeWindow_lock` and with GLES 3/2 on an EGL window
+   surface through ANGLE, read back in CI (`tests/apps/glapp`,
+   `tests/native/gl_window_test.cc`). **Done** (`ANativeActivity` is not:
+   see below).
 
 ## Building the test libraries
 
@@ -260,7 +265,8 @@ libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
 Android NDK (r27c, `27.2.12479018`) on the Linux runner, the JNI test's dex
 (javac + d8 9.5.26), and `nativeapp.apk` (`tests/apps/nativeapp/build.sh`:
 the NDK, aapt2/zipalign from build-tools r36.1, the SDK's `android.jar` from
-`platform-36_r02`, d8), and uploads them as the `native-libs` artifact; the
+`platform-36_r02`, d8), `glapp.apk` and `libglapp.so`
+(`tests/apps/glapp/build.sh`, C against libandroid/libEGL/libGLESv3), and uploads them as the `native-libs` artifact; the
 Windows `test` job runs them through `elf_load_test`, dalvikvm and
 gesher-app.
 
@@ -462,25 +468,29 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
   `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
   `android_getaddrinfofornetwork` & co.
-- **The graphics track's half of libandroid.** `ANativeWindow_fromSurface`
-  returns `nullptr` and the other `ANativeWindow_*` calls fail with
-  `-EINVAL` (one message says so); `ANativeActivity_finish`/
+- **ANativeActivity** (`android.app.NativeActivity`): `ANativeActivity_finish`/
   `setWindowFormat`/`setWindowFlags`/`showSoftInput`/`hideSoftInput` are
-  dropped. What they need: an `ANativeWindow` is the
-  `struct ANativeWindow` of `<system/window.h>` behind an
-  `android.view.Surface`'s `mNativeObject`, so `fromSurface` must take the
-  real `JNIEnv` from `RealJniEnv`, read the Surface's native object and
-  `incStrong` it; `lock`/`unlockAndPost` fill and post an
-  `ANativeWindow_Buffer` (`width`, `height`, `stride`, `format`, `bits`); the
-  `.so` calls them all with the System V ABI, so they belong in this same
-  table (`AddBionicSymbol`). `ANativeActivity` needs
-  `android.app.NativeActivity`'s natives (`android_app_NativeActivity.cpp`:
-  `loadNativeCode` dlopens the app's library, which now comes back through
-  the ELF dlopen hook, then calls its `ANativeActivity_onCreate` — a System V
-  function, so through a stub like the JNI bridge's — with an
-  `ANativeActivity` whose `vm`/`env` must be the bridge's proxies and whose
-  `callbacks` the `.so` fills with System V function pointers that the
-  natives must call as such), plus `AInputQueue` and the window callbacks.
+  dropped (one message says so), and nothing calls an app's
+  `ANativeActivity_onCreate`: NativeActivity's natives
+  (`android_app_NativeActivity.cpp`) are not built, and an Activity has no
+  window of its own under gesher-app yet (the graphics track's
+  IWindowSession/ViewRootImpl work). The next step, once Activity windows
+  exist: build those natives; `loadNativeCode` dlopens the app's library
+  (through the ELF dlopen hook) and calls `ANativeActivity_onCreate` through a
+  System V stub like the JNI bridge's, with `vm`/`env` the bridge's proxies;
+  the `callbacks` the `.so` fills are System V and must be called as such,
+  with `SetupThreadTls` on the thread; `onNativeWindowCreated` gets the
+  Activity's Surface as an `ANativeWindow` (a `Win32Surface`, so
+  `ANativeWindow_lock` and `eglCreateWindowSurface` work on it as tested
+  here), plus `AInputQueue` for input.
+- **Graphics limits**: EGL window surfaces need a Gesher window (a
+  `Win32Surface`, found by `gesher_window_hwnd`); other `ANativeWindow`s give
+  `EGL_BAD_NATIVE_WINDOW`; pixmap surfaces are passed through to ANGLE and
+  fail. An ES 2 context is ANGLE's ES 3.0 (backward compatible, as Android
+  drivers may do). GLES 1 (`libGLESv1_CM.so`) resolves but is untested.
+  `AChoreographer`, `ASurfaceControl`, `AHardwareBuffer`, `ASurfaceTexture`
+  are not provided. `eglDestroySurface` of a surface that is still current
+  releases the window at once (Android defers it).
 - **The test APK** is built against the public SDK's `android.jar`
   (platform 36 r2), not Gesher's framework classes; its native code is API 26
   (emulated TLS) and its `libc++_shared.so` is the NDK's.
@@ -506,8 +516,8 @@ _Last updated 2026-10-23 by the native-libraries track; branch
 
 ### After that (not started)
 
-- libandroid's graphics half with the graphics track (interface above), and
-  the remaining shim gaps as real apps need them.
+- `ANativeActivity` once Activities have windows (above), and the remaining
+  shim gaps as real apps need them.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery
   to a running thread (suspend, redirect to a handler trampoline, resume).
