@@ -2519,3 +2519,73 @@ diff --git a/libs/hwui/jni/text/TextShaper.cpp b/libs/hwui/jni/text/TextShaper.c
  };
  
  int register_android_graphics_text_TextShaper(JNIEnv* env) {
+diff --git a/core/jni/android_view_Surface.cpp b/core/jni/android_view_Surface.cpp
+--- a/core/jni/android_view_Surface.cpp
++++ b/core/jni/android_view_Surface.cpp
+@@ -471,38 +471,38 @@
+ static const JNINativeMethod gSurfaceMethods[] = {
+ #ifdef __ANDROID__
+         {"nativeCreateFromSurfaceTexture", "(Landroid/graphics/SurfaceTexture;)J",
+-         (void*)nativeCreateFromSurfaceTexture},
+-#endif
+-        {"nativeRelease", "(J)V", (void*)nativeRelease},
+-        {"nativeIsValid", "(J)Z", (void*)nativeIsValid},
+-        {"nativeIsConsumerRunningBehind", "(J)Z", (void*)nativeIsConsumerRunningBehind},
++         GESHER_JNI(nativeCreateFromSurfaceTexture)},
++#endif
++        {"nativeRelease", "(J)V", GESHER_JNI(nativeRelease)},
++        {"nativeIsValid", "(J)Z", GESHER_JNI(nativeIsValid)},
++        {"nativeIsConsumerRunningBehind", "(J)Z", GESHER_JNI(nativeIsConsumerRunningBehind)},
+         {"nativeLockCanvas", "(JLandroid/graphics/Canvas;Landroid/graphics/Rect;)J",
+-         (void*)nativeLockCanvas},
++         GESHER_JNI(nativeLockCanvas)},
+         {"nativeUnlockCanvasAndPost", "(JLandroid/graphics/Canvas;)V",
+-         (void*)nativeUnlockCanvasAndPost},
+-        {"nativeAllocateBuffers", "(J)V", (void*)nativeAllocateBuffers},
+-#ifdef __ANDROID__
+-        {"nativeCreateFromSurfaceControl", "(J)J", (void*)nativeCreateFromSurfaceControl},
+-        {"nativeGetFromSurfaceControl", "(JJ)J", (void*)nativeGetFromSurfaceControl},
+-        {"nativeReadFromParcel", "(JLandroid/os/Parcel;)J", (void*)nativeReadFromParcel},
+-        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", (void*)nativeWriteToParcel},
+-#endif
+-        {"nativeGetWidth", "(J)I", (void*)nativeGetWidth},
+-        {"nativeGetHeight", "(J)I", (void*)nativeGetHeight},
+-        {"nativeGetNextFrameNumber", "(J)J", (void*)nativeGetNextFrameNumber},
+-        {"nativeSetScalingMode", "(JI)I", (void*)nativeSetScalingMode},
+-        {"nativeForceScopedDisconnect", "(J)I", (void*)nativeForceScopedDisconnect},
++         GESHER_JNI(nativeUnlockCanvasAndPost)},
++        {"nativeAllocateBuffers", "(J)V", GESHER_JNI(nativeAllocateBuffers)},
++#ifdef __ANDROID__
++        {"nativeCreateFromSurfaceControl", "(J)J", GESHER_JNI(nativeCreateFromSurfaceControl)},
++        {"nativeGetFromSurfaceControl", "(JJ)J", GESHER_JNI(nativeGetFromSurfaceControl)},
++        {"nativeReadFromParcel", "(JLandroid/os/Parcel;)J", GESHER_JNI(nativeReadFromParcel)},
++        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", GESHER_JNI(nativeWriteToParcel)},
++#endif
++        {"nativeGetWidth", "(J)I", GESHER_JNI(nativeGetWidth)},
++        {"nativeGetHeight", "(J)I", GESHER_JNI(nativeGetHeight)},
++        {"nativeGetNextFrameNumber", "(J)J", GESHER_JNI(nativeGetNextFrameNumber)},
++        {"nativeSetScalingMode", "(JI)I", GESHER_JNI(nativeSetScalingMode)},
++        {"nativeForceScopedDisconnect", "(J)I", GESHER_JNI(nativeForceScopedDisconnect)},
+ #ifdef __ANDROID__
+         {"nativeAttachAndQueueBufferWithColorSpace", "(JLandroid/hardware/HardwareBuffer;I)I",
+-         (void*)nativeAttachAndQueueBufferWithColorSpace},
+-#endif
+-        {"nativeSetSharedBufferModeEnabled", "(JZ)I", (void*)nativeSetSharedBufferModeEnabled},
+-        {"nativeSetAutoRefreshEnabled", "(JZ)I", (void*)nativeSetAutoRefreshEnabled},
+-        {"nativeSetFrameRate", "(JFII)I", (void*)nativeSetFrameRate},
+-#ifdef __ANDROID__
+-        {"nativeGetFromBlastBufferQueue", "(JJ)J", (void*)nativeGetFromBlastBufferQueue},
+-#endif
+-        {"nativeDestroy", "(J)V", (void*)nativeDestroy},
++         GESHER_JNI(nativeAttachAndQueueBufferWithColorSpace)},
++#endif
++        {"nativeSetSharedBufferModeEnabled", "(JZ)I", GESHER_JNI(nativeSetSharedBufferModeEnabled)},
++        {"nativeSetAutoRefreshEnabled", "(JZ)I", GESHER_JNI(nativeSetAutoRefreshEnabled)},
++        {"nativeSetFrameRate", "(JFII)I", GESHER_JNI(nativeSetFrameRate)},
++#ifdef __ANDROID__
++        {"nativeGetFromBlastBufferQueue", "(JJ)J", GESHER_JNI(nativeGetFromBlastBufferQueue)},
++#endif
++        {"nativeDestroy", "(J)V", GESHER_JNI(nativeDestroy)},
+ };
+ 
+ int register_android_view_Surface(JNIEnv* env)

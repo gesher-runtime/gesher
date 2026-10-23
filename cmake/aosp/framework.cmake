@@ -59,30 +59,30 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
   -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable
   -Wno-deprecated-anon-enum-enum-conversion -Wno-unused-label)
 
-# Stand-ins for hwui's natives (compat/framework/hwui_standins.cc), their
-# tables generated from hwui's JNI sources.
-set(_hwui_standin_sources
-  android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp
-  android/graphics/Paint=${_fw}/libs/hwui/jni/Paint.cpp:methods
-  android/graphics/Matrix=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:methods
-  android/graphics/Matrix.ExtraNatives=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:extra_methods
-  android/graphics/Path=${_fw}/libs/hwui/jni/Path.cpp:methods)
-set(_hwui_standin_inputs)
-foreach(_s ${_hwui_standin_sources})
+# Stand-ins for device-only natives (compat/framework/device_standins.cc:
+# SurfaceControl, SurfaceSession, BLASTBufferQueue), their tables generated
+# from the framework's JNI sources. hwui's natives are real
+# (cmake/aosp/hwui.cmake, docs/graphics.md).
+set(_device_standin_sources
+  android/view/SurfaceControl=${_fwjni}/android_view_SurfaceControl.cpp:sSurfaceControlMethods
+  android/view/SurfaceSession=${_fwjni}/android_view_SurfaceSession.cpp
+  android/graphics/BLASTBufferQueue=${_fwjni}/android_graphics_BLASTBufferQueue.cpp)
+set(_device_standin_inputs)
+foreach(_s ${_device_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")
   string(REGEX REPLACE ":[A-Za-z_]+$" "" _f "${_f}")
-  list(APPEND _hwui_standin_inputs "${_f}")
+  list(APPEND _device_standin_inputs "${_f}")
 endforeach()
 add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py
-          ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc ${_hwui_standin_sources}
-  DEPENDS ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py ${_hwui_standin_inputs}
-  COMMENT "hwui stand-in tables")
+  OUTPUT ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/framework/gen_device_standins.py
+          ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc ${_device_standin_sources}
+  DEPENDS ${CMAKE_SOURCE_DIR}/compat/framework/gen_device_standins.py ${_device_standin_inputs}
+  COMMENT "device-only stand-in tables")
 
 add_library(framework_runtime OBJECT
-  ${CMAKE_SOURCE_DIR}/compat/framework/hwui_standins.cc
-  ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/device_standins.cc
+  ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc
   ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_Parcel.cpp
