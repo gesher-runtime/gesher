@@ -152,6 +152,13 @@ needs: [framework-build.md](framework-build.md).
       back its pixels (WARP)
 - [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
       and `KeyEvent`; a click reaches `onClick`, tested in CI
+  - [x] libinput's transport and the framework's input natives (InputChannel,
+        InputEventReceiver/Sender, KeyEvent, MotionEvent, KeyCharacterMap with
+        Generic.kcm, VelocityTracker); a Gesher window's mouse, wheel and key
+        messages (and touch, injected) to a Java InputEventReceiver, finished
+        (ci run 40038368343, both runners; docs/input.md)
+  - [ ] A click in an app's window reaches `onClick` (the window session
+        attaches its InputChannel: `WindowInput.attach`)
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
   - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
         Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map

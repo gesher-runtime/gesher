@@ -1,0 +1,6 @@
+# Values for libinput's aconfig flags (frameworks/native/libs/input/input_flags.aconfig)
+# in Gesher builds: what release config bp4a (build/release/aconfig/bp4a) enables
+# among the flags the sources Gesher builds read. Unlisted flags are false;
+# enable_outbound_event_verification stays off (its verifier is Rust, not built).
+# Format: <flag name>=true|false.
+clear_relative_axes_in_resampled_coords=true

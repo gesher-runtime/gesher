@@ -143,6 +143,10 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   its RenderThread with the SkiaCpu pipeline into the Win32Surface, then
   `NativeWindow.present()`; PrintWindow reads magenta, white and the cyan
   child back.
+- **Window input additions** (input track, docs/input.md): the window also
+  queues WM_MOUSEHWHEEL (`delta_x`), WM_MOUSELEAVE (`kMouseLeave`, with
+  TrackMouseEvent) and WM_POINTER* for touch and pen (`kTouch*`, `pointer`,
+  `tool`).
 
 ### Stand-ins and gaps (what is not real yet)
 
@@ -240,12 +244,20 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    `getFontsXmlDir`/`getSystemFontDir` the same way), or install there; ship
    Roboto + NotoSansHebrew + data/fonts/fonts.xml. Then `Typeface.DEFAULT`
    initializes and TextView draws.
-4. **Input**: MotionEvent natives need libinput's Input.cpp (+
-   InputEventLabels, aidl IInputConstants headers via GESHER_AIDL,
-   HmacKeyManager from libs/attestation). `gesher::Window`'s event queue
-   (`WindowEvent`, an eventfd a Looper can watch) is ready to feed
-   `ViewRootImpl.dispatchInputEvent`; CI posts WM_LBUTTONDOWN/UP and checks
-   onClick and changed pixels.
+4. **Input** (input track, docs/input.md, ADR 0027): done up to the window
+   session. libinput and the framework's input natives are real; a Gesher
+   window's messages become MotionEvents/KeyEvents on an InputChannel. In
+   `addToDisplay`: `InputChannel.openInputChannelPair(name)`, the client end
+   `copyTo(outInputChannel)`, the server end
+   `com.gesher.app.input.WindowInput.attach(nativeWindow.getHwnd(), server,
+   options)` (C: `gesher_input_attach` in compat/input/include/gesher_input.h);
+   `close()` it in `remove()` before the window goes. Do not set
+   `INPUT_FEATURE_NO_INPUT_CHANNEL`. The connection becomes the window
+   queue's only reader: resize/close/focus/characters come to
+   `WindowInput.Options.listener`. Register
+   `VirtualKeyboard.InputManager` as the "input" service (VelocityTracker,
+   KeyCharacterMap.load). Then CI posts WM_LBUTTONDOWN/UP and checks onClick
+   and changed pixels.
 5. **ANGLE**: a separate agent works on branch wip/angle.
 
 ### Open problems and dead ends

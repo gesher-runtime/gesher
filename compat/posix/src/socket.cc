@@ -92,11 +92,16 @@ int socket(int domain, int type, int protocol) {
 // Windows has no socketpair: this connects two loopback TCP (or UDP)
 // sockets, as other ports do. The peer must be the socket just connected,
 // so another local process cannot slip in between listen and accept.
+// SOCK_SEQPACKET (Android's InputChannel, docs/input.md) is a connected UDP
+// pair: messages keep their boundaries and order on loopback, but a full
+// receive buffer drops a message instead of blocking the sender, and a
+// closed peer is not reported as a hangup.
 int socketpair(int domain, int type, int protocol, int fds[2]) {
   if (!ws::Startup()) return -1;
   if (domain != AF_UNIX && domain != AF_INET) return errno = EAFNOSUPPORT, -1;
   if (protocol != 0) return errno = EPROTONOSUPPORT, -1;
   ws::Type ws_type = ToType(type & ~kTypeFlags);
+  if (ws_type == ws::Type::kSeqpacket && domain == AF_UNIX) ws_type = ws::Type::kDgram;
   if (ws_type != ws::Type::kStream && ws_type != ws::Type::kDgram) return errno = EOPNOTSUPP, -1;
 
   sockaddr_in loopback = {};
