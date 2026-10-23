@@ -140,7 +140,10 @@ needs: [framework-build.md](framework-build.md).
       skia_probe on windows-2022 and windows-2025)
 - [ ] hwui's natives on Skia (Canvas, Paint, Path, Matrix, RenderNode,
       Bitmap) in place of the Phase 2 stand-ins
-- [ ] ANGLE: EGL and GLES over Direct3D 11, built in CI
+- [x] ANGLE: EGL and GLES over Direct3D 11, built in CI (ci run
+      39990699626: angle_probe on windows-2022 and windows-2025, D3D11 and
+      WARP; docs/angle.md). hwui does not draw through it yet (its GL
+      pipeline, an EGL window surface on the Win32 window)
 - [ ] A Win32 window as the Activity's surface (`ANativeWindow`), opened
       through a window manager stand-in
 - [ ] A simple Activity drawn in a Win32 window, tested in CI by reading

@@ -68,7 +68,25 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
 
 ### Done and CI-verified
 
-(filled in from CI below)
+- **ANGLE builds from source in CI**: angle run 39987335568 (first build,
+  cache miss): `gclient sync` about 2 minutes, `ninja libEGL libGLESv2` 565
+  edges in 7 minutes on windows-2022, the whole job 10 minutes;
+  `libGLESv2.dll` 5.3 MB, `libEGL.dll` 0.5 MB. angle run 39988938192 rebuilt
+  it after a `build-angle.ps1` change (NOTICES.txt filter).
+- **The probe passes on windows-2022 and windows-2025**, on both devices
+  (angle runs 39987335568 and 39988938192, job `probe`): `GL_RENDERER` is
+  `ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11
+  vs_5_0 ps_5_0, D3D11-10.0.20348.5756)` (26100 on windows-2025),
+  `GL_VERSION` `OpenGL ES 3.0.0 (ANGLE 2.1.1 git hash: ab6a82e0ed14)`, EGL
+  1.5; "2048 yellow, 2048 textured, 0 other pixels", "all passed (D3D11
+  hardware)" and "all passed (D3D11 WARP)". The runners have no GPU: their
+  "hardware" adapter is the Microsoft Basic Render Driver, itself WARP.
+- **In ci.yml** (ci run 39990699626 on wip/angle, all green; job `angle` hit
+  the cache, 19 s): `PASS  angle: EGL on D3D11, GLES 3 shaders, draw,
+  glReadPixels` and `PASS  angle: the same on WARP` on windows-2022 and
+  windows-2025, every earlier check still passing; the package job installed
+  `libEGL.dll`, `libGLESv2.dll` and `licenses\ANGLE-NOTICES.txt` (`PASS
+  installer: installs, runs Hello and gesher-app, uninstalls`).
 
 ### Not done (next steps)
 
@@ -79,5 +97,8 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
   entry points that apps' NDK code and `android.opengl.*` reach. None of that
   is done here; the graphics track draws with Skia's CPU raster for now.
 - Skia's GL backend is not built (graphics' Skia is CPU raster only).
-- ES 3.1 depends on the D3D11 feature level (WARP reports 11_1 and gets 3.1;
-  not checked by the probe).
+- The runners report OpenGL ES 3.0 on both devices; ES 3.1 on a real GPU
+  through this build is unverified.
+- Only pbuffers are tested; window surfaces (an HWND) are not.
+- `gclient sync` still fetches `buildtools/reclient` (~470 MB, a CIPD
+  package that `custom_deps` does not drop); harmless, only on a cache miss.
