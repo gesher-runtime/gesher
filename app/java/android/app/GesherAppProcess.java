@@ -66,6 +66,8 @@ public final class GesherAppProcess {
         // here two Java threads join it, before the server can call in.
         com.gesher.server.SystemServer.startBinderThreads("app", 2);
 
+        withoutSystemFonts();
+
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
         ActivityThread thread = new ActivityThread();
@@ -136,6 +138,33 @@ public final class GesherAppProcess {
         log("removing task " + taskId + " (" + tasks.get(0).baseActivity.flattenToShortString()
                 + ")");
         atm.removeTask(taskId);
+    }
+
+    /**
+     * WORKAROUND until system fonts are installed (graphics track): with no fonts.xml,
+     * handleBindApplication's {@code Typeface.setSystemFontMap} gets an empty font map and
+     * no default typeface, and fails. Here, as when a font map is loaded, the default
+     * family ({@code sans-serif}) gets a typeface first: one made of no font family (by
+     * the Typeface natives, stand-ins until hwui's are linked). Nothing is drawn with it.
+     */
+    private static void withoutSystemFonts() throws ReflectiveOperationException {
+        if (new java.io.File(android.graphics.fonts.SystemFonts.LEGACY_FONTS_XML).exists()) {
+            return;
+        }
+        java.lang.reflect.Method create = android.graphics.Typeface.class.getDeclaredMethod(
+                "nativeCreateFromArray", long[].class, long.class, int.class, int.class);
+        create.setAccessible(true);
+        long ni = (long) create.invoke(null, new long[0], 0L,
+                android.graphics.Typeface.RESOLVE_BY_FONT_TABLE,
+                android.graphics.Typeface.RESOLVE_BY_FONT_TABLE);
+        java.lang.reflect.Constructor<android.graphics.Typeface> c =
+                android.graphics.Typeface.class.getDeclaredConstructor(long.class,
+                        String.class);
+        c.setAccessible(true);
+        android.graphics.Typeface.setSystemFontMap(
+                java.util.Map.of("sans-serif", c.newInstance(ni, "sans-serif")));
+        log("no system fonts (" + android.graphics.fonts.SystemFonts.LEGACY_FONTS_XML
+                + "): an empty sans-serif typeface stands in");
     }
 
     /** Notes EXIT_APPLICATION on its way to ActivityThread's H. */
