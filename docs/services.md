@@ -46,7 +46,7 @@ every transaction on stderr.
   - `PASS  services: the launcher removes the task: onPause, onStop, onDestroy, then the server ends the process`
   - `PASS  services: system_server attaches the app process and drives it with client transactions`
   - `PASS  services: LifecycleActivity finish(): the system server pauses, stops and destroys it`
-  - `PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user, input_method`
+  - `PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user, input_method, uimode`
 
   and the package job still has
   `PASS  installer: gesher-app --system-server runs the app with the services in a system server process`
