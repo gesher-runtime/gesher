@@ -38,6 +38,10 @@ int register_android_os_Binder(JNIEnv* env);
 // Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
 int register_gesher_graphics(JNIEnv* env);
 int register_gesher_attach_standins(JNIEnv* env);
+// libandroid_runtime's input natives (InputChannel, InputEventReceiver/Sender,
+// KeyEvent, MotionEvent, KeyCharacterMap, VelocityTracker) and gesher-app's
+// input classes: compat/input/input_jni.cc, docs/input.md.
+int register_gesher_input(JNIEnv* env);
 // android.os.SharedMemory over memfds: compat/framework/shared_memory.cc.
 int register_gesher_shared_memory(JNIEnv* env);
 
@@ -369,6 +373,8 @@ static const struct {
     // hwui (AndroidRuntime.cpp registers it through libhwui's
     // register_android_graphics_classes), then the device-only stand-ins.
     {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
+    // The input natives, after the stand-ins they replace (each class is checked).
+    {"gesher_input", "android/view/KeyEvent", ::register_gesher_input},
     {"gesher_device_standins", "android/view/SurfaceControl", ::register_gesher_device_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
     {"gesher_ApplicationSharedMemory", "com/android/internal/os/ApplicationSharedMemory",
