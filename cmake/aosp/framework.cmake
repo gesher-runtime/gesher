@@ -100,6 +100,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/android_util_jar_StrictJarFile.cpp
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/shared_memory.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
