@@ -128,8 +128,11 @@ target_include_directories(input_jni PRIVATE
 target_link_libraries(input_jni PUBLIC gesher_input android_input hwui nativehelper androidfw
   binder utils cutils log base)
 gesher_graphics_cxx(input_jni)
+# Like libinput's, these sources lean on what Android's headers bring in:
+# chrono literals, and utils/Trace.h's ATRACE_* (InputEventReceiver).
 target_compile_options(input_jni PRIVATE -Wall -Wno-unused-parameter -Wno-error
-  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${_cin}/libinput/chrono_literals.h>")
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${_cin}/libinput/chrono_literals.h>"
+  "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include utils/Trace.h>")
 
 target_link_libraries(dalvikvm PRIVATE input_jni)
 
