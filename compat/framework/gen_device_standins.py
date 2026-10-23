@@ -7,10 +7,13 @@
 (android/graphics/Foo.Bar); <table> defaults to gMethods.
 
 Some of the framework's natives talk to what only a device has:
-SurfaceFlinger (SurfaceControl and its Transactions, SurfaceSession) and
-BufferQueue's BLAST adapter (BLASTBufferQueue). Gesher has no compositor; the
-framework still calls them when a window is laid out (ViewRootImpl), so each
-native of the listed tables is registered with an answer that holds no state:
+SurfaceFlinger (SurfaceControl and its Transactions, SurfaceSession),
+BufferQueue's BLAST adapter (BLASTBufferQueue), InputDispatcher's channels
+(InputChannel, InputEventReceiver), the display's overlays
+(OverlayProperties) and Perfetto's producer (android.tracing.perfetto).
+Gesher has no compositor; the framework still calls them when a window is
+laid out (ViewRootImpl), so each native of the listed tables is registered
+with an answer that holds no state:
 zero, false, null or 0.0 (by its JNI return type). The few that must create
 something or return a function are hand-written in device_standins.cc and
 named in SPECIALS; the table, with each native's name and signature, is read
@@ -55,6 +58,26 @@ SPECIALS = {
     # The window's Surface (docs/graphics.md): a provider the window code
     # installs, else null.
     ('android/graphics/BLASTBufferQueue', 'nativeGetSurface'): 'Blast_getSurface',
+    # Handles carry a tag (the Gesher window a SurfaceControl stands for,
+    # gesher_device_standins.h) from the SurfaceControl the window session
+    # made to its copies and to the BLAST adapter that draws into it.
+    ('android/view/SurfaceControl', 'nativeCopyFromSurfaceControl'): 'SurfaceControl_copy',
+    ('android/view/SurfaceControl', 'nativeGetHandle'): 'Standin_tag',
+    ('android/graphics/BLASTBufferQueue', 'nativeUpdate'): 'Blast_update',
+    ('android/graphics/BLASTBufferQueue', 'nativeIsSameSurfaceControl'):
+        'Blast_isSameSurfaceControl',
+    # Input channels (InputDispatcher's sockets) and receivers: none yet; a
+    # window added with one gets a channel that never delivers.
+    ('android/view/InputChannel', 'nativeGetFinalizer'): 'Standin_getFreeFunction',
+    # The display's overlay support (libgui): a default that supports nothing.
+    ('android/hardware/OverlayProperties', 'nCreateDefault'): 'Standin_create',
+    ('android/hardware/OverlayProperties', 'nGetDestructor'): 'Standin_getFreeFunction',
+    ('android/hardware/OverlayProperties', 'nReadOverlayPropertiesFromParcel'):
+        'Standin_create',
+    # Perfetto's producer and data sources (ViewRootImpl starts ProtoLog): none;
+    # nothing is traced.
+    ('android/tracing/perfetto/DataSource', 'nativeCreate'): 'Standin_create',
+    ('android/tracing/perfetto/DataSource', 'nativeGetFinalizer'): 'Standin_getFreeFunction',
 }
 
 
@@ -63,7 +86,8 @@ def entries(path, table):
     m = re.search(TABLE.format(table), text)
     if not m:
         sys.exit(f'{path}: no table {table}')
-    end = text.index('\n};', m.end())
+    # The table ends at a '};' on its own line, or right after the last entry.
+    end = re.compile(r'\n\s*\};|(?<=\})\};').search(text, m.end()).start()
     out = []
     for e in ENTRY.finditer(text, m.end(), end):
         out.append((e.group(1), ''.join(re.findall(r'"([^"]*)"', e.group(2)))))
