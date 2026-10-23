@@ -17,7 +17,7 @@ From AOSP android-16.0.0_r4, the versions the BP4A release selects:
 | `DroidSansMono.ttf` (108 KB) | `monospace` | frameworks/base `data/fonts` (`RELEASE_USE_ROBOTO_MONO_FONT` is false) | Apache 2.0 |
 | `NotoSansHebrew-{Regular,Bold}.ttf` (35 KB) | fallback `und-Hebr` | external/noto-fonts `notosanshebrew/font/1.040` (`RELEASE_PACKAGE_HEBREW_FONT_VERSION`'s default) | OFL 1.1 |
 
-About 3.6 MB in all. `config/fonts/fonts.xml` is AOSP's `fonts.xml`
+About 3.4 MB in all (8 files). `config/fonts/fonts.xml` is AOSP's `fonts.xml`
 (Apache 2.0) cut down to these families, unchanged otherwise: sans-serif
 with its 18 variable instances and aliases (`sans-serif-thin`, `-light`,
 `-medium`, `-black`, `arial`, `helvetica`, `tahoma`, `verdana`),
@@ -79,7 +79,51 @@ through SharedMemory, … bytes)`, or `none (no …/fonts.xml)`.
 
 ## Status
 
-(see below; updated with CI results)
+### Done and CI-verified
+
+`tests/dex-graphics/gesher/FontsTest.java`, run by
+`tests/windows/tracks/32-fonts.ps1` on windows-2022 and windows-2025
+(`PASS  dalvikvm: system fonts: Typeface.DEFAULT, fonts.xml families, Hebrew
+through the fallback chain, bold/italic`, ci run 40011630189):
+
+- the font map from `$ANDROID_ROOT/etc/fonts.xml`: 25 typefaces (4 named
+  families, 2 fallback families), serialized into a SharedMemory (about
+  26 KB) and installed from it by `Typeface.setSystemFontMap`;
+- the named families and aliases (`sans-serif`, `sans-serif-medium`,
+  `sans-serif-condensed`, `serif`, `monospace`, `arial`, `times`);
+- `Typeface.DEFAULT`, `DEFAULT_BOLD`, `SANS_SERIF`, `SERIF`, `MONOSPACE`
+  initialized; `Typeface.create` with styles, weights and family names;
+- `SystemFonts.getAvailableFonts()`: 61 fonts (font + axes instances), all
+  in `$ANDROID_ROOT/fonts`;
+- Latin text with the default typeface (a Paint with no typeface) measures
+  and draws exactly as Roboto-Regular.ttf alone;
+- Hebrew from a Latin default comes from the fallback chain: `hasGlyph`,
+  widths and pixels identical to Noto Sans Hebrew alone (Roboto alone gives
+  other widths); drawn right to left; a Hebrew `StaticLayout` paragraph is
+  right to left and aligned right; mixed Latin and Hebrew measured;
+- bold differs from regular (640 vs 629 px wide at 200 px, 962 vs 648 dark pixels at 32 px), `create(DEFAULT,
+  BOLD)` is `DEFAULT_BOLD`'s face, bold Hebrew is Noto Sans Hebrew Bold;
+  italic differs from upright; monospace is monospaced; serif is Noto Serif.
+
+The installer (package job, same run): `{app}\fonts\fonts.xml`, every font
+it names and `{app}\licenses\FONTS-NOTICES.txt` are installed, and the
+installed gesher-app loads them (`PASS  installer: gesher-app loads the
+installed system fonts`; its log: `gesher-app: system fonts: 25 typefaces
+from …/Gesher/system/etc/fonts.xml (4 named families, 2 fallback families;
+font map through SharedMemory, 26717 bytes)`).
+
+### CI runs
+
+- ci 40002967687: build failed (`jniCreateFileDescriptor` is in
+  JNIPlatformHelp.h).
+- ci 40006279655: fonts installed and loaded everywhere (package job
+  green), but SharedMemory's `mapReadWrite` failed with ENOMEM (gesher-base
+  refused a writable view ending inside the file's last page; fixed in
+  `compat/posix/src/mman.cc`), and bold/regular widths compared at 32 px
+  were both 102 (whole-pixel advances).
+- ci 40010423197: SharedMemory font map works; only the 32 px width
+  comparison failed.
+- ci 40011630189: green.
 
 ## Known gaps
 
