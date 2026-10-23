@@ -135,10 +135,19 @@ _Last updated 2026-10-23 by the native-libraries track; branch
 
 ### Open problems and decisions
 
-- **%fs for bionic TLS** — decided in
-  [0014](decisions/0014-native-libs-fs-base.md): use `WRFSBASE`, proven per-run
-  by the `fsbase` probe. Fallback (patching `%fs` accesses) is specified but not
-  implemented; only needed if a runner reports `FSGSBASE` off.
+- **%fs for bionic TLS — the track's main open problem.**
+  [0014](decisions/0014-native-libs-fs-base.md) chose `WRFSBASE`, but the first
+  CI run (`39942420552`) showed it **does not hold on windows-2022/2025**:
+  `WRFSBASE` executes (FSGSBASE is on) but Windows does not preserve the user
+  `%fs` base across a kernel transition, so a later `%fs` load faulted. The
+  probe is now crash-safe and the track check is informational, so step 1 is
+  not blocked, but **a `%fs`-using `.so` (libc++_shared, any stack-protected or
+  `thread_local` code) will not work until this is solved**. Options, in the
+  ADR's Finding: re-arm `WRFSBASE` at each `.so` entry (fragile), patch the
+  `.so`'s `%fs` accesses at load time (the real fallback, like ART's `%gs`), or
+  another mechanism. Resolve this before step 4; the trivial step-1/step-2
+  (libc, pthread) `.so`s can avoid `%fs` by building with
+  `-fno-stack-protector` and no `thread_local`.
 - **Variadic System V entry points** (`printf` family, `__android_log_print`):
   cannot be forwarded to the MS-ABI CRT, because `va_start` is not allowed in a
   `sysv_abi` function on Windows ([0011](decisions/0011-libcore-natives.md)).
