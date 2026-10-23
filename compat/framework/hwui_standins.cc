@@ -63,6 +63,11 @@ __attribute__((sysv_abi)) jlong RenderNode_create() {
   return reinterpret_cast<jlong>(calloc(1, 64));
 }
 
+// Paint.nInit(), Paint.nInitWithPaint(long): a paint, its state kept in Java.
+__attribute__((sysv_abi)) jlong Standin_create() {
+  return reinterpret_cast<jlong>(calloc(1, 64));
+}
+
 }  // namespace gesher_hwui
 
 int register_gesher_hwui_standins(JNIEnv* env) {
