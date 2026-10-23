@@ -1,6 +1,6 @@
 // gesher-base: Linux interfaces with little or no Windows equivalent —
 // termios on the console, prctl, capabilities, extended attributes, the
-// mount table and sendfile.
+// mount table, sendfile and syslog.
 #include <errno.h>
 #include <mntent.h>
 #include <pthread.h>
@@ -12,6 +12,7 @@
 #include <sys/prctl.h>
 #include <sys/sendfile.h>
 #include <sys/xattr.h>
+#include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -294,6 +295,27 @@ ssize_t sendfile(int out_fd, int in_fd, off_t* offset, size_t count) {
     if (static_cast<size_t>(n) < chunk) break;
   }
   return static_cast<ssize_t>(total);
+}
+
+// syslog: there is no system log; messages go to stderr, prefixed with the
+// openlog identity.
+static const char* g_syslog_ident = nullptr;
+
+void openlog(const char* ident, int, int) {
+  g_syslog_ident = ident;
+}
+
+void syslog(int, const char* format, ...) {
+  va_list ap;
+  va_start(ap, format);
+  if (g_syslog_ident != nullptr) fprintf(stderr, "%s: ", g_syslog_ident);
+  vfprintf(stderr, format, ap);
+  fputc('\n', stderr);
+  va_end(ap);
+}
+
+void closelog(void) {
+  g_syslog_ident = nullptr;
 }
 
 }  // extern "C"

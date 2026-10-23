@@ -1,0 +1,17 @@
+package android.content.res;
+
+/** Stand-in for the framework class; the natives come from its JNI table (tests/gen_jni_standins.py). */
+public final class XmlBlock {
+  /** What nativeGetFlagInfo returns. */
+  public static final class FlagInfo {
+    public final int nameIndex;
+    public final boolean negated;
+
+    FlagInfo(int nameIndex, boolean negated) {
+      this.nameIndex = nameIndex;
+      this.negated = negated;
+    }
+  }
+
+  // @natives core/jni/android_util_XmlBlock.cpp gXmlBlockMethods
+}

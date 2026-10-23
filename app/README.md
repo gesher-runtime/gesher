@@ -37,6 +37,10 @@ framework.jar lacks (below), which must never shadow real ones.
 
 `com.gesher.app.Main`, on the main thread:
 
+0. `Digests.install()`: the JCA providers that exist on Gesher's boot class
+   path (libcore's list names Conscrypt and BouncyCastle, which are not
+   there yet), and SHA-1, SHA-256 and MD5 digests, which the framework needs
+   from its first steps.
 1. `System.loadLibrary("android_runtime")`: the framework's natives, a builtin
    library on Windows.
 2. Loads the build.prop (`app/build.prop`, android-16.0.0_r4's
@@ -58,10 +62,11 @@ framework.jar lacks (below), which must never shadow real ones.
    read; `ParsingPackageUtils` can replace it later.)
 6. Installs the stand-in services (below) through
    `ServiceManager.initServiceCache`.
-7. Posts the launch to the main Looper and runs `Looper.loop()`; the launch
-   ends with `quitSafely()`, so the process exits once the messages it left
-   behind have run. Any exception, in the launch or in those messages, exits
-   with code 1.
+7. Posts the launch to the main Looper and runs `Looper.loop()`. The main
+   Looper may not quit, so the launch ends by posting a message that throws
+   out of `Looper.loop()`: the process exits once the messages it left behind
+   have run, as with `quitSafely()`. Any exception, in the launch or in those
+   messages, exits with code 1.
 
 `android.app.GesherAppDriver.launch` is a scaled-down
 `ActivityThread.handleBindApplication` and `performLaunchActivity`, as
@@ -142,10 +147,16 @@ framework.jar (Connectivity, Wi-Fi, Bluetooth, NFC, AppSearch, Health,
 Stats, Media, Role, Scheduling, SDK sandbox, AdServices, UWB, Safety Center,
 Nearby, OnDevicePersonalization, OnDeviceIntelligence, DeviceLock,
 Virtualization, ConfigInfrastructure, EnhancedConfirmation, Profiling,
-Ranging) and empty placeholders for `LocationManager`, `CountryDetector` and
+Ranging, and the telephony module's `TelephonyServicesInitializer`) and
+empty placeholders for `LocationManager`, `CountryDetector` and
 `TetheringManager`. Those services are simply not registered. When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
+
+One placeholder has behaviour: `android.provider.DeviceConfig`, through which
+framework.jar reads its server-side flags (autofill reads them on resume). It
+keeps flags in the process: nothing sets one, so each read answers the
+caller's default; `setProperty` sets one and tells the namespace's listeners.
 
 ## Building
 

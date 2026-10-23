@@ -1,0 +1,15 @@
+diff --git a/libcutils/include/cutils/sockets.h b/libcutils/include/cutils/sockets.h
+index be21a8f..aa7aa72 100644
+--- a/libcutils/include/cutils/sockets.h
++++ b/libcutils/include/cutils/sockets.h
+@@ -23,7 +23,9 @@
+ #include <string.h>
+ #include <stdbool.h>
+ 
+-#if defined(_WIN32)
++// Gesher: gesher-base's sockets are file descriptors with Linux's ABI
++// (docs/decisions/0009-socket-fds.md), so the Unix branch applies.
++#if defined(_WIN32) && !defined(GESHER)
+ 
+ #include <winsock2.h>
+ #include <ws2tcpip.h>

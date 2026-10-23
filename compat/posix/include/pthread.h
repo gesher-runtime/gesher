@@ -8,10 +8,12 @@
 #include <sched.h>
 #include <errno.h>
 
-// winpthreads defines these as macros that expand to ENOTSUP.
+// winpthreads defines these as macros that expand to ENOTSUP (or, for
+// pthread_atfork, to 0, which hides the call).
 #undef pthread_getcpuclockid
 #undef pthread_attr_getguardsize
 #undef pthread_attr_setguardsize
+#undef pthread_atfork
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +30,10 @@ int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id);
 // accepted and ignored.
 int pthread_attr_getguardsize(const pthread_attr_t* attr, size_t* guardsize);
 int pthread_attr_setguardsize(pthread_attr_t* attr, size_t guardsize);
+
+// There is no fork (it fails with ENOSYS), so fork handlers never run;
+// registering them succeeds, as libbinder's ProcessState requires.
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
 
 // winpthreads runs a key's destructor at thread exit whenever the key was
 // set, even back to NULL; POSIX runs it only for non-NULL values (ART's
