@@ -137,9 +137,61 @@ without an input service) work in apps.
 
 ### Done and CI-verified
 
-(see below; filled in from CI)
+ci run 40038368343 (commit 40d5053), windows-2022 and windows-2025, from
+`tests/windows/tracks/33-input.ps1`; every earlier check still passes
+(services, graphics, native libraries, the installer):
+
+- `PASS  input: Win32 messages to MotionEvent/KeyEvent over an InputChannel
+  (InputPublisher/InputConsumer)` (`probes/input/input_probe.cc`, no Java):
+  the translation (buttons, wheel, two fingers, key repeats, the virtual-key
+  and scan code tables, meta state, scale and offset); Generic.kcm built in
+  (FULL; a, A, !); `InputChannel::openInputChannelPair` over gesher-base's
+  socketpair; `gesher_input_attach` on a real Gesher window (and refused for
+  another window); WM_MOUSEMOVE/LBUTTONDOWN/MOUSEMOVE/LBUTTONUP/MOUSEWHEEL
+  and WM_KEYDOWN (twice, the second a repeat)/KEYUP posted to the HWND read
+  back with libinput's InputConsumer as HOVER_ENTER, DOWN, BUTTON_PRESS,
+  MOVE, BUTTON_RELEASE, UP, SCROLL and KEYCODE_A (scan 30, repeat 0 then 1);
+  injected touch as DOWN/MOVE/UP on SOURCE_TOUCHSCREEN; every finished
+  signal read by the connection; injected shift+A with META_SHIFT_ON.
+- `PASS  dalvikvm: input: Win32 window messages to a Java InputEventReceiver
+  (MotionEvent, KeyEvent, Generic.kcm)` (`tests/dex-graphics/gesher/InputTest.java`,
+  framework.jar and gesher-app.jar), with its own checks:
+  `KeyEvent.keyCodeToString/keyCodeFromString (libinput's labels)`;
+  `MotionEvent: obtain, offsetLocation, transform(Matrix), two pointers, Parcel`;
+  `VelocityTracker: 10 px every 10 ms is 999.99963 px/s`;
+  `KeyCharacterMap (Generic.kcm): FULL; a, A, !, label Z; getEvents("Hi"); Parcel`;
+  `KeyEvent.getUnicodeChar through KeyCharacterMap.load(VIRTUAL_KEYBOARD)`;
+  `InputChannel.openInputChannelPair`;
+  `InputEventSender to InputEventReceiver on a Looper: a key and a motion,
+  finished as handled [11:true, 12:true]`;
+  `PostMessage: mouse, wheel and key messages to the Gesher window`;
+  `the window's events reached the receiver`;
+  `the initial focus event: onFocusEvent(true)`;
+  `WM_MOUSEMOVE without buttons: ACTION_HOVER_ENTER at (10, 20), SOURCE_MOUSE`;
+  `left and right buttons: DOWN, BUTTON_PRESS, MOVE, BUTTON_PRESS (secondary),
+  BUTTON_RELEASE x2, UP (window pixels, SOURCE_MOUSE)`;
+  `WM_MOUSEWHEEL / WM_MOUSEHWHEEL: ACTION_SCROLL, AXIS_VSCROLL -1, AXIS_HSCROLL 2`;
+  `WM_KEYDOWN/KEYUP: KEYCODE_A (scan 30, repeat 0 then 1, getUnicodeChar 'a'),
+  keypad Enter (KEYCODE_NUMPAD_ENTER, scan 96)`;
+  `touch: DOWN, MOVE, UP (SOURCE_TOUCHSCREEN, finger)`;
+  `meta state: shift+A (isShiftPressed, 'A'), ctrl+click (META_CTRL_ON)`;
+  `two fingers: DOWN, POINTER_DOWN (index 1), MOVE, POINTER_UP (index 0), UP`;
+  `finished signals: the connection saw every event finished as handled, none dropped`.
+- With the real natives, ViewRootImpl's `WindowInputEventReceiver` would
+  throw on the stand-in session's uninitialized channel; the generated
+  `android_view_InputEventReceiver.cpp` gives such a receiver a channel
+  nothing writes to (`gen_jni_sources.py` EDITS) and the services checks pass
+  again (they failed in ci run 40035577063 without it).
 
 ### Stand-ins and gaps
+
+- WM_POINTER* (touch, pen) is handled by the window but not exercised in
+  CI: Windows does not post WM_POINTER messages (PostMessage fails), and
+  touch injection needs an interactive desktop; the tests inject the
+  WindowEvents that handler queues.
+- No app window uses it yet: the window session (wip/graphics) must open
+  the pair and attach it (above); until then ViewRootImpl gets a channel
+  that never delivers.
 
 - Text input: characters a key map cannot produce (other layouts, IMEs)
   need an InputConnection path; WM_CHAR only reaches the callback.
@@ -158,3 +210,14 @@ without an input service) work in apps.
   have no Meta (Windows key) or Num Lock state.
 
 ### CI runs
+
+- ci 40025490132: libinput: `5ms` without `std::chrono_literals`.
+- ci 40026819332: `AMOTION_EVENT_INVALID_CURSOR_POSITION` is in `android::`.
+- ci 40027947370: InputEventReceiver needs utils/Trace.h's `ATRACE_*`.
+- ci 40030684867: the probe's `<poll.h>` clashes with winsock2.h from utils/FileMap.h.
+- ci 40033016380: `GetReferent` (core_jni_helpers.cpp) was not built.
+- ci 40035577063: built; the probe passed except posting WM_POINTER (Windows
+  refuses); InputTest disposed a receiver off its Looper; every services
+  check failed: ViewRootImpl's receiver on the stand-in session's
+  uninitialized InputChannel.
+- ci 40038368343: green on both runners and the installer.
