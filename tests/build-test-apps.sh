@@ -30,12 +30,24 @@ with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as z:
     z.write(sys.argv[1], "classes.dex")
 PY
 
-# The framework-natives test (tests/dex-natives): gesher.NativeTest plus
-# stand-ins for the framework classes libandroid_runtime registers on.
+# The framework-natives tests (tests/dex-natives): gesher.NativeTest and
+# gesher.LooperTest, the real Looper, Handler, Message, MessageQueue and
+# HandlerThread from frameworks/base (MessageQueue as Soong's messagequeue-gen
+# picks it for bp4a: CombinedMessageQueue), and stand-ins for the rest of the
+# framework they reference. libcore's FileDescriptor.getInt$ is patched into
+# java.base for javac only (tests/dex-natives-javabase); java.* is not dexed.
+aosp=${AOSP_DIR:-$root/third_party/aosp}
+fwos=$aosp/frameworks/base/core/java/android/os
 mkdir -p "$work/classes-natives" "$work/dex-natives"
-javac -encoding UTF-8 --release 11 -d "$work/classes-natives" $(find "$root/tests/dex-natives" -name '*.java')
-java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
-  --output "$work/dex-natives" $(find "$work/classes-natives" -name '*.class')
+javac -encoding UTF-8 -source 17 -target 17 -nowarn -proc:none \
+  --patch-module "java.base=$root/tests/dex-natives-javabase" \
+  -d "$work/classes-natives" \
+  $(find "$root/tests/dex-natives" "$root/tests/dex-natives-javabase" -name '*.java') \
+  "$fwos"/{Looper,Handler,Message,HandlerThread,MessageHeap,MessageStack}.java \
+  "$fwos/CombinedMessageQueue/MessageQueue.java"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 36 \
+  --output "$work/dex-natives" \
+  $(find "$work/classes-natives" -name '*.class' -not -path "$work/classes-natives/java/*")
 cp "$work/dex-natives/classes.dex" "$out/natives.dex"
 
 echo "test apps written to $out"

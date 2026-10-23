@@ -68,21 +68,31 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
   $failed++
 }
 
-# The framework natives: libandroid_runtime's registrations and the
-# @CriticalNative ABI canary (docs/framework-natives.md, step 2).
-$out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/natives.dex") gesher.NativeTest 2>&1 | Out-String
-if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
-  Write-Host 'PASS  dalvikvm: framework natives (libandroid_runtime)'
-} else {
-  Write-Host ('FAIL  dalvikvm: framework natives (exit 0x{0:X8})' -f $LASTEXITCODE)
-  if (Test-Path "$Dir/dalvikvm.map") {
-    $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+# Runs a class from natives.dex with the interpreter; passes when it exits 0
+# and prints "all passed" (tests/dex-natives).
+function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @()) {
+  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
+    Write-Host "PASS  dalvikvm: $Name"
   } else {
-    Write-Host $out
+    Write-Host ("FAIL  dalvikvm: $Name (exit 0x{0:X8})" -f $LASTEXITCODE)
+    if (Test-Path "$Dir/dalvikvm.map") {
+      $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+    } else {
+      Write-Host $out
+    }
+    $script:failed++
   }
-  $failed++
 }
+
+# The framework natives (docs/framework-natives.md): libandroid_runtime's
+# registrations and the @CriticalNative ABI canary (step 2), then the
+# framework's message loop over its MessageQueue natives with both queue
+# implementations (step 3).
+RunDex 'framework natives (libandroid_runtime)' gesher.NativeTest
+RunDex 'Looper, Handler, HandlerThread (legacy MessageQueue)' gesher.LooperTest
+RunDex 'Looper, Handler, HandlerThread (concurrent MessageQueue)' gesher.LooperTest @('-Dgesher.mq.concurrent=true')
 
 Write-Host "`n$failed test(s) failed"
 exit $failed

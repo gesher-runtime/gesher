@@ -28,6 +28,14 @@ public class SystemProperties {
 
   public static native void native_report_sysprop_change();
 
+  public static int getInt(String key, int def) {
+    return native_get_int(key, def);
+  }
+
+  public static boolean getBoolean(String key, boolean def) {
+    return native_get_boolean(key, def);
+  }
+
   // native_add_change_callback caches this method; it must exist.
   private static void callChangeCallbacks() {}
 }
