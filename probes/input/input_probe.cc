@@ -6,7 +6,8 @@
 // KeyEvents and finishing them. Run in CI on Windows
 // (tests/windows/tracks/33-input.ps1); prints "all passed" when every check
 // holds.
-#include <poll.h>
+// No <poll.h>: utils/FileMap.h brings in winsock2.h, whose pollfd clashes
+// with gesher-base's; InputChannel::waitForMessage polls instead.
 #include <unistd.h>
 
 #include <chrono>
@@ -255,8 +256,7 @@ void TestChannel() {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   int touch_up = 0;
   while (std::chrono::steady_clock::now() < deadline && touch_up == 0) {
-    struct pollfd p = {clientChannel->getFd(), POLLIN, 0};
-    poll(&p, 1, 100);
+    clientChannel->waitForMessage(std::chrono::milliseconds(100));
     for (;;) {
       uint32_t seq = 0;
       android::InputEvent* event = nullptr;
@@ -369,8 +369,7 @@ void TestChannel() {
   gesher_input_inject(connection, &shiftA);
   bool injected = false;
   for (int i = 0; i < 100 && !injected; i++) {
-    struct pollfd p = {clientChannel->getFd(), POLLIN, 0};
-    poll(&p, 1, 50);
+    clientChannel->waitForMessage(std::chrono::milliseconds(50));
     uint32_t seq_no = 0;
     android::InputEvent* event = nullptr;
     if (consumer.consume(&factory, true, -1, &seq_no, &event) == android::OK && event != nullptr) {
