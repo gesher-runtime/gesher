@@ -6,10 +6,7 @@
 // ApplicationSharedMemory region the system server shares with each app
 // process (services track, docs/services.md).
 
-#include <jni.h>
-
-#include "core_jni_helpers.h"
-
+// First: it defines LOG_TAG, which headers included before it would define too.
 #include "android_app_PropertyInvalidatedCache.cpp"
 
 namespace android {
