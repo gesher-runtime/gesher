@@ -76,10 +76,12 @@ if [[ -n $core ]]; then
 fi
 java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp" "$(native "$root/app/gen/StubGen.java")" \
   "$(native "$work/gen")" com.gesher.server.stub \
+  android.permission.IPermissionChecker \
   android.app.IActivityManager android.app.IActivityTaskManager \
   android.app.IActivityClientController android.content.pm.IPackageManager \
   android.view.IWindowManager android.view.IWindowSession \
-  android.hardware.display.IDisplayManager android.os.IUserManager
+  android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
+  android.app.INotificationManager android.app.IUiModeManager
 
 mkdir -p "$work/classes"
 find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"

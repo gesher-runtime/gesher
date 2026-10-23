@@ -1,0 +1,24 @@
+--- a/libutils/Timers.cpp
++++ b/libutils/Timers.cpp
+@@ -29,12 +29,20 @@
+     LOG_ALWAYS_FATAL_IF(clock < 0 || clock >= clock_id_max, "invalid clock id");
+ }
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+ nsecs_t systemTime(int clock) {
+     checkClockId(clock);
++#if defined(GESHER)
++    // Gesher: gesher-base has clock_gettime, but no CLOCK_BOOTTIME; the monotonic
++    // clock is the one System.nanoTime reads too (Choreographer compares the two).
++    static constexpr clockid_t clocks[] = {CLOCK_REALTIME, CLOCK_MONOTONIC,
++                                           CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
++                                           CLOCK_MONOTONIC};
++#else
+     static constexpr clockid_t clocks[] = {CLOCK_REALTIME, CLOCK_MONOTONIC,
+                                            CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
+                                            CLOCK_BOOTTIME};
++#endif
+     static_assert(clock_id_max == arraysize(clocks));
+     timespec t = {};
+     clock_gettime(clocks[clock], &t);

@@ -20,7 +20,11 @@
 // code 2 if another binderd already serves the device. GESHER_BINDER_TRACE=1
 // traces every command on stderr.
 //
-// Not done: file descriptors in transactions (BINDER_TYPE_FD, FDA), scatter-
+// File descriptors (BINDER_TYPE_FD) travel as Windows handles: the sender's
+// /dev/binder puts the fd's handle in the object, binderd duplicates it into
+// the receiving process and the receiver's /dev/binder wraps it in a new fd.
+//
+// Not done: fd arrays (BINDER_TYPE_FDA), scatter-
 // gather buffers (BINDER_TYPE_PTR, used by HIDL), security contexts
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
 // transactions fail with BR_FAILED_REPLY.
@@ -459,6 +463,31 @@ bool UpdateRefForHandle(Proc* proc, uint32_t desc, bool increment, bool strong) 
 
 constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
 
+// A handle of another process, for a BINDER_TYPE_FD object: duplicated from
+// the sender into the receiver (0 if that fails), or closed in its process.
+uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+  if (handle == 0) return 0;
+  HANDLE from = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(from_pid));
+  HANDLE to = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(to_pid));
+  HANDLE dup = nullptr;
+  bool ok = from != nullptr && to != nullptr &&
+            DuplicateHandle(from, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), to,
+                            &dup, 0, FALSE, DUPLICATE_SAME_ACCESS);
+  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_pid, to_pid, GetLastError());
+  if (from != nullptr) CloseHandle(from);
+  if (to != nullptr) CloseHandle(to);
+  return ok ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dup)) : 0;
+}
+
+void CloseRemoteHandle(int pid, uint64_t handle) {
+  if (handle == 0) return;
+  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
+  if (p == nullptr) return;
+  DuplicateHandle(p, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
+                  0, FALSE, DUPLICATE_CLOSE_SOURCE);
+  CloseHandle(p);
+}
+
 // binder_transaction_buffer_release: drops the references a buffer's objects
 // hold, in the receiver's terms.
 void ReleaseBufferObjects(Buffer* buffer) {
@@ -479,6 +508,11 @@ void ReleaseBufferObjects(Buffer* buffer) {
       case BINDER_TYPE_WEAK_HANDLE:
         if (proc->is_dead) break;
         UpdateRefForHandle(proc, fp.handle, false, fp.hdr.type == BINDER_TYPE_HANDLE);
+        break;
+      case BINDER_TYPE_FD:
+        // Never delivered: the receiver has not taken the handle duplicated
+        // for it, so it is closed there.
+        if (!buffer->allow_user_free) CloseRemoteHandle(proc->pid, fp.binder);
         break;
       default:
         break;
@@ -623,14 +657,27 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
     uint32_t type;
     memcpy(&type, buffer->data.data() + off, sizeof(type));
     if (type != BINDER_TYPE_BINDER && type != BINDER_TYPE_WEAK_BINDER &&
-        type != BINDER_TYPE_HANDLE && type != BINDER_TYPE_WEAK_HANDLE) {
+        type != BINDER_TYPE_HANDLE && type != BINDER_TYPE_WEAK_HANDLE &&
+        type != BINDER_TYPE_FD) {
       Log("proc %u: object type %08x is not supported", proc->id, type);
       return BR_FAILED_REPLY;
     }
     if (off + kFlatObjectSize > buffer->data.size()) return BR_FAILED_REPLY;
     flat_binder_object fp;
     memcpy(&fp, buffer->data.data() + off, sizeof(fp));
-    if (type == BINDER_TYPE_BINDER || type == BINDER_TYPE_WEAK_BINDER) {
+    if (type == BINDER_TYPE_FD) {
+      // binder_translate_fd: fp.binder is binder_fd_object's pad_binder,
+      // where the sender's /dev/binder put the fd's handle.
+      if (fp.binder == 0) {
+        Log("proc %u: a file descriptor without a Windows handle cannot be sent", proc->id);
+        return BR_FAILED_REPLY;
+      }
+      uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
+      if (dup == 0) return BR_FAILED_REPLY;
+      TRACE("proc %u: fd handle %llx -> %llx in proc %u", proc->id,
+            (unsigned long long)fp.binder, (unsigned long long)dup, target_proc->id);
+      fp.binder = dup;
+    } else if (type == BINDER_TYPE_BINDER || type == BINDER_TYPE_WEAK_BINDER) {
       // binder_translate_binder
       Node* node = GetNode(proc, fp.binder);
       if (node == nullptr) node = NewNode(proc, fp.binder, fp.cookie, fp.flags);

@@ -12,7 +12,9 @@ import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ParceledListSlice;
+import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
+import android.content.pm.ServiceInfo;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -21,16 +23,40 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@code package}: PackageManagerService, knowing the APKs it was given (parsed with
- * PackageParser2, {@link ApkPackage}). All of them run as the same uid.
+ * {@code package}: PackageManagerService, knowing the APKs it was given and the installed
+ * packages ({@link Installer}; parsed with PackageParser2, {@link ApkPackage}). All of them
+ * run as the same uid. Packages come and go while it serves (install, uninstall): readers
+ * see one version of the map, replaced as a whole.
  */
 public final class PackageManagerService extends IPackageManager.Default {
-    private final Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
 
     public PackageManagerService(Collection<ApkPackage> packages) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
-            mPackages.put(p.packageName, p);
+            map.put(p.packageName, p);
         }
+        mPackages = map;
+    }
+
+    /** Adds or replaces a package (an install or an update). */
+    synchronized void add(ApkPackage p) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
+        map.put(p.packageName, p);
+        mPackages = map;
+    }
+
+    /** Removes a package (an uninstall); returns it, or null. */
+    synchronized ApkPackage remove(String packageName) {
+        Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
+        ApkPackage p = map.remove(packageName);
+        mPackages = map;
+        return p;
+    }
+
+    /** The packages, now. */
+    Collection<ApkPackage> packages() {
+        return mPackages.values();
     }
 
     public ApkPackage get(String packageName) {
@@ -87,6 +113,83 @@ public final class PackageManagerService extends IPackageManager.Default {
         return result;
     }
 
+    /** The services {@code intent} resolves to, in every package. */
+    List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        for (ApkPackage p : mPackages.values()) {
+            result.addAll(p.queryIntentServices(intent, resolvedType, flags));
+        }
+        return result;
+    }
+
+    /** The manifest receivers {@code intent} reaches, in every package. */
+    List<ResolveInfo> receivers(Intent intent, String resolvedType, long flags) {
+        List<ResolveInfo> result = new ArrayList<>();
+        for (ApkPackage p : mPackages.values()) {
+            result.addAll(p.queryIntentReceivers(intent, resolvedType, flags));
+        }
+        return result;
+    }
+
+    /** The provider with authority {@code authority} (one of its authorities), or null. */
+    ProviderInfo provider(String authority, long flags) {
+        for (ApkPackage p : mPackages.values()) {
+            for (ProviderInfo info : p.providers(flags)) {
+                if (info.authority == null) continue;
+                for (String a : info.authority.split(";")) {
+                    if (a.equals(authority)) return info;
+                }
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public ResolveInfo resolveService(Intent intent, String resolvedType, long flags,
+            int userId) {
+        List<ResolveInfo> all = services(intent, resolvedType, flags);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    @Override
+    public ParceledListSlice queryIntentServices(Intent intent, String resolvedType,
+            long flags, int userId) {
+        return new ParceledListSlice<>(services(intent, resolvedType, flags));
+    }
+
+    @Override
+    public ParceledListSlice queryIntentReceivers(Intent intent, String resolvedType,
+            long flags, int userId) {
+        return new ParceledListSlice<>(receivers(intent, resolvedType, flags));
+    }
+
+    @Override
+    public ServiceInfo getServiceInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        return p == null ? null : p.serviceInfo(className.getClassName(), flags);
+    }
+
+    @Override
+    public ActivityInfo getReceiverInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        return p == null ? null : p.receiverInfo(className.getClassName(), flags);
+    }
+
+    @Override
+    public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
+        return provider(name, flags);
+    }
+
+    @Override
+    public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        ApkPackage p = get(className.getPackageName());
+        if (p == null) return null;
+        for (ProviderInfo info : p.providers(flags)) {
+            if (info.name.equals(className.getClassName())) return info;
+        }
+        return null;
+    }
+
     @Override
     public ParceledListSlice getInstalledPackages(long flags, int userId) {
         List<PackageInfo> result = new ArrayList<>();
@@ -122,7 +225,8 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        return mPackages.isEmpty() ? null : mPackages.keySet().iterator().next();
+        Map<String, ApkPackage> packages = mPackages;
+        return packages.isEmpty() ? null : packages.keySet().iterator().next();
     }
 
     @Override
@@ -133,5 +237,17 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public String getInstallerPackageName(String packageName) {
         return null;
+    }
+
+    @Override
+    public void notifyDexLoad(String loadingPackageName,
+            java.util.Map<String, String> classLoaderContextMap, String loaderIsa) {
+        // No dexopt to schedule.
+    }
+
+    @Override
+    public ParceledListSlice queryProperty(String propertyName, int componentType) {
+        // Manifest <property> tags are not indexed: none is found.
+        return new ParceledListSlice<>(java.util.Collections.emptyList());
     }
 }

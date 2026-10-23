@@ -153,6 +153,14 @@ needs: [framework-build.md](framework-build.md).
 - [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
       and `KeyEvent`; a click reaches `onClick`, tested in CI
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+  - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
+        Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
+        through SharedMemory: `Typeface.DEFAULT`, families and aliases,
+        Hebrew through the fallback chain drawn right to left, a Hebrew
+        `StaticLayout` paragraph, bold/italic; shipped by the installer and
+        loaded by the installed gesher-app (ci run 40011630189, both runners;
+        docs/fonts.md)
+  - [ ] RTL text in a View (TextView in a window) and further scripts
 
 ## Phase 4 checklist
 
@@ -166,17 +174,41 @@ needs: [framework-build.md](framework-build.md).
         `gesher-app --system-server` uses them across processes, and the
         launcher starts binderd, servicemanager and the server (ci runs
         39984218373, 39986921774)
-  - [ ] The app attached to the server (`attachApplication`,
+  - [x] The app attached to the server (`attachApplication`,
         `bindApplication`, `ClientTransaction`s), the server driving the
-        lifecycle
+        lifecycle to onResume and finishing it (pause, stop, destroy) in
+        `gesher-app --system-server` (ci run 40001194804)
+  - [x] The rest of the app model through the server: activities starting
+        activities (results, standard, singleTop), started, bound and
+        foreground services, registered and manifest broadcast receivers,
+        the app's content providers and a settings stand-in (ci run
+        40007889523)
+  - [x] A persistent Gesher device: one system server shared by every
+        launch (started detached by the first, found under a mutex, stopped
+        by `gesher-app shutdown`, when idle or with its job), installed
+        packages (`install`, `uninstall`, `list`), app processes the server
+        starts on demand and ends; another package's activity and provider
+        in its own process; `gesher-app my.apk` and the `.apk` association
+        use it (ci run 40019524773)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
+- [x] Installed apps in the Start menu: a shortcut per launchable package
+      (`Gesher Apps\<label>.lnk`, `gesher-app launch <package>`) with the
+      app's label and launcher icon (PNG/WebP mipmaps, adaptive icons, the
+      framework's default) as a multi-size `.ico`, and an AppUserModelID the
+      app's processes set too; removed by `gesher-app uninstall` and with
+      Gesher; Gesher's own icon for Setup, its entries and `.apk` files
+      (ci run 40024847287; docs/installer.md, ADR 0028)
 
 ## Phase 6 checklist
 
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
-      over gesher-base (libandroid's non-graphics APIs; `ANativeWindow`/
-      `ANativeActivity` wait for the graphics track)
+      over gesher-base (libandroid's non-graphics APIs; `ANativeActivity`
+      waits for Activity windows)
 - [x] `System.loadLibrary` of an app's NDK library from its APK's
       `lib/x86_64`, with JNI calls both ways, tested in CI
+- [x] The NDK's graphics from an app's `.so`: `ANativeWindow_*` and EGL/GLES
+      (libEGL/libGLESv1_CM/libGLESv2/libGLESv3 over ANGLE) on a Win32
+      window, read back in CI on D3D11 and WARP (ci run 40013029994;
+      docs/native-libs.md step 7)

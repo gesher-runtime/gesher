@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A test app for gesher-app's system server: activities starting activities (results,
+     standard and singleTop), started, bound and foreground services, registered and manifest
+     broadcast receivers, its own content provider and the settings provider. MainActivity
+     runs the steps one after the other and finishes. No action bar: no text to lay out
+     while the app process has no system fonts (an empty typeface stands in). Its icon is
+     an adaptive icon: a WebP foreground over a color (the shell track's tests). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.components"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <application
+        android:name=".ComponentsApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".SecondActivity" android:exported="false" />
+        <!-- Uses another package's activity and provider (tests/apps/peer); the launcher
+             starts it explicitly. -->
+        <activity android:name=".CrossActivity" android:exported="true" />
+        <activity
+            android:name=".SingleTopActivity"
+            android:launchMode="singleTop"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.gesher.components.SINGLE_TOP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <service android:name=".CounterService" android:exported="false" />
+        <service android:name=".LocalService" android:exported="false" />
+        <service
+            android:name=".ForegroundService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false" />
+        <receiver android:name=".ManifestReceiver" android:exported="false" />
+        <provider
+            android:name=".ItemsProvider"
+            android:authorities="com.gesher.components.items"
+            android:exported="false" />
+    </application>
+</manifest>
