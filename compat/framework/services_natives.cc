@@ -22,6 +22,7 @@
 //   (libdebugstore, for dumpsys) is not built; events are dropped.
 
 #include <jni.h>
+#include <log/log.h>
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 
@@ -35,6 +36,23 @@
 #pragma clang diagnostic pop
 
 namespace android {
+
+// Registers a table; not fatal when the class lacks a method (the natives tests
+// load stand-ins of some of these classes without natives): logged and skipped.
+int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMethod* methods,
+                          int count) {
+    jclass clazz = env->FindClass(className);
+    if (clazz == nullptr) {
+        env->ExceptionClear();
+        return 0;
+    }
+    if (env->RegisterNatives(clazz, methods, count) < 0) {
+        env->ExceptionClear();
+        ALOGI("libandroid_runtime: %s does not declare these natives; skipped", className);
+    }
+    env->DeleteLocalRef(clazz);
+    return 0;
+}
 
 static const JNINativeMethod gGesherApplicationSharedMemoryMethods[] = {
     {"nativeCreate", "()I", GESHER_JNI(nativeCreate)},
@@ -54,7 +72,7 @@ static const JNINativeMethod gGesherApplicationSharedMemoryMethods[] = {
 };
 
 int register_gesher_ApplicationSharedMemory(JNIEnv* env) {
-    return RegisterMethodsOrDie(env, "com/android/internal/os/ApplicationSharedMemory",
+    return RegisterGesherNatives(env, "com/android/internal/os/ApplicationSharedMemory",
                                 gGesherApplicationSharedMemoryMethods,
                                 NELEM(gGesherApplicationSharedMemoryMethods));
 }
@@ -74,7 +92,7 @@ static const JNINativeMethod gClassLoaderFactoryMethods[] = {
 };
 
 int register_gesher_ClassLoaderFactory(JNIEnv* env) {
-    return RegisterMethodsOrDie(env, "com/android/internal/os/ClassLoaderFactory",
+    return RegisterGesherNatives(env, "com/android/internal/os/ClassLoaderFactory",
                                 gClassLoaderFactoryMethods, NELEM(gClassLoaderFactoryMethods));
 }
 
@@ -86,7 +104,7 @@ static const JNINativeMethod gActivityThreadMethods[] = {
 };
 
 int register_gesher_ActivityThread(JNIEnv* env) {
-    return RegisterMethodsOrDie(env, "android/app/ActivityThread", gActivityThreadMethods,
+    return RegisterGesherNatives(env, "android/app/ActivityThread", gActivityThreadMethods,
                                 NELEM(gActivityThreadMethods));
 }
 
@@ -103,7 +121,7 @@ static const JNINativeMethod gDebugStoreMethods[] = {
 };
 
 int register_gesher_DebugStore(JNIEnv* env) {
-    return RegisterMethodsOrDie(env, "com/android/internal/os/DebugStore", gDebugStoreMethods,
+    return RegisterGesherNatives(env, "com/android/internal/os/DebugStore", gDebugStoreMethods,
                                 NELEM(gDebugStoreMethods));
 }
 

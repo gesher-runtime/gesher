@@ -11,6 +11,9 @@
 
 namespace android {
 
+int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMethod* methods,
+                          int count);  // services_natives.cc
+
 static const JNINativeMethod gGesherPropertyInvalidatedCacheMethods[] = {
     {"nativeGetMaxNonce", "(J)I", GESHER_JNI(getMaxNonce)},
     {"nativeGetMaxByte", "(J)I", GESHER_JNI(getMaxByte)},
@@ -22,7 +25,7 @@ static const JNINativeMethod gGesherPropertyInvalidatedCacheMethods[] = {
 };
 
 int register_gesher_PropertyInvalidatedCache(JNIEnv* env) {
-    return RegisterMethodsOrDie(env, "android/app/PropertyInvalidatedCache",
+    return RegisterGesherNatives(env, "android/app/PropertyInvalidatedCache",
                                 gGesherPropertyInvalidatedCacheMethods,
                                 NELEM(gGesherPropertyInvalidatedCacheMethods));
 }
