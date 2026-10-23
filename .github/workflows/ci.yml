@@ -131,24 +131,25 @@ jobs:
           if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows')) {
             throw "Hello through the installed gesher failed (exit $code)"
           }
-          # gesher-app and the framework it runs on are installed; the
-          # lifecycle run itself is checked by the tests (run-tests.ps1).
+          # gesher-app and the framework it runs on are installed, and the
+          # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
-          Write-Host "gesher-app lifecycle.apk (exit $LASTEXITCODE):"
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
-          # Informational until the framework's natives are in: its exit code
-          # must not become the step's.
-          $global:LASTEXITCODE = 0
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
+            throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
+          }
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-          'PASS  installer: installs, runs Hello, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
         with:

@@ -127,8 +127,8 @@ needs: [framework-build.md](framework-build.md).
 - [x] `epoll` and `eventfd` in gesher-base, for `Looper`
       (`probes/posix/epoll_probe.cc`)
 - [ ] libutils, libcutils and libandroidfw in full
-- [ ] `libandroid_runtime`'s host natives linked in: assets, resources,
+- [x] `libandroid_runtime`'s host natives linked in: assets, resources,
       `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
-- [ ] In-process stand-ins for the services the lifecycle calls
-- [ ] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
-      resources and manifest loaded (tested in CI)
+- [x] In-process stand-ins for the services the lifecycle calls
+- [x] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
+      resources and manifest loaded (tested in CI, and through the installer)
