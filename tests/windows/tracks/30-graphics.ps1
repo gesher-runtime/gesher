@@ -30,6 +30,7 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
                    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/graphics-tests.dex"), "gesher.$Main") + $Arguments) {
     $psi.ArgumentList.Add($a)
   }
+  $psi.Environment['GESHER_TRACE_FAULTS'] = '1'  # report a fault where it happens (crash.cc)
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -59,8 +60,11 @@ function GraphicsDex([string] $Name, [string] $Main, [string[]] $Arguments = @()
 # android.graphics on framework.jar with hwui's natives (Bitmap, Canvas, Paint
 # text with a font file, BitmapFactory/compress), and a Surface over
 # gesher-app's Win32 window (lockCanvas, PrintWindow read-back).
+# The font is copied next to the test root: paths without a drive letter are
+# on the current drive, which need not be C:.
+Copy-Item 'C:/Windows/Fonts/arial.ttf' (Join-Path $root 'arial.ttf')
 GraphicsDex 'android.graphics (Bitmap, Canvas, Paint text, codecs) and a Surface in a Win32 window' `
-  GraphicsTest @((NoDrive 'C:/Windows/Fonts/arial.ttf'), (NoDrive $env:RUNNER_TEMP))
+  GraphicsTest @((NoDrive (Join-Path $root 'arial.ttf')), (NoDrive $env:RUNNER_TEMP))
 
 # hwui's renderer: HardwareRenderer, its RenderThread and the CPU pipeline
 # drawing a RenderNode tree into the window's Surface.

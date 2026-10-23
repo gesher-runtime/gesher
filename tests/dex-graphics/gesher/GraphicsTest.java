@@ -68,9 +68,15 @@ public final class GraphicsTest {
     paint.setAntiAlias(true);
     paint.setColor(Color.BLUE);
     canvas.drawCircle(48, 48, 10, paint);
-    int edge = bitmap.getPixel(48 + 10, 48);  // on the rim: blended
-    check(bitmap.getPixel(48, 48) == Color.BLUE && edge != Color.BLUE && edge != Color.WHITE,
-        "Canvas.drawCircle, antialiased");
+    int blended = 0;  // rim pixels, partly covered
+    for (int y = 37; y < 60; y++) {
+      for (int x = 37; x < 60; x++) {
+        int c = bitmap.getPixel(x, y);
+        if (c != Color.BLUE && c != Color.WHITE) blended++;
+      }
+    }
+    check(bitmap.getPixel(48, 48) == Color.BLUE && blended > 8,
+        "Canvas.drawCircle, antialiased (" + blended + " blended rim pixels)");
 
     Path path = new Path();
     path.moveTo(0, 63);
