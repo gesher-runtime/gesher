@@ -51,6 +51,7 @@ public final class GesherAppProcess {
 
     /** Thrown out of Looper.loop() when the main Looper ends the process (scheduleExit). */
     private static volatile boolean sExitRequested;
+    private static boolean sTracing;
 
     /**
      * Runs the app process: attaches it, starts {@code launch} from the launcher thread,
@@ -99,8 +100,15 @@ public final class GesherAppProcess {
         }
         log("attached to the system server (pid " + android.os.Process.myPid() + ")");
 
+        if (System.getenv("GESHER_APP_TRACE_LOOPER") != null) {
+            // Each message the main Looper dispatches, on stderr.
+            Looper.getMainLooper().setMessageLogging(line -> System.err.println("looper: " + line));
+        }
         try {
             Looper.loop();
+        } catch (Error e) {
+            if (sTracing) dalvik.system.VMDebug.stopMethodTracing();
+            throw e;
         } catch (IllegalStateException e) {
             // EXIT_APPLICATION: Application.onTerminate, then Looper.quit(), which the main
             // Looper refuses with this exception; on a device the server kills the process.
@@ -174,6 +182,12 @@ public final class GesherAppProcess {
         callback.set(h, (Handler.Callback) (Message msg) -> {
             if (msg.what == ActivityThread.H.EXIT_APPLICATION) {
                 sExitRequested = true;
+            }
+            String trace = System.getenv("GESHER_APP_METHOD_TRACE");
+            if (trace != null && msg.what == ActivityThread.H.EXECUTE_TRANSACTION
+                    && !sTracing) {
+                sTracing = true;
+                dalvik.system.VMDebug.startMethodTracing(trace, 64 << 20, 0, false, 0);
             }
             return false;  // ActivityThread handles it
         });

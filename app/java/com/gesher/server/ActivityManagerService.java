@@ -117,6 +117,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
             // declares none.
             m.writeSystemFeaturesCache(new SystemFeaturesCache(
                     new ArrayMap<String, FeatureInfo>()).getSdkFeatureVersions());
+            // WindowManagerService keeps the animator duration scale there: 1.
+            m.setCurrentAnimatorScale(1f);
             mSharedMemory = m;
         }
         return mSharedMemory;

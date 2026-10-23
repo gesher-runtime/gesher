@@ -22,6 +22,8 @@ import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindowManager;
 
+import com.android.internal.view.IInputMethodManager;
+
 import com.gesher.app.DeviceProfile;
 
 import java.lang.reflect.Field;
@@ -60,6 +62,8 @@ public final class Services {
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
+                new InputMethodManager()).asBinder());
         return services;
     }
 
@@ -158,6 +162,14 @@ public final class Services {
         public Point getStableDisplaySize() {
             return new Point(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
         }
+    }
+
+    /**
+     * input_method: InputMethodManagerService, with no input method. A window's
+     * ViewRootImpl needs the service to exist (InputMethodManager's instance); every
+     * call answers its default (no IME, nothing shown).
+     */
+    public static final class InputMethodManager extends IInputMethodManager.Default {
     }
 
     /** user: UserManagerService, with the system user, running and unlocked. */

@@ -21,13 +21,18 @@ import java.util.List;
  */
 public final class Digests extends Provider {
     public Digests() {
-        super("GesherDigests", 1.0, "Gesher's MessageDigests (SHA-1, SHA-256, MD5)");
+        super("GesherDigests", 1.0,
+                "Gesher's MessageDigests (SHA-1, SHA-256, MD5) and X.509 certificates");
         put("MessageDigest.SHA-1", Sha1.class.getName());
         put("Alg.Alias.MessageDigest.SHA1", "SHA-1");
         put("Alg.Alias.MessageDigest.SHA", "SHA-1");
         put("MessageDigest.SHA-256", Sha256.class.getName());
         put("Alg.Alias.MessageDigest.SHA256", "SHA-256");
         put("MessageDigest.MD5", Md5.class.getName());
+        // X.509 certificates over libcore's own parser (Conscrypt's factory is not there
+        // yet): the network security config reads the system CA store with one.
+        put("CertificateFactory.X.509", X509.class.getName());
+        put("Alg.Alias.CertificateFactory.X509", "X.509");
     }
 
     /** Rewrites the configured provider list as described above. */
@@ -347,6 +352,70 @@ public final class Digests extends Provider {
         @Override
         protected int engineGetDigestLength() {
             return 16;
+        }
+    }
+
+    /**
+     * CertificateFactory X.509: DER or PEM certificates, parsed by libcore's
+     * sun.security.x509.X509CertImpl. No CRLs and no cert paths.
+     */
+    public static final class X509 extends java.security.cert.CertificateFactorySpi {
+        private static final String BEGIN = "-----BEGIN CERTIFICATE-----";
+        private static final String END = "-----END CERTIFICATE-----";
+
+        @Override
+        public java.security.cert.Certificate engineGenerateCertificate(java.io.InputStream in)
+                throws java.security.cert.CertificateException {
+            java.util.List<java.security.cert.Certificate> all = parse(in, 1);
+            if (all.isEmpty()) {
+                throw new java.security.cert.CertificateException("no certificate");
+            }
+            return all.get(0);
+        }
+
+        @Override
+        public java.util.Collection<? extends java.security.cert.Certificate>
+                engineGenerateCertificates(java.io.InputStream in)
+                throws java.security.cert.CertificateException {
+            return parse(in, Integer.MAX_VALUE);
+        }
+
+        @Override
+        public java.security.cert.CRL engineGenerateCRL(java.io.InputStream in)
+                throws java.security.cert.CRLException {
+            throw new java.security.cert.CRLException("CRLs are not supported");
+        }
+
+        @Override
+        public java.util.Collection<? extends java.security.cert.CRL> engineGenerateCRLs(
+                java.io.InputStream in) throws java.security.cert.CRLException {
+            throw new java.security.cert.CRLException("CRLs are not supported");
+        }
+
+        private static java.util.List<java.security.cert.Certificate> parse(
+                java.io.InputStream in, int max) throws java.security.cert.CertificateException {
+            byte[] bytes;
+            try {
+                bytes = in.readAllBytes();
+            } catch (java.io.IOException e) {
+                throw new java.security.cert.CertificateException(e);
+            }
+            java.util.List<java.security.cert.Certificate> out = new ArrayList<>();
+            String text = new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+            int at = text.indexOf(BEGIN);
+            if (at < 0) {
+                out.add(new sun.security.x509.X509CertImpl(bytes));  // DER
+                return out;
+            }
+            while (at >= 0 && out.size() < max) {
+                int end = text.indexOf(END, at);
+                if (end < 0) break;
+                String b64 = text.substring(at + BEGIN.length(), end).replaceAll("\\s", "");
+                out.add(new sun.security.x509.X509CertImpl(
+                        java.util.Base64.getDecoder().decode(b64)));
+                at = text.indexOf(BEGIN, end);
+            }
+            return out;
         }
     }
 }
