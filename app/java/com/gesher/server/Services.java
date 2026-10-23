@@ -47,6 +47,22 @@ public final class Services {
     private Services() {
     }
 
+    /** The services {@link #create} made last: for the system server's own use. */
+    static final class Created {
+        final PackageManagerService pm;
+        final ActivityTaskManagerService atm;
+        final ActivityManagerService am;
+
+        Created(PackageManagerService pm, ActivityTaskManagerService atm,
+                ActivityManagerService am) {
+            this.pm = pm;
+            this.atm = atm;
+            this.am = am;
+        }
+    }
+
+    static volatile Created sLast;
+
     /** The services, by name, for the given packages. */
     public static Map<String, IBinder> create(Collection<ApkPackage> packages) {
         Map<String, IBinder> services = new LinkedHashMap<>();
@@ -54,6 +70,7 @@ public final class Services {
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
+        sLast = new Created(pm, atm, am);
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
         services.put(Context.ACTIVITY_SERVICE,
                 StandIn.of(IActivityManager.class, am).asBinder());

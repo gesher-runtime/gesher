@@ -373,7 +373,7 @@ final class ActiveServices {
 
     /** ActiveServices.bringUpServiceLocked: create, then the starts and bind requests. */
     private void bringUp(ServiceRecord r) {
-        mAtm.withProcess(r.info.packageName, app -> {
+        mAtm.withProcess(r.info.packageName, "service " + r, app -> {
             boolean create;
             List<ServiceStartArgs> starts;
             List<IntentBindRecord> binds = new ArrayList<>();
@@ -440,6 +440,16 @@ final class ActiveServices {
         } catch (RemoteException e) {
             SystemServer.log("scheduleStopService " + r + ": " + e);
         }
+        // A process kept by the service alone ends now (scheduleExit follows the stop).
+        mAtm.maybeExit(r.app);
+    }
+
+    /** Whether a service runs (or is being brought up) in the process. */
+    synchronized boolean hasServices(ActivityTaskManagerService.ProcessRecord app) {
+        for (ServiceRecord r : mServices.values()) {
+            if (r.app == app) return true;
+        }
+        return false;
     }
 
     /** The process went away: so did its services. */

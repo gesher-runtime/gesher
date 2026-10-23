@@ -37,6 +37,11 @@ import java.util.List;
  * thread of its own: {@code IActivityTaskManager.startActivityAndWait} with the launch
  * intent, then (unless the activity finished itself) {@code removeTask}, which makes the
  * server pause, stop and destroy the activity and then end the process.
+ *
+ * <p>{@link #main} is the entry of a process the system server starts for a package (its
+ * zygote, lite: {@code com.gesher.server.Zygote}): {@code --package P --start-seq N
+ * --target-sdk S}. It attaches with the start sequence number, which pairs it with the
+ * package, and has no launcher part: the server drives it, and tells it when to exit.
  */
 public final class GesherAppProcess {
     private static final String TAG = "gesher-app";
@@ -64,6 +69,64 @@ public final class GesherAppProcess {
      */
     public static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle)
             throws Exception {
+        run(launch, targetSdkVersion, removeTaskWhenIdle, 0L);
+    }
+
+    /**
+     * {@code android.app.GesherAppProcess --package P --start-seq N [--target-sdk S]}: an app
+     * process the system server started for package P (ActivityThread.main after the
+     * zygote's fork). Exits with 0 when the server ends it, 1 on a failure.
+     */
+    public static void main(String[] args) {
+        int code = 0;
+        try {
+            String packageName = null;
+            long startSeq = 0;
+            int targetSdk = 0;
+            for (int i = 0; i + 1 < args.length; i += 2) {
+                switch (args[i]) {
+                    case "--package": packageName = args[i + 1]; break;
+                    case "--start-seq": startSeq = Long.parseLong(args[i + 1]); break;
+                    case "--target-sdk": targetSdk = Integer.parseInt(args[i + 1]); break;
+                    default: throw new IllegalArgumentException("unknown option " + args[i]);
+                }
+            }
+            if (packageName == null || startSeq <= 0) {
+                throw new IllegalArgumentException("usage: GesherAppProcess --package P"
+                        + " --start-seq N [--target-sdk S]");
+            }
+            log("app process for " + packageName + ": pid " + android.os.Process.myPid()
+                    + ", start seq " + startSeq);
+            String androidRoot = System.getenv("ANDROID_ROOT");
+            if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
+            com.gesher.app.Main.bootstrap(TAG, androidRoot + "/build.prop",
+                    androidRoot + "/framework/framework-res.apk");
+            if (System.getenv("GESHER_APP_STRICT_SERVICES") != null) {
+                com.gesher.server.StandIn.setStrict(true);
+            }
+            // The system server gone, so is the device: this process too (on a device the
+            // zygote's children die with system_server).
+            android.os.IBinder am = android.os.ServiceManager.getService("activity");
+            if (am != null) {
+                am.linkToDeath(() -> {
+                    System.err.println(TAG + ": the system server died; exiting");
+                    System.exit(3);
+                }, 0);
+            }
+            run(null, targetSdk, false, startSeq);
+        } catch (Throwable t) {
+            System.out.flush();
+            System.err.println(TAG + ": failed: " + t);
+            t.printStackTrace();
+            code = 1;
+        }
+        System.out.flush();
+        System.err.flush();
+        System.exit(code);
+    }
+
+    private static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle,
+            long startSeq) throws Exception {
         // The zygote sets the runtime's target SDK in the child before it runs the app
         // (ZygoteConnection: VMRuntime.setTargetSdkVersion): ART's rules for apps (such as
         // which static final fields JNI may still overwrite, as Typeface's font map
@@ -100,29 +163,33 @@ public final class GesherAppProcess {
         }
         watchForExit(thread.mH);
 
-        final Throwable[] launcherFailure = new Throwable[1];
-        Thread launcher = new Thread(() -> {
-            try {
-                launch(launch, removeTaskWhenIdle);
-            } catch (Throwable t) {
-                launcherFailure[0] = t;
-                System.err.println(TAG + ": the launcher failed: " + t);
-                t.printStackTrace();
-                // Nothing will end the process now: end it from its main thread.
-                new android.os.Handler(Looper.getMainLooper()).post(() -> {
-                    throw new IllegalStateException("the launcher failed", t);
-                });
-            }
-        }, "launcher");
-        launcher.setDaemon(true);
-        launcher.start();
-
         try {
-            attach.invoke(thread, false, 0L);
+            attach.invoke(thread, false, startSeq);
         } catch (java.lang.reflect.InvocationTargetException e) {
             throw rethrow(e.getCause());
         }
         log("attached to the system server (pid " + android.os.Process.myPid() + ")");
+
+        // The launcher asks for the start once the process is attached: the server gives
+        // the start to the process that asked for it, rather than starting another one.
+        final Throwable[] launcherFailure = new Throwable[1];
+        if (launch != null) {
+            Thread launcher = new Thread(() -> {
+                try {
+                    launch(launch, removeTaskWhenIdle);
+                } catch (Throwable t) {
+                    launcherFailure[0] = t;
+                    System.err.println(TAG + ": the launcher failed: " + t);
+                    t.printStackTrace();
+                    // Nothing will end the process now: end it from its main thread.
+                    new android.os.Handler(Looper.getMainLooper()).post(() -> {
+                        throw new IllegalStateException("the launcher failed", t);
+                    });
+                }
+            }, "launcher");
+            launcher.setDaemon(true);
+            launcher.start();
+        }
 
         if (System.getenv("GESHER_APP_TRACE_LOOPER") != null) {
             // Debugging: each message the main Looper dispatches, on stderr.
@@ -160,14 +227,24 @@ public final class GesherAppProcess {
             throw new IllegalStateException("the system server did not start " + launch);
         }
         if (!removeTaskWhenIdle) return;
-        List<ActivityManager.RunningTaskInfo> tasks = atm.getTasks(1,
-                false /* filterOnlyVisibleRecents */, false /* keepIntentExtra */,
-                android.view.Display.INVALID_DISPLAY);
-        if (tasks.isEmpty()) return;  // the activity finished by itself
-        int taskId = tasks.get(0).taskId;
-        log("removing task " + taskId + " (" + tasks.get(0).baseActivity.flattenToShortString()
+        ActivityManager.RunningTaskInfo task = taskOf(atm, result.who.getPackageName());
+        if (task == null) return;  // the activity finished by itself
+        log("removing task " + task.taskId + " (" + task.baseActivity.flattenToShortString()
                 + ")");
-        atm.removeTask(taskId);
+        atm.removeTask(task.taskId);
+    }
+
+    /** The most recent task whose base activity is the package's, or null. */
+    public static ActivityManager.RunningTaskInfo taskOf(IActivityTaskManager atm,
+            String packageName) throws android.os.RemoteException {
+        for (ActivityManager.RunningTaskInfo t : atm.getTasks(Integer.MAX_VALUE,
+                false /* filterOnlyVisibleRecents */, false /* keepIntentExtra */,
+                android.view.Display.INVALID_DISPLAY)) {
+            if (t.baseActivity != null && t.baseActivity.getPackageName().equals(packageName)) {
+                return t;
+            }
+        }
+        return null;
     }
 
     /**
