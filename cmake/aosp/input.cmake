@@ -119,7 +119,10 @@ add_custom_command(
           ${_input_jni_inputs}
   COMMENT "System V copies of libandroid_runtime's input natives")
 
-add_library(input_jni STATIC ${_input_jni_srcs} ${_cin}/input_jni.cc)
+# core_jni_helpers.cpp: GetReferent (InputEventReceiver/Sender), which no
+# source framework.cmake compiles needed before.
+add_library(input_jni STATIC ${_input_jni_srcs} ${_cin}/input_jni.cc
+  ${_fwbase}/core/jni/core_jni_helpers.cpp)
 target_include_directories(input_jni PRIVATE
   ${_fwbase}/core/jni ${_fwbase}/core/jni/include ${CMAKE_SOURCE_DIR}/compat/framework/include
   ${_native}/libs/binderthreadstate/include
