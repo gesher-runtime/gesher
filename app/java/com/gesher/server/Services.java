@@ -4,16 +4,13 @@
  */
 package com.gesher.server;
 
-import android.app.ContentProviderHolder;
-import android.app.IActivityClientController;
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
-import android.app.IApplicationThread;
 import android.content.Context;
 import android.content.pm.IPackageManager;
-import android.content.pm.PackageManager;
 import android.content.pm.UserInfo;
 import android.graphics.Point;
+import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
 import android.os.IBinder;
@@ -25,6 +22,8 @@ import android.os.ServiceWithMetadata;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindowManager;
+
+import com.android.internal.view.IInputMethodManager;
 
 import com.gesher.app.DeviceProfile;
 
@@ -50,18 +49,22 @@ public final class Services {
     /** The services, by name, for the given packages. */
     public static Map<String, IBinder> create(Collection<ApkPackage> packages) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        services.put("package", StandIn.of(IPackageManager.class,
-                new PackageManagerService(packages)).asBinder());
+        PackageManagerService pm = new PackageManagerService(packages);
+        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        ActivityManagerService am = new ActivityManagerService(atm);
+        services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());
         services.put(Context.ACTIVITY_SERVICE,
-                StandIn.of(IActivityManager.class, new ActivityManager()).asBinder());
+                StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
-                StandIn.of(IActivityTaskManager.class, new ActivityTaskManager()).asBinder());
+                StandIn.of(IActivityTaskManager.class, atm).asBinder());
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, new WindowManagerService()).asBinder());
         services.put(Context.DISPLAY_SERVICE,
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
+                new InputMethodManager()).asBinder());
         return services;
     }
 
@@ -129,49 +132,6 @@ public final class Services {
         }
     }
 
-    /** activity: ActivityManagerService. */
-    public static final class ActivityManager extends IActivityManager.Default {
-        @Override
-        public ContentProviderHolder getContentProvider(IApplicationThread caller,
-                String callingPackage, String name, int userId, boolean stable) {
-            return null;  // No providers yet: Settings and friends fall back to defaults.
-        }
-
-        @Override
-        public int checkPermission(String permission, int pid, int uid) {
-            return PackageManager.PERMISSION_GRANTED;
-        }
-
-        @Override
-        public UserInfo getCurrentUser() {
-            return UserManager.owner();
-        }
-    }
-
-    /** activity_task: ActivityTaskManagerService, and its per-activity controller. */
-    public static final class ActivityTaskManager extends IActivityTaskManager.Default {
-        private final StandIn<IActivityClientController> mClient =
-                StandIn.of(IActivityClientController.class, new ActivityClientController());
-
-        @Override
-        public IActivityClientController getActivityClientController() {
-            return mClient.asInterface();
-        }
-    }
-
-    public static final class ActivityClientController
-            extends IActivityClientController.Default {
-        @Override
-        public int getDisplayId(IBinder activityToken) {
-            return Display.DEFAULT_DISPLAY;
-        }
-
-        @Override
-        public int getTaskForActivity(IBinder token, boolean onlyRoot) {
-            return 1;
-        }
-    }
-
     /** display: DisplayManagerService, with one display. */
     public static final class DisplayManager extends IDisplayManager.Default {
         @Override
@@ -195,8 +155,34 @@ public final class Services {
         }
 
         @Override
+        public OverlayProperties getOverlaySupport() {
+            // DisplayManagerService answers the composer's; the display has none of its
+            // own (the natives are stand-ins until the graphics track's).
+            return OverlayProperties.getDefault();
+        }
+
+        @Override
+        public int getPreferredWideGamutColorSpaceId() {
+            return 0;  // ColorSpace.Named.SRGB's id: the display has no wide color gamut
+        }
+
+        @Override
         public Point getStableDisplaySize() {
             return new Point(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
+        }
+    }
+
+    /**
+     * input_method: InputMethodManagerService, with no input method. A window's
+     * ViewRootImpl needs the service to exist (InputMethodManager's instance); every
+     * call answers its default (no IME, nothing shown).
+     */
+    public static final class InputMethodManager extends IInputMethodManager.Default {
+        @Override
+        public void addClient(com.android.internal.inputmethod.IInputMethodClient client,
+                com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
+                int untrustedDisplayId) {
+            // No input method will ever bind to it.
         }
     }
 

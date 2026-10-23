@@ -37,6 +37,7 @@ int register_android_os_Binder(JNIEnv* env);
 // hwui's natives (android.graphics, RenderNode, HardwareRenderer) and
 // Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
 int register_gesher_graphics(JNIEnv* env);
+int register_gesher_attach_standins(JNIEnv* env);
 
 namespace android {
 
@@ -57,6 +58,12 @@ int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
+// services_natives.cc: the app process attached to a system server.
+int register_gesher_ApplicationSharedMemory(JNIEnv* env);
+int register_gesher_ClassLoaderFactory(JNIEnv* env);
+int register_gesher_ActivityThread(JNIEnv* env);
+int register_gesher_DebugStore(JNIEnv* env);
+int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -352,11 +359,22 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
+    // Stand-ins for graphics and view natives on the attached app process's path
+    // (attach_standins.cc); before the graphics rows, so real natives replace them.
+    {"gesher_attach_standins", "android/graphics/Canvas", ::register_gesher_attach_standins},
     // hwui (AndroidRuntime.cpp registers it through libhwui's
     // register_android_graphics_classes), then the device-only stand-ins.
     {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
     {"gesher_device_standins", "android/view/SurfaceControl", ::register_gesher_device_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
+    {"gesher_ApplicationSharedMemory", "com/android/internal/os/ApplicationSharedMemory",
+     register_gesher_ApplicationSharedMemory},
+    {"gesher_ClassLoaderFactory", "com/android/internal/os/ClassLoaderFactory",
+     register_gesher_ClassLoaderFactory},
+    {"gesher_ActivityThread", "android/app/ActivityThread", register_gesher_ActivityThread},
+    {"gesher_DebugStore", "com/android/internal/os/DebugStore", register_gesher_DebugStore},
+    {"gesher_PropertyInvalidatedCache", "android/app/PropertyInvalidatedCache",
+     register_gesher_PropertyInvalidatedCache},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
