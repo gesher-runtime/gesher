@@ -34,6 +34,9 @@
 
 #define SYSV __attribute__((sysv_abi))
 
+// compat/hwui/graphics_runtime.cc: a FrameMetricsObserver of hwui that drops the metrics.
+extern "C" jlong gesher_standin_frame_metrics_observer();
+
 namespace {
 
 void FreeBlock(void* ptr) { free(ptr); }
@@ -42,6 +45,7 @@ SYSV jlong Standin_zero() { return 0; }
 SYSV jdouble Standin_zeroFloat() { return 0.0; }
 SYSV jlong Standin_create() { return reinterpret_cast<jlong>(calloc(1, 64)); }
 SYSV jlong Standin_freeFunction() { return reinterpret_cast<jlong>(&FreeBlock); }
+SYSV jlong Standin_frameMetricsObserver() { return gesher_standin_frame_metrics_observer(); }
 
 const JNINativeMethod kandroid_graphics_Canvas[] = {
     {"nGetNativeFinalizer", "()J", reinterpret_cast<void*>(&Standin_freeFunction)},
@@ -336,7 +340,7 @@ const JNINativeMethod kandroid_view_InputEventReceiver[] = {
     {"nativeProbablyHasInput", "(J)Z", reinterpret_cast<void*>(&Standin_zero)},
     {"nativeConsumeBatchedInputEvents", "(JJ)Z", reinterpret_cast<void*>(&Standin_zero)},
     {"nativeGetToken", "(J)Landroid/os/IBinder;", reinterpret_cast<void*>(&Standin_zero)},
-    {"nativeGetFrameMetricsObserver", "(J)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetFrameMetricsObserver", "(J)J", reinterpret_cast<void*>(&Standin_frameMetricsObserver)},
     {"nativeDump", "(JLjava/lang/String;)Ljava/lang/String;", reinterpret_cast<void*>(&Standin_zero)},
 };
 
