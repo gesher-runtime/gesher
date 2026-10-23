@@ -42,6 +42,7 @@ int register_android_os_Trace(JNIEnv* env);
 int register_android_text_AndroidCharacter(JNIEnv* env);
 int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
+int register_android_util_jar_StrictJarFile(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
 
 // --- AndroidRuntime statics ---------------------------------------------------
@@ -200,6 +201,8 @@ static const struct {
      register_android_text_AndroidCharacter},
     {"android_util_EventLog", "android/util/EventLog", register_android_util_EventLog},
     {"android_util_Log", "android/util/Log", register_android_util_Log},
+    {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
+     register_android_util_jar_StrictJarFile},
     {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",
      register_com_android_internal_util_VirtualRefBasePtr},
     {"android_content_res_ApkAssets", "android/content/res/ApkAssets",
