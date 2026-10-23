@@ -44,10 +44,12 @@ target_include_directories(androidfw PUBLIC ${_afw}/include ${_afw}/include_path
 target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z)
 target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
 # libandroidfw_defaults: gnu++2b, -Werror -Wunreachable-code, and on Windows
-# -Wno-missing-field-initializers.
+# -Wno-missing-field-initializers. Soong's global flags let these pass too: a
+# variable-length array (LocaleData) and a variable unused while the
+# resource_readwrite_flags flag is off (LoadedArsc).
 set_target_properties(androidfw PROPERTIES CXX_STANDARD 23)
 target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
-  -Wno-missing-field-initializers)
+  -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable)
 
 add_library(framework_runtime OBJECT
   ${_fwjni}/android_content_res_ApkAssets.cpp
