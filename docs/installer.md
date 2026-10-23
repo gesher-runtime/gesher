@@ -73,3 +73,11 @@ command line through `cmd.exe` as Explorer would, and expects
 `.apk`'s default and the `OpenWithProgids` entry are gone.
 
 Verified in ci run 39946705097 (package job on windows-2022).
+
+With the Gesher device (ci run 40019524773), the package job also runs the
+installed `gesher-app lifecycle.apk` (the device starts, the APK is installed
+and run; `gesher-app list` shows it), `--single-process`, `gesher-app
+shutdown` (the device's three processes gone), the `.apk` open command (which
+starts the device again) and checks that the device still runs after that
+command's console is gone; after uninstalling, that its processes are gone and
+`%LOCALAPPDATA%\Gesher` removed.

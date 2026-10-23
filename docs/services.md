@@ -38,12 +38,92 @@ Running by hand: `set GESHER_BINDER=mydev`, start `binderd.exe mydev`, then
 `servicemanager.exe`, then any processes using binder (dalvikvm with
 framework.jar, or the probes; the system server and gesher-app as in
 [app/README.md](../app/README.md), or simply `gesher-app my.apk
---system-server`, which starts all of them). `GESHER_BINDER_TRACE=1` makes binderd trace
-every transaction on stderr.
+--system-server`, which starts all of them for one run). `gesher-app my.apk`
+runs it on the persistent Gesher device instead (0026; `gesher-app status`,
+`shutdown`; logs in `%LOCALAPPDATA%\Gesher\logs`, one `<package>.log` per
+app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
+`GESHER_APP_METHOD_TRACE=<dir>` (a drive-less path) makes each app process the
+device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
+which survives an abort (it found the HealthConnectManager placeholder's need).
 
 ## Status and next steps
 
 ### Done and verified
+- **CI run 40019524773** (ci, both windows-2022 and windows-2025, 63 PASS and
+  0 failed each, and the package job; commit 5a62b99): the persistent Gesher
+  device, [0026](decisions/0026-services-persistent-device.md). Every earlier
+  check passes (the gesher-app single-process checks, native-libs' nativeapp,
+  graphics', the per-run `--system-server` checks; components' parse line now
+  counts 4 activities, with `CrossActivity`; the registration check matches
+  the list's start, as `permission_checker` and the persistent device's
+  `gesher` follow), and `50-services.ps1` adds:
+  - `PASS  services: two launchers at once: one starts the Gesher device (binderd, servicemanager, system server, detached), the other waits for it and connects`
+  - `PASS  services: gesher-app install and list: base.apk in data/app/<package>-<n>, packages.list, getInstalledPackages and getPackageInfo from the system server`
+  - `PASS  services: gesher-app launch lifecycle.apk: the system server starts its process (GesherAppProcess, start seq), onResume, the task removed, the process ended`
+  - `PASS  services: gesher-app launch components.apk --keep-task: installed on first launch, its own process, every step`
+  - `PASS  services: launches share one system server (pid N): lifecycle.apk and components.apk, each in a process it started`
+  - `PASS  services: cross-package: an implicit intent from components starts peer's activity in a process of peer's, and the result comes back`
+  - `PASS  services: cross-package: components' ContentResolver reaches peer's provider (insert, getType, call), the system server starting peer's process for it`
+  - `PASS  services: processes on demand: peer started for its activity, ended with it, started again for its provider, ended with its last client`
+  - `PASS  services: gesher-app uninstall: the package's code, data and entry removed`
+  - `PASS  services: gesher-app shutdown: the system server ends its app processes, then itself, binderd and servicemanager (one job)`
+  - `PASS  services: an idle device stops by itself (GESHER_IDLE_TIMEOUT)`
+  - `PASS  services: a killed system server takes binderd and servicemanager with it; the next launcher cleans up the stale state`
+
+  and the package job (the installed `gesher-app`, now the device by default):
+  - `PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it`
+  - `PASS  installer: gesher-app shutdown stops the Gesher device's processes`
+  - `PASS  installer: gesher-app --system-server runs the app with the services in a system server process`
+  - `PASS  installer: .apk opens with gesher-app through the registered command`
+  - `PASS  installer: the Gesher device started by a double-click keeps running after its console is gone`
+  - `PASS  installer: uninstall stops the Gesher device and removes its data`
+  - `PASS  installer: uninstall removes the .apk association`
+  - `PASS  installer: installs, runs Hello and gesher-app, uninstalls`
+
+  (the single-process run there is `gesher-app lifecycle.apk --single-process`).
+- The device: binderd, servicemanager and `SystemServer --persistent`, started
+  by the first `com.gesher.app.Launcher` detached (`Zygote.nativeSpawn`:
+  `CREATE_NO_WINDOW`, a new process group, breakaway from the launcher's job,
+  stdout/stderr appended to `logs/*.log`, only the log and NUL handles
+  inherited, so a runner reading the launcher's pipes is not held), recorded in
+  `$ANDROID_DATA/system/gesher-device` (pids and creation times) and
+  `gesher-device.ready`; launchers take the named mutex
+  `Local\gesher-<hash>-device`. The server puts itself, binderd and
+  servicemanager in a kill-on-close job (app processes, its children, join
+  it); it stops on its named shutdown event (`gesher-app shutdown`, also from
+  PowerShell without a runtime), on `GESHER_IDLE_TIMEOUT` seconds (default
+  600) without an app process or launcher call, or with the job when killed.
+- Packages: `Installer` (`app/<package>-<n>/base.apk`, `lib/x86_64`,
+  `data/<package>`, `system/packages.list`, loaded at start; same APK:
+  unchanged; another: an update after stopping the package; uninstall;
+  directories no entry names are removed at start). The `gesher` service
+  (hand-written Parcels) carries install, uninstall, status, shutdown and a
+  package's last exit code; `list` is `IPackageManager.getInstalledPackages`
+  and `getPackageInfo`.
+- Processes on demand: `ActivityTaskManagerService.startProcess` (for an
+  activity, a service, a manifest receiver or a provider of a package with no
+  process) spawns `android.app.GesherAppProcess --package --start-seq
+  --target-sdk` with the server's own runtime options; `attachApplication`
+  pairs it by `startSeq`; a process that dies first fails what waited.
+  `maybeExit` ends a process with no activity, service, waiting work or
+  client process of another package using its providers; a process told to
+  exit hands out no provider. `getContentProvider` starts a provider's process
+  and waits for it to publish. Self-attached processes (`--system-server`)
+  still work: the launcher thread now asks for its start after attaching.
+- `gesher-app my.apk` (the `.apk` association too) = `Launcher launch`:
+  install or update, `startActivityAndWait` from no process, the app's
+  `logs/<package>.log` copied to the console, the task removed when idle
+  (`--keep-task` to let it finish), the package's process waited for
+  (`getRunningAppProcesses`, implemented), its exit code returned.
+  `--single-process` and `--system-server` keep the earlier modes.
+- What the cross-package path needed: a `permission_checker` stand-in
+  (`Services.PermissionChecker`, granting: a provider's `Transport.getType`
+  checks the caller), a placeholder `android.health.connect.HealthConnectManager`
+  (`AppOpsManager.permissionToOp` asks it; missing, the provider's binder
+  thread died with a NoClassDefFoundError without a stack trace, found with a
+  streamed method trace, `GESHER_APP_METHOD_TRACE=<dir>`), and java.nio's
+  delete for directories (`File.delete` is `remove(3)`, which removes no
+  directory on Windows' C runtime).
 - **CI run 40007889523** (ci, both windows-2022 and windows-2025, and the package
   job; commit 6e1ab01, on the integration branch with the graphics, ANGLE and
   native-libs tracks): roadmap item 2's rest of the app model,
@@ -173,10 +253,8 @@ every transaction on stderr.
   (`debug.choreographer.vsync=false`, set by GesherAppProcess); and, when
   there is no `/system/etc/fonts.xml`, an empty `sans-serif` typeface made
   before `handleBindApplication`'s font map load (GesherAppProcess).
-- The mode stays opt-in: `gesher-app.cmd` and the `.apk` association run the
-  single-process `GesherAppDriver`. The attach path runs headless on stand-in
-  graphics natives and a fonts workaround; it should become the default once
-  the graphics track's natives and window session are in it.
+- (Until run 40019524773 the mode was opt-in; `gesher-app` and the `.apk`
+  association now use the persistent device, 0026.)
 - **CI run 39984218373** (ci, both windows-2022 and windows-2025; commit
   43b6ff4): steps 1a and 1b below. Every earlier check still passes
   (`PASS  gesher-app: lifecycle.apk to onResume`, the installer's three, the
@@ -262,10 +340,18 @@ every transaction on stderr.
    c. Done (above).
    d. Done (above).
    e. Done (above): activities, services, broadcasts, providers (0025).
+   f. Done (above): the persistent device, installed packages, processes on
+      demand, other packages' activities and providers (0026).
    Next: singleTask/singleInstance and CLEAR_TOP, ordered and sticky
-   broadcasts, providers of other packages (needs starting their process),
-   permissions and exported checks, a service keeping its process alive,
-   making `--system-server` the default (with the graphics track's session).
+   broadcasts, cross-process cursors (CursorWindow's natives with Parcel
+   support: a provider of another package answers insert, getType and call,
+   not query), permissions and exported checks, one uid per package, the
+   graphics track's window session in device mode (the hardware renderer is
+   off until it gives surfaces, `GESHER_APP_HWUI=1`), system fonts (an app
+   whose theme has an action bar stops measuring text in device mode; use
+   `--single-process`). Services and manifest receivers of another package
+   start its process through the same path (`withProcess`), not yet checked
+   by a test.
 2. For the graphics track: `window` is
    `com.gesher.server.WindowManagerService`, minimal. A real
    `IWindowSession` plugs in with `WindowManagerService.setSessionFactory`

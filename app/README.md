@@ -295,8 +295,10 @@ app-process path reaches a few more module classes; `app/java` has
 placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
 `android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
-`ActivityContextInfo` (no intent starts an SDK sandbox activity), and
-`android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped). When
+`ActivityContextInfo` (no intent starts an SDK sandbox activity),
+`android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped), and
+`android.health.connect.HealthConnectManager` (`AppOpsManager.permissionToOp` asks it
+whether a permission is a health permission: none is). When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
 
