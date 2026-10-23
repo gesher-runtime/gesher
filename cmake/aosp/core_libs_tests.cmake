@@ -95,6 +95,9 @@ gesher_core_test(libcutils_test
   LIBS cutils log base gtest_main)
 target_include_directories(libcutils_test PRIVATE ${_cu})
 set_target_properties(libcutils_test PROPERTIES CXX_STANDARD 23)
+# cutils/properties.h sizes keys with bionic's PROP_NAME_MAX, which only
+# bionic's <sys/system_properties.h> defines; trace-dev.inc uses it.
+target_compile_definitions(libcutils_test PRIVATE PROP_NAME_MAX=32)
 
 # --- libandroidfw_tests ---------------------------------------------------------
 # With the android sources (BackupData, BackupHelpers, ObbFile, PosixUtils).

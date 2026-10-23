@@ -16,6 +16,9 @@
 #include <unwindstack/AndroidUnwinder.h>
 #include <unwindstack/Error.h>
 
+// <windows.h> defines ERROR_INVALID_PARAMETER as Win32's error number.
+constexpr unwindstack::ErrorCode kErrorInvalidParameter = unwindstack::ERROR_INVALID_PARAMETER;
+
 #include <cxxabi.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -310,7 +313,7 @@ bool AndroidUnwinder::Unwind(std::optional<pid_t> tid, AndroidUnwinderData& data
 
 bool AndroidUnwinder::Unwind(void* ucontext, AndroidUnwinderData& data) {
   if (ucontext == nullptr) {
-    data.error.code = ERROR_INVALID_PARAMETER;
+    data.error.code = kErrorInvalidParameter;
     return false;
   }
   // A signal handler's ucontext_t has no Windows unwinding context in it.
