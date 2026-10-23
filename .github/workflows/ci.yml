@@ -66,6 +66,11 @@ jobs:
   framework:
     uses: ./.github/workflows/framework.yml
 
+  # Phase 6 (native libraries): the Android NDK test .so files, built on the
+  # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
+  native-libs:
+    uses: ./.github/workflows/native-libs.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -181,7 +186,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: [build, framework]
+    needs: [build, framework, native-libs]
     strategy:
       fail-fast: false
       matrix:
@@ -202,6 +207,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: framework
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-libs
           path: dist
 
       - name: Run tests
