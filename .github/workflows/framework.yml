@@ -186,17 +186,21 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Cache build-tools and the framework's JVM tools
-        uses: actions/cache@v4
+      # Restored and saved apart (actions/cache saves only when the whole
+      # job passes, and the javac step may still fail): each is saved right
+      # after it is built.
+      - name: Restore build-tools and the framework's JVM tools
+        id: jvm
+        uses: actions/cache/restore@v4
         with:
           path: |
             work/build-tools-36.1
             out/framework/jvm-tools
           key: framework-tools-36.1-kotlin-2.1.21
 
-      - name: Cache the coremod
+      - name: Restore the coremod
         id: coremod
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: out/coremod
           key: coremod-${{ hashFiles('tools/build-boot-jars.sh', 'tools/make-coremod.sh', 'tools/gen/**', 'config/aconfig/**', 'java/compile-stubs/**', 'aosp.lock', 'patches/libcore/**', 'patches/external/icu/**') }}
@@ -207,9 +211,16 @@ jobs:
           WORK_DIR="$PWD/work/boot" tools/build-boot-jars.sh out/boot-jars
           tools/make-coremod.sh work/boot out/coremod
 
-      - name: Cache framework-res
+      - name: Save the coremod
+        if: steps.coremod.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/coremod
+          key: ${{ steps.coremod.outputs.cache-primary-key }}
+
+      - name: Restore framework-res
         id: res
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: out/framework-res
           key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
@@ -217,6 +228,13 @@ jobs:
       - name: Build framework-res (R.java, framework-res.apk)
         if: steps.res.outputs.cache-hit != 'true'
         run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res > framework-res.log 2>&1 || { tail -50 framework-res.log; exit 1; }
+
+      - name: Save framework-res
+        if: steps.res.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/framework-res
+          key: ${{ steps.res.outputs.cache-primary-key }}
 
       - name: Build the framework (generators + javac)
         run: |
@@ -251,6 +269,15 @@ jobs:
             exit 1
           fi
           echo "::notice::javac: no errors"
+
+      - name: Save build-tools and the framework's JVM tools
+        if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/build-tools-36.1
+            out/framework/jvm-tools
+          key: ${{ steps.jvm.outputs.cache-primary-key }}
 
       - name: Sparse sets after the build
         if: always()
