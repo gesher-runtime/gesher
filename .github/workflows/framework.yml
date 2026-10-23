@@ -354,6 +354,19 @@ jobs:
           name: framework
           path: dist-framework/
 
+      # TEMPORARY (services track): the classes, to compile gesher-app locally.
+      - name: Pack the framework's classes (temporary)
+        run: |
+          mkdir -p dist-classes
+          (cd out/framework/classes && zip -qr "$GITHUB_WORKSPACE/dist-classes/framework-classes.zip" .)
+          (cd out/coremod && zip -qr "$GITHUB_WORKSPACE/dist-classes/coremod.zip" .)
+          ls -la dist-classes
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-classes
+          path: dist-classes/
+          retention-days: 2
+
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
         uses: actions/cache/save@v4
