@@ -22,6 +22,7 @@
 #include <windows.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <io.h>
 #include <unistd.h>
 
@@ -360,10 +361,30 @@ std::string CrtMode(const char* mode) {
   if (noinherit) out += 'N';
   return out;
 }
+// fopen through gesher-base's open (Linux O_* flags, delete access shared, so
+// the file can be unlinked or renamed while open, as on Linux), then fdopen.
 FILE* BIONIC_SYSV Fopen(const char* path, const char* mode) {
   std::string m = CrtMode(mode);
   if (m.empty()) return errno = kEINVAL, nullptr;
-  return std::fopen(path, m.c_str());
+  bool plus = m.find('+') != std::string::npos;
+  int flags = 0;
+  switch (m[0]) {
+    case 'r': flags = plus ? O_RDWR : O_RDONLY; break;
+    case 'w': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
+    default: flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
+  }
+  if (m.find('x') != std::string::npos) flags |= O_EXCL;
+  if (m.find('N') != std::string::npos) flags |= O_CLOEXEC;
+  int fd = open(path, flags, 0666);
+  if (fd < 0) return nullptr;
+  std::string crt = m.substr(0, plus ? 2 : 1) + "b";
+  FILE* f = fdopen(fd, crt.c_str());
+  if (f == nullptr) {
+    int saved = errno;
+    close(fd);
+    errno = saved;
+  }
+  return f;
 }
 FILE* BIONIC_SYSV Fdopen(int fd, const char* mode) {
   std::string m = CrtMode(mode);
@@ -505,7 +526,6 @@ int BIONIC_SYSV Setvbuf(void* f, char* buf, int mode, size_t size) {
   return std::setvbuf(F(f), buf, kModes[mode], size);
 }
 void BIONIC_SYSV Setbuf(void* f, char* buf) { std::setbuf(F(f), buf); }
-int BIONIC_SYSV Remove(const char* path) { return std::remove(path); }
 FILE* BIONIC_SYSV Tmpfile() { return std::tmpfile(); }
 void BIONIC_SYSV Perror(const char* s) {
   if (s != nullptr && *s != 0) {
@@ -860,7 +880,6 @@ void RegisterStdio(SymbolTable& t) {
   E("rewind", Rewind);
   E("setvbuf", Setvbuf);
   E("setbuf", Setbuf);
-  E("remove", Remove);
   E("tmpfile", Tmpfile);
   E("perror", Perror);
   E("stdin", g_stdin);

@@ -496,7 +496,6 @@ int64_t BIONIC_SYSV Pwrite(int fd, const void* buf, size_t n, int64_t off) {
 int64_t BIONIC_SYSV Lseek(int fd, int64_t off, int whence) {
   return static_cast<int64_t>(lseek(fd, static_cast<off_t>(off), whence));
 }
-int BIONIC_SYSV Unlink(const char* path) { return unlink(path); }
 int BIONIC_SYSV Access(const char* path, int mode) { return access(path, mode); }
 int BIONIC_SYSV Mkdir(const char* path, uint32_t mode) {
   return mkdir(path, static_cast<mode_t>(mode));
@@ -896,7 +895,6 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("pwrite64", Pwrite);
   ENTRY("lseek", Lseek);
   ENTRY("lseek64", Lseek);
-  ENTRY("unlink", Unlink);
   ENTRY("access", Access);
   ENTRY("mkdir", Mkdir);
   ENTRY("dup", Dup);

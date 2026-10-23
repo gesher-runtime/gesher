@@ -247,12 +247,54 @@ int BIONIC_SYSV Fstatat(int dirfd, const char* path, struct stat* st, int flags)
   if (r == 0) WidenStat(st);
   return r;
 }
+// unlink/rmdir with Linux's semantics: the name goes at once, even while the
+// file (or directory) is open, as long as the opener shared delete access
+// (gesher-base's open does; the shim's fopen goes through it). A plain
+// DeleteFile/RemoveDirectory only marks it delete-pending, which keeps the
+// name, and its parent non-empty, until the last handle closes; std::
+// filesystem's remove_all removes a directory while it still holds it open.
+// Falls back to gesher-base's calls (and their errno) when the POSIX
+// disposition is unavailable.
+int PosixDelete(const char* path, bool directory) {
+  if (path == nullptr) return errno = kEFAULT, -1;
+  std::wstring w = Wide(path);
+  HANDLE h = CreateFileW(w.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                         nullptr);
+  if (h != INVALID_HANDLE_VALUE) {
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    bool is_dir = GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+                  (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+                  (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+    if (is_dir != directory) {
+      CloseHandle(h);
+      return errno = directory ? kENOTDIR : 21 /* EISDIR */, -1;
+    }
+    FILE_DISPOSITION_INFO_EX info{};
+    info.Flags = FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
+                 FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE;
+    bool ok = SetFileInformationByHandle(h, FileDispositionInfoEx, &info, sizeof(info));
+    DWORD error = GetLastError();
+    CloseHandle(h);
+    if (ok) return 0;
+    if (error == ERROR_DIR_NOT_EMPTY) return errno = 39 /* ENOTEMPTY */, -1;
+  }
+  return directory ? rmdir(path) : unlink(path);
+}
+
+int BIONIC_SYSV Unlink(const char* path) { return PosixDelete(path, false); }
+int BIONIC_SYSV Rmdir(const char* path) { return PosixDelete(path, true); }
+int BIONIC_SYSV Remove(const char* path) {
+  struct stat st {};
+  if (path != nullptr && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) return Rmdir(path);
+  return Unlink(path);
+}
 int BIONIC_SYSV Unlinkat(int dirfd, const char* path, int flags) {
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
-  return (flags & kAtRemovedir) != 0 ? rmdir(p.c_str()) : unlink(p.c_str());
+  return PosixDelete(p.c_str(), (flags & kAtRemovedir) != 0);
 }
-int BIONIC_SYSV Rmdir(const char* path) { return rmdir(path); }
 int BIONIC_SYSV Mkdirat(int dirfd, const char* path, uint32_t mode) {
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
@@ -668,6 +710,8 @@ void RegisterPosix(SymbolTable& t) {
   E("fstatat64", Fstatat);
   E("unlinkat", Unlinkat);
   E("rmdir", Rmdir);
+  E("unlink", Unlink);
+  E("remove", Remove);
   E("mkdirat", Mkdirat);
   E("renameat", Renameat);
   E("rename", Rename);
