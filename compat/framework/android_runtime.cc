@@ -27,8 +27,10 @@
 
 #include "core_jni_helpers.h"
 
-// android_util_Binder.cpp defines its register function outside the namespace.
+// android_util_Binder.cpp defines its register function outside the namespace,
+// as hwui_standins.cc does.
 int register_android_os_Binder(JNIEnv* env);
+int register_gesher_hwui_standins(JNIEnv* env);
 
 namespace android {
 
@@ -348,6 +350,7 @@ static const struct {
      register_android_content_XmlBlock},
     {"android_graphics_ColorSpace", "android/graphics/ColorSpace$Rgb$Native",
      register_android_graphics_ColorSpace},
+    {"gesher_hwui_standins", "android/graphics/RenderNode", ::register_gesher_hwui_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };

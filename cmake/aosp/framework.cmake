@@ -53,7 +53,25 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
   -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable
   -Wno-deprecated-anon-enum-enum-conversion)
 
+# Stand-ins for hwui's natives (compat/framework/hwui_standins.cc), their
+# tables generated from hwui's JNI sources.
+set(_hwui_standin_sources
+  android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp)
+set(_hwui_standin_inputs)
+foreach(_s ${_hwui_standin_sources})
+  string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")
+  list(APPEND _hwui_standin_inputs "${_f}")
+endforeach()
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py
+          ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc ${_hwui_standin_sources}
+  DEPENDS ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py ${_hwui_standin_inputs}
+  COMMENT "hwui stand-in tables")
+
 add_library(framework_runtime OBJECT
+  ${CMAKE_SOURCE_DIR}/compat/framework/hwui_standins.cc
+  ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
   ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_Parcel.cpp
