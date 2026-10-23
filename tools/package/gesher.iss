@@ -2,7 +2,8 @@
 ;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
-; PATH and adds a Start menu entry that runs the bundled Hello.
+; PATH, adds a Start menu entry that runs the bundled Hello and opens `.apk`
+; files with gesher-app (docs/installer.md).
 
 #ifndef BuildDir
   #error Pass /DBuildDir=<build output directory>
@@ -25,6 +26,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ChangesEnvironment=yes
+ChangesAssociations=yes
 OutputBaseFilename=gesher-setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
@@ -53,6 +55,18 @@ Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"
 Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 
+[Registry]
+; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
+; an APK with gesher-app. Gesher always joins `.apk`'s "Open with" list, but
+; becomes the default only when no other ProgID owns `.apk` (ApkUnclaimed), and
+; never touches Explorer's UserChoice. The uninstaller removes `.apk`'s default
+; only while it still names Gesher.Apk (CurUninstallStepChanged).
+Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
+Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
+
 [UninstallDelete]
 ; The runtime's directories (gesher.ps1).
 Type: filesandordirs; Name: "{localappdata}\Gesher"
@@ -60,6 +74,20 @@ Type: filesandordirs; Name: "{localappdata}\Gesher"
 [Code]
 const
   EnvKey = 'Environment';
+  ApkKey = 'Software\Classes\.apk';
+  ApkProgId = 'Gesher.Apk';
+
+// True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
+// per-user and per-machine view, so another app's machine-wide association
+// counts too.
+function ApkUnclaimed(): Boolean;
+var
+  ProgId: String;
+begin
+  if not RegQueryStringValue(HKEY_CLASSES_ROOT, '.apk', '', ProgId) then
+    ProgId := '';
+  Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
+end;
 
 function PathEntries(): String;
 begin
@@ -96,6 +124,10 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    if RegQueryStringValue(HKEY_CURRENT_USER, ApkKey, '', Path) and
+       (CompareText(Path, ApkProgId) = 0) then
+      RegDeleteValue(HKEY_CURRENT_USER, ApkKey, '');
+    RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, ApkKey);
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if HasEntry(Path, Dir) then
