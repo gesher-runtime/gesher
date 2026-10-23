@@ -356,6 +356,22 @@ jobs:
           name: framework
           path: dist-framework/
 
+      # The framework's classes and the coremod, to compile gesher-app's Java
+      # against off CI (app/build.sh --framework-classes/--core-classes).
+      - name: Pack the framework's classes
+        run: |
+          (cd out/framework/classes && zip -qr "$GITHUB_WORKSPACE/framework-classes.zip" .)
+          (cd out/coremod && zip -qr "$GITHUB_WORKSPACE/coremod.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-classes
+          path: |
+            framework-classes.zip
+            coremod.zip
+          retention-days: 3
+          compression-level: 0
+
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
         uses: actions/cache/save@v4
