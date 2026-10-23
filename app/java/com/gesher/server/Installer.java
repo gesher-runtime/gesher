@@ -108,7 +108,21 @@ final class Installer {
      */
     static List<ApkPackage> loadInstalled() throws IOException {
         List<ApkPackage> result = new ArrayList<>();
-        for (Entry e : readRegistry().values()) {
+        Map<String, Entry> entries = readRegistry();
+        // Code directories no entry names: an uninstall or update that could not delete
+        // them (a file still open), or one that did not finish.
+        java.util.Set<String> kept = new java.util.HashSet<>();
+        for (Entry e : entries.values()) kept.add(new File(e.codePath).getName());
+        File[] dirs = new File(Device.dataDir(), "app").listFiles();
+        if (dirs != null) {
+            for (File d : dirs) {
+                if (d.isDirectory() && !kept.contains(d.getName())) {
+                    SystemServer.log("removing " + d + ": no installed package's");
+                    deleteTree(d);
+                }
+            }
+        }
+        for (Entry e : entries.values()) {
             try {
                 result.add(open(e));
             } catch (Exception ex) {
@@ -180,7 +194,7 @@ final class Installer {
         writeRegistry();
         mPm.add(installed);
         if (old != null && !old.codePath.equals(entry.codePath)) {
-            deleteTree(new File(old.codePath));
+            delete(new File(old.codePath));
         }
         String what = old != null ? "updated" : "installed";
         SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
@@ -196,8 +210,8 @@ final class Installer {
         mPm.remove(packageName);
         mEntries.remove(packageName);
         writeRegistry();
-        deleteTree(new File(e.codePath));
-        deleteTree(new File(Device.dataDir(), "data/" + packageName));
+        delete(new File(e.codePath));
+        delete(new File(Device.dataDir(), "data/" + packageName));
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;
     }
@@ -239,13 +253,25 @@ final class Installer {
         }
     }
 
-    private static void deleteTree(File f) {
+    /**
+     * Deletes a tree. The system server may still have the package's APK open (the parser's
+     * assets, closed when collected): it tries again after a collection, and a code
+     * directory left behind is removed at the next start.
+     */
+    private static void delete(File f) {
+        for (int i = 0; i < 5 && !deleteTree(f); i++) {
+            System.gc();
+            System.runFinalization();
+            android.os.SystemClock.sleep(200);
+        }
+        if (f.exists()) SystemServer.log("cannot delete " + f + " now");
+    }
+
+    private static boolean deleteTree(File f) {
         File[] children = f.listFiles();
         if (children != null) {
             for (File c : children) deleteTree(c);
         }
-        if (f.exists() && !f.delete()) {
-            SystemServer.log("cannot delete " + f);
-        }
+        return !f.exists() || f.delete();
     }
 }
