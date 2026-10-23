@@ -192,14 +192,31 @@ int main(int argc, char** argv) {
   int rc = cpu_draw(cpu_window, out, sizeof out);
   std::printf("cpu: %s\n", out);
   if (rc != 0) failures++;
+  // A shown window's WM_PAINT runs on its own thread after the post; until
+  // then PrintWindow may see the previous contents, so it is retried.
   Image cpu_image;
-  if (!Capture(static_cast<HWND>(gesher_window_hwnd(cpu_window)), PW_CLIENTONLY, false, &cpu_image)) {
+  int wrong = -1;
+  // PW_CLIENTONLY has the window paint into the memory DC (WM_PRINTCLIENT);
+  // with PW_RENDERFULLCONTENT, DWM gives what it composed. Both are tried.
+  const char* way = "PrintWindow";
+  for (int attempt = 0; attempt < 20 && wrong != 0; attempt++) {
+    if (attempt > 0) Sleep(100);
+    UINT flags = attempt % 2 == 0 ? PW_CLIENTONLY : PW_CLIENTONLY | PW_RENDERFULLCONTENT;
+    if (Capture(static_cast<HWND>(gesher_window_hwnd(cpu_window)), flags, false, &cpu_image)) {
+      wrong = WrongQuadrantPixels(cpu_image);
+      way = attempt % 2 == 0 ? "PrintWindow" : "PrintWindow(PW_RENDERFULLCONTENT)";
+    }
+  }
+  if (wrong < 0) {
     std::printf("FAIL: PrintWindow of the cpu window\n");
     failures++;
   } else {
-    int wrong = WrongQuadrantPixels(cpu_image);
-    std::printf("cpu window read back with PrintWindow: %dx%d, %d pixels not red/green/blue/white by quadrant%s\n",
-                cpu_image.width, cpu_image.height, wrong, wrong == 0 ? ": quadrants ok" : "");
+    int w = cpu_image.width, h = cpu_image.height;
+    std::printf("cpu window read back with %s: %dx%d, %d pixels not red/green/blue/white by quadrant%s"
+                " (quadrant centers %06x %06x %06x %06x)\n",
+                way, w, h, wrong, wrong == 0 ? ": quadrants ok" : "", cpu_image.at(w / 4, h / 4),
+                cpu_image.at(3 * w / 4, h / 4), cpu_image.at(w / 4, 3 * h / 4),
+                cpu_image.at(3 * w / 4, 3 * h / 4));
     if (wrong != 0) failures++;
   }
   ANativeWindow_release(cpu_window);
