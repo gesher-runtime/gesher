@@ -18,6 +18,7 @@ on:
       - 'cmake/aosp/skia.cmake'
       - 'cmake/aosp/minikin.cmake'
       - 'cmake/aosp/hwui.cmake'
+      - 'cmake/aosp/window.cmake'
       - 'tools/gen/bp_cc.py'
       - 'probes/graphics/**'
       - 'compat/hwui/**'
@@ -53,12 +54,12 @@ jobs:
 
       # The probes first, so they run on Windows even while the rest fails.
       - name: Build Skia and the probes
-        run: ninja -C out skia_probe > probes-build.log 2>&1 || { grep -B2 -A6 -E 'error' probes-build.log | head -300; exit 1; }
+        run: ninja -C out -k 0 skia_probe window_probe > probes-build.log 2>&1 || { grep -B2 -A6 -E 'error' probes-build.log | head -300; exit 1; }
 
       - name: Collect artifacts
         run: |
           mkdir -p dist-graphics
-          cp out/skia_probe.exe dist-graphics/
+          cp out/skia_probe.exe out/window_probe.exe dist-graphics/
           ls -la dist-graphics
 
       - uses: actions/upload-artifact@v4
@@ -103,6 +104,12 @@ jobs:
         shell: pwsh
         run: |
           & dist/skia_probe.exe C:/Windows/Fonts/arial.ttf skia_probe.png
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Window probe
+        shell: pwsh
+        run: |
+          & dist/window_probe.exe window_probe.png
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4

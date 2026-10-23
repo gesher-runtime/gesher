@@ -6,7 +6,7 @@ through System V thunks, as tools/jni-sysv-patch.py does for core/jni.
       > patches/frameworks/base/0101-graphics-hwui-sysv-jni-tables.patch
 
 ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md);
-hwui's JNI tables (libs/hwui/jni) are written by hand, `{"name", "sig",
+hwui's JNI tables (libs/hwui/jni, and core/jni's Surface, built with hwui) are written by hand, `{"name", "sig",
 (void*) fn}`. Each `(void*) fn` becomes `GESHER_JNI(fn)`, which
 graphics_jni_helpers.h defines under GESHER (patch 0100). The sources are
 read from the checkout's HEAD; FILES are the hwui JNI sources
@@ -76,6 +76,9 @@ FILES = [
     'libs/hwui/jni/text/LineBreaker.cpp',
     'libs/hwui/jni/text/MeasuredText.cpp',
     'libs/hwui/jni/text/TextShaper.cpp',
+    # core/jni's Surface natives, in their host form, are built with hwui
+    # (cmake/aosp/hwui.cmake); core_jni_helpers.h has GESHER_JNI (patch 0001).
+    'core/jni/android_view_Surface.cpp',
 ]
 
 
@@ -91,8 +94,10 @@ def main():
             continue
         # jni-sysv-patch.py insists on core_jni_helpers.h; hwui's sources reach
         # GESHER_JNI through GraphicsJNI.h or graphics_jni_helpers.h instead.
-        if 'GraphicsJNI.h' not in old and 'graphics_jni_helpers.h' not in old:
-            sys.exit(f'{path}: includes neither GraphicsJNI.h nor graphics_jni_helpers.h')
+        if not any(h in old for h in ('GraphicsJNI.h', 'graphics_jni_helpers.h',
+                                      'core_jni_helpers.h')):
+            sys.exit(f'{path}: includes none of GraphicsJNI.h, graphics_jni_helpers.h, '
+                     'core_jni_helpers.h')
         marker = '\n// core_jni_helpers.h\n'
         new = jsp.rewrite(path, old + marker)
         assert new.endswith(marker)

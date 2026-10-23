@@ -79,6 +79,13 @@ class Window {
   // Frames posted so far (UnlockAndPost calls).
   uint64_t frames() const { return frames_; }
 
+  // What the window shows of its client area, read back with PrintWindow
+  // (which repaints into a memory DC: no visible desktop needed). BGRA pixels,
+  // top-down, *width x *height. False if Windows refuses.
+  bool PrintClient(std::vector<uint32_t>* pixels, int* width, int* height);
+  // A copy of the back buffer (BGRA, top-down).
+  void ReadBackBuffer(std::vector<uint32_t>* pixels, int* width, int* height);
+
   // For the window procedure.
   intptr_t HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam);
 

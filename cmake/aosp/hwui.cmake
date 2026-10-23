@@ -92,6 +92,8 @@ configure_file(${_native}/libs/gui/include/gui/TraceUtils.h
 add_library(hwui STATIC ${HWUI_SRCS}
   ${CMAKE_SOURCE_DIR}/compat/hwui/SharedLib.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/graphics_runtime.cc
+  # Fontations (Skia's Rust font backend) is not built: FreeType takes its calls.
+  ${CMAKE_SOURCE_DIR}/compat/hwui/fontations_fallback.cc
   # libandroid_runtime's Surface natives and ANativeWindow_fromSurface, in
   # their host form (core/jni/Android.bp), over hostgraphics' Surface.
   ${_fw}/core/jni/android_view_Surface.cpp
@@ -112,6 +114,7 @@ target_link_libraries(hwui PUBLIC skia minikin harfbuzz hostgraphics ui_types gr
   androidfw nativehelper ziparchive utils cutils log base icu_headers icuuc icui18n jpeg z)
 gesher_graphics_lib(hwui)
 # hwui's registrations run from libandroid_runtime's table
-# (compat/framework/android_runtime.cc: register_gesher_graphics).
+# (compat/framework/android_runtime.cc: register_gesher_graphics); dalvikvm
+# links it (cmake/aosp/graphics.cmake).
 add_library(gesher_graphics INTERFACE)
 target_link_libraries(gesher_graphics INTERFACE hwui)

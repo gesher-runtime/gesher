@@ -335,6 +335,7 @@ jobs:
         run: |
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -347,6 +348,7 @@ jobs:
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
+          cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
 
       - uses: actions/upload-artifact@v4
