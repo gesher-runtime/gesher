@@ -39,7 +39,7 @@ where Gesher keeps Android's system directory: `build.prop` and
   to the families Gesher ships, in the legacy syntax both parsers read:
   sans-serif and sans-serif-condensed (Roboto 3.011, one variable file),
   serif (Noto Serif), monospace (DroidSansMono), and the Hebrew fallback
-  (Noto Sans Hebrew 1.040), with their aliases. About 3.7 MB.
+  (Noto Sans Hebrew 1.040), with their aliases. About 3.4 MB.
 - **The paths are not mapped; Gesher calls the framework's font pipeline
   with `$ANDROID_ROOT`'s paths** (`com.gesher.app.fonts.SystemFontMap`, run
   by gesher-app after its bootstrap): `FontListParser.parse(fontsXml,
@@ -55,7 +55,9 @@ where Gesher keeps Android's system directory: `build.prop` and
 - **android.os.SharedMemory gets natives** (`compat/framework/shared_memory.cc`):
   a region is a gesher-base memfd (a delete-on-close temporary file that mmap
   maps with a file mapping), as compat/bionic's ASharedMemory. ashmem's
-  protection mask is not modelled.
+  protection mask is not modelled. gesher-base's mmap now lets any file view
+  end inside the file's last page (it allowed that only for read-only
+  views): regions are not page multiples.
 
 ### Rejected
 

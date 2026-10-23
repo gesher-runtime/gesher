@@ -153,6 +153,14 @@ needs: [framework-build.md](framework-build.md).
 - [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
       and `KeyEvent`; a click reaches `onClick`, tested in CI
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+  - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
+        Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
+        through SharedMemory: `Typeface.DEFAULT`, families and aliases,
+        Hebrew through the fallback chain drawn right to left, a Hebrew
+        `StaticLayout` paragraph, bold/italic; shipped by the installer and
+        loaded by the installed gesher-app (ci run 40011630189, both runners;
+        docs/fonts.md)
+  - [ ] RTL text in a View (TextView in a window) and further scripts
 
 ## Phase 4 checklist
 
