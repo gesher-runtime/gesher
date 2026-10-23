@@ -17,6 +17,7 @@ on:
       - 'tools/framework/**'
       - 'tools/gen/**'
       - 'tools/host/**'
+      - 'tools/host-tools-ci.cmake'
       - 'tools/build-boot-jars.sh'
       - 'tools/build-framework-res.sh'
       - 'tools/make-coremod.sh'
@@ -59,7 +60,7 @@ jobs:
           lines=$(grep -E "^($projects)(\s|$)" aosp.lock)
           echo "$lines"
           lock=$(echo "$lines" | sha256sum | cut -c1-16)
-          echo "key=host-tools-$lock-${{ hashFiles('tools/host/**', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**', '.github/workflows/framework.yml') }}" >> "$GITHUB_OUTPUT"
+          echo "key=host-tools-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**', '.github/workflows/framework.yml') }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache host tools
         id: tools
@@ -105,7 +106,8 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
-            -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++"
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++" \
+            -DCMAKE_PROJECT_gesher_host_tools_INCLUDE="$PWD/tools/host-tools-ci.cmake"
           ninja -C out/host -k 0
           ccache --show-stats | head -5
           mkdir -p dist-host/protobuf
