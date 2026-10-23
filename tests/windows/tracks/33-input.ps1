@@ -6,9 +6,15 @@
 
 # Without Java: the translation, Generic.kcm, and a window's posted messages
 # read back with libinput's InputConsumer on the client end of the channel.
+# Its INFO line (touch through a synthetic pointer device, which needs an
+# interactive desktop) is shown either way.
+$inputProbeOut = & "$Dir/input_probe.exe" 2>&1 | Out-String
+$inputProbeCode = $LASTEXITCODE
 Check 'input: Win32 messages to MotionEvent/KeyEvent over an InputChannel (InputPublisher/InputConsumer)' {
-  & "$Dir/input_probe.exe"
+  $inputProbeOut
+  $global:LASTEXITCODE = $inputProbeCode
 } @('all passed')
+($inputProbeOut -split "`n" | Select-String -Pattern '^INFO  ') | Out-Host
 
 # The framework's input natives on framework.jar (KeyEvent, MotionEvent,
 # VelocityTracker, KeyCharacterMap with Generic.kcm, InputChannel,

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -32,6 +33,9 @@
 
 using gesher::WindowEvent;
 using namespace gesher::input;
+
+// touch_inject.cc (windows.h, apart from AOSP's headers).
+unsigned long ProbeInjectTouch(void* hwnd, int x, int y);
 
 namespace {
 
@@ -387,6 +391,40 @@ void TestChannel() {
     }
   }
   check(injected, "gesher_input_inject: shift+A arrives with META_SHIFT_ON|META_SHIFT_LEFT_ON");
+
+  // The window's own WM_POINTER handling, with a synthetic touch device:
+  // informational, as it needs an interactive desktop (touch_inject.cc).
+  unsigned long inject_error = ProbeInjectTouch(hwnd, 50, 60);
+  bool touch_down = false, touch_move = false, touch_up = false;
+  if (inject_error == 0) {
+    for (int i = 0; i < 60 && !touch_up; i++) {
+      clientChannel->waitForMessage(std::chrono::milliseconds(50));
+      uint32_t seq_no = 0;
+      android::InputEvent* event = nullptr;
+      while (consumer.consume(&factory, true, -1, &seq_no, &event) == android::OK &&
+             event != nullptr) {
+        if (event->getType() == android::InputEventType::MOTION &&
+            event->getSource() == AINPUT_SOURCE_TOUCHSCREEN) {
+          auto* m = static_cast<android::MotionEvent*>(event);
+          int a = m->getActionMasked();
+          if (a == AMOTION_EVENT_ACTION_DOWN && Near(m->getX(0), 50) && Near(m->getY(0), 60)) {
+            touch_down = true;
+          }
+          if (a == AMOTION_EVENT_ACTION_MOVE && Near(m->getX(0), 70)) touch_move = true;
+          if (a == AMOTION_EVENT_ACTION_UP) touch_up = true;
+        }
+        consumer.sendFinishedSignal(seq_no, true);
+        event = nullptr;
+      }
+    }
+  }
+  std::printf("INFO  WM_POINTER touch through InjectSyntheticPointerInput: %s\n",
+              inject_error != 0 ? ("not injected, error " + std::to_string(inject_error)).c_str()
+              : touch_down && touch_move && touch_up
+                  ? "DOWN at (50, 60), MOVE, UP on SOURCE_TOUCHSCREEN"
+                  : (std::string("injected; seen: down ") + (touch_down ? "yes" : "no") +
+                     ", move " + (touch_move ? "yes" : "no") + ", up " +
+                     (touch_up ? "yes" : "no")).c_str());
 
   gesher_input_detach(connection);
   delete window;
