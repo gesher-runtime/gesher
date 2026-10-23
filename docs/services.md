@@ -98,7 +98,7 @@ every transaction on stderr.
   - `PASS  services: the launcher removes the task: onPause, onStop, onDestroy, then the server ends the process`
   - `PASS  services: system_server attaches the app process and drives it with client transactions`
   - `PASS  services: LifecycleActivity finish(): the system server pauses, stops and destroys it`
-  - `PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user, input_method`
+  - `PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user, input_method, uimode`
 
   and the package job still has
   `PASS  installer: gesher-app --system-server runs the app with the services in a system server process`
@@ -162,8 +162,10 @@ every transaction on stderr.
   SurfaceControl, SurfaceSession, BLASTBufferQueue, perfetto
   Producer/DataSource/TracingContext, KeyCharacterMap, MotionEvent,
   VelocityTracker: zero answers, a block for creators, a free function for
-  finalizers), registered before the graphics rows so that real natives
-  override them; `StandInWindowSession` (ADD_OKAY, the display's frames, no
+  finalizers, and for `InputEventReceiver.nativeGetFrameMetricsObserver` a
+  real hwui observer that drops the metrics, since ViewRootImpl hands it to
+  the real `HardwareRenderer.nAddObserver` and 0 crashes the render thread),
+  registered before the graphics rows so that real natives override them; `StandInWindowSession` (ADD_OKAY, the display's frames, no
   input channel, no surface: nothing is drawn), replaced through
   `WindowManagerService.setSessionFactory`; frames timed by messages
   (`debug.choreographer.vsync=false`, set by GesherAppProcess); and, when
