@@ -43,8 +43,10 @@ What works, and what doesn't yet
 --------------------------------
 - No windows yet: Android apps run headless (gesher-app); drawing and input
   are the next phase of the project. Only apps without native (.so) code.
-  The framework's native side is still being filled in, so apps beyond the
-  bundled test app may stop at a missing native method.
+  The framework's natives cover what an Activity's lifecycle needs
+  (resources, Looper, Parcel, in-process Binder); drawing is stubbed out and
+  system services are in-process stand-ins, so apps beyond the bundled test
+  app may stop at a missing native method or service.
 - Interpreter only (no JIT and no boot image), so startup takes a few seconds.
 - java.lang, collections, strings, ICU (text, locales), basic file I/O.
 - Not yet: starting processes (ProcessBuilder), WatchService,
