@@ -6,11 +6,13 @@
 # Patches in patches/<project>/*.patch are applied in order after checkout.
 # Re-running is cheap: projects already at the pinned tag with the same
 # patches are skipped; a patch change resets the checkout and re-applies.
+# Projects are fetched $FETCH_JOBS at a time (default 8).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 dest=${1:-${AOSP_DIR:-$root/third_party/aosp}}
 lock=$root/aosp.lock
+jobs=${FETCH_JOBS:-8}
 
 tag=$(awk '$1 == "tag" { print $2 }' "$lock")
 mkdir -p "$dest"
@@ -33,20 +35,25 @@ clone() {  # clone <repository> <dir> [sparse dirs...]
   fi
 }
 
-grep -vE '^\s*(#|$|tag )' "$lock" | while read -r entry sparse; do
+sync_project() {  # sync_project <entry> [sparse dirs...]
+  set -euo pipefail
   # <path>[=<repository>]; the repository defaults to platform/<path>.
-  project=${entry%%=*}
-  repo=platform/$project
+  local entry=$1
+  shift
+  local sparse="$*"
+  local project=${entry%%=*}
+  local repo=platform/$project
   [[ $entry == *=* ]] && repo=${entry#*=}
-  dir=$dest/$project
-  stamp=$dir/.gesher-tag
-  patches=("$root/patches/$project"/*.patch)
+  local dir=$dest/$project
+  local stamp=$dir/.gesher-tag
+  local patches=("$root/patches/$project"/*.patch)
   [[ -e ${patches[0]} ]] || patches=()
+  local want have
   want="$tag $({ echo "$sparse"; cat "${patches[@]}" /dev/null; } | git hash-object --stdin)"
   have=$(cat "$stamp" 2>/dev/null || true)
 
   if [[ $have == "$want" ]]; then
-    continue
+    return 0
   elif [[ ${have%% *} == "$tag" && -z $sparse ]]; then
     echo "re-patching $project"
     git -C "$dir" reset -q --hard
@@ -58,11 +65,17 @@ grep -vE '^\s*(#|$|tag )' "$lock" | while read -r entry sparse; do
     clone "$repo" "$dir" $sparse
   fi
 
+  local patch
   for patch in "${patches[@]}"; do
     echo "  applying ${patch#"$root"/}"
     git -C "$dir" apply --whitespace=nowarn "$patch"
   done
   echo "$want" > "$stamp"
-done
+}
+
+export -f clone sync_project
+export root dest tag
+
+grep -vE '^\s*(#|$|tag )' "$lock" | xargs -P "$jobs" -d '\n' -I{} bash -c 'sync_project {}'
 
 echo "AOSP sources ready in $dest"
