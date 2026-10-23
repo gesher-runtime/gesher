@@ -31,7 +31,17 @@ Windows, and nothing showed that what was built behaves as on a device.
   thread priorities) keep their host branch.
 - **Missing POSIX goes into gesher-base,** not around it: `select`/`pselect`,
   `fnmatch`, `random`/`srandom`, `bzero`, `<linux/capability.h>`, the
-  `CPU_*` set operations, `NETLINK_KOBJECT_UEVENT`.
+  `CPU_*` set operations, `NETLINK_KOBJECT_UEVENT`; and, from the tests:
+  `posix_memalign` whose memory `free()` takes, IPv6 sockets dual-stack by
+  default, `/proc/self/fd/<n>` for `readlink`/`realpath`, `readv`/`writev`
+  failing on a bad fd.
+- **`posix_memalign` wraps `free` and `realloc`.** The CRT's `free()` takes
+  only `malloc()`'s pointers, and `_aligned_malloc` memory needs
+  `_aligned_free`. gesher-base over-allocates with `malloc`, returns the
+  aligned pointer inside, and records it; every module links with
+  `--wrap=free --wrap=realloc`, whose wrappers look a pointer up only while
+  any aligned block is live (one atomic load otherwise). The table is per
+  module, so a block goes back to the module that allocated it.
 - **A Windows unwinder behind libunwindstack's interface.**
   `compat/unwindstack/android_unwinder.cc` implements `AndroidUnwinder` and
   `AndroidLocalUnwinder` over `RtlVirtualUnwind` (the calling thread from
@@ -56,3 +66,5 @@ Windows, and nothing showed that what was built behaves as on a device.
   them. ART can move to the real unwinder (its thread dumps then show native
   frames).
 - libandroidfw links libbinder (`CursorWindow`'s `Parcel`) and libpng.
+- Every executable and DLL linked with gesher-base goes through the `free`
+  and `realloc` wrappers.
