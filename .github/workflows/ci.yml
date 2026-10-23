@@ -81,6 +81,11 @@ jobs:
   graphics:
     uses: ./.github/workflows/graphics.yml
 
+  # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
+  # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
+  angle:
+    uses: ./.github/workflows/angle.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -105,7 +110,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics]
+    needs: [build, framework, graphics, angle]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +130,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: graphics
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
           path: dist
 
       - name: Build installer
@@ -153,7 +163,7 @@ jobs:
           }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
@@ -201,7 +211,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: [build, framework, native-libs, libs, graphics]
+    needs: [build, framework, native-libs, libs, graphics, angle]
     strategy:
       fail-fast: false
       matrix:
@@ -237,6 +247,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: graphics
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
           path: dist
 
       - name: Run tests
