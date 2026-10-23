@@ -1,0 +1,108 @@
+name: graphics
+
+# Graphics (docs/graphics.md): Skia and the libraries it builds on, minikin
+# and hwui, cross-compiled with llvm-mingw like the rest; the probes run on
+# Windows.
+#
+#   gh workflow run graphics --ref <branch>
+#
+# ci.yml calls this workflow too; its artifact "graphics" (the probes) is
+# downloaded by the test jobs.
+on:
+  # Pushes to the graphics branch that touch its inputs run it on its own.
+  push:
+    branches: ['wip/graphics']
+    paths:
+      - 'cmake/aosp/bp_cc.cmake'
+      - 'cmake/aosp/graphics.cmake'
+      - 'cmake/aosp/skia.cmake'
+      - 'cmake/aosp/minikin.cmake'
+      - 'cmake/aosp/hwui.cmake'
+      - 'tools/gen/bp_cc.py'
+      - 'probes/graphics/**'
+      - 'compat/hwui/**'
+      - 'aosp.lock'
+      - '.github/workflows/graphics.yml'
+  workflow_dispatch:
+  workflow_call:
+
+# A newer push supersedes a running build.
+concurrency:
+  # github.workflow is the caller's ("ci") when ci.yml runs this one.
+  group: ${{ github.workflow }}-graphics-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: graphics
+
+      - name: Build the graphics libraries and probes
+        run: |
+          set +e
+          ninja -C out -k 0 gesher_graphics > graphics-build.log 2>&1
+          code=$?
+          ccache --show-stats | head -8
+          if [[ $code != 0 ]]; then
+            echo "$(grep -cE '^FAILED: ' graphics-build.log) failed edges"
+            grep -E '^FAILED: ' graphics-build.log | sed -E 's/ -o .*//' | head -50
+            grep -B2 -A6 -E 'error:' graphics-build.log | head -600
+          fi
+          tail -3 graphics-build.log
+          exit $code
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist-graphics
+          cp out/skia_probe.exe dist-graphics/
+          ls -la dist-graphics
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: graphics
+          path: dist-graphics/
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphics-build-log
+          path: graphics-build.log
+
+  # The probes alone, when this workflow runs on its own; ci.yml's test jobs
+  # run them with everything else (tests/windows/tracks/30-graphics.ps1).
+  probe:
+    if: github.workflow == 'graphics'
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
+          path: dist
+
+      - name: Skia probe
+        shell: pwsh
+        run: |
+          & dist/skia_probe.exe C:/Windows/Fonts/arial.ttf skia_probe.png
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graphics-probe-pictures
+          path: '*.png'
+          if-no-files-found: ignore
