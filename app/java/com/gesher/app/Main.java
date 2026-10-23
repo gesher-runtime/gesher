@@ -97,6 +97,10 @@ public final class Main {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
         apk = new File(apk).getAbsolutePath();
 
+        // 0. JCA providers that exist on Gesher's boot class path, and digests
+        //    (Digests): before anything uses JCA.
+        Digests.install();
+
         // 1. The framework's natives (a builtin library of the runtime on Windows).
         System.loadLibrary("android_runtime");
 
