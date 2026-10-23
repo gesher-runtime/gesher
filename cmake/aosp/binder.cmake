@@ -107,6 +107,9 @@ add_library(binder STATIC
   ${_binder}/BufferedTextOutput.cpp ${_binder}/BackendUnifiedServiceManager.cpp
   ${_binder}/IPCThreadState.cpp ${_binder}/IServiceManager.cpp ${_binder}/IServiceManagerFFI.cpp
   ${_binder}/ProcessState.cpp ${_binder}/Static.cpp ${_binder}/ServiceManagerHost.cpp
+  # ServiceManagerHost's adb helpers (execute, CommandResult); fork fails with
+  # ENOSYS on gesher-base, so execute() just returns nothing if ever reached.
+  ${_binder}/UtilsHost.cpp
   ${_binder}/IPermissionController.cpp ${_binder}/PermissionCache.cpp
   ${_binder}/PermissionController.cpp
   ${_binder_aidl_srcs}

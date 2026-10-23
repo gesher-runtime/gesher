@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
 #include "socket_internal.h"
@@ -144,6 +145,7 @@ int close(int fd) {
   if (!gesher::Remove(fd, &state)) {
     gesher::ForgetDevice(fd);
     gesher::ForgetEventObject(fd);
+    gesher::ForgetBinder(fd);
     return gesher::CrtResult(_close(fd));
   }
   // Closing the socket first wakes threads blocked on it, as on Linux.
@@ -185,6 +187,7 @@ int dup(int fd) {
     Device device;
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
     if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
+    if (fd2 >= 0) gesher::DupBinder(fd, fd2);
     return fd2;
   }
   state.socket = gesher::ws::Duplicate(state.socket);
@@ -215,6 +218,7 @@ int dup2(int fd, int fd2) {
   gesher::ForgetDevice(fd2);
   gesher::ForgetEventObject(fd2);
   gesher::ForgetEpollEntries(fd2);
+  gesher::ForgetBinder(fd2);
   Device device;
   if (source_is_socket) {
     gesher::Insert(fd2, source);
@@ -222,6 +226,7 @@ int dup2(int fd, int fd2) {
     gesher::RegisterDevice(fd2, device);
   } else {
     gesher::DupEventObject(fd, fd2);
+    gesher::DupBinder(fd, fd2);
   }
   return fd2;
 }

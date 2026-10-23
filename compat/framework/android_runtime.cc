@@ -19,11 +19,13 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <android_runtime/AndroidRuntime.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
+#include <utils/AndroidThreads.h>
 
 #include "core_jni_helpers.h"
 
@@ -42,6 +44,7 @@ int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
+int register_android_os_ServiceManagerNative(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
 int register_android_os_SystemProperties(JNIEnv* env);
 int register_android_os_Trace(JNIEnv* env);
@@ -66,6 +69,43 @@ static JavaVM* gGesherJavaVM = nullptr;
 
 /* static */ JavaVM* AndroidRuntime::getJavaVM() {
   return gGesherJavaVM;
+}
+
+// --- threads that can call Java ----------------------------------------------------
+// AndroidRuntime::startReg's androidSetCreateThreadFunc(javaCreateThreadEtc):
+// threads libutils creates for Java (libbinder's pooled binder threads,
+// which run Java Binders' onTransact) are attached to the VM for their
+// lifetime, as AndroidRuntime.cpp's javaThreadShell does.
+
+struct JavaThreadStart {
+  android_thread_func_t entry;
+  void* user_data;
+  char* name;
+};
+
+static int JavaThreadShell(void* arg) {
+  JavaThreadStart start = *static_cast<JavaThreadStart*>(arg);
+  delete static_cast<JavaThreadStart*>(arg);
+  JavaVMAttachArgs args = {JNI_VERSION_1_4, start.name, nullptr};
+  JNIEnv* env = nullptr;
+  if (gGesherJavaVM->AttachCurrentThread(&env, &args) != JNI_OK) {
+    ALOGE("libandroid_runtime: attaching thread %s failed", start.name);
+    free(start.name);
+    return -1;
+  }
+  int result = start.entry(start.user_data);
+  gGesherJavaVM->DetachCurrentThread();
+  free(start.name);
+  return result;
+}
+
+static int JavaCreateThreadEtc(android_thread_func_t entry, void* user_data,
+                               const char* thread_name, int32_t thread_priority,
+                               size_t thread_stack_size, android_thread_id_t* thread_id) {
+  LOG_ALWAYS_FATAL_IF(thread_name == nullptr, "threadName not provided to javaCreateThreadEtc");
+  auto* start = new JavaThreadStart{entry, user_data, strdup(thread_name)};
+  return androidCreateRawThreadEtc(JavaThreadShell, start, thread_name, thread_priority,
+                                   thread_stack_size, thread_id);
 }
 
 /* static */ JNIEnv* AndroidRuntime::getJNIEnv() {
@@ -340,6 +380,8 @@ static const struct {
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
     {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
+    {"android_os_ServiceManagerNative", "android/os/ServiceManagerProxy",
+     register_android_os_ServiceManagerNative},
     {"android_content_res_ApkAssets", "android/content/res/ApkAssets",
      register_android_content_res_ApkAssets},
     {"android_content_AssetManager", "android/content/res/AssetManager",
@@ -363,6 +405,7 @@ extern "C" jint JNI_OnLoad_android_runtime(JavaVM* vm, void*) {
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
     return JNI_ERR;
   }
+  androidSetCreateThreadFunc(android::JavaCreateThreadEtc);
   for (const auto& r : android::gRegJNI) {
     jclass clazz = env->FindClass(r.className);
     if (clazz == nullptr) {
