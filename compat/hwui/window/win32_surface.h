@@ -17,6 +17,7 @@
 #include <mutex>
 #include <vector>
 
+#include <utils/Timers.h>  // nsecs_t, which hostgraphics' Surface.h uses unincluded
 #include <gui/Surface.h>
 #include <ui/ANativeObjectBase.h>
 

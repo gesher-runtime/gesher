@@ -37,7 +37,7 @@ static void check(bool ok, const char* what) {
   if (!ok) failures++;
 }
 
-static bool near(uint32_t bgra, SkColor want) {
+static bool closeTo(uint32_t bgra, SkColor want) {
   int b = bgra & 0xff, g = (bgra >> 8) & 0xff, r = (bgra >> 16) & 0xff;
   return std::abs(r - int(SkColorGetR(want))) <= 8 && std::abs(g - int(SkColorGetG(want))) <= 8 &&
          std::abs(b - int(SkColorGetB(want))) <= 8;
@@ -155,7 +155,7 @@ static void surfaceChecks() {
   Sleep(200);
   std::vector<uint32_t> px;
   bool printed = capture(hwnd, kW, kH, &px);
-  check(printed && near(px[10 * kW + 10], SK_ColorRED) && near(px[10 * kW + kW - 10], kColor),
+  check(printed && closeTo(px[10 * kW + 10], SK_ColorRED) && closeTo(px[10 * kW + kW - 10], kColor),
         "surface: the window shows the RGBA frame (red, 0x2060c0)");
 
   // hwui's CPU pipeline: dequeueBuffer's reserved[0] is the pixels it draws
@@ -174,7 +174,7 @@ static void surfaceChecks() {
   check(anw->queueBuffer(anw, b, -1) == 0, "surface: queueBuffer");
   Sleep(200);
   printed = capture(hwnd, kW, kH, &px);
-  check(printed && near(px[50 * kW + 100], SK_ColorGREEN), "surface: the window shows the queued buffer");
+  check(printed && closeTo(px[50 * kW + 100], SK_ColorGREEN), "surface: the window shows the queued buffer");
 
   ANativeWindow_release(anw);
   check(!IsWindow(hwnd), "surface: the window goes with the last reference");
@@ -195,12 +195,12 @@ int main(int argc, char** argv) {
   std::vector<uint32_t> px;
   bool printed = capture(hwnd, kW, kH, &px);
   check(printed, "window: PrintWindow");
-  check(near(px[10 * kW + 10], SK_ColorRED) && near(px[10 * kW + kW - 10], SK_ColorBLUE) &&
-            near(px[(kH / 2) * kW + kW / 2], SK_ColorGREEN),
+  check(closeTo(px[10 * kW + 10], SK_ColorRED) && closeTo(px[10 * kW + kW - 10], SK_ColorBLUE) &&
+            closeTo(px[(kH / 2) * kW + kW / 2], SK_ColorGREEN),
         "window: PrintWindow reads back what Skia drew (red, blue, green)");
   std::vector<uint32_t> pc;
   printClient(hwnd, kW, kH, &pc);
-  check(near(pc[10 * kW + 10], SK_ColorRED) && near(pc[10 * kW + kW - 10], SK_ColorBLUE),
+  check(closeTo(pc[10 * kW + 10], SK_ColorRED) && closeTo(pc[10 * kW + kW - 10], SK_ColorBLUE),
         "window: WM_PRINTCLIENT paints the back buffer");
   {
     // What PrintWindow read, for the CI artifact.
