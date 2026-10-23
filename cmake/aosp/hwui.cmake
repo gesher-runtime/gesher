@@ -8,6 +8,18 @@ set(_fw "${AOSP_DIR}/frameworks/base")
 set(_hwui "${_fw}/libs/hwui")
 set(_native "${AOSP_DIR}/frameworks/native")
 
+# What llvm-mingw's newer libc++ is stricter about than Soong's host libc++:
+# libutils' StrongPointer.h uses std::nothrow without <new>, ui/Rect.h
+# std::round without <cmath>; utils/Trace.h mixes C's <stdatomic.h> with
+# <atomic>, which libc++ allows from C++23 on (framework.cmake does the same);
+# math/half.h specializes std::is_floating_point.
+function(gesher_graphics_cxx target)
+  set_target_properties(${target} PROPERTIES CXX_STANDARD 23)
+  target_compile_options(${target} PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new -include cmath>"
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-invalid-specialization>)
+endfunction()
+
 # --- HarfBuzz (external/harfbuzz_ng: libharfbuzz_ng) ----------------------------
 gesher_bp_cc(HB external/harfbuzz_ng libharfbuzz_ng)
 gesher_bp_library(harfbuzz HB QUIET)
@@ -38,7 +50,10 @@ target_include_directories(graphics_native_headers INTERFACE
   ${_native}/libs/nativewindow/include
   ${_native}/libs/nativedisplay/include
   ${_native}/include
+  ${_native}/include/private              # surface_control_private.h (RenderThread.h)
   ${_native}/opengl/include
+  # hardware/hardware.h (ui/PixelFormat.h): what of libhardware's header it uses.
+  ${CMAKE_SOURCE_DIR}/compat/hwui/include-native
   ${AOSP_DIR}/external/vulkan-headers/include
   ${AOSP_DIR}/frameworks/av/media/ndk/include)
 
@@ -46,6 +61,7 @@ target_include_directories(graphics_native_headers INTERFACE
 gesher_bp_cc(UI frameworks/native/libs/ui libui-types)
 gesher_bp_library(ui_types UI)
 target_link_libraries(ui_types PUBLIC graphics_native_headers utils base log)
+gesher_graphics_cxx(ui_types)
 gesher_graphics_lib(ui_types)
 
 # --- libhostgraphics (frameworks/base/libs/hostgraphics) -------------------------
@@ -57,6 +73,7 @@ gesher_bp_cc(HOSTGRAPHICS frameworks/base/libs/hostgraphics libhostgraphics)
 gesher_bp_library(hostgraphics HOSTGRAPHICS)
 target_include_directories(hostgraphics BEFORE PUBLIC ${_fw}/libs/hostgraphics/include)
 target_link_libraries(hostgraphics PUBLIC ui_types graphics_native_headers utils base log)
+gesher_graphics_cxx(hostgraphics)
 gesher_graphics_lib(hostgraphics)
 
 # --- hwui (frameworks/base/libs/hwui: libhwui, host) -----------------------------
@@ -78,6 +95,7 @@ add_library(hwui STATIC ${HWUI_SRCS}
   ${_fw}/core/jni/android_view_Surface.cpp
   ${_fw}/core/jni/platform/host/native_window_jni.cpp)
 gesher_bp_flags(hwui HWUI)
+gesher_graphics_cxx(hwui)
 target_compile_options(hwui PRIVATE
   # What clang for Windows reports that Soong's host build does not see.
   -Wno-error -Wno-unused-function -Wno-unknown-pragmas)
