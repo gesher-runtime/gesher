@@ -1,6 +1,6 @@
 # 0014 — %fs for bionic's TLS in loaded Android libraries
 
-**Status:** accepted, 2026-10-23 (native-libraries track)
+**Status:** accepted, 2026-10-23 (native-libraries track); the WRFSBASE decision was superseded the same day by the load-time rewrite at the end of this record
 
 ## Context
 An app's NDK `.so` is x86-64 Android code. Like all Android native code it is
@@ -103,3 +103,89 @@ Before any `%fs`-using `.so` runs (anything with `-fstack-protector` or
    OS/driver-assisted base set).
 
 This is the track's main open problem; see `docs/native-libs.md`.
+
+## Decision, revised (2026-10-23): rewrite `%fs` accesses at load time
+
+This **replaces the WRFSBASE decision** above (option 2), which the runners
+disproved, with option 1 done in a way that needs no code relocation. The
+loader no longer executes `WRFSBASE`; the `fsbase` probe stays as an
+informational CI line.
+
+- **Where the rewrite happens.** `compat/elf/fs_rewrite.cc`, called from
+  `LoadCommon` right after the segments are mapped (still read-write) and
+  before relocation, because IFUNC resolvers run during relocation and may be
+  stack-protected. It never touches anything a relocation writes (the
+  displacements it changes are the constants 0 and 0x28), and `.text` gets
+  its final read-execute protection afterwards as before.
+- **Finding the instructions.** A small x86-64 length decoder
+  (`compat/elf/x86_decode.cc`: legacy prefixes, REX, the one-byte/0F/0F38/0F3A
+  maps, VEX, EVEX, XOP, 3DNow!) walks the code instruction by instruction over
+  each FDE's `[pc_begin, pc_begin + range)` from `.eh_frame_hdr` (every NDK
+  function has unwind info), else over `SHF_EXECINSTR` sections, else over the
+  executable segments. Decoding from known function starts means a `0x64`
+  byte inside another instruction or in data is never taken for a prefix.
+  The decoder agreed with `objdump` on every one of 7.2 M instructions of a
+  GCC-built binary, and on an AVX-512 OpenBLAS (only `fwait`-merged x87
+  mnemonics and data in `.text` differed).
+- **What each form becomes** (instruction lengths unchanged):
+  - `%fs:0x28` (the stack guard) → `%gs:0x30`, `NT_TIB.Self`: per-thread,
+    constant for the thread's life, non-zero, and valid on **every** thread,
+    including ones the loader never set up (ART's, the CRT's). Prologue and
+    epilogue read the same slot, so any stable value is a correct cookie; it is
+    not secret (the TEB address), an accepted loss of hardening. The TCB's own
+    slot 5 holds the same value for code that reaches it through the thread
+    pointer.
+  - `%fs:0` (the thread pointer, initial-exec address computations) →
+    `%gs:[0x1480 + 8*i]`, a `TlsAlloc` slot (`i < 64`, the same constraint and
+    mechanism as ART's thread register, [0006](0006-managed-abi.md)) holding
+    the thread's bionic block pointer. Only the `0x64` → `0x65` prefix byte and
+    the disp32 change.
+  - `%fs:(%reg)` / `%fs:d(%base,%index)` (initial-exec loads and stores) cannot
+    be rewritten in place. The instruction is replayed in an out-of-line stub:
+    `lea -128(%rsp),%rsp; pushfq; add %gs:slot,%base; popfq; lea 128(%rsp),%rsp`,
+    the instruction without its `%fs` prefix, the same sequence with `sub`
+    (skipped when the instruction overwrites the base register), and a jump
+    back. The red zone and the flags are preserved. The site becomes
+    `jmp rel32` to the stub when the instruction is at least 5 bytes and the
+    stub (allocated next to the object) is within ±2 GiB; otherwise an `int3`
+    that a vectored handler redirects to the stub. Supported: the integer
+    `mov`/ALU/`cmp`/`test`/`movzx`/`movsx`/`movsxd`/`imul`/`cmov`/`xchg`/
+    `inc`/`dec`/`not`/`neg` forms with a register or immediate operand.
+  - Anything else (another `%fs` displacement, i.e. a bionic TCB slot Gesher
+    does not provide; a RIP-relative `%fs` operand; an instruction the stub
+    cannot replay, such as VEX or a partial write of its own base register)
+    becomes an `int3`; the load prints the site, and reaching it prints the
+    library+offset, the reason and the original bytes, then aborts. The load
+    itself does not fail, so a library whose odd path is never taken still
+    works.
+- **Diagnostics for misses.** The same vectored handler names an access
+  violation inside loaded code that comes from an un-rewritten `%fs`
+  instruction, or from a `%gs`-slot access on a thread with no TLS block
+  (`SetupThreadTls` not called), then lets the fault proceed.
+- **Thread setup.** `SetupThreadTls()` (bionic `pthread_create`'s threads, and
+  any thread that enters loaded code with initial-exec TLS; the JNI entry path
+  of step 4 is the next caller) builds the block and stores its thread pointer
+  in the slot. The stack guard and `__tls_get_addr` need no setup.
+- **Static TLS with a surplus; late modules.** Each thread's block reserves
+  1 MiB of address space below the thread pointer and commits pages as
+  modules are assigned. A `PT_TLS` module loaded after threads exist gets the
+  next static offset; the space is committed in every live thread's block and,
+  once the module is relocated, its image is copied into each of them (its code
+  cannot have run yet). A module that does not fit is **dynamic-only**:
+  `__tls_get_addr` gives each thread its own copy on first use, and an
+  initial-exec relocation against it fails the load with a message. Blocks
+  are freed at thread exit (an FLS callback). `__tls_get_addr` caches each
+  module's base per thread, so the general-dynamic path takes no lock after
+  the first call.
+
+### Consequences of the revision
+- No dependence on an undocumented kernel behaviour; everything used (`%gs`
+  as the TEB, `TlsAlloc` slots, `NT_TIB.Self`) is stable Windows ABI.
+- Load time grows by one linear decode of the object's code (tens of MB/s;
+  libraries are small); runtime cost is nil for the guard and thread pointer,
+  a few instructions per register-based initial-exec access, and an exception
+  round trip only for short (< 5 byte) ones whose stub is out of `rel32`
+  range.
+- Code that computes `%fs`-relative addresses at run time (JIT-generated code
+  inside the app, or self-modifying code) is not covered; it would fault and be
+  named by the diagnostic handler.

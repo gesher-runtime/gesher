@@ -11,7 +11,7 @@ $fsOut = & "$Dir/fsbase_probe.exe" 2>&1 | Out-String
 if ($fsOut -match 'all passed') {
   Write-Host 'INFO  fsbase: %fs IS usable via WRFSBASE on this runner'
 } else {
-  Write-Host 'INFO  fsbase: %fs NOT usable via WRFSBASE here (ADR 0014; loader must patch %fs)'
+  Write-Host 'INFO  fsbase: %fs NOT usable via WRFSBASE here (ADR 0014: the loader rewrites %fs instead)'
 }
 ($fsOut -split "`n" | Where-Object { $_ -match 'ok|FAIL|verdict|#UD' } | Select-Object -First 12) |
   ForEach-Object { Write-Host "      $_" }
@@ -31,3 +31,18 @@ Check 'ELF loader: load a trivial .so and call it' {
 Check 'bionic shim: a libc/pthread .so runs its checks' {
   & "$Dir/elf_load_test.exe" (NoDrive "$Dir/libc_test.so")
 } @('libc_test: all passed', 'elf_load_test all passed')
+
+# %fs without WRFSBASE (ADR 0014): NDK libraries built with the default stack
+# protector and thread-locals (tests/native/fs_test.c). The loader rewrites
+# their %fs accesses to %gs-based ones at load time; the libraries check the
+# guard, the thread pointer and their thread-locals across sleeps and threads.
+# API 26: emulated thread-locals. API 29: ELF TLS (general-dynamic,
+# local-dynamic, initial-exec), and a TLS library dlopen()ed while a thread
+# runs.
+Check 'native libs: stack-protected .so with emulated TLS (API 26) under the %fs rewrite' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test26.so") (NoDrive "$Dir")
+} @('fs_test: all passed', 'elf_load_test all passed')
+
+Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a late TLS library' {
+  & "$Dir/elf_load_test.exe" (NoDrive "$Dir/fs_test29.so") (NoDrive "$Dir")
+} @('fs_test: all passed', 'elf_load_test all passed')

@@ -36,12 +36,19 @@ follow it. It builds in steps, each verified in CI
   `sysv_abi` pointers, and the shim's entry points the `.so` calls are
   `sysv_abi` too.
 
-- **TLS and `%fs`** ([0014](decisions/0014-native-libs-fs-base.md)). Each
-  thread that runs loaded code gets a bionic variant-II TLS block
-  (`compat/elf/tls.cc`). Pointing `%fs` at it with `WRFSBASE` was the plan,
-  but the `fsbase` probe showed Windows does **not** preserve the user `%fs`
-  base across kernel entry, so this is still open (see "Status and next
-  steps").
+- **TLS and `%fs`** ([0014](decisions/0014-native-libs-fs-base.md)). Windows
+  keeps no user `%fs` base across kernel entry (the `fsbase` probe), so the
+  loader **rewrites the object's `%fs` accesses at load time**
+  (`compat/elf/fs_rewrite.cc`, with the x86-64 length decoder
+  `compat/elf/x86_decode.cc`): it decodes the code over the FDE ranges of
+  `.eh_frame_hdr` and turns `%fs:0x28` (the stack guard) into `%gs:0x30`
+  (`NT_TIB.Self`) and `%fs:0` (the thread pointer) into a `TlsAlloc` slot of
+  the TEB, keeping instruction lengths; register-based `%fs:(%reg)` accesses
+  (initial-exec TLS) are replayed in out-of-line stubs; anything else becomes
+  an `int3` with a diagnostic. Each thread that runs loaded code gets a bionic
+  variant-II block (`compat/elf/tls.cc`) with 1 MiB of static TLS reserved
+  below the thread pointer, so a TLS library loaded later still gets a static
+  offset and is copied into every live thread's block.
 
 - **The bionic shim** (`compat/bionic/`, CMake target `gesher_bionic`,
   `gesher/bionic_shim.h`): the libc/libm/libdl/liblog/pthread symbols an app
@@ -96,8 +103,10 @@ follow it. It builds in steps, each verified in CI
 2. The bionic shim: libc/libm/libdl/liblog symbols; a `.so` that uses
    `malloc`, `stdio`, `pthread`, `errno` (`tests/native/libc_test.c`).
    **Done.**
-3. `%fs` for bionic TLS and the stack guard: a stack-protected /
-   `thread_local` `.so`. **Next.**
+3. `%fs` for bionic TLS and the stack guard: stack-protected `.so` files
+   with emulated (API 26) and ELF (API 29) thread-locals, threads, sleeps, and
+   a TLS library loaded while a thread runs (`tests/native/fs_test.c`,
+   `fs_late.c`). **Done.**
 4. The JNI path: `System.loadLibrary`, `JNI_OnLoad`, `RegisterNatives`,
    `Java_*`, and `JNIEnv` calls from the `.so` back into ART.
 5. libc++_shared and a C++ exception; a test APK under `lib/x86_64`, run
@@ -113,9 +122,8 @@ Android NDK (r27c, `27.2.12479018`) on the Linux runner and uploads them as the
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`. This session finished goal 1 (the bionic
-shim) and stopped there by the coordinator's instruction; the next agent
-starts with `%fs` (step 3 below)._
+`wip/native-libs` off `phase3/base`. This session did step 3 (`%fs`); the
+next agent starts with step 4 (JNI), see "After that"._
 
 ### Done and CI-verified
 
@@ -145,71 +153,66 @@ starts with `%fs` (step 3 below)._
   `pthread_cond_timedwait` timing out, `dlsym(RTLD_DEFAULT)`/`dlerror`,
   `dl_iterate_phdr` finding the library's own `PT_LOAD`, `dladdr`, and
   `__android_log_print`.
-  - The first attempt, ci `39947567513`, failed on a `-Werror` unused constant
-    in `pthread_bionic.cc`, fixed in the next commit.
+- **Step 3 — `%fs` by load-time rewrite** (ADR 0014's revised decision).
+  `compat/elf/x86_decode.cc` (length decoder), `compat/elf/fs_rewrite.cc`
+  (rewrite, stubs, vectored handler for `int3` sites and diagnostics),
+  `compat/elf/tls.cc` (TLS slot, per-thread blocks with a static surplus,
+  late modules, dynamic-only fallback, blocks freed at thread exit through
+  FLS). `WRFSBASE` is gone from the loader. `native-libs.yml` builds
+  `fs_test26.so` (API 26, emulated TLS), `fs_test29.so` (API 29, ELF TLS:
+  general-dynamic, local-dynamic and initial-exec variables) and `fs_late.so`
+  (API 29, initial-exec + general-dynamic), all `-fstack-protector-strong`;
+  the build log counts 14, 25 and 4 instructions using `%fs` in them,
+  including `movq %fs:0x28`, `movq/addq %fs:0x0`, `movl %fs:(%rcx)`,
+  `cmpl $0x7, %fs:(%r15)`, `cmpb $0x0, %fs:(%rcx)` and
+  `movl $0x63, %fs:(%rax)`. **ci `39955700023`, green on windows-2022 and
+  windows-2025**:
+  `PASS  native libs: stack-protected .so with emulated TLS (API 26) under the %fs rewrite`,
+  `PASS  native libs: stack-protected .so with ELF TLS (API 29), threads and a late TLS library`
+  (and the step-1/2 lines). `elf_load_test` requires that the library's
+  expected kinds of rewrite happened (stack guard; thread pointer;
+  out-of-line for API 29) and that nothing was left un-rewritable; the
+  library checks the guard and thread pointer are non-zero, per-thread and
+  stable across sleeps (a stack-protected function sleeps between prologue
+  and epilogue), its thread-locals' initial values in new threads and their
+  per-thread values across sleeps in 4 threads, `&tls` inside the thread's
+  block, and, for API 29, `dlopen("fs_late.so")` while a thread is running:
+  that thread sees the late library's initial TLS values and keeps its own.
+  The rewriter and stubs were also exercised locally with a hand-built ELF
+  image (every form above plus indexed, store and flag-preserving cases, the
+  `int3` and `jmp` entries, and the abort diagnostic), and the decoder was
+  compared with `objdump` (identical boundaries over 7.2 M instructions of a
+  GCC binary; an AVX-512 OpenBLAS differed only on `fwait`-merged x87 mnemonics
+  and data in `.text`).
+- Roadmap: the "ELF loader" box is ticked (normal NDK libraries with the
+  stack protector and TLS load and run, ci `39955700023`). The bionic box is
+  not: it names libandroid, which the shim does not have.
 
 ### Not done / stand-ins in what exists
 
-- No roadmap box is ticked yet: the loader cannot yet run a normal NDK `.so`
-  (they are built with `-fstack-protector-strong` by default, which reads
-  `%fs:0x28`), and the bionic box also names libandroid, which the shim does
-  not have.
-- Shim gaps (none needed by the test): `opendir`/`readdir` (bionic's
+- **Thread setup for initial-exec TLS.** The stack guard (`%gs:0x30`) and
+  `__tls_get_addr` work on any thread; `%fs:0`-derived (initial-exec)
+  accesses need the thread's block, made by `SetupThreadTls()` (the shim's
+  `pthread_create` threads and `elf_load_test`'s main thread call it).
+  Threads ART creates must call it before entering loaded code: step 4's JNI
+  entry should. A miss faults with a named diagnostic from the loader's
+  vectored handler.
+- The stack cookie is the TEB address: correct, not secret.
+- Un-rewritable `%fs` forms (other TCB displacements, RIP-relative, VEX with a
+  register-based `%fs` operand, partial writes of the base register) load as
+  `int3` sites that abort with a message if reached; none occur in the test
+  libraries.
+- Shim gaps (none needed by the tests): `opendir`/`readdir` (bionic's
   `struct dirent` differs), sockets, `select`/`poll`, signals, `fork`/`exec`,
   locale and wide-char functions, `getline`, `scanf`/`fscanf` from a `FILE*`,
-  `%Lf` in `scanf`, `strtold`, `localtime`/`strftime`, `getauxval`.
-  Missing **function** imports load as stubs that print the name and abort
-  when called; missing **data** imports still fail the load.
+  `%Lf` in `scanf`, `strtold`, `localtime`/`strftime`, `getauxval`, and no
+  libandroid. Missing **function** imports load as stubs that print the name
+  and abort when called; missing **data** imports still fail the load.
 - Threads ART creates (not through the shim's `pthread_create`) do not run
   bionic key destructors or `thread_local` destructors when they exit.
 - `__system_property_get` returns "" for everything; `__android_log_*` writes
   `P/tag: text` to stderr.
-
-### Next: step 3 — `%fs` for bionic TLS (the track's main open problem)
-
-The `fsbase` probe (an INFO line in every run) still shows that `WRFSBASE`
-executes but the base is lost on kernel entry, so ADR 0014's decision needs
-replacing; update the ADR with the outcome. What a successor should know:
-
-- **Where `%fs` shows up in NDK code.** `native-libs.yml` now prints, per
-  `.so`, how many instructions use `%fs:` (`llvm-objdump -d | grep -c '%fs:'`);
-  `trivial.so` and `libc_test.so` should report 0. In NDK output:
-  - the stack guard, in every `-fstack-protector-strong` function:
-    `mov %fs:0x28,%rax` (`64 48 8b 04 25 28 00 00 00`) in the prologue, and a
-    `mov`/`cmp`/`sub`/`xor` with `%fs:0x28` in the epilogue: absolute
-    `[disp32]` addressing (ModRM mod=00 rm=100, SIB 0x25);
-  - `thread_local`: for **API < 29** clang uses *emulated* TLS
-    (`__emutls_get_address`, linked into the `.so` from compiler-rt and built
-    on `pthread_key_*`/`pthread_once`/`malloc`, all in the shim), so no `%fs`;
-    for **API 29 and up**, ELF TLS in a shared object is general-dynamic
-    (`__tls_get_addr`, in the shim) unless built with
-    `-ftls-model=initial-exec`, which gives `mov %fs:0,%rax` (absolute) or
-    `mov %fs:(%rax),%eax` (register-based) forms.
-- **A load-time rewrite that keeps instruction lengths** (to be proven in
-  CI): Windows keeps `%gs` at the TEB, so an absolute `%fs:[d]` can become
-  `%gs:[d']` by changing only the prefix byte `0x64` to `0x65` and the 4-byte
-  displacement:
-  - `%fs:0x28` to `%gs:0x30` (`NT_TIB.Self`: per-thread, non-zero, constant
-    for the thread's life; any stable value works as a stack cookie, since the
-    prologue and epilogue read the same slot);
-  - `%fs:0` (the thread pointer) to `%gs:[0x1480 + 8*i]`, a `TlsAlloc` slot
-    (`TEB.TlsSlots[i]`, i < 64) holding the thread's variant-II block pointer,
-    set by `SetupThreadTls` (so it must run on a thread before IE code does);
-  - register-based forms (`%fs:(%reg)`) cannot be rewritten in place; trap
-    them (e.g. `int3` and a vectored handler that emulates the `mov`) or reject
-    the `.so` with a clear message; they only appear with initial-exec TLS.
-  - Match only complete encodings (prefix 0x64, REX.W, a read opcode with a
-    ModRM, SIB 0x25, disp32 0x28 or 0), and patch before `ProtectSegments`
-    makes `.text` read-only. A linear-sweep decoder is more robust than byte
-    matching if false positives (the pattern inside other instructions'
-    immediates) turn up.
-- `TlsGetAddr`/`BuildArena` (`compat/elf/tls.cc`) build a thread's block
-  **once**; a `PT_TLS` module loaded after that gets a `tp_offset` outside the
-  block. Give `__tls_get_addr` a per-thread, per-module fallback (allocated on
-  first use) before relying on API 29+ libraries.
-- The CI check for step 3: a `.so` built with the default stack protector and
-  an emulated-TLS `thread_local` (API 26), and a second with ELF TLS
-  (API 29), each used from several shim threads.
+- Closing a library does not unmap it or release its TLS offset.
 
 ### After that (not started)
 
@@ -229,13 +232,15 @@ replacing; update the ADR with the outcome. What a successor should know:
   `lib/x86_64`, run through gesher-app.** libc++_shared's unwinder finds
   `.eh_frame_hdr` through `dl_iterate_phdr`, which the shim now provides
   (System V, over `elf::ForEachLoaded`, verified by `libc_test`);
-  libc++_shared is stack-protected, so it needs step 3 first.
+  libc++_shared is stack-protected, which step 3 now handles.
 
 ### Open problems and decisions
 
-- `%fs`: above.
-- **Static-only TLS**: every load-time module gets a static (initial-exec)
-  offset; see the `TlsGetAddr` note above.
+- `%fs`: solved by load-time rewriting (ADR 0014, revised). Code generated
+  at run time inside the app (its own JIT) that uses `%fs` is not covered.
+- **Static TLS reserve**: 1 MiB per thread of address space (committed on
+  demand); a module beyond it is dynamic-only (general-dynamic works,
+  initial-exec relocations against it fail the load with a message).
 - The variadic bridge saves all six argument GPRs and eight XMMs regardless
   of `%al`, and assumes a `va_list` the `.so` passes is bionic's (a pointer to
   the 24-byte struct); both hold for NDK clang output.
@@ -243,7 +248,12 @@ replacing; update the ADR with the outcome. What a successor should know:
 ### Dead ends ruled out
 
 - **`WRFSBASE` per thread** (ADR 0014's first decision): the base does not
-  survive kernel entry on windows-2022/2025 (the probe, every run).
+  survive kernel entry on windows-2022/2025 (the probe, every run); replaced
+  by the load-time rewrite.
+- **Matching `%fs` byte patterns without decoding**: the plan's first idea;
+  replaced by decoding from FDE starts, which also finds the register-based
+  and immediate forms the compiler emits (`cmpl $7, %fs:(%r15)`,
+  `addq %fs:0, %r15`) and never mistakes data for a prefix.
 - **Forwarding bionic pthread to winpthreads**: impossible; bionic's
   `pthread_mutex_t` is 40 bytes with a different layout than winpthreads', and
   the `.so` allocates the bionic-sized object. The shim implements the ABI
