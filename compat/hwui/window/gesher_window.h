@@ -57,7 +57,12 @@ class Window {
   ~Window();  // destroys the window and joins its thread
 
   void Show();
+  void Hide();
   void SetTitle(const std::string& title_utf8);
+  // Lets the user resize (and maximize) the window, or not.
+  void SetResizable(bool resizable);
+  // Resizes the window so its client area is width x height pixels.
+  void SetClientSize(int width, int height);
 
   // The back buffer, locked for drawing: BGRA pixels, `*stride` pixels a row,
   // the size the window had when it was locked (*width x *height).
