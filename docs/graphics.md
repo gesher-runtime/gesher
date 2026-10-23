@@ -62,18 +62,35 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 - Skia + FreeType/libpng/libjpeg-turbo/libwebp/wuffs compile and link for
   Windows with llvm-mingw: graphics run 39941675902 built `skia_probe.exe`
   (artifact `graphics`). Earlier runs: 39940386438 (2 compile errors, fixed),
-  39940952986 (skcms link error, fixed). Whether the probe *passes* on
-  Windows: see the probe job of run 39941675902 (and the final report).
+  39940952986 (skcms link error, fixed). The probe passes on windows-2022
+  (run 39941675902, job `probe`): raster surface, filled rect, antialiased
+  circle, path, FreeType text (473 glyph pixels), PNG/JPEG/WebP round trips
+  — "all passed".
+- HarfBuzz and minikin (with patch 0001) compile in that run; libhostgraphics
+  is not reached yet (it needs ui_types).
 
 ### In progress / half-done
 
 - **hwui, minikin, HarfBuzz, libui-types, libhostgraphics** (step 2): the
   CMake (`cmake/aosp/hwui.cmake`), shims (`compat/hwui/include`),
   `SharedLib.cc` and `graphics_runtime.cc` are written and committed; the
-  first compile is run 39941675902's "Build the graphics libraries" step.
-  Expect a few rounds of compile fixes (missing headers such as the
-  android.hardware.graphics.common NDK AIDL headers if `ui/GraphicTypes.h`
-  gets pulled in; `pthread_gettid_np` in RenderProxy; `libandroid_headers_private`).
+  first compile (run 39941675902) has 30 failed edges, all in ui_types and
+  hwui, from four causes:
+  - `surface_control_private.h` not found (RenderThread.h, 15 files): it is
+    in frameworks/native/libs/nativewindow/include-private? or
+    frameworks/base/native/android/include_platform — locate it, add to the
+    sparse set / include path (or a shim declaring the few ASurfaceControl
+    function types RenderThread.h names).
+  - `hardware/hardware.h` not found (ui/PixelFormat.h): libhardware's header,
+    hardware/libhardware/include — add `hardware/libhardware include/` to
+    aosp.lock, or a shim.
+  - libc++ strictness of llvm-mingw's newer libc++: `std::nothrow`
+    (StrongPointer.h needs `<new>`), `std::round` (ui/Rect.h needs `<cmath>`),
+    `std::__c11_atomic_thread_fence`/`memory_order_acquire` (LightRefBase.h,
+    `<atomic>` vs C's `<stdatomic.h>` mixing, see framework.cmake's C++23
+    note: build ui_types and hwui as C++23), `is_floating_point` specialization
+    in math/half.h (`-Wno-invalid-specialization`). Force-include `<new>`,
+    `<cmath>` for those targets, or patch.
 - Not linked into dalvikvm yet: `compat/framework/android_runtime.cc` still
   registers the Phase 2 stand-ins (`hwui_standins.cc`, its ColorSpace stub).
 - aosp.lock changes (one cache churn): external/skia (sparse),
