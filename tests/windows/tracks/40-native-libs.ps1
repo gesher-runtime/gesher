@@ -53,9 +53,10 @@ Check 'native libs: stack-protected .so with ELF TLS (API 29), threads and a lat
 # (compat/bionic/jni_bridge.cc): JNI_OnLoad and RegisterNatives, natives found
 # by name, arguments on the stack, and the .so's calls back into ART through
 # the System V JNIEnv/JavaVM proxies, from ART's threads and its own.
+# System.load takes an absolute path.
 Check 'native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java_* and JNIEnv calls into ART' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive "$Dir/jni_test.so")
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/jni-test.dex") gesher.JniTest (NoDrive (Resolve-Path "$Dir/jni_test.so").Path)
 } @('JNI_OnLoad ran: ok', 'JniTest all passed')
 
 # Step 5, libc++: a C++ .so against the NDK's libc++_shared.so, which the
