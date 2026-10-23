@@ -81,16 +81,18 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   wip/graphics, "Graphics: a Win32 window and its probe, written, not built
   yet"). Run 39945930947 had the last two errors (math/half.h under C++23).
   Nothing links hwui yet, so unresolved symbols in it are still unknown.
+- **graphics in ci.yml** (goal 2): job `graphics` (`uses: ./.github/workflows/graphics.yml`);
+  `test` and `package` `need` it and download artifact `graphics` into
+  `dist`. ci run 39953186255 (wip/graphics at fa3b482) is green: build,
+  framework (host tools rebuilt once, as expected), graphics, both test
+  runners and the installer. `PASS  skia: CPU raster, FreeType text,
+  PNG/JPEG/WebP codecs` on windows-2022 and windows-2025, with every earlier
+  check still passing (`PASS  gesher-app: lifecycle.apk to onResume`,
+  `PASS  installer: installs, runs Hello and gesher-app, uninstalls`).
+  Roadmap Phase 3's first box is ticked.
 
 ### In progress / half-done
 
-- **ci.yml wiring** (goal 2): job `graphics` (`uses: ./.github/workflows/graphics.yml`),
-  `test` and `package` `needs: [build, framework, graphics]` and download
-  artifact `graphics` into `dist`. Committed and pushed; a full `ci` run on
-  wip/graphics was not started yet when this was written (the GitHub API
-  was rate-limited) — see "CI runs" below for the outcome. When `ci` is green
-  with `PASS  skia: CPU raster, FreeType text, PNG/JPEG/WebP codecs` on both
-  runners, tick the first Phase 3 box in docs/roadmap.md.
 - **Win32 window, written but never compiled**: `compat/hwui/window/gesher_window.{h,cc}`
   (`gesher::Window`: a thread per HWND running its message loop; a BGRA
   top-down back buffer in system memory, `Lock`/`UnlockAndPost`; WM_PAINT and
@@ -121,14 +123,11 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 
 - graphics 39945930947: 2 failed edges (ui_types: half.h deprecations).
 - graphics 39947396734: green (graphics_all + skia_probe on windows-2022).
-- ci on wip/graphics: not run yet (see above).
+- ci 39953186255 on wip/graphics: green (skia_probe from 30-graphics.ps1 on both runners).
 
 ### Next concrete steps
 
-1. Run `ci` on wip/graphics (`gh workflow run ci --ref wip/graphics`), check
-   `PASS  skia: ...` on windows-2022 and windows-2025 and that the rest stays
-   green; tick roadmap Phase 3's first item.
-2. Link hwui into dalvikvm: `target_link_libraries(dalvikvm PRIVATE gesher_graphics)`
+1. Link hwui into dalvikvm: `target_link_libraries(dalvikvm PRIVATE gesher_graphics)`
    (or framework_runtime), and in `compat/framework/android_runtime.cc`
    replace the `android_graphics_ColorSpace` and `gesher_hwui_standins` rows by
    one `{"gesher_graphics", "android/graphics/RenderNode", register_gesher_graphics}`.
@@ -140,7 +139,7 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    BLASTBufferQueue (`android_graphics_BLASTBufferQueue.cpp`, `gMethods`).
    Check that gesher-app lifecycle.apk still reaches onResume with the real
    natives (test job and the installer check in `package`).
-3. Window (design worked out; the native window is written, see above):
+2. Window (design worked out; the native window is written, see above):
    - Native (compat/hwui): `GesherWindow` (one thread per HWND, system-memory
      BGRA back buffer, mutex, WM_PAINT and WM_PRINTCLIENT blit it so
      `PrintWindow` works off-screen; WM_GETMINMAXINFO allows large sizes;
@@ -182,14 +181,14 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    - Fonts: Typeface's static init preloads `/system/fonts/Roboto-Regular.ttf`
      and parses the legacy fonts.xml (`SystemFonts.getSystemPreinstalledFontConfigFromLegacyXml`):
      install Roboto + NotoSansHebrew and data/fonts/fonts.xml under $ANDROID_ROOT.
-4. CI window test: tests/apps/<window app> (colored Views + Button), run
+3. CI window test: tests/apps/<window app> (colored Views + Button), run
    gesher-app --window in the background, find the window by title, PrintWindow
    + GetPixel from PowerShell (Add-Type), check colors.
-5. Input: MotionEvent natives need libinput's Input.cpp (+ InputEventLabels,
+4. Input: MotionEvent natives need libinput's Input.cpp (+ InputEventLabels,
    aidl IInputConstants headers via GESHER_AIDL, HmacKeyManager from
    libs/attestation); deliver via `ViewRootImpl.dispatchInputEvent`; CI posts
    WM_LBUTTONDOWN/UP, checks onClick output and changed pixels.
-6. ANGLE: not started. Plan: a pinned, checksummed prebuilt (libEGL.dll /
+5. ANGLE: not started. Plan: a pinned, checksummed prebuilt (libEGL.dll /
    libGLESv2.dll from a pinned Electron win32-x64 release zip, cached), loaded
    with LoadLibrary/eglGetProcAddress (C API, MS ABI is fine); WARP via
    `EGL_PLATFORM_ANGLE_DEVICE_TYPE_WARP_ANGLE`; an angle_probe first; record the
