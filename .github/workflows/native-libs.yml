@@ -34,7 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests/native
+          sparse-checkout: |
+            tests/native
+            tests/apps/nativeapp
 
       - name: Cache the Android NDK
         id: ndk
@@ -123,6 +125,35 @@ jobs:
           "$bin/llvm-readelf" --dyn-syms -W dist-native/libc++_shared.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
           echo "--- jni_test.so imports ---"
           "$bin/llvm-readelf" --dyn-syms -W dist-native/jni_test.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
+
+      # aapt2 and zipalign (build-tools r36.1, as tests/apps/lifecycle uses) and
+      # the SDK's android.jar, for the test APK.
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+          ls sdk sdk/build-tools
+
+      # gesher-app's test app with native code: lib/x86_64/libnativeapp.so and
+      # libc++_shared.so in the APK (tests/apps/nativeapp).
+      - name: Build the native test APK
+        run: |
+          tests/apps/nativeapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
 
       - uses: actions/upload-artifact@v4
         with:
