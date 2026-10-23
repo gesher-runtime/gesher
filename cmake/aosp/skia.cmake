@@ -82,7 +82,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${AOSP_DIR}/external/skia/win/include/config/SkUserConfig.h")
 target_include_directories(skia BEFORE PUBLIC "${CMAKE_BINARY_DIR}/gen/skia")
 # Soong's Windows toolchain does not define NOGDI; Skia's Windows ports use GDI.
-target_compile_options(skia PRIVATE -UNOGDI)
+target_compile_options(skia PRIVATE -UNOGDI
+  "SHELL:-include ${CMAKE_SOURCE_DIR}/compat/hwui/skia_prefix.h")
+# Skia's headers have MSVC pragmas (#pragma warning) clang does not know.
+target_compile_options(skia INTERFACE -Wno-unknown-pragmas)
 target_link_libraries(skia PUBLIC ft2 png jpeg webp_decode webp_encode wuffs expat z cutils log
   # android.bp's host_ldlibs for Windows
   gdi32 oleaut32 ole32 opengl32 uuid windowscodecs usp10 dwrite)
