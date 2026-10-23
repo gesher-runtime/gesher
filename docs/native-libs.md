@@ -67,6 +67,114 @@ follow it. It builds in steps, each verified in CI
 ## Building the test libraries
 
 `.github/workflows/native-libs.yml` builds the `.so` files with a pinned
-Android NDK on the Linux runner and uploads them as the `native-libs`
-artifact; the Windows `test` job loads them through `elf_load_test` (and later
-through gesher-app).
+Android NDK (r27c, `27.2.12479018`) on the Linux runner and uploads them as the
+`native-libs` artifact; the Windows `test` job loads them through
+`elf_load_test` (and later through gesher-app).
+
+## Status and next steps
+
+_Last updated 2026-10-23 by the native-libraries track; branch
+`wip/native-libs` off `phase3/base`._
+
+### Done and CI-verified
+
+- **Step 1 — loader on a self-contained object.** The ELF loader
+  (`compat/elf/`), the `fsbase` probe and `elf_load_test` are built and the
+  track checks (`tests/windows/tracks/40-native-libs.ps1`) run on Windows
+  2022/2025. The NDK builds `trivial.so` with `-nostdlib`; the loader maps it,
+  applies RELATIVE/RELR, runs its constructor and calls its exports; the
+  `fsbase` probe proves `WRFSBASE` works and the `%fs` base survives
+  scheduling. **Verification run: `39942420552`** (trigger
+  `gh run view 39942420552 -R gesher-runtime/gesher`). The first attempt,
+  `39941328906`, failed on a `-Werror` unused parameter, now fixed; the
+  `native-libs` NDK-build job passed in both.
+  - If `39942420552` shows a failing track line, read it from the `test` job's
+    log and fix before building on step 1. The loader logic is syntax-checked
+    with the local WinLibs `g++` (see below) but only CI runs it.
+
+### In progress / half-done
+
+- **Step 2 — the bionic shim** (`compat/bionic/`). Written and syntax-checked
+  but **deliberately not in CMake yet**, so it cannot break step 1's CI:
+  - `abi_types.h` — bionic's LP64 pthread/type layouts (fixed-width, since the
+    `.so` has 64-bit `long` and mingw has 32-bit).
+  - `pthread_bionic.cc` — bionic's pthread ABI over Windows threads and
+    `WaitOnAddress` futexes (mutex/cond/once/keys/create/join); each created
+    thread calls `elf::SetupThreadTls()` for `%fs`.
+  - `shim.cc` — a System V symbol table (libc mem/str/stdio, libm, a core of
+    unistd, pthread, liblog, libdl, `__stack_chk_*`, `__cxa_atexit/finalize`,
+    `__tls_get_addr`) and `InstallBionicShim()`, which registers the resolver
+    with the loader.
+  - **Next concrete steps:** add `compat/bionic/bionic.cmake` (a `gesher_bionic`
+    static lib) and `include()` it from `CMakeLists.txt`; link it into
+    `elf_load_test` and call `InstallBionicShim()` there; add a `libc.so`-using
+    test to `native-libs.yml` (NDK, *with* libc, pthread, malloc, non-variadic
+    stdio) and a track check that loads it. Verify under llvm-mingw — the local
+    `g++` check does not cover `posix_memalign`/`strdup`/`strnlen`/`aligned_alloc`
+    signature differences, so expect a few CRT-availability fixes there.
+
+### Next steps after that (not started)
+
+- **Step 3 — JNI path.** Hook the host `OpenNativeLibrary`/`dlopen`
+  (`art/libnativeloader/native_loader.cpp` `!ART_TARGET_ANDROID` branch, which
+  already calls plain `dlopen`/`dlsym`) so `System.loadLibrary` routes a `.so`
+  through the ELF loader, and `JNI_OnLoad`/`RegisterNatives`/`Java_*` resolve
+  through `elf::Lookup`. `JNIEnv`/`JavaVM` tables are MS-ABI
+  ([0006](decisions/0006-managed-abi.md)); calls from the `.so` into them must
+  go MS-ABI while the `.so`'s own natives are entered System V — reuse the
+  `jni-sysv` machinery (`tools/jni-sysv-patch.py`, `NATIVEHELPER_SYSV_JNI_ENTRY`).
+  The minimal edit to `native_loader.cpp` must be noted in the report (shared
+  file / other track's domain is `libnativeloader`? — it is ART, not another
+  track's; confirm with the coordinator).
+- **Step 4 — libc++_shared and a C++ exception; a test APK under `lib/x86_64`,
+  run through gesher-app.** Open problem: C++ exception unwinding needs
+  `dl_iterate_phdr` to report the loaded `.so`'s program headers (the unwinder
+  in libc++_shared reads `PT_GNU_EH_FRAME` that way); gesher-base's
+  `dl_iterate_phdr` currently reports nothing. The loader must register each
+  loaded object's phdrs and gesher-base's `dl_iterate_phdr` must enumerate them.
+
+### Open problems and decisions
+
+- **%fs for bionic TLS** — decided in
+  [0014](decisions/0014-native-libs-fs-base.md): use `WRFSBASE`, proven per-run
+  by the `fsbase` probe. Fallback (patching `%fs` accesses) is specified but not
+  implemented; only needed if a runner reports `FSGSBASE` off.
+- **Variadic System V entry points** (`printf` family, `__android_log_print`):
+  cannot be forwarded to the MS-ABI CRT, because `va_start` is not allowed in a
+  `sysv_abi` function on Windows ([0011](decisions/0011-libcore-natives.md)).
+  The shim offers non-variadic stdio/logging and a fixed-argument
+  `__android_log_print`; a general sysv→ms vararg bridge (an assembly trampoline
+  that rebuilds the register save area) is future work. Keep the test `.so`
+  clear of `printf`/variadic logging until then.
+- **Static-only TLS**: every load-time module gets a static (initial-exec)
+  offset, so a `PT_TLS` module loaded after a thread starts is absent from that
+  thread's block. Fine while all `.so`s load before app threads start; a
+  growable per-thread DTV is the fix when that changes.
+
+### Dead ends ruled out
+
+- **Load-time patching of `%fs` accesses** (the `%gs` approach from
+  [0006](decisions/0006-managed-abi.md)) was considered and set aside for
+  `WRFSBASE`: the app `.so` is prebuilt and the `%fs` prefix sits on
+  variable-length instructions, so in-place rewriting is far more invasive than
+  one `WRFSBASE` per thread. Kept only as the documented fallback.
+- **Forwarding bionic pthread to winpthreads**: impossible — bionic's
+  `pthread_mutex_t` is 40 bytes with a different layout than winpthreads', and
+  the `.so` allocates the bionic-sized object. The shim implements the ABI
+  directly instead.
+- **File-backed fixed segment mappings** for `PT_LOAD`: avoided; the loader
+  reserves one anonymous range and copies segment contents, since file-backed
+  `MAP_FIXED` over a reservation needs placeholder mappings gesher-base does not
+  have yet.
+
+### How to work on this
+
+- Loader/shim logic can be syntax-checked locally without AOSP or WSL with the
+  WinLibs UCRT `g++` already on the machine:
+  `g++ -std=gnu++20 -fsyntax-only -Wall -Wextra -Werror -mfsgsbase -DGESHER
+  -I compat/elf/include -I compat/bionic -I compat/posix/include <file.cc>`.
+  It is not the CI toolchain (llvm-mingw) but catches most `-Werror` issues
+  cheaply before a full CI build.
+- Full verification is CI only: `gh workflow run ci --ref wip/native-libs`
+  (the reusable `native-libs.yml` runs because `ci` calls it; it cannot be
+  dispatched on its own until it reaches the default branch).
