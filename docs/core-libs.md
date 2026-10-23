@@ -78,13 +78,14 @@ errors in that run:
    `<windows.h>` macro — fixed in the last commit (kErrorInvalidParameter).
 2. `trace-dev_test.cpp`: `PROP_NAME_MAX` undefined off bionic — fixed in the
    last commit (test-only define, 32).
-3. `posix_memalign` undefined when linking libutils_binder_test(s) and
-   libandroidfw_tests: gesher-base's stdlib.h declares it but nothing defines
-   it. Needs a gesher-base implementation whose memory `free()` accepts
-   (`_aligned_malloc` memory cannot go to `free`): e.g. over-allocate with
-   malloc only for alignment <= 16 (malloc's guarantee) and fail with EINVAL/
-   ENOMEM otherwise, or find the caller (likely gmock or libbase) and see what
-   alignment it asks for.
+3. `posix_memalign` undefined when linking libutils_binder_test and its
+   custom-allocator variant: gesher-base's stdlib.h declares it but nothing
+   defines it. The caller is `Unicode_test.cpp:255` (page-aligned buffer
+   next to a PROT_NONE guard page, for the overread death test). Needs a
+   gesher-base implementation whose memory `free()` accepts
+   (`_aligned_malloc` memory cannot go to `free`); e.g. a page-aligned
+   allocation tracked in a table that a gesher `free` wrapper recognises, or
+   mmap-backed allocations for alignments above 16.
 4. `android::util::ExecuteBinary` undefined (libandroidfw_tests): libandroidfw
    `PosixUtils.cpp` compiles it out under `_WIN32`, but the android-only
    `tests/PosixUtils_test.cpp` calls it. Either implement it for Gesher (a
