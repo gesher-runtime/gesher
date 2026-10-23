@@ -21,7 +21,8 @@
 
 #include "gesher_native_window.h"
 
-#define WIN32_LEAN_AND_MEAN 1
+// The project defines NOGDI for AOSP code; this test reads windows back with GDI.
+#undef NOGDI
 #include <windows.h>
 
 #include <cstdint>
