@@ -74,6 +74,11 @@ file(READ "${AOSP_DIR}/external/skia/win/include/config/SkUserConfig.h" _cfg)
 foreach(_d SK_FONTMGR_FONTATIONS_AVAILABLE SK_TYPEFACE_FACTORY_FONTATIONS SK_SUPPORT_PDF)
   string(REGEX REPLACE "#ifndef ${_d}\n#define ${_d}[^\n]*\n#endif" "// Gesher: no ${_d}" _cfg "${_cfg}")
 endforeach()
+# kN32 is RGBA, as on Android, not Skia's Windows default (BGRA): hwui maps
+# Bitmap.Config.ARGB_8888 and PIXEL_FORMAT_RGBA_8888 to kN32, and apps read
+# Bitmap pixels as RGBA bytes (copyPixelsToBuffer). The window converts to
+# GDI's BGRA when it presents (compat/hwui/window/win32_surface.cc).
+string(APPEND _cfg "\n// Gesher: Android's byte order for kN32_SkColorType (RGBA).\n#define SK_R32_SHIFT 0\n")
 file(CONFIGURE OUTPUT "${_skcfg}" CONTENT "${_cfg}" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${AOSP_DIR}/external/skia/win/include/config/SkUserConfig.h")
