@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.UserInfo;
 import android.graphics.Point;
+import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
 import android.os.IBinder;
@@ -151,6 +152,13 @@ public final class Services {
         @Override
         public void registerCallbackWithEventMask(IDisplayManagerCallback callback,
                 long eventsMask) {
+        }
+
+        @Override
+        public OverlayProperties getOverlaySupport() {
+            // DisplayManagerService answers the composer's; the display has none of its
+            // own (the natives are stand-ins until the graphics track's).
+            return OverlayProperties.getDefault();
         }
 
         @Override

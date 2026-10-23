@@ -163,7 +163,6 @@ public final class Main {
                 log("--data-dir ignored: the system server's package manager sets the data"
                         + " directory");
             }
-            RemoteServices.installDisplayManagerGlobal();
             Intent intent = launchIntent(packageName, activity);
             for (java.util.Map.Entry<String, Boolean> e : extras.entrySet()) {
                 intent.putExtra(e.getKey(), (boolean) e.getValue());
