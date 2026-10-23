@@ -120,6 +120,7 @@ jobs:
           sparse-checkout: |
             tools/package
             tests/windows/shell
+            tests/windows/graphics
 
       - uses: actions/download-artifact@v4
         with:
@@ -200,6 +201,9 @@ jobs:
             }
             return @($pids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
           }
+          # lifecycle.apk runs headless (no window; its task is removed once it
+          # is idle); uiapp.apk's window is checked below.
+          $env:GESHER_APP_WINDOW = 'headless'
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           $code = $LASTEXITCODE
           Write-Host "gesher-app lifecycle.apk (exit $code):"
@@ -331,6 +335,54 @@ jobs:
           $running = DevicePids
           if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
           'PASS  installer: the Gesher device started by a double-click keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # An app's window on the device (docs/graphics.md, ADR 0029): the
+          # installed gesher-app launches uiapp.apk with a hidden window; the
+          # app process the system server starts draws its UI into a Win32
+          # window of its own (read back with PrintWindow), with the
+          # Activity's label, the package's AppUserModelID and its shortcut's
+          # icon; WM_CLOSE finishes the Activity and the process ends.
+          . tests\windows\graphics\WindowChecks.ps1
+          $uiapp = Join-Path $env:TEMP 'uiapp.apk'  # on Gesher's drive
+          Copy-Item dist\uiapp.apk $uiapp
+          $uiLog = Join-Path $env:TEMP 'uiapp-launch.log'
+          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$app\gesher-app.cmd`" `"$uiapp`" --hidden-window > `"$uiLog`" 2>&1`"")
+          $psi.UseShellExecute = $false
+          $p = [Diagnostics.Process]::Start($psi)
+          $hwnd = [IntPtr]::Zero
+          $deadline = (Get-Date).AddSeconds(400)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+            $m = [regex]::Match("$(Get-Content -Raw $uiLog -ErrorAction SilentlyContinue)", 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+            if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16); break }
+            Start-Sleep -Milliseconds 250
+          }
+          $problems = @()
+          if ($hwnd -eq [IntPtr]::Zero) { $problems += 'no first frame' } else {
+            Start-Sleep 3
+            $px = [GesherWin32]::Capture($hwnd)
+            if ($null -eq $px) { $problems += 'PrintWindow failed' } else { $problems += @(UiAppPixels $px) }
+            $text = Get-Content -Raw $uiLog
+            $m = [regex]::Match($text, 'app process for com\.gesher\.uiapp: pid (\d+)')
+            $owner = [GesherWin32]::ProcessId($hwnd)
+            if (-not $m.Success -or [int]$m.Groups[1].Value -ne $owner) { $problems += "the window is process $owner's, not the app process's" }
+            $title = [GesherWin32]::Title($hwnd); $id = [GesherWin32]::AppUserModelId($hwnd)
+            Write-Host "uiapp's window: title '$title', process $owner, AppUserModelID '$id', icon: $([GesherWin32]::HasIcon($hwnd))"
+            if ($title -ne 'Gesher UI test') { $problems += "title '$title'" }
+            if ($id -ne 'Gesher.App.com.gesher.uiapp') { $problems += "AppUserModelID '$id'" }
+            if (-not [GesherWin32]::HasIcon($hwnd)) { $problems += 'no window icon' }
+            [void][GesherWin32]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+          }
+          if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += 'did not end after WM_CLOSE' }
+          elseif ($p.ExitCode -ne 0) { $problems += "exit $($p.ExitCode)" }
+          $text = Get-Content -Raw $uiLog -ErrorAction SilentlyContinue
+          foreach ($want in 'UiActivity onDestroy', 'the process of com.gesher.uiapp ended (exit code 0)', 'gesher-app: done') {
+            if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+          }
+          if ($problems) {
+            Write-Host $text
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            throw "uiapp.apk's window on the Gesher device: $($problems -join '; ')"
+          }
+          'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
           Set-Content $sentinel 'not Gesher''s'
