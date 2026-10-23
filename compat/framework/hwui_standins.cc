@@ -63,7 +63,8 @@ __attribute__((sysv_abi)) jlong RenderNode_create() {
   return reinterpret_cast<jlong>(calloc(1, 64));
 }
 
-// Paint.nInit(), Paint.nInitWithPaint(long): a paint, its state kept in Java.
+// Paint.nInit, Matrix.nCreate, Path.nInit and the like: the object, with no
+// state (its state lives in Java, or nowhere until views are drawn).
 __attribute__((sysv_abi)) jlong Standin_create() {
   return reinterpret_cast<jlong>(calloc(1, 64));
 }
