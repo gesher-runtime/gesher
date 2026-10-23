@@ -18,7 +18,9 @@ function(gesher_core_test name)
   cmake_parse_arguments(T "" "" "FLAGS;SOURCES;LIBS;DEFINES" ${ARGN})
   add_executable(${name} EXCLUDE_FROM_ALL ${T_SOURCES})
   target_link_libraries(${name} PRIVATE ${T_LIBS})
-  target_compile_options(${name} PRIVATE ${T_FLAGS})
+  # Soong's global cflags zero uninitialized locals (-ftrivial-auto-var-init=zero,
+  # device and host); Unicode_test's zero-length cases rely on it.
+  target_compile_options(${name} PRIVATE -ftrivial-auto-var-init=zero ${T_FLAGS})
   target_compile_definitions(${name} PRIVATE ${T_DEFINES})
   # Unstripped, unlike the tools: CallStack's tests read the symbol table.
   set_target_properties(${name} PROPERTIES
@@ -75,6 +77,17 @@ foreach(_n 1 2)
   add_dependencies(core_libs_tests ${_t})
 endforeach()
 target_link_libraries(libutils_test_singleton2 PRIVATE libutils_test_singleton1)
+# lld's --export-all-symbols skips every symbol that also has an __imp_ entry
+# in a linked import library, and singleton1's exports all of singleton2's
+# functions: singleton2 names its exports instead.
+file(WRITE ${CMAKE_BINARY_DIR}/libutils_test_singleton2.def
+  "EXPORTS
+  singletonGetInstanceContents
+  singletonSetInstanceContents
+  singletonHasInstance
+")
+target_sources(libutils_test_singleton2 PRIVATE ${CMAKE_BINARY_DIR}/libutils_test_singleton2.def)
+set_target_properties(libutils_test_singleton2 PROPERTIES LINK_OPTIONS "-static")
 
 # --- libcutils_test -------------------------------------------------------------
 # libcutils_test_default with its android and not_windows sources, less
