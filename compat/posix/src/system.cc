@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
@@ -290,6 +291,13 @@ int fcntl(int fd, int cmd, ...) {
         break;  // F_DUPFD and the rest below
     }
   }
+  if (std::shared_ptr<gesher::EventFd> e = gesher::LookupEventFd(fd)) {
+    if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
+    if (cmd == F_SETFL) {
+      gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
+      return 0;
+    }
+  }
   switch (cmd) {
     case F_GETFD: {
       DWORD flags = 0;
@@ -307,8 +315,18 @@ int fcntl(int fd, int cmd, ...) {
     case F_SETFL:
       return 0;
     case F_DUPFD:
-    case F_DUPFD_CLOEXEC:
-      return dup(fd);  // fd.cc; duplicates sockets too
+    case F_DUPFD_CLOEXEC: {
+      // The lowest free number >= arg, as on Linux. dup (fd.cc) duplicates
+      // sockets and eventfds too; fds are never inherited, so the two match.
+      if (arg < 0) return errno = EINVAL, -1;
+      int dup_fd = dup(fd);
+      if (dup_fd < 0 || dup_fd >= arg) return dup_fd;
+      int target = static_cast<int>(arg);
+      while (gesher::HandleFromFd(target) != INVALID_HANDLE_VALUE) ++target;
+      int moved = dup2(dup_fd, target);
+      close(dup_fd);
+      return moved;
+    }
     case F_ADD_SEALS:
     case F_GET_SEALS:
       return 0;  // seals are advisory here

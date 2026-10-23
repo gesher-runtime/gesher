@@ -1,6 +1,6 @@
-// gesher-base: file descriptors that may be sockets (see socket_internal.h)
-// or /dev/zero and /dev/random (path.cc), and poll() over files, pipes and
-// sockets.
+// gesher-base: file descriptors that may be sockets (see socket_internal.h),
+// /dev/zero and /dev/random (path.cc) or eventfds and epolls (epoll.cc), and
+// poll() over files, pipes, sockets and eventfds.
 //
 // close, read, write, dup and dup2 are defined here under the CRT's own
 // names: gesher-base is linked before the CRT, so every caller gets these.
@@ -16,10 +16,12 @@
 #include <bcrypt.h>
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
 
+#include "event_internal.h"
 #include "internal.h"
 #include "socket_internal.h"
 
@@ -79,7 +81,8 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
   return static_cast<int>(count);
 }
 
-// A CRT fd on NUL, to reserve a number for a socket.
+}  // namespace
+
 int ReserveFd() {
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          nullptr, OPEN_EXISTING, 0, nullptr);
@@ -88,8 +91,6 @@ int ReserveFd() {
   if (fd < 0) CloseHandle(h);
   return fd;
 }
-
-}  // namespace
 
 int RegisterSocket(const SocketFd& state) {
   int fd = ReserveFd();
@@ -138,9 +139,11 @@ int gesher_is_socket(int fd) {
 }
 
 int close(int fd) {
+  gesher::ForgetEpollEntries(fd);
   SocketFd state;
   if (!gesher::Remove(fd, &state)) {
     gesher::ForgetDevice(fd);
+    gesher::ForgetEventObject(fd);
     return gesher::CrtResult(_close(fd));
   }
   // Closing the socket first wakes threads blocked on it, as on Linux.
@@ -156,6 +159,8 @@ int read(int fd, void* buf, unsigned int count) {
   if (!gesher::LookupSocket(fd, &state)) {
     Device device;
     if (gesher::LookupDevice(fd, &device)) return gesher::ReadDevice(device, buf, count);
+    int result;
+    if (gesher::ReadEventObject(fd, buf, count, &result)) return result;
     return gesher::CrtResult(_read(fd, buf, count));
   }
   gesher::ws::Buffer buffer = {buf, count};
@@ -164,7 +169,11 @@ int read(int fd, void* buf, unsigned int count) {
 
 int write(int fd, const void* buf, unsigned int count) {
   SocketFd state;
-  if (!gesher::LookupSocket(fd, &state)) return gesher::CrtResult(_write(fd, buf, count));
+  if (!gesher::LookupSocket(fd, &state)) {
+    int result;
+    if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
+    return gesher::CrtResult(_write(fd, buf, count));
+  }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
   return static_cast<int>(gesher::ws::Send(state.socket, &buffer, 1, 0, nullptr));
 }
@@ -175,6 +184,7 @@ int dup(int fd) {
     int fd2 = gesher::CrtResult(_dup(fd));
     Device device;
     if (fd2 >= 0 && gesher::LookupDevice(fd, &device)) gesher::RegisterDevice(fd2, device);
+    if (fd2 >= 0) gesher::DupEventObject(fd, fd2);
     return fd2;
   }
   state.socket = gesher::ws::Duplicate(state.socket);
@@ -201,12 +211,17 @@ int dup2(int fd, int fd2) {
     if (source_is_socket) gesher::ws::Close(source.socket);
     return -1;
   }
+  // fd2's old file is closed: forget what it was.
   gesher::ForgetDevice(fd2);
+  gesher::ForgetEventObject(fd2);
+  gesher::ForgetEpollEntries(fd2);
   Device device;
   if (source_is_socket) {
     gesher::Insert(fd2, source);
   } else if (gesher::LookupDevice(fd, &device)) {
     gesher::RegisterDevice(fd2, device);
+  } else {
+    gesher::DupEventObject(fd, fd2);
   }
   return fd2;
 }
@@ -276,76 +291,132 @@ bool PollFile(pollfd* p) {
 
 }  // namespace
 
-extern "C" int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+namespace gesher {
+
+int PollFds(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, bool* interrupted) {
   ULONGLONG deadline = timeout < 0 ? ~0ULL : GetTickCount64() + static_cast<ULONGLONG>(timeout);
-  std::vector<gesher::ws::PollEntry> sockets;
+  std::vector<ws::PollEntry> sockets;
   std::vector<nfds_t> socket_index;
+  // Held so that their events stay open while waited on.
+  std::vector<std::shared_ptr<EventFd>> eventfds;
+  std::vector<nfds_t> eventfd_index;
   bool waiting_files = false;  // a pipe that may become readable
-  int ready = 0;
   for (nfds_t i = 0; i < nfds; ++i) {
     pollfd* p = &fds[i];
     p->revents = 0;
     if (p->fd < 0) continue;  // ignored, as on Linux
     SocketFd state;
-    if (gesher::LookupSocket(p->fd, &state)) {
-      int events = ((p->events & kIn) != 0 ? gesher::ws::kPollIn : 0) |
-                   ((p->events & kOut) != 0 ? gesher::ws::kPollOut : 0);
+    if (std::shared_ptr<EventFd> e = LookupEventFd(p->fd)) {
+      p->revents = PollEventFd(*e, p->events, nullptr);
+      eventfds.push_back(std::move(e));
+      eventfd_index.push_back(i);
+    } else if (LookupSocket(p->fd, &state)) {
+      int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
+                   ((p->events & kOut) != 0 ? ws::kPollOut : 0);
       sockets.push_back({state.socket, events, 0});
       socket_index.push_back(i);
     } else if (!PollFile(p)) {
       waiting_files = true;
     }
-    if (p->revents != 0) ++ready;
   }
+  auto count_ready = [&] {
+    int n = 0;
+    for (nfds_t i = 0; i < nfds; ++i) n += fds[i].fd >= 0 && fds[i].revents != 0;
+    return n;
+  };
+  int ready = count_ready();
+  bool unused;
+  if (interrupted == nullptr) interrupted = &unused;
+  *interrupted = false;
 
+  // Eventfds and `interrupt` are Win32 events, waited for together with the
+  // real timeout. Pipes have no wait handle and WSAPoll takes only sockets,
+  // so with pipes, or with sockets and events, every source is checked in
+  // 10 ms slices.
+  bool sliced = waiting_files || (!sockets.empty() && (!eventfds.empty() || interrupt != nullptr));
+  std::vector<HANDLE> handles;
   for (;;) {
-    int wait_ms;
-    if (ready > 0) {
-      wait_ms = 0;  // only collect what the sockets have
-    } else if (waiting_files) {
-      wait_ms = 10;  // pipes have no wait handle that WSAPoll accepts
-    } else if (timeout < 0) {
-      wait_ms = -1;
-    } else {
-      ULONGLONG now = GetTickCount64();
-      wait_ms = now >= deadline ? 0 : static_cast<int>(deadline - now);
-    }
-    if (waiting_files && timeout >= 0) {
-      ULONGLONG now = GetTickCount64();
-      if (now >= deadline) wait_ms = 0;
-      else if (deadline - now < static_cast<ULONGLONG>(wait_ms)) wait_ms = static_cast<int>(deadline - now);
+    int wait_ms = 0;  // with something ready, only collect what the rest has
+    if (ready == 0) {
+      if (timeout < 0) {
+        wait_ms = -1;
+      } else {
+        ULONGLONG now = GetTickCount64();
+        wait_ms = now >= deadline ? 0 : static_cast<int>(deadline - now);
+      }
+      if (sliced && (wait_ms < 0 || wait_ms > 10)) wait_ms = 10;
     }
 
     if (!sockets.empty()) {
-      if (gesher::ws::Poll(sockets.data(), sockets.size(), wait_ms) < 0) return -1;
+      if (ws::Poll(sockets.data(), sockets.size(), wait_ms) < 0) return -1;
       for (size_t k = 0; k < sockets.size(); ++k) {
         pollfd* p = &fds[socket_index[k]];
         int r = sockets[k].revents;
         short out = 0;
-        if (r & gesher::ws::kPollIn) out |= p->events & kIn;
-        if (r & gesher::ws::kPollOut) out |= p->events & kOut;
-        if (r & gesher::ws::kPollErr) out |= POLLERR;
-        if (r & gesher::ws::kPollHup) out |= POLLHUP;
-        if (r & gesher::ws::kPollNval) out |= POLLNVAL;
-        if (p->revents == 0 && out != 0) ++ready;
+        if (r & ws::kPollIn) out |= p->events & kIn;
+        if (r & ws::kPollOut) out |= p->events & kOut;
+        if (r & ws::kPollErr) out |= POLLERR;
+        if (r & ws::kPollHup) out |= POLLHUP;
+        if (r & ws::kPollNval) out |= POLLNVAL;
         p->revents = out;
       }
-    } else if (ready == 0 && wait_ms != 0) {
-      Sleep(wait_ms < 0 ? INFINITE : static_cast<DWORD>(wait_ms));
+    } else if (wait_ms != 0) {
+      handles.clear();
+      for (size_t k = 0; k < eventfds.size(); ++k) {
+        pollfd* p = &fds[eventfd_index[k]];
+        HANDLE wake = nullptr;
+        p->revents = PollEventFd(*eventfds[k], p->events, &wake);
+        if (p->revents != 0) wait_ms = 0;  // ready since the last look
+        if (wake != nullptr) handles.push_back(wake);
+      }
+      if (interrupt != nullptr) handles.push_back(interrupt);
+      if (handles.size() > MAXIMUM_WAIT_OBJECTS) {
+        handles.clear();  // too many to wait for: look every 10 ms
+        if (wait_ms < 0 || wait_ms > 10) wait_ms = 10;
+      }
+      if (wait_ms != 0 && handles.empty()) {
+        Sleep(wait_ms < 0 ? INFINITE : static_cast<DWORD>(wait_ms));
+      } else if (wait_ms != 0) {
+        DWORD n = static_cast<DWORD>(handles.size());
+        DWORD w = WaitForMultipleObjects(n, handles.data(), FALSE,
+                                         wait_ms < 0 ? INFINITE : static_cast<DWORD>(wait_ms));
+        if (w == WAIT_FAILED) return FailWithLastError();
+        // The auto-reset `interrupt` is consumed by the wait that sees it.
+        if (interrupt != nullptr && w == WAIT_OBJECT_0 + n - 1) *interrupted = true;
+      }
     }
 
-    if (ready > 0 || timeout == 0 || (timeout > 0 && GetTickCount64() >= deadline)) return ready;
+    for (size_t k = 0; k < eventfds.size(); ++k) {
+      pollfd* p = &fds[eventfd_index[k]];
+      p->revents = PollEventFd(*eventfds[k], p->events, nullptr);
+    }
+    if (interrupt != nullptr && !*interrupted &&
+        WaitForSingleObject(interrupt, 0) == WAIT_OBJECT_0) {
+      *interrupted = true;
+    }
     if (waiting_files) {
       waiting_files = false;
       for (nfds_t i = 0; i < nfds; ++i) {
         pollfd* p = &fds[i];
-        if (p->fd < 0 || p->revents != 0 || gesher_is_socket(p->fd)) continue;
+        SocketFd state;
+        if (p->fd < 0 || p->revents != 0 || LookupSocket(p->fd, &state) || LookupEventFd(p->fd)) {
+          continue;
+        }
         if (!PollFile(p)) waiting_files = true;
-        if (p->revents != 0) ++ready;
       }
-      if (ready > 0) return ready;
+    }
+    ready = count_ready();
+    if (ready > 0 || *interrupted || timeout == 0 ||
+        (timeout > 0 && GetTickCount64() >= deadline)) {
+      return ready;
     }
   }
+}
+
+}  // namespace gesher
+
+extern "C" int poll(struct pollfd* fds, nfds_t nfds, int timeout) {
+  return gesher::PollFds(fds, nfds, timeout, nullptr, nullptr);
 }
 
 // Signals are not delivered asynchronously here, so the mask has nothing to

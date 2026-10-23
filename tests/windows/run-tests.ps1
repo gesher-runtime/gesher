@@ -19,6 +19,8 @@ function Check([string] $Name, [scriptblock] $Run, [string[]] $Expect) {
 
 Check 'platform probe' { & "$Dir/platform_probe.exe" } @('0 probe(s) failed')
 Check 'socket probe' { & "$Dir/socket_probe.exe" } @('all passed')
+Check 'epoll probe' { & "$Dir/epoll_probe.exe" } @('all passed')
+Check 'libutils probe' { & "$Dir/libutils_probe.exe" } @('all passed')
 
 Check 'dexdump: disassemble .dex' { & "$Dir/dexdump.exe" -d "$Dir/hello.dex" } @(
   "Class descriptor  : 'Lgesher/Hello;'",
@@ -63,6 +65,85 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
   } else {
     Write-Host $out
   }
+  $failed++
+}
+
+# Runs a class from natives.dex with the interpreter; passes when it exits 0
+# and prints "all passed" (tests/dex-natives).
+function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @(), [string[]] $Arguments = @(), [string] $Bcp = $bcp) {
+  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$Bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main @Arguments 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
+    Write-Host "PASS  dalvikvm: $Name"
+  } else {
+    Write-Host ("FAIL  dalvikvm: $Name (exit 0x{0:X8})" -f $LASTEXITCODE)
+    if (Test-Path "$Dir/dalvikvm.map") {
+      $out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+    } else {
+      Write-Host $out
+    }
+    $script:failed++
+  }
+}
+
+# The framework natives (docs/framework-natives.md): libandroid_runtime's
+# registrations and the @CriticalNative ABI canary (step 2), then the
+# framework's message loop over its MessageQueue natives with both queue
+# implementations (step 3), then libandroidfw through the asset natives on
+# res.apk (step 4).
+RunDex 'framework natives (libandroid_runtime)' gesher.NativeTest
+RunDex 'Looper, Handler, HandlerThread (legacy MessageQueue)' gesher.LooperTest
+RunDex 'Looper, Handler, HandlerThread (concurrent MessageQueue)' gesher.LooperTest @('-Dgesher.mq.concurrent=true')
+RunDex 'resources: ApkAssets, AssetManager, XmlBlock on res.apk' gesher.ResourcesTest @() @(NoDrive "$Dir/res.apk")
+
+# libopenjdk's EPoll natives over gesher-base's epoll (tests/dex-libcore).
+$out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/libcore-tests.dex") gesher.EPollTest 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0 -and $out.Contains('EPollTest all passed')) {
+  Write-Host 'PASS  dalvikvm: EPoll natives over a pipe'
+} else {
+  Write-Host ('FAIL  dalvikvm: EPoll natives over a pipe (exit 0x{0:X8})' -f $LASTEXITCODE)
+  Write-Host $out
+  $failed++
+}
+
+# framework.jar on the boot class path (tests/dex-framework): its classes
+# that need no natives run.
+$bcpFramework = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+  -Xint '-Xusejit:false' -cp (NoDrive "$Dir/framework-tests.dex") gesher.FrameworkSmoke 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0 -and $out.Contains('FrameworkSmoke all passed')) {
+  Write-Host 'PASS  dalvikvm: framework.jar on the boot class path'
+} else {
+  Write-Host ('FAIL  dalvikvm: framework.jar on the boot class path (exit 0x{0:X8})' -f $LASTEXITCODE)
+  Write-Host $out
+  $failed++
+}
+
+# libandroid_runtime on framework.jar (steps 3 and 5): every table registered
+# on the framework's own classes, MessageQueue, Parcel and an in-process Binder.
+RunDex 'framework natives on framework.jar: MessageQueue, Parcel, Binder' gesher.FrameworkNativesTest @() @() $bcpFramework
+
+# gesher-app drives lifecycle.apk's Activity to onResume (app/README.md): the
+# app's manifest, its resources and framework-res.apk's theme are read, and
+# the Application and the Activity go through their callbacks.
+Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework')
+Copy-Item "$Dir/build.prop" (Join-Path $root 'system')
+$bcpApp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+  -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/lifecycle.apk") 2>&1 | Out-String
+$code = $LASTEXITCODE
+$expect = @(
+  'LifecycleApplication onCreate, package=com.gesher.lifecycle',
+  'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
+  'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
+  'gesher-app: done')
+$missing = $expect | Where-Object { -not $out.Contains($_) }
+if ($code -eq 0 -and -not $missing) {
+  Write-Host 'PASS  gesher-app: lifecycle.apk to onResume'
+} else {
+  Write-Host ('FAIL  gesher-app: lifecycle.apk to onResume (exit 0x{0:X8}; missing: {1})' -f $code, ($missing -join ' | '))
+  ($out -split "`n" | Select-String -Pattern 'gesher-app|Lifecycle|Exception|Error|at ' | Select-Object -First 60) | Out-Host
   $failed++
 }
 

@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # framework.yml finds host tools other branches built
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -43,6 +44,9 @@ jobs:
       - name: Build boot class path (core-oj, core-libart)
         run: tools/build-boot-jars.sh out/boot-jars
 
+      - name: Build the framework's resources (framework-res.apk)
+        run: tools/build-framework-res.sh out/framework-res
+
       - name: Collect artifacts
         run: |
           mkdir -p dist
@@ -55,6 +59,12 @@ jobs:
         with:
           name: windows-x64
           path: dist/
+
+  # framework.jar's pipeline (host tools, coremod, framework-res, then
+  # tools/framework/build.py): .github/workflows/framework.yml, which also
+  # runs on its own (gh workflow run framework --ref <branch>).
+  framework:
+    uses: ./.github/workflows/framework.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
@@ -80,7 +90,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: build
+    needs: [build, framework]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +100,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
           path: dist
 
       - name: Build installer
@@ -116,13 +131,25 @@ jobs:
           if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows')) {
             throw "Hello through the installed gesher failed (exit $code)"
           }
+          # gesher-app and the framework it runs on are installed, and the
+          # installed copy takes the bundled app to onResume.
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar') {
+            if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
+          }
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
+            throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
+          }
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-          'PASS  installer: installs, runs Hello, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
         with:
@@ -130,7 +157,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: build
+    needs: [build, framework]
     strategy:
       fail-fast: false
       matrix:
@@ -148,6 +175,11 @@ jobs:
           name: windows-x64
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -155,6 +187,6 @@ jobs:
           $code = $LASTEXITCODE
           "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
-          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)|failed' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
