@@ -12,7 +12,9 @@
 
 #include "shim_internal.h"
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 // bcrypt.h needs windows.h first.
 #include <bcrypt.h>
@@ -32,9 +34,11 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gesher::bionic {
@@ -76,6 +80,13 @@ bool PathOfFd(int fd, std::string* out) {
     if (c == '\\') c = '/';
   }
   return true;
+}
+
+std::wstring Wide(const std::string& s) {
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+  std::wstring w(static_cast<size_t>(n), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+  return w;
 }
 
 // `path` relative to `dirfd` (AT_FDCWD: the current directory).
@@ -251,7 +262,10 @@ int BIONIC_SYSV Renameat(int olddir, const char* oldpath, int newdir, const char
   std::string a, b;
   if (!AtPath(olddir, oldpath, &a) || !AtPath(newdir, newpath, &b)) return -1;
   // Linux replaces an existing target; the CRT's rename does not.
-  if (MoveFileExA(a.c_str(), b.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) return 0;
+  std::wstring wa = Wide(a), wb = Wide(b);
+  if (MoveFileExW(wa.c_str(), wb.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
+    return 0;
+  }
   return std::rename(a.c_str(), b.c_str());
 }
 int BIONIC_SYSV Rename(const char* a, const char* b) { return Renameat(kAtFdcwd, a, kAtFdcwd, b); }
