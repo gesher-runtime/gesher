@@ -39,13 +39,14 @@ their sources; protoc from the release `external/protobuf` pins.
 ## Libraries compiled in from source
 modules-utils (binary-xml, build, os, preconditions, statemachine, …),
 aconfig's Java storage readers (build/make/tools/aconfig), bouncycastle
-(repackaged), libphonenumber, tagsoup, rappor, protobuf-nano's runtime,
-perfetto's framework Java library, mimemap.
+(repackaged), libphonenumber, rappor, protobuf-nano's runtime, perfetto's
+framework Java library, mimemap.
 
 ## Compile-only
 Annotations (`androidx.annotation`, `app-compat-annotations`,
 `unsupportedappusage`, `framework-annotations-lib`, error-prone's, jsr305)
 and the API stubs of the mainline modules the framework calls
-(`framework-updatable-stubs-module_libs_api`, `framework-statsd`): the
+(`framework-updatable-stubs-module_libs_api`, `framework-statsd`), and
+`ext` (tagsoup), a boot jar of its own on Android: the
 framework compiles against them; at run time a module's own jar is needed
 only when the headless lifecycle reaches it.
