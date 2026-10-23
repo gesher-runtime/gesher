@@ -8,11 +8,14 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.FeatureInfo;
+import android.content.pm.SystemFeaturesCache;
 import android.content.res.CompatibilityInfo;
 import android.content.res.Configuration;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.LocaleList;
+import android.util.ArrayMap;
 import android.util.SuperNotCalledException;
 import android.view.Display;
 
@@ -69,6 +72,14 @@ public final class GesherAppDriver {
         set(ActivityThread.class, null, "sCurrentActivityThread", thread);
         ConfigurationController configController = new ConfigurationController(thread);
         set(ActivityThread.class, thread, "mConfigurationController", configController);
+
+        // System features: ActivityThread reads them early from ApplicationSharedMemory,
+        // which ActivityManagerService fills from PackageManagerService. The headless
+        // device declares none (hasSystemFeature answers false for each SDK feature).
+        if (!SystemFeaturesCache.hasInstance()) {
+            SystemFeaturesCache.setInstance(
+                    new SystemFeaturesCache(new ArrayMap<String, FeatureInfo>()));
+        }
 
         // Process state ActivityManagerService would have sent in bindApplication.
         try {
