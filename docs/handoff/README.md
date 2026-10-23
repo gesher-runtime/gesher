@@ -21,6 +21,50 @@ Each track doc has a "Status and next steps" section, written on that
 track's branch: what CI verified (with run ids), what is half-done, and what
 comes next.
 
+## Where each track stopped (2026-10-23)
+
+All four branches are pushed with clean working trees. No roadmap box of
+theirs is ticked yet.
+
+- **`wip/libs-full`** (fc5716e): every source of libutils, libcutils,
+  libandroidfw, libutilscallstack and googletest compiles in CI (libs run
+  39942371602). Two link errors are left: `posix_memalign` is declared in
+  gesher-base but not defined, and `android::util::ExecuteBinary` is used by
+  `PosixUtils_test`. Because of them, no gtest has run on Windows yet.
+  libutils now uses its pthread threading under `GESHER`, so check hwui and
+  binder against that change.
+- **`wip/graphics`** (29e9522): Skia (CPU raster), FreeType and the codecs
+  are verified on windows-2022 (skia_probe, run 39941675902; the first Phase 3
+  item can be ticked once that check runs from `ci`). HarfBuzz and minikin
+  compile. hwui fails with 30 compile errors from four causes, listed in
+  `docs/graphics.md`. Not started: the Win32 window, input, ANGLE and fonts.
+  Don't run `ci` on this branch before `ci.yml` downloads the `graphics`
+  artifact, or `30-graphics.ps1` fails.
+- **`wip/native-libs`** (1dabf66): ci run 39944128455 is green on both
+  runners. `PASS  ELF loader: load a trivial .so and call it`. WRFSBASE runs
+  on the runners, but Windows drops the `%fs` base on kernel entry, so bionic
+  TLS needs another approach, most likely load-time patching of `%fs`
+  accesses (ADR 0014, native-libs). The bionic shim is written but not wired
+  into CMake. Not started: JNI through the loader, and libc++_shared with
+  exceptions.
+- **`wip/services`** (1c56b34): **does not build.** `dalvikvm.exe` fails to
+  link because `ServiceManagerNative`'s registration pulls in
+  `UtilsHost.cpp`; the two fixes are in `docs/services.md`. binderd (the
+  `/dev/binder` broker), servicemanager and the probes compile in CI. The
+  cross-process Binder tests passed only locally, with WinLibs g++. Not
+  started: the framework's real system services, and the `.apk`
+  association.
+
+Expect these conflicts when merging:
+- `aosp.lock`: graphics and libs-full both add `external/libpng`.
+- ADR numbers: three tracks each wrote an ADR 0014; renumber them.
+- `CMakeLists.txt` and `ci.yml`: `include()` lines and the new jobs'
+  `needs`.
+- `compat/framework/android_runtime.cc`: graphics and services both edit it.
+- Unwinders: `compat/unwindstack/` (libs-full) and ART's
+  `compat/art/unwindstack_stub.cc` define the same functions, so no
+  executable may link both.
+
 ## The project owner's working principles
 
 - **As much as possible in CI**, to save the local machine's memory and disk:
