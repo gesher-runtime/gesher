@@ -297,7 +297,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $missing = @(
   'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'system_server: registered package, activity, activity_task, window, display, user, input_method, notification with servicemanager',
+  'system_server: registered package, activity, activity_task, window, display, user, input_method, notification',
   'system_server: finishing com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity (app-request)'
 ) | Where-Object { -not $serverOut.Contains($_) }
 if (-not $missing) {

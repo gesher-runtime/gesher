@@ -207,6 +207,34 @@ public final class Services {
         }
     }
 
+    /**
+     * permission_checker: PermissionCheckerService, granting everything (every app runs as
+     * one uid; no permission is enforced). A provider's Transport asks it before it
+     * answers another process (getType, query...).
+     */
+    public static final class PermissionChecker
+            extends android.permission.IPermissionChecker.Default {
+        @Override
+        public int checkPermission(String permission,
+                android.content.AttributionSourceState attributionSource, String message,
+                boolean forDataDelivery, boolean startDataDelivery, boolean fromDatasource,
+                int attributedOp) {
+            return android.content.PermissionChecker.PERMISSION_GRANTED;
+        }
+
+        @Override
+        public void finishDataDelivery(int op,
+                android.content.AttributionSourceState attributionSource,
+                boolean fromDatasource) {
+        }
+
+        @Override
+        public int checkOp(int op, android.content.AttributionSourceState attributionSource,
+                String message, boolean forDataDelivery, boolean startDataDelivery) {
+            return android.content.PermissionChecker.PERMISSION_GRANTED;
+        }
+    }
+
     /** user: UserManagerService, with the system user, running and unlocked. */
     public static final class UserManager extends IUserManager.Default {
         static UserInfo owner() {

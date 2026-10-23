@@ -148,6 +148,10 @@ public final class SystemServer {
         // The services, published with servicemanager.
         Map<String, IBinder> services = Services.create(packages);
         Services.Created created = Services.sLast;
+        // Providers answering other processes ask the permission checker.
+        services.put("permission_checker", StandIn.of(
+                android.permission.IPermissionChecker.class,
+                new Services.PermissionChecker()).asBinder());
         startAppProcessesOnDemand(created.atm);
         PersistentDevice device = null;
         if (persistent) {
