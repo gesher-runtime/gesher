@@ -61,8 +61,10 @@ natives with the System V ABI ([0006](0006-managed-abi.md)).
   that takes no parameters (System V's caller pops the arguments): zero,
   false, null or 0.0 by return type; those that create an object return a
   zeroed block that their finalizer frees, and a few getters return a fresh
-  object's non-zero defaults (scale and alpha 1, identity matrix). A class is
-  added when the lifecycle reaches it.
+  object's non-zero defaults (scale and alpha 1, identity matrix). `Path`
+  keeps its geometry and flattens curves for `approximate()`, which
+  `PathInterpolator` (DecorView's interpolators) needs. A class is added when
+  the lifecycle reaches it.
 - **libbinder without a driver.** Built without `__ANDROID__`, so
   `ProcessState`'s open of `/dev/binder` fails and only logs; local Binder
   objects, Parcel and in-process transactions work. The binder observer is off,
@@ -86,7 +88,8 @@ natives with the System V ABI ([0006](0006-managed-abi.md)).
   MD5 digests until BouncyCastle or Conscrypt are boot jars (the framework
   digests partition fingerprints with SHA-1 from its first steps); the
   system features cache; placeholders for classes framework.jar references
-  but lacks (`TelephonyServicesInitializer`).
+  but lacks (`TelephonyServicesInitializer`, and `DeviceConfig`, an
+  in-process flag store whose unset flags read as their defaults).
 
 ## Consequences
 - A registration added to the table needs its sources in `framework.cmake`,

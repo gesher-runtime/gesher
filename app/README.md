@@ -147,10 +147,16 @@ framework.jar (Connectivity, Wi-Fi, Bluetooth, NFC, AppSearch, Health,
 Stats, Media, Role, Scheduling, SDK sandbox, AdServices, UWB, Safety Center,
 Nearby, OnDevicePersonalization, OnDeviceIntelligence, DeviceLock,
 Virtualization, ConfigInfrastructure, EnhancedConfirmation, Profiling,
-Ranging) and empty placeholders for `LocationManager`, `CountryDetector` and
+Ranging, and the telephony module's `TelephonyServicesInitializer`) and
+empty placeholders for `LocationManager`, `CountryDetector` and
 `TetheringManager`. Those services are simply not registered. When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
+
+One placeholder has behaviour: `android.provider.DeviceConfig`, through which
+framework.jar reads its server-side flags (autofill reads them on resume). It
+keeps flags in the process: nothing sets one, so each read answers the
+caller's default; `setProperty` sets one and tells the namespace's listeners.
 
 ## Building
 
