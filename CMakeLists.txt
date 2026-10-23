@@ -49,6 +49,7 @@ include(cmake/aosp/icu.cmake)
 include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/framework.cmake)
+include(cmake/aosp/graphics.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
