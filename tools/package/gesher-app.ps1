@@ -3,10 +3,15 @@
 # processes the system server starts (docs/services.md, ADR 0026).
 #
 #   gesher-app my.apk                  install or update my.apk, start its
-#                                      launcher activity (headless: once it is
-#                                      idle the launcher closes its task) and
-#                                      show the app's output until its process ends
-#   gesher-app my.apk --keep-task      ... and let the app run until it finishes
+#                                      launcher activity in a window (the app's
+#                                      process draws it) and show the app's
+#                                      output until its process ends (closing
+#                                      the window finishes the activity)
+#   gesher-app my.apk --hidden-window  ... with the window never shown
+#   gesher-app my.apk --headless       ... with no window: once the activity is
+#                                      idle the launcher closes its task
+#                                      ($GESHER_APP_WINDOW=headless: the default)
+#   gesher-app my.apk --headless --keep-task  ... and let it run until it finishes
 #   gesher-app my.apk --activity .Other [--ez KEY true|false]...
 #   gesher-app install my.apk          install or update the package (and its
 #                                      Start menu shortcut, Gesher Apps\<label>)
@@ -38,7 +43,7 @@ $here = $PSScriptRoot
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
 $commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch'
 if ($Arguments.Count -eq 0) {
-  Write-Host 'usage: gesher-app APK [--keep-task] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
+  Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | list | status | start | shutdown'
   exit 2
 }

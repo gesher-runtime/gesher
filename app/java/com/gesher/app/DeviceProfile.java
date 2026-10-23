@@ -17,16 +17,17 @@ import android.view.Surface;
  * The display stand-in reports it, and the process configuration is derived from it, as
  * system_server derives it from DisplayManagerService and the window manager.
  *
- * <p>The display is 1080x2400 at 420 dpi unless the Java system property
+ * <p>The display is 400x800 at 160 dpi (a phone's 400x800 dp, one pixel a dp, as a window
+ * on a desktop at 100% scaling) unless the Java system property
  * {@code gesher.display} or the environment variable {@code GESHER_DISPLAY} says otherwise
  * ({@code WIDTHxHEIGHT} or {@code WIDTHxHEIGHT@DPI}, pixels), or {@link #set} changes it
  * before anything reads it (gesher-app's {@code --display}). An app window shown on the
  * desktop is this size (com.gesher.app.window.WindowSession).
  */
 public final class DeviceProfile {
-    public static int WIDTH = 1080;
-    public static int HEIGHT = 2400;
-    public static int DENSITY_DPI = 420;
+    public static int WIDTH = 400;
+    public static int HEIGHT = 800;
+    public static int DENSITY_DPI = 160;
     public static final float REFRESH_RATE = 60f;
 
     static {
