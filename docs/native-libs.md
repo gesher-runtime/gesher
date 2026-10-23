@@ -8,8 +8,8 @@ common NDK libraries) built on gesher-base, so `System.loadLibrary` and JNI
 work both ways.
 
 This is the native-libraries track; its decisions are
-[0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS) and the ADRs that
-follow it. It builds in steps, each verified in CI
+[0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS) and
+[0015](decisions/0015-native-libs-jni-bridge.md) (JNI). It builds in steps, each verified in CI
 (`tracks/40-native-libs.ps1`, `.github/workflows/native-libs.yml`).
 
 ## Pieces
@@ -89,9 +89,32 @@ follow it. It builds in steps, each verified in CI
     `.so` with unused missing imports still loads (`LoadOptions::
     stub_unresolved_functions`).
 
-- **The runtime hook** (later steps): the host `OpenNativeLibrary`/`dlopen`
-  path so `System.loadLibrary`/`System.load` find the app's `.so` through the
-  ELF loader, and `JNI_OnLoad`/`RegisterNatives`/`Java_*` work through it.
+  - `locale_bionic.cc`: what libc++ needs of `<locale.h>`, `<wchar.h>` and
+    `<wctype.h>`: `newlocale`/`uselocale` (C and UTF-8 locales, UTF-8 by
+    default), `MB_CUR_MAX`, UTF-8 `mbrtowc`/`wcrtomb`/`mbsnrtowcs`/... on
+    32-bit `wchar_t` and bionic's 8-byte `mbstate_t`, the `*_l`
+    classification functions, wide string parsing, `strtold` (binary128).
+    `syscall` (in `shim.cc`) does `futex` wait/wake (libc++abi's guards,
+    `std::atomic::wait`) and `gettid`.
+
+- **The JNI bridge** ([0015](decisions/0015-native-libs-jni-bridge.md),
+  `compat/bionic/jni_bridge.cc`, linked into dalvikvm). ART's host
+  `OpenNativeLibrary` calls plain `dlopen`; gesher-base's `dlopen` hands a
+  file with the ELF magic to the loader registered through
+  `<gesher/elf_dlopen.h>`, which is this bridge. `dlsym` on such a handle
+  gives ART a Microsoft-ABI stub for `JNI_OnLoad`/`JNI_OnUnload`, and for
+  `Java_*` (and functions passed to `RegisterNatives`) a System V entry stub
+  that sets the thread up (`SetupThreadTls`) and swaps ART's `JNIEnv*` for a
+  per-thread proxy. The `.so` only sees proxy `JNIEnv`/`JavaVM` objects whose
+  System V tables forward to ART's Microsoft-ABI ones; variadic and `va_list`
+  calls are turned into `jvalue` arrays by the method's parameter types.
+  DT_NEEDED libraries are looked up next to the library (an APK's
+  `libc++_shared.so`).
+
+- **gesher-app** copies the APK's `lib/x86_64/*.so` into
+  `ApplicationInfo.nativeLibraryDir` before launching
+  (`app/java/com/gesher/app/NativeLibs.java`), which the app's class loader
+  searches for `System.loadLibrary`.
 
 ## Steps and status
 
@@ -108,22 +131,28 @@ follow it. It builds in steps, each verified in CI
    a TLS library loaded while a thread runs (`tests/native/fs_test.c`,
    `fs_late.c`). **Done.**
 4. The JNI path: `System.loadLibrary`, `JNI_OnLoad`, `RegisterNatives`,
-   `Java_*`, and `JNIEnv` calls from the `.so` back into ART.
-5. libc++_shared and a C++ exception; a test APK under `lib/x86_64`, run
-   through gesher-app in CI.
+   `Java_*`, and `JNIEnv` calls from the `.so` back into ART
+   (`tests/native/jni_test.c`, `tests/native/java/gesher/JniTest.java`).
+   **Done.**
+5. libc++_shared and a C++ exception (`tests/native/libcxx_test.cpp`); a test
+   APK under `lib/x86_64`, run through gesher-app in CI
+   (`tests/apps/nativeapp`). **Done.**
 
 ## Building the test libraries
 
 `.github/workflows/native-libs.yml` builds the `.so` files with a pinned
-Android NDK (r27c, `27.2.12479018`) on the Linux runner and uploads them as the
-`native-libs` artifact; the Windows `test` job loads them through
-`elf_load_test` (and later through gesher-app).
+Android NDK (r27c, `27.2.12479018`) on the Linux runner, the JNI test's dex
+(javac + d8 9.5.26), and `nativeapp.apk` (`tests/apps/nativeapp/build.sh`:
+the NDK, aapt2/zipalign from build-tools r36.1, the SDK's `android.jar` from
+`platform-36_r02`, d8), and uploads them as the `native-libs` artifact; the
+Windows `test` job runs them through `elf_load_test`, dalvikvm and
+gesher-app.
 
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`. This session did step 3 (`%fs`); the
-next agent starts with step 4 (JNI), see "After that"._
+`wip/native-libs` off `phase3/base`. Steps 1-5 are done and CI-verified; see
+"After that" for what is left._
 
 ### Done and CI-verified
 
@@ -184,19 +213,85 @@ next agent starts with step 4 (JNI), see "After that"._
   compared with `objdump` (identical boundaries over 7.2 M instructions of a
   GCC binary; an AVX-512 OpenBLAS differed only on `fwait`-merged x87 mnemonics
   and data in `.text`).
-- Roadmap: the "ELF loader" box is ticked (normal NDK libraries with the
-  stack protector and TLS load and run, ci `39955700023`). The bionic box is
-  not: it names libandroid, which the shim does not have.
+- **Step 4 — the JNI path** ([0015](decisions/0015-native-libs-jni-bridge.md)).
+  `<gesher/elf_dlopen.h>` and the hook in gesher-base's `dlfcn.cc`;
+  `compat/bionic/jni_bridge.cc` (+ `jni.cmake`) in dalvikvm. dalvikvm runs
+  `gesher.JniTest` (dex built in `native-libs.yml`), whose `System.load` of
+  `jni_test.so` (API 29, stack protector, an initial-exec thread-local) goes
+  through ART's unpatched host libnativeloader path. **ci `39981957010`, green
+  on windows-2022 and windows-2025**:
+  `PASS  native libs: System.load of an NDK .so; JNI_OnLoad, RegisterNatives, Java_* and JNIEnv calls into ART`.
+  The check requires `JNI_OnLoad ran: ok` and `JniTest all passed`, i.e.:
+  `JNI_OnLoad` (GetEnv, FindClass, NewGlobalRef, RegisterNatives of a static
+  and an instance native), natives by name with strings both ways, 15
+  arguments of mixed types (two integer and one double on the stack),
+  `ThrowNew` caught in Java; from native code: `FindClass`, static/virtual/
+  non-virtual calls in variadic and `jvalue` forms, 10 mixed variadic
+  arguments (some on the stack), fields, `NewObject`, arrays, a Java
+  exception seen and cleared, `GetJavaVM`/`GetEnv` giving the same proxy,
+  local frames; a variadic call with a `jmethodID` from
+  `FromReflectedMethod` (parameter types by reflection); a pthread of the
+  library's own that attaches, calls Java and detaches; and initial-exec TLS
+  on the main thread and on another thread ART created (each starts at its
+  initial value and keeps its own).
+- **Step 5 — libc++_shared and C++ exceptions; the test APK.**
+  `locale_bionic.cc` and `syscall` (futex) in the shim. `libcxx_test.so`
+  (API 29, C++, `DT_NEEDED libc++_shared.so`, the NDK's copy beside it), run
+  by `elf_load_test`: **ci `39981957010`, both runners**:
+  `PASS  native libs: libc++_shared through the loader; C++ exceptions thrown and caught in the .so`
+  (requires `libcxx_test: all passed`): `std::runtime_error` thrown and
+  caught, `std::out_of_range` thrown by libc++ itself (`vector::at`) and
+  caught in the library, an exception through 6 frames caught as a base class
+  with 6 destructors run during unwinding, `catch (...)` and rethrow,
+  `exception_ptr`, `std::stoi`'s `invalid_argument`, `dynamic_cast`/`typeid`/
+  `bad_cast`, 4 `std::thread`s throwing and catching 50 times each,
+  `std::to_string`. The unwinder is libc++_shared's own (LLVM libunwind),
+  finding `.eh_frame_hdr` through the shim's `dl_iterate_phdr`; it needed no
+  loader change. `nativeapp.apk` (`tests/apps/nativeapp`:
+  `lib/x86_64/libnativeapp.so`, C++ against `libc++_shared.so`, both in the
+  APK, stored) through gesher-app: **ci `39981957010`, both runners**:
+  `PASS  native libs: gesher-app runs nativeapp.apk; lib/x86_64 loaded from the APK, native result checked in onResume`
+  (requires `extracted 2 native libraries (x86_64)`,
+  `NativeActivity onResume, native=Hello from C++, caught std::out_of_range, callBack(12)=145`,
+  `gesher-app: com.gesher.nativeapp.NativeActivity onResume` and
+  `gesher-app: done`): gesher-app extracts `lib/x86_64`, the Activity's
+  `onCreate` calls `System.loadLibrary("nativeapp")` through the app's
+  `PathClassLoader`, the library loads `libc++_shared.so` from the same
+  directory, catches a libc++ exception, and calls back into the Activity
+  through C++'s `JNIEnv::CallIntMethod` (which uses the `va_list` form).
+- Roadmap: the "ELF loader" box (ci `39955700023`) and the
+  "`System.loadLibrary` of an app's NDK library from its APK's `lib/x86_64`,
+  with JNI calls both ways" box (ci `39981957010`) are ticked. The bionic box
+  is not: it names libandroid, which the shim does not have.
 
 ### Not done / stand-ins in what exists
 
 - **Thread setup for initial-exec TLS.** The stack guard (`%gs:0x30`) and
   `__tls_get_addr` work on any thread; `%fs:0`-derived (initial-exec)
-  accesses need the thread's block, made by `SetupThreadTls()` (the shim's
-  `pthread_create` threads and `elf_load_test`'s main thread call it).
-  Threads ART creates must call it before entering loaded code: step 4's JNI
-  entry should. A miss faults with a named diagnostic from the loader's
-  vectored handler.
+  accesses need the thread's block, made by `SetupThreadTls()`: the shim's
+  `pthread_create` threads, the JNI bridge's native entry stub, its
+  `JNI_OnLoad` bridge and `AttachCurrentThread`, and `elf_load_test`'s main
+  thread call it. Loaded code reached any other way (a `.so` function pointer
+  that Windows code calls directly) would fault with a named diagnostic from
+  the loader's vectored handler.
+- **JNI** ([0015](decisions/0015-native-libs-jni-bridge.md)): `@CriticalNative`
+  natives in an app library pass the entry stub untouched, but that is not
+  tested. JVMTI environments from `GetEnv` are not wrapped. `dlsym` results
+  other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
+  addresses. No linker namespaces: all app libraries share one global scope.
+  `dlclose` (class loader unloading) runs fini functions but never unmaps.
+- **libc++ imports the shim still lacks** (they load as stubs that abort if
+  called; the tests do not reach them): `std::filesystem`'s (`opendir`,
+  `readdir`, `fdopendir`, `closedir`, `realpath`, `getcwd`, `chdir`,
+  `openat`, `unlinkat`, `symlink`, `link`, `readlink`, `truncate`,
+  `ftruncate`, `fchmod`, `fchmodat`, `utimensat`, `pathconf`, `statvfs`,
+  `sendfile`), wide stdio (`getwc`, `ungetwc`, `fputwc`, `swprintf`), and
+  `ioctl`. The loader prints one "not implemented (stubbed)" line per such
+  import when libc++_shared.so loads. Locales other than C/UTF-8 do not exist
+  (collation and `strftime_l` are the C locale's).
+- **The test APK** is built against the public SDK's `android.jar`
+  (platform 36 r2), not Gesher's framework classes; its native code is API 26
+  (emulated TLS) and its `libc++_shared.so` is the NDK's.
 - The stack cookie is the TEB address: correct, not secret.
 - Un-rewritable `%fs` forms (other TCB displacements, RIP-relative, VEX with a
   register-based `%fs` operand, partial writes of the base register) load as
@@ -204,7 +299,7 @@ next agent starts with step 4 (JNI), see "After that"._
   libraries.
 - Shim gaps (none needed by the tests): `opendir`/`readdir` (bionic's
   `struct dirent` differs), sockets, `select`/`poll`, signals, `fork`/`exec`,
-  locale and wide-char functions, `getline`, `scanf`/`fscanf` from a `FILE*`,
+  wide-char stdio, `getline`, `scanf`/`fscanf` from a `FILE*`,
   `%Lf` in `scanf`, `strtold`, `localtime`/`strftime`, `getauxval`, and no
   libandroid. Missing **function** imports load as stubs that print the name
   and abort when called; missing **data** imports still fail the load.
@@ -216,23 +311,18 @@ next agent starts with step 4 (JNI), see "After that"._
 
 ### After that (not started)
 
-- **Step 4 — JNI path.** Hook the host `OpenNativeLibrary`/`dlopen`
-  (`art/libnativeloader/native_loader.cpp`'s `!ART_TARGET_ANDROID` branch,
-  which calls plain `dlopen`/`dlsym`; on Windows that is gesher-base's
-  `dlopen` in `compat/posix/src/dlfcn.cc`, which knows builtin libraries and
-  PE DLLs) so `System.loadLibrary` routes an ELF `.so` through the loader,
-  and `JNI_OnLoad`/`RegisterNatives`/`Java_*` resolve through `elf::Lookup`.
-  JNI is System V on both sides already (JNICALL is `sysv_abi`, GESHER_JNI
-  wraps the JNIEnv/JavaVM tables for System V callers;
-  [0006](decisions/0006-managed-abi.md), `tools/jni-sysv-patch.py`), so a
-  `.so`'s `Java_*` functions and its calls through `JNIEnv` should need no
-  extra bridging; verify. Any edit in `art/libnativeloader` patches must be
-  listed in the final report.
-- **Step 5 — libc++_shared and a C++ exception; a test APK under
-  `lib/x86_64`, run through gesher-app.** libc++_shared's unwinder finds
-  `.eh_frame_hdr` through `dl_iterate_phdr`, which the shim now provides
-  (System V, over `elf::ForEachLoaded`, verified by `libc_test`);
-  libc++_shared is stack-protected, which step 3 now handles.
+- **libandroid** (`ANativeWindow`, `AAssetManager`, `ALooper`, ...), for the
+  roadmap's bionic box; `AAssetManager` over the framework's AssetManager is
+  what real apps need most often.
+- The libc++ imports listed above (`std::filesystem`, wide stdio) and the
+  other shim gaps, as real apps need them.
+- Real-world APKs through gesher-app: the NDK samples (hello-jni,
+  hello-libs), and C++ code registering natives from tables.
+- A correction to this file's earlier plan: JNI was not "System V on both
+  sides already". ART's `JNIEnv`/`JavaVM` tables are Microsoft ABI
+  (`GESHER_JNI` only wraps natives the framework registers); the bridge's
+  proxies are what make a `.so`'s `JNIEnv` calls work
+  ([0015](decisions/0015-native-libs-jni-bridge.md)).
 
 ### Open problems and decisions
 
