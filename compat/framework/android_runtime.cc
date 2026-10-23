@@ -64,6 +64,7 @@ int register_gesher_ClassLoaderFactory(JNIEnv* env);
 int register_gesher_ActivityThread(JNIEnv* env);
 int register_gesher_DebugStore(JNIEnv* env);
 int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
+int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -375,6 +376,7 @@ static const struct {
     {"gesher_DebugStore", "com/android/internal/os/DebugStore", register_gesher_DebugStore},
     {"gesher_PropertyInvalidatedCache", "android/app/PropertyInvalidatedCache",
      register_gesher_PropertyInvalidatedCache},
+    {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
