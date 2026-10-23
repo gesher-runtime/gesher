@@ -141,7 +141,8 @@ target_link_libraries(dalvikvm PRIVATE input_jni)
 
 # The input probe (probes/input/input_probe.cc), run in CI on Windows
 # (tests/windows/tracks/33-input.ps1).
-add_executable(input_probe ${CMAKE_SOURCE_DIR}/probes/input/input_probe.cc)
+add_executable(input_probe ${CMAKE_SOURCE_DIR}/probes/input/input_probe.cc
+  ${CMAKE_SOURCE_DIR}/probes/input/touch_inject.cc)
 target_link_libraries(input_probe PRIVATE gesher_input)
 target_compile_options(input_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   -Wno-deprecated-copy -Wno-deprecated-anon-enum-enum-conversion -Wno-non-virtual-dtor
