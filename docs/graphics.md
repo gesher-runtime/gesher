@@ -57,7 +57,7 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   Skia's Fontations backend is not built; hwui's host build would use it by
   default, so `compat/hwui/fontations_fallback.cc` gives those calls to
   FreeType. Skia's `kN32` is RGBA (`SK_R32_SHIFT 0`), as on Android.
-- **Window** (ADR 0017, `compat/hwui/window`, `cmake/aosp/window.cmake`):
+- **Window** (ADR 0021, `compat/hwui/window`, `cmake/aosp/window.cmake`):
   `gesher::Window` (thread per HWND, BGRA DIB back buffer, `WM_PAINT` and
   `WM_PRINTCLIENT`, `PrintClient`/`ReadBackBuffer`, input queue + eventfd);
   `gesher::Win32Surface` (hostgraphics' `android::Surface` over a window, one
