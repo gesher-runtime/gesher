@@ -21,6 +21,29 @@ Each track doc has a "Status and next steps" section, written on that
 track's branch: what CI verified (with run ids), what is half-done, and what
 comes next.
 
+## The project owner's working principles
+
+- **As much as possible in CI**, to save the local machine's memory and disk:
+  builds, AOSP fetches and tests run on GitHub Actions, not locally. The
+  local machine has about 20 GB of free disk, and WSL only 7 GB of RAM (an
+  earlier out-of-memory once rebooted the machine). Avoid WSL altogether
+  where possible, as long as that doesn't hold the work up.
+- **As many steps in parallel as possible:** independent tracks on their own
+  branches, merged later and verified in CI together.
+- **Keep going to the end without stopping to ask:** the target is a fully
+  ready installer. Don't stop before it.
+- Heavy, iterative work goes to subagents with disjoint file domains. The
+  coordinating session verifies, merges and commits. Don't sit idle on
+  builds; run them in the background.
+- **Report honestly** what CI verified and what it didn't.
+- Replies to the owner are in Hebrew. Code, commits and docs are in English,
+  in the existing style. Commits end with
+  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and PR
+  descriptions with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Merging to `main` only with the owner's explicit approval.**
+- A word-based network filter (NetFree) sometimes blocks text or requests.
+  Work around it by rephrasing, or by writing the text to a file.
+
 ## Coordinating
 
 - Read the track's status section on its branch, then check its latest CI
