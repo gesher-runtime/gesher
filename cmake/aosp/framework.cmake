@@ -52,11 +52,12 @@ target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
 # -Wno-missing-field-initializers. Soong's global flags let these pass too: a
 # variable-length array (LocaleData), a variable unused while the
 # resource_readwrite_flags flag is off (LoadedArsc), and bitwise operations
-# between unnamed enums (ResourceTypes.h, deprecated in C++20).
+# between unnamed enums (ResourceTypes.h, deprecated in C++20), and labels
+# CursorWindow's error paths leave unused.
 set_target_properties(androidfw PROPERTIES CXX_STANDARD 23)
 target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
   -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable
-  -Wno-deprecated-anon-enum-enum-conversion)
+  -Wno-deprecated-anon-enum-enum-conversion -Wno-unused-label)
 
 # Stand-ins for hwui's natives (compat/framework/hwui_standins.cc), their
 # tables generated from hwui's JNI sources.

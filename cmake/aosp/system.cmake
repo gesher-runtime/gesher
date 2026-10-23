@@ -113,3 +113,18 @@ target_include_directories(utils PUBLIC ${_ut}/include ${_core}/libsystem/includ
 target_link_libraries(utils PUBLIC utils_binder cutils log base)
 target_compile_definitions(utils PRIVATE ${_utils_defs})
 target_compile_options(utils PRIVATE ${_utils_flags})
+
+# --- libutilscallstack -----------------------------------------------------------
+# Disabled for Windows in Android.bp, as libunwindstack is ELF's. Gesher's
+# AndroidUnwinder (compat/unwindstack) walks Windows' x64 unwind data instead;
+# ProcessCallStack.cpp (linux) builds too.
+add_library(unwindstack_gesher STATIC ${CMAKE_SOURCE_DIR}/compat/unwindstack/android_unwinder.cc)
+target_include_directories(unwindstack_gesher PUBLIC
+  ${AOSP_DIR}/system/unwinding/libunwindstack/include)
+target_link_libraries(unwindstack_gesher PUBLIC base)
+target_compile_options(unwindstack_gesher PRIVATE -Wall -Wextra -Werror)
+
+add_library(utilscallstack STATIC ${_ut}/CallStack.cpp ${_ut}/ProcessCallStack.cpp)
+target_link_libraries(utilscallstack PUBLIC utils unwindstack_gesher log)
+target_compile_definitions(utilscallstack PRIVATE ${_utils_defs})
+target_compile_options(utilscallstack PRIVATE ${_utils_flags})

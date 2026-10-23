@@ -39,21 +39,25 @@ gesher_core_test(libutils_binder_test
   SOURCES ${_ub_test_srcs}
   FLAGS ${_ut_test_flags}
   LIBS utils_binder base log lzma gmock gtest_main)
+# Errors_test.cpp includes utils/ErrorsMacros.h, a libutils header.
+target_include_directories(libutils_binder_test PRIVATE ${_ut}/include)
 gesher_core_test(libutils_binder_test_custom_allocator
   SOURCES ${_ub_test_srcs}
   FLAGS ${_ut_test_flags}
   DEFINES ANDROID_UTILS_CUSTOM_ALLOCATOR
   LIBS utils_binder_custom_allocator base log lzma gmock gtest_main)
+target_include_directories(libutils_binder_test_custom_allocator PRIVATE ${_ut}/include)
 
 # --- libutils_test --------------------------------------------------------------
 # With SystemClock_test.cpp (android) and Looper_test.cpp (linux).
 gesher_core_test(libutils_test
   SOURCES
-    ${_ut}/BitSet_test.cpp ${_ut}/FileMap_test.cpp ${_ut}/LruCache_test.cpp
+    ${_ut}/BitSet_test.cpp ${_ut}/CallStack_test.cpp ${_ut}/FileMap_test.cpp
+    ${_ut}/LruCache_test.cpp
     ${_ut}/Mutex_test.cpp ${_ut}/Singleton_test.cpp ${_ut}/Timers_test.cpp
     ${_ut}/SystemClock_test.cpp ${_ut}/Looper_test.cpp
   FLAGS ${_ut_test_flags}
-  LIBS utils base log lzma z gtest_main)
+  LIBS utils utilscallstack base log lzma z gtest_main)
 
 # libutils_test_singleton1 and 2, which Singleton_test loads from the test's
 # directory by their Android names: DLLs named *.so. The second takes the
@@ -75,19 +79,22 @@ target_link_libraries(libutils_test_singleton2 PRIVATE libutils_test_singleton1)
 # --- libcutils_test -------------------------------------------------------------
 # libcutils_test_default with its android and not_windows sources, less
 # sched_policy_test.cpp, which tests libprocessgroup's cgroup policies, and
-# trace-dev_test.cpp, which builds in trace-dev.cpp and so needs bionic's
-# property area (docs/core-libs.md).
+# ashmem_test.cpp, which tests the device's ashmem-dev.cpp through the ashmem
+# driver's ioctls and fork() (docs/core-libs.md). trace-dev_test.cpp builds the device's trace-dev.cpp
+# into itself, with C's <stdatomic.h>, which libc++ allows next to <atomic>
+# from C++23 on.
 gesher_core_test(libcutils_test
   SOURCES
     ${_cu}/ashmem_base_test.cpp ${_cu}/native_handle_test.cpp ${_cu}/properties_test.cpp
     ${_cu}/sockets_test.cpp
     # android
     ${_cu}/android_get_control_file_test.cpp ${_cu}/android_get_control_socket_test.cpp
-    ${_cu}/ashmem_test.cpp ${_cu}/fs_config_test.cpp ${_cu}/multiuser_test.cpp
-    ${_cu}/str_parms_test.cpp
+    ${_cu}/fs_config_test.cpp ${_cu}/multiuser_test.cpp
+    ${_cu}/str_parms_test.cpp ${_cu}/trace-dev_test.cpp
   FLAGS -Wall -Wextra
   LIBS cutils log base gtest_main)
 target_include_directories(libcutils_test PRIVATE ${_cu})
+set_target_properties(libcutils_test PROPERTIES CXX_STANDARD 23)
 
 # --- libandroidfw_tests ---------------------------------------------------------
 # With the android sources (BackupData, BackupHelpers, ObbFile, PosixUtils).

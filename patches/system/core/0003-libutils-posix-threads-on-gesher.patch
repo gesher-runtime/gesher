@@ -1,5 +1,5 @@
 diff --git a/libutils/Threads.cpp b/libutils/Threads.cpp
-index 111d46a..4a6b176 100644
+index 111d46a..8f13450 100644
 --- a/libutils/Threads.cpp
 +++ b/libutils/Threads.cpp
 @@ -21,7 +21,7 @@
@@ -40,7 +40,21 @@ index 111d46a..4a6b176 100644
      // Mac OS doesn't have this, and we build libutil for the host too
      int hasAt = 0;
      int hasDot = 0;
-@@ -196,7 +198,7 @@ android_thread_id_t androidGetThreadId()
+@@ -119,8 +121,13 @@ void androidSetThreadName(const char* name) {
+     } else {
+         s = name + len - 15;
+     }
++#if defined(GESHER)
++    // Windows' long is 32 bits: pass the pointer whole.
++    prctl(PR_SET_NAME, (uintptr_t) s, 0, 0, 0);
++#else
+     prctl(PR_SET_NAME, (unsigned long) s, 0, 0, 0);
+ #endif
++#endif
+ }
+ 
+ int androidCreateRawThreadEtc(android_thread_func_t entryFunction,
+@@ -196,7 +203,7 @@ android_thread_id_t androidGetThreadId()
  }
  
  // ----------------------------------------------------------------------------
@@ -49,7 +63,7 @@ index 111d46a..4a6b176 100644
  // ----------------------------------------------------------------------------
  
  /*
-@@ -276,7 +278,7 @@ android_thread_id_t androidGetThreadId()
+@@ -276,7 +283,7 @@ android_thread_id_t androidGetThreadId()
  }
  
  // ----------------------------------------------------------------------------
@@ -58,7 +72,7 @@ index 111d46a..4a6b176 100644
  
  // ----------------------------------------------------------------------------
  
-@@ -337,7 +339,7 @@ namespace android {
+@@ -337,7 +344,7 @@ namespace android {
   * ===========================================================================
   */
  
@@ -67,7 +81,7 @@ index 111d46a..4a6b176 100644
  // implemented as inlines in threads.h
  #else
  
-@@ -401,7 +403,7 @@ status_t Mutex::tryLock()
+@@ -401,7 +408,7 @@ status_t Mutex::tryLock()
      return (dwWaitResult == WAIT_OBJECT_0) ? 0 : -1;
  }
  
@@ -76,7 +90,7 @@ index 111d46a..4a6b176 100644
  
  
  /*
-@@ -410,7 +412,7 @@ status_t Mutex::tryLock()
+@@ -410,7 +417,7 @@ status_t Mutex::tryLock()
   * ===========================================================================
   */
  
@@ -85,7 +99,7 @@ index 111d46a..4a6b176 100644
  // implemented as inlines in threads.h
  #else
  
-@@ -633,7 +635,7 @@ void Condition::broadcast()
+@@ -633,7 +640,7 @@ void Condition::broadcast()
      ReleaseMutex(condState->internalMutex);
  }
  
