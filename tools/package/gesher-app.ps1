@@ -46,6 +46,14 @@ $data = Get-Item (Join-Path $here 'icudt*l.dat')
 Install $data.FullName (Join-Path $root "i18n/etc/icu/$($data.Name)")
 Install (Join-Path $here 'framework-res.apk') (Join-Path $root 'system/framework/framework-res.apk')
 Install (Join-Path $here 'build.prop') (Join-Path $root 'system/build.prop')
+# The system fonts and fonts.xml (docs/fonts.md), as /system/fonts and /system/etc.
+if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
+  foreach ($d in 'system/fonts', 'system/etc') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+  Install (Join-Path $here 'fonts/fonts.xml') (Join-Path $root 'system/etc/fonts.xml')
+  foreach ($f in Get-ChildItem (Join-Path $here 'fonts') -Filter *.ttf) {
+    Install $f.FullName (Join-Path $root "system/fonts/$($f.Name)")
+  }
+}
 
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
