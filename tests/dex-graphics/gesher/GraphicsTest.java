@@ -30,6 +30,7 @@ import java.nio.ByteBuffer;
  */
 public final class GraphicsTest {
   private static int failures;
+  private static Object sKeepAlive;
 
   public static void main(String[] args) throws Exception {
     // libandroid_runtime (with hwui's natives), as gesher-app's Main loads it.
@@ -164,6 +165,10 @@ public final class GraphicsTest {
       Constructor<Typeface> make = Typeface.class.getDeclaredConstructor(long.class, String.class);
       make.setAccessible(true);
       typeface = make.newInstance(nativeTypeface, null);
+      // The family's native object is freed with it (NativeAllocationRegistry):
+      // keep it reachable while the native Typeface uses it, as
+      // CustomFallbackBuilder does through its list.
+      sKeepAlive = family;
     } catch (Exception e) {
       e.printStackTrace();
       check(false, "Font.Builder, FontFamily.Builder, a Typeface over them (" + fontPath + ")");
