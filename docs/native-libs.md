@@ -9,9 +9,10 @@ work both ways.
 
 This is the native-libraries track; its decisions are
 [0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS),
-[0017](decisions/0017-native-libs-jni-bridge.md) (JNI) and
+[0017](decisions/0017-native-libs-jni-bridge.md) (JNI),
 [0020](decisions/0020-native-libs-libandroid.md) (libandroid, the rest of
-libc, signals). It builds in steps, each verified in CI
+libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
+(ANativeWindow, EGL/GLES over ANGLE). It builds in steps, each verified in CI
 (`tracks/40-native-libs.ps1`, `.github/workflows/native-libs.yml`).
 
 ## Pieces
@@ -165,8 +166,44 @@ libc, signals). It builds in steps, each verified in CI
     file with androidfw's `ObbFile`;
   - `ASharedMemory_create`/`getSize`/`setProt` over gesher-base's
     `memfd_create`;
-  - `ANativeWindow_*` and `ANativeActivity_*`: stand-ins for the graphics
-    track (below).
+  - `ANativeWindow_fromSurface`/`toSurface` over libandroid_runtime's, with
+    the runtime's `JNIEnv`; the other `ANativeWindow_*` are in
+    `libandroid_window.cc` ("Graphics" below);
+  - `ANativeActivity_*`: stand-ins (no NativeActivity natives yet; below).
+- **Graphics** ([0023](decisions/0023-native-libs-ndk-graphics.md),
+  `compat/bionic/ndk_graphics.cmake`: the OBJECT library
+  `gesher_ndk_graphics`, linked into dalvikvm and `gl_window_test`):
+  - `libandroid_window.cc`: `ANativeWindow_acquire`/`release`/`getWidth`/
+    `getHeight`/`getFormat`/`setBuffersGeometry`/`lock`/`unlockAndPost`/
+    `setBuffersTransform`/`setBuffersDataSpace`/`getBuffersDataSpace`/
+    `getBuffersDefaultDataSpace`/`setFrameRate`/
+    `setFrameRateWithChangeStrategy`/`tryAllocateBuffers` as System V thunks
+    over dalvikvm's Microsoft-ABI functions
+    (`compat/hwui/window/gesher_native_window.h`: hostgraphics' and the
+    graphics track's), which work on any hostgraphics `Surface` — a
+    `Win32Surface` for a Gesher window. `ANativeWindow_clearFrameRate` is
+    inline in the NDK's header.
+  - `egl_gles.cc` + `gen_gl_thunks.py`: every function of AOSP's
+    `frameworks/native/opengl/include` (EGL 1.5 and extensions, GLES 1.x,
+    2.0, 3.0-3.2 and extensions: 1,182, 14 of them handwritten) as a System V
+    thunk to ANGLE's `libEGL.dll`/`libGLESv2.dll` (loaded from the
+    executable's directory on first use; a function ANGLE lacks aborts naming
+    itself), so an app's `libEGL.so`/`libGLESv1_CM.so`/`libGLESv2.so`/
+    `libGLESv3.so` imports and `eglGetProcAddress` all resolve.
+    `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
+    adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
+    printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`
+    (and the platform forms) takes the `ANativeWindow*` and creates ANGLE's
+    window surface on its HWND (`gesher_window_hwnd`), holding a reference
+    to the window until `eglDestroySurface`. Android-only config attributes
+    are dropped/answered, `EGL_NATIVE_VISUAL_ID` is a HAL pixel format,
+    callbacks get Microsoft-ABI trampolines.
+  - **Presenting when GL owns the HWND**: the Gesher window paints its CPU
+    back buffer on `WM_PAINT`; while an EGL window surface is on it,
+    `egl_gles.cc` subclasses the HWND so `WM_PAINT` only validates (the
+    swap chain presents), and restores it with the last surface. Nothing in
+    `compat/hwui/window` changed.
+
 - **Unresolved data imports** no longer fail a load: the loader binds each to
   its own slot in a reserved, inaccessible region and prints "data '...' is
   not provided"; touching it is caught by a vectored handler that names the
@@ -216,6 +253,11 @@ libc, signals). It builds in steps, each verified in CI
    `*at()` calls, sockets, poll/select, signals, time, `fscanf`, wide stdio,
    the libc++ imports `std::filesystem` needs); the test APK's native code
    uses them through gesher-app. **Done.**
+7. libandroid's graphics half and EGL/GLES: an NDK library draws into a
+   Gesher window with `ANativeWindow_lock` and with GLES 3/2 on an EGL window
+   surface through ANGLE, read back in CI (`tests/apps/glapp`,
+   `tests/native/gl_window_test.cc`). **Done** (`ANativeActivity` is not:
+   see below).
 
 ## Building the test libraries
 
@@ -223,16 +265,18 @@ libc, signals). It builds in steps, each verified in CI
 Android NDK (r27c, `27.2.12479018`) on the Linux runner, the JNI test's dex
 (javac + d8 9.5.26), and `nativeapp.apk` (`tests/apps/nativeapp/build.sh`:
 the NDK, aapt2/zipalign from build-tools r36.1, the SDK's `android.jar` from
-`platform-36_r02`, d8), and uploads them as the `native-libs` artifact; the
+`platform-36_r02`, d8), `glapp.apk` and `libglapp.so`
+(`tests/apps/glapp/build.sh`, C against libandroid/libEGL/libGLESv3), and uploads them as the `native-libs` artifact; the
 Windows `test` job runs them through `elf_load_test`, dalvikvm and
 gesher-app.
 
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`. Steps 1-6 are done and CI-verified
-(latest: ci `39987881014`, green on windows-2022 and windows-2025); see
-"After that" for what is left._
+`wip/native-libs` (on the integration branch with the graphics track's
+window and ANGLE). Steps 1-7 are done and CI-verified (latest: ci
+`40013029994`, green on windows-2022 and windows-2025); `ANativeActivity`
+waits for Activity windows; see "After that" for what is left._
 
 ### Done and CI-verified
 
@@ -376,14 +420,54 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   The first run of this check (ci `39987006747`) failed only on `remove_all`
   (`ENOTEMPTY`: Windows' delete-pending names), which led to the POSIX
   delete disposition and the share-delete `fopen`.
+- **Step 7 — ANativeWindow and EGL/GLES** ([0023](decisions/0023-native-libs-ndk-graphics.md)).
+  `libandroid_window.cc`, `egl_gles.cc`, `gen_gl_thunks.py`
+  (`ndk_graphics.cmake`); `tests/apps/glapp` (`libglapp.so`, C, `DT_NEEDED`
+  libandroid/libEGL/libGLESv3) and `tests/native/gl_window_test.cc`.
+  **ci `40013029994` (commit a6b8891), green on windows-2022 and
+  windows-2025**:
+  `PASS  native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read back with PrintWindow`,
+  `PASS  native libs: EGL/GLES 3 and 2 from an NDK .so through ANGLE onto a window surface; glReadPixels`,
+  `PASS  native libs: the GLES 3 and 2 frames presented in the window, read back with PrintWindow`,
+  `PASS  native libs: the same EGL/GLES window surfaces on WARP`,
+  `PASS  native libs: gesher-app runs glapp.apk; ANativeWindow_fromSurface and lock into a Surface, read back`,
+  `PASS  native libs: gesher-app runs glapp.apk; EGL/GLES 3 and 2 on a Surface's window from the .so`
+  (and every earlier line). `gl_window_test` makes 160x96 windows with
+  `gesher_window_create`, shows them and loads `libglapp.so` through the
+  loader: the library checks `getWidth`/`getHeight`/`getFormat`, sets RGBA_8888
+  with `setBuffersGeometry`, locks (160x96, stride 160, format 1), writes four
+  colored quadrants and posts; PrintWindow reads all 15,360 pixels back
+  correct. Then, per window, EGL on `EGL_DEFAULT_DISPLAY` ("gesher EGL:
+  default display: ANGLE, Direct3D 11 hardware device"; the runners'
+  hardware adapter is the Basic Render Driver), `eglChooseConfig` with
+  `EGL_RECORDABLE_ANDROID`, `EGL_NATIVE_VISUAL_ID` 1 into
+  `setBuffersGeometry`, `eglCreateWindowSurface` on the `ANativeWindow*`, an
+  ES 3 (then ES 2) context, `eglGetProcAddress("glClearColor")` called, a
+  blue clear and a green triangle (GLSL ES 3.00 with a VAO, then GLSL ES
+  1.00), `glReadPixels`: 1,920 green, 13,440 blue, 0 other, `eglSwapBuffers`;
+  `PrintWindow(PW_RENDERFULLCONTENT)` then reads the presented frame back
+  from the window (center green, corners blue, 1,920 green). The same again
+  with `GESHER_EGL_DEVICE=warp` ("Direct3D 11 WARP device"). Through
+  gesher-app, `glapp.apk`'s Activity makes windows with gesher-app's
+  `NativeWindow` (reflection; Activities have no windows yet), passes their
+  `android.view.Surface` to the library (`ANativeWindow_fromSurface`), reads
+  the locked frame back with `NativeWindow.capture()` and gets ES 3 and ES 2
+  frames checked by `glReadPixels`. ES 2 contexts report "OpenGL ES 3.0.0"
+  (ANGLE gives the newest compatible version, as Android drivers may). The
+  first runs found that Windows widens a captioned window's client area to
+  about 120 pixels (a 96-pixel request gave a 120-pixel window while
+  `ANativeWindow_getWidth` said 96: noted for the graphics track), and that
+  on windows-2022 a shown window's read-back can precede its repaint (the
+  test retries for up to 2 s); copying the screen under the window never
+  sees it on the runners.
 - Roadmap: the "ELF loader" box (ci `39955700023`), the
   "`System.loadLibrary` of an app's NDK library from its APK's `lib/x86_64`,
   with JNI calls both ways" box (ci `39981957010`) and the bionic box
   (libc, libm, libdl, liblog and libandroid's non-graphics APIs, ci
   `39987881014`; `libc_test.so` covers libm, libdl and liblog, the app covers
-  libc and libandroid) are ticked. libandroid's graphics half
-  (`ANativeWindow`, `ANativeActivity`, `AChoreographer`, `AInputQueue`) is
-  the graphics track's, noted on the box.
+  libc and libandroid) are ticked, and the NDK graphics box (`ANativeWindow`
+  and EGL/GLES from an app's `.so`, ci `40013029994`). `ANativeActivity`,
+  `AChoreographer` and `AInputQueue` are not done.
 
 ### Not done / stand-ins in what exists
 
@@ -425,25 +509,29 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
   `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
   `android_getaddrinfofornetwork` & co.
-- **The graphics track's half of libandroid.** `ANativeWindow_fromSurface`
-  returns `nullptr` and the other `ANativeWindow_*` calls fail with
-  `-EINVAL` (one message says so); `ANativeActivity_finish`/
+- **ANativeActivity** (`android.app.NativeActivity`): `ANativeActivity_finish`/
   `setWindowFormat`/`setWindowFlags`/`showSoftInput`/`hideSoftInput` are
-  dropped. What they need: an `ANativeWindow` is the
-  `struct ANativeWindow` of `<system/window.h>` behind an
-  `android.view.Surface`'s `mNativeObject`, so `fromSurface` must take the
-  real `JNIEnv` from `RealJniEnv`, read the Surface's native object and
-  `incStrong` it; `lock`/`unlockAndPost` fill and post an
-  `ANativeWindow_Buffer` (`width`, `height`, `stride`, `format`, `bits`); the
-  `.so` calls them all with the System V ABI, so they belong in this same
-  table (`AddBionicSymbol`). `ANativeActivity` needs
-  `android.app.NativeActivity`'s natives (`android_app_NativeActivity.cpp`:
-  `loadNativeCode` dlopens the app's library, which now comes back through
-  the ELF dlopen hook, then calls its `ANativeActivity_onCreate` — a System V
-  function, so through a stub like the JNI bridge's — with an
-  `ANativeActivity` whose `vm`/`env` must be the bridge's proxies and whose
-  `callbacks` the `.so` fills with System V function pointers that the
-  natives must call as such), plus `AInputQueue` and the window callbacks.
+  dropped (one message says so), and nothing calls an app's
+  `ANativeActivity_onCreate`: NativeActivity's natives
+  (`android_app_NativeActivity.cpp`) are not built, and an Activity has no
+  window of its own under gesher-app yet (the graphics track's
+  IWindowSession/ViewRootImpl work). The next step, once Activity windows
+  exist: build those natives; `loadNativeCode` dlopens the app's library
+  (through the ELF dlopen hook) and calls `ANativeActivity_onCreate` through a
+  System V stub like the JNI bridge's, with `vm`/`env` the bridge's proxies;
+  the `callbacks` the `.so` fills are System V and must be called as such,
+  with `SetupThreadTls` on the thread; `onNativeWindowCreated` gets the
+  Activity's Surface as an `ANativeWindow` (a `Win32Surface`, so
+  `ANativeWindow_lock` and `eglCreateWindowSurface` work on it as tested
+  here), plus `AInputQueue` for input.
+- **Graphics limits**: EGL window surfaces need a Gesher window (a
+  `Win32Surface`, found by `gesher_window_hwnd`); other `ANativeWindow`s give
+  `EGL_BAD_NATIVE_WINDOW`; pixmap surfaces are passed through to ANGLE and
+  fail. An ES 2 context is ANGLE's ES 3.0 (backward compatible, as Android
+  drivers may do). GLES 1 (`libGLESv1_CM.so`) resolves but is untested.
+  `AChoreographer`, `ASurfaceControl`, `AHardwareBuffer`, `ASurfaceTexture`
+  are not provided. `eglDestroySurface` of a surface that is still current
+  releases the window at once (Android defers it).
 - **The test APK** is built against the public SDK's `android.jar`
   (platform 36 r2), not Gesher's framework classes; its native code is API 26
   (emulated TLS) and its `libc++_shared.so` is the NDK's.
@@ -469,8 +557,8 @@ _Last updated 2026-10-23 by the native-libraries track; branch
 
 ### After that (not started)
 
-- libandroid's graphics half with the graphics track (interface above), and
-  the remaining shim gaps as real apps need them.
+- `ANativeActivity` once Activities have windows (above), and the remaining
+  shim gaps as real apps need them.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery
   to a running thread (suspend, redirect to a handler trampoline, resume).

@@ -97,3 +97,63 @@ Check 'native libs: gesher-app runs nativeapp.apk; libandroid assets/looper and 
 } @('NativeActivity platform: asset=Hello from an asset, assets=hello.txt, config=ok, sensors=0, looper=ok, mainlooper=armed, socketpair=ok, tcp=ok, getaddrinfo=ok, readdir=a.txt/b.txt/sub, fscanf=ok, filesystem=ok, signals=ok, strftime=ok, sysconf=ok',
     'NativeActivity main looper: fd callback ran',
     'gesher-app: done')
+
+# The graphics half of the NDK (docs/native-libs.md, "Graphics"; ADR 0023):
+# libglapp.so (tests/apps/glapp/jni/glapp.c) draws into Gesher windows made
+# with gesher_window_create, loaded by tests/native/gl_window_test.cc without
+# Java. ANativeWindow_lock/unlockAndPost through libandroid's System V thunks;
+# the window is read back with PrintWindow and its quadrants checked.
+# EGL/GLES 3 and 2 through the generated thunks to ANGLE (libEGL.dll and
+# libGLESv2.dll next to the executable): EGL_DEFAULT_DISPLAY, a window surface
+# on the window's HWND, a triangle checked with glReadPixels, eglSwapBuffers.
+$glTestOut = & "$Dir/gl_window_test.exe" (NoDrive "$Dir/libglapp.so") 2>&1 | Out-String
+$glTestExit = $LASTEXITCODE
+Check 'native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read back with PrintWindow' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @(', posted: lock ok', 'quadrants ok', 'gl_window_test all passed')
+
+Check 'native libs: EGL/GLES 3 and 2 from an NDK .so through ANGLE onto a window surface; glReadPixels' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @('gesher EGL: default display: ANGLE, Direct3D 11', 'es3: EGL 1.5', 'es2: EGL 1.5', 'GL_VERSION=OpenGL ES 3.',
+    'readpixels=ok, swap=ok', 'gl_window_test all passed')
+
+# What DWM composed from the swap chain, read back with PrintWindow
+# (PW_RENDERFULLCONTENT): the triangle is in the window itself.
+Check 'native libs: the GLES 3 and 2 frames presented in the window, read back with PrintWindow' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @('es3 window read back from PrintWindow(PW_RENDERFULLCONTENT): triangle ok',
+    'es2 window read back from PrintWindow(PW_RENDERFULLCONTENT): triangle ok',
+    'gl_window_test: GL windows read back from Windows')
+
+# The same on ANGLE's WARP device (GESHER_EGL_DEVICE=warp).
+$env:GESHER_EGL_DEVICE = 'warp'
+$glWarpOut = & "$Dir/gl_window_test.exe" (NoDrive "$Dir/libglapp.so") 2>&1 | Out-String
+$glWarpExit = $LASTEXITCODE
+Remove-Item Env:GESHER_EGL_DEVICE
+Check 'native libs: the same EGL/GLES window surfaces on WARP' {
+  $global:LASTEXITCODE = $glWarpExit
+  $glWarpOut
+} @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'readpixels=ok, swap=ok',
+    'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed')
+
+# Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
+# NativeWindow and passes their android.view.Surface to the library, which
+# takes the ANativeWindow with ANativeWindow_fromSurface; the Activity reads
+# the ANativeWindow_lock window back with PrintWindow, the library checks its
+# GLES 3 and 2 frames with glReadPixels.
+$glAppOut = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpNative" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+  -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/glapp.apk") 2>&1 | Out-String
+$glAppExit = $LASTEXITCODE
+Check 'native libs: gesher-app runs glapp.apk; ANativeWindow_fromSurface and lock into a Surface, read back' {
+  $global:LASTEXITCODE = $glAppExit
+  $glAppOut
+} @('extracted 1 native library (x86_64)', 'GlActivity cpu: ok: window 160x96',
+    'GlActivity cpu read back: ok: 160x96, 0 pixels', 'gesher-app: done')
+Check 'native libs: gesher-app runs glapp.apk; EGL/GLES 3 and 2 on a Surface''s window from the .so' {
+  $global:LASTEXITCODE = $glAppExit
+  $glAppOut
+} @('GlActivity es3: ok: EGL 1.5', 'GlActivity es2: ok: EGL 1.5', 'surface 160x96', 'readpixels=ok, swap=ok',
+    'gesher-app: done')
