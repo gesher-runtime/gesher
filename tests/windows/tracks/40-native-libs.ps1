@@ -116,13 +116,17 @@ Check 'native libs: ANativeWindow_lock from an NDK .so into a Win32 window, read
 Check 'native libs: EGL/GLES 3 and 2 from an NDK .so through ANGLE onto a window surface; glReadPixels' {
   $global:LASTEXITCODE = $glTestExit
   $glTestOut
-} @('gesher EGL: default display: ANGLE, Direct3D 11', 'GL_VERSION=OpenGL ES 3.', 'GL_VERSION=OpenGL ES 2.',
+} @('gesher EGL: default display: ANGLE, Direct3D 11', 'es3: EGL 1.5', 'es2: EGL 1.5', 'GL_VERSION=OpenGL ES 3.',
     'readpixels=ok, swap=ok', 'gl_window_test all passed')
 
-# What Windows composed from the swap chain (PrintWindow with
-# PW_RENDERFULLCONTENT, or the screen under the window): reported, not gated.
-($glTestOut -split "`n" | Where-Object { $_ -match 'window read back from' }) |
-  ForEach-Object { Write-Host "INFO  gl_window_test: $($_.Trim())" }
+# What DWM composed from the swap chain, read back with PrintWindow
+# (PW_RENDERFULLCONTENT): the triangle is in the window itself.
+Check 'native libs: the GLES 3 and 2 frames presented in the window, read back with PrintWindow' {
+  $global:LASTEXITCODE = $glTestExit
+  $glTestOut
+} @('es3 window read back from PrintWindow(PW_RENDERFULLCONTENT): triangle ok',
+    'es2 window read back from PrintWindow(PW_RENDERFULLCONTENT): triangle ok',
+    'gl_window_test: GL windows read back from Windows')
 
 # The same on ANGLE's WARP device (GESHER_EGL_DEVICE=warp).
 $env:GESHER_EGL_DEVICE = 'warp'
@@ -133,7 +137,7 @@ Check 'native libs: the same EGL/GLES window surfaces on WARP' {
   $global:LASTEXITCODE = $glWarpExit
   $glWarpOut
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'readpixels=ok, swap=ok',
-    'gl_window_test all passed')
+    'gl_window_test: GL windows read back from Windows', 'gl_window_test all passed')
 
 # Through gesher-app: glapp.apk's Activity makes windows with gesher-app's
 # NativeWindow and passes their android.view.Surface to the library, which
@@ -146,9 +150,10 @@ $glAppExit = $LASTEXITCODE
 Check 'native libs: gesher-app runs glapp.apk; ANativeWindow_fromSurface and lock into a Surface, read back' {
   $global:LASTEXITCODE = $glAppExit
   $glAppOut
-} @('extracted 1 native library (x86_64)', 'GlActivity cpu: ok: window 96x64',
-    'GlActivity cpu read back: ok: 96x64, 0 pixels', 'gesher-app: done')
+} @('extracted 1 native library (x86_64)', 'GlActivity cpu: ok: window 160x96',
+    'GlActivity cpu read back: ok: 160x96, 0 pixels', 'gesher-app: done')
 Check 'native libs: gesher-app runs glapp.apk; EGL/GLES 3 and 2 on a Surface''s window from the .so' {
   $global:LASTEXITCODE = $glAppExit
   $glAppOut
-} @('GlActivity es3: ok: EGL 1.5', 'GlActivity es2: ok: EGL 1.5', 'gesher-app: done')
+} @('GlActivity es3: ok: EGL 1.5', 'GlActivity es2: ok: EGL 1.5', 'surface 160x96', 'readpixels=ok, swap=ok',
+    'gesher-app: done')

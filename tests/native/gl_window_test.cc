@@ -11,9 +11,9 @@
 //    DC) and its four quadrants checked;
 //  - with EGL/GLES 3 and then 2 (eglCreateWindowSurface on the window, a
 //    triangle, glReadPixels checked by the library, eglSwapBuffers): the
-//    window is then read back from what Windows composed (PrintWindow with
-//    PW_RENDERFULLCONTENT, then the screen under the window) and its center
-//    and corners checked.
+//    window is then read back from what DWM composed (PrintWindow with
+//    PW_RENDERFULLCONTENT, which sees the swap chain's frame) and its center,
+//    corners and green area checked.
 // The device is ANGLE's default (hardware, else WARP; GESHER_EGL_DEVICE=warp
 // forces WARP).
 #include <gesher/bionic_shim.h>
@@ -42,7 +42,9 @@ using CpuDraw = int(SYSV*)(ANativeWindow* window, char* out, size_t n);
 using GlDraw = int(SYSV*)(ANativeWindow* window, int es, char* out, size_t n);
 using GlFinish = void(SYSV*)();
 
-constexpr int kWidth = 96, kHeight = 64;
+// Wider than the narrowest client area Windows gives a captioned window
+// (about 120 pixels on the runners).
+constexpr int kWidth = 160, kHeight = 96;
 
 struct Image {
   int width = 0, height = 0;
@@ -134,8 +136,9 @@ bool CheckGlWindow(HWND hwnd, const char* label) {
     UINT flags;
     bool from_screen;
   };
-  const Way kWays[] = {{"PrintWindow(PW_RENDERFULLCONTENT)", PW_CLIENTONLY | PW_RENDERFULLCONTENT, false},
-                       {"the screen", 0, true}};
+  // (Copying the screen under the window does not see it on the CI
+  // runners, whose desktop is not composed for display.)
+  const Way kWays[] = {{"PrintWindow(PW_RENDERFULLCONTENT)", PW_CLIENTONLY | PW_RENDERFULLCONTENT, false}};
   bool any = false;
   for (const Way& way : kWays) {
     std::string seen = "nothing";
