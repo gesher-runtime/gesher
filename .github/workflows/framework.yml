@@ -82,7 +82,7 @@ jobs:
 
       - name: Install build tools
         if: steps.tools.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache
+        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
       - name: Cache compiler output
         if: steps.tools.outputs.cache-hit != 'true'
@@ -96,16 +96,16 @@ jobs:
         if: steps.tools.outputs.cache-hit != 'true'
         run: |
           ccache --set-config=max_size=1G
-          # clang, as Soong builds them: AOSP host sources use clang-only
-          # builtins (__builtin_available) gcc rejects. Soong's libc++ pulls
-          # in <algorithm> and <cstring> where libstdc++ does not, which
-          # libpropertyinfoserializer relies on. -O1: build time over speed.
+          # clang and libc++, as Soong builds them: AOSP host sources use
+          # clang-only builtins (__builtin_available) gcc rejects, and rely on
+          # libc++'s transitive includes (libpropertyinfoserializer's
+          # std::find_if and strcpy). -O1: build time over speed.
           cmake -S tools/host -B out/host -G Ninja -DAOSP_DIR="$PWD/third_party/aosp" \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
-            -DCMAKE_CXX_FLAGS="-include algorithm -include cstring"
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++"
           ninja -C out/host -k 0
           ccache --show-stats | head -5
           mkdir -p dist-host/protobuf
