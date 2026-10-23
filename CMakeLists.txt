@@ -60,6 +60,8 @@ include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
 include(cmake/aosp/core_libs_tests.cmake)
 include(cmake/aosp/graphics.cmake)
+# Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
+include(cmake/aosp/input.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)

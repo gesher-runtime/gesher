@@ -34,6 +34,13 @@ struct WindowEvent {
     kResize = 8,     // width, height (client area, pixels)
     kFocus = 9,      // button: 1 gained, 0 lost
     kClose = 10,     // the user asked to close the window
+    // Input track (docs/input.md): touch and pen contacts (WM_POINTER*),
+    // the pointer leaving the client area (WM_MOUSELEAVE).
+    kTouchDown = 11,   // x, y, pointer, tool
+    kTouchMove = 12,   // x, y, pointer, tool
+    kTouchUp = 13,     // x, y, pointer, tool
+    kTouchCancel = 14, // pointer, tool
+    kMouseLeave = 15,
   };
   int32_t type = 0;
   float x = 0, y = 0;
@@ -46,6 +53,9 @@ struct WindowEvent {
   uint32_t ch = 0;
   int32_t width = 0, height = 0;
   int64_t time_ms = 0;  // GetMessageTime()
+  float delta_x = 0;    // kWheel from WM_MOUSEHWHEEL: notches, + is to the right
+  int32_t pointer = 0;  // kTouch*: the Windows pointer id
+  int32_t tool = 0;     // kTouch*: 1 finger, 2 pen
 };
 
 class Window {
@@ -118,6 +128,7 @@ class Window {
   std::condition_variable event_cv_;
   std::deque<WindowEvent> events_;
   int buttons_ = 0;
+  bool tracking_leave_ = false;  // TrackMouseEvent(TME_LEAVE) is armed
 };
 
 }  // namespace gesher

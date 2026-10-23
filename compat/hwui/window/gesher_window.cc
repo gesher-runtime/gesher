@@ -379,6 +379,11 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       return 0;
     }
     case WM_MOUSEMOVE:
+      if (!tracking_leave_) {
+        // One WM_MOUSELEAVE when the pointer leaves the client area.
+        TRACKMOUSEEVENT track = {sizeof track, TME_LEAVE, hwnd, 0};
+        tracking_leave_ = TrackMouseEvent(&track) != 0;
+      }
       e.type = WindowEvent::kMouseMove;
       e.x = static_cast<float>(GET_X_LPARAM(lparam));
       e.y = static_cast<float>(GET_Y_LPARAM(lparam));
@@ -393,6 +398,51 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       e.x = static_cast<float>(p.x);
       e.y = static_cast<float>(p.y);
       e.delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+      e.modifiers = Modifiers();
+      Queue(e);
+      return 0;
+    }
+    case WM_MOUSEHWHEEL: {
+      POINT p = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};  // screen coordinates
+      ScreenToClient(hwnd, &p);
+      e.type = WindowEvent::kWheel;
+      e.x = static_cast<float>(p.x);
+      e.y = static_cast<float>(p.y);
+      e.delta_x = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+      e.modifiers = Modifiers();
+      Queue(e);
+      return 0;
+    }
+    case WM_MOUSELEAVE:
+      tracking_leave_ = false;
+      e.type = WindowEvent::kMouseLeave;
+      e.modifiers = Modifiers();
+      Queue(e);
+      return 0;
+    // Touch and pen contacts (docs/input.md). The mouse and touchpads keep
+    // their mouse messages (EnableMouseInPointer is off). A pointer Windows
+    // does not know, as in a posted message, is taken as a finger.
+    case WM_POINTERDOWN:
+    case WM_POINTERUPDATE:
+    case WM_POINTERUP:
+    case WM_POINTERCAPTURECHANGED: {
+      UINT32 id = GET_POINTERID_WPARAM(wparam);
+      POINTER_INPUT_TYPE type = PT_TOUCH;
+      if (GetPointerType(id, &type) && type != PT_TOUCH && type != PT_PEN) return -1;
+      if (msg == WM_POINTERUPDATE && !IS_POINTER_INCONTACT_WPARAM(wparam)) return 0;  // hovering
+      if (msg == WM_POINTERCAPTURECHANGED) {
+        e.type = WindowEvent::kTouchCancel;
+      } else {
+        POINT p = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};  // screen coordinates
+        ScreenToClient(hwnd, &p);
+        e.x = static_cast<float>(p.x);
+        e.y = static_cast<float>(p.y);
+        e.type = msg == WM_POINTERDOWN ? WindowEvent::kTouchDown
+                 : msg == WM_POINTERUP ? WindowEvent::kTouchUp
+                                       : WindowEvent::kTouchMove;
+      }
+      e.pointer = static_cast<int32_t>(id);
+      e.tool = type == PT_PEN ? 2 : 1;
       e.modifiers = Modifiers();
       Queue(e);
       return 0;
