@@ -37,6 +37,7 @@ jobs:
           sparse-checkout: |
             tests/native
             tests/apps/nativeapp
+            tests/apps/glapp
 
       - name: Cache the Android NDK
         id: ndk
@@ -154,6 +155,13 @@ jobs:
       - name: Build the native test APK
         run: |
           tests/apps/nativeapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
+
+      # The graphics half of the NDK: lib/x86_64/libglapp.so (ANativeWindow
+      # and EGL/GLES) in glapp.apk, and the same library beside it for
+      # tests/native/gl_window_test.cc (tests/apps/glapp).
+      - name: Build the graphics test APK
+        run: |
+          tests/apps/glapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
 
       - uses: actions/upload-artifact@v4
         with:

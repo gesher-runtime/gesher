@@ -190,7 +190,11 @@ needs: [framework-build.md](framework-build.md).
 
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
-      over gesher-base (libandroid's non-graphics APIs; `ANativeWindow`/
-      `ANativeActivity` wait for the graphics track)
+      over gesher-base (libandroid's non-graphics APIs; `ANativeActivity`
+      waits for Activity windows)
 - [x] `System.loadLibrary` of an app's NDK library from its APK's
       `lib/x86_64`, with JNI calls both ways, tested in CI
+- [x] The NDK's graphics from an app's `.so`: `ANativeWindow_*` and EGL/GLES
+      (libEGL/libGLESv1_CM/libGLESv2/libGLESv3 over ANGLE) on a Win32
+      window, read back in CI on D3D11 and WARP (ci run 40013029994;
+      docs/native-libs.md step 7)
