@@ -57,7 +57,10 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
 # tables generated from hwui's JNI sources.
 set(_hwui_standin_sources
   android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp
-  android/graphics/Paint=${_fw}/libs/hwui/jni/Paint.cpp:methods)
+  android/graphics/Paint=${_fw}/libs/hwui/jni/Paint.cpp:methods
+  android/graphics/Matrix=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:methods
+  android/graphics/Matrix.ExtraNatives=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:extra_methods
+  android/graphics/Path=${_fw}/libs/hwui/jni/Path.cpp:methods)
 set(_hwui_standin_inputs)
 foreach(_s ${_hwui_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")

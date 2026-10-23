@@ -3,6 +3,9 @@
 
   gen_hwui_standins.py <out.cc> <class>=<hwui jni source>[:<table>] ...
 
+<class> is a JNI class name, with '.' before a nested class's name
+(android/graphics/Matrix.ExtraNatives); <table> defaults to gMethods.
+
 hwui (and Skia) are left out until views (docs/framework-natives.md), but the
 headless lifecycle constructs View objects, whose constructors and setters
 call hwui's natives (RenderNode). Nothing is drawn, so each native of the
@@ -40,6 +43,14 @@ SPECIALS = {
     ('android/graphics/Paint', 'nInit'): 'Standin_create',
     ('android/graphics/Paint', 'nInitWithPaint'): 'Standin_create',
     ('android/graphics/Paint', 'nGetNativeFinalizer'): 'Standin_getFreeFunction',
+    ('android/graphics/Matrix$ExtraNatives', 'nCreate'): 'Standin_create',
+    ('android/graphics/Matrix$ExtraNatives', 'nGetNativeFinalizer'): 'Standin_getFreeFunction',
+    ('android/graphics/Matrix', 'nIsIdentity'): 'Standin_true',
+    ('android/graphics/Matrix', 'nIsAffine'): 'Standin_true',
+    ('android/graphics/Matrix', 'nRectStaysRect'): 'Standin_true',
+    ('android/graphics/Path', 'nInit'): 'Standin_create',
+    ('android/graphics/Path', 'nGetFinalizer'): 'Standin_getFreeFunction',
+    ('android/graphics/Path', 'nIsEmpty'): 'Standin_true',
 }
 # The return type each special's function declares.
 FLOAT_SPECIALS = {'Standin_oneFloat'}
@@ -77,6 +88,9 @@ def main():
     classes = []
     for arg in sys.argv[2:]:
         cls, source = arg.split('=', 1)
+        # Nested classes are given with '.', as '$' does not survive build
+        # files and shells.
+        cls = cls.replace('.', '$')
         table = 'gMethods'
         m = re.match(r'(.*):([A-Za-z_]\w*)$', source)
         if m:
