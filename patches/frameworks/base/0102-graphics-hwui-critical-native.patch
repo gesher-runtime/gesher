@@ -1,0 +1,13 @@
+diff --git a/libs/hwui/jni/PathIterator.cpp b/libs/hwui/jni/PathIterator.cpp
+--- a/libs/hwui/jni/PathIterator.cpp
++++ b/libs/hwui/jni/PathIterator.cpp
+@@ -40,7 +40,8 @@
+     // A variant of 'next' (below) that is compatible with the host JVM.
+     static jint nextHost(JNIEnv* env, jclass clazz, jlong iteratorHandle, jfloatArray pointsArray) {
+         jfloat* points = env->GetFloatArrayElements(pointsArray, 0);
+-#ifdef __ANDROID__
++// Gesher: @CriticalNative functions take no JNIEnv/jclass (graphics_jni_helpers.h).
++#if defined(__ANDROID__) || defined(GESHER)
+         jint result = next(iteratorHandle, reinterpret_cast<jlong>(points));
+ #else
+         jint result = next(env, clazz, iteratorHandle, reinterpret_cast<jlong>(points));

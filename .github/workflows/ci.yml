@@ -76,6 +76,11 @@ jobs:
   libs:
     uses: ./.github/workflows/libs.yml
 
+  # Skia, hwui and the graphics probes (docs/graphics.md):
+  # .github/workflows/graphics.yml, which also runs on its own.
+  graphics:
+    uses: ./.github/workflows/graphics.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -100,7 +105,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework]
+    needs: [build, framework, graphics]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +120,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: framework
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
           path: dist
 
       - name: Build installer
@@ -191,7 +201,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: [build, framework, native-libs, libs]
+    needs: [build, framework, native-libs, libs, graphics]
     strategy:
       fail-fast: false
       matrix:
@@ -223,6 +233,11 @@ jobs:
         with:
           name: libs-tests
           path: dist/libs-tests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
+          path: dist
 
       - name: Run tests
         shell: pwsh
