@@ -67,6 +67,197 @@ diff --git a/core/jni/android_os_MessageQueue.cpp b/core/jni/android_os_MessageQ
  };
  
  int register_android_os_MessageQueue(JNIEnv* env) {
+diff --git a/core/jni/android_os_Parcel.cpp b/core/jni/android_os_Parcel.cpp
+--- a/core/jni/android_os_Parcel.cpp
++++ b/core/jni/android_os_Parcel.cpp
+@@ -917,102 +917,102 @@
+ // clang-format off
+ static const JNINativeMethod gParcelMethods[] = {
+     // @CriticalNative
+-    {"nativeMarkSensitive",       "(J)V", (void*)android_os_Parcel_markSensitive},
++    {"nativeMarkSensitive",       "(J)V", GESHER_JNI(android_os_Parcel_markSensitive)},
+     // @FastNative
+-    {"nativeMarkForBinder",       "(JLandroid/os/IBinder;)V", (void*)android_os_Parcel_markForBinder},
+-    // @CriticalNative
+-    {"nativeIsForRpc",            "(J)Z", (void*)android_os_Parcel_isForRpc},
+-    // @CriticalNative
+-    {"nativeDataSize",            "(J)I", (void*)android_os_Parcel_dataSize},
+-    // @CriticalNative
+-    {"nativeDataAvail",           "(J)I", (void*)android_os_Parcel_dataAvail},
+-    // @CriticalNative
+-    {"nativeDataPosition",        "(J)I", (void*)android_os_Parcel_dataPosition},
+-    // @CriticalNative
+-    {"nativeDataCapacity",        "(J)I", (void*)android_os_Parcel_dataCapacity},
++    {"nativeMarkForBinder",       "(JLandroid/os/IBinder;)V", GESHER_JNI(android_os_Parcel_markForBinder)},
++    // @CriticalNative
++    {"nativeIsForRpc",            "(J)Z", GESHER_JNI(android_os_Parcel_isForRpc)},
++    // @CriticalNative
++    {"nativeDataSize",            "(J)I", GESHER_JNI(android_os_Parcel_dataSize)},
++    // @CriticalNative
++    {"nativeDataAvail",           "(J)I", GESHER_JNI(android_os_Parcel_dataAvail)},
++    // @CriticalNative
++    {"nativeDataPosition",        "(J)I", GESHER_JNI(android_os_Parcel_dataPosition)},
++    // @CriticalNative
++    {"nativeDataCapacity",        "(J)I", GESHER_JNI(android_os_Parcel_dataCapacity)},
+     // @FastNative
+-    {"nativeSetDataSize",         "(JI)V", (void*)android_os_Parcel_setDataSize},
+-    // @CriticalNative
+-    {"nativeSetDataPosition",     "(JI)V", (void*)android_os_Parcel_setDataPosition},
++    {"nativeSetDataSize",         "(JI)V", GESHER_JNI(android_os_Parcel_setDataSize)},
++    // @CriticalNative
++    {"nativeSetDataPosition",     "(JI)V", GESHER_JNI(android_os_Parcel_setDataPosition)},
+     // @FastNative
+-    {"nativeSetDataCapacity",     "(JI)V", (void*)android_os_Parcel_setDataCapacity},
+-
+-    // @CriticalNative
+-    {"nativePushAllowFds",        "(JZ)Z", (void*)android_os_Parcel_pushAllowFds},
+-    // @CriticalNative
+-    {"nativeRestoreAllowFds",     "(JZ)V", (void*)android_os_Parcel_restoreAllowFds},
+-
+-    {"nativeWriteByteArray",      "(J[BII)V", (void*)android_os_Parcel_writeByteArray},
+-    {"nativeWriteBlob",           "(J[BII)V", (void*)android_os_Parcel_writeBlob},
+-    // @CriticalNative
+-    {"nativeWriteInt",            "(JI)I", (void*)android_os_Parcel_writeInt},
+-    // @CriticalNative
+-    {"nativeWriteLong",           "(JJ)I", (void*)android_os_Parcel_writeLong},
+-    // @CriticalNative
+-    {"nativeWriteFloat",          "(JF)I", (void*)android_os_Parcel_writeFloat},
+-    // @CriticalNative
+-    {"nativeWriteDouble",         "(JD)I", (void*)android_os_Parcel_writeDouble},
+-    {"nativeSignalExceptionForError", "(I)V", (void*)android_os_Parcel_nativeSignalExceptionForError},
++    {"nativeSetDataCapacity",     "(JI)V", GESHER_JNI(android_os_Parcel_setDataCapacity)},
++
++    // @CriticalNative
++    {"nativePushAllowFds",        "(JZ)Z", GESHER_JNI(android_os_Parcel_pushAllowFds)},
++    // @CriticalNative
++    {"nativeRestoreAllowFds",     "(JZ)V", GESHER_JNI(android_os_Parcel_restoreAllowFds)},
++
++    {"nativeWriteByteArray",      "(J[BII)V", GESHER_JNI(android_os_Parcel_writeByteArray)},
++    {"nativeWriteBlob",           "(J[BII)V", GESHER_JNI(android_os_Parcel_writeBlob)},
++    // @CriticalNative
++    {"nativeWriteInt",            "(JI)I", GESHER_JNI(android_os_Parcel_writeInt)},
++    // @CriticalNative
++    {"nativeWriteLong",           "(JJ)I", GESHER_JNI(android_os_Parcel_writeLong)},
++    // @CriticalNative
++    {"nativeWriteFloat",          "(JF)I", GESHER_JNI(android_os_Parcel_writeFloat)},
++    // @CriticalNative
++    {"nativeWriteDouble",         "(JD)I", GESHER_JNI(android_os_Parcel_writeDouble)},
++    {"nativeSignalExceptionForError", "(I)V", GESHER_JNI(android_os_Parcel_nativeSignalExceptionForError)},
+     // @FastNative
+-    {"nativeWriteString8",        "(JLjava/lang/String;)V", (void*)android_os_Parcel_writeString8},
++    {"nativeWriteString8",        "(JLjava/lang/String;)V", GESHER_JNI(android_os_Parcel_writeString8)},
+     // @FastNative
+-    {"nativeWriteString16",       "(JLjava/lang/String;)V", (void*)android_os_Parcel_writeString16},
++    {"nativeWriteString16",       "(JLjava/lang/String;)V", GESHER_JNI(android_os_Parcel_writeString16)},
+     // @FastNative
+-    {"nativeWriteStrongBinder",   "(JLandroid/os/IBinder;)V", (void*)android_os_Parcel_writeStrongBinder},
++    {"nativeWriteStrongBinder",   "(JLandroid/os/IBinder;)V", GESHER_JNI(android_os_Parcel_writeStrongBinder)},
+     // @FastNative
+-    {"nativeWriteFileDescriptor", "(JLjava/io/FileDescriptor;)V", (void*)android_os_Parcel_writeFileDescriptor},
+-
+-    {"nativeCreateByteArray",     "(J)[B", (void*)android_os_Parcel_createByteArray},
+-    {"nativeReadByteArray",       "(J[BI)Z", (void*)android_os_Parcel_readByteArray},
+-    {"nativeReadBlob",            "(J)[B", (void*)android_os_Parcel_readBlob},
+-    // @CriticalNative
+-    {"nativeReadInt",             "(J)I", (void*)android_os_Parcel_readInt},
+-    // @CriticalNative
+-    {"nativeReadLong",            "(J)J", (void*)android_os_Parcel_readLong},
+-    // @CriticalNative
+-    {"nativeReadFloat",           "(J)F", (void*)android_os_Parcel_readFloat},
+-    // @CriticalNative
+-    {"nativeReadDouble",          "(J)D", (void*)android_os_Parcel_readDouble},
++    {"nativeWriteFileDescriptor", "(JLjava/io/FileDescriptor;)V", GESHER_JNI(android_os_Parcel_writeFileDescriptor)},
++
++    {"nativeCreateByteArray",     "(J)[B", GESHER_JNI(android_os_Parcel_createByteArray)},
++    {"nativeReadByteArray",       "(J[BI)Z", GESHER_JNI(android_os_Parcel_readByteArray)},
++    {"nativeReadBlob",            "(J)[B", GESHER_JNI(android_os_Parcel_readBlob)},
++    // @CriticalNative
++    {"nativeReadInt",             "(J)I", GESHER_JNI(android_os_Parcel_readInt)},
++    // @CriticalNative
++    {"nativeReadLong",            "(J)J", GESHER_JNI(android_os_Parcel_readLong)},
++    // @CriticalNative
++    {"nativeReadFloat",           "(J)F", GESHER_JNI(android_os_Parcel_readFloat)},
++    // @CriticalNative
++    {"nativeReadDouble",          "(J)D", GESHER_JNI(android_os_Parcel_readDouble)},
+     // @FastNative
+-    {"nativeReadString8",         "(J)Ljava/lang/String;", (void*)android_os_Parcel_readString8},
++    {"nativeReadString8",         "(J)Ljava/lang/String;", GESHER_JNI(android_os_Parcel_readString8)},
+     // @FastNative
+-    {"nativeReadString16",        "(J)Ljava/lang/String;", (void*)android_os_Parcel_readString16},
++    {"nativeReadString16",        "(J)Ljava/lang/String;", GESHER_JNI(android_os_Parcel_readString16)},
+     // @FastNative
+-    {"nativeReadStrongBinder",    "(J)Landroid/os/IBinder;", (void*)android_os_Parcel_readStrongBinder},
++    {"nativeReadStrongBinder",    "(J)Landroid/os/IBinder;", GESHER_JNI(android_os_Parcel_readStrongBinder)},
+     // @FastNative
+-    {"nativeReadFileDescriptor",  "(J)Ljava/io/FileDescriptor;", (void*)android_os_Parcel_readFileDescriptor},
+-
+-    {"nativeCreate",              "()J", (void*)android_os_Parcel_create},
+-    {"nativeFreeBuffer",          "(J)V", (void*)android_os_Parcel_freeBuffer},
+-    {"nativeDestroy",             "(J)V", (void*)android_os_Parcel_destroy},
+-
+-    {"nativeMarshall",            "(J)[B", (void*)android_os_Parcel_marshall},
+-    {"nativeMarshallArray",       "(J[BII)I", (void*)android_os_Parcel_marshall_array},
+-    {"nativeMarshallBuffer",      "(JLjava/nio/ByteBuffer;II)I", (void*)android_os_Parcel_marshall_buffer},
+-    {"nativeUnmarshall",          "(J[BII)V", (void*)android_os_Parcel_unmarshall},
+-    {"nativeUnmarshallBuffer",    "(JLjava/nio/ByteBuffer;II)V", (void*)android_os_Parcel_unmarshall_buffer},
+-    {"nativeCompareData",         "(JJ)I", (void*)android_os_Parcel_compareData},
+-    {"nativeCompareDataInRange",  "(JIJII)Z", (void*)android_os_Parcel_compareDataInRange},
+-    {"nativeAppendFrom",          "(JJII)V", (void*)android_os_Parcel_appendFrom},
+-    // @CriticalNative
+-    {"nativeHasFileDescriptors",  "(J)Z", (void*)android_os_Parcel_hasFileDescriptors},
+-    {"nativeHasFileDescriptorsInRange",  "(JII)Z", (void*)android_os_Parcel_hasFileDescriptorsInRange},
+-
+-    {"nativeHasBinders",  "(J)Z", (void*)android_os_Parcel_hasBinders},
+-    {"nativeHasBindersInRange",  "(JII)Z", (void*)android_os_Parcel_hasBindersInRange},
+-    {"nativeWriteInterfaceToken", "(JLjava/lang/String;)V", (void*)android_os_Parcel_writeInterfaceToken},
+-    {"nativeEnforceInterface",    "(JLjava/lang/String;)V", (void*)android_os_Parcel_enforceInterface},
+-
+-    {"getGlobalAllocSize",        "()J", (void*)android_os_Parcel_getGlobalAllocSize},
+-    {"getGlobalAllocCount",       "()J", (void*)android_os_Parcel_getGlobalAllocCount},
+-
+-    // @CriticalNative
+-    {"nativeGetOpenAshmemSize",       "(J)J", (void*)android_os_Parcel_getOpenAshmemSize},
+-
+-    // @CriticalNative
+-    {"nativeReadCallingWorkSourceUid", "(J)I", (void*)android_os_Parcel_readCallingWorkSourceUid},
+-    // @CriticalNative
+-    {"nativeReplaceCallingWorkSourceUid", "(JI)Z", (void*)android_os_Parcel_replaceCallingWorkSourceUid},
++    {"nativeReadFileDescriptor",  "(J)Ljava/io/FileDescriptor;", GESHER_JNI(android_os_Parcel_readFileDescriptor)},
++
++    {"nativeCreate",              "()J", GESHER_JNI(android_os_Parcel_create)},
++    {"nativeFreeBuffer",          "(J)V", GESHER_JNI(android_os_Parcel_freeBuffer)},
++    {"nativeDestroy",             "(J)V", GESHER_JNI(android_os_Parcel_destroy)},
++
++    {"nativeMarshall",            "(J)[B", GESHER_JNI(android_os_Parcel_marshall)},
++    {"nativeMarshallArray",       "(J[BII)I", GESHER_JNI(android_os_Parcel_marshall_array)},
++    {"nativeMarshallBuffer",      "(JLjava/nio/ByteBuffer;II)I", GESHER_JNI(android_os_Parcel_marshall_buffer)},
++    {"nativeUnmarshall",          "(J[BII)V", GESHER_JNI(android_os_Parcel_unmarshall)},
++    {"nativeUnmarshallBuffer",    "(JLjava/nio/ByteBuffer;II)V", GESHER_JNI(android_os_Parcel_unmarshall_buffer)},
++    {"nativeCompareData",         "(JJ)I", GESHER_JNI(android_os_Parcel_compareData)},
++    {"nativeCompareDataInRange",  "(JIJII)Z", GESHER_JNI(android_os_Parcel_compareDataInRange)},
++    {"nativeAppendFrom",          "(JJII)V", GESHER_JNI(android_os_Parcel_appendFrom)},
++    // @CriticalNative
++    {"nativeHasFileDescriptors",  "(J)Z", GESHER_JNI(android_os_Parcel_hasFileDescriptors)},
++    {"nativeHasFileDescriptorsInRange",  "(JII)Z", GESHER_JNI(android_os_Parcel_hasFileDescriptorsInRange)},
++
++    {"nativeHasBinders",  "(J)Z", GESHER_JNI(android_os_Parcel_hasBinders)},
++    {"nativeHasBindersInRange",  "(JII)Z", GESHER_JNI(android_os_Parcel_hasBindersInRange)},
++    {"nativeWriteInterfaceToken", "(JLjava/lang/String;)V", GESHER_JNI(android_os_Parcel_writeInterfaceToken)},
++    {"nativeEnforceInterface",    "(JLjava/lang/String;)V", GESHER_JNI(android_os_Parcel_enforceInterface)},
++
++    {"getGlobalAllocSize",        "()J", GESHER_JNI(android_os_Parcel_getGlobalAllocSize)},
++    {"getGlobalAllocCount",       "()J", GESHER_JNI(android_os_Parcel_getGlobalAllocCount)},
++
++    // @CriticalNative
++    {"nativeGetOpenAshmemSize",       "(J)J", GESHER_JNI(android_os_Parcel_getOpenAshmemSize)},
++
++    // @CriticalNative
++    {"nativeReadCallingWorkSourceUid", "(J)I", GESHER_JNI(android_os_Parcel_readCallingWorkSourceUid)},
++    // @CriticalNative
++    {"nativeReplaceCallingWorkSourceUid", "(JI)Z", GESHER_JNI(android_os_Parcel_replaceCallingWorkSourceUid)},
+ };
+ // clang-format on
+ 
 diff --git a/core/jni/android_os_SystemClock.cpp b/core/jni/android_os_SystemClock.cpp
 --- a/core/jni/android_os_SystemClock.cpp
 +++ b/core/jni/android_os_SystemClock.cpp
@@ -372,6 +563,128 @@ diff --git a/core/jni/android_util_AssetManager.cpp b/core/jni/android_util_Asse
  };
  
  int register_android_content_AssetManager(JNIEnv* env) {
+diff --git a/core/jni/android_util_Binder.cpp b/core/jni/android_util_Binder.cpp
+--- a/core/jni/android_util_Binder.cpp
++++ b/core/jni/android_util_Binder.cpp
+@@ -1288,40 +1288,40 @@
+ static const JNINativeMethod gBinderMethods[] = {
+      /* name, signature, funcPtr */
+     // @CriticalNative
+-    { "getCallingPid", "()I", (void*)android_os_Binder_getCallingPid },
++    { "getCallingPid", "()I", GESHER_JNI(android_os_Binder_getCallingPid) },
+     // @CriticalNative
+-    { "getCallingUid", "()I", (void*)android_os_Binder_getCallingUid },
++    { "getCallingUid", "()I", GESHER_JNI(android_os_Binder_getCallingUid) },
+     // @CriticalNative
+     { "isDirectlyHandlingTransactionNative", "()Z",
+-        (void*)android_os_Binder_isDirectlyHandlingTransactionNative },
++        GESHER_JNI(android_os_Binder_isDirectlyHandlingTransactionNative) },
+     // @CriticalNative
+-    { "clearCallingIdentity", "()J", (void*)android_os_Binder_clearCallingIdentity },
++    { "clearCallingIdentity", "()J", GESHER_JNI(android_os_Binder_clearCallingIdentity) },
+     // @CriticalNative
+-    { "restoreCallingIdentity", "(J)V", (void*)android_os_Binder_restoreCallingIdentity },
++    { "restoreCallingIdentity", "(J)V", GESHER_JNI(android_os_Binder_restoreCallingIdentity) },
+     // @CriticalNative
+-    { "hasExplicitIdentity", "()Z", (void*)android_os_Binder_hasExplicitIdentity },
++    { "hasExplicitIdentity", "()Z", GESHER_JNI(android_os_Binder_hasExplicitIdentity) },
+     // @CriticalNative
+-    { "setThreadStrictModePolicy", "(I)V", (void*)android_os_Binder_setThreadStrictModePolicy },
++    { "setThreadStrictModePolicy", "(I)V", GESHER_JNI(android_os_Binder_setThreadStrictModePolicy) },
+     // @CriticalNative
+-    { "getThreadStrictModePolicy", "()I", (void*)android_os_Binder_getThreadStrictModePolicy },
++    { "getThreadStrictModePolicy", "()I", GESHER_JNI(android_os_Binder_getThreadStrictModePolicy) },
+     // @CriticalNative
+-    { "setCallingWorkSourceUid", "(I)J", (void*)android_os_Binder_setCallingWorkSourceUid },
++    { "setCallingWorkSourceUid", "(I)J", GESHER_JNI(android_os_Binder_setCallingWorkSourceUid) },
+     // @CriticalNative
+-    { "getCallingWorkSourceUid", "()I", (void*)android_os_Binder_getCallingWorkSourceUid },
++    { "getCallingWorkSourceUid", "()I", GESHER_JNI(android_os_Binder_getCallingWorkSourceUid) },
+     // @CriticalNative
+-    { "clearCallingWorkSource", "()J", (void*)android_os_Binder_clearCallingWorkSource },
++    { "clearCallingWorkSource", "()J", GESHER_JNI(android_os_Binder_clearCallingWorkSource) },
+     // @CriticalNative
+-    { "setGlobalInheritRt", "(Z)V", (void*)android_os_Binder_setGlobalInheritRt },
+-    { "restoreCallingWorkSource", "(J)V", (void*)android_os_Binder_restoreCallingWorkSource },
+-    { "markVintfStability", "()V", (void*)android_os_Binder_markVintfStability},
+-    { "forceDowngradeToSystemStability", "()V", (void*)android_os_Binder_forceDowngradeToSystemStability},
+-    { "flushPendingCommands", "()V", (void*)android_os_Binder_flushPendingCommands },
++    { "setGlobalInheritRt", "(Z)V", GESHER_JNI(android_os_Binder_setGlobalInheritRt) },
++    { "restoreCallingWorkSource", "(J)V", GESHER_JNI(android_os_Binder_restoreCallingWorkSource) },
++    { "markVintfStability", "()V", GESHER_JNI(android_os_Binder_markVintfStability)},
++    { "forceDowngradeToSystemStability", "()V", GESHER_JNI(android_os_Binder_forceDowngradeToSystemStability)},
++    { "flushPendingCommands", "()V", GESHER_JNI(android_os_Binder_flushPendingCommands) },
+     // @CriticalNative
+-    { "getNativeBBinderHolder", "()J", (void*)android_os_Binder_getNativeBBinderHolder },
+-    { "getNativeFinalizer", "()J", (void*)android_os_Binder_getNativeFinalizer },
+-    { "blockUntilThreadAvailable", "()V", (void*)android_os_Binder_blockUntilThreadAvailable },
+-    { "setExtensionNative", "(Landroid/os/IBinder;)V", (void*)android_os_Binder_setExtension },
+-    { "setInheritRt", "(Z)V", (void*)android_os_Binder_setInheritRt },
++    { "getNativeBBinderHolder", "()J", GESHER_JNI(android_os_Binder_getNativeBBinderHolder) },
++    { "getNativeFinalizer", "()J", GESHER_JNI_SYSV(android_os_Binder_getNativeFinalizer) },
++    { "blockUntilThreadAvailable", "()V", GESHER_JNI(android_os_Binder_blockUntilThreadAvailable) },
++    { "setExtensionNative", "(Landroid/os/IBinder;)V", GESHER_JNI(android_os_Binder_setExtension) },
++    { "setInheritRt", "(Z)V", GESHER_JNI(android_os_Binder_setInheritRt) },
+ };
+ // clang-format on
+ 
+@@ -1465,15 +1465,15 @@
+ 
+ static const JNINativeMethod gBinderInternalMethods[] = {
+      /* name, signature, funcPtr */
+-    { "getContextObject", "()Landroid/os/IBinder;", (void*)android_os_BinderInternal_getContextObject },
+-    { "joinThreadPool", "()V", (void*)android_os_BinderInternal_joinThreadPool },
+-    { "disableBackgroundScheduling", "(Z)V", (void*)android_os_BinderInternal_disableBackgroundScheduling },
+-    { "setMaxThreads", "(I)V", (void*)android_os_BinderInternal_setMaxThreads },
+-    { "handleGc", "()V", (void*)android_os_BinderInternal_handleGc },
+-    { "nSetBinderProxyCountEnabled", "(Z)V", (void*)android_os_BinderInternal_setBinderProxyCountEnabled },
+-    { "nGetBinderProxyPerUidCounts", "()Landroid/util/SparseIntArray;", (void*)android_os_BinderInternal_getBinderProxyPerUidCounts },
+-    { "nGetBinderProxyCount", "(I)I", (void*)android_os_BinderInternal_getBinderProxyCount },
+-    { "nSetBinderProxyCountWatermarks", "(III)V", (void*)android_os_BinderInternal_setBinderProxyCountWatermarks}
++    { "getContextObject", "()Landroid/os/IBinder;", GESHER_JNI(android_os_BinderInternal_getContextObject) },
++    { "joinThreadPool", "()V", GESHER_JNI(android_os_BinderInternal_joinThreadPool) },
++    { "disableBackgroundScheduling", "(Z)V", GESHER_JNI(android_os_BinderInternal_disableBackgroundScheduling) },
++    { "setMaxThreads", "(I)V", GESHER_JNI(android_os_BinderInternal_setMaxThreads) },
++    { "handleGc", "()V", GESHER_JNI(android_os_BinderInternal_handleGc) },
++    { "nSetBinderProxyCountEnabled", "(Z)V", GESHER_JNI(android_os_BinderInternal_setBinderProxyCountEnabled) },
++    { "nGetBinderProxyPerUidCounts", "()Landroid/util/SparseIntArray;", GESHER_JNI(android_os_BinderInternal_getBinderProxyPerUidCounts) },
++    { "nGetBinderProxyCount", "(I)I", GESHER_JNI(android_os_BinderInternal_getBinderProxyCount) },
++    { "nSetBinderProxyCountWatermarks", "(III)V", GESHER_JNI(android_os_BinderInternal_setBinderProxyCountWatermarks)}
+ };
+ 
+ const char* const kBinderInternalPathName = "com/android/internal/os/BinderInternal";
+@@ -1773,20 +1773,20 @@
+ // clang-format off
+ static const JNINativeMethod gBinderProxyMethods[] = {
+      /* name, signature, funcPtr */
+-    {"pingBinder",          "()Z", (void*)android_os_BinderProxy_pingBinder},
+-    {"isBinderAlive",       "()Z", (void*)android_os_BinderProxy_isBinderAlive},
+-    {"getInterfaceDescriptor", "()Ljava/lang/String;", (void*)android_os_BinderProxy_getInterfaceDescriptor},
+-    {"transactNative",      "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", (void*)android_os_BinderProxy_transact},
+-    {"linkToDeathNative",   "(Landroid/os/IBinder$DeathRecipient;I)V", (void*)android_os_BinderProxy_linkToDeath},
+-    {"unlinkToDeathNative", "(Landroid/os/IBinder$DeathRecipient;I)Z", (void*)android_os_BinderProxy_unlinkToDeath},
++    {"pingBinder",          "()Z", GESHER_JNI(android_os_BinderProxy_pingBinder)},
++    {"isBinderAlive",       "()Z", GESHER_JNI(android_os_BinderProxy_isBinderAlive)},
++    {"getInterfaceDescriptor", "()Ljava/lang/String;", GESHER_JNI(android_os_BinderProxy_getInterfaceDescriptor)},
++    {"transactNative",      "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", GESHER_JNI(android_os_BinderProxy_transact)},
++    {"linkToDeathNative",   "(Landroid/os/IBinder$DeathRecipient;I)V", GESHER_JNI(android_os_BinderProxy_linkToDeath)},
++    {"unlinkToDeathNative", "(Landroid/os/IBinder$DeathRecipient;I)Z", GESHER_JNI(android_os_BinderProxy_unlinkToDeath)},
+     {"addFrozenStateChangeCallbackNative",
+-        "(Landroid/os/IBinder$FrozenStateChangeCallback;)V", (void*)android_os_BinderProxy_addFrozenStateChangeCallback},
++        "(Landroid/os/IBinder$FrozenStateChangeCallback;)V", GESHER_JNI(android_os_BinderProxy_addFrozenStateChangeCallback)},
+     {"removeFrozenStateChangeCallbackNative",
+-        "(Landroid/os/IBinder$FrozenStateChangeCallback;)Z", (void*)android_os_BinderProxy_removeFrozenStateChangeCallback},
++        "(Landroid/os/IBinder$FrozenStateChangeCallback;)Z", GESHER_JNI(android_os_BinderProxy_removeFrozenStateChangeCallback)},
+     {"isFrozenStateChangeCallbackSupportedNative",
+-        "()Z", (void*)android_os_BinderProxy_frozenStateChangeCallbackSupported},
+-    {"getNativeFinalizer",  "()J", (void*)android_os_BinderProxy_getNativeFinalizer},
+-    {"getExtension",        "()Landroid/os/IBinder;", (void*)android_os_BinderProxy_getExtension},
++        "()Z", GESHER_JNI(android_os_BinderProxy_frozenStateChangeCallbackSupported)},
++    {"getNativeFinalizer",  "()J", GESHER_JNI_SYSV(android_os_BinderProxy_getNativeFinalizer)},
++    {"getExtension",        "()Landroid/os/IBinder;", GESHER_JNI(android_os_BinderProxy_getExtension)},
+ };
+ // clang-format on
+ 
 diff --git a/core/jni/android_util_EventLog.cpp b/core/jni/android_util_EventLog.cpp
 --- a/core/jni/android_util_EventLog.cpp
 +++ b/core/jni/android_util_EventLog.cpp

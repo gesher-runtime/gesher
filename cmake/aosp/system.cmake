@@ -48,9 +48,12 @@ add_library(cutils STATIC
   ${_cu}/strlcpy.c
   # host
   ${_cu}/trace-host.cpp ${_cu}/ashmem-host.cpp
-  # libcutils_sockets, windows
-  ${_cu}/sockets.cpp ${_cu}/socket_inaddr_any_server_windows.cpp
-  ${_cu}/socket_network_client_windows.cpp ${_cu}/sockets_windows.cpp)
+  # libcutils_sockets: the not_windows set, as gesher-base's sockets are file
+  # descriptors with Linux's ABI (system/core patch 0002), less the two that
+  # need select(), which gesher-base lacks and nothing linked in calls
+  # (socket_inaddr_any_server, socket_network_client)
+  ${_cu}/sockets.cpp ${_cu}/socket_local_client_unix.cpp
+  ${_cu}/socket_local_server_unix.cpp ${_cu}/sockets_unix.cpp)
 target_include_directories(cutils PUBLIC ${_cu}/include ${_core}/libprocessgroup/include)
 # ashmem-host.cpp includes utils/Compat.h (headers only; no link dependency).
 target_include_directories(cutils PRIVATE ${_core}/libutils/include)

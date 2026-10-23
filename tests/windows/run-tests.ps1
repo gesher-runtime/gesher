@@ -70,8 +70,8 @@ if ($code -eq 0 -and $out.Contains('Hello from ART on Windows')) {
 
 # Runs a class from natives.dex with the interpreter; passes when it exits 0
 # and prints "all passed" (tests/dex-natives).
-function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @(), [string[]] $Arguments = @()) {
-  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+function RunDex([string] $Name, [string] $Main, [string[]] $Extra = @(), [string[]] $Arguments = @(), [string] $Bcp = $bcp) {
+  $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$Bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' @Extra -cp (NoDrive "$Dir/natives.dex") $Main @Arguments 2>&1 | Out-String
   if ($LASTEXITCODE -eq 0 -and $out.Contains('all passed')) {
     Write-Host "PASS  dalvikvm: $Name"
@@ -119,6 +119,10 @@ if ($LASTEXITCODE -eq 0 -and $out.Contains('FrameworkSmoke all passed')) {
   Write-Host $out
   $failed++
 }
+
+# libandroid_runtime on framework.jar (steps 3 and 5): every table registered
+# on the framework's own classes, MessageQueue, Parcel and an in-process Binder.
+RunDex 'framework natives on framework.jar: MessageQueue, Parcel, Binder' gesher.FrameworkNativesTest @() @() $bcpFramework
 
 # gesher-app drives lifecycle.apk's Activity to onResume (app/README.md).
 # Informational until libandroid_runtime's natives are in: it reports how

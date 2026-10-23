@@ -1,38 +1,107 @@
 package android.os;
 
-/** Stand-in for the framework class until libbinder's Parcel (step 5): the API Message uses. */
+/**
+ * Stand-in for the framework class. Without framework.jar it is the API
+ * Message names and is never used; with framework.jar on the boot class path
+ * the real class is used, and this is only the API gesher.FrameworkNativesTest
+ * compiles against (same signatures).
+ */
 public final class Parcel {
   private Parcel() {}
 
   private static UnsupportedOperationException unsupported() {
-    return new UnsupportedOperationException("Parcel is not ported yet");
+    return new UnsupportedOperationException("Parcel needs framework.jar");
   }
 
-  public void writeInt(int v) {
+  public static Parcel obtain() {
     throw unsupported();
   }
 
-  public void writeLong(long v) {
+  public final void recycle() {
     throw unsupported();
   }
 
-  public void writeParcelable(Parcelable p, int flags) {
+  public final int dataSize() {
     throw unsupported();
   }
 
-  public void writeBundle(Bundle b) {
+  public final int dataPosition() {
     throw unsupported();
   }
 
-  public void writeStrongBinder(Object binder) {
+  public final void setDataPosition(int pos) {
     throw unsupported();
   }
 
-  public int readInt() {
+  public final byte[] marshall() {
     throw unsupported();
   }
 
-  public long readLong() {
+  public final void unmarshall(byte[] data, int offset, int length) {
+    throw unsupported();
+  }
+
+  public final void writeInt(int v) {
+    throw unsupported();
+  }
+
+  public final void writeLong(long v) {
+    throw unsupported();
+  }
+
+  public final void writeDouble(double v) {
+    throw unsupported();
+  }
+
+  public final void writeString(String v) {
+    throw unsupported();
+  }
+
+  public final void writeByteArray(byte[] v) {
+    throw unsupported();
+  }
+
+  public final void writeStrongBinder(IBinder binder) {
+    throw unsupported();
+  }
+
+  public final void writeInterfaceToken(String descriptor) {
+    throw unsupported();
+  }
+
+  public final void enforceInterface(String descriptor) {
+    throw unsupported();
+  }
+
+  public final void writeParcelable(Parcelable p, int flags) {
+    throw unsupported();
+  }
+
+  public final void writeBundle(Bundle b) {
+    throw unsupported();
+  }
+
+  public final int readInt() {
+    throw unsupported();
+  }
+
+  public final long readLong() {
+    throw unsupported();
+  }
+
+  public final double readDouble() {
+    throw unsupported();
+  }
+
+  public final String readString() {
+    throw unsupported();
+  }
+
+  public final byte[] createByteArray() {
+    throw unsupported();
+  }
+
+  public final IBinder readStrongBinder() {
     throw unsupported();
   }
 
@@ -40,7 +109,7 @@ public final class Parcel {
     throw unsupported();
   }
 
-  public Bundle readBundle() {
+  public final Bundle readBundle() {
     throw unsupported();
   }
 }

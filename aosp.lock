@@ -27,7 +27,7 @@ external/expat Android.bp expat_config.h expat/lib/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/
+frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl
 
 # The framework build (tools/framework/build.py) and its host tools
 # (tools/host). Projects with only *.bp give the planner their Soong module
@@ -57,7 +57,8 @@ external/tagsoup *.bp
 frameworks/av *.bp
 frameworks/hardware/interfaces *.bp
 frameworks/libs/systemui *.bp
-frameworks/native *.bp include/android/
+frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/
+bionic libc/kernel/uapi/linux/android/
 frameworks/opt/telephony *.bp
 frameworks/proto_logging
 hardware/interfaces *.bp

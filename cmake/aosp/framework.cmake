@@ -56,11 +56,13 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
 add_library(framework_runtime OBJECT
   ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
+  ${_fwjni}/android_os_Parcel.cpp
   ${_fwjni}/android_os_SystemClock.cpp
   ${_fwjni}/android_os_SystemProperties.cpp
   ${_fwjni}/android_os_Trace.cpp
   ${_fwjni}/android_text_AndroidCharacter.cpp
   ${_fwjni}/android_util_AssetManager.cpp
+  ${_fwjni}/android_util_Binder.cpp
   ${_fwjni}/android_util_EventLog.cpp
   ${_fwjni}/android_util_Log.cpp
   ${_fwjni}/android_util_StringBlock.cpp
@@ -69,14 +71,17 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
-  ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include)
+  ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include
+  ${AOSP_DIR}/frameworks/native/libs/binderthreadstate/include)
 # AndroidCharacter uses ICU4C directly, as the platform build does.
-target_link_libraries(framework_runtime PUBLIC androidfw nativehelper utils cutils log base
+target_link_libraries(framework_runtime PUBLIC androidfw binder nativehelper utils cutils log base
   icu_headers icuuc)
 # Android.bp's libandroid_runtime warning set, plus what -Wextra and C++20
 # add that Soong's global flags do not report: a deprecated implicit copy
 # (utils/TypeHelpers.h), anonymous enum arithmetic (ResourceTypes.h), and an
-# override without `override` (ApkAssets).
+# override without `override` (ApkAssets). Binder's sources include
+# binderthreadstate's CallerUtils.h, header-only, with a libhwbinder shim
+# (compat/framework/include/hwbinder).
 target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
   -Wno-unused-parameter -Wno-non-virtual-dtor -Wno-deprecated-anon-enum-enum-conversion
   -Wno-deprecated-copy -Wno-inconsistent-missing-override)

@@ -33,7 +33,9 @@ int register_android_content_AssetManager(JNIEnv* env);
 int register_android_content_res_ApkAssets(JNIEnv* env);
 int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
+int register_android_os_Binder(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
+int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
 int register_android_os_SystemProperties(JNIEnv* env);
 int register_android_os_Trace(JNIEnv* env);
@@ -175,11 +177,13 @@ static int register_gesher_NativeCanary(JNIEnv* env) {
   return RegisterMethodsOrDie(env, "gesher/NativeCanary", gCanaryMethods, NELEM(gCanaryMethods));
 }
 
-// Each registration with the class it registers on. A class that is not on
-// the class path is skipped, with a log line: the framework's register
-// functions abort when their classes are missing, which with framework.jar
-// never happens, but the tests load stand-ins for a few classes only
-// (tests/dex-natives), and the canary class is never in the framework.
+// Each registration with a class it needs. When that class is not on the
+// class path the registration is skipped, with a log line: the framework's
+// register functions abort when their classes are missing, which with
+// framework.jar never happens, but the tests load stand-ins for a few classes
+// only (tests/dex-natives), and the canary class is never in the framework.
+// Binder and Parcel need BinderInternal, which no stand-in has: the stand-ins
+// for Binder and Parcel (what Looper and Message use) carry no natives.
 static const struct {
   const char* name;
   const char* className;
@@ -190,6 +194,8 @@ static const struct {
      register_android_os_SystemProperties},
     {"android_os_Trace", "android/os/Trace", register_android_os_Trace},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
+    {"android_os_Binder", "com/android/internal/os/BinderInternal", register_android_os_Binder},
+    {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
     {"android_util_EventLog", "android/util/EventLog", register_android_util_EventLog},
