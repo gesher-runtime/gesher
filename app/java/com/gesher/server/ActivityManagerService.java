@@ -9,15 +9,18 @@ import android.app.ContentProviderHolder;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.FeatureInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ProviderInfoList;
+import android.content.pm.SystemFeaturesCache;
 import android.content.pm.UserInfo;
 import android.content.res.CompatibilityInfo;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.system.Os;
+import android.util.ArrayMap;
 
 import com.android.internal.os.ApplicationSharedMemory;
 import com.gesher.app.DeviceProfile;
@@ -110,7 +113,10 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private synchronized ApplicationSharedMemory sharedMemory() throws IOException {
         if (mSharedMemory == null) {
             ApplicationSharedMemory m = ApplicationSharedMemory.create();
-            m.writeSystemFeaturesCache(new int[0]);
+            // SystemServer writes PackageManagerService's features; the headless device
+            // declares none.
+            m.writeSystemFeaturesCache(new SystemFeaturesCache(
+                    new ArrayMap<String, FeatureInfo>()).getSdkFeatureVersions());
             mSharedMemory = m;
         }
         return mSharedMemory;

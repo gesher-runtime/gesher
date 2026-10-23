@@ -33,6 +33,7 @@
 // as hwui_standins.cc does.
 int register_android_os_Binder(JNIEnv* env);
 int register_gesher_hwui_standins(JNIEnv* env);
+int register_gesher_attach_standins(JNIEnv* env);
 
 namespace android {
 
@@ -392,6 +393,9 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
+    // Stand-ins for graphics and view natives on the attached app process's path
+    // (attach_standins.cc); before the graphics rows, so real natives replace them.
+    {"gesher_attach_standins", "android/graphics/Canvas", ::register_gesher_attach_standins},
     {"android_graphics_ColorSpace", "android/graphics/ColorSpace$Rgb$Native",
      register_android_graphics_ColorSpace},
     {"gesher_hwui_standins", "android/graphics/RenderNode", ::register_gesher_hwui_standins},
