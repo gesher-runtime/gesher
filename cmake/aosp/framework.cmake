@@ -101,6 +101,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/attach_standins.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
