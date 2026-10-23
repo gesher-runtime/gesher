@@ -154,6 +154,15 @@ needs: [framework-build.md](framework-build.md).
       `servicemanager`
 - [ ] The framework's own system services (PackageManager parses the APK,
       ActivityManager starts the Activity) in place of gesher-app's stand-ins
+  - [x] The APK parsed by the framework's PackageParser2 (ci run 39984218373)
+  - [x] A system server process registering package, activity,
+        activity_task, window, display and user with servicemanager;
+        `gesher-app --system-server` uses them across processes, and the
+        launcher starts binderd, servicemanager and the server (ci runs
+        39984218373, 39986921774)
+  - [ ] The app attached to the server (`attachApplication`,
+        `bindApplication`, `ClientTransaction`s), the server driving the
+        lifecycle
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 

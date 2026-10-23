@@ -177,8 +177,13 @@ natives (libgui) are not registered.
 Not done yet ([services.md](../docs/services.md)): the app process is not
 attached to the server (`ActivityThread.attach`, `bindApplication`,
 `ClientTransaction`s), so the server does not drive the lifecycle; gesher-app
-still does. There is no launcher that starts binderd, servicemanager and the
-server: `gesher-app.cmd` runs the single-process mode.
+still does.
+
+On Windows, `gesher-app my.apk --system-server` (`tools/package/gesher-app.ps1`)
+starts binderd and servicemanager for a binder device of its own and the
+system server with the APK, runs the app, and stops the three when it exits
+(their logs: `%LOCALAPPDATA%\Gesher\logs`). Without `--system-server`,
+`gesher-app.cmd` runs the single-process mode.
 
 ## Classes framework.jar does not have
 
