@@ -51,3 +51,5 @@ the registry, replaces `%1` with the installed `lifecycle.apk`, runs the
 command line through `cmd.exe` as Explorer would, and expects
 `gesher-app: done`. After uninstalling, it checks that the `Gesher.Apk` key,
 `.apk`'s default and the `OpenWithProgids` entry are gone.
+
+Verified in ci run 39946705097 (package job on windows-2022).
