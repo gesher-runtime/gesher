@@ -57,11 +57,18 @@ public final class GesherAppProcess {
      * loops until the server ends the process. Returns normally when it exited as asked;
      * throws whatever the main thread or the launcher threw.
      *
+     * @param targetSdkVersion the app's target SDK, for the runtime (as the zygote sets it)
      * @param removeTaskWhenIdle remove the activity's task once it is idle (the launcher
      *     shuts down), so that the run ends; otherwise the process runs until the
      *     activity finishes itself
      */
-    public static void run(Intent launch, boolean removeTaskWhenIdle) throws Exception {
+    public static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle)
+            throws Exception {
+        // The zygote sets the runtime's target SDK in the child before it runs the app
+        // (ZygoteConnection: VMRuntime.setTargetSdkVersion): ART's rules for apps (such as
+        // which static final fields JNI may still overwrite, as Typeface's font map
+        // does) follow it.
+        dalvik.system.VMRuntime.getRuntime().setTargetSdkVersion(targetSdkVersion);
         // The zygote's child starts its binder thread pool (ZygoteInit.nativeZygoteInit);
         // here two Java threads join it, before the server can call in.
         com.gesher.server.SystemServer.startBinderThreads("app", 2);
@@ -72,6 +79,15 @@ public final class GesherAppProcess {
         // debug.choreographer.vsync=false. Without frames, the sync barrier a window's
         // first traversal posts would hold every lifecycle message back.
         android.os.SystemProperties.set("debug.choreographer.vsync", "false");
+        // The system server's window session gives windows no surface (StandInWindowSession):
+        // the windows are laid out but not drawn, so they get no hardware renderer, as
+        // ActivityThread leaves persistent processes on low-end devices without one. With
+        // hwui's real natives and no surface, the render thread faulted in CanvasContext
+        // (integration ci run 40003812869). GESHER_APP_HWUI=1 keeps the renderer, for a
+        // window session that gives a surface.
+        if (!"1".equals(System.getenv("GESHER_APP_HWUI"))) {
+            android.view.ThreadedRenderer.sRendererEnabled = false;
+        }
 
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
