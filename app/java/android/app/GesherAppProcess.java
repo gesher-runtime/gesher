@@ -97,6 +97,15 @@ public final class GesherAppProcess {
             }
             log("app process for " + packageName + ": pid " + android.os.Process.myPid()
                     + ", start seq " + startSeq);
+            String trace = System.getenv("GESHER_APP_METHOD_TRACE");
+            if (trace != null && !trace.isEmpty()) {
+                // Debugging: ART's method trace of the whole process, streamed (it survives an
+                // abort), to <dir>/<package>-<pid>.trace.
+                java.io.FileOutputStream out = new java.io.FileOutputStream(trace + "/"
+                        + packageName + "-" + android.os.Process.myPid() + ".trace");
+                dalvik.system.VMDebug.startMethodTracing("app", out.getFD(), 8 << 20, 0, false,
+                        0, true);
+            }
             String androidRoot = System.getenv("ANDROID_ROOT");
             if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
             com.gesher.app.Main.bootstrap(TAG, androidRoot + "/build.prop",
