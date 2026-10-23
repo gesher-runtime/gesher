@@ -1,0 +1,69 @@
+name: native-libs
+
+# Builds the Android NDK test .so files for the native-libraries track
+# (Phase 6) on the Linux runner and uploads them for the Windows test job.
+# ci.yml calls this workflow; it also runs on its own:
+#
+#   gh workflow run native-libs --ref <branch>
+#
+# The NDK is pinned. Later steps add the libc++_shared test library and a test
+# APK packaging it under lib/x86_64.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  # API level for the test libraries' target.
+  ANDROID_API: "26"
+
+concurrency:
+  group: ${{ github.workflow }}-native-libs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-libs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/native
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Build the test .so files
+        run: |
+          set -euo pipefail
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
+          mkdir -p dist-native
+          # Step 1: a self-contained library, no libc, no TLS, no stack guard.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
+            -o dist-native/trivial.so tests/native/trivial.c
+          echo "--- trivial.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -hdS dist-native/trivial.so | sed -n '1,40p'
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -d dist-native/trivial.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-libs
+          path: dist-native/
