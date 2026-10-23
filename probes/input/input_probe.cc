@@ -49,11 +49,8 @@ bool Near(float a, float b) {
 
 // Win32 (winuser.h), without windows.h next to AOSP's headers.
 constexpr uint32_t kWmKeyDown = 0x0100, kWmKeyUp = 0x0101, kWmMouseMove = 0x0200,
-                   kWmLButtonDown = 0x0201, kWmLButtonUp = 0x0202, kWmMouseWheel = 0x020A,
-                   kWmPointerUpdate = 0x0245, kWmPointerDown = 0x0246, kWmPointerUp = 0x0247;
+                   kWmLButtonDown = 0x0201, kWmLButtonUp = 0x0202, kWmMouseWheel = 0x020A;
 constexpr uint64_t kMkLButton = 0x0001;
-// POINTER_MESSAGE_FLAG_NEW | INRANGE | INCONTACT | FIRSTBUTTON | PRIMARY
-constexpr uint64_t kPointerContact = 0x1 | 0x2 | 0x4 | 0x10 | 0x2000;
 
 int64_t Point(int x, int y) {
   return (static_cast<int64_t>(static_cast<uint16_t>(y)) << 16) | static_cast<uint16_t>(x);
@@ -231,9 +228,6 @@ void TestChannel() {
 
   int32_t sx = 30, sy = 40;
   ClientToScreenPoint(hwnd, &sx, &sy);
-  int32_t px = 100, py = 110, qx = 120, qy = 130;
-  ClientToScreenPoint(hwnd, &px, &py);
-  ClientToScreenPoint(hwnd, &qx, &qy);
   bool posted = PostWindowMessage(hwnd, kWmMouseMove, 0, Point(10, 20)) &&
                 PostWindowMessage(hwnd, kWmLButtonDown, kMkLButton, Point(40, 50)) &&
                 PostWindowMessage(hwnd, kWmMouseMove, kMkLButton, Point(60, 70)) &&
@@ -241,12 +235,22 @@ void TestChannel() {
                 PostWindowMessage(hwnd, kWmMouseWheel, 120ull << 16, Point(sx, sy)) &&
                 PostWindowMessage(hwnd, kWmKeyDown, 'A', 0x001E0001) &&
                 PostWindowMessage(hwnd, kWmKeyDown, 'A', 0x401E0001) &&
-                PostWindowMessage(hwnd, kWmKeyUp, 'A', 0xC01E0001ll) &&
-                PostWindowMessage(hwnd, kWmPointerDown, 4242 | (kPointerContact << 16), Point(px, py)) &&
-                PostWindowMessage(hwnd, kWmPointerUpdate, 4242 | (kPointerContact << 16),
-                                  Point(qx, qy)) &&
-                PostWindowMessage(hwnd, kWmPointerUp, 4242 | (0x2ull << 16), Point(qx, qy));
-  check(posted, "PostMessage: mouse, wheel, key and pointer messages to the window");
+                PostWindowMessage(hwnd, kWmKeyUp, 'A', 0xC01E0001ll);
+  check(posted, "PostMessage: mouse, wheel and key messages to the window");
+  // Windows refuses to post WM_POINTER* (system messages): touch is injected
+  // as the window's own WM_POINTER handling would queue it, once the posted
+  // messages have been handled (injections go first within a pass).
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  WindowEvent touchEvent = Event(WindowEvent::kTouchDown, 100, 110);
+  touchEvent.pointer = 4242;
+  touchEvent.tool = 1;
+  gesher_input_inject(connection, &touchEvent);
+  touchEvent.type = WindowEvent::kTouchMove;
+  touchEvent.x = 120;
+  touchEvent.y = 130;
+  gesher_input_inject(connection, &touchEvent);
+  touchEvent.type = WindowEvent::kTouchUp;
+  gesher_input_inject(connection, &touchEvent);
 
   // The client end: libinput's consumer, as InputEventReceiver uses it.
   std::shared_ptr<android::InputChannel> clientChannel = std::move(client);
@@ -342,7 +346,7 @@ void TestChannel() {
                seq[9].tool == android::ToolType::FINGER && Near(seq[9].x, 100) &&
                Near(seq[9].y, 110) && seq[10].action == AMOTION_EVENT_ACTION_MOVE &&
                Near(seq[10].x, 120) && seq[11].action == AMOTION_EVENT_ACTION_UP;
-  check(touch, "WM_POINTERDOWN/UPDATE/UP (touch): DOWN, MOVE, UP (SOURCE_TOUCHSCREEN, finger)");
+  check(touch, "touch (injected window events): DOWN, MOVE, UP (SOURCE_TOUCHSCREEN, finger)");
   std::printf("  WM_CHAR events to the window-event callback: %d\n", chars);
 
   // The connection reads the finished signals.

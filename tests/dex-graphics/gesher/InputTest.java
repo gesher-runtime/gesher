@@ -43,20 +43,22 @@ public final class InputTest {
   private static final int WM_RBUTTONUP = 0x0205;
   private static final int WM_MOUSEWHEEL = 0x020A;
   private static final int WM_MOUSEHWHEEL = 0x020E;
-  private static final int WM_POINTERUPDATE = 0x0245;
-  private static final int WM_POINTERDOWN = 0x0246;
-  private static final int WM_POINTERUP = 0x0247;
   private static final long MK_LBUTTON = 1;
   private static final long MK_RBUTTON = 2;
-  // POINTER_MESSAGE_FLAG_NEW | INRANGE | INCONTACT | FIRSTBUTTON | PRIMARY
-  private static final long POINTER_CONTACT = 0x1 | 0x2 | 0x4 | 0x10 | 0x2000;
 
   public static void main(String[] args) throws Exception {
     System.loadLibrary("android_runtime");
-    events();
-    keyCharacterMap();
-    senderAndReceiver();
-    window();
+    try {
+      events();
+      keyCharacterMap();
+      senderAndReceiver();
+      window();
+    } catch (Throwable t) {
+      // Looper threads would keep the VM alive.
+      t.printStackTrace();
+      System.out.println("InputTest: " + t);
+      System.exit(1);
+    }
     if (failures == 0) {
       System.out.println("InputTest all passed");
     } else {
@@ -232,11 +234,23 @@ public final class InputTest {
         && results.contains("11:true") && results.contains("12:true");
     check(ok, "InputEventSender to InputEventReceiver on a Looper: a key and a motion, finished"
         + " as handled " + results);
-    receiver.dispose();
-    sender.dispose();
+    onThread(thread, () -> {
+      receiver.dispose();
+      sender.dispose();
+    });
     pair[0].dispose();
     pair[1].dispose();
     thread.quitSafely();
+  }
+
+  /** Runs r on the thread's Looper (receivers are disposed there) and waits. */
+  private static void onThread(HandlerThread thread, Runnable r) throws InterruptedException {
+    CountDownLatch ran = new CountDownLatch(1);
+    new android.os.Handler(thread.getLooper()).post(() -> {
+      r.run();
+      ran.countDown();
+    });
+    ran.await(10, TimeUnit.SECONDS);
   }
 
   private static long point(int x, int y) {
@@ -279,8 +293,6 @@ public final class InputTest {
     WindowInput input = WindowInput.attach(hwnd, pair[0], options);
 
     int[] wheel = WindowInput.clientToScreen(hwnd, 30, 40);
-    int[] touchDown = WindowInput.clientToScreen(hwnd, 100, 110);
-    int[] touchMove = WindowInput.clientToScreen(hwnd, 120, 130);
     boolean posted = WindowInput.postMessage(hwnd, WM_MOUSEMOVE, 0, point(10, 20))
         && WindowInput.postMessage(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, point(40, 50))
         && WindowInput.postMessage(hwnd, WM_MOUSEMOVE, MK_LBUTTON, point(60, 70))
@@ -293,17 +305,15 @@ public final class InputTest {
         && WindowInput.postMessage(hwnd, WM_KEYDOWN, 'A', 0x401E0001L)
         && WindowInput.postMessage(hwnd, WM_KEYUP, 'A', 0xC01E0001L)
         && WindowInput.postMessage(hwnd, WM_KEYDOWN, 0x0D, 0x011C0001L)  // keypad Enter
-        && WindowInput.postMessage(hwnd, WM_KEYUP, 0x0D, 0xC11C0001L)
-        && WindowInput.postMessage(hwnd, WM_POINTERDOWN, 4242 | (POINTER_CONTACT << 16),
-            point(touchDown[0], touchDown[1]))
-        && WindowInput.postMessage(hwnd, WM_POINTERUPDATE, 4242 | (POINTER_CONTACT << 16),
-            point(touchMove[0], touchMove[1]))
-        && WindowInput.postMessage(hwnd, WM_POINTERUP, 4242 | (0x2L << 16),
-            point(touchMove[0], touchMove[1]));
-    check(posted, "PostMessage: mouse, wheel, key and pointer messages to the Gesher window");
-    // Posted messages carry no keyboard state: modifiers and a two-finger
-    // gesture are injected as window events, after the posted ones.
+        && WindowInput.postMessage(hwnd, WM_KEYUP, 0x0D, 0xC11C0001L);
+    check(posted, "PostMessage: mouse, wheel and key messages to the Gesher window");
+    // Posted messages carry no keyboard state, and Windows does not post
+    // WM_POINTER*: modifiers and touches are injected as window events (what
+    // the window's WM_POINTER handling queues), after the posted ones.
     Thread.sleep(500);
+    input.inject(WindowInput.EVENT_TOUCH_DOWN, 100, 110, 0, 0, 0, 0, 0, 0, 0, 4242, 1);
+    input.inject(WindowInput.EVENT_TOUCH_MOVE, 120, 130, 0, 0, 0, 0, 0, 0, 0, 4242, 1);
+    input.inject(WindowInput.EVENT_TOUCH_UP, 120, 130, 0, 0, 0, 0, 0, 0, 0, 4242, 1);
     input.inject(WindowInput.EVENT_KEY_DOWN, 0, 0, 0, 'A', 0x1E, 0, WindowInput.MODIFIER_SHIFT,
         0, 0, 0, 0);
     input.inject(WindowInput.EVENT_KEY_UP, 0, 0, 0, 'A', 0x1E, 0, WindowInput.MODIFIER_SHIFT,
@@ -405,8 +415,7 @@ public final class InputTest {
       check(keys, "WM_KEYDOWN/KEYUP: KEYCODE_A (scan 30, repeat 0 then 1, getUnicodeChar 'a'),"
           + " keypad Enter (KEYCODE_NUMPAD_ENTER, scan 96)");
 
-      // The posted touch (a pointer Windows does not know is a finger). The
-      // posted messages were handled before anything was injected.
+      // A finger, injected after the posted messages were handled.
       boolean touch = seq.size() >= i + 3;
       if (touch) {
         MotionEvent td = (MotionEvent) seq.get(i);
@@ -418,7 +427,7 @@ public final class InputTest {
             && td.getY() == 110f && tm.getActionMasked() == MotionEvent.ACTION_MOVE
             && tm.getX() == 120f && tu.getActionMasked() == MotionEvent.ACTION_UP;
       }
-      check(touch, "WM_POINTERDOWN/UPDATE/UP: DOWN, MOVE, UP (SOURCE_TOUCHSCREEN, finger)");
+      check(touch, "touch: DOWN, MOVE, UP (SOURCE_TOUCHSCREEN, finger)");
       i += 3;
 
       // Injected: shift+A down/up; ctrl+click DOWN, BUTTON_PRESS, BUTTON_RELEASE, UP.
@@ -473,7 +482,7 @@ public final class InputTest {
         "finished signals: the connection saw every event finished as handled, none dropped");
 
     input.close();
-    receiver.dispose();
+    onThread(thread, receiver::dispose);
     pair[0].dispose();
     pair[1].dispose();
     thread.quitSafely();
