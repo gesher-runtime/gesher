@@ -92,6 +92,8 @@ configure_file(${_native}/libs/gui/include/gui/TraceUtils.h
 add_library(hwui STATIC ${HWUI_SRCS}
   ${CMAKE_SOURCE_DIR}/compat/hwui/SharedLib.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/graphics_runtime.cc
+  # Fontations (Skia's Rust font backend) is not built: FreeType takes its calls.
+  ${CMAKE_SOURCE_DIR}/compat/hwui/fontations_fallback.cc
   # libandroid_runtime's Surface natives and ANativeWindow_fromSurface, in
   # their host form (core/jni/Android.bp), over hostgraphics' Surface.
   ${_fw}/core/jni/android_view_Surface.cpp
