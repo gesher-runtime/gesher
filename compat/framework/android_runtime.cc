@@ -57,6 +57,7 @@ int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
 int register_gesher_ApplicationSharedMemory(JNIEnv* env);
 int register_gesher_ClassLoaderFactory(JNIEnv* env);
 int register_gesher_ActivityThread(JNIEnv* env);
+int register_gesher_DebugStore(JNIEnv* env);
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -400,6 +401,7 @@ static const struct {
     {"gesher_ClassLoaderFactory", "com/android/internal/os/ClassLoaderFactory",
      register_gesher_ClassLoaderFactory},
     {"gesher_ActivityThread", "android/app/ActivityThread", register_gesher_ActivityThread},
+    {"gesher_DebugStore", "com/android/internal/os/DebugStore", register_gesher_DebugStore},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 

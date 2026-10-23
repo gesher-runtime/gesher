@@ -80,6 +80,10 @@ public final class SystemServer {
                     + " registers its services with servicemanager over binderd");
         }
         StandIn.setTag(TAG);
+        // Binder calls from this process carry the system uid, as system_server's do
+        // (gesher-base's /dev/binder reads it when the process opens the driver, below):
+        // ActivityThread's ApplicationThread expects its callers to be the system.
+        android.system.Os.setenv("GESHER_BINDER_UID", String.valueOf(Process.SYSTEM_UID), true);
         String androidRoot = System.getenv("ANDROID_ROOT");
         if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
         if (buildProp == null) buildProp = androidRoot + "/build.prop";
@@ -104,8 +108,26 @@ public final class SystemServer {
         log("registered " + String.join(", ", services.keySet()) + " with servicemanager"
                 + " (pid " + Process.myPid() + ")");
 
+        // Binder threads: the server calls into app processes (bindApplication,
+        // scheduleTransaction) while their main threads call it (attachApplication,
+        // activityPaused), and startActivityAndWait holds a thread until the activity is
+        // idle. system_server runs up to 31 (BinderInternal.setMaxThreads); here a few.
+        startBinderThreads(TAG, 3);
+
         // This thread serves binder calls from now on, as system_server's main thread
         // ends in Looper.loop() and its binder threads in joinThreadPool.
         Binder.joinThreadPool();
+    }
+
+    /**
+     * Starts {@code count} Java threads that join this process's binder thread pool, as
+     * ProcessState.startThreadPool's pooled threads do (named {@code binder:<name>_N}).
+     */
+    public static void startBinderThreads(String name, int count) {
+        for (int i = 1; i <= count; i++) {
+            Thread t = new Thread(Binder::joinThreadPool, "binder:" + name + "_" + i);
+            t.setDaemon(true);
+            t.start();
+        }
     }
 }

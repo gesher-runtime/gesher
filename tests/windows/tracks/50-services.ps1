@@ -93,10 +93,35 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
+# Passes when every line of $Expect is in $Out, in that order.
+function CheckOrdered([string] $Name, [string] $Out, [string[]] $Expect, [int] $Code = 0) {
+  $at = 0
+  $missing = @()
+  foreach ($e in $Expect) {
+    $i = $Out.IndexOf($e, $at)
+    if ($i -lt 0) { $missing += $e } else { $at = $i + $e.Length }
+  }
+  if ($Code -eq 0 -and -not $missing) {
+    Write-Host "PASS  $Name"
+    return $true
+  }
+  Write-Host "FAIL  $Name (exit $Code; missing or out of order: $($missing -join ' | '))"
+  $script:failed++
+  return $false
+}
+
 # system_server-lite: com.gesher.server.SystemServer parses lifecycle.apk and
-# registers the system services with servicemanager over binderd; gesher-app
-# --system-server, in another process, gets the package and every service
-# through ServiceManager and takes the app to onResume.
+# registers the system services with servicemanager over binderd. gesher-app
+# --system-server, in another process, is an app process the framework's way
+# (android.app.GesherAppProcess): ActivityThread.attach → attachApplication;
+# its launcher thread asks for the launch (startActivityAndWait). The server
+# binds the process (bindApplication, with the ApplicationSharedMemory region
+# passed as a file descriptor over binder) and drives the activity with
+# client transactions (LaunchActivityItem + ResumeActivityItem); once it is
+# idle the launcher removes the task, and the server pauses, stops and
+# destroys the activity (PauseActivityItem, StopActivityItem,
+# DestroyActivityItem) and ends the process (scheduleExit). A second run asks
+# the activity to finish() itself.
 $device = "apps-$PID"
 $env:GESHER_BINDER = $device
 $binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
@@ -109,15 +134,58 @@ $server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
   -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk")) `
   -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
 $failedBefore = $failed
-CheckTimed 'services: gesher-app --system-server, lifecycle.apk to onResume with the services in system_server' "$Dir/dalvikvm.exe" `
-  ($dvmApp + 'com.gesher.app.Main', '--system-server', (NoDrive "$Dir/lifecycle.apk")) @(
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
+  (NoDrive "$Dir/lifecycle.apk")) 400
+$appCode = $LASTEXITCODE
+$ok = CheckOrdered 'services: gesher-app --system-server, lifecycle.apk to onResume with the services in system_server' $appOut @(
   'gesher-app: system services from servicemanager: ',
   ' (in another process)',
   'gesher-app: package com.gesher.lifecycle from the system server''s package manager',
   'LifecycleApplication onCreate, package=com.gesher.lifecycle',
-  'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
-  'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
-  'gesher-app: done') 400
+  'LifecycleActivity onCreate',
+  'LifecycleActivity onStart',
+  'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false') $appCode
+$ok = (CheckOrdered 'services: the launcher removes the task: onPause, onStop, onDestroy, then the server ends the process' $appOut @(
+  'gesher-app: startActivityAndWait: result 0, com.gesher.lifecycle/.LifecycleActivity',
+  'gesher-app: removing task ',
+  'LifecycleActivity onPause',
+  'LifecycleActivity onStop',
+  'LifecycleActivity onDestroy',
+  'gesher-app: the system server ended the process (scheduleExit)',
+  'gesher-app: done') $appCode) -and $ok
+if (-not $ok) { Write-Host $appOut }
+Start-Sleep -Milliseconds 500
+$serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
+$null = CheckOrdered 'services: system_server attaches the app process and drives it with client transactions' $serverOut @(
+  'system_server: attachApplication: process ',
+  'system_server: bindApplication: process ',
+  'system_server: finishAttachApplication: process ',
+  'system_server: scheduleTransaction LaunchActivityItem, ResumeActivityItem to com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity',
+  'system_server: activityResumed: com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity',
+  'system_server: activityIdle: com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity',
+  'system_server: removing task ',
+  'system_server: scheduleTransaction PauseActivityItem',
+  'system_server: activityPaused: ',
+  'system_server: scheduleTransaction StopActivityItem',
+  'system_server: activityStopped: ',
+  'system_server: scheduleTransaction DestroyActivityItem',
+  'system_server: activityDestroyed: ',
+  'system_server: scheduleExit: process ')
+
+# The activity finishes itself (lifecycle.apk with the extra
+# com.gesher.lifecycle.FINISH): finishActivity → the same three steps.
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
+  '--ez', 'com.gesher.lifecycle.FINISH', 'true', (NoDrive "$Dir/lifecycle.apk")) 400
+$appCode = $LASTEXITCODE
+if (-not (CheckOrdered 'services: LifecycleActivity finish(): the system server pauses, stops and destroys it' $appOut @(
+  'LifecycleActivity onResume',
+  'LifecycleActivity finish()',
+  'LifecycleActivity onPause',
+  'LifecycleActivity onStop',
+  'LifecycleActivity onDestroy',
+  'gesher-app: the system server ended the process (scheduleExit)',
+  'gesher-app: done') $appCode)) { Write-Host $appOut }
+
 foreach ($p in $server, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }
@@ -125,7 +193,8 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $missing = @(
   'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'system_server: registered package, activity, activity_task, window, display, user with servicemanager'
+  'system_server: registered package, activity, activity_task, window, display, user with servicemanager',
+  'system_server: finishing com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity (app-request)'
 ) | Where-Object { -not $serverOut.Contains($_) }
 if (-not $missing) {
   Write-Host 'PASS  services: system_server parses lifecycle.apk and registers package, activity, activity_task, window, display, user'
@@ -133,6 +202,8 @@ if (-not $missing) {
   Write-Host "FAIL  services: system_server parses lifecycle.apk and registers its services (missing: $($missing -join ', '))"
   $failed++
 }
+$standIns = ([regex]::Matches($serverOut + (Get-Content "$logs/system_server.err" -Raw -ErrorAction SilentlyContinue), 'stand-in \S+ not implemented') | ForEach-Object Value) -join '; '
+Write-Host "services: system_server stand-in methods called but not implemented: $(if ($standIns) { $standIns } else { 'none' })"
 if ($failed -ne $failedBefore) {
   foreach ($f in 'system_server.out', 'system_server.err', 'apps-servicemanager.log', 'apps-binderd.log') {
     Write-Host "--- $f"

@@ -5,13 +5,13 @@
 package com.gesher.app;
 
 import android.app.GesherAppDriver;
+import android.app.GesherAppProcess;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.content.pm.parsing.ApkLite;
 import android.content.pm.parsing.ApkLiteParseUtils;
 import android.content.pm.parsing.result.ParseResult;
@@ -42,10 +42,13 @@ import java.util.List;
  *   --data-dir DIR        the app's data directory (default $ANDROID_DATA/data/PACKAGE)
  *   --strict-services     a stand-in service method that is not implemented throws
  *                         instead of returning a default value
- *   --system-server       get the package and the system services from a running
+ *   --system-server       run as an app process attached to a running
  *                         com.gesher.server.SystemServer (given the APK), through
- *                         servicemanager over binderd ($GESHER_BINDER), instead of
- *                         parsing the APK and serving stand-ins in this process
+ *                         servicemanager over binderd ($GESHER_BINDER): the server binds
+ *                         the app and drives its activity (android.app.GesherAppProcess),
+ *                         instead of parsing the APK and serving stand-ins in this process
+ *   --ez KEY true|false   a boolean extra in the launch intent (--system-server), as am
+ *                         start's
  * </pre>
  *
  * <p>The driver runs from the boot class path (it is in {@code android.app} to reach
@@ -94,6 +97,7 @@ public final class Main {
         String activity = null;
         String dataDir = null;
         boolean systemServer = false;
+        java.util.Map<String, Boolean> extras = new java.util.LinkedHashMap<>();
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
             switch (a) {
@@ -103,6 +107,11 @@ public final class Main {
                 case "--data-dir": dataDir = value(args, ++i, a); break;
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--system-server": systemServer = true; break;
+                case "--ez": {
+                    String key = value(args, ++i, a);
+                    extras.put(key, Boolean.parseBoolean(value(args, ++i, a)));
+                    break;
+                }
                 case "-h":
                 case "--help":
                     usage();
@@ -136,6 +145,9 @@ public final class Main {
         ApplicationInfo appInfo;
         ActivityInfo launch;
         if (systemServer) {
+            // The app process the framework's way (android.app.GesherAppProcess): attached
+            // to the system server, which binds it and drives its activity with client
+            // transactions; this process also plays the launcher (am start -W).
             IPackageManager pm = remotePackageManager();
             String packageName = packageName(apk);
             appInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA
@@ -145,17 +157,22 @@ public final class Main {
                         + packageName + " (start com.gesher.server.SystemServer with " + apk
                         + ")");
             }
-            launch = remoteLauncherActivity(pm, packageName, activity);
-            RemoteServices.installDisplayManagerGlobal();
             log("package " + packageName + " from the system server's package manager: "
                     + appInfo.sourceDir);
             if (dataDir != null) {
-                String d = new File(dataDir).getAbsolutePath();
-                appInfo.dataDir = d;
-                appInfo.credentialProtectedDataDir = d;
-                appInfo.deviceProtectedDataDir = d;
-                appInfo.nativeLibraryDir = d + "/lib";
+                log("--data-dir ignored: the system server's package manager sets the data"
+                        + " directory");
             }
+            RemoteServices.installDisplayManagerGlobal();
+            Intent intent = launchIntent(packageName, activity);
+            for (java.util.Map.Entry<String, Boolean> e : extras.entrySet()) {
+                intent.putExtra(e.getKey(), (boolean) e.getValue());
+            }
+            log("starting " + intent.toShortString(false, true, true, false)
+                    + " through the system server");
+            GesherAppProcess.run(intent, true /* removeTaskWhenIdle */);
+            log("done");
+            return 0;
         } else {
             ApkPackage pkg = ApkPackage.parse(apk);
             log(pkg.describe());
@@ -268,29 +285,18 @@ public final class Main {
     }
 
     /**
-     * The Activity to launch, from the package manager: {@code requested}, or what
-     * MAIN/LAUNCHER resolves to in the package (as getLaunchIntentForPackage finds it).
+     * The launch intent, as the launcher makes it: MAIN/LAUNCHER in the package (as
+     * getLaunchIntentForPackage), or {@code requested} explicitly.
      */
-    private static ActivityInfo remoteLauncherActivity(IPackageManager pm, String packageName,
-            String requested) throws Exception {
-        if (requested != null) {
-            String name = requested.startsWith(".") ? packageName + requested
-                    : requested.indexOf('.') < 0 ? packageName + "." + requested : requested;
-            ActivityInfo a = pm.getActivityInfo(new ComponentName(packageName, name), 0, 0);
-            if (a == null) {
-                throw new IllegalStateException(packageName + " declares no activity " + name);
-            }
-            return a;
-        }
+    private static Intent launchIntent(String packageName, String requested) {
         Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .setPackage(packageName);
-        @SuppressWarnings("unchecked")
-        List<ResolveInfo> found = pm.queryIntentActivities(intent, null, 0, 0).getList();
-        if (found == null || found.isEmpty()) {
-            throw new IllegalStateException(packageName + " has no MAIN/LAUNCHER activity;"
-                    + " name one with --activity");
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (requested == null) {
+            return intent.setPackage(packageName);
         }
-        return found.get(0).activityInfo;
+        String name = requested.startsWith(".") ? packageName + requested
+                : requested.indexOf('.') < 0 ? packageName + "." + requested : requested;
+        return intent.setComponent(new ComponentName(packageName, name));
     }
 
     private static String value(String[] args, int i, String option) {
@@ -307,7 +313,7 @@ public final class Main {
 
     private static void usage() {
         System.err.println("usage: gesher-app [--build-prop FILE] [--framework-res FILE]"
-                + " [--activity CLASS] [--data-dir DIR] [--strict-services] [--system-server]"
-                + " <app.apk>");
+                + " [--activity CLASS] [--data-dir DIR] [--strict-services] [--system-server"
+                + " [--ez KEY true|false]...] <app.apk>");
     }
 }

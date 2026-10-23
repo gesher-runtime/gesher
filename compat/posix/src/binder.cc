@@ -340,6 +340,17 @@ void ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
   });
 }
 
+// The uid the driver gives this process's transactions (Binder.getCallingUid
+// in the receiver): getuid(), or $GESHER_BINDER_UID. Every gesher-base process
+// is uid 10000; the system server sets GESHER_BINDER_UID=1000 (SYSTEM_UID)
+// before it opens the driver, so that apps see their calls come from the
+// system, as ApplicationThread checks.
+uint32_t BinderUid() {
+  const char* uid = getenv("GESHER_BINDER_UID");
+  if (uid != nullptr && uid[0] != '\0') return static_cast<uint32_t>(strtoul(uid, nullptr, 10));
+  return getuid();
+}
+
 bool IsTransactionCommand(uint32_t cmd) {
   return cmd == BC_TRANSACTION || cmd == BC_REPLY || cmd == BC_TRANSACTION_SG ||
          cmd == BC_REPLY_SG;
@@ -482,7 +493,7 @@ int OpenBinder(int flags) {
   hello.Put<uint32_t>(wire::kMagic);
   hello.Put<uint32_t>(wire::kVersion);
   hello.Put<uint32_t>(GetCurrentProcessId());
-  hello.Put<uint32_t>(getuid());
+  hello.Put<uint32_t>(BinderUid());
   std::vector<uint8_t> reply;
   if (!Send(pipe, hello) || !Receive(pipe, &reply)) return errno = EIO, -1;
   Reader r{reply.data(), reply.data() + reply.size()};
