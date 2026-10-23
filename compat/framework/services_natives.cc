@@ -24,7 +24,12 @@
 
 #include "core_jni_helpers.h"
 
+// Its layout checks use offsetof on a class with atomics, which Soong's flags
+// let pass (-Wno-invalid-offsetof).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winvalid-offsetof"
 #include "com_android_internal_os_ApplicationSharedMemory.cpp"
+#pragma clang diagnostic pop
 
 namespace android {
 
