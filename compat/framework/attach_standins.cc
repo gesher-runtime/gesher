@@ -16,6 +16,12 @@
 //     android/view/SurfaceControl=core/jni/android_view_SurfaceControl.cpp:sSurfaceControlMethods
 //     android/view/SurfaceSession=core/jni/android_view_SurfaceSession.cpp
 //     android/graphics/BLASTBufferQueue=core/jni/android_graphics_BLASTBufferQueue.cpp
+//     android/tracing/perfetto/Producer=core/jni/android_tracing_PerfettoProducer.cpp
+//     android/tracing/perfetto/DataSource=core/jni/android_tracing_PerfettoDataSource.cpp
+//     android/tracing/perfetto/TracingContext=core/jni/android_tracing_PerfettoDataSource.cpp:gMethodsTracingContext
+//     android/view/KeyCharacterMap=core/jni/android_view_KeyCharacterMap.cpp:g_methods
+//     android/view/MotionEvent=core/jni/android_view_MotionEvent.cpp:gMotionEventMethods
+//     android/view/VelocityTracker=core/jni/android_view_VelocityTracker.cpp:gVelocityTrackerMethods
 //
 // Stand-ins for graphics and view natives on the attached app process's
 // path (services track, docs/services.md); register_gesher_attach_standins
@@ -518,6 +524,114 @@ const JNINativeMethod kandroid_graphics_BLASTBufferQueue[] = {
     {"nativeSetCornerRadiiCallback", "(JLandroid/graphics/BLASTBufferQueue$CornerRadiiCallback;)V", reinterpret_cast<void*>(&Standin_zero)},
 };
 
+const JNINativeMethod kandroid_tracing_perfetto_Producer[] = {
+    {"nativePerfettoProducerInit", "(II)V", reinterpret_cast<void*>(&Standin_zero)},
+};
+
+const JNINativeMethod kandroid_tracing_perfetto_DataSource[] = {
+    {"nativeCreate", "(Landroid/tracing/perfetto/DataSource;Ljava/lang/String;)J", reinterpret_cast<void*>(&Standin_create)},
+    {"nativeFlushAll", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetFinalizer", "()J", reinterpret_cast<void*>(&Standin_freeFunction)},
+    {"nativeRegisterDataSource", "(JIZZZ)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPerfettoInstanceLocked", "(JI)Landroid/tracing/perfetto/DataSourceInstance;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeReleasePerfettoInstanceLocked", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeStopDonePerfettoInstanceLocked", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeWritePackets", "(J[[B)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativePerfettoDsTraceIterateBegin", "(J)Z", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativePerfettoDsTraceIterateNext", "(J)Z", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativePerfettoDsTraceIterateBreak", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPerfettoDsInstanceIndex", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+};
+
+const JNINativeMethod kandroid_tracing_perfetto_TracingContext[] = {
+    {"nativeGetCustomTls", "(J)Ljava/lang/Object;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetIncrementalState", "(J)Ljava/lang/Object;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetCustomTls", "(JLjava/lang/Object;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetIncrementalState", "(JLjava/lang/Object;)V", reinterpret_cast<void*>(&Standin_zero)},
+};
+
+const JNINativeMethod kandroid_view_KeyCharacterMap[] = {
+    {"nativeReadFromParcel", "(Landroid/os/Parcel;)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeDispose", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetCharacter", "(JII)C", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetFallbackAction", "(JIILandroid/view/KeyCharacterMap$FallbackAction;)Z", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetNumber", "(JI)C", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetMatch", "(JI[CI)C", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetDisplayLabel", "(JI)C", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetKeyboardType", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetEvents", "(J[C)[Landroid/view/KeyEvent;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeObtainEmptyKeyCharacterMap", "(I)Landroid/view/KeyCharacterMap;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeEquals", "(JJ)Z", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeObtainMapWithOverlay", "(JLjava/lang/String;Ljava/lang/String;)Landroid/view/KeyCharacterMap;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetMappedKey", "(JI)I", reinterpret_cast<void*>(&Standin_zero)},
+};
+
+const JNINativeMethod kandroid_view_MotionEvent[] = {
+    {"nativeInitialize", "(JIIIIIIIIIFFFFJJI[Landroid/view/MotionEvent$PointerProperties;[Landroid/view/MotionEvent$PointerCoords;)J", reinterpret_cast<void*>(&Standin_create)},
+    {"nativeDispose", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeAddBatch", "(JJ[Landroid/view/MotionEvent$PointerCoords;I)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeReadFromParcel", "(JLandroid/os/Parcel;)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeAxisToString", "(I)Ljava/lang/String;", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeAxisFromString", "(Ljava/lang/String;)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPointerProperties", "(JILandroid/view/MotionEvent$PointerProperties;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPointerCoords", "(JIILandroid/view/MotionEvent$PointerCoords;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPointerId", "(JI)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetToolType", "(JI)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetEventTimeNanos", "(JI)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetRawAxisValue", "(JIII)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetAxisValue", "(JIII)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeTransform", "(JLandroid/graphics/Matrix;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeApplyTransform", "(JLandroid/graphics/Matrix;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeCopy", "(JJZ)J", reinterpret_cast<void*>(&Standin_create)},
+    {"nativeSplit", "(JJI)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetId", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetDeviceId", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetSource", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetSource", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetDisplayId", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetDisplayId", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetAction", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetAction", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetActionButton", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetActionButton", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeIsTouchEvent", "(J)Z", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetFlags", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetFlags", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetEdgeFlags", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetEdgeFlags", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetMetaState", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetButtonState", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetButtonState", "(JI)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetClassification", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeOffsetLocation", "(JFF)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetRawXOffset", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetRawYOffset", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetXPrecision", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetYPrecision", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetXCursorPosition", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeGetYCursorPosition", "(J)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeSetCursorPosition", "(JFF)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetDownTimeNanos", "(J)J", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeSetDownTimeNanos", "(JJ)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetPointerCount", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeFindPointerIndex", "(JI)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetHistorySize", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeScale", "(JF)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetSurfaceRotation", "(J)I", reinterpret_cast<void*>(&Standin_zero)},
+};
+
+const JNINativeMethod kandroid_view_VelocityTracker[] = {
+    {"nativeInitialize", "(I)J", reinterpret_cast<void*>(&Standin_create)},
+    {"nativeDispose", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeClear", "(J)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeAddMovement", "(JLandroid/view/MotionEvent;)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeComputeCurrentVelocity", "(JIF)V", reinterpret_cast<void*>(&Standin_zero)},
+    {"nativeGetVelocity", "(JII)F", reinterpret_cast<void*>(&Standin_zeroFloat)},
+    {"nativeIsAxisSupported", "(I)Z", reinterpret_cast<void*>(&Standin_zero)},
+};
+
 const struct {
   const char* className;
   const JNINativeMethod* methods;
@@ -539,6 +653,12 @@ const struct {
     {"android/view/SurfaceControl", kandroid_view_SurfaceControl, sizeof(kandroid_view_SurfaceControl) / sizeof(kandroid_view_SurfaceControl[0])},
     {"android/view/SurfaceSession", kandroid_view_SurfaceSession, sizeof(kandroid_view_SurfaceSession) / sizeof(kandroid_view_SurfaceSession[0])},
     {"android/graphics/BLASTBufferQueue", kandroid_graphics_BLASTBufferQueue, sizeof(kandroid_graphics_BLASTBufferQueue) / sizeof(kandroid_graphics_BLASTBufferQueue[0])},
+    {"android/tracing/perfetto/Producer", kandroid_tracing_perfetto_Producer, sizeof(kandroid_tracing_perfetto_Producer) / sizeof(kandroid_tracing_perfetto_Producer[0])},
+    {"android/tracing/perfetto/DataSource", kandroid_tracing_perfetto_DataSource, sizeof(kandroid_tracing_perfetto_DataSource) / sizeof(kandroid_tracing_perfetto_DataSource[0])},
+    {"android/tracing/perfetto/TracingContext", kandroid_tracing_perfetto_TracingContext, sizeof(kandroid_tracing_perfetto_TracingContext) / sizeof(kandroid_tracing_perfetto_TracingContext[0])},
+    {"android/view/KeyCharacterMap", kandroid_view_KeyCharacterMap, sizeof(kandroid_view_KeyCharacterMap) / sizeof(kandroid_view_KeyCharacterMap[0])},
+    {"android/view/MotionEvent", kandroid_view_MotionEvent, sizeof(kandroid_view_MotionEvent) / sizeof(kandroid_view_MotionEvent[0])},
+    {"android/view/VelocityTracker", kandroid_view_VelocityTracker, sizeof(kandroid_view_VelocityTracker) / sizeof(kandroid_view_VelocityTracker[0])},
 };
 
 }  // namespace
