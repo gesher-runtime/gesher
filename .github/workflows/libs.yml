@@ -4,15 +4,31 @@ name: libs
 # modules of libutils, libcutils and libandroidfw, with googletest, built by
 # cmake/aosp/core_libs_tests.cmake with the project's toolchain. ci.yml calls
 # this workflow and its test job runs them on Windows
-# (tests/windows/tracks/20-libs.ps1). Run on its own, it runs them too:
-#
-#   gh workflow run libs --ref <branch>
+# (tests/windows/tracks/20-libs.ps1). Run on its own (a push to the core
+# libraries' branch, or `gh workflow run libs --ref <branch>`), it runs them
+# too.
 on:
+  push:
+    branches: ['wip/libs-full']
+    paths:
+      - 'cmake/aosp/**'
+      - 'compat/**'
+      - 'patches/**'
+      - 'aosp.lock'
+      - 'CMakeLists.txt'
+      - 'tests/windows/tracks/20-libs.ps1'
+      - '.github/workflows/libs.yml'
   workflow_dispatch:
   workflow_call:
 
 permissions:
   contents: read
+
+# A newer push supersedes a running build (github.workflow is the caller's,
+# "ci", when ci.yml runs this one).
+concurrency:
+  group: ${{ github.workflow }}-libs-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   LLVM_MINGW_TAG: "20261006"
