@@ -12,12 +12,14 @@ set(_native "${AOSP_DIR}/frameworks/native")
 # libutils' StrongPointer.h uses std::nothrow without <new>, ui/Rect.h
 # std::round without <cmath>; utils/Trace.h mixes C's <stdatomic.h> with
 # <atomic>, which libc++ allows from C++23 on (framework.cmake does the same);
-# math/half.h specializes std::is_floating_point.
+# math/half.h specializes std::is_floating_point and uses std::float_denorm_style
+# (deprecated in C++23).
 function(gesher_graphics_cxx target)
   set_target_properties(${target} PROPERTIES CXX_STANDARD 23)
   target_compile_options(${target} PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new -include cmath>"
-    $<$<COMPILE_LANGUAGE:CXX>:-Wno-invalid-specialization>)
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-invalid-specialization>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-declarations>)
 endfunction()
 
 # --- HarfBuzz (external/harfbuzz_ng: libharfbuzz_ng) ----------------------------
