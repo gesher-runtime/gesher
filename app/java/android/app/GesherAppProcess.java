@@ -68,6 +68,11 @@ public final class GesherAppProcess {
         com.gesher.server.SystemServer.startBinderThreads("app", 2);
 
         withoutSystemFonts();
+        // No vsync source yet (DisplayEventReceiver's natives are stand-ins that never
+        // deliver one): Choreographer times its frames with messages instead, as with
+        // debug.choreographer.vsync=false. Without frames, the sync barrier a window's
+        // first traversal posts would hold every lifecycle message back.
+        android.os.SystemProperties.set("debug.choreographer.vsync", "false");
 
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
@@ -188,6 +193,12 @@ public final class GesherAppProcess {
                     && !sTracing) {
                 sTracing = true;
                 dalvik.system.VMDebug.startMethodTracing(trace, 64 << 20, 0, false, 0);
+                Thread stop = new Thread(() -> {
+                    android.os.SystemClock.sleep(8000);
+                    dalvik.system.VMDebug.stopMethodTracing();
+                });
+                stop.setDaemon(true);
+                stop.start();
             }
             return false;  // ActivityThread handles it
         });
