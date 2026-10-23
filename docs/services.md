@@ -31,16 +31,30 @@ every transaction on stderr.
   notification after the server exits, `BR_DEAD_REPLY` afterwards,
   `BC_CLEAR_DEATH_NOTIFICATION`. Local harness: scratchpad shims for
   open/ioctl/mmap (not committed).
-- **CI**: run 39941566620 (commit "Binder across processes: binderd, ...")
-  — see the result below.
+- **CI, compile only**: run 39941566620 compiled gesher-base with binder.cc,
+  binderd, binder_probe and servicemanager's sources with clang -Werror; it
+  failed linking servicemanager (`androidSetThreadName`, fixed since by
+  `compat/binder/thread_name.cc`). Run 39942847956: the framework job passed
+  (so `services-tests.dex`, BinderTest, compiles against framework.jar's
+  classes); the build job failed linking **dalvikvm.exe** (below). No
+  Windows test of this track has run yet.
 
-### In progress (committed, not yet CI-verified)
-- Commit "Java Binder across dalvikvm processes ...": the Java test
-  (`BinderTest service|client` started by 50-services.ps1 with binderd and
-  servicemanager), the frameworks/native patch 0002, the
-  `android_runtime.cc` edits (thread attach + ServiceManagerNative) and
-  framework.yml building `services-tests.dex`. Run CI on it first
-  (`gh workflow run ci --ref wip/services`).
+### Half-done: the build is broken on this branch
+- dalvikvm.exe fails to link: `android::execute(...)`,
+  `android::CommandResult::toString()`, `~CommandResult()` undefined. They
+  come from libbinder's `ServiceManagerHost.cpp` (RPC service manager over
+  adb, BINDER_SERVICEMANAGEMENT_DELEGATION_SUPPORT off bionic), now pulled
+  into dalvikvm by the newly registered `android_os_ServiceManagerNative`
+  (→ `getJavaServicemanagerImpl...` → `BackendUnifiedServiceManager` →
+  `IServiceManager.cpp`). Fix: add libbinder's `UtilsHost.cpp` to
+  `cmake/aosp/binder.cmake` (it defines `execute`/`CommandResult`; check it
+  builds on gesher-base: it uses fork/pipe/poll), or drop the
+  ServiceManagerNative registration and set
+  `ServiceManager.sServiceManager = IServiceManager.Stub.asInterface(
+  BinderInternal.getContextObject())` from Java instead. Until then the
+  branch does not build; the last commit that builds dalvikvm is
+  78b4ad8 (phase3/base) — revert the `android_runtime.cc`/`framework.cmake`
+  registration lines to get a building tree with only the native pieces.
 
 ### Next steps
 1. Get the three 50-services checks green (binder_probe, libbinder_probe,
