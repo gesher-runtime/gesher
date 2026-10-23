@@ -148,12 +148,14 @@ try {
   }
   $Commit | Set-Content (Join-Path $Out 'ANGLE_COMMIT.txt')
 
-  # NOTICES.txt: ANGLE's BSD license, then every third-party license of code
-  # linked into the DLLs (ANGLE's own src/**/third_party, zlib, abseil,
-  # Chromium's libc++/libc++abi, which the DLLs link statically).
+  # NOTICES.txt: ANGLE's BSD license, then the licenses of third-party code
+  # in the DLLs: ANGLE's own src/**/third_party (without what only tests, the
+  # Vulkan backend or Linux use), zlib, abseil, and Chromium's libc++ and
+  # libc++abi, which the DLLs link statically.
   $licenses = @('LICENSE') +
     @(Get-ChildItem src -Recurse -File -Include 'LICENSE*', 'COPYING*' |
-      Where-Object { $_.FullName -match '[\\/]third_party[\\/]' } |
+      Where-Object { $_.FullName -match '[\\/]third_party[\\/]' -and
+                     $_.FullName -notmatch '[\\/](tests|vulkan|libXNVCtrl|volk)[\\/]' } |
       ForEach-Object { Resolve-Path -Relative $_.FullName }) +
     @('third_party/zlib/LICENSE', 'third_party/abseil-cpp/LICENSE',
       'third_party/libc++/src/LICENSE.TXT', 'third_party/libc++abi/src/LICENSE.TXT')
