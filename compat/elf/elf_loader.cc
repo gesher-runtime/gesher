@@ -178,6 +178,52 @@ void* MakeUnresolvedStub(const char* name) {
   return p;
 }
 
+// --- placeholders for unresolved data imports ---------------------------------
+// A data import nothing defines (an object the shim lacks) is bound to its own
+// slot in a reserved, inaccessible region instead of failing the load, so an
+// object whose missing data is never touched still loads. Touching it faults;
+// the handler below names the symbol and aborts.
+constexpr size_t kDataSlot = 256;
+constexpr size_t kDataRegionSize = size_t{1} << 20;  // 4096 slots
+std::mutex g_data_mutex;
+uint8_t* g_data_region = nullptr;
+size_t g_data_used = 0;
+const char* g_data_names[kDataRegionSize / kDataSlot];
+
+LONG CALLBACK UnresolvedDataHandler(EXCEPTION_POINTERS* info) {
+  const EXCEPTION_RECORD* r = info->ExceptionRecord;
+  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2 ||
+      g_data_region == nullptr) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  auto addr = static_cast<uintptr_t>(r->ExceptionInformation[1]);
+  auto base = reinterpret_cast<uintptr_t>(g_data_region);
+  if (addr < base || addr >= base + kDataRegionSize) return EXCEPTION_CONTINUE_SEARCH;
+  size_t slot = (addr - base) / kDataSlot;
+  const char* name = slot < g_data_used / kDataSlot ? g_data_names[slot] : "?";
+  std::fprintf(stderr,
+               "gesher elf: loaded code accessed data symbol '%s' (+%zu), which nothing "
+               "defines (the bionic shim lacks it)\n",
+               name, static_cast<size_t>((addr - base) % kDataSlot));
+  std::fflush(stderr);
+  std::abort();
+}
+
+void* MakeUnresolvedData(const char* name) {
+  std::lock_guard<std::mutex> lock(g_data_mutex);
+  if (g_data_region == nullptr) {
+    g_data_region = static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, kDataRegionSize, MEM_RESERVE, PAGE_NOACCESS));
+    if (g_data_region == nullptr) return nullptr;
+    AddVectoredExceptionHandler(1, UnresolvedDataHandler);
+  }
+  if (g_data_used + kDataSlot > kDataRegionSize) return nullptr;
+  g_data_names[g_data_used / kDataSlot] = name;
+  void* p = g_data_region + g_data_used;
+  g_data_used += kDataSlot;
+  return p;
+}
+
 bool SymbolDefined(const Elf64_Sym* sym) {
   return sym->st_shndx != SHN_UNDEF;
 }
@@ -514,6 +560,18 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
         rs->found = rs->address != nullptr;
         if (rs->found) {
           std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
+                       lib->name.c_str(), name);
+          return true;
+        }
+      }
+      // An unresolved data object: an inaccessible placeholder (above).
+      if (lib->stub_unresolved && (type == R_X86_64_GLOB_DAT || type == R_X86_64_64)) {
+        rs->address = MakeUnresolvedData(name);
+        rs->found = rs->address != nullptr;
+        if (rs->found) {
+          std::fprintf(stderr,
+                       "gesher elf: %s: data '%s' is not provided (a placeholder that faults "
+                       "if used)\n",
                        lib->name.c_str(), name);
           return true;
         }

@@ -6,7 +6,7 @@
 #
 # The NDK builds jni/nativeapp.cpp into lib/x86_64/libnativeapp.so against its
 # libc++_shared.so, which goes into the APK beside it; aapt2 links the manifest
-# and resources against the SDK's android.jar, javac and d8 compile the
+# and resources (and assets/) against the SDK's android.jar, javac and d8 compile the
 # Activity, and the APK is zip-aligned with its .so files stored uncompressed.
 # Unsigned: gesher-app does not verify signatures. Runs on the Linux runner
 # (.github/workflows/native-libs.yml).
@@ -33,18 +33,24 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Native code.
+# Native code (C++, libc++_shared, libandroid).
 llvm=$ndk/toolchains/llvm/prebuilt/linux-x86_64
 mkdir -p "$work/apk/lib/x86_64"
 "$llvm/bin/x86_64-linux-android26-clang++" -shared -fPIC -O2 -fstack-protector-strong \
-  -Wl,-soname,libnativeapp.so -o "$work/apk/lib/x86_64/libnativeapp.so" "$app/jni/nativeapp.cpp"
+  -Wl,-soname,libnativeapp.so -o "$work/apk/lib/x86_64/libnativeapp.so" "$app/jni/nativeapp.cpp" \
+  -landroid -llog
 cp "$llvm/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so" "$work/apk/lib/x86_64/"
+echo "--- libnativeapp.so: needed, and what it imports ---"
+"$llvm/bin/llvm-readelf" -d "$work/apk/lib/x86_64/libnativeapp.so" | grep -E 'NEEDED|SONAME'
+"$llvm/bin/llvm-readelf" --dyn-syms -W "$work/apk/lib/x86_64/libnativeapp.so" |
+  awk '$7 == "UND" && $8 != "" {print $4, $8}' | sort -u | tr '\n' ' '
+echo
 
 # Resources and manifest.
 "$tools/aapt2" compile --dir "$app/res" -o "$work/res.zip"
 "$tools/aapt2" link -o "$work/unaligned.apk" -I "$android_jar" \
   --manifest "$app/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 36 \
-  "$work/res.zip"
+  -A "$app/assets" "$work/res.zip"
 
 # Code.
 mkdir -p "$work/classes" "$work/dex"

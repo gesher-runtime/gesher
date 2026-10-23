@@ -370,10 +370,6 @@ int32_t BIONIC_SYSV gesher_bionic_pthread_gettid_np(bionic_pthread_t thread) {
 }
 
 int BIONIC_SYSV gesher_bionic_pthread_setname_np(bionic_pthread_t, const char*) { return 0; }
-int BIONIC_SYSV gesher_bionic_pthread_kill(bionic_pthread_t, int sig) {
-  return sig == 0 ? 0 : kENOSYS;
-}
-int BIONIC_SYSV gesher_bionic_pthread_sigmask(int, const void*, void*) { return 0; }
 int BIONIC_SYSV gesher_bionic_sched_yield(void) {
   SwitchToThread();
   return 0;
@@ -637,6 +633,8 @@ int BIONIC_SYSV gesher_bionic_register_atfork(void*, void*, void*, void*) { retu
 
 }  // extern "C"
 
+uint64_t PthreadSelfId() { return SelfId(); }
+
 void RegisterPthread(SymbolTable& t) {
 #define P(name) t[#name] = reinterpret_cast<void*>(&gesher_bionic_##name)
   P(pthread_attr_init);
@@ -661,8 +659,6 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_exit);
   P(pthread_gettid_np);
   P(pthread_setname_np);
-  P(pthread_kill);
-  P(pthread_sigmask);
   P(sched_yield);
   P(pthread_mutexattr_init);
   P(pthread_mutexattr_destroy);

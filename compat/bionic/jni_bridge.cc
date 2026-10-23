@@ -31,6 +31,7 @@
 // A @CriticalNative method gets no JNIEnv; the entry stub only replaces its
 // first argument when that is this thread's JNIEnv.
 
+#include "jni_bridge.h"
 #include "shim_internal.h"
 
 #include <gesher/bionic_shim.h>
@@ -668,3 +669,10 @@ const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};
 [[maybe_unused]] const bool g_registered = (gesher_set_elf_dlopen(&kElfOps), true);
 
 }  // namespace
+
+JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
+  if (env == nullptr) return nullptr;
+  auto* proxy = reinterpret_cast<ProxyEnv*>(env);
+  return proxy->functions == g_env_table ? proxy->real : env;
+}
+
