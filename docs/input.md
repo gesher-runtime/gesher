@@ -185,10 +185,13 @@ ci run 40038368343 (commit 40d5053), windows-2022 and windows-2025, from
 
 ### Stand-ins and gaps
 
-- WM_POINTER* (touch, pen) is handled by the window but not exercised in
-  CI: Windows does not post WM_POINTER messages (PostMessage fails), and
-  touch injection needs an interactive desktop; the tests inject the
-  WindowEvents that handler queues.
+- WM_POINTER* touch is exercised only as an INFO line: Windows does not
+  post WM_POINTER messages (PostMessage fails), so the checks inject the
+  WindowEvents the window's handler queues; the probe also taps the shown
+  window through `InjectSyntheticPointerInput` (`probes/input/touch_inject.cc`),
+  which needs an interactive desktop. On both runners (ci run 40040115231):
+  `INFO  WM_POINTER touch through InjectSyntheticPointerInput: DOWN at (50, 60),
+  MOVE, UP on SOURCE_TOUCHSCREEN`. Pen (PT_PEN) is untested.
 - No app window uses it yet: the window session (wip/graphics) must open
   the pair and attach it (above); until then ViewRootImpl gets a channel
   that never delivers.
@@ -221,3 +224,6 @@ ci run 40038368343 (commit 40d5053), windows-2022 and windows-2025, from
   check failed: ViewRootImpl's receiver on the stand-in session's
   uninitialized InputChannel.
 - ci 40038368343: green on both runners and the installer.
+- ci 40039426375: the probe's synthetic touch (a name clash).
+- ci 40040115231: green; real WM_POINTER touch from a synthetic pointer
+  device reaches the consumer on both runners (INFO).
