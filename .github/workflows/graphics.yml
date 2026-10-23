@@ -54,7 +54,7 @@ jobs:
 
       # The probes first, so they run on Windows even while the rest fails.
       - name: Build Skia and the probes
-        run: ninja -C out skia_probe window_probe > probes-build.log 2>&1 || { grep -B2 -A6 -E 'error' probes-build.log | head -300; exit 1; }
+        run: ninja -C out -k 0 skia_probe window_probe > probes-build.log 2>&1 || { grep -B2 -A6 -E 'error' probes-build.log | head -300; exit 1; }
 
       - name: Collect artifacts
         run: |

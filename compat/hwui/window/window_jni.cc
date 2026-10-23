@@ -66,6 +66,10 @@ jlong JNICALL NativeWindow_getHwnd(JNIEnv*, jclass, jlong ptr) {
   return reinterpret_cast<jlong>(Get(ptr)->window()->hwnd());
 }
 
+void JNICALL NativeWindow_present(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->Present();
+}
+
 // The client area as ARGB colors (GDI's BGRA little-endian words are
 // 0xAARRGGBB already; GDI leaves alpha undefined, so it is set opaque):
 // what PrintWindow reads back (print = true), or the back buffer. Null when
@@ -99,6 +103,7 @@ const JNINativeMethod kMethods[] = {
     {"nGetFramesPresented", "(J)J", reinterpret_cast<void*>(&NativeWindow_getFramesPresented)},
     {"nGetHwnd", "(J)J", reinterpret_cast<void*>(&NativeWindow_getHwnd)},
     {"nCapture", "(JZ)[I", reinterpret_cast<void*>(&NativeWindow_capture)},
+    {"nPresent", "(J)V", reinterpret_cast<void*>(&NativeWindow_present)},
 };
 
 }  // namespace
