@@ -8,8 +8,10 @@ common NDK libraries) built on gesher-base, so `System.loadLibrary` and JNI
 work both ways.
 
 This is the native-libraries track; its decisions are
-[0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS) and
-[0015](decisions/0015-native-libs-jni-bridge.md) (JNI). It builds in steps, each verified in CI
+[0014](decisions/0014-native-libs-fs-base.md) (%fs/TLS),
+[0015](decisions/0015-native-libs-jni-bridge.md) (JNI) and
+[0016](decisions/0016-native-libs-libandroid.md) (libandroid, the rest of
+libc, signals). It builds in steps, each verified in CI
 (`tracks/40-native-libs.ps1`, `.github/workflows/native-libs.yml`).
 
 ## Pieces
@@ -96,6 +98,79 @@ This is the native-libraries track; its decisions are
     classification functions, wide string parsing, `strtold` (binary128).
     `syscall` (in `shim.cc`) does `futex` wait/wake (libc++abi's guards,
     `std::atomic::wait`) and `gettid`.
+  - `posix_bionic.cc`: directories with bionic's 280-byte `struct dirent`
+    (`opendir`, `fdopendir` owning its fd, `readdir`/`readdir_r`, `dirfd`,
+    `scandir`/`alphasort`); the `*at()` calls (`openat`, `fstatat`,
+    `unlinkat`, `mkdirat`, `renameat`, `faccessat`, `fchmodat`, `utimensat`,
+    `readlinkat`, `linkat`, `symlinkat`) by resolving the directory fd's
+    path; `unlink`/`rmdir`/`remove` with a POSIX delete disposition (the name
+    goes at once even while open, as Linux's); `getcwd`, `chdir`, `realpath`,
+    `truncate`/`ftruncate`, `fchmod`, `statvfs` (bionic's 24 reserved bytes),
+    `sendfile`, `pathconf` and **`sysconf` by bionic's own `_SC_*`/`_PC_*`
+    numbers** (the shim used to pass them to gesher-base, which uses glibc's);
+    `fcntl` (record locks are always granted: not modelled), `ioctl`,
+    `getauxval`, `uname`, ids, rlimits; `environ`/`__progname` data; the
+    FORTIFY `__read_chk`/`__write_chk`/`__pread_chk`/`__getcwd_chk`/... forms;
+    `stpcpy`, `memrchr`, `strsep`, `strcasestr`, `basename`, `dirname`.
+  - `socket_bionic.cc`: BSD sockets over gesher-base's Winsock layer (same
+    Linux structures; `SO_RCVTIMEO`/`SO_SNDTIMEO` convert bionic's 64-bit
+    `timeval`), `getaddrinfo`/`getnameinfo` with bionic's BSD `addrinfo`
+    field order and `AI_*`/`EAI_*`/`NI_*` values, `inet_*`, `poll`/`ppoll`,
+    `select`/`pselect` over `poll` with bionic's 1024-bit `fd_set` and
+    `__FD_*_chk`, `epoll_*`, `eventfd`, `pipe`/`pipe2`, `readv`/`writev`;
+    `in6addr_any`/`in6addr_loopback` data.
+  - `signal_bionic.cc`: signals in user space, separate from gesher-base's and
+    ART's (libsigchain): `sigaction` (bionic's LP64 layout, System V
+    handlers, `SA_SIGINFO` with a Linux `siginfo_t`, `SA_RESETHAND`,
+    `SA_NODEFER`), `signal`, per-thread masks, `raise`/`kill`/`sigqueue`/
+    `pthread_kill`, `sigpending`, `sigwait*`, `sigsuspend`, `pause`,
+    `strsignal`, and `abort()` running a `SIGABRT` handler first. See "Not
+    done" for what Windows does not allow.
+  - `time_bionic.cc`: bionic's 56-byte `struct tm` (`tm_gmtoff`, `tm_zone`):
+    `localtime(_r)`, `gmtime(_r)`, `mktime`, `timegm`, `tzset` with the
+    `tzname`/`timezone`/`daylight` data, `asctime`/`ctime`, and a C-locale
+    `strftime`/`strftime_l` with every conversion and flag bionic's has (the
+    CRT's aborts on unknown ones).
+  - In `stdio_bionic.cc` too: `fscanf`/`scanf`/`vfscanf` (and `%Lf` into
+    binary128 for the whole scanf family), `getline`/`getdelim`, wide stdio
+    (`fgetwc`/`getwc`, `ungetwc`, `fputwc`/`putwc`, `fputws`, `fwide`,
+    `swprintf`/`vswprintf`), `freopen`, `fgetpos`/`fsetpos`, the FILE FORTIFY
+    forms; `fopen` modes are always binary (`e` and `x` understood), and
+    `fopen` opens through gesher-base's `open`, which shares delete access,
+    so an open file can be unlinked or renamed as on Linux.
+- **libandroid** (`compat/bionic/libandroid.cc`, target `gesher_libandroid`
+  in `compat/bionic/jni.cmake`, linked into dalvikvm next to the framework's
+  natives): the NDK's non-graphics `libandroid.so` APIs as System V entries
+  that its static initializer adds to the shim's table, so an app's
+  `DT_NEEDED libandroid.so` is satisfied symbol by symbol like `libc.so`:
+  - `AAssetManager_fromJava` → the Java `AssetManager`'s native
+    `AssetManager2` (through `android_util_AssetManager.cpp`'s
+    `NdkAssetManagerForJavaObject`; the `.so`'s `JNIEnv` is the bridge's
+    proxy, so the bridge's `RealJniEnv` gives the runtime's), `AAssetManager_
+    open`/`openDir`, all `AAsset_*` (64-bit `off_t`), `AAssetDir_*` — the
+    APK's assets as on Android;
+  - `AConfiguration_*` on a `ResTable_config`, `fromAssetManager` reading the
+    `AssetManager2`'s configuration;
+  - `ALooper_*`: an `ALooper*` is libutils' `Looper*`, as on Android, so the
+    main thread's `ALooper_forThread()` is the Java main Looper;
+    `ALooper_addFd`'s System V callback is wrapped in a `LooperCallback` that
+    sets the thread up for loaded code; `ALooper_pollOnce`/`pollAll`/`wake`/
+    `removeFd`/`acquire`/`release`;
+  - `ASensorManager_*`/`ASensorEventQueue_*`/`ASensor_*`: a device with no
+    sensors (an empty list, queues that never deliver);
+  - `ATrace_*`: no-ops, `isEnabled` false;
+  - `AStorageManager_*`: mounting OBBs is not supported (the callback gets
+    `AOBB_STATE_ERROR_INTERNAL` from another thread, as the platform's comes
+    from a binder thread); `AObbScanner_getObbInfo`/`AObbInfo_*` read the
+    file with androidfw's `ObbFile`;
+  - `ASharedMemory_create`/`getSize`/`setProt` over gesher-base's
+    `memfd_create`;
+  - `ANativeWindow_*` and `ANativeActivity_*`: stand-ins for the graphics
+    track (below).
+- **Unresolved data imports** no longer fail a load: the loader binds each to
+  its own slot in a reserved, inaccessible region and prints "data '...' is
+  not provided"; touching it is caught by a vectored handler that names the
+  symbol and aborts (like the stubs for missing functions).
 
 - **The JNI bridge** ([0015](decisions/0015-native-libs-jni-bridge.md),
   `compat/bionic/jni_bridge.cc`, linked into dalvikvm). ART's host
@@ -137,6 +212,10 @@ This is the native-libraries track; its decisions are
 5. libc++_shared and a C++ exception (`tests/native/libcxx_test.cpp`); a test
    APK under `lib/x86_64`, run through gesher-app in CI
    (`tests/apps/nativeapp`). **Done.**
+6. libandroid's non-graphics APIs and the shim's gaps (directories, the
+   `*at()` calls, sockets, poll/select, signals, time, `fscanf`, wide stdio,
+   the libc++ imports `std::filesystem` needs); the test APK's native code
+   uses them through gesher-app. **Done.**
 
 ## Building the test libraries
 
@@ -151,7 +230,8 @@ gesher-app.
 ## Status and next steps
 
 _Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` off `phase3/base`. Steps 1-5 are done and CI-verified; see
+`wip/native-libs` off `phase3/base`. Steps 1-6 are done and CI-verified
+(latest: ci `39987881014`, green on windows-2022 and windows-2025); see
 "After that" for what is left._
 
 ### Done and CI-verified
@@ -259,10 +339,51 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   `PathClassLoader`, the library loads `libc++_shared.so` from the same
   directory, catches a libc++ exception, and calls back into the Activity
   through C++'s `JNIEnv::CallIntMethod` (which uses the `va_list` form).
-- Roadmap: the "ELF loader" box (ci `39955700023`) and the
+- **Step 6 — libandroid and the shim's gaps.** `libandroid.cc`,
+  `posix_bionic.cc`, `socket_bionic.cc`, `signal_bionic.cc`,
+  `time_bionic.cc` and the stdio additions (see "Pieces"). `nativeapp.apk`
+  now carries `assets/hello.txt` (and `assets/data/inner.txt`), its library
+  links `-landroid -llog`, and the Activity's `onCreate` calls
+  `platformChecks(getAssets(), dataDir)`; one gesher-app run gives both
+  nativeapp lines. **ci `39987881014`, green on windows-2022 and
+  windows-2025** (all earlier lines still pass):
+  `PASS  native libs: gesher-app runs nativeapp.apk; libandroid assets/looper and libc sockets/readdir/std::filesystem/signals from the .so`.
+  It requires
+  `NativeActivity platform: asset=Hello from an asset, assets=hello.txt, config=ok, sensors=0, looper=ok, mainlooper=armed, socketpair=ok, tcp=ok, getaddrinfo=ok, readdir=a.txt/b.txt/sub, fscanf=ok, filesystem=ok, signals=ok, strftime=ok, sysconf=ok`
+  and `NativeActivity main looper: fd callback ran`, i.e.: the asset's
+  contents through `AAssetManager_fromJava`/`AAssetManager_open`
+  (`AASSET_MODE_BUFFER`, `getBuffer`, `seek`/`read`/`getRemainingLength`),
+  a missing asset giving `nullptr`, `AAssetManager_openDir("")` listing only
+  the regular file; `AConfiguration_fromAssetManager` and a setter/getter;
+  an empty sensor list; on the library's own thread `ALooper_prepare`, a pipe
+  with a callback and an eventfd with ident 7 on `ALooper_addFd`, both seen by
+  `ALooper_pollOnce` (fd, events, data), then `ALooper_wake` from a third
+  thread ending a 10 s poll with `ALOOPER_POLL_WAKE`; a pipe added to the main
+  thread's Looper (Java's), whose callback the Java message loop ran before the
+  message `onResume` posted; `socketpair` with `poll`, `select` (fortified
+  `FD_SET`), `send`/`recv`; TCP over loopback (`bind` to port 0,
+  `getsockname`, `SO_RCVTIMEO` round trip, `connect`, `accept`); numeric
+  `getaddrinfo` and `EAI_NONAME`; `readdir` names and `d_type`; `fscanf` and
+  `getline`; `std::filesystem` (`create_directories`, `ofstream`/`ifstream`,
+  `file_size`, `copy_file` (sendfile), `rename`, `recursive_directory_iterator`,
+  `canonical`, `current_path`, `remove_all` of 5 entries while a file in it is
+  still open); `SIGUSR1` with `SA_SIGINFO` through `raise`, a blocked
+  `SIGUSR2` from `kill` pending and delivered by `sigprocmask`, `SIG_IGN`;
+  `strftime` (`%Y-%m-%d %H:%M:%S %a %j %z %e|%k|%P`), `timegm`,
+  `localtime_r`/`mktime`; `sysconf(_SC_PAGESIZE)` and
+  `_SC_NPROCESSORS_ONLN`. With the new shim, `libc++_shared.so` loads with no
+  "not implemented (stubbed)" import at all (it had 26).
+  The first run of this check (ci `39987006747`) failed only on `remove_all`
+  (`ENOTEMPTY`: Windows' delete-pending names), which led to the POSIX
+  delete disposition and the share-delete `fopen`.
+- Roadmap: the "ELF loader" box (ci `39955700023`), the
   "`System.loadLibrary` of an app's NDK library from its APK's `lib/x86_64`,
-  with JNI calls both ways" box (ci `39981957010`) are ticked. The bionic box
-  is not: it names libandroid, which the shim does not have.
+  with JNI calls both ways" box (ci `39981957010`) and the bionic box
+  (libc, libm, libdl, liblog and libandroid's non-graphics APIs, ci
+  `39987881014`; `libc_test.so` covers libm, libdl and liblog, the app covers
+  libc and libandroid) are ticked. libandroid's graphics half
+  (`ANativeWindow`, `ANativeActivity`, `AChoreographer`, `AInputQueue`) is
+  the graphics track's, noted on the box.
 
 ### Not done / stand-ins in what exists
 
@@ -280,15 +401,49 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
   addresses. No linker namespaces: all app libraries share one global scope.
   `dlclose` (class loader unloading) runs fini functions but never unmaps.
-- **libc++ imports the shim still lacks** (they load as stubs that abort if
-  called; the tests do not reach them): `std::filesystem`'s (`opendir`,
-  `readdir`, `fdopendir`, `closedir`, `realpath`, `getcwd`, `chdir`,
-  `openat`, `unlinkat`, `symlink`, `link`, `readlink`, `truncate`,
-  `ftruncate`, `fchmod`, `fchmodat`, `utimensat`, `pathconf`, `statvfs`,
-  `sendfile`), wide stdio (`getwc`, `ungetwc`, `fputwc`, `swprintf`), and
-  `ioctl`. The loader prints one "not implemented (stubbed)" line per such
-  import when libc++_shared.so loads. Locales other than C/UTF-8 do not exist
-  (collation and `strftime_l` are the C locale's).
+- **libc++**: every import of the NDK's `libc++_shared.so` now resolves.
+  Locales other than C/UTF-8 do not exist (collation and `strftime_l` are the
+  C locale's). Symbolic links: `symlink` fails with `EPERM` and `readlink`
+  with `EINVAL` (gesher-base's), so `std::filesystem`'s symlink operations
+  report errors.
+- **Signals** (`signal_bionic.cc`) are the shim's own bookkeeping, since
+  Windows has none: a signal for the calling thread runs its handler before
+  `raise`/`kill`/`pthread_kill` returns; one for another thread (or blocked)
+  is pending and runs at that thread's next delivery point (lowering its
+  mask, `sigsuspend`/`pause`, and the shim's sleeps, `poll`, `select`,
+  `epoll_wait`, `ALooper_pollOnce`), so it cannot interrupt a thread busy or
+  blocked elsewhere. Not done: **synchronous signals from faults** (`SIGSEGV`,
+  `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGTRAP`) do not reach the `.so`'s handlers
+  (a crash reporter's): Windows exceptions in loaded code go to ART's fault
+  handling and the loader's diagnostics; the handler gets no machine context
+  (`ucontext` is zeroed); `alarm`/`setitimer` timers; `sigaltstack` is only
+  recorded; `kill` of other processes is `ESRCH`. A `SIG_DFL` that would
+  terminate does (`abort()` for the core-dumping signals).
+- **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
+  (unsupported; scanning works). Not provided at all (they bind to the
+  aborting stubs): `AChoreographer_*`, `AInputQueue_*`/`AInputEvent_*`,
+  `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
+  `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
+  `android_getaddrinfofornetwork` & co.
+- **The graphics track's half of libandroid.** `ANativeWindow_fromSurface`
+  returns `nullptr` and the other `ANativeWindow_*` calls fail with
+  `-EINVAL` (one message says so); `ANativeActivity_finish`/
+  `setWindowFormat`/`setWindowFlags`/`showSoftInput`/`hideSoftInput` are
+  dropped. What they need: an `ANativeWindow` is the
+  `struct ANativeWindow` of `<system/window.h>` behind an
+  `android.view.Surface`'s `mNativeObject`, so `fromSurface` must take the
+  real `JNIEnv` from `RealJniEnv`, read the Surface's native object and
+  `incStrong` it; `lock`/`unlockAndPost` fill and post an
+  `ANativeWindow_Buffer` (`width`, `height`, `stride`, `format`, `bits`); the
+  `.so` calls them all with the System V ABI, so they belong in this same
+  table (`AddBionicSymbol`). `ANativeActivity` needs
+  `android.app.NativeActivity`'s natives (`android_app_NativeActivity.cpp`:
+  `loadNativeCode` dlopens the app's library, which now comes back through
+  the ELF dlopen hook, then calls its `ANativeActivity_onCreate` — a System V
+  function, so through a stub like the JNI bridge's — with an
+  `ANativeActivity` whose `vm`/`env` must be the bridge's proxies and whose
+  `callbacks` the `.so` fills with System V function pointers that the
+  natives must call as such), plus `AInputQueue` and the window callbacks.
 - **The test APK** is built against the public SDK's `android.jar`
   (platform 36 r2), not Gesher's framework classes; its native code is API 26
   (emulated TLS) and its `libc++_shared.so` is the NDK's.
@@ -297,12 +452,15 @@ _Last updated 2026-10-23 by the native-libraries track; branch
   register-based `%fs` operand, partial writes of the base register) load as
   `int3` sites that abort with a message if reached; none occur in the test
   libraries.
-- Shim gaps (none needed by the tests): `opendir`/`readdir` (bionic's
-  `struct dirent` differs), sockets, `select`/`poll`, signals, `fork`/`exec`,
-  wide-char stdio, `getline`, `scanf`/`fscanf` from a `FILE*`,
-  `%Lf` in `scanf`, `strtold`, `localtime`/`strftime`, `getauxval`, and no
-  libandroid. Missing **function** imports load as stubs that print the name
-  and abort when called; missing **data** imports still fail the load.
+- Shim gaps left: `fork`/`exec*`/`posix_spawn`/`popen`/`system`, `getopt`,
+  `getpwnam`/`getpwuid`, `dl*` namespaces, `wordexp`/`glob`, `iconv`,
+  `strptime`, `wprintf`/`fwprintf`/`vfwprintf`/`fgetws`/`wscanf`,
+  wide-character `%ls` in `scanf`, and `__system_property_get` (every
+  property reads as ""). `fcntl` record locks always succeed (not modelled).
+  `environ` is the environment as the shim found it. Missing **function**
+  imports load as stubs that print the name and abort when called; missing
+  **data** imports load as inaccessible placeholders that name the symbol if
+  touched.
 - Threads ART creates (not through the shim's `pthread_create`) do not run
   bionic key destructors or `thread_local` destructors when they exit.
 - `__system_property_get` returns "" for everything; `__android_log_*` writes
@@ -311,11 +469,11 @@ _Last updated 2026-10-23 by the native-libraries track; branch
 
 ### After that (not started)
 
-- **libandroid** (`ANativeWindow`, `AAssetManager`, `ALooper`, ...), for the
-  roadmap's bionic box; `AAssetManager` over the framework's AssetManager is
-  what real apps need most often.
-- The libc++ imports listed above (`std::filesystem`, wide stdio) and the
-  other shim gaps, as real apps need them.
+- libandroid's graphics half with the graphics track (interface above), and
+  the remaining shim gaps as real apps need them.
+- Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
+  (crash reporters), chained with ART's fault handling; asynchronous delivery
+  to a running thread (suspend, redirect to a handler trampoline, resume).
 - Real-world APKs through gesher-app: the NDK samples (hello-jni,
   hello-libs), and C++ code registering natives from tables.
 - A correction to this file's earlier plan: JNI was not "System V on both
