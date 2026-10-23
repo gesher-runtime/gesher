@@ -169,14 +169,22 @@ public final class FontsTest {
   private static void styles() {
     Paint regular = paint(Typeface.DEFAULT);
     Paint bold = paint(Typeface.DEFAULT_BOLD);
-    float regularWidth = regular.measureText(LATIN);
-    float boldWidth = bold.measureText(LATIN);
+    // Without subpixel text the advances are whole pixels, which rounds Roboto's
+    // 400 and 700 instances of "Gesher" (100.7 and 102.5 px) to the same 102.
+    Paint regularSubpixel = paint(Typeface.DEFAULT);
+    Paint boldSubpixel = paint(Typeface.DEFAULT_BOLD);
+    regularSubpixel.setSubpixelText(true);
+    boldSubpixel.setSubpixelText(true);
+    float regularWidth = regularSubpixel.measureText(LATIN);
+    float boldWidth = boldSubpixel.measureText(LATIN);
     int regularDark = darkPixels(draw(regular, LATIN));
     int boldDark = darkPixels(draw(bold, LATIN));
     check(boldWidth > regularWidth + 1 && boldDark > regularDark * 1.15,
         "bold differs from regular (width " + boldWidth + " > " + regularWidth + ", "
             + boldDark + " > " + regularDark + " dark pixels)");
-    float createdBold = paint(Typeface.create(Typeface.DEFAULT, Typeface.BOLD)).measureText(LATIN);
+    Paint createdBoldPaint = paint(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+    createdBoldPaint.setSubpixelText(true);
+    float createdBold = createdBoldPaint.measureText(LATIN);
     check(Math.abs(createdBold - boldWidth) < 0.01f,
         "Typeface.create(DEFAULT, BOLD) is DEFAULT_BOLD's face (" + createdBold + ")");
 
@@ -209,9 +217,10 @@ public final class FontsTest {
     if (notoSerif != null) {
       float serif = paint(Typeface.SERIF).measureText(LATIN);
       float serifAlone = paint(notoSerif).measureText(LATIN);
-      check(Math.abs(serif - serifAlone) < 0.05f && Math.abs(serif - regularWidth) > 1,
-          "serif is Noto Serif (" + serif + " = " + serifAlone + ", sans-serif " + regularWidth
-              + ")");
+      check(Math.abs(serif - serifAlone) < 0.05f
+              && Math.abs(serif - regular.measureText(LATIN)) > 1,
+          "serif is Noto Serif (" + serif + " = " + serifAlone + ", sans-serif "
+              + regular.measureText(LATIN) + ")");
     }
   }
 
