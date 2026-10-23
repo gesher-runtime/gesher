@@ -101,7 +101,14 @@ class Cls:
         return m.group(0) if m else ''
 
     def superclass(self):
-        m = re.search(r'\bextends\s+([\w.]+)', self.header)
+        # `extends` bounds inside type parameters are not the superclass.
+        header = self.header
+        while True:
+            stripped = re.sub(r'<[^<>]*>', '', header)
+            if stripped == header:
+                break
+            header = stripped
+        m = re.search(r'\bextends\s+([\w.]+)', header)
         return m.group(1) if m and self.kind == 'class' else None
 
 
@@ -275,7 +282,8 @@ def emit_class(cls, known, indent, outer_kind=None):
     # A constructor for subclasses among the stubs, which call it.
     if cls.kind == 'class':
         sup = super_call(cls, known)
-        lines.append(f'{body}{cls.simple}(gesher.stubs.Marker m) {{ {sup}{STUB} }}')
+        # protected: subclasses in other packages call it too.
+        lines.append(f'{body}protected {cls.simple}(gesher.stubs.Marker m) {{ {sup}{STUB} }}')
     lines.append(f'{pad}}}')
     return lines
 

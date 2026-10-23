@@ -43,19 +43,28 @@ class Plan:
         self.include_dirs = set()  # directories generators search: checked out whole
         self.plugins = set()       # annotation processors the bundled libraries run
         self.jarjar = {}           # library -> its jarjar rules file (sources renamed)
+        self.jarjar_root = None    # the built library's own rules (the whole jar renamed)
         self.lib_files = {}        # library -> the Java files its srcs add
         self.lib_tasks = {}        # library -> the generation tasks its srcs add
         self.lib_static = {}       # library -> its static_libs
+        # Compile-only sources and generation tasks by class path position:
+        # where two define one class, the earlier wins, as on javac's class
+        # path (a module's `defaults` libs first, then its own, in order).
+        self.order = {}
 
     def add_java(self, path, bundle):
         self.needed.add(path)
         (self.bundle if bundle else self.compile).add(path)
+        if not bundle:
+            self.order.setdefault(path, len(self.order))
 
     def task(self, kind, key, bundle, **args):
         t = self.tasks.get(key)
         if t is None:
             t = self.tasks[key] = Task(kind, key, **args)
         t.bundle = t.bundle or bundle
+        if not bundle:
+            self.order.setdefault(key, len(self.order))
         return t
 
 
@@ -64,6 +73,8 @@ class Plan:
 COMBINED_STUBS = {
     'framework-updatable-stubs-module_libs_api': 'frameworks-base-api',
 }
+# frameworks/base's list of api.go's non_updatable_modules (as .impl libraries).
+NON_UPDATABLE_IMPLS = 'framework-non-updatable-unbundled-impl-libs'
 # Already on the class path: libcore's, ICU's and Conscrypt's boot jars.
 CORE_APIS = {'art.module.public.api', 'i18n.module.public.api'}
 # The core platform API of boot jars Gesher does not build yet, which
@@ -103,6 +114,8 @@ class Planner:
             t = self.plan.task('api-stubs', 'api-stubs', False, files=[])
             t.args['files'] += [f for f in files if f not in t.args['files']]
             self.plan.needed.update(files)
+            # Its position is the first library's that adds stubs.
+            self.plan.order.pop('api-stubs', None)
         for lib in CORE_PLATFORM_LIBRARIES:
             self.library(lib, False, 'core_platform')
 
@@ -135,6 +148,17 @@ class Planner:
             self.sysprop(mod, props, bundle)
         elif mod.type == 'aidl_interface':
             self.aidl_interface(mod, props, None, bundle, name)
+        elif mod.type == 'java_genrule':
+            # A genrule's jar as a static library: only the mime map
+            # resources are packaged this way (build.py's gen_mimemap_res
+            # reproduces its minimizing genrule chain).
+            if name == 'mimemap-res.jar':
+                self.plan.task('mimemap-res', 'mimemap-res', bundle)
+                self.plan.needed.update(['external/mime-support/mime.types',
+                                         'frameworks/base/mime/java-res/android.mime.types',
+                                         'frameworks/base/mime/java-res/vendor.mime.types'])
+            else:
+                self.plan.unsupported[f'library type {mod.type} ({name})'].add(referrer)
         elif mod.type in ('java_defaults',):
             pass
         else:
@@ -143,9 +167,16 @@ class Planner:
     def generated_library(self, name, bundle, referrer):
         """Libraries Soong derives from other modules."""
         if name in COMBINED_STUBS:
+            # The *updatable* modules' stubs: api.go leaves out its
+            # non_updatable_modules, which the framework compiles against as
+            # implementations (NON_UPDATABLE_IMPLS lists them the same).
+            non_updatable = set()
+            impls = self.modules.get(NON_UPDATABLE_IMPLS)
+            for lib in as_list(self.modules.merged(impls).get('static_libs')) if impls else []:
+                non_updatable.add(lib[:-len('.impl')] if lib.endswith('.impl') else lib)
             api = self.modules.get(COMBINED_STUBS[name])
             for lib in as_list(api.props.get('bootclasspath')) if api else []:
-                if lib not in CORE_APIS:
+                if lib not in CORE_APIS and lib not in non_updatable:
                     self.sdk_library_stubs(lib, referrer)
             return True
         m = SDK_LIBRARY_VARIANT.match(name)
@@ -207,6 +238,13 @@ class Planner:
             aidl_flags.append('--transaction_names')
         self.plan.include_dirs.update(includes)
         ctx = Context(mod, props, bundle, includes, aidl_flags)
+        # The built module's `libs` are its class path, in order: they rank
+        # before anything its sources reach (an AIDL interface's
+        # additional_libs, say). Other libraries' own sources rank first.
+        is_root = mod.name == self.root
+        if is_root:
+            for dep in as_list(props.get('libs')):
+                self.library(dep, False, mod.name)
         excluded = set(self.expand(ctx, as_list(props.get('exclude_srcs')), collect=False))
         for item in self.expand(ctx, as_list(props.get('srcs')) + as_list(props.get('device_common_srcs'))):
             if item not in excluded:
@@ -216,20 +254,26 @@ class Planner:
             self.plan.plugins.update(as_list(props.get('plugins')))
         self.plan.lib_files[mod.name] = ctx.files
         self.plan.lib_tasks[mod.name] = ctx.tasks
-        self.plan.lib_static[mod.name] = as_list(props.get('static_libs'))
+        self.plan.lib_static[mod.name] = as_list(props.get('static_libs')) + ctx.static
         # A static library's jarjar rules rename it before its dependents
-        # compile against it; the library being built applies its own to the
-        # finished jar.
+        # compile against it; the library being built applies its own to
+        # everything bundled, as jarjar on the finished jar would.
         rules = props.get('jarjar_rules')
-        if rules and bundle and mod.name != self.root:
+        if rules and bundle:
             path = self.expand(ctx, [rules], collect=False)
             if path:
-                self.plan.jarjar[mod.name] = path[0]
+                if mod.name == self.root:
+                    self.plan.jarjar_root = path[0]
+                else:
+                    self.plan.jarjar[mod.name] = path[0]
                 self.plan.needed.add(path[0])
+        # `libs` before static libraries: a static library's own `libs` are
+        # not this module's class path (they only rank after it).
+        if not is_root:
+            for dep in as_list(props.get('libs')):
+                self.library(dep, False, mod.name)
         for dep in as_list(props.get('static_libs')):
             self.library(dep, bundle, mod.name)
-        for dep in as_list(props.get('libs')):
-            self.library(dep, False, mod.name)
 
     def exported_aidl_includes(self, name, seen=None):
         seen = seen or set()
@@ -270,11 +314,13 @@ class Planner:
             t = self.plan.task('aidl', f'aidl:{ctx.mod.name}', ctx.bundle,
                                files=[], flags=ctx.aidl_flags)
             t.args['files'].append(path)
+            ctx.tasks.add(t.key)
             self.plan.aidl_includes[t.key].update(ctx.includes)
             self.plan.needed.add(path)
         elif ext == 'logtags':
             t = self.plan.task('logtags', f'logtags:{ctx.mod.name}', ctx.bundle, files=[])
             t.args['files'].append(path)
+            ctx.tasks.add(t.key)
             self.plan.needed.add(path)
         elif ext == 'proto':
             proto = ctx.props.get('proto') or {}
@@ -282,6 +328,9 @@ class Planner:
             runtime = PROTO_RUNTIMES.get(proto.get('type') or 'lite')
             if runtime and not proto.get('plugin'):
                 self.library(runtime, ctx.bundle, ctx.mod.name)
+                # The runtime is linked in like a static library: a module
+                # with jarjar rules renames its copy of it too.
+                ctx.static.append(runtime)
             t = self.plan.task('proto', f'proto:{ctx.mod.name}', ctx.bundle, files=[],
                                type=proto.get('type', 'lite'),
                                includes=[norm(f'{ctx.mod.dir}/{d}') for d in as_list(proto.get('local_include_dirs'))]
@@ -342,6 +391,7 @@ class Planner:
                                  'systemfeatures/SystemFeaturesGenerator.kt')
         elif mod.type in JAVA_LIB_TYPES:
             self.library(name, ctx.bundle, ctx.mod.name)
+            ctx.static.append(name)
         else:
             self.plan.unsupported[f'{mod.type} {name}'].add(ctx.mod.name)
         return []
@@ -513,3 +563,4 @@ class Context:
         self.includes, self.aidl_flags = includes, aidl_flags
         self.tasks = tasks if tasks is not None else set()  # generation tasks of its srcs
         self.files = files if files is not None else set()  # Java files of its srcs
+        self.static = []  # libraries its srcs link in (proto runtimes)
