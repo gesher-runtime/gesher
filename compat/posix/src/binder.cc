@@ -300,6 +300,46 @@ void CloseThreadPipe(BinderFile* file) {
 
 // --- ioctls ---------------------------------------------------------------------------
 
+// File descriptors in transactions (BINDER_TYPE_FD). The kernel installs a
+// new fd for the same open file in the receiver. Here the sender puts the
+// fd's Windows handle in the object (its 64-bit pad_binder, which shares the
+// fd's union), binderd duplicates it into the receiving process
+// (DuplicateHandle), and the receiver wraps the duplicate in a new fd. Only
+// fds backed by a Windows handle (files, memfds, pipes) travel; any other
+// goes as handle 0, which binderd refuses (BR_FAILED_REPLY).
+template <typename F>
+void ForEachFdObject(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size,
+                     F f) {
+  const uint8_t* offs = static_cast<const uint8_t*>(offsets);
+  for (size_t i = 0; i + sizeof(binder_size_t) <= offsets_size; i += sizeof(binder_size_t)) {
+    binder_size_t off;
+    memcpy(&off, offs + i, sizeof(off));
+    if (off > data_size || data_size - off < sizeof(binder_fd_object)) continue;
+    binder_fd_object obj;
+    memcpy(&obj, data + off, sizeof(obj));
+    if (obj.hdr.type != BINDER_TYPE_FD) continue;
+    f(obj);
+    memcpy(data + off, &obj, sizeof(obj));
+  }
+}
+
+void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
+  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+    intptr_t h = _get_osfhandle(static_cast<int>(obj.fd));
+    obj.pad_binder = h == -1 || h == -2 ? 0 : static_cast<binder_uintptr_t>(h);
+  });
+}
+
+void ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
+  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+    HANDLE h = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
+    int fd = _open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_BINARY);
+    if (fd < 0) CloseHandle(h);
+    obj.pad_binder = 0;
+    obj.fd = static_cast<__u32>(fd);
+  });
+}
+
 bool IsTransactionCommand(uint32_t cmd) {
   return cmd == BC_TRANSACTION || cmd == BC_REPLY || cmd == BC_TRANSACTION_SG ||
          cmd == BC_REPLY_SG;
@@ -338,7 +378,11 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       tr.data.ptr.offsets = 0;
       m.Put(tr);
       if (size > sizeof(tr)) m.Write(arg + sizeof(tr), size - sizeof(tr));  // buffers_size
-      if (tr.data_size > 0) m.Write(data, tr.data_size);
+      if (tr.data_size > 0) {
+        size_t at = m.bytes.size();
+        m.Write(data, tr.data_size);
+        SendFds(m.bytes.data() + at, tr.data_size, offsets, tr.offsets_size);
+      }
       if (tr.offsets_size > 0) m.Write(offsets, tr.offsets_size);
     } else if (cmd == BC_FREE_BUFFER) {
       binder_uintptr_t ptr;
@@ -382,6 +426,7 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       if (!r.Read(block, data_size) || !r.Read(block + aligned, tr.offsets_size)) {
         return errno = EBADF, -1;
       }
+      ReceiveFds(block, data_size, block + aligned, tr.offsets_size);
       tr.data.ptr.buffer = reinterpret_cast<binder_uintptr_t>(block);
       tr.data.ptr.offsets = reinterpret_cast<binder_uintptr_t>(block + aligned);
       memcpy(rbase + rpos + 4, &tr, sizeof(tr));

@@ -53,6 +53,10 @@ int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
+// services_natives.cc: the app process attached to a system server.
+int register_gesher_ApplicationSharedMemory(JNIEnv* env);
+int register_gesher_ClassLoaderFactory(JNIEnv* env);
+int register_gesher_ActivityThread(JNIEnv* env);
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -391,6 +395,11 @@ static const struct {
      register_android_graphics_ColorSpace},
     {"gesher_hwui_standins", "android/graphics/RenderNode", ::register_gesher_hwui_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
+    {"gesher_ApplicationSharedMemory", "com/android/internal/os/ApplicationSharedMemory",
+     register_gesher_ApplicationSharedMemory},
+    {"gesher_ClassLoaderFactory", "com/android/internal/os/ClassLoaderFactory",
+     register_gesher_ClassLoaderFactory},
+    {"gesher_ActivityThread", "android/app/ActivityThread", register_gesher_ActivityThread},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
