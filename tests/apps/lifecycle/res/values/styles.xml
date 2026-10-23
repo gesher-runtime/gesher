@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Its parent comes from framework-res.apk, so its attributes show the framework's
+         resources were loaded too. -->
+    <style name="LifecycleTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="gesherMarker">from-theme</item>
+    </style>
+</resources>

@@ -73,9 +73,13 @@ target_include_directories(framework_runtime PRIVATE
 # AndroidCharacter uses ICU4C directly, as the platform build does.
 target_link_libraries(framework_runtime PUBLIC androidfw nativehelper utils cutils log base
   icu_headers icuuc)
-# Android.bp's libandroid_runtime warning set.
+# Android.bp's libandroid_runtime warning set, plus what -Wextra and C++20
+# add that Soong's global flags do not report: a deprecated implicit copy
+# (utils/TypeHelpers.h), anonymous enum arithmetic (ResourceTypes.h), and an
+# override without `override` (ApkAssets).
 target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
-  -Wno-unused-parameter -Wno-non-virtual-dtor -Wno-deprecated-anon-enum-enum-conversion)
+  -Wno-unused-parameter -Wno-non-virtual-dtor -Wno-deprecated-anon-enum-enum-conversion
+  -Wno-deprecated-copy -Wno-inconsistent-missing-override)
 # utils/Trace.h includes cutils/trace.h and so C's <stdatomic.h>; libc++
 # allows it next to <atomic> only from C++23 on (bionic's allows it always).
 set_target_properties(framework_runtime PROPERTIES CXX_STANDARD 23)

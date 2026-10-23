@@ -1,0 +1,383 @@
+name: framework
+
+# framework.jar's pipeline on its own: the host tools (cached), the boot
+# class path as javac's java.base (the "coremod"), framework-res, and
+# tools/framework/build.py's generators and javac.
+#
+#   gh workflow run framework --ref <branch> [-f javac-memory=10g]
+#
+# ci.yml calls this workflow too. Every input is cached, so a run after a
+# tools/framework change goes straight to the build. Caches are per branch
+# (plus main's): the first run on a new branch builds the host tools.
+on:
+  # Pushes to the framework branches that touch its inputs run it too.
+  push:
+    branches: ['phase2/**', 'wip/ci-framework']
+    paths:
+      - 'tools/framework/**'
+      - 'tools/gen/**'
+      - 'tools/host/**'
+      - 'tools/host-tools-ci.cmake'
+      - 'tools/build-boot-jars.sh'
+      - 'tools/build-framework-res.sh'
+      - 'tools/make-coremod.sh'
+      - 'tools/sparse-bp.sh'
+      - 'tools/fetch-aosp.sh'
+      - 'aosp.lock'
+      - 'patches/**'
+      - '.github/workflows/framework.yml'
+  workflow_dispatch:
+    inputs:
+      javac-memory:
+        description: javac's heap (-J-Xmx)
+        default: 10g
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read  # to find the host tools another branch built
+
+# A newer push to a branch supersedes its running framework build.
+concurrency:
+  # github.workflow is the caller's ("ci") when ci.yml runs this one.
+  group: ${{ github.workflow }}-framework-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # aidl, hidl-gen, protoc and its Java plugins, stats-log-api-gen,
+  # expresscatalog-codegen, sysprop_java: tools/host, built natively for the
+  # Linux build host from the pinned AOSP sources.
+  host-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keyed on what the tools are built from: tools/host, the blueprint
+      # reader its bp_srcs.py uses, and the aosp.lock lines and patches of
+      # the projects it compiles.
+      - name: Host tools' sources
+        id: key
+        run: |
+          projects='tag|system/(libbase|logging|core|libhwbinder)|system/tools/(aidl|hidl|sysprop)'
+          projects+='|external/(googletest|abseil-cpp|protobuf|gflags|jsoncpp|libtextclassifier|fmtlib)'
+          projects+='|frameworks/(proto_logging|base)'
+          lines=$(grep -E "^($projects)(\s|$)" aosp.lock)
+          echo "$lines"
+          lock=$(echo "$lines" | sha256sum | cut -c1-16)
+          # v: the build recipe below (compiler, flags); bump it when it changes.
+          echo "key=host-tools-v1-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache host tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: dist-host
+          key: ${{ steps.key.outputs.key }}
+
+      # Caches are per branch; artifacts are not. A build of the same key
+      # on any branch is reused (each build uploads one, named by its key).
+      - name: Reuse another branch's build
+        id: reuse
+        if: steps.tools.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ steps.key.outputs.key }}
+        run: |
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$KEY&per_page=10" \
+            --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty' || true)
+          if [[ -n $run ]] && gh run download "$run" -R "$GITHUB_REPOSITORY" -n "$KEY" -D dist-host; then
+            find dist-host -type f -exec chmod +x {} +
+            echo "reused the host tools of run $run"
+            ls -la dist-host dist-host/protobuf
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            rm -rf dist-host
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache AOSP sources
+        if: steps.reuse.outputs.build == 'true'
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Fetch AOSP sources
+        if: steps.reuse.outputs.build == 'true'
+        run: tools/fetch-aosp.sh
+
+      - name: Install build tools
+        if: steps.reuse.outputs.build == 'true'
+        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+
+      # Restored and saved separately, so a failed build keeps its objects.
+      - name: Restore compiler output
+        if: steps.reuse.outputs.build == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-host-tools-${{ github.run_id }}
+          restore-keys: ccache-host-tools-
+
+      - name: Build
+        if: steps.reuse.outputs.build == 'true'
+        run: |
+          ccache --set-config=max_size=1G
+          # clang and libc++, as Soong builds them: AOSP host sources use
+          # clang-only builtins (__builtin_available) gcc rejects, and rely on
+          # libc++'s transitive includes (libpropertyinfoserializer's
+          # std::find_if and strcpy). -O1: build time over speed.
+          cmake -S tools/host -B out/host -G Ninja -DAOSP_DIR="$PWD/third_party/aosp" \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++" -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++" \
+            -DCMAKE_PROJECT_gesher_host_tools_INCLUDE="$PWD/tools/host-tools-ci.cmake"
+          ninja -C out/host -k 0
+          ccache --show-stats | head -5
+          mkdir -p dist-host/protobuf
+          cp out/host/aidl out/host/hidl-gen out/host/stats-log-api-gen \
+             out/host/sysprop_java out/host/expresscatalog-codegen \
+             out/host/protoc-gen-javanano out/host/protoc-gen-javastream dist-host/
+          cp out/host/protobuf/protoc dist-host/protobuf/
+          ls -la dist-host dist-host/protobuf
+
+      - name: Save compiler output
+        if: always() && steps.reuse.outputs.build == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-host-tools-${{ github.run_id }}
+
+      - name: Smoke-test the tools
+        if: steps.reuse.outputs.build == 'true'
+        run: |
+          ls -la dist-host dist-host/protobuf
+          dist-host/protobuf/protoc --version
+
+      - name: Publish the build for other branches
+        if: steps.reuse.outputs.build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.key.outputs.key }}
+          path: dist-host/
+          retention-days: 90
+
+  framework:
+    needs: host-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache keys
+        run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
+
+      - name: Restore host tools
+        uses: actions/cache/restore@v4
+        with:
+          path: dist-host
+          key: ${{ needs.host-tools.outputs.key }}
+          fail-on-cache-miss: true
+
+      # The tools are linked against libc++, as Soong links them.
+      - name: Install the host tools' runtime
+        run: |
+          sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
+          missing=$(for t in $(find dist-host -type f); do ldd "$t" | sed -n "s|^|$t: |; /not found/p"; done)
+          if [[ -n $missing ]]; then echo "$missing"; echo "::error::host tools miss shared libraries"; exit 1; fi
+          dist-host/protobuf/protoc --version
+
+      # build.py --checkout widens the sparse sets to the files the plan
+      # needs (blobless clones fetch them then). The tree is saved again,
+      # under a key naming its sparse sets, only when that widened it.
+      - name: Restore AOSP sources
+        id: aosp
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/aosp
+          key: ${{ env.AOSP_KEY }}-
+          restore-keys: |
+            ${{ env.AOSP_KEY }}-
+            aosp-framework-
+            aosp-
+
+      - name: Fetch AOSP sources
+        run: |
+          tools/fetch-aosp.sh
+          tools/sparse-bp.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Restored and saved apart (actions/cache saves only when the whole
+      # job passes, and the javac step may still fail): each is saved right
+      # after it is built.
+      - name: Restore the framework's JVM tools (kotlinc, JavaPoet, Guava)
+        id: jvm
+        uses: actions/cache/restore@v4
+        with:
+          path: out/framework/jvm-tools
+          key: framework-jvm-tools-kotlin-2.1.21
+
+      - name: Restore the coremod
+        id: coremod
+        uses: actions/cache/restore@v4
+        with:
+          path: out/coremod
+          key: coremod-${{ hashFiles('tools/build-boot-jars.sh', 'tools/make-coremod.sh', 'tools/gen/**', 'config/aconfig/**', 'java/compile-stubs/**', 'aosp.lock', 'patches/libcore/**', 'patches/external/icu/**') }}
+
+      - name: Build the coremod (boot class path classes as java.base)
+        if: steps.coremod.outputs.cache-hit != 'true'
+        run: |
+          WORK_DIR="$PWD/work/boot" tools/build-boot-jars.sh out/boot-jars
+          tools/make-coremod.sh work/boot out/coremod
+
+      - name: Save the coremod
+        if: steps.coremod.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/coremod
+          key: ${{ steps.coremod.outputs.cache-primary-key }}
+
+      - name: Restore framework-res
+        id: res
+        uses: actions/cache/restore@v4
+        with:
+          path: out/framework-res
+          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
+
+      # aapt2 for framework-res and lifecycle.apk, from Google's build-tools, where
+      # tools/build-framework-res.sh looks for it (WORK_DIR); fetched here,
+      # with retries, as dl.google.com fails now and then.
+      - name: Restore build-tools
+        id: bt
+        uses: actions/cache/restore@v4
+        with:
+          path: work/build-tools-36.1
+          key: build-tools-36.1-linux
+
+      - name: Fetch build-tools
+        if: steps.bt.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p work
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o work/build-tools.zip \
+            https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          rm -rf work/build-tools.tmp && mkdir work/build-tools.tmp
+          python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' \
+            work/build-tools.zip work/build-tools.tmp
+          chmod +x work/build-tools.tmp/*/aapt2 work/build-tools.tmp/*/aidl
+          mv work/build-tools.tmp/* work/build-tools-36.1 && rmdir work/build-tools.tmp
+          rm work/build-tools.zip
+
+      - name: Save build-tools
+        if: steps.bt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: work/build-tools-36.1
+          key: build-tools-36.1-linux
+
+      - name: Build framework-res (R.java, framework-res.apk)
+        if: steps.res.outputs.cache-hit != 'true'
+        run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res > framework-res.log 2>&1 || { tail -50 framework-res.log; exit 1; }
+
+      - name: Save framework-res
+        if: steps.res.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/framework-res
+          key: ${{ steps.res.outputs.cache-primary-key }}
+
+      - name: Build the framework (generators + javac)
+        run: |
+          set +e
+          python3 tools/framework/build.py --aosp third_party/aosp --out out/framework \
+            --core-classes out/coremod --aidl "$PWD/dist-host/aidl" \
+            --host-tools "$PWD/dist-host" \
+            --framework-res-java out/framework-res/framework-res-java \
+            --checkout --javac-memory "${{ inputs.javac-memory || '10g' }}" --show 20 \
+            2>&1 | grep -v '^warning:' | tee build-framework.log
+          code=${PIPESTATUS[0]}
+          javac=$(grep -E '^javac exit ' build-framework.log | tail -1)
+          {
+            echo "### framework build"
+            echo
+            echo "**${javac:-javac not reached (build.py exit $code)}**"
+            echo
+            echo '```'
+            grep -E '^(plan:|generated:|sources left out:|javac:|javac exit)' build-framework.log
+            grep -E '^  (unsupported|skipped)' build-framework.log
+            sed -n '/^javac exit /,$p' build-framework.log | sed -n '2,16p'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z $javac ]]; then
+            echo "::error::build.py failed before javac (exit $code)"
+            exit 1
+          fi
+          errors=$(sed -E 's/^javac exit (-?[0-9]+), ([0-9]+) errors.*/\2/' <<<"$javac")
+          jcode=$(sed -E 's/^javac exit (-?[0-9]+),.*/\1/' <<<"$javac")
+          if [[ $jcode != 0 ]]; then
+            echo "::error::javac: $errors errors (exit $jcode); see the step summary and the framework-logs artifact (javac.log)"
+            exit 1
+          fi
+          echo "::notice::javac: no errors"
+
+      # gesher-app's driver and its test APK compile against the framework's
+      # classes, so they are built here, next to them.
+      - name: Build gesher-app and lifecycle.apk
+        run: |
+          app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+
+      - name: Collect framework artifacts
+        run: |
+          mkdir -p dist-framework
+          cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
+          cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
+            out/app/lifecycle.apk dist-framework/
+          ls -la dist-framework
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework
+          path: dist-framework/
+
+      - name: Save the framework's JVM tools
+        if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: out/framework/jvm-tools
+          key: ${{ steps.jvm.outputs.cache-primary-key }}
+
+      - name: Sparse sets after the build
+        if: always()
+        id: after
+        run: echo "sparse=$(tools/sparse-bp.sh --hash)" >> "$GITHUB_OUTPUT"
+
+      - name: Save AOSP sources
+        if: always() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/aosp
+          key: ${{ env.AOSP_KEY }}-${{ steps.after.outputs.sparse }}
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-logs
+          path: |
+            build-framework.log
+            framework-res.log
+            out/framework/javac.log
+            out/framework/*.sources.txt
+          if-no-files-found: ignore

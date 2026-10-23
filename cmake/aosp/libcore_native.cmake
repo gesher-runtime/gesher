@@ -85,10 +85,9 @@ set_source_files_properties("${_lc}/luni/src/main/native/Register.cpp" PROPERTIE
 
 # --- libopenjdk -------------------------------------------------------------
 libcore_bp_files(_openjdk_srcs libopenjdk_native_srcs)
-# epoll and inotify have no Windows equivalent yet; UNIXProcess starts
-# processes with vfork.
+# inotify has no Windows equivalent yet; UNIXProcess starts processes with
+# vfork. (epoll is gesher-base's, over its file descriptors.)
 set(GESHER_OPENJDK_UNPORTED
-  ojluni/src/main/native/EPoll.c
   ojluni/src/main/native/LinuxWatchService.c
   ojluni/src/main/native/UNIXProcess_md.c
   CACHE STRING "libopenjdk native sources not built yet")

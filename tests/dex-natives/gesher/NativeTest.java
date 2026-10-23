@@ -104,6 +104,9 @@ public final class NativeTest {
     Process.setArgV0("gesher-native-test");
     check(Process.getThreadPriority(0) == 0, "getThreadPriority");
     check(Process.getElapsedCpuTime() >= 0, "getElapsedCpuTime");
+    Process.setThreadGroup(0, Process.THREAD_GROUP_DEFAULT);
+    check(Process.getProcessGroup(0) == Process.THREAD_GROUP_DEFAULT, "getProcessGroup");
+    check(Process.getUidForName("root") == -1, "getUidForName");
     check(new Activity().getDlWarning() == null, "getDlWarning is null");
 
     // The @CriticalNative ABI canary: a System V / Microsoft mismatch in how

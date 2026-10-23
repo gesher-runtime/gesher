@@ -16,6 +16,19 @@ void JNI_OnUnload_icu_jni(JavaVM* vm, void* reserved);
 jint JNI_OnLoad_javacore(JavaVM* vm, void* reserved);
 void JNI_OnUnload_javacore(JavaVM* vm, void* reserved);
 jint JNI_OnLoad_openjdk(JavaVM* vm, void* reserved);
+
+// EPoll.c's and EPollPort.c's natives, found by name.
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_eventSize(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_eventsOffset(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_dataOffset(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_epollCreate(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_epollCtl(JNIEnv*, jclass, jint, jint, jint, jint);
+JNIEXPORT jint JNICALL Java_sun_nio_ch_EPoll_epollWait(JNIEnv*, jclass, jint, jlong, jint);
+JNIEXPORT void JNICALL Java_sun_nio_ch_EPoll_close0(JNIEnv*, jclass, jint);
+JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_socketpair(JNIEnv*, jclass, jintArray);
+JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_interrupt(JNIEnv*, jclass, jint);
+JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_drain1(JNIEnv*, jclass, jint);
+JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_close0(JNIEnv*, jclass, jint);
 }
 
 namespace {
@@ -32,6 +45,21 @@ const gesher_builtin_symbol kJavacore[] = {
 
 const gesher_builtin_symbol kOpenjdk[] = {
     {"JNI_OnLoad", reinterpret_cast<void*>(&JNI_OnLoad_openjdk)},
+    {"Java_sun_nio_ch_EPoll_eventSize", reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_eventSize)},
+    {"Java_sun_nio_ch_EPoll_eventsOffset",
+     reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_eventsOffset)},
+    {"Java_sun_nio_ch_EPoll_dataOffset", reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_dataOffset)},
+    {"Java_sun_nio_ch_EPoll_epollCreate",
+     reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_epollCreate)},
+    {"Java_sun_nio_ch_EPoll_epollCtl", reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_epollCtl)},
+    {"Java_sun_nio_ch_EPoll_epollWait", reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_epollWait)},
+    {"Java_sun_nio_ch_EPoll_close0", reinterpret_cast<void*>(&Java_sun_nio_ch_EPoll_close0)},
+    {"Java_sun_nio_ch_EPollPort_socketpair",
+     reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_socketpair)},
+    {"Java_sun_nio_ch_EPollPort_interrupt",
+     reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_interrupt)},
+    {"Java_sun_nio_ch_EPollPort_drain1", reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_drain1)},
+    {"Java_sun_nio_ch_EPollPort_close0", reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_close0)},
 };
 
 const bool registered = [] {
