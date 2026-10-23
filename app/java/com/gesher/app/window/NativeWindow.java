@@ -46,6 +46,15 @@ public final class NativeWindow implements AutoCloseable {
     return nGetFramesPresented(ptr());
   }
 
+  /**
+   * Presents what was last drawn into the Surface's buffer without
+   * lockCanvas/unlockCanvasAndPost: hwui's CPU renderer (HardwareRenderer)
+   * draws into the buffer in place and does not queue it.
+   */
+  public void present() {
+    nPresent(ptr());
+  }
+
   /** The window's HWND. */
   public long getHwnd() {
     return nGetHwnd(ptr());
@@ -89,5 +98,6 @@ public final class NativeWindow implements AutoCloseable {
   private static native int nGetHeight(long ptr);
   private static native long nGetFramesPresented(long ptr);
   private static native long nGetHwnd(long ptr);
+  private static native void nPresent(long ptr);
   private static native int[] nCapture(long ptr, boolean print);
 }
