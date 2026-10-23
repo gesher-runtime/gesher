@@ -74,3 +74,32 @@ starts, and a growable per-thread DTV is left for when that stops being true.
 - Depends on Windows preserving the user `%fs` base across scheduling, which
   the probe asserts on every CI run, so a regression (an older image, a
   different CPU) is caught as a test failure, not a silent corruption.
+
+## Finding (2026-10-23) — WRFSBASE did not hold on the CI runners
+
+The first probe run (CI `39942420552`, both `windows-2022` and `windows-2025`)
+showed **`WRFSBASE` does not give a usable `%fs` on these runners**: the probe
+took an access violation on a `%fs` memory load that followed a kernel
+transition, i.e. `CR4.FSGSBASE` is on and `WRFSBASE` executes, but the base is
+**not preserved** (Windows appears to reset the user `%fs` base, so the next
+`%fs`-relative access reads near-null). The step-1 ELF loader still **passed**
+on both runners, because `trivial.so` touches no `%fs`.
+
+Consequence: the primary decision above **cannot be relied on as-is**. The
+`fsbase` probe has been made crash-safe and now reports a precise verdict
+(checking the base with `RDFSBASE`, which touches no memory), and the track
+check is **informational** so the loader's step-1 result is not blocked by it.
+Before any `%fs`-using `.so` runs (anything with `-fstack-protector` or
+`thread_local`, which includes libc++_shared), the next session must either:
+
+1. confirm, with the revised probe, whether re-asserting `WRFSBASE` right
+   before entering `.so` code (and after every return from a Windows call that
+   could have reset it) is enough — fragile, and racy against preemption; or
+2. implement the **fallback**: patch the `.so`'s `%fs` accesses at load time
+   (rewrite the `0x64` segment-prefixed instructions to reach the per-thread
+   block another way), the way ART's `%gs` loads were handled
+   ([0006](0006-managed-abi.md)); or
+3. find another mechanism (e.g. a thread that keeps re-arming the base, or an
+   OS/driver-assisted base set).
+
+This is the track's main open problem; see `docs/native-libs.md`.
