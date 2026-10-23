@@ -10,7 +10,7 @@ libnativehelper
 system/libbase
 system/logging
 system/libziparchive
-system/core libcutils/include/ libcutils/trace-host.cpp libutils/include/ libutils/binder/include/ property_service/ *.bp
+system/core libcutils/include/ libcutils/trace-host.cpp libutils/include/ libutils/binder/include/ property_service/
 external/zlib
 external/tinyxml2
 external/fmtlib
@@ -24,10 +24,10 @@ external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_brid
 external/okhttp Android.bp repackaged/
 external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
-frameworks/libs/modules-utils java/android/annotation/ *.bp
-tools/platform-compat=tools/platform-compat java/android/compat/annotation/ *.bp
+frameworks/libs/modules-utils java/android/annotation/
+tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ tools/streaming_proto/ *.bp
+frameworks/base core/res/ tools/streaming_proto/
 
 # The framework build (tools/framework/build.py) and its host tools
 # (tools/host). Projects with only *.bp give the planner their Soong module
