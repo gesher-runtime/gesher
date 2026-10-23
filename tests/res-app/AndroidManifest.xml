@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The resources test's APK (tests/build-test-apps.sh): own attributes only,
+     so aapt2 links it without android.jar. -->
+<manifest xmlns:gesher="http://schemas.android.com/apk/res-auto" package="gesher.res">
+    <application gesher:label="@string/greeting" />
+</manifest>

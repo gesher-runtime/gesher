@@ -47,6 +47,10 @@ PathKind MapPath(const char* path, std::wstring* windows);
 // is the current one (getcwd, realpath).
 std::string LinuxPath(const wchar_t* windows);
 
+// A new CRT fd open on NUL (fd.cc), which reserves a number for an fd that
+// gesher-base serves itself: a socket, eventfd or epoll.
+int ReserveFd();
+
 // Character devices Windows lacks: a CRT fd on NUL whose reads fd.cc serves.
 enum class Device { kZero, kRandom };
 // Takes over `fd`, which must be open on NUL.

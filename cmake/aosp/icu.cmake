@@ -62,15 +62,11 @@ target_include_directories(icu_ndk_headers INTERFACE ${_icu}/libicu/ndk_headers)
 target_compile_definitions(icu_ndk_headers INTERFACE U_STATIC_IMPLEMENTATION UCONFIG_USE_LOCAL)
 target_link_libraries(icu_ndk_headers INTERFACE icu_ndk log)  # uconfig_local.h: <android/log.h>
 
-# --- libcutils' tracing, as on the host (trace-host.cpp: no-ops) --------------
-add_library(cutils_trace STATIC ${_core}/libcutils/trace-host.cpp)
-target_include_directories(cutils_trace PUBLIC ${_core}/libcutils/include)
-
 # --- libicu_jni (android_icu4j/libcore_bridge/src/native) ---------------------
 file(GLOB _icu_jni_srcs "${_icu}/android_icu4j/libcore_bridge/src/native/*.cpp")
 list(SORT _icu_jni_srcs)
 add_library(icu_jni OBJECT ${_icu_jni_srcs})
-target_link_libraries(icu_jni PUBLIC icui18n icuuc nativehelper base log cutils_trace)
+target_link_libraries(icu_jni PUBLIC icui18n icuuc nativehelper base log cutils)
 target_compile_definitions(icu_jni PRIVATE U_USING_ICU_NAMESPACE=0
   # libjavacore has a JniConstants and a maybeThrowIcuException too, apart in
   # their .so files on Android; linked into one executable they would clash.

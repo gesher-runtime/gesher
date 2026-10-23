@@ -3,3 +3,5 @@
 *.exe
 *.o
 survey.md
+__pycache__/
+*.pyc

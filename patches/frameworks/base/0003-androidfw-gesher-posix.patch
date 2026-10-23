@@ -1,0 +1,28 @@
+diff --git a/libs/androidfw/FileStream.cpp b/libs/androidfw/FileStream.cpp
+index e8989490..1049b94c 100644
+--- a/libs/androidfw/FileStream.cpp
++++ b/libs/androidfw/FileStream.cpp
+@@ -26,7 +26,8 @@
+ #include "android-base/macros.h"
+ #include "android-base/utf8.h"
+ 
+-#if defined(_WIN32)
++// Gesher: gesher-base's fcntl.h defines Linux's O_CLOEXEC.
++#if defined(_WIN32) && !defined(GESHER)
+ // This is only needed for O_CLOEXEC.
+ #include <windows.h>
+ #define O_CLOEXEC O_NOINHERIT
+diff --git a/libs/androidfw/ResourceTypes.cpp b/libs/androidfw/ResourceTypes.cpp
+index f1296634..f25119b5 100644
+--- a/libs/androidfw/ResourceTypes.cpp
++++ b/libs/androidfw/ResourceTypes.cpp
+@@ -58,7 +58,8 @@ using namespace std::literals;
+ 
+ namespace android {
+ 
+-#if defined(_WIN32)
++// Gesher: gesher-base's <netinet/in.h> defines the byte-order macros.
++#if defined(_WIN32) && !defined(GESHER)
+ #undef  nhtol
+ #undef  htonl
+ #define ntohl(x)    ( ((x) << 24) | (((x) >> 24) & 255) | (((x) << 8) & 0xff0000) | (((x) >> 8) & 0xff00) )

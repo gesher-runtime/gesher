@@ -1,0 +1,75 @@
+diff --git a/libs/binder/Binder.cpp b/libs/binder/Binder.cpp
+index 274d9b0..55ff70e 100644
+--- a/libs/binder/Binder.cpp
++++ b/libs/binder/Binder.cpp
+@@ -51,7 +51,9 @@ constexpr uid_t kUidRoot = 0;
+ 
+ // Service implementations inherit from BBinder and IBinder, and this is frozen
+ // in prebuilts.
+-#ifdef __LP64__
++// Gesher: Windows x64 is LLP64 but has 64-bit pointers
++// (docs/decisions/0005-posix-layer.md).
++#if defined(__LP64__) || defined(_WIN64)
+ static_assert(sizeof(IBinder) == 24);
+ static_assert(sizeof(BBinder) == 40);
+ #else
+diff --git a/libs/binder/FdUtils.h b/libs/binder/FdUtils.h
+index 52ae487..7228426 100644
+--- a/libs/binder/FdUtils.h
++++ b/libs/binder/FdUtils.h
+@@ -18,8 +18,14 @@
+ 
+ #include <binder/unique_fd.h>
+ 
+-#if defined(_WIN32) || defined(__TRUSTY__)
++#if (defined(_WIN32) && !defined(GESHER)) || defined(__TRUSTY__)
+ // Pipe and Socketpair are missing there
++#elif defined(GESHER)
++// Gesher: libbase has Pipe on Windows (system/libbase patch 0001), not
++// Socketpair.
++namespace android::binder {
++using android::base::Pipe;
++} // namespace android::binder
+ #elif !defined(BINDER_NO_LIBBASE)
+ 
+ namespace android::binder {
+diff --git a/libs/binder/Parcel.cpp b/libs/binder/Parcel.cpp
+index a9eaf07..f096ce3 100644
+--- a/libs/binder/Parcel.cpp
++++ b/libs/binder/Parcel.cpp
+@@ -101,7 +101,8 @@ using binder::borrowed_fd;
+ using binder::unique_fd;
+ 
+ // many things compile this into prebuilts on the stack
+-#ifdef __LP64__
++// Gesher: Windows x64 has 64-bit pointers too.
++#if defined(__LP64__) || defined(_WIN64)
+ static_assert(sizeof(Parcel) == 120);
+ #else
+ static_assert(sizeof(Parcel) == 60);
+diff --git a/libs/binder/include/binder/IPCThreadState.h b/libs/binder/include/binder/IPCThreadState.h
+index 83f8b60..68aed55 100644
+--- a/libs/binder/include/binder/IPCThreadState.h
++++ b/libs/binder/include/binder/IPCThreadState.h
+@@ -22,7 +22,8 @@
+ #include <utils/Errors.h>
+ #include <utils/Vector.h>
+ 
+-#if defined(_WIN32)
++// Gesher: gesher-base's <sys/types.h> has Linux's uid_t.
++#if defined(_WIN32) && !defined(GESHER)
+ typedef  int  uid_t;
+ #endif
+ 
+diff --git a/libs/binder/include/binder/IServiceManager.h b/libs/binder/include/binder/IServiceManager.h
+index 713bddf..6bfca99 100644
+--- a/libs/binder/include/binder/IServiceManager.h
++++ b/libs/binder/include/binder/IServiceManager.h
+@@ -25,6 +25,7 @@
+ #include <utils/Vector.h>
+ #include <optional>
+ #include <set>
++#include <vector>
+ 
+ namespace android {
+ 

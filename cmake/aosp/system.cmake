@@ -39,3 +39,52 @@ target_link_libraries(ziparchive PUBLIC base log z)
 target_compile_definitions(ziparchive PRIVATE ZLIB_CONST)
 target_compile_options(ziparchive PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers -Wconversion -Wno-sign-conversion>)
+
+# --- libcutils (Windows configuration, plus the host trace and ashmem) ------
+set(_cu "${_core}/libcutils")
+add_library(cutils STATIC
+  ${_cu}/config_utils.cpp ${_cu}/iosched_policy.cpp ${_cu}/load_file.cpp
+  ${_cu}/native_handle.cpp ${_cu}/properties.cpp ${_cu}/record_stream.cpp
+  ${_cu}/strlcpy.c
+  # host
+  ${_cu}/trace-host.cpp ${_cu}/ashmem-host.cpp
+  # libcutils_sockets: the not_windows set, as gesher-base's sockets are file
+  # descriptors with Linux's ABI (system/core patch 0002), less the two that
+  # need select(), which gesher-base lacks and nothing linked in calls
+  # (socket_inaddr_any_server, socket_network_client)
+  ${_cu}/sockets.cpp ${_cu}/socket_local_client_unix.cpp
+  ${_cu}/socket_local_server_unix.cpp ${_cu}/sockets_unix.cpp)
+target_include_directories(cutils PUBLIC ${_cu}/include ${_core}/libprocessgroup/include)
+# ashmem-host.cpp includes utils/Compat.h (headers only; no link dependency).
+target_include_directories(cutils PRIVATE ${_core}/libutils/include)
+target_link_libraries(cutils PUBLIC base log)
+target_compile_definitions(cutils PRIVATE _GNU_SOURCE)
+target_compile_options(cutils PRIVATE -Wall -Wextra -Wno-exit-time-destructors)
+
+# --- libutils_binder, libutils (Windows configuration, plus Looper) ---------
+# Looper.cpp is Linux-only in Android.bp; gesher-base's epoll and eventfd
+# (docs/decisions/0009-socket-fds.md) let it build for Windows.
+set(_ut "${_core}/libutils")
+set(_utils_flags -Wall -Wno-exit-time-destructors -Wno-unused-private-field)
+set(_utils_defs ANDROID_UTILS_REF_BASE_DISABLE_IMPLICIT_CONSTRUCTION MB_CUR_MAX=1)
+add_library(utils_binder STATIC
+  ${_ut}/binder/Errors.cpp ${_ut}/binder/RefBase.cpp ${_ut}/binder/SharedBuffer.cpp
+  ${_ut}/binder/String16.cpp ${_ut}/binder/String8.cpp ${_ut}/binder/StrongPointer.cpp
+  ${_ut}/binder/Unicode.cpp ${_ut}/binder/VectorImpl.cpp)
+target_include_directories(utils_binder PUBLIC ${_ut}/binder/include)
+target_link_libraries(utils_binder PUBLIC cutils log base)
+target_compile_definitions(utils_binder PRIVATE ${_utils_defs})
+target_compile_options(utils_binder PRIVATE ${_utils_flags} -Winvalid-offsetof -Wsequence-point
+  -Wzero-as-null-pointer-constant)
+
+add_library(utils STATIC
+  ${_ut}/FileMap.cpp ${_ut}/JenkinsHash.cpp ${_ut}/LightRefBase.cpp
+  ${_ut}/NativeHandle.cpp ${_ut}/Printer.cpp ${_ut}/StopWatch.cpp
+  ${_ut}/SystemClock.cpp ${_ut}/Threads.cpp ${_ut}/Timers.cpp ${_ut}/Tokenizer.cpp
+  ${_ut}/misc.cpp
+  # linux (Gesher: Windows too)
+  ${_ut}/Looper.cpp)
+target_include_directories(utils PUBLIC ${_ut}/include ${_core}/libsystem/include)
+target_link_libraries(utils PUBLIC utils_binder cutils log base)
+target_compile_definitions(utils PRIVATE ${_utils_defs})
+target_compile_options(utils PRIVATE ${_utils_flags})

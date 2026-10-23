@@ -106,3 +106,29 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
+
+## Phase 2 checklist
+
+Approach: [0012](decisions/0012-headless-framework.md); what framework.jar
+needs: [framework-build.md](framework-build.md).
+
+- [x] `framework-res.apk`, and its `R` and `Manifest`, built with aapt2
+      (`tools/build-framework-res.sh`, with release BP4A's flag values)
+- [x] The framework's dependency graph mapped (`tools/gen/bp_deps.py`)
+- [x] aconfig flag classes as `java_aconfig_library` makes them
+      (`Flags`, `FeatureFlags`, `FeatureFlagsImpl`)
+- [x] Host tools built in CI: hidl-gen, protoc's javanano and javastream
+      plugins, stats-log-api-gen, sysprop, xsdc, systemfeatures
+      (`.github/workflows/framework.yml`, cached and shared across branches)
+- [x] Code generation for the framework: AIDL, HIDL, protos, statslog,
+      sysprop, XSD, event log tags
+- [x] `framework.jar` compiles (javac, no errors) and is dexed (D8), in CI
+- [x] `framework.jar` on the boot class path, tested on Windows (FrameworkSmoke)
+- [x] `epoll` and `eventfd` in gesher-base, for `Looper`
+      (`probes/posix/epoll_probe.cc`)
+- [ ] libutils, libcutils and libandroidfw in full
+- [x] `libandroid_runtime`'s host natives linked in: assets, resources,
+      `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
+- [x] In-process stand-ins for the services the lifecycle calls
+- [x] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
+      resources and manifest loaded (tested in CI, and through the installer)

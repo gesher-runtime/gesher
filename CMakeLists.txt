@@ -47,6 +47,8 @@ include(cmake/aosp/art.cmake)
 include(cmake/aosp/art_runtime.cmake)
 include(cmake/aosp/icu.cmake)
 include(cmake/aosp/libcore_native.cmake)
+include(cmake/aosp/binder.cmake)
+include(cmake/aosp/framework.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
@@ -56,3 +58,13 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 # gesher-base's socket layer and fd overrides, run in CI on Windows.
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
+
+# eventfd and epoll, for libutils' Looper; also run in CI on Windows.
+add_executable(epoll_probe probes/posix/epoll_probe.cc)
+target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
+
+# libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
+# also run in CI on Windows.
+add_executable(libutils_probe probes/system/libutils_probe.cc)
+target_compile_options(libutils_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(libutils_probe PRIVATE utils)
