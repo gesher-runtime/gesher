@@ -55,6 +55,8 @@ include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
+# gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
+include(cmake/aosp/shell.cmake)
 # gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)

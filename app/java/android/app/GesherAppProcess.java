@@ -110,6 +110,9 @@ public final class GesherAppProcess {
             if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
             com.gesher.app.Main.bootstrap(TAG, androidRoot + "/build.prop",
                     androidRoot + "/framework/framework-res.apk");
+            // Its windows group under the package's Start menu shortcut on the taskbar
+            // ($GESHER_APP_USER_MODEL_ID, from the system server; docs/installer.md).
+            com.gesher.app.shell.AppShell.applyProcessAppUserModelId(TAG);
             if (System.getenv("GESHER_APP_STRICT_SERVICES") != null) {
                 com.gesher.server.StandIn.setStrict(true);
             }

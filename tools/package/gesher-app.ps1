@@ -8,8 +8,11 @@
 #                                      show the app's output until its process ends
 #   gesher-app my.apk --keep-task      ... and let the app run until it finishes
 #   gesher-app my.apk --activity .Other [--ez KEY true|false]...
-#   gesher-app install my.apk          install or update the package
-#   gesher-app uninstall com.example   uninstall a package
+#   gesher-app install my.apk          install or update the package (and its
+#                                      Start menu shortcut, Gesher Apps\<label>)
+#   gesher-app launch com.example      start an installed package (its shortcut's
+#                                      command; `launch my.apk` = `gesher-app my.apk`)
+#   gesher-app uninstall com.example   uninstall a package (and its shortcut)
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app shutdown                stop the device
@@ -33,10 +36,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown'
+$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch'
 if ($Arguments.Count -eq 0) {
   Write-Host 'usage: gesher-app APK [--keep-task] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
-  Write-Host '       gesher-app install APK | uninstall PACKAGE | list | status | start | shutdown'
+  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | list | status | start | shutdown'
   exit 2
 }
 $command = $Arguments[0]
@@ -96,7 +99,8 @@ if ($root.Substring(0, 2) -ne $here.Substring(0, 2)) {
 $apkFull = $null
 if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path $command).Path
-} elseif ($command -eq 'install' -and $rest.Count -gt 0) {
+} elseif ($rest.Count -gt 0 -and ($command -eq 'install' -or
+    ($command -eq 'launch' -and (Test-Path -LiteralPath $rest[0] -PathType Leaf)))) {
   $apkFull = (Resolve-Path $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
