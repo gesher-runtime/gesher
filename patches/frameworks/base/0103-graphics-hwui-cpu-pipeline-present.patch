@@ -1,0 +1,119 @@
+diff --git a/libs/hwui/pipeline/skia/SkiaCpuPipeline.cpp b/libs/hwui/pipeline/skia/SkiaCpuPipeline.cpp
+index 5bbbc100..44efdd67 100644
+--- a/libs/hwui/pipeline/skia/SkiaCpuPipeline.cpp
++++ b/libs/hwui/pipeline/skia/SkiaCpuPipeline.cpp
+@@ -93,6 +93,11 @@ MakeCurrentResult SkiaCpuPipeline::makeCurrent() {
+ }
+ 
+ Frame SkiaCpuPipeline::getFrame() {
++#ifdef GESHER
++    if (mWindow != nullptr && mBuffer == nullptr) {
++        dequeueBuffer();
++    }
++#endif
+     return Frame(mSurface->width(), mSurface->height(), 0);
+ }
+ 
+@@ -108,6 +113,56 @@ IRenderPipeline::DrawResult SkiaCpuPipeline::draw(
+     return {true, IRenderPipeline::DrawResult::kUnknownTime, android::base::unique_fd{}};
+ }
+ 
++#ifdef GESHER
++// Gesher: a buffer per frame, dequeued in getFrame (and here) and queued in
++// swapBuffers, as with a swap chain, so the window presents each frame.
++bool SkiaCpuPipeline::setSurface(ANativeWindow* surface, SwapBehavior swapBehavior) {
++    if (mWindow != nullptr && mBuffer != nullptr) {
++        mWindow->cancelBuffer(mWindow, mBuffer, -1);
++    }
++    mWindow = surface;
++    mBuffer = nullptr;
++    mPixels = nullptr;
++    mSurface = sk_sp<SkSurface>();
++    if (surface != nullptr) {
++        dequeueBuffer();
++    }
++    return true;
++}
++
++bool SkiaCpuPipeline::dequeueBuffer() {
++    ANativeWindowBuffer* buffer = nullptr;
++    if (mWindow->dequeueBuffer(mWindow, &buffer, nullptr) != 0 || buffer == nullptr) {
++        return false;
++    }
++    const int width = buffer->width;
++    const int height = buffer->height;
++    void* pixels = buffer->reserved[0];
++    if (mSurface.get() == nullptr || mSurface->width() != width || mSurface->height() != height ||
++        mPixels != pixels) {
++        SkImageInfo imageInfo =
++                SkImageInfo::Make(width, height, mSurfaceColorType,
++                                  SkAlphaType::kPremul_SkAlphaType, mSurfaceColorSpace);
++        size_t rowBytes = (buffer->stride > 0 ? buffer->stride : width) * imageInfo.bytesPerPixel();
++        mSurface = SkSurfaces::WrapPixels(imageInfo, pixels, rowBytes);
++        mPixels = pixels;
++    }
++    mBuffer = buffer;
++    return true;
++}
++
++bool SkiaCpuPipeline::swapBuffers(const Frame& frame, IRenderPipeline::DrawResult& drawResult,
++                                  const SkRect& screenDirty, FrameInfo* currentFrameInfo,
++                                  bool* requireSwap) {
++    if (mWindow == nullptr || mBuffer == nullptr) {
++        return false;
++    }
++    int err = mWindow->queueBuffer(mWindow, mBuffer, -1);
++    mBuffer = nullptr;
++    *requireSwap = true;
++    return err == 0;
++}
++#else
+ bool SkiaCpuPipeline::setSurface(ANativeWindow* surface, SwapBehavior swapBehavior) {
+     if (surface) {
+         ANativeWindowBuffer* buffer;
+@@ -126,6 +181,7 @@ bool SkiaCpuPipeline::setSurface(ANativeWindow* surface, SwapBehavior swapBehavi
+     }
+     return true;
+ }
++#endif
+ 
+ } /* namespace skiapipeline */
+ } /* namespace uirenderer */
+diff --git a/libs/hwui/pipeline/skia/SkiaCpuPipeline.h b/libs/hwui/pipeline/skia/SkiaCpuPipeline.h
+index 5a1014c2..e4d08b8b 100644
+--- a/libs/hwui/pipeline/skia/SkiaCpuPipeline.h
++++ b/libs/hwui/pipeline/skia/SkiaCpuPipeline.h
+@@ -49,11 +49,19 @@ public:
+             const std::vector<sp<RenderNode>>& renderNodes, FrameInfoVisualizer* profiler,
+             const renderthread::HardwareBufferRenderParams& bufferParams,
+             std::mutex& profilerLock) override;
++#ifdef GESHER
++    // Gesher: queues the frame's buffer to the window (a Win32 window's
++    // surface), so what was drawn is shown; getFrame dequeues the next one.
++    bool swapBuffers(const renderthread::Frame& frame, IRenderPipeline::DrawResult& drawResult,
++                     const SkRect& screenDirty, FrameInfo* currentFrameInfo,
++                     bool* requireSwap) override;
++#else
+     bool swapBuffers(const renderthread::Frame& frame, IRenderPipeline::DrawResult& drawResult,
+                      const SkRect& screenDirty, FrameInfo* currentFrameInfo,
+                      bool* requireSwap) override {
+         return false;
+     }
++#endif
+     DeferredLayerUpdater* createTextureLayer() override { return nullptr; }
+     bool setSurface(ANativeWindow* surface, renderthread::SwapBehavior swapBehavior) override;
+     [[nodiscard]] android::base::unique_fd flush() override {
+@@ -69,6 +77,13 @@ public:
+     }
+ 
+ private:
++#ifdef GESHER
++    // Dequeues the window's next buffer and draws into it (mSurface).
++    bool dequeueBuffer();
++    ANativeWindow* mWindow = nullptr;      // CanvasContext's ReliableSurface keeps it
++    ANativeWindowBuffer* mBuffer = nullptr;  // dequeued and not yet queued
++    void* mPixels = nullptr;                 // what mSurface wraps
++#endif
+     sk_sp<SkSurface> mSurface;
+ };
+ 
