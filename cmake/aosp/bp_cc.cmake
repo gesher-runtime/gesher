@@ -10,6 +10,9 @@
 #     a static library of <prefix>'s sources, flags and include directories
 #     (exported ones PUBLIC). NO_WERROR drops -Werror; QUIET adds -w, for
 #     third-party code built as its project builds it.
+#
+#   gesher_bp_flags(<target> <prefix> [NO_WERROR] [QUIET])
+#     <prefix>'s flags on an existing target.
 
 function(gesher_bp_cc prefix dir module)
   cmake_parse_arguments(A "" "TARGETS" "EXCLUDE" ${ARGN})
@@ -38,9 +41,8 @@ function(gesher_bp_cc prefix dir module)
   endforeach()
 endfunction()
 
-function(gesher_bp_library target prefix)
+function(gesher_bp_flags target prefix)
   cmake_parse_arguments(A "NO_WERROR;QUIET" "" "" ${ARGN})
-  add_library(${target} STATIC ${${prefix}_SRCS})
   set(_c ${${prefix}_CFLAGS})
   set(_conly ${${prefix}_CONLYFLAGS})
   set(_cpp ${${prefix}_CPPFLAGS})
@@ -49,16 +51,21 @@ function(gesher_bp_library target prefix)
     list(REMOVE_ITEM _conly -Werror)
     list(REMOVE_ITEM _cpp -Werror)
   endif()
-  # Flags Soong's toolchain sets per language (-std=gnu89 for libpng, ...).
   set(_opts)
+  set(_defs)
   foreach(_f ${_c})
-    if(_f MATCHES " ")
+    if(_f MATCHES "^-D(.*)")
+      # As definitions, which CMake quotes for the shell (-D__INTRODUCED_IN(n)=,
+      # -DLOG_TAG="HWUI").
+      list(APPEND _defs "${CMAKE_MATCH_1}")
+    elseif(_f MATCHES " ")
       # "-Xclang +avx2": one option of two words, kept together.
       list(APPEND _opts "SHELL:${_f}")
     else()
       list(APPEND _opts "$<$<COMPILE_LANGUAGE:C,CXX>:${_f}>")
     endif()
   endforeach()
+  # Flags Soong's toolchain sets per language (-std=gnu89 for libpng, ...).
   foreach(_f ${_conly})
     list(APPEND _opts "$<$<COMPILE_LANGUAGE:C>:${_f}>")
   endforeach()
@@ -69,6 +76,12 @@ function(gesher_bp_library target prefix)
     list(APPEND _opts -w)
   endif()
   target_compile_options(${target} PRIVATE ${_opts})
+  target_compile_definitions(${target} PRIVATE ${_defs})
+endfunction()
+
+function(gesher_bp_library target prefix)
+  add_library(${target} STATIC ${${prefix}_SRCS})
+  gesher_bp_flags(${target} ${prefix} ${ARGN})
   set(_priv ${${prefix}_INCLUDES})
   list(REMOVE_ITEM _priv ${${prefix}_EXPORT_INCLUDES})
   target_include_directories(${target} PRIVATE ${_priv} PUBLIC ${${prefix}_EXPORT_INCLUDES})

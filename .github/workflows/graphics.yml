@@ -22,6 +22,7 @@ on:
       - 'probes/graphics/**'
       - 'compat/hwui/**'
       - 'aosp.lock'
+      - 'patches/**'
       - '.github/workflows/graphics.yml'
   workflow_dispatch:
   workflow_call:
@@ -50,19 +51,9 @@ jobs:
         with:
           ccache-key: graphics
 
-      - name: Build the graphics libraries and probes
-        run: |
-          set +e
-          ninja -C out -k 0 gesher_graphics > graphics-build.log 2>&1
-          code=$?
-          ccache --show-stats | head -8
-          if [[ $code != 0 ]]; then
-            echo "$(grep -cE '^FAILED: ' graphics-build.log) failed edges"
-            grep -E '^FAILED: ' graphics-build.log | sed -E 's/ -o .*//' | head -50
-            grep -B2 -A6 -E 'error:' graphics-build.log | head -600
-          fi
-          tail -3 graphics-build.log
-          exit $code
+      # The probes first, so they run on Windows even while the rest fails.
+      - name: Build Skia and the probes
+        run: ninja -C out skia_probe > probes-build.log 2>&1 || { grep -B2 -A6 -E 'error' probes-build.log | head -300; exit 1; }
 
       - name: Collect artifacts
         run: |
@@ -75,17 +66,31 @@ jobs:
           name: graphics
           path: dist-graphics/
 
+      - name: Build the graphics libraries (hwui, minikin, ...)
+        run: |
+          set +e
+          ninja -C out -k 0 graphics_all > graphics-build.log 2>&1
+          code=$?
+          ccache --show-stats | head -8
+          if [[ $code != 0 ]]; then
+            echo "$(grep -cE '^FAILED: ' graphics-build.log) failed edges"
+            grep -E '^FAILED: ' graphics-build.log | sed -E 's/ -o .*//' | head -80
+            grep -A8 -E 'error:' graphics-build.log | grep -v '^ccache ' | head -900
+          fi
+          tail -3 graphics-build.log
+          exit $code
+
       - name: Upload the build log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: graphics-build-log
-          path: graphics-build.log
+          path: '*-build.log'
 
   # The probes alone, when this workflow runs on its own; ci.yml's test jobs
   # run them with everything else (tests/windows/tracks/30-graphics.ps1).
   probe:
-    if: github.workflow == 'graphics'
+    if: github.workflow == 'graphics' && !cancelled()
     needs: build
     runs-on: windows-2022
     steps:
