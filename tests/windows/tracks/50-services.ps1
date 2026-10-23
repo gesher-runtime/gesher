@@ -131,7 +131,7 @@ $servicemanager = Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow
 $dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false')
 $server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
-  -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk")) `
+  -ArgumentList ($dvmApp + 'com.gesher.server.SystemServer', (NoDrive "$Dir/lifecycle.apk"), (NoDrive "$Dir/components.apk")) `
   -RedirectStandardOutput "$logs/system_server.out" -RedirectStandardError "$logs/system_server.err"
 $failedBefore = $failed
 $appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server',
@@ -186,6 +186,110 @@ if (-not (CheckOrdered 'services: LifecycleActivity finish(): the system server 
   'gesher-app: the system server ended the process (scheduleExit)',
   'gesher-app: done') $appCode)) { Write-Host $appOut }
 
+# The rest of the app model in the system server (tests/apps/components):
+# MainActivity runs each step after the previous one ended, then finishes;
+# gesher-app --keep-task leaves the task alone, so the run ends with the app.
+# Activities: startActivityForResult, a standard activity started on top of
+# itself (a new instance), an implicit start through an intent filter, a
+# singleTop activity started again (onNewIntent), the back stack unwinding
+# (onRestart, the result, onResume). Services: started (stopService,
+# stopSelf), bound (the onBind Binder back in the same process), foreground
+# (a notification channel and notification to the stand-in notification
+# manager). Broadcasts: a registered receiver, a manifest receiver
+# (explicit). Providers: the app's own, installed at bindApplication, and
+# the settings stand-in.
+function CheckSequences([string] $Name, [string] $Out, [object[]] $Sequences, [int] $Code = 0) {
+  $missing = @()
+  foreach ($seq in $Sequences) {
+    $at = 0
+    foreach ($e in $seq) {
+      $i = $Out.IndexOf($e, $at)
+      if ($i -lt 0) { $missing += $e } else { $at = $i + $e.Length }
+    }
+  }
+  if ($Code -eq 0 -and -not $missing) {
+    Write-Host "PASS  $Name"
+    return $true
+  }
+  Write-Host "FAIL  $Name (exit $Code; missing or out of order: $($missing -join ' | '))"
+  $script:failed++
+  return $false
+}
+$appOut = RunTimed "$Dir/dalvikvm.exe" ($dvmApp + 'com.gesher.app.Main', '--system-server', '--keep-task',
+  (NoDrive "$Dir/components.apk")) 400
+$appCode = $LASTEXITCODE
+$c = 'components: '
+$ok = CheckSequences 'services: activities start activities: startActivityForResult, standard, implicit, singleTop (onNewIntent), the back stack and the result' $appOut @(
+  @("${c}MainActivity onResume #1", "${c}MainActivity onPause", "${c}SecondActivity#1 onCreate",
+    "${c}SecondActivity#1 started by .MainActivity, in MainActivity's task: true", "${c}SecondActivity#1 onResume #1",
+    "${c}SecondActivity#1 onPause", "${c}SecondActivity#2 onCreate",
+    "${c}SecondActivity#2 started by startActivity (no result), in MainActivity's task: true", "${c}SecondActivity#2 onResume #1",
+    "${c}SecondActivity#2 starts com.gesher.components.SINGLE_TOP (implicit)", "${c}SecondActivity#2 onPause",
+    "${c}SingleTopActivity#1 onCreate", "${c}SingleTopActivity#1 intent n=1", "${c}SingleTopActivity#1 onResume #1",
+    "${c}SingleTopActivity#1 onPause", "${c}SingleTopActivity#1 onNewIntent n=2", "${c}SingleTopActivity#1 onResume #2",
+    "${c}SingleTopActivity#1 finish()", "${c}SingleTopActivity#1 onPause",
+    "${c}SecondActivity#2 onResume #2", "${c}SecondActivity#2 finish()",
+    "${c}SecondActivity#1 onResume #2", "${c}SecondActivity#1 setResult(RESULT_OK, answer=42), finish()",
+    "${c}MainActivity onRestart", "${c}MainActivity onStart",
+    "${c}MainActivity onActivityResult: request 1, result RESULT_OK, answer 42", "${c}MainActivity onResume #2"),
+  @("${c}MainActivity onPause", "${c}MainActivity onStop", "${c}MainActivity onRestart"),
+  @("${c}SingleTopActivity#1 finish()", "${c}SingleTopActivity#1 onStop", "${c}SingleTopActivity#1 onDestroy"),
+  @("${c}SecondActivity#2 finish()", "${c}SecondActivity#2 onStop", "${c}SecondActivity#2 onDestroy"),
+  @("${c}SecondActivity#1 setResult(RESULT_OK, answer=42), finish()", "${c}SecondActivity#1 onStop", "${c}SecondActivity#1 onDestroy")
+) $appCode
+if ($appOut.Contains('SingleTopActivity#2')) {
+  Write-Host 'FAIL  services: singleTop made a second instance'
+  $failed++
+  $ok = $false
+}
+$ok = (CheckSequences 'services: startService, stopService and stopSelf: onCreate, onStartCommand, onDestroy' $appOut @(
+  ,@("${c}step: started service, stopService", "${c}stopService: true", "${c}CounterService onCreate",
+    "${c}CounterService onStartCommand start id 1, n=1", "${c}CounterService onStartCommand start id 2, n=2",
+    "${c}CounterService onDestroy", "${c}step: started service, stopSelf", "${c}CounterService onCreate",
+    "${c}CounterService onStartCommand start id 1, n=0", "${c}CounterService stopSelf(1)", "${c}CounterService onDestroy")
+) $appCode) -and $ok
+$ok = (CheckSequences 'services: bindService and unbindService, the Binder from onBind back in the same process' $appOut @(
+  ,@("${c}step: bound service", "${c}bindService: true", "${c}LocalService onCreate", "${c}LocalService onBind",
+    "${c}onServiceConnected .LocalService: LocalBinder, the service's own Binder: true, add(2, 3) = 5",
+    "${c}unbindService", "${c}LocalService onUnbind", "${c}LocalService onDestroy")
+) $appCode) -and $ok
+$ok = (CheckSequences 'services: a foreground service: startForegroundService, its notification to the stand-in notification manager' $appOut @(
+  ,@("${c}step: foreground service", "${c}ForegroundService onCreate", "${c}ForegroundService startForeground(7), channel gesher",
+    "${c}ForegroundService stopForeground, stopSelf", "${c}ForegroundService onDestroy")
+) $appCode) -and $ok
+$ok = (CheckSequences 'services: broadcasts: registerReceiver and sendBroadcast, a manifest receiver for an explicit broadcast' $appOut @(
+  ,@("${c}step: broadcasts", "${c}registered receiver onReceive com.gesher.components.PING, n=7",
+    "${c}sendBroadcast to ManifestReceiver (explicit)",
+    "${c}ManifestReceiver onReceive com.gesher.components.HELLO (ReceiverRestrictedContext)")
+) $appCode) -and $ok
+$ok = (CheckSequences 'services: content providers: the app''s own (installed at bindApplication), insert and query; Settings from the settings stand-in' $appOut @(
+  @("${c}ItemsProvider onCreate", "${c}ComponentsApplication onCreate, providers installed: true"),
+  @("${c}step: content providers", "${c}insert apple: content://com.gesher.components.items/items/1",
+    "${c}insert banana: content://com.gesher.components.items/items/2",
+    "${c}query content://com.gesher.components.items/items: 2 rows: apple, banana",
+    "${c}Settings.System font_scale=1.0, Settings.Secure android_id=6765736865720000, Settings.Global auto_time=1",
+    "${c}Settings.System gesher_test after putInt: 7", "${c}all steps ran", "${c}MainActivity onDestroy",
+    'gesher-app: the system server ended the process (scheduleExit)', 'gesher-app: done')
+) $appCode) -and $ok
+if (-not $ok) { Write-Host $appOut }
+Start-Sleep -Milliseconds 500
+$serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
+$s = 'system_server: '
+$null = CheckSequences 'services: system_server drives components.apk: NewIntentItem, ActivityResultItem, services, receivers, providers, notifications' $serverOut @(
+  ,@("${s}com.gesher.components parsed by PackageParser2: 3 activities, 3 services, 1 receivers, 1 providers",
+    "${s}publishContentProviders: com.gesher.components.items (com.gesher.components.ItemsProvider)",
+    "${s}scheduleTransaction NewIntentItem to com.gesher.components/com.gesher.components.SingleTopActivity",
+    "${s}scheduleTransaction ActivityResultItem, ResumeActivityItem to com.gesher.components/com.gesher.components.MainActivity",
+    "${s}scheduleCreateService com.gesher.components/.CounterService", "${s}scheduleServiceArgs com.gesher.components/.CounterService",
+    "${s}scheduleStopService com.gesher.components/.CounterService", "${s}stopSelf com.gesher.components/.CounterService (start id 1)",
+    "${s}scheduleBindService com.gesher.components/.LocalService", "${s}publishService com.gesher.components/.LocalService",
+    "${s}scheduleUnbindService com.gesher.components/.LocalService",
+    "${s}notification channel gesher created for com.gesher.components",
+    "${s}notification 7 posted for com.gesher.components: channel gesher, title `"Gesher foreground service`"",
+    "${s}registerReceiver from com.gesher.components: com.gesher.components.PING",
+    "${s}scheduleReceiver com.gesher.components/com.gesher.components.ManifestReceiver",
+    "${s}settings: system gesher_test = 7", "${s}scheduleExit: process ")
+)
 foreach ($p in $server, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }

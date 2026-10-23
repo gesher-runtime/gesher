@@ -334,8 +334,12 @@ final class ActiveServices {
             r.foregroundId = id;
         }
         if (id != 0) {
+            // FOREGROUND_SERVICE_TYPE_MANIFEST (startForeground(id, notification)): the
+            // manifest's types.
+            int type = foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
+                    ? r.info.getForegroundServiceType() : foregroundServiceType;
             SystemServer.log("setServiceForeground " + r + ": foreground, notification " + id
-                    + " (type 0x" + Integer.toHexString(foregroundServiceType) + ")");
+                    + " (service type 0x" + Integer.toHexString(type) + ")");
             mNotifications.post(r.info.packageName, null, id, notification);
         } else {
             SystemServer.log("setServiceForeground " + r + ": background"

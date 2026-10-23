@@ -795,31 +795,43 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     // --- reports from the app (ActivityClientController) --------------------------------
 
     void activityResumed(ActivityRecord r) {
+        List<ActivityRecord> toStop;
         synchronized (this) {
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
             if (r.state == State.LAUNCHING || r.state == State.RESUMING) r.state = State.RESUMED;
+            toStop = stopping(r);
             notifyAll();
         }
         SystemServer.log("activityResumed: " + r.name());
+        for (ActivityRecord a : toStop) stop(a);
     }
 
     void activityIdle(ActivityRecord r) {
-        List<ActivityRecord> toStop = new ArrayList<>();
+        List<ActivityRecord> toStop;
         synchronized (this) {
             r.idle = true;
-            // ActivityTaskSupervisor.processStoppingAndFinishingActivities: the activities
-            // paused for this one (or another) are stopped once one is idle.
-            for (ActivityRecord a : mActivities) {
-                if (a.stopWhenIdle && a.state == State.PAUSED && !a.finishing) {
-                    a.stopWhenIdle = false;
-                    toStop.add(a);
-                }
-            }
+            toStop = stopping(r);
             notifyAll();
         }
         SystemServer.log("activityIdle: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+    }
+
+    /**
+     * ActivityTaskSupervisor.processStoppingAndFinishingActivities: the activities paused
+     * for another one are stopped once an activity in front of them reports it is resumed
+     * (it is visible) or idle. Guarded by this.
+     */
+    private List<ActivityRecord> stopping(ActivityRecord reporting) {
+        List<ActivityRecord> toStop = new ArrayList<>();
+        for (ActivityRecord a : mActivities) {
+            if (a != reporting && a.stopWhenIdle && a.state == State.PAUSED && !a.finishing) {
+                a.stopWhenIdle = false;
+                toStop.add(a);
+            }
+        }
+        return toStop;
     }
 
     void activityPaused(ActivityRecord r) {
