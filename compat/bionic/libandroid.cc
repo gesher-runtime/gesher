@@ -25,9 +25,11 @@
 //    AOBB_STATE_ERROR_INTERNAL from another thread, as the platform reports
 //    asynchronously).
 //  - ASharedMemory_create/getSize/setProt over gesher-base's memfd_create.
-//  - ANativeWindow_* and ANativeActivity_*: stand-ins for the graphics track,
-//    which errors or no-ops that say so once (see docs/native-libs.md for the
-//    interface they need).
+//  - ANativeWindow_fromSurface/toSurface over libandroid_runtime's (with the
+//    runtime's JNIEnv); the other ANativeWindow_* are in libandroid_window.cc
+//    and EGL/GLES in egl_gles.cc.
+//  - ANativeActivity_*: stand-ins until NativeActivity's natives exist; they
+//    are dropped, saying so once.
 
 #include "jni_bridge.h"
 #include "shim_internal.h"
@@ -57,6 +59,12 @@
 #include <memory>
 #include <string>
 #include <thread>
+
+// libandroid_runtime's (native_window_jni.cpp, android_view_Surface.cpp's
+// ANativeWindow_toSurface: compat/hwui/window/window_jni.cc), Microsoft ABI.
+struct ANativeWindow;
+extern "C" ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
+extern "C" jobject ANativeWindow_toSurface(JNIEnv* env, ANativeWindow* window);
 
 namespace gesher::bionic {
 
@@ -424,43 +432,25 @@ size_t BIONIC_SYSV SharedMemoryGetSize(int fd) {
 }
 int BIONIC_SYSV SharedMemorySetProt(int, int) { return 0; }
 
-// --- ANativeWindow, ANativeActivity: the graphics track's ---------------------------------------
-// No Surface exists yet: ANativeWindow_fromSurface gives nullptr and the
-// window functions fail with -EINVAL; ANativeActivity's requests are dropped.
+// --- ANativeWindow_fromSurface/toSurface, ANativeActivity ----------------------------------------
+// The other ANativeWindow_* functions are in libandroid_window.cc. These two
+// take a JNIEnv: the .so's is the bridge's proxy, and libandroid_runtime's
+// functions (Microsoft ABI, in dalvikvm) want the runtime's real one. The
+// Surface's native object is a hostgraphics Surface (a Win32Surface for a
+// Gesher window); fromSurface takes a reference the .so releases.
+// ANativeActivity has no NativeActivity natives yet (docs/native-libs.md):
+// its requests are dropped, saying so once.
 
-std::atomic<bool> g_said_window{false};
 std::atomic<bool> g_said_activity{false};
-void SayWindow() {
-  LogOnce(&g_said_window, "ANativeWindow: no native windows yet (the graphics track's)");
-}
 void SayActivity() {
-  LogOnce(&g_said_activity, "ANativeActivity: requests are not handled yet (the graphics track's)");
+  LogOnce(&g_said_activity, "ANativeActivity: requests are not handled yet (no NativeActivity natives)");
 }
 
-void* BIONIC_SYSV WindowFromSurface(JNIEnv*, jobject) {
-  SayWindow();
-  return nullptr;
+ANativeWindow* BIONIC_SYSV WindowFromSurface(JNIEnv* env, jobject surface) {
+  return ANativeWindow_fromSurface(RealJniEnv(env), surface);
 }
-jobject BIONIC_SYSV WindowToSurface(JNIEnv*, void*) {
-  SayWindow();
-  return nullptr;
-}
-void BIONIC_SYSV WindowAcquireRelease(void*) {}
-int32_t BIONIC_SYSV WindowQuery(void*) {
-  SayWindow();
-  return kEinval;
-}
-int32_t BIONIC_SYSV WindowSetBuffersGeometry(void*, int32_t, int32_t, int32_t) {
-  SayWindow();
-  return kEinval;
-}
-int32_t BIONIC_SYSV WindowLock(void*, void*, void*) {
-  SayWindow();
-  return kEinval;
-}
-int32_t BIONIC_SYSV WindowSetInt(void*, int32_t) {
-  SayWindow();
-  return kEinval;
+jobject BIONIC_SYSV WindowToSurface(JNIEnv* env, ANativeWindow* window) {
+  return ANativeWindow_toSurface(RealJniEnv(env), window);
 }
 void BIONIC_SYSV ActivityRequest(void*) { SayActivity(); }
 void BIONIC_SYSV ActivityRequestFlags(void*, uint32_t, uint32_t) { SayActivity(); }
@@ -574,20 +564,10 @@ void Register() {
       E("ASharedMemory_create", SharedMemoryCreate),
       E("ASharedMemory_getSize", SharedMemoryGetSize),
       E("ASharedMemory_setProt", SharedMemorySetProt),
-      // Graphics-track stand-ins.
+      // Surfaces (the rest of ANativeWindow_*: libandroid_window.cc).
       E("ANativeWindow_fromSurface", WindowFromSurface),
       E("ANativeWindow_toSurface", WindowToSurface),
-      E("ANativeWindow_acquire", WindowAcquireRelease),
-      E("ANativeWindow_release", WindowAcquireRelease),
-      E("ANativeWindow_getWidth", WindowQuery),
-      E("ANativeWindow_getHeight", WindowQuery),
-      E("ANativeWindow_getFormat", WindowQuery),
-      E("ANativeWindow_setBuffersGeometry", WindowSetBuffersGeometry),
-      E("ANativeWindow_lock", WindowLock),
-      E("ANativeWindow_unlockAndPost", WindowQuery),
-      E("ANativeWindow_setBuffersTransform", WindowSetInt),
-      E("ANativeWindow_setBuffersDataSpace", WindowSetInt),
-      E("ANativeWindow_getBuffersDataSpace", WindowQuery),
+      // NativeActivity (stand-ins).
       E("ANativeActivity_finish", ActivityRequest),
       E("ANativeActivity_setWindowFormat", ActivityRequestOne),
       E("ANativeActivity_setWindowFlags", ActivityRequestFlags),
