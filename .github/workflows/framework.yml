@@ -1,0 +1,252 @@
+name: framework
+
+# framework.jar's pipeline on its own: the host tools (cached), the boot
+# class path as javac's java.base (the "coremod"), framework-res, and
+# tools/framework/build.py's generators and javac.
+#
+#   gh workflow run framework --ref <branch> [-f javac-memory=10g]
+#
+# ci.yml calls this workflow too. Every input is cached, so a run after a
+# tools/framework change goes straight to the build. Caches are per branch
+# (plus main's): the first run on a new branch builds the host tools.
+on:
+  # Pushes to the framework branches that touch its inputs run it too.
+  push:
+    branches: ['phase2/**', 'wip/ci-framework']
+    paths:
+      - 'tools/framework/**'
+      - 'tools/gen/**'
+      - 'tools/host/**'
+      - 'tools/build-boot-jars.sh'
+      - 'tools/build-framework-res.sh'
+      - 'tools/make-coremod.sh'
+      - 'tools/sparse-bp.sh'
+      - 'tools/fetch-aosp.sh'
+      - 'aosp.lock'
+      - 'patches/**'
+      - '.github/workflows/framework.yml'
+  workflow_dispatch:
+    inputs:
+      javac-memory:
+        description: javac's heap (-J-Xmx)
+        default: 10g
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # aidl, hidl-gen, protoc and its Java plugins, stats-log-api-gen,
+  # expresscatalog-codegen, sysprop_java: tools/host, built natively for the
+  # Linux build host from the pinned AOSP sources.
+  host-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Keyed on what the tools are built from: tools/host, the blueprint
+      # reader its bp_srcs.py uses, and the aosp.lock lines and patches of
+      # the projects it compiles.
+      - name: Host tools' sources
+        id: key
+        run: |
+          projects='tag|system/(libbase|logging|core|libhwbinder)|system/tools/(aidl|hidl|sysprop)'
+          projects+='|external/(googletest|abseil-cpp|protobuf|gflags|jsoncpp|libtextclassifier|fmtlib)'
+          projects+='|frameworks/(proto_logging|base)'
+          lines=$(grep -E "^($projects)(\s|$)" aosp.lock)
+          echo "$lines"
+          lock=$(echo "$lines" | sha256sum | cut -c1-16)
+          echo "key=host-tools-$lock-${{ hashFiles('tools/host/**', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**', '.github/workflows/framework.yml') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache host tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: dist-host
+          key: ${{ steps.key.outputs.key }}
+
+      - name: Cache AOSP sources
+        if: steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: third_party/aosp
+          key: aosp-${{ hashFiles('aosp.lock', 'patches/**') }}
+          restore-keys: aosp-
+
+      - name: Fetch AOSP sources
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: tools/fetch-aosp.sh
+
+      - name: Install build tools
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache
+
+      - name: Cache compiler output
+        if: steps.tools.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-host-tools-${{ github.sha }}
+          restore-keys: ccache-host-tools-
+
+      - name: Build
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          ccache --set-config=max_size=1G
+          # clang, as Soong builds them: AOSP host sources use clang-only
+          # builtins (__builtin_available) gcc rejects. Soong's libc++ pulls
+          # in <algorithm> and <cstring> where libstdc++ does not, which
+          # libpropertyinfoserializer relies on. -O1: build time over speed.
+          cmake -S tools/host -B out/host -G Ninja -DAOSP_DIR="$PWD/third_party/aosp" \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-O1 -DNDEBUG" -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS="-include algorithm -include cstring"
+          ninja -C out/host -k 0
+          ccache --show-stats | head -5
+          mkdir -p dist-host/protobuf
+          cp out/host/aidl out/host/hidl-gen out/host/stats-log-api-gen \
+             out/host/sysprop_java out/host/expresscatalog-codegen \
+             out/host/protoc-gen-javanano out/host/protoc-gen-javastream dist-host/
+          cp out/host/protobuf/protoc dist-host/protobuf/
+          ls -la dist-host dist-host/protobuf
+
+      - name: Smoke-test the tools
+        run: |
+          ls -la dist-host dist-host/protobuf
+          dist-host/protobuf/protoc --version
+
+  framework:
+    needs: host-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache keys
+        run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
+
+      - name: Restore host tools
+        uses: actions/cache/restore@v4
+        with:
+          path: dist-host
+          key: ${{ needs.host-tools.outputs.key }}
+          fail-on-cache-miss: true
+
+      # build.py --checkout widens the sparse sets to the files the plan
+      # needs (blobless clones fetch them then). The tree is saved again,
+      # under a key naming its sparse sets, only when that widened it.
+      - name: Restore AOSP sources
+        id: aosp
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/aosp
+          key: ${{ env.AOSP_KEY }}-
+          restore-keys: |
+            ${{ env.AOSP_KEY }}-
+            aosp-framework-
+            aosp-
+
+      - name: Fetch AOSP sources
+        run: |
+          tools/fetch-aosp.sh
+          tools/sparse-bp.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Cache build-tools and the framework's JVM tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/build-tools-36.1
+            out/framework/jvm-tools
+          key: framework-tools-36.1-kotlin-2.1.21
+
+      - name: Cache the coremod
+        id: coremod
+        uses: actions/cache@v4
+        with:
+          path: out/coremod
+          key: coremod-${{ hashFiles('tools/build-boot-jars.sh', 'tools/make-coremod.sh', 'tools/gen/**', 'config/aconfig/**', 'java/compile-stubs/**', 'aosp.lock', 'patches/libcore/**', 'patches/external/icu/**') }}
+
+      - name: Build the coremod (boot class path classes as java.base)
+        if: steps.coremod.outputs.cache-hit != 'true'
+        run: |
+          WORK_DIR="$PWD/work/boot" tools/build-boot-jars.sh out/boot-jars
+          tools/make-coremod.sh work/boot out/coremod
+
+      - name: Cache framework-res
+        id: res
+        uses: actions/cache@v4
+        with:
+          path: out/framework-res
+          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
+
+      - name: Build framework-res (R.java, framework-res.apk)
+        if: steps.res.outputs.cache-hit != 'true'
+        run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res > framework-res.log 2>&1 || { tail -50 framework-res.log; exit 1; }
+
+      - name: Build the framework (generators + javac)
+        run: |
+          set +e
+          python3 tools/framework/build.py --aosp third_party/aosp --out out/framework \
+            --core-classes out/coremod --aidl "$PWD/dist-host/aidl" \
+            --host-tools "$PWD/dist-host" \
+            --framework-res-java out/framework-res/framework-res-java \
+            --checkout --javac-memory "${{ inputs.javac-memory || '10g' }}" --show 20 \
+            2>&1 | grep -v '^warning:' | tee build-framework.log
+          code=${PIPESTATUS[0]}
+          javac=$(grep -E '^javac exit ' build-framework.log | tail -1)
+          {
+            echo "### framework build"
+            echo
+            echo "**${javac:-javac not reached (build.py exit $code)}**"
+            echo
+            echo '```'
+            grep -E '^(plan:|generated:|sources left out:|javac:|javac exit)' build-framework.log
+            grep -E '^  (unsupported|skipped)' build-framework.log
+            sed -n '/^javac exit /,$p' build-framework.log | sed -n '2,16p'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z $javac ]]; then
+            echo "::error::build.py failed before javac (exit $code)"
+            exit 1
+          fi
+          errors=$(sed -E 's/^javac exit (-?[0-9]+), ([0-9]+) errors.*/\2/' <<<"$javac")
+          jcode=$(sed -E 's/^javac exit (-?[0-9]+),.*/\1/' <<<"$javac")
+          if [[ $jcode != 0 ]]; then
+            echo "::error::javac: $errors errors (exit $jcode); see the step summary and the framework-logs artifact (javac.log)"
+            exit 1
+          fi
+          echo "::notice::javac: no errors"
+
+      - name: Sparse sets after the build
+        if: always()
+        id: after
+        run: echo "sparse=$(tools/sparse-bp.sh --hash)" >> "$GITHUB_OUTPUT"
+
+      - name: Save AOSP sources
+        if: always() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/aosp
+          key: ${{ env.AOSP_KEY }}-${{ steps.after.outputs.sparse }}
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-logs
+          path: |
+            build-framework.log
+            framework-res.log
+            out/framework/javac.log
+            out/framework/*.sources.txt
+          if-no-files-found: ignore
