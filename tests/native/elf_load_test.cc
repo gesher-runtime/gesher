@@ -2,15 +2,19 @@
 //
 //   elf_load_test <library.so> [search-dir ...]
 //
-// It loads the library, checks that the loader ran its constructors (the
-// library exports gesher_ctor_ran()), calls gesher_answer() and expects 42,
-// then calls gesher_add(40, 2). This is the step-1 check: mapping, relocations
-// (RELATIVE/RELR, GLOB_DAT for the library's own data) and init arrays on a
-// self-contained object, before the bionic shim. Later steps load a library
-// that imports libc and libc++_shared through the shim.
+// The bionic shim (compat/bionic) is installed first, so the library may
+// import libc, libm, libdl, liblog and pthread.
+//
+// A library that exports gesher_selftest() runs its own checks: the test calls
+// it and expects 0 failures (tests/native/libc_test.c). Otherwise it is the
+// step-1 check (tests/native/trivial.c): the loader ran its constructors (the
+// library exports gesher_ctor_ran()), gesher_answer() returns 42 and
+// gesher_add(40, 2) returns 42, which exercises mapping, relocations
+// (RELATIVE/RELR) and init arrays on a self-contained object.
 //
 // Prints "elf_load_test all passed" and exits 0 on success.
 
+#include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
 #include <cstdio>
@@ -37,6 +41,8 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  gesher::bionic::InstallBionicShim();
+
   // %fs for this thread, so any thread-local or stack-protector code works.
   bool tls = elf::SetupThreadTls();
   std::printf("thread TLS (%%fs) set up: %s\n", tls ? "yes" : "no (host lacks WRFSBASE)");
@@ -50,6 +56,19 @@ int main(int argc, char** argv) {
   if (lib == nullptr) {
     std::printf("\n%d check(s) failed\n", failures);
     return 1;
+  }
+
+  // A library with its own checks.
+  if (auto selftest = reinterpret_cast<int (SYSV*)()>(elf::Lookup(lib, "gesher_selftest"))) {
+    int n = selftest();
+    std::fflush(stdout);
+    Check("gesher_selftest() reports no failures", n == 0);
+    if (failures == 0) {
+      std::printf("\nelf_load_test all passed\n");
+    } else {
+      std::printf("\n%d check(s) failed\n", failures);
+    }
+    return failures == 0 ? 0 : 1;
   }
 
   auto ctor_ran = reinterpret_cast<int (SYSV*)()>(elf::Lookup(lib, "gesher_ctor_ran"));

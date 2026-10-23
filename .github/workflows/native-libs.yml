@@ -57,11 +57,22 @@ jobs:
           "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
             -o dist-native/trivial.so tests/native/trivial.c
+          # Step 2: a library using bionic's libc, libm, libdl, liblog and
+          # pthread through the shim. No stack protector and no thread_local,
+          # so it does not touch %fs (ADR 0014).
+          "$cc" -shared -fPIC -O2 -fno-stack-protector             -Wl,-soname,libc_test.so             -o dist-native/libc_test.so tests/native/libc_test.c -llog -ldl -lm
           echo "--- trivial.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
             -hdS dist-native/trivial.so | sed -n '1,40p'
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
             -d dist-native/trivial.so
+          echo "--- libc_test.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d --dyn-syms dist-native/libc_test.so
+          # Instructions that use %fs (the stack guard, ELF TLS): ADR 0014.
+          for so in dist-native/*.so; do
+            n=$("$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump" -d "$so"               | grep -c '%fs:' || true)
+            echo "$so: $n instruction(s) using %fs"
+          done
 
       - uses: actions/upload-artifact@v4
         with:

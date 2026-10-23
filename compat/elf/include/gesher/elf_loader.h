@@ -43,6 +43,10 @@ struct LoadOptions {
   // symbol-by-symbol (libc.so, libm.so, libdl.so, liblog.so, libandroid.so,
   // libc++_shared.so provided by the shim) are not an error.
   bool allow_shimmed_needed = true;
+  // When true, an undefined function import that nothing defines is bound to
+  // a stub that reports it when called (SetUnresolvedHandler) instead of
+  // failing the load. Data imports must always resolve.
+  bool stub_unresolved_functions = true;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its
@@ -74,6 +78,37 @@ const char* Soname(Library* library);
 // Runs the object's DT_FINI_ARRAY / DT_FINI and marks it closed. The mapping is
 // kept (handles may still be held); full unmap is not implemented.
 void Close(Library* library);
+
+// What dl_iterate_phdr reports for one loaded object.
+struct PhdrInfo {
+  uintptr_t addr = 0;            // load bias
+  const char* name = "";         // soname
+  const void* phdr = nullptr;    // Elf64_Phdr[phnum], inside the mapping
+  uint16_t phnum = 0;
+  size_t tls_modid = 0;          // 0 when the object has no PT_TLS
+  uint64_t adds = 0;             // objects loaded so far (dlpi_adds)
+};
+
+// Calls `fn` for each loaded (not closed) object, in load order, until it
+// returns a non-zero value, which is returned. 0 if every call returned 0.
+int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn);
+
+// For dladdr: the object containing `addr` and the closest exported symbol at
+// or below it. Returns false if `addr` is in no loaded object.
+struct AddressInfo {
+  const char* soname = "";
+  void* base = nullptr;          // the mapping's start
+  const char* symbol = nullptr;  // nullptr if no symbol covers it
+  void* symbol_addr = nullptr;
+};
+bool FindAddress(const void* addr, AddressInfo* info);
+
+// Called (System V ABI, from loaded code) when the object calls a function
+// that no loaded object or the shim defines. The loader binds such imports to
+// a per-symbol stub that passes the name here, so an object whose unused
+// imports are missing still loads. Without a handler the stub aborts.
+using UnresolvedHandler = void (*)(const char* name);
+void SetUnresolvedHandler(UnresolvedHandler handler);
 
 // Per-thread setup: makes %fs point at this thread's bionic TLS block, so the
 // loaded code's thread-local and stack-protector accesses work. Call on every
