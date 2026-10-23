@@ -133,6 +133,7 @@ jobs:
           key: ccache-host-tools-${{ github.run_id }}
 
       - name: Smoke-test the tools
+        if: steps.tools.outputs.cache-hit != 'true'
         run: |
           ls -la dist-host dist-host/protobuf
           dist-host/protobuf/protoc --version
