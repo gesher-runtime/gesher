@@ -124,22 +124,27 @@ if ($LASTEXITCODE -eq 0 -and $out.Contains('FrameworkSmoke all passed')) {
 # on the framework's own classes, MessageQueue, Parcel and an in-process Binder.
 RunDex 'framework natives on framework.jar: MessageQueue, Parcel, Binder' gesher.FrameworkNativesTest @() @() $bcpFramework
 
-# gesher-app drives lifecycle.apk's Activity to onResume (app/README.md).
-# Informational until libandroid_runtime's natives are in: it reports how
-# far the lifecycle got and does not count as a failure yet.
+# gesher-app drives lifecycle.apk's Activity to onResume (app/README.md): the
+# app's manifest, its resources and framework-res.apk's theme are read, and
+# the Application and the Activity go through their callbacks.
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework')
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system')
 $bcpApp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
   -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/lifecycle.apk") 2>&1 | Out-String
 $code = $LASTEXITCODE
-$reached = @('LifecycleApplication onCreate', 'onCreate', 'onStart', 'onResume', 'gesher-app: done') |
-  Where-Object { $out.Contains($_) }
-if ($code -eq 0 -and $out.Contains('gesher-app: done')) {
+$expect = @(
+  'LifecycleApplication onCreate, package=com.gesher.lifecycle',
+  'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
+  'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
+  'gesher-app: done')
+$missing = $expect | Where-Object { -not $out.Contains($_) }
+if ($code -eq 0 -and -not $missing) {
   Write-Host 'PASS  gesher-app: lifecycle.apk to onResume'
 } else {
-  Write-Host ('INFO  gesher-app: lifecycle.apk not resumed yet (exit 0x{0:X8}; reached: {1})' -f $code, ($reached -join ', '))
-  ($out -split "`n" | Select-String -Pattern 'gesher-app|Lifecycle|Exception|Error|at ' | Select-Object -First 40) | Out-Host
+  Write-Host ('FAIL  gesher-app: lifecycle.apk to onResume (exit 0x{0:X8}; missing: {1})' -f $code, ($missing -join ' | '))
+  ($out -split "`n" | Select-String -Pattern 'gesher-app|Lifecycle|Exception|Error|at ' | Select-Object -First 60) | Out-Host
+  $failed++
 }
 
 Write-Host "`n$failed test(s) failed"
