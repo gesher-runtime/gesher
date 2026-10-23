@@ -354,6 +354,18 @@ jobs:
           name: framework
           path: dist-framework/
 
+      # TEMPORARY (services track): framework.jar's classes, to compile gesher-app locally.
+      - name: Upload the framework's classes (standalone runs only)
+        if: github.workflow == 'framework'
+        run: cd out/framework/classes && zip -qr -1 ../../../framework-classes.zip .
+      - if: github.workflow == 'framework'
+        uses: actions/upload-artifact@v4
+        with:
+          name: framework-classes
+          path: framework-classes.zip
+          retention-days: 1
+          compression-level: 0
+
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''
         uses: actions/cache/save@v4
