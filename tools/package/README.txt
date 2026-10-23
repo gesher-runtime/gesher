@@ -39,6 +39,12 @@ resumed, then the program exits. The bundled test app:
 
 Another Activity than the launcher one: gesher-app my.apk --activity .Other
 
+With the system services in a process of their own, as on Android
+(binderd, servicemanager and a system server start first, and stop when
+the app exits; their logs are in %LOCALAPPDATA%\Gesher\logs):
+
+    gesher-app my.apk --system-server
+
 Double-clicking an .apk file runs it with gesher-app too, unless another
 program already opens .apk files; then use "Open with" (the Gesher entry
 runs gesher-app.cmd).
@@ -49,7 +55,8 @@ What works, and what doesn't yet
   are the next phase of the project. Only apps without native (.so) code.
   The framework's natives cover what an Activity's lifecycle needs
   (resources, Looper, Parcel, in-process Binder); drawing is stubbed out and
-  system services are in-process stand-ins, so apps beyond the bundled test
+  system services are stand-ins (in the app's process, or a system server
+  process with --system-server), so apps beyond the bundled test
   app may stop at a missing native method or service.
 - Interpreter only (no JIT and no boot image), so startup takes a few seconds.
 - java.lang, collections, strings, ICU (text, locales), basic file I/O.
