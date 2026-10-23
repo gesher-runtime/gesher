@@ -70,7 +70,7 @@ fi
 mkdir -p "$work/classes"
 find "$root/app/java" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
-javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options \
+javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 
 # One dex for both, into a jar.

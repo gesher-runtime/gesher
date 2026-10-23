@@ -83,7 +83,7 @@ fi
 find "$app/java" "$work/gen" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
 mkdir -p "$work/classes" "$work/dex"
-javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options \
+javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 (cd "$work" && find classes -name '*.class' > dex.txt &&
   java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
