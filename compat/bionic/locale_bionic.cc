@@ -33,7 +33,6 @@ using wchar32 = uint32_t;
 using wint32 = uint32_t;
 constexpr wint32 kWEOF = 0xffffffffu;
 constexpr int kEILSEQ = 84;  // Linux
-constexpr int kENOENT = 2;
 constexpr size_t kInvalid = static_cast<size_t>(-1);
 constexpr size_t kIncomplete = static_cast<size_t>(-2);
 
@@ -383,11 +382,6 @@ size_t BIONIC_SYSV Strxfrm(char* dst, const char* src, size_t n, void*) {
   return len;
 }
 
-size_t BIONIC_SYSV Strftime(char* s, size_t max, const char* fmt, const void* tm, void*) {
-  // bionic's struct tm starts with the same nine ints as the CRT's.
-  return strftime(s, max, fmt, static_cast<const struct tm*>(tm));
-}
-
 int64_t BIONIC_SYSV Strtoll(const char* s, char** end, int base, void*) {
   return strtoll(s, end, base);
 }
@@ -472,6 +466,11 @@ void BIONIC_SYSV Closelog() {}
 
 }  // namespace
 
+void DoubleToBinary128(double d, void* out) {
+  Quad q = ToQuad(d);
+  std::memcpy(out, &q, sizeof(q));
+}
+
 void RegisterLocale(SymbolTable& t) {
 #define L(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   L("newlocale", Newlocale);
@@ -509,7 +508,6 @@ void RegisterLocale(SymbolTable& t) {
   L("wcsxfrm_l", Wcsxfrm);
   L("strcoll_l", Strcoll);
   L("strxfrm_l", Strxfrm);
-  L("strftime_l", Strftime);
   L("strtoll_l", Strtoll);
   L("strtoull_l", Strtoull);
   L("strtold", Strtold);
