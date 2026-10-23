@@ -1,5 +1,5 @@
 diff --git a/core/jni/android_util_AssetManager.cpp b/core/jni/android_util_AssetManager.cpp
-index a931c52..c4ac4f0 100644
+index a931c521..c4ac4f0c 100644
 --- a/core/jni/android_util_AssetManager.cpp
 +++ b/core/jni/android_util_AssetManager.cpp
 @@ -273,7 +273,8 @@ static jobject ReturnParcelFileDescriptor(JNIEnv* env, std::unique_ptr<Asset> as
@@ -22,7 +22,7 @@ index a931c52..c4ac4f0 100644
            GetFieldIDOrDie(env, gFileDescriptorOffsets.mClass, "handle", "J");
  #endif
 diff --git a/core/jni/core_jni_helpers.h b/core/jni/core_jni_helpers.h
-index 8b0b775..8bee8bf 100644
+index 8b0b7754..720ccce4 100644
 --- a/core/jni/core_jni_helpers.h
 +++ b/core/jni/core_jni_helpers.h
 @@ -28,7 +28,8 @@
@@ -35,7 +35,7 @@ index 8b0b775..8bee8bf 100644
  #define CRITICAL_JNI_PARAMS
  #define CRITICAL_JNI_PARAMS_COMMA
  #else
-@@ -36,6 +37,17 @@
+@@ -36,6 +37,19 @@
  #define CRITICAL_JNI_PARAMS_COMMA JNIEnv*, jclass,
  #endif
  
@@ -49,6 +49,8 @@ index 8b0b775..8bee8bf 100644
 +#else
 +#define GESHER_JNI(fn) reinterpret_cast<void*>(fn)
 +#endif
++// A function declared JNICALL, which is System V under GESHER already.
++#define GESHER_JNI_SYSV(fn) reinterpret_cast<void*>(fn)
 +
  namespace android {
  

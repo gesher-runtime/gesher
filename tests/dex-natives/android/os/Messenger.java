@@ -13,7 +13,7 @@ public final class Messenger {
   }
 
   public static void writeMessengerOrNullToParcel(Messenger messenger, Parcel out) {
-    out.writeStrongBinder(messenger);
+    throw new UnsupportedOperationException("Parcel needs framework.jar");
   }
 
   public static Messenger readMessengerOrNullFromParcel(Parcel in) {

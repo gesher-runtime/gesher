@@ -8,7 +8,8 @@ The framework's JNI tables are written by hand, `{"name", "sig", (void*) fn}`,
 so they would hand ART Microsoft-ABI functions. In every table of the files
 below, each `(void*) fn` and `reinterpret_cast<void*>(fn)` becomes
 `GESHER_JNI(fn)`, which core_jni_helpers.h (patch 0001) defines as a System V
-thunk under GESHER.
+thunk under GESHER; a function already declared JNICALL (System V under
+GESHER) becomes `GESHER_JNI_SYSV(fn)`, the function itself.
 
 The sources are read from the checkout's HEAD, so the patch is made against
 the pristine files whatever is applied to the working tree. FILES lists the
@@ -23,11 +24,13 @@ import sys
 FILES = [
     'core/jni/android_content_res_ApkAssets.cpp',
     'core/jni/android_os_MessageQueue.cpp',
+    'core/jni/android_os_Parcel.cpp',
     'core/jni/android_os_SystemClock.cpp',
     'core/jni/android_os_SystemProperties.cpp',
     'core/jni/android_os_Trace.cpp',
     'core/jni/android_text_AndroidCharacter.cpp',
     'core/jni/android_util_AssetManager.cpp',
+    'core/jni/android_util_Binder.cpp',
     'core/jni/android_util_EventLog.cpp',
     'core/jni/android_util_Log.cpp',
     'core/jni/android_util_StringBlock.cpp',
@@ -70,8 +73,17 @@ def rewrite(path, text):
             continue
         end = table_end(text, m.end())
         body = text[m.end():end]
+
+        def entry(f):
+            # A function declared JNICALL is System V already (libnativehelper
+            # patch 0002); it is registered as it is.
+            name = f.group(1).split('::')[-1].split('<')[0]
+            if re.search(r'\bJNICALL\s+' + re.escape(name) + r'\s*\(', text):
+                return 'GESHER_JNI_SYSV(' + f.group(1) + ')'
+            return 'GESHER_JNI(' + f.group(1) + ')'
+
         for cast in CASTS:
-            body = cast.sub(lambda f: 'GESHER_JNI(' + f.group(1) + ')', body)
+            body = cast.sub(entry, body)
         if re.search(r'void\s*\*\s*>?\s*\)', body):
             sys.exit(f'{path}: a table entry is not a plain function name')
         out.append(text[pos:m.end()])
