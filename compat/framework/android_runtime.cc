@@ -16,6 +16,7 @@
 
 #include <gesher/builtin_library.h>
 
+#include <pthread.h>
 #include <signal.h>
 #include <time.h>
 
@@ -25,6 +26,9 @@
 
 #include "core_jni_helpers.h"
 
+// android_util_Binder.cpp defines its register function outside the namespace.
+int register_android_os_Binder(JNIEnv* env);
+
 namespace android {
 
 // The register_* functions of the frameworks/base sources built so far
@@ -33,7 +37,6 @@ int register_android_content_AssetManager(JNIEnv* env);
 int register_android_content_res_ApkAssets(JNIEnv* env);
 int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
-int register_android_os_Binder(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
@@ -44,6 +47,13 @@ int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
+
+// --- libutils' androidSetThreadName ----------------------------------------------
+// libutils' Windows Threads.cpp leaves it out; libbinder's ProcessState names
+// its pooled threads with it.
+extern "C" void androidSetThreadName(const char* name) {
+  pthread_setname_np(pthread_self(), name);
+}
 
 // --- AndroidRuntime statics ---------------------------------------------------
 // There is no AndroidRuntime instance (no Zygote; ART is started by dalvikvm
@@ -195,7 +205,7 @@ static const struct {
      register_android_os_SystemProperties},
     {"android_os_Trace", "android/os/Trace", register_android_os_Trace},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
-    {"android_os_Binder", "com/android/internal/os/BinderInternal", register_android_os_Binder},
+    {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
     {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
