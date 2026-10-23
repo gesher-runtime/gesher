@@ -146,6 +146,7 @@ public final class Main {
                         + ")");
             }
             launch = remoteLauncherActivity(pm, packageName, activity);
+            RemoteServices.installDisplayManagerGlobal();
             log("package " + packageName + " from the system server's package manager: "
                     + appInfo.sourceDir);
             if (dataDir != null) {
