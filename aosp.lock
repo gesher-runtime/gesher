@@ -10,7 +10,7 @@ libnativehelper
 system/libbase
 system/logging
 system/libziparchive
-system/core libcutils/ libutils/ libsystem/include/ libprocessgroup/include/
+system/core libcutils/ libutils/ libsystem/include/ libprocessgroup/include/ property_service/
 external/zlib
 external/tinyxml2
 external/fmtlib
@@ -27,6 +27,82 @@ external/expat Android.bp expat_config.h expat/lib/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ libs/androidfw/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/
-frameworks/native include/android/
-system/incremental_delivery incfs/util/
+frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/
+
+# The framework build (tools/framework/build.py) and its host tools
+# (tools/host). Projects with only *.bp give the planner their Soong module
+# graphs; tools/framework/checkout.py widens each sparse set to the exact
+# files the plan needs at build time (blobless clones fetch them then).
+# Projects tools/host compiles are checked out whole (or the listed trees).
+build/make=platform/build *.bp
+build/soong *.bp
+external/abseil-cpp
+external/bouncycastle *.bp
+external/conscrypt *.bp
+external/cronet *.bp
+external/error_prone *.bp
+external/gflags
+external/googletest googletest/
+external/javapoet *.bp
+external/jsoncpp
+external/jsr305 *.bp
+external/kotlinc *.bp
+external/libphonenumber *.bp
+external/libtextclassifier *.bp native/utils/hash/
+external/mime-support *.bp
+external/perfetto *.bp
+external/protobuf
+external/rappor *.bp
+external/tagsoup *.bp
+frameworks/av *.bp
+frameworks/hardware/interfaces *.bp
+frameworks/libs/systemui *.bp
+frameworks/native *.bp include/android/
+frameworks/opt/telephony *.bp
+frameworks/proto_logging
+hardware/interfaces *.bp
+packages/apps/EyeDropper *.bp
+packages/modules/AdServices *.bp
+packages/modules/AppSearch *.bp
+packages/modules/Bluetooth *.bp
+packages/modules/ConfigInfrastructure *.bp
+packages/modules/Connectivity *.bp
+packages/modules/CrashRecovery *.bp
+packages/modules/DeviceLock *.bp
+packages/modules/HealthFitness *.bp
+packages/modules/IPsec *.bp
+packages/modules/Media *.bp
+packages/modules/NeuralNetworks *.bp
+packages/modules/Nfc *.bp
+packages/modules/OnDevicePersonalization *.bp
+packages/modules/Permission *.bp
+packages/modules/Profiling *.bp
+packages/modules/Scheduling *.bp
+packages/modules/SdkExtensions *.bp
+packages/modules/StatsD *.bp
+packages/modules/Telephony *.bp
+packages/modules/Uwb *.bp
+packages/modules/Virtualization *.bp
+packages/modules/Wifi *.bp
+packages/modules/common *.bp
+packages/providers/MediaProvider *.bp
+packages/services/Telecomm *.bp
+prebuilts/sdk *.bp
+system/apex *.bp
+system/chre *.bp
+system/connectivity/wificond *.bp
+system/extras *.bp
+system/gsid *.bp
+system/hardware/interfaces *.bp
+system/incremental_delivery *.bp incfs/util/
+system/libhidl *.bp
+system/libhwbinder include/ *.bp
+system/libsysprop *.bp
+system/security *.bp
+system/server_configurable_flags *.bp
+system/tools/aidl
+system/tools/hidl
+system/tools/sysprop
+system/tools/xsdc
+system/update_engine *.bp
+system/vold *.bp

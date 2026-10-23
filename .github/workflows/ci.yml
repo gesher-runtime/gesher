@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # framework.yml finds host tools other branches built
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -58,6 +59,12 @@ jobs:
         with:
           name: windows-x64
           path: dist/
+
+  # framework.jar's pipeline (host tools, coremod, framework-res, then
+  # tools/framework/build.py): .github/workflows/framework.yml, which also
+  # runs on its own (gh workflow run framework --ref <branch>).
+  framework:
+    uses: ./.github/workflows/framework.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
@@ -133,7 +140,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: build
+    needs: [build, framework]
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +158,11 @@ jobs:
           name: windows-x64
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -158,6 +170,6 @@ jobs:
           $code = $LASTEXITCODE
           "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
-          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)|failed' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code

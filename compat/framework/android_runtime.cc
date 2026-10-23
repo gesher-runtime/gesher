@@ -16,6 +16,7 @@
 
 #include <gesher/builtin_library.h>
 
+#include <signal.h>
 #include <time.h>
 
 #include <android_runtime/AndroidRuntime.h>
@@ -79,19 +80,26 @@ static const JNINativeMethod gActivityMethods[] = {
 };
 
 // --- android.os.Process (Gesher stub) ------------------------------------------
-// The smallest set the headless framework calls: thread priority (accepted
-// and ignored for now), argv0 and CPU time. Grown as UnsatisfiedLinkErrors
-// appear (docs/framework-natives.md).
+// The real android_util_Process.cpp is cgroups, /proc and libprocessgroup.
+// This is the part of its table an app process calls, by the same names and
+// signatures: thread priority and groups (accepted and ignored: there are no
+// cgroups, and Windows priorities are ART's business), argv0, CPU time,
+// signals (gesher-base's kill), and name lookups (no users or groups). Grown
+// as UnsatisfiedLinkErrors appear (docs/framework-natives.md).
 
-static void Process_setThreadPriority(JNIEnv*, jclass, jint, jint) {}
-
-static void Process_setCallingThreadPriority(JNIEnv*, jclass, jint) {}
+static void Process_setThreadPriorityNative(JNIEnv*, jclass, jint, jint) {}
 
 static jint Process_getThreadPriority(JNIEnv*, jclass, jint) {
   return 0;  // THREAD_PRIORITY_DEFAULT
 }
 
-static void Process_setArgV0(JNIEnv*, jclass, jstring) {}
+static void Process_setThreadGroup(JNIEnv*, jclass, jint, jint) {}
+
+static jint Process_getProcessGroup(JNIEnv*, jclass, jint) {
+  return -1;  // THREAD_GROUP_DEFAULT
+}
+
+static void Process_setArgV0Native(JNIEnv*, jclass, jstring) {}
 
 static jlong Process_getElapsedCpuTime(JNIEnv*, jclass) {
   struct timespec ts;
@@ -99,12 +107,27 @@ static jlong Process_getElapsedCpuTime(JNIEnv*, jclass) {
   return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+static jint Process_getIdForName(JNIEnv*, jclass, jstring) {
+  return -1;
+}
+
+static void Process_sendSignal(JNIEnv*, jclass, jint pid, jint sig) {
+  if (pid > 0) kill(pid, sig);
+}
+
 static const JNINativeMethod gProcessMethods[] = {
-    {"setThreadPriority", "(II)V", GESHER_JNI(Process_setThreadPriority)},
-    {"setThreadPriority", "(I)V", GESHER_JNI(Process_setCallingThreadPriority)},
+    {"setThreadPriorityNative", "(II)V", GESHER_JNI(Process_setThreadPriorityNative)},
     {"getThreadPriority", "(I)I", GESHER_JNI(Process_getThreadPriority)},
-    {"setArgV0", "(Ljava/lang/String;)V", GESHER_JNI(Process_setArgV0)},
+    {"setThreadGroup", "(II)V", GESHER_JNI(Process_setThreadGroup)},
+    {"setThreadGroupAndCpuset", "(II)V", GESHER_JNI(Process_setThreadGroup)},
+    {"setProcessGroup", "(II)V", GESHER_JNI(Process_setThreadGroup)},
+    {"getProcessGroup", "(I)I", GESHER_JNI(Process_getProcessGroup)},
+    {"setArgV0Native", "(Ljava/lang/String;)V", GESHER_JNI(Process_setArgV0Native)},
     {"getElapsedCpuTime", "()J", GESHER_JNI(Process_getElapsedCpuTime)},
+    {"getUidForName", "(Ljava/lang/String;)I", GESHER_JNI(Process_getIdForName)},
+    {"getGidForName", "(Ljava/lang/String;)I", GESHER_JNI(Process_getIdForName)},
+    {"sendSignal", "(II)V", GESHER_JNI(Process_sendSignal)},
+    {"sendSignalQuiet", "(II)V", GESHER_JNI(Process_sendSignal)},
 };
 
 // --- gesher.NativeCanary --------------------------------------------------------

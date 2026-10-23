@@ -18,15 +18,34 @@ public class Process {
   public static final int THREAD_GROUP_RT_APP = 6;
   public static final int THREAD_GROUP_RESTRICTED = 7;
 
-  public static native void setThreadPriority(int tid, int priority);
-
-  public static native void setThreadPriority(int priority);
+  // The natives, by the real class's names (compat/framework/android_runtime.cc).
+  private static native void setThreadPriorityNative(int tid, int priority);
 
   public static native int getThreadPriority(int tid);
 
-  public static native void setArgV0(String text);
+  private static native void setArgV0Native(String text);
 
   public static native long getElapsedCpuTime();
+
+  public static native void setThreadGroup(int tid, int group);
+
+  public static native int getProcessGroup(int pid);
+
+  public static native int getUidForName(String name);
+
+  public static native void sendSignalQuiet(int pid, int signal);
+
+  public static void setThreadPriority(int tid, int priority) {
+    setThreadPriorityNative(tid, priority);
+  }
+
+  public static void setThreadPriority(int priority) {
+    setThreadPriorityNative(myTid(), priority);
+  }
+
+  public static void setArgV0(String text) {
+    setArgV0Native(text);
+  }
 
   // libcore's android.system.Os is on the boot class path at run time but
   // not in the JDK these stand-ins compile against.
@@ -58,7 +77,4 @@ public class Process {
     return false;
   }
 
-  public static int getProcessGroup(int tid) {
-    return THREAD_GROUP_DEFAULT;
-  }
 }

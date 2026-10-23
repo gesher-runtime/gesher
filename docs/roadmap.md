@@ -117,11 +117,13 @@ needs: [framework-build.md](framework-build.md).
 - [x] The framework's dependency graph mapped (`tools/gen/bp_deps.py`)
 - [x] aconfig flag classes as `java_aconfig_library` makes them
       (`Flags`, `FeatureFlags`, `FeatureFlagsImpl`)
-- [ ] Host tools built in CI: hidl-gen, protoc's javanano and javastream
+- [x] Host tools built in CI: hidl-gen, protoc's javanano and javastream
       plugins, stats-log-api-gen, sysprop, xsdc, systemfeatures
-- [ ] Code generation for the framework: AIDL, HIDL, protos, statslog,
+      (`.github/workflows/framework.yml`, cached and shared across branches)
+- [x] Code generation for the framework: AIDL, HIDL, protos, statslog,
       sysprop, XSD, event log tags
-- [ ] `framework.jar` compiles (javac), then joins the boot class path
+- [x] `framework.jar` compiles (javac, no errors) and is dexed (D8), in CI
+- [ ] `framework.jar` on the boot class path, tested on Windows
 - [x] `epoll` and `eventfd` in gesher-base, for `Looper`
       (`probes/posix/epoll_probe.cc`)
 - [ ] libutils, libcutils and libandroidfw in full
