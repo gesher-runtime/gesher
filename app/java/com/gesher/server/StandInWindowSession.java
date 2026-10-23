@@ -64,6 +64,12 @@ public final class StandInWindowSession extends IWindowSession.Default {
     }
 
     @Override
+    public void setOnBackInvokedCallbackInfo(IWindow window,
+            android.window.OnBackInvokedCallbackInfo callbackInfo) {
+        // No back gesture to dispatch.
+    }
+
+    @Override
     public void remove(android.os.IBinder clientToken) {
         SystemServer.log("window session (stand-in): removed a window");
     }
