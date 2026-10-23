@@ -153,7 +153,8 @@ needs: [framework-build.md](framework-build.md).
       `servicemanager`
 - [ ] The framework's own system services (PackageManager parses the APK,
       ActivityManager starts the Activity) in place of gesher-app's stand-ins
-- [ ] `.apk` file association from the installer
+- [x] `.apk` file association from the installer (per user; see
+      `docs/installer.md`), tested in CI by the package job
 
 ## Phase 6 checklist
 

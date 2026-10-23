@@ -39,6 +39,10 @@ resumed, then the program exits. The bundled test app:
 
 Another Activity than the launcher one: gesher-app my.apk --activity .Other
 
+Double-clicking an .apk file runs it with gesher-app too, unless another
+program already opens .apk files; then use "Open with" (the Gesher entry
+runs gesher-app.cmd).
+
 What works, and what doesn't yet
 --------------------------------
 - No windows yet: Android apps run headless (gesher-app); drawing and input
