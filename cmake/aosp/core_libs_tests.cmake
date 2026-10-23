@@ -100,7 +100,11 @@ set_target_properties(libcutils_test PROPERTIES CXX_STANDARD 23)
 target_compile_definitions(libcutils_test PRIVATE PROP_NAME_MAX=32)
 
 # --- libandroidfw_tests ---------------------------------------------------------
-# With the android sources (BackupData, BackupHelpers, ObbFile, PosixUtils).
+# With the android sources (BackupData, BackupHelpers, ObbFile), less
+# PosixUtils_test.cpp: libandroidfw's PosixUtils.cpp compiles
+# android::util::ExecuteBinary out on _WIN32 (fork/execvp; its one user,
+# OverlayConfig's JNI running /system/bin/idmap2, is not built), and the test
+# runs /bin/date (docs/core-libs.md).
 gesher_core_test(libandroidfw_tests
   SOURCES
     ${_afw}/tests/CommonHelpers.cpp ${_afw}/tests/TestHelpers.cpp ${_afw}/tests/TestMain.cpp
@@ -122,7 +126,7 @@ gesher_core_test(libandroidfw_tests
     ${_afw}/tests/ZipUtils_test.cpp
     # android
     ${_afw}/tests/BackupData_test.cpp ${_afw}/tests/BackupHelpers_test.cpp
-    ${_afw}/tests/ObbFile_test.cpp ${_afw}/tests/PosixUtils_test.cpp
+    ${_afw}/tests/ObbFile_test.cpp
   # libandroidfw_defaults, and -Wno-unnamed-type-template-args for gtest.
   FLAGS -Wunreachable-code -Wno-missing-field-initializers -Wno-unnamed-type-template-args
   LIBS androidfw binder ziparchive utils cutils base log z gmock)
