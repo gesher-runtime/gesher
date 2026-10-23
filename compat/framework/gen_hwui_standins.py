@@ -37,6 +37,9 @@ SPECIALS = {
     ('android/graphics/RenderNode', 'nGetAlpha'): 'Standin_oneFloat',
     ('android/graphics/RenderNode', 'nGetScaleX'): 'Standin_oneFloat',
     ('android/graphics/RenderNode', 'nGetScaleY'): 'Standin_oneFloat',
+    ('android/graphics/Paint', 'nInit'): 'Standin_create',
+    ('android/graphics/Paint', 'nInitWithPaint'): 'Standin_create',
+    ('android/graphics/Paint', 'nGetNativeFinalizer'): 'Standin_getFreeFunction',
 }
 # The return type each special's function declares.
 FLOAT_SPECIALS = {'Standin_oneFloat'}
@@ -75,8 +78,9 @@ def main():
     for arg in sys.argv[2:]:
         cls, source = arg.split('=', 1)
         table = 'gMethods'
-        if ':' in source[2:]:  # not a drive letter
-            source, table = source.rsplit(':', 1)
+        m = re.match(r'(.*):([A-Za-z_]\w*)$', source)
+        if m:
+            source, table = m.group(1), m.group(2)
         var = 'k' + re.sub(r'\W', '_', cls)
         out.append(f'static const JNINativeMethod {var}[] = {{')
         for name, sig in entries(source, table):

@@ -56,10 +56,12 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
 # Stand-ins for hwui's natives (compat/framework/hwui_standins.cc), their
 # tables generated from hwui's JNI sources.
 set(_hwui_standin_sources
-  android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp)
+  android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp
+  android/graphics/Paint=${_fw}/libs/hwui/jni/Paint.cpp:methods)
 set(_hwui_standin_inputs)
 foreach(_s ${_hwui_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")
+  string(REGEX REPLACE ":[A-Za-z_]+$" "" _f "${_f}")
   list(APPEND _hwui_standin_inputs "${_f}")
 endforeach()
 add_custom_command(
