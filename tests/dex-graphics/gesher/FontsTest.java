@@ -160,6 +160,17 @@ public final class FontsTest {
     check(dark > 100 && java.util.Arrays.equals(drawn, expected),
         "Canvas.drawText Hebrew, default typeface: Noto Sans Hebrew's glyphs (" + dark
             + " dark pixels, identical)");
+    // Right to left: the last letter (final mem) is drawn leftmost, where the first
+    // (shin) would be in left-to-right order.
+    int[] lastAlone = pixels(draw(def, HEBREW.substring(3)));
+    int[] firstAlone = pixels(draw(def, HEBREW.substring(0, 1)));
+    int columns = 8 + (int) def.measureText(HEBREW.substring(3)) - 1;
+    int asLast = differing(drawn, lastAlone, columns);
+    int asFirst = differing(drawn, firstAlone, columns);
+    check(asLast < asFirst, "Hebrew drawn right to left (the leftmost glyph is the last"
+        + " letter: " + asLast + " pixels differ from it, " + asFirst + " from the first)");
+    rtlLayout(def);
+
     String mixed = LATIN + " " + HEBREW;
     float mixedWidth = def.measureText(mixed);
     check(mixedWidth > def.measureText(LATIN) + width,
@@ -224,6 +235,24 @@ public final class FontsTest {
     }
   }
 
+  /** A Hebrew paragraph through StaticLayout (minikin's line breaker): right to left. */
+  private static void rtlLayout(Paint paint) {
+    try {
+      android.text.TextPaint textPaint = new android.text.TextPaint(paint);
+      String text = HEBREW + " " + HEBREW;
+      android.text.StaticLayout layout = android.text.StaticLayout.Builder
+          .obtain(text, 0, text.length(), textPaint, 400).build();
+      check(layout.getLineCount() == 1
+              && layout.getParagraphDirection(0) == android.text.Layout.DIR_RIGHT_TO_LEFT
+              && layout.getLineLeft(0) > 100 && Math.abs(layout.getLineRight(0) - 400) < 1,
+          "StaticLayout: a Hebrew paragraph is right to left, aligned right (line "
+              + layout.getLineLeft(0) + ".." + layout.getLineRight(0) + " of 400)");
+    } catch (Throwable t) {
+      t.printStackTrace();
+      check(false, "StaticLayout: a Hebrew paragraph (" + t + ")");
+    }
+  }
+
   // --- helpers --------------------------------------------------------------------------
 
   private static Paint paint(Typeface typeface) {
@@ -247,6 +276,17 @@ public final class FontsTest {
     int[] out = new int[bitmap.getWidth() * bitmap.getHeight()];
     bitmap.getPixels(out, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
     return out;
+  }
+
+  /** Pixels that differ between two 200x48 drawings in the columns left of {@code columns}. */
+  private static int differing(int[] a, int[] b, int columns) {
+    int n = 0;
+    for (int y = 0; y < 48; y++) {
+      for (int x = 0; x < columns && x < 200; x++) {
+        if (a[y * 200 + x] != b[y * 200 + x]) n++;
+      }
+    }
+    return n;
   }
 
   private static int darkPixels(Bitmap bitmap) {
