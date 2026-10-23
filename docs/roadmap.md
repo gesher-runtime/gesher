@@ -126,7 +126,8 @@ needs: [framework-build.md](framework-build.md).
 - [x] `framework.jar` on the boot class path, tested on Windows (FrameworkSmoke)
 - [x] `epoll` and `eventfd` in gesher-base, for `Looper`
       (`probes/posix/epoll_probe.cc`)
-- [ ] libutils, libcutils and libandroidfw in full
+- [x] libutils, libcutils and libandroidfw in full, with AOSP's gtests on
+      Windows (ci run 39956255117; exclusions in `docs/core-libs.md`)
 - [x] `libandroid_runtime`'s host natives linked in: assets, resources,
       `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
 - [x] In-process stand-ins for the services the lifecycle calls
