@@ -7,9 +7,13 @@ package com.gesher.server;
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
 import android.app.INotificationManager;
+import android.app.IUiModeManager;
+import android.app.IUiModeManagerCallback;
+import android.app.UiModeManager;
 import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.UserInfo;
+import android.content.res.Configuration;
 import android.graphics.Point;
 import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
@@ -69,6 +73,8 @@ public final class Services {
                 new InputMethodManager()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
+        services.put(Context.UI_MODE_SERVICE,
+                StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
         return services;
     }
 
@@ -187,6 +193,41 @@ public final class Services {
                 com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
                 int untrustedDisplayId) {
             // No input method will ever bind to it.
+        }
+    }
+
+    /**
+     * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
+     * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.
+     */
+    public static final class UiModeService extends IUiModeManager.Default {
+        @Override
+        public void addCallback(IUiModeManagerCallback callback, int userId) {
+            // Nothing ever changes.
+        }
+
+        @Override
+        public void removeCallback(IUiModeManagerCallback callback, int userId) {
+        }
+
+        @Override
+        public int getCurrentModeType(int displayId) {
+            return Configuration.UI_MODE_TYPE_NORMAL;
+        }
+
+        @Override
+        public int getNightMode(int displayId) {
+            return UiModeManager.MODE_NIGHT_NO;
+        }
+
+        @Override
+        public float getContrast(int userId) {
+            return 0f;
+        }
+
+        @Override
+        public int getForceInvertState(int userId) {
+            return UiModeManager.FORCE_INVERT_TYPE_OFF;
         }
     }
 
