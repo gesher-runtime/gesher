@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Set only by LifecycleTheme: reading it back shows the theme was applied. -->
+    <attr name="gesherMarker" format="string" />
+</resources>
