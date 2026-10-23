@@ -363,8 +363,8 @@ AndroidEvent Translator::TouchMotion(int32_t action, int64_t t, int32_t meta) co
   e.meta_state = meta;
   e.down_time = touch_down_time_;
   e.event_time = t;
-  e.cursor_x = AMOTION_EVENT_INVALID_CURSOR_POSITION;
-  e.cursor_y = AMOTION_EVENT_INVALID_CURSOR_POSITION;
+  e.cursor_x = android::AMOTION_EVENT_INVALID_CURSOR_POSITION;
+  e.cursor_y = android::AMOTION_EVENT_INVALID_CURSOR_POSITION;
   e.pointer_count = static_cast<uint32_t>(touches_.size());
   for (size_t i = 0; i < touches_.size(); i++) {
     e.properties[i].clear();
