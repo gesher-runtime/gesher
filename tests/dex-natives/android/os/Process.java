@@ -35,6 +35,14 @@ public class Process {
 
   public static native void sendSignalQuiet(int pid, int signal);
 
+  public static native void sendSignal(int pid, int signal);
+
+  public static native void setThreadGroupAndCpuset(int tid, int group);
+
+  public static native void setProcessGroup(int pid, int group);
+
+  public static native int getGidForName(String name);
+
   public static void setThreadPriority(int tid, int priority) {
     setThreadPriorityNative(tid, priority);
   }
