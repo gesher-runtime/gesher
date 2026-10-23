@@ -61,6 +61,18 @@ jobs:
           # pthread through the shim. No stack protector and no thread_local,
           # so it does not touch %fs (ADR 0014).
           "$cc" -shared -fPIC -O2 -fno-stack-protector             -Wl,-soname,libc_test.so             -o dist-native/libc_test.so tests/native/libc_test.c -llog -ldl -lm
+          # Step 3: libraries built the way the NDK builds app code by default,
+          # with the stack protector (%fs:0x28) and thread-locals: emulated at
+          # API 26, ELF TLS (general-dynamic, local-dynamic, initial-exec) at
+          # API 29, plus a TLS library fs_test29.so dlopen()s while a thread
+          # runs. The loader rewrites their %fs accesses (ADR 0014).
+          cc29="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
+          "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
+          "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
+          "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c
+          echo "--- fs_test29.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true
           echo "--- trivial.so ---"
           "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
             -hdS dist-native/trivial.so | sed -n '1,40p'
