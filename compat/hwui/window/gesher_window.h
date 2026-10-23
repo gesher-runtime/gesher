@@ -63,6 +63,12 @@ class Window {
   void SetResizable(bool resizable);
   // Resizes the window so its client area is width x height pixels.
   void SetClientSize(int width, int height);
+  // The window's icon (title bar, taskbar, Alt+Tab) from an .ico file; false
+  // when it cannot be read.
+  bool SetIcon(const std::string& ico_path_utf8);
+  // The System.AppUserModel.ID given to the window when it was created (the
+  // process's; empty when it has none).
+  const std::string& app_user_model_id() const { return app_user_model_id_; }
 
   // The back buffer, locked for drawing: BGRA pixels, `*stride` pixels a row,
   // the size the window had when it was locked (*width x *height).
@@ -104,6 +110,9 @@ class Window {
   void* hwnd_ = nullptr;
   int event_fd_ = -1;
   void* thread_handle_ = nullptr;
+  void* icon_big_ = nullptr;
+  void* icon_small_ = nullptr;
+  std::string app_user_model_id_;
   uint32_t thread_id_ = 0;
 
   // Creation handshake.

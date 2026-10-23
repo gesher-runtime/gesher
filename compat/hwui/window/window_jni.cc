@@ -95,6 +95,18 @@ void JNICALL NativeWindow_setClientSize(JNIEnv*, jclass, jlong ptr, jint width, 
   Get(ptr)->window()->SetClientSize(width, height);
 }
 
+// The window's icon from an .ico file (title bar, taskbar); false when it
+// cannot be read.
+jboolean JNICALL NativeWindow_setIcon(JNIEnv* env, jclass, jlong ptr, jstring path) {
+  return Get(ptr)->window()->SetIcon(Utf8(env, path)) ? JNI_TRUE : JNI_FALSE;
+}
+
+// The System.AppUserModel.ID the window got (the process's), or null.
+jstring JNICALL NativeWindow_getAppUserModelId(JNIEnv* env, jclass, jlong ptr) {
+  const std::string& id = Get(ptr)->window()->app_user_model_id();
+  return id.empty() ? nullptr : env->NewStringUTF(id.c_str());
+}
+
 // Tags a stand-in SurfaceControl handle with the window, so the BLAST adapter
 // ViewRootImpl makes for it hands out this window's Surface.
 void JNICALL NativeWindow_tagSurfaceControl(JNIEnv*, jclass, jlong ptr, jlong surface_control) {
@@ -191,6 +203,9 @@ const JNINativeMethod kMethods[] = {
     {"nTagSurfaceControl", "(JJ)V", reinterpret_cast<void*>(&NativeWindow_tagSurfaceControl)},
     {"nGetEventFd", "(J)I", reinterpret_cast<void*>(&NativeWindow_getEventFd)},
     {"nPollEvent", "(J[D)I", reinterpret_cast<void*>(&NativeWindow_pollEvent)},
+    {"nSetIcon", "(JLjava/lang/String;)Z", reinterpret_cast<void*>(&NativeWindow_setIcon)},
+    {"nGetAppUserModelId", "(J)Ljava/lang/String;",
+     reinterpret_cast<void*>(&NativeWindow_getAppUserModelId)},
 };
 
 }  // namespace

@@ -46,6 +46,19 @@ public final class NativeWindow implements AutoCloseable {
     nSetClientSize(ptr(), width, height);
   }
 
+  /** The window's icon (title bar, taskbar) from an .ico file; false if it cannot be read. */
+  public boolean setIcon(String icoPath) {
+    return nSetIcon(ptr(), icoPath);
+  }
+
+  /**
+   * The System.AppUserModel.ID the window was given when it was created (the process's,
+   * which app processes set from $GESHER_APP_USER_MODEL_ID), or null.
+   */
+  public String getAppUserModelId() {
+    return nGetAppUserModelId(ptr());
+  }
+
   /**
    * Makes a stand-in SurfaceControl handle ({@code SurfaceControl.mNativeObject}) stand for
    * this window: its copies, and the BLASTBufferQueue ViewRootImpl updates with it, hand
@@ -160,4 +173,6 @@ public final class NativeWindow implements AutoCloseable {
   private static native void nTagSurfaceControl(long ptr, long surfaceControl);
   private static native int nGetEventFd(long ptr);
   private static native int nPollEvent(long ptr, double[] out);
+  private static native boolean nSetIcon(long ptr, String icoPath);
+  private static native String nGetAppUserModelId(long ptr);
 }
