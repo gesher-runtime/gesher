@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <nativehelper/JNIHelp.h>
+#include <nativehelper/JNIPlatformHelp.h>
 
 namespace {
 
