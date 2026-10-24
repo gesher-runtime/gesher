@@ -1,5 +1,5 @@
 # dex2oat (art/dex2oat/Android.bp, host variant) and the libraries it is made
-# of: libart-compiler (art/compiler/Android.bp, the x86-64 code generator only)
+# of: libart-compiler (art/compiler/Android.bp, the x86 and x86-64 code generators)
 # and libart-dex2oat. Built for Windows like dalvikvm, on the same libart, so
 # Gesher's boot image comes from the runtime that loads it (docs/boot-image.md,
 # ADR 0031). dalvikvm itself does not link the compiler: it runs with the JIT
@@ -48,7 +48,14 @@ set(_compiler_srcs
   optimizing/superblock_cloner.cc optimizing/write_barrier_elimination.cc
   trampolines/trampoline_compiler.cc utils/assembler.cc
   utils/jni_macro_assembler.cc compiler.cc
-  # codegen: x86_64
+  # codegen: x86 and x86_64 (Soong builds the 32-bit variant into the 64-bit
+  # one; the x86-64 code generator shares its nodes and simplifiers)
+  jni/quick/x86/calling_convention_x86.cc optimizing/code_generator_x86.cc
+  optimizing/code_generator_vector_x86.cc optimizing/intrinsics_x86.cc
+  optimizing/instruction_simplifier_x86_shared.cc
+  optimizing/instruction_simplifier_x86.cc optimizing/pc_relative_fixups_x86.cc
+  optimizing/x86_memory_gen.cc utils/x86/assembler_x86.cc
+  utils/x86/jni_macro_assembler_x86.cc utils/x86/managed_register_x86.cc
   jni/quick/x86_64/calling_convention_x86_64.cc
   optimizing/intrinsics_x86_64.cc optimizing/instruction_simplifier_x86_64.cc
   optimizing/code_generator_x86_64.cc optimizing/code_generator_vector_x86_64.cc
@@ -57,7 +64,7 @@ set(_compiler_srcs
 list(TRANSFORM _compiler_srcs PREPEND "${_cc}/")
 add_library(art_compiler STATIC ${_compiler_srcs} ${compiler_ops})
 target_include_directories(art_compiler PUBLIC ${_cc} ${_art}/disassembler)
-target_compile_definitions(art_compiler PUBLIC ART_ENABLE_CODEGEN_x86_64)
+target_compile_definitions(art_compiler PUBLIC ART_ENABLE_CODEGEN_x86 ART_ENABLE_CODEGEN_x86_64)
 target_link_libraries(art_compiler PUBLIC art_runtime)
 add_dependencies(art_compiler art_asm_support_headers)
 
@@ -71,7 +78,8 @@ set(_dex2oat_srcs
   linker/image_writer.cc linker/multi_oat_relative_patcher.cc
   linker/oat_writer.cc linker/relative_patcher.cc sdk_checker.cc transaction.cc
   utils/swap_space.cc
-  # codegen: x86_64
+  # codegen: x86 and x86_64
+  linker/x86/relative_patcher_x86.cc linker/x86/relative_patcher_x86_base.cc
   linker/x86_64/relative_patcher_x86_64.cc)
 list(TRANSFORM _dex2oat_srcs PREPEND "${_d2o}/")
 add_library(art_dex2oat STATIC ${_dex2oat_srcs} ${dex2oat_ops})

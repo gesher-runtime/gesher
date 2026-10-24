@@ -47,6 +47,7 @@ $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
 $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
-& (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system/framework/boot.art")" `
+# The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
+& (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
   -Xint '-Xusejit:false' -cp (NoDrive $dexFull) $Class @ProgramArgs
 exit $LASTEXITCODE
