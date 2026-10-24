@@ -92,6 +92,32 @@ if ($p.ExitCode -eq 0 -and $outText.Contains('Hello from ART on Windows') -and $
   $script:failed++
 }
 
+# AOT code in the extensions too (boot-image.yml: -ExtensionFilter speed):
+# with framework.jar and gesher-app.jar on the boot class path, far more
+# methods have compiled code than with the primary image alone.
+function CompiledCount([string] $Bcp) {
+  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+  foreach ($a in @($image, "-Xbootclasspath:$Bcp", '-Xusejit:false', '-cp', (NoDrive "$Dir/hello.dex"), 'gesher.Hello')) { $psi.ArgumentList.Add($a) }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.Environment['GESHER_LOG_EXECUTION'] = '1'
+  $p = [Diagnostics.Process]::Start($psi)
+  $e = $p.StandardError.ReadToEndAsync()
+  $null = $p.StandardOutput.ReadToEnd()
+  $p.WaitForExit()
+  if ($e.Result -match 'boot image: (\d+) methods with compiled code \((\d+) native') { return @([int]$Matches[1], [int]$Matches[2]) }
+  return @(0, 0)
+}
+$primary = CompiledCount $bcp
+$all = CompiledCount $bcpWithApp
+if ($primary[0] -gt 0 -and $all[0] -gt $primary[0] + 100000) {
+  Write-Host ("PASS  boot image: AOT code in the extensions too: {0} methods with compiled code with framework.jar and gesher-app.jar, {1} with the primary image alone ({2} / {3} JNI stubs)" -f $all[0], $primary[0], $all[1], $primary[1])
+} else {
+  Write-Host ("FAIL  boot image: the extensions carry no AOT code ({0} methods with compiled code with them, {1} without)" -f $all[0], $primary[0])
+  $script:failed++
+}
+
 # Startup times, imageless and with the image, alternating, median of 3: Hello
 # to its line, and lifecycle.apk (gesher-app's single-process driver) to
 # LifecycleActivity.onCreate, both from the process start.
