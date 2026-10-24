@@ -6,14 +6,21 @@ package com.gesher.uiapp;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.widget.EditText;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * gesher-app's window test app: a layout of colored Views and a TextView. Reports its
- * layout once the window has laid it out, and each lifecycle step, on stdout.
+ * gesher-app's window test app: a layout of colored Views and a TextView, a Button whose
+ * click turns the red View cyan, an EditText (focused) echoed into a TextView, and a
+ * ScrollView. Reports its layout once the window has laid it out and whenever its size
+ * changes, the clicks, the echoed text (other than ASCII as backslash-u escapes), the scroll position and
+ * each lifecycle step, on stdout (tests/windows/tracks/34-windows.ps1 reads them).
  */
 public class UiActivity extends Activity {
     private static final String TAG = "UiActivity";
@@ -47,7 +54,52 @@ public class UiActivity extends Activity {
                                 + ", hardware accelerated " + root.isHardwareAccelerated());
                     }
                 });
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (r - l != or - ol || b - t != ob - ot) {
+                say("UiActivity content " + (r - l) + "x" + (b - t));
+            }
+        });
+        final View red = findViewById(R.id.red);
+        findViewById(R.id.button).setOnClickListener(v -> {
+            red.setBackgroundColor(0xFF00FFFF);
+            say("UiActivity onClick: button");
+        });
+        final EditText edit = findViewById(R.id.edit);
+        final TextView echo = findViewById(R.id.echo);
+        edit.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                echo.setText(s.toString());
+                say("UiActivity echo: " + escape(s.toString()));
+            }
+        });
+        edit.requestFocus();
+        ScrollView scroll = findViewById(R.id.scroll);
+        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) ->
+                say("UiActivity scrolled to " + y));
         say("UiActivity onCreate");
+    }
+
+    /** {@code s} in ASCII: other characters as backslash-u and four hex digits. */
+    private static String escape(String s) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c < 0x7f) {
+                out.append(c);
+            } else {
+                out.append(String.format("\\u%04x", (int) c));
+            }
+        }
+        return out.toString();
     }
 
     @Override
