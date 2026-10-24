@@ -44,6 +44,9 @@ int register_gesher_attach_standins(JNIEnv* env);
 int register_gesher_input(JNIEnv* env);
 // android.os.SharedMemory over memfds: compat/framework/shared_memory.cc.
 int register_gesher_shared_memory(JNIEnv* env);
+// android.app.NativeActivity's and android.view.InputQueue's natives for an
+// app's ELF libraries: compat/bionic/native_activity.cc, docs/native-libs.md.
+int register_gesher_native_activity(JNIEnv* env);
 
 namespace android {
 
@@ -376,6 +379,7 @@ static const struct {
     {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
     // The input natives, after the stand-ins they replace (each class is checked).
     {"gesher_input", "android/view/KeyEvent", ::register_gesher_input},
+    {"gesher_native_activity", "android/app/NativeActivity", ::register_gesher_native_activity},
     {"gesher_device_standins", "android/view/SurfaceControl", ::register_gesher_device_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
     {"gesher_ApplicationSharedMemory", "com/android/internal/os/ApplicationSharedMemory",
