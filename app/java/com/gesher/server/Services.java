@@ -132,6 +132,9 @@ public final class Services {
                 new DeviceServices.SearchService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new DeviceServices.ClipboardService()).asBinder());
+        // Devices (docs/devices.md): location over Windows' location service.
+        services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
+                new LocationManagerService(pm, am)).asBinder());
         return services;
     }
 
