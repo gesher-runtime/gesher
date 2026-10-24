@@ -15,11 +15,19 @@
 $image = "-Ximage:$(NoDrive "$root/system")/framework/boot.art"
 $codegenDex = NoDrive "$Dir/codegen-tests.dex"
 
-function RunMode([string[]] $ModeArgs, [string[]] $Program, [hashtable] $Env = @{}) {
+# Every thread's stack of a process that hangs, with cdb if the runner has it.
+function CodegenStacks([int] $Id) {
+  $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $cdb) { return '(no cdb.exe on this machine)' }
+  $text = & $cdb.FullName -p $Id -c '.symopt+0x40; ~*k 40; qd' 2>&1 | Out-String
+  $text -replace 'dalvikvm\+0x', 'dalvikvm.exe+0x'
+}
+
+# Runs dalvikvm; a run that takes more than `Seconds` is stopped, with its stacks.
+function RunDalvikvm([string[]] $Arguments, [hashtable] $Env = @{}, [int] $Seconds = 240) {
   $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
-  foreach ($a in @("-Xbootclasspath:$bcp", $image) + $ModeArgs + @('-cp', $codegenDex) + $Program) {
-    $psi.ArgumentList.Add($a)
-  }
+  foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -28,9 +36,23 @@ function RunMode([string[]] $ModeArgs, [string[]] $Program, [hashtable] $Env = @
   $watch = [Diagnostics.Stopwatch]::StartNew()
   $p = [Diagnostics.Process]::Start($psi)
   $stderr = $p.StandardError.ReadToEndAsync()
-  $stdout = $p.StandardOutput.ReadToEnd()
-  if (-not $p.WaitForExit(600000)) { $p.Kill(); $stdout += "`n(timed out)" }
-  [pscustomobject]@{ Exit = $p.ExitCode; Out = $stdout + "`n" + $stderr.Result; Ms = [int]$watch.Elapsed.TotalMilliseconds }
+  $stdout = $p.StandardOutput.ReadToEndAsync()
+  $extra = ''
+  if (-not $p.WaitForExit($Seconds * 1000)) {
+    $extra = "`n(timed out after $Seconds s; its threads:)`n" + (CodegenStacks $p.Id)
+    try { $p.Kill($true) } catch {}
+    $null = $p.WaitForExit(30000)
+  }
+  $null = $stdout.Wait(30000)
+  $null = $stderr.Wait(30000)
+  $o = if ($stdout.IsCompleted) { $stdout.Result } else { '' }
+  $e = if ($stderr.IsCompleted) { $stderr.Result } else { '' }
+  [pscustomobject]@{ Exit = $(if ($p.HasExited) { $p.ExitCode } else { -1 }); Out = $o + "`n" + $e + $extra;
+                     Stdout = $o; Err = $e + $extra; Ms = [int]$watch.Elapsed.TotalMilliseconds }
+}
+
+function RunMode([string[]] $ModeArgs, [string[]] $Program, [hashtable] $Env = @{}) {
+  RunDalvikvm (@("-Xbootclasspath:$bcp", $image) + $ModeArgs + @('-cp', $codegenDex) + $Program) $Env
 }
 
 function ReportFailure([string] $Name, $r) {
@@ -41,6 +63,18 @@ function ReportFailure([string] $Name, $r) {
   }
   ($text -split "`n" | Select-Object -Last 80) | Out-Host
   $script:failed++
+}
+
+# First, Hello under nterp with every fault traced (fault_signals.cc): the
+# runtime's own faults, before the heavier checks.
+$r = RunDalvikvm @("-Xbootclasspath:$bcp", $image, '-Xusejit:false', '-cp', (NoDrive "$Dir/hello.dex"), 'gesher.Hello') `
+  @{ GESHER_TRACE_SIGNALS = '1'; GESHER_ART_NO_AOT = '1' } 60
+if ($r.Exit -eq 0 -and $r.Out.Contains('Hello from ART on Windows') -and $r.Out.Contains('gesher: execution: nterp')) {
+  Write-Host "PASS  codegen: Hello under nterp ($(@($r.Out -split "`n" | Where-Object { $_ -match 'gesher-signal:' }).Count) faults traced)"
+  $nterpOk = $true
+} else {
+  ReportFailure 'Hello under nterp' $r
+  $nterpOk = $false
 }
 
 # What a mode's output must show, besides the program's own result.
@@ -64,11 +98,19 @@ $modes = [ordered]@{
   'jit' = @{ Args = $jitArgs; Env = @{} }
 }
 
+# Without a working nterp, the compiled modes would only time out one by one.
+if (-not $nterpOk) {
+  Write-Host 'INFO  codegen: nterp does not run Hello; only the interpreter modes run'
+  foreach ($k in 'nterp', 'aot', 'jit') { $modes.Remove($k) }
+}
+
 # A boot image without compiled code (--compiler-filter=verify) has no AOT mode.
-$probe = RunMode @('-Xusejit:false') @('gesher.Bench', '0') @{}
-if ($probe.Out -match 'gesher: boot image: 0 methods with compiled code') {
-  Write-Host 'INFO  codegen: the boot image has no compiled code; no aot mode'
-  $modes.Remove('aot')
+if ($nterpOk) {
+  $probe = RunMode @('-Xusejit:false') @('gesher.Bench', '0') @{}
+  if ($probe.Out -match 'gesher: boot image: 0 methods with compiled code') {
+    Write-Host 'INFO  codegen: the boot image has no compiled code; no aot mode'
+    $modes.Remove('aot')
+  }
 }
 
 $bench = [ordered]@{}
@@ -125,20 +167,9 @@ foreach ($dex in Get-ChildItem "$Dir/art-*.dex" -ErrorAction SilentlyContinue | 
   foreach ($name in @($modes.Keys)) {
     if ($name -eq 'interpret-only') { continue }
     $m = $modes[$name]
-    $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
-    foreach ($a in @("-Xbootclasspath:$bcp", $image) + $m.Args + $extra + @('-cp', (NoDrive $dex.FullName), 'Main')) {
-      $psi.ArgumentList.Add($a)
-    }
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    foreach ($k in $m.Env.Keys) { $psi.Environment[$k] = $m.Env[$k] }
-    $p = [Diagnostics.Process]::Start($psi)
-    $err = $p.StandardError.ReadToEndAsync()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    if (-not $p.WaitForExit(600000)) { $p.Kill(); $stdout += "`n(timed out)" }
-    $actual = $stdout -replace "`r", ''
-    $results[$name] = @{ Ok = ($p.ExitCode -eq 0 -and $actual.TrimEnd() -eq $expected.TrimEnd()); Exit = $p.ExitCode; Out = $actual; Err = $err.Result }
+    $rr = RunDalvikvm (@("-Xbootclasspath:$bcp", $image) + $m.Args + $extra + @('-cp', (NoDrive $dex.FullName), 'Main')) $m.Env
+    $actual = $rr.Stdout -replace "`r", ''
+    $results[$name] = @{ Ok = ($rr.Exit -eq 0 -and $actual.TrimEnd() -eq $expected.TrimEnd()); Exit = $rr.Exit; Out = $actual; Err = $rr.Err }
   }
   if (-not $results['switch'].Ok) {
     Write-Host ('INFO  codegen: art run-test {0} does not pass under the switch interpreter either (exit 0x{1:X8}); not counted' -f $test, $results['switch'].Exit)

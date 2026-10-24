@@ -34,6 +34,8 @@
 //    does not handle to the action it found when it claimed the signal.)
 
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ucontext.h>
 #include <windows.h>
@@ -48,6 +50,34 @@ constexpr uintptr_t kPage = 4096;
 
 thread_local bool t_unhandled = false;
 thread_local int t_depth = 0;
+
+// GESHER_TRACE_SIGNALS=1: the first 200 exceptions this handler sees, and what
+// became of them, on stderr.
+LONG g_traced = 0;
+bool Tracing() {
+  static const bool on = getenv("GESHER_TRACE_SIGNALS") != nullptr;
+  return on;
+}
+
+void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what) {
+  if (!Tracing() || InterlockedIncrement(&g_traced) > 200) return;
+  ULONG_PTR fault = rec->NumberParameters >= 2 ? rec->ExceptionInformation[1] : 0;
+  HMODULE module = nullptr;
+  char name[MAX_PATH] = "?";
+  uintptr_t base = 0;
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCSTR>(c->Rip), &module) &&
+      GetModuleFileNameA(module, name, sizeof(name)) != 0) {
+    base = reinterpret_cast<uintptr_t>(module);
+  }
+  const char* file = strrchr(name, '\\');
+  fprintf(stderr,
+          "gesher-signal: thread %lu code 0x%08lx address 0x%llx rip %s+0x%llx (0x%llx) rsp 0x%llx: %s\n",
+          GetCurrentThreadId(), rec->ExceptionCode, static_cast<unsigned long long>(fault),
+          file != nullptr ? file + 1 : name, static_cast<unsigned long long>(c->Rip - base),
+          static_cast<unsigned long long>(c->Rip), static_cast<unsigned long long>(c->Rsp), what);
+}
 
 void Unhandled(int, siginfo_t*, void*) { t_unhandled = true; }
 
@@ -149,7 +179,10 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
   switch (rec->ExceptionCode) {
     case EXCEPTION_ACCESS_VIOLATION:
       if (rec->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
-      if (GrowStack(rec->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
+      if (GrowStack(rec->ExceptionInformation[1])) {
+        Trace(rec, info->ContextRecord, "stack grown");
+        return EXCEPTION_CONTINUE_EXECUTION;
+      }
       signo = SIGSEGV;
       addr = reinterpret_cast<void*>(rec->ExceptionInformation[1]);
       {
@@ -178,6 +211,7 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
     return EXCEPTION_CONTINUE_SEARCH;
   }
   if ((act.sa_flags & SA_SIGINFO) != 0 && act.sa_sigaction == Unhandled) {
+    Trace(rec, info->ContextRecord, "no handler");
     return EXCEPTION_CONTINUE_SEARCH;
   }
   // A fault in a handler that is handling a fault on this thread: once more
@@ -209,7 +243,11 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
   const bool unhandled = t_unhandled;
   t_unhandled = saved_unhandled;
   pthread_sigmask(SIG_SETMASK, &uc.uc_sigmask, nullptr);
-  if (unhandled) return EXCEPTION_CONTINUE_SEARCH;
+  if (unhandled) {
+    Trace(rec, info->ContextRecord, "not taken by the handler");
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  Trace(rec, info->ContextRecord, "taken by the handler");
   FromUcontext(&uc, info->ContextRecord);
   return EXCEPTION_CONTINUE_EXECUTION;
 }
