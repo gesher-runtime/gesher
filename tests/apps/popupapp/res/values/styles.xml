@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- With an action bar (the options menu's overflow). -->
+    <style name="PopupTheme" parent="android:Theme.Material.Light">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

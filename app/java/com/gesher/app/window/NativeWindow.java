@@ -24,6 +24,80 @@ public final class NativeWindow implements AutoCloseable {
     return new NativeWindow(ptr);
   }
 
+  /**
+   * A hidden popup window (no frame, no taskbar button) whose client area is width x height
+   * pixels, owned by {@code owner} (null: none): Windows keeps it above its owner and hides it
+   * with it (docs/graphics.md, "Dialogs, menus and other popups").
+   */
+  public static NativeWindow createPopup(String title, int width, int height,
+      NativeWindow owner) {
+    long ptr = nCreatePopup(title, width, height, owner != null ? owner.ptr() : 0);
+    if (ptr == 0) {
+      throw new IllegalStateException("Windows refused to create a popup window");
+    }
+    return new NativeWindow(ptr);
+  }
+
+  /**
+   * Places a popup: its client area at (x, y) of {@code anchor}'s client area (the screen's
+   * when null), width x height pixels; it follows the anchor when that moves.
+   */
+  public void setPopupBounds(NativeWindow anchor, int x, int y, int width, int height) {
+    nSetPopupBounds(ptr(), anchor != null ? anchor.ptr() : 0, x, y, width, height);
+  }
+
+  /** Shows a popup where setPopupBounds put it, activated or not. */
+  public void showPopup(boolean activate) {
+    nShowPopup(ptr(), activate);
+  }
+
+  /** Shows what is drawn with its alpha (a layered window) over what is behind. */
+  public void setTranslucent(boolean translucent) {
+    nSetTranslucent(ptr(), translucent);
+  }
+
+  /** Never activated by a click; with {@code passthrough} clicks go through it. */
+  public void setNoActivate(boolean noActivate, boolean passthrough) {
+    nSetNoActivate(ptr(), noActivate, passthrough);
+  }
+
+  /** To the top of its owner's popups, not activated. */
+  public void raise() {
+    nRaise(ptr());
+  }
+
+  /** Brings the window to the front and gives it the keyboard. */
+  public void activate() {
+    nActivate(ptr());
+  }
+
+  /** Dims what the window shows by {@code amount} (0..1), as behind a dialog. */
+  public void setDim(float amount) {
+    nSetDim(ptr(), amount);
+  }
+
+  /**
+   * Where the window's input goes instead of its own queue (null: its own): pointer events
+   * (a gesture stays with the window it started in), keys and characters; {@code outside}:
+   * windows told of a press outside them.
+   */
+  public void setInputRoute(NativeWindow pointer, NativeWindow keys, NativeWindow[] outside) {
+    long[] watchers = new long[outside != null ? outside.length : 0];
+    for (int i = 0; i < watchers.length; i++) watchers[i] = outside[i].ptr();
+    nSetInputRoute(ptr(), pointer != null ? pointer.ptr() : 0, keys != null ? keys.ptr() : 0,
+        watchers);
+  }
+
+  /** The client area on the screen: {left, top, right, bottom}. */
+  public int[] getScreenBounds() {
+    return nGetScreenBounds(ptr());
+  }
+
+  /** Moves the window so its client area starts at (x, y) on the screen. */
+  public void setScreenPosition(int x, int y) {
+    nSetScreenPosition(ptr(), x, y);
+  }
+
   public void show() {
     nShow(ptr());
   }
@@ -193,4 +267,16 @@ public final class NativeWindow implements AutoCloseable {
   private static native int nPollEvent(long ptr, double[] out);
   private static native boolean nSetIcon(long ptr, String icoPath);
   private static native String nGetAppUserModelId(long ptr);
+  private static native long nCreatePopup(String title, int width, int height, long owner);
+  private static native void nSetPopupBounds(long ptr, long anchor, int x, int y, int width,
+      int height);
+  private static native void nShowPopup(long ptr, boolean activate);
+  private static native void nSetTranslucent(long ptr, boolean translucent);
+  private static native void nSetNoActivate(long ptr, boolean noActivate, boolean passthrough);
+  private static native void nRaise(long ptr);
+  private static native void nActivate(long ptr);
+  private static native void nSetDim(long ptr, float amount);
+  private static native void nSetInputRoute(long ptr, long pointer, long keys, long[] outside);
+  private static native int[] nGetScreenBounds(long ptr);
+  private static native void nSetScreenPosition(long ptr, int x, int y);
 }
