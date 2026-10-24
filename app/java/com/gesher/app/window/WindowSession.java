@@ -205,6 +205,12 @@ public final class WindowSession extends IWindowSession.Stub {
         String groupState;
         /** A top-level window the user minimized (WM_SIZE SIZE_MINIMIZED), until restored. */
         boolean minimized;
+        /** SkiaGL: the dim behind its popups, a layered window of its own (setDimLayer). */
+        NativeWindow dimLayer;
+        /** What dimLayer was drawn with: alpha, width, height. */
+        int dimDrawn;
+        int dimWidth;
+        int dimHeight;
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -694,6 +700,7 @@ public final class WindowSession extends IWindowSession.Stub {
             log("window \"" + w.title() + "\": resized: " + e);
         }
         resizePopups(w);
+        if (w.dimLayer != null && w.dimDrawn != 0) updateGroup(w);  // the dim layer's size
         if (w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
             mLifecycleHandler.onTaskResized(w.attrs.token, w.taskId, new Rect(w.bounds));
         }
@@ -844,6 +851,51 @@ public final class WindowSession extends IWindowSession.Stub {
         if (close) close(key);
     }
 
+    /**
+     * The dim behind a dialog with SkiaGL (ADR 0048): ANGLE's swap chain presents the app
+     * window, so it cannot dim what it shows in its paint as the CPU pipeline's frames are
+     * dimmed (Window::SetDim). The dim is then what Android's is, a layer of its own: a
+     * layered popup window over the app window's client area, black at the dim amount,
+     * clicked through, below its popups (they are raised after it).
+     */
+    private void setDimLayer(AppWindow root, float dim) {
+        int alpha = Math.round(Math.max(0f, Math.min(1f, dim)) * 255f);
+        NativeWindow layer = root.dimLayer;
+        if (alpha == 0) {
+            if (layer != null && root.dimDrawn != 0) {
+                layer.hide();
+                root.dimDrawn = 0;
+            }
+            return;
+        }
+        int width = root.nativeWindow.getWidth();
+        int height = root.nativeWindow.getHeight();
+        if (layer == null) {
+            layer = NativeWindow.createPopup("Gesher dim", width, height, root.nativeWindow);
+            layer.setTranslucent(true);
+            layer.setNoActivate(true, true);
+            root.dimLayer = layer;
+        }
+        if (root.dimDrawn != alpha || root.dimWidth != width || root.dimHeight != height) {
+            layer.setPopupBounds(root.nativeWindow, 0, 0, width, height);
+            android.view.Surface surface = layer.getSurface();
+            try {
+                android.graphics.Canvas c = surface.lockCanvas(null);
+                c.drawColor(android.graphics.Color.argb(alpha, 0, 0, 0),
+                        android.graphics.PorterDuff.Mode.SRC);
+                surface.unlockCanvasAndPost(c);
+            } catch (RuntimeException e) {
+                log("window \"" + root.title() + "\": dim layer: " + e);
+            } finally {
+                surface.release();
+            }
+            root.dimDrawn = alpha;
+            root.dimWidth = width;
+            root.dimHeight = height;
+        }
+        layer.showPopup(false);
+    }
+
     private void closeNativeWindow(AppWindow w) {
         if (w.input != null) {
             // Before the window and the channel go (joins the connection's thread).
@@ -855,6 +907,12 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         w.queue = null;
         w.eventFd = null;
+        if (w.dimLayer != null) {
+            w.dimLayer.hide();
+            w.dimLayer.close();
+            w.dimLayer = null;
+            w.dimDrawn = 0;
+        }
         if (w.nativeWindow != null) {
             // Hidden at once; the HWND goes when the last Surface over it is released too.
             w.nativeWindow.hide();
@@ -1283,7 +1341,13 @@ public final class WindowSession extends IWindowSession.Stub {
                     watchers.add(v);
                 }
             }
-            if (root.nativeWindow != null) root.nativeWindow.setDim(dim);
+            if (root.nativeWindow != null) {
+                if (glRenderer()) {
+                    setDimLayer(root, dim);
+                } else {
+                    root.nativeWindow.setDim(dim);
+                }
+            }
             for (AppWindow v : group) {
                 if (v != root) v.nativeWindow.raise();
             }

@@ -107,10 +107,12 @@ function LifeRedShare([IntPtr] $app, $red, [int] $r) {
   return $n / [Math]::Max(1, ($red[2] - $red[0]) * ($red[3] - $red[1]))
 }
 
-function LifeWaitRed([IntPtr] $app, $red, [int] $Seconds = 30) {
+function LifeWaitRed([IntPtr] $app, $red, [int] $Seconds = 30, [switch] $OrDimmed) {
   $deadline = (Get-Date).AddSeconds($Seconds)
   do {
     $share = LifeRedShare $app $red 255
+    # Under a dialog-themed Activity the window is dimmed (backgroundDimAmount 0.6: 0x660000).
+    if ($OrDimmed) { $share = [Math]::Max($share, (LifeRedShare $app $red 102)) }
     if ($share -ge 0.9) { return $share }
     Start-Sleep -Milliseconds 500
   } while ((Get-Date) -lt $deadline)
@@ -153,8 +155,8 @@ function OverActivity([IntPtr] $app, [scriptblock] $ReadLog, $at, $red, [string]
   $after = LogAfter $ReadLog $mark
   if ($after.Contains('LifeActivity onStop')) { $out += "LifeActivity stopped under $Name (it should stay paused, visible)" }
   if (-not [GesherWin32]::IsWindowVisible($app)) { $out += "LifeActivity's window was hidden under $Name" }
-  $share = LifeWaitRed $app $red 10
-  Write-Host "INFO  under ${Name}: LifeActivity's window shows $([int]($share * 100))% of its red View"
+  $share = LifeWaitRed $app $red 10 -OrDimmed
+  Write-Host "INFO  under ${Name}: LifeActivity's window shows $([int]($share * 100))% of its red View (or dimmed)"
   if ($share -lt 0.9) { $out += "LifeActivity's window under ${Name}: $([int]($share * 100))% red" }
   if ($hwnd -eq [IntPtr]::Zero) { return $out + "no window for $Name" }
   $mark = LogMark $ReadLog
@@ -304,9 +306,12 @@ function ComposeScenario([IntPtr] $app, [scriptblock] $ReadLog) {
   Start-Sleep 3
   $r = [GesherLifeWin32]::Rect($dialog)
   $behind = [GesherLifeWin32]::ScreenPixel($a[0] + 8, $a[3] - 8)
-  $corner = [GesherLifeWin32]::ScreenPixel($r[0] + 2, $r[1] + 2)
+  # Above the card, at its middle: the room left for its shadow (surface insets), inside the
+  # app window (the popup may reach past its sides in a narrow window).
+  $cornerAt = @([int](($r[0] + $r[2]) / 2), ($r[1] + 2))
+  $corner = [GesherLifeWin32]::ScreenPixel($cornerAt[0], $cornerAt[1])
   $center = [GesherLifeWin32]::ScreenPixel([int](($r[0] + $r[2]) / 2), [int]($r[1] + ($r[3] - $r[1]) / 3))
-  Write-Host ("INFO  dim {0}: the app window at its bottom left 0x{1:x6} before the dialog, 0x{2:x6} with it; the dialog's popup at {3}: its corner 0x{4:x6}, its card 0x{5:x6}" -f $dim, $before, $behind, ($r -join ','), $corner, $center)
+  Write-Host ("INFO  dim {0}: the app window at its bottom left 0x{1:x6} before the dialog, 0x{2:x6} with it; the dialog's popup at {3}: above its card at {6} 0x{4:x6}, its card 0x{5:x6}" -f $dim, $before, $behind, ($r -join ','), $corner, $center, ($cornerAt -join ','))
   function Channels([uint32] $c) { return @((($c -shr 16) -band 255), (($c -shr 8) -band 255), ($c -band 255)) }
   $b = Channels $before; $d = Channels $behind; $k = Channels $corner; $c = Channels $center
   if ($b[0] -lt 200 -or $b[1] -lt 200 -or $b[2] -lt 200) { return @(("the desktop does not show the app window (0x{0:x6} where its white background is): no screen to read the composition from" -f $before)) }
@@ -315,7 +320,7 @@ function ComposeScenario([IntPtr] $app, [scriptblock] $ReadLog) {
   if ($c[0] -lt 200 -or $c[1] -lt 200 -or $c[2] -lt 200) { $out += ("the dialog's card shows 0x{0:x6}, not white" -f $center) }
   # Behind the transparent corner: the dimmed app window (darkened a little by the shadow), not black.
   if ($k[0] -lt 0.5 * $want -or $k[0] -gt $want + 30 -or [Math]::Abs($k[0] - $k[1]) -gt 30 -or [Math]::Abs($k[1] - $k[2]) -gt 30) {
-    $out += ("the dialog's transparent corner shows 0x{0:x6}, not the dimmed app window behind it (~{1:n0} gray): the popup is not composed with alpha" -f $corner, $want)
+    $out += ("the dialog's transparent edge shows 0x{0:x6}, not the dimmed app window behind it (~{1:n0} gray): the popup is not composed with alpha" -f $corner, $want)
   }
   [void][GesherWin32]::PostMessageW($dialog, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE: Back
   [void](WaitAfter $ReadLog $mark 'LifeActivity dialog dismissed' 30)
