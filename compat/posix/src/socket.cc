@@ -609,6 +609,13 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     return ws::SetOption(state.socket, ws::Option::kIpMulticastIf,
                          static_cast<int>(address.s_addr));
   }
+  if (level == IPPROTO_IP && name == IP_MULTICAST_ALL) {
+    // Linux-only. Android's DatagramSocket turns it off (0): a socket then
+    // receives only the multicast groups it joined itself, which is how
+    // Winsock always behaves. Accepted; getsockopt reports Winsock's 0.
+    if (!ReadInt(value, len, &v)) return -1;
+    return 0;
+  }
   int rc = SetMembership(state.socket, level, name, value, len);
   if (rc != 1) return rc;
   return errno = ENOPROTOOPT, -1;
@@ -675,6 +682,9 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
     memcpy(value, &address, sizeof(address));
     *len = sizeof(address);
     return 0;
+  }
+  if (level == IPPROTO_IP && name == IP_MULTICAST_ALL) {
+    return WriteInt(0, value, len) ? 0 : -1;  // see setsockopt
   }
   return errno = ENOPROTOOPT, -1;
 }
