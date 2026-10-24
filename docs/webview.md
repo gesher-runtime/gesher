@@ -210,7 +210,10 @@ drawing in a window that is covered or off the desktop;
 - **webapp.apk** (`tests/apps/webapp`, built by webview.yml from the
   framework job's artifacts; `tests/windows/tracks/37-webview.ps1`), in a
   single process and on the Gesher device: see the script's header and
-  "Status".
+  "Status". A blue 40x40 view over the asset WebView (right edge, 220 px
+  down) must read back blue: its place is cut out of the WebView2 window.
+- **e2e**: org.billthefarmer.notes (tests/e2e/apps.json) edits a note through
+  its floating button over the WebView and renders it.
 - `GESHER_WEBVIEW_DEBUG=1` logs each placement and, after each page load, a
   summary of `CapturePreview`'s picture (size, center color).
 
