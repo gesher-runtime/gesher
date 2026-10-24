@@ -7,12 +7,14 @@
 #include <stdio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <mutex>
 #include <string>
 #include <unordered_set>
 
 #include "ime.h"
+#include "thread_watch.h"
 #include "touch_keyboard.h"
 
 namespace gesher {
@@ -86,6 +88,8 @@ struct ImeWindow::Impl {
   // The procedure could not be restored (another subclass is on top): pass
   // everything on.
   bool detached = false;
+  // The watch on the window's thread (thread_watch.h); null when none.
+  std::atomic<ThreadWatch*> watch{nullptr};
 
   // Shared with the other threads.
   std::mutex mutex;
@@ -379,6 +383,20 @@ struct ImeWindow::Impl {
 
   LRESULT Handle(UINT msg, WPARAM wparam, LPARAM lparam) {
     if (detached) return CallOriginal(msg, wparam, lparam);
+    ThreadWatch* w = watch.load();
+    if (ThreadWatchMessage(w, msg)) return 0;
+    uint32_t saved = 0;
+    ThreadWatchEnter(w, msg, &saved);
+    LRESULT result;
+    {
+      SlowWatch slow{"message", static_cast<int>(msg)};
+      result = Dispatch(msg, wparam, lparam);
+    }
+    ThreadWatchLeave(w, saved);
+    return result;
+  }
+
+  LRESULT Dispatch(UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
       case WM_KEYDOWN:
       case WM_SYSKEYDOWN:
@@ -479,6 +497,11 @@ std::unique_ptr<ImeWindow> ImeWindow::Attach(void* hwnd_ptr) {
   }
   SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(ImeProc));
   std::unique_ptr<ImeWindow> ime(new ImeWindow(hwnd, impl));
+  wchar_t title[128] = {0};
+  GetWindowTextW(hwnd, title, 128);
+  char name[256] = {0};
+  WideCharToMultiByte(CP_UTF8, 0, title, -1, name, sizeof(name), nullptr, nullptr);
+  impl->watch.store(StartThreadWatch(hwnd, name));
   // No editor yet: no input context.
   ime->Post(kOpState);
   return ime;
@@ -486,6 +509,7 @@ std::unique_ptr<ImeWindow> ImeWindow::Attach(void* hwnd_ptr) {
 
 ImeWindow::~ImeWindow() {
   HWND hwnd = static_cast<HWND>(hwnd_);
+  ThreadWatch* watch = impl_->watch.exchange(nullptr);
   DWORD_PTR result = 0;
   if (IsWindow(hwnd) &&
       SendMessageTimeoutW(hwnd, DetachMessage(), 0, reinterpret_cast<LPARAM>(impl_),
@@ -494,6 +518,7 @@ ImeWindow::~ImeWindow() {
     delete impl_;
   }
   // Otherwise the Impl stays: the window's thread may still call into it.
+  StopThreadWatch(watch);
 }
 
 void ImeWindow::Post(int op) {
