@@ -77,6 +77,14 @@ public final class ActivityClientController extends IActivityClientController.De
     }
 
     @Override
+    public boolean navigateUpTo(IBinder token, Intent destIntent, String resolvedType,
+            int resultCode, Intent resultData) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && mAtm.navigateUpTo(r, destIntent, resolvedType, resultCode,
+                resultData);
+    }
+
+    @Override
     public int getDisplayId(IBinder activityToken) {
         return Display.DEFAULT_DISPLAY;
     }
