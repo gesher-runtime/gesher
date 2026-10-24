@@ -12,10 +12,10 @@ index 3027b6c..58ab4ad 100644
      return madvise(base_begin_, base_size_, MADV_DONTFORK);
    }
 diff --git a/libartbase/base/memfd.cc b/libartbase/base/memfd.cc
-index f965a08..8dde83a 100644
+index f965a08..5bac363 100644
 --- a/libartbase/base/memfd.cc
 +++ b/libartbase/base/memfd.cc
-@@ -74,6 +74,25 @@ bool IsSealFutureWriteSupported() {
+@@ -74,6 +74,32 @@ bool IsSealFutureWriteSupported() {
    return is_seal_future_write_supported;
  }
  
@@ -24,13 +24,20 @@ index f965a08..8dde83a 100644
 +}  // namespace art
 +
 +extern "C" int memfd_create(const char* name, unsigned int flags);
++extern "C" int gesher_mmap_placeholders(void);
 +
 +namespace art {
 +
 +// Gesher: gesher-base's memfd (a delete-on-close temporary file) backs the
 +// JIT code cache's dual view, a writable and an executable view of one file
-+// (docs/decisions/0036).
++// (docs/decisions/0036). Without placeholder mappings gesher-base cannot map
++// the executable view over the read-only one, and the JIT takes its single
++// mapping instead.
 +int memfd_create(const char* name, unsigned int flags) {
++  if (gesher_mmap_placeholders() == 0) {
++    errno = ENOSYS;
++    return -1;
++  }
 +  return ::memfd_create(name, flags);
 +}
 +

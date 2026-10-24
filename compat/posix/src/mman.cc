@@ -847,6 +847,10 @@ bool ForEachRun(void* addr, size_t len, Fn fn) {
 
 extern "C" {
 
+// Whether mappings are placeholder-based (MAP_FIXED over file views,
+// executable file views): ART's JIT asks before taking its dual view.
+int gesher_mmap_placeholders(void) { return Placeholders().available() ? 1 : 0; }
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
   State& s = state();
   if (length == 0 || reinterpret_cast<uintptr_t>(addr) % s.page_size != 0 || offset < 0) {

@@ -19,13 +19,23 @@ TEB. This brings the three faster execution modes to Windows. The design is
   (`compat/posix/src/fault_signals.cc`): implicit null checks and the stack
   overflow probe that nterp and compiled code rely on now work.
 - **nterp** is on (implicit null and stack overflow checks on, patch 0014).
-- **The boot image** carries AOT-compiled code for its primary image
-  (`--compiler-filter=speed` for core-oj, core-libart, core-icu4j); the
-  extensions stay verify-only for now (`tools/boot-image/compile.ps1`).
+- **The boot image** carries AOT-compiled code for its primary image and its
+  extensions (`--compiler-filter=speed` for core-oj, core-libart, core-icu4j,
+  framework.jar and gesher-app.jar; `tools/boot-image/compile.ps1`,
+  `boot-image.yml`).
 - **The JIT** is linked into dalvikvm (libart-compiler) and compiles app code;
-  the code cache uses one RWX mapping toggled with `mprotect` (ART's
-  single-mapping path), since gesher-base has no executable file views for the
-  dual W^X mapping yet.
+  its code cache is dual-mapped (W^X): code is written through a read-write
+  view of a memfd and runs from a separate read-execute view (ADR 0036).
+- **Deep recursion** throws `StackOverflowError` under every execution mode:
+  Windows' `EXCEPTION_STACK_OVERFLOW` at a stack probe is delivered as the
+  `SIGSEGV` ART expects, and ART's protected region sits right above the
+  stack guarantee (ADR 0036; `fault_signals.cc`, `pthread_attr_getguardsize`).
+- **Compiled JNI stubs**: the JNI macro assembler and the JNI trampolines reach
+  `Thread*` through the TLS slot (ART patch 0016); the boot image has AOT JNI
+  stubs, the JIT compiles the others.
+- **Oat files are mapped, not copied**: gesher-base's `mmap` fills placeholder
+  reservations with views (`MapViewOfFile3`), executable ones included, so an
+  oat file's code is a view of the file shared between processes (ADR 0036).
 
 ## Diagnosis switches
 - `GESHER_ART_INTERPRET_ONLY=1` — the switch interpreter only, explicit checks,
@@ -34,6 +44,10 @@ TEB. This brings the three faster execution modes to Windows. The design is
 - `GESHER_LOG_EXECUTION=1` — log the execution mode and the boot image's
   compiled-method count.
 - `GESHER_TRACE_SIGNALS=1` — log the first 200 faults and what became of each.
+- `GESHER_TRACE_MMAP=1` — log every `mmap` call, and for file mappings whether
+  they became a view (`an executable view of ...`) or a copy.
+- `GESHER_MMAP_NO_PLACEHOLDERS=1` — plain allocations and views, oat code
+  copied, no dual-mapped JIT cache (the configuration before ADR 0036).
 
 ## Status
 Verified in CI (`tests/windows/tracks/70-codegen.ps1`, run-tests.ps1 sets
