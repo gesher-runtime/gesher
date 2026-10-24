@@ -305,18 +305,17 @@ add_library(stagefright_mp3dec STATIC
   ${_mp3}/src/pvmp3_dct_9.cpp
   ${_mp3}/src/pvmp3_dct_16.cpp)
 target_include_directories(stagefright_mp3dec PUBLIC ${_mp3}/include ${_mp3}/src)
-target_compile_definitions(stagefright_mp3dec PRIVATE "OSCL_UNUSED_ARG(x)=(void)(x)")
-target_compile_options(stagefright_mp3dec PRIVATE -Wno-unused-parameter)
+# CMake drops function-like macros from COMPILE_DEFINITIONS: take OSCL_UNUSED_ARG
+# from the force-included gesher_media_aosp.h instead.
+target_compile_options(stagefright_mp3dec PRIVATE -Wno-unused-parameter
+  "SHELL:-include ${_media_aosp}/include/gesher_media_aosp.h")
 
 # Everything the player (cmake/aosp/media.cmake) links.
 add_library(gesher_media_codecs INTERFACE)
 target_link_libraries(gesher_media_codecs INTERFACE ${GESHER_MEDIA_EXTRACTORS}
   stagefright_foundation vorbisidec FLAC opus stagefright_mp3dec)
 
-# What media.yml's codecs job builds on its own (ninja -k 0 media_codecs_all),
-# to see every compile error of a port at once.
+# Everything of the port under one name (kept for a `ninja media_codecs_all`
+# while debugging; the default build now carries all of it into dalvikvm).
 add_custom_target(media_codecs_all DEPENDS ${GESHER_MEDIA_EXTRACTORS} stagefright_foundation
   vorbisidec FLAC opus stagefright_mp3dec)
-# Until the player links them (stage 1 part 2), the default build leaves them out.
-set_target_properties(${GESHER_MEDIA_EXTRACTORS} stagefright_foundation vorbisidec FLAC opus
-  stagefright_mp3dec PROPERTIES EXCLUDE_FROM_ALL TRUE)

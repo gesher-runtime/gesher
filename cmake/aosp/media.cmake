@@ -31,9 +31,8 @@ target_compile_options(gesher_media PRIVATE -Wall -Wextra -Werror -Wno-unused-pa
 target_link_libraries(dalvikvm PRIVATE gesher_media)
 
 # The player under MediaPlayer, SoundPool and MediaMetadataRetriever
-# (compat/media/player) and their natives: built by media.yml's codecs job
-# until it links (then into dalvikvm with the rest).
-add_library(gesher_media_player OBJECT EXCLUDE_FROM_ALL
+# (compat/media/player) and their natives.
+add_library(gesher_media_player OBJECT
   ${_media}/player/data_source.cc
   ${_media}/player/http_source.cc
   ${_media}/player/extractor.cc
@@ -52,9 +51,13 @@ add_library(gesher_media_player OBJECT EXCLUDE_FROM_ALL
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
 target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_codecs gesher_bionic
   winhttp ole32)
-target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
+  # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
+  -Wno-deprecated-copy)
 set_target_properties(gesher_media_player PROPERTIES CXX_STANDARD 23)
 add_dependencies(media_codecs_all gesher_media_player)
+
+target_link_libraries(dalvikvm PRIVATE gesher_media_player)
 
 # The engine's probe (compat/media/probe), run in CI on Windows
 # (tests/windows/tracks/38-media.ps1): logs to stderr, no runtime.

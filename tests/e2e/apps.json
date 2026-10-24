@@ -58,6 +58,17 @@
       "actions": [ { "click": [60, 340] }, { "keys": "3" } ]
     },
     {
+      "package": "org.billthefarmer.siggen",
+      "label": "Signal Generator",
+      "versionName": "1.37",
+      "versionCode": 137,
+      "sha256": "e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/billthefarmer/siggen",
+      "why": "Audio (docs/media.md): a tone generator that plays through AudioTrack from onResume on; custom views (scale, knob, display), pure Java, no AndroidX.",
+      "actions": [ { "click": [298, 196] }, { "click": [172, 196] } ]
+    },
+    {
       "package": "name.boyle.chris.sgtpuzzles",
       "label": "Simon Tatham's Puzzles",
       "versionName": "2025-09-12-1919-23762278-fdroid",

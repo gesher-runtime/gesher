@@ -141,27 +141,26 @@ Everything below is pushed (tip of `wip/media`), built only by media.yml's
   run prints when they are right.
 
 ### Exactly what is next
-1. Dispatch ci on `wip/media` (`gh workflow run ci -R gesher-runtime/gesher
-   --ref wip/media`; watch with `gh run watch <id> --exit-status
-   --interval 120`). Read `media / codecs` errors
-   (`gh api repos/gesher-runtime/gesher/actions/jobs/<job>/logs`), fix, repeat
-   until `media_codecs_all` builds.
-2. Then link it: in `cmake/aosp/media.cmake` drop `EXCLUDE_FROM_ALL` from
-   `gesher_media_player` and link it into dalvikvm
-   (`target_link_libraries(dalvikvm PRIVATE gesher_media_player)`); in
-   `media_codecs.cmake` drop the `EXCLUDE_FROM_ALL` line; remove the codecs job
-   from media.yml. Link errors to expect: duplicate symbols between
-   extractors (each is a plugin on Android), `off64_t`, libbinder for
-   AMessage's Parcel code.
+1. DONE: run 40135129611's `media / codecs` log read; every compile error of
+   the port fixed: `ogg_uint8_t` typedef'd in `compat/media/aosp/include/
+   _G_config.h` (Tremolo only defines it on the non-win32 path), `memrchr`
+   shimmed in `gesher_media_aosp.h` (OggExtractor), mp3dec takes
+   `OSCL_UNUSED_ARG` from the force-included header (CMake silently drops a
+   function-like macro given to `target_compile_definitions`),
+   `MediaErrors.h` included for `ERROR_UNSUPPORTED` (extractor.cc),
+   `-Wno-deprecated-copy` on gesher_media_player (libutils TypeHelpers.h).
+2. DONE: linked: `gesher_media_player` into dalvikvm, `EXCLUDE_FROM_ALL`
+   dropped everywhere, the codecs job removed from media.yml.
 3. Run ci; make `38-media.ps1` green on both runners (the mediaapp run is
    single process, `-Xint`). Then tick the roadmap's MediaPlayer, SoundPool/
    Ringtone/MediaMetadataRetriever and AAudio/OpenSL ES boxes with the run id,
    and add the PASS lines here.
-4. F-Droid audio app for `tests/e2e/apps.json`: Signal Generator
-   (`org.billthefarmer.siggen` 1.37, versionCode 137; pure Java, AudioTrack);
-   its SHA-256 is NOT known yet (a `curl` of
-   `https://f-droid.org/repo/org.billthefarmer.siggen_137.apk` returned a
-   427-byte page, not the APK: fetch it properly and hash it).
+4. DONE: Signal Generator (`org.billthefarmer.siggen` 1.37, versionCode 137)
+   added to `tests/e2e/apps.json`, SHA-256
+   `e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601` (the APK
+   from the official mirror `https://ftp.gwdg.de/pub/android/fdroid/repo/`;
+   f-droid.org itself answers 418 through the local network filter) —
+   verified green in e2e before ticking this off.
 5. Stage 2: MediaExtractor is written (`media_extractor_jni.cc`); MediaCodec
    and MediaCodecList (audio decoding first: ExoPlayer apps use MediaCodec +
    AudioTrack), MediaMuxer; video needs a Surface to draw into: SurfaceView
