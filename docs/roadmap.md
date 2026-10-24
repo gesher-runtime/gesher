@@ -288,6 +288,23 @@ needs: [framework-build.md](framework-build.md).
   - [x] Simon Tatham's Puzzles (its generator is an ELF executable run as a
         process)
 
+## Phase 5 checklist
+
+- [x] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041; limits there)
+  - [x] The WebView2 SDK (NuGet, pinned) with llvm-mingw, the static loader
+        linked; a controller in a child window, a page's script calling a host
+        object synchronously, ExecuteScript, CapturePreview, PrintWindow with
+        PW_RENDERFULLCONTENT, requests answered by the host (webview run
+        40128694232: the probe on windows-2022 and windows-2025)
+  - [x] android.webkit.WebView in an app's window: Gesher's
+        WebViewFactoryProvider, the WebView2 window kept at the view's bounds,
+        WebViewClient/WebChromeClient, evaluateJavascript,
+        @JavascriptInterface, file:///android_asset, cookies, views over the
+        WebView cut out of its window (single process and the Gesher device;
+        ci run 40138367211 on windows-2022 and windows-2025)
+  - [x] A real app that relies on WebView in the e2e job (Notes 1.41, ci run
+        40138367211)
+
 ## Phase 6 checklist
 
 - [x] ELF loader for x86-64 Android `.so` files on Windows
