@@ -70,6 +70,8 @@ include(cmake/aosp/core_libs_tests.cmake)
 include(cmake/aosp/graphics.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
+include(compat/devices/devices.cmake)
 # android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
 include(cmake/webview.cmake)
 
