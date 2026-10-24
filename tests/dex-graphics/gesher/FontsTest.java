@@ -223,6 +223,10 @@ public final class FontsTest {
     check(narrow > 10 && Math.abs(narrow - wide) < 0.01f
             && Math.abs(regular.measureText("iiii") - regular.measureText("WWWW")) > 5,
         "monospace: iiii and WWWW equally wide (" + narrow + ", " + wide + ")");
+    // Drawn too (e2e: Editor's monospace EditText showed no text).
+    int monoDark = darkPixels(draw(mono, LATIN));
+    check(monoDark > 150 && monoDark < 3000,
+        "Canvas.drawText Latin, monospace (" + monoDark + " dark pixels)");
 
     Typeface notoSerif = fileTypeface("NotoSerif-Regular.ttf");
     if (notoSerif != null) {
