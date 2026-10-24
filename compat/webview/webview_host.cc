@@ -482,8 +482,7 @@ class Bridge final : public IDispatch {
                                    VARIANT* result, EXCEPINFO*, UINT*) override {
     UINT argc = params != nullptr ? params->cArgs : 0;
     if (getenv("GESHER_WEBVIEW_DEBUG") != nullptr) {
-      fprintf(stderr, "gesher-webview: bridge Invoke(dispid %ld, flags %u, %u args)%s
-",
+      fprintf(stderr, "gesher-webview: bridge Invoke(dispid %ld, flags %u, %u args)%s\n",
               static_cast<long>(id), static_cast<unsigned>(flags), argc,
               callable_ ? " on the method" : "");
       fflush(stderr);
