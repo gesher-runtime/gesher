@@ -137,4 +137,26 @@ FsRewriteCounts FsRewrites(Library* library);
 // System V __tls_get_addr the loaded code calls for general-dynamic TLS.
 void* TlsGetAddr(size_t module_id, size_t offset);
 
+// --- Executables (docs/exec.md) ----------------------------------------------
+// An Android executable is a PIE: an ET_DYN object with PT_INTERP
+// (/system/bin/linker64) whose entry point is the NDK's _start. Load() maps it
+// like a shared object; the launcher (compat/elf/exec) then enters it.
+
+// What a launcher needs to start a loaded executable at its entry point.
+struct ExecutableInfo {
+  void* entry = nullptr;        // e_entry + load bias (_start); null if e_entry is 0
+  const void* phdr = nullptr;   // Elf64_Phdr[phnum] inside the mapping (AT_PHDR)
+  uint16_t phnum = 0;           // AT_PHNUM
+  void* base = nullptr;         // the mapping's start
+  bool has_interp = false;      // PT_INTERP present: built as an executable
+};
+// Fills `info` for `library`; false if `library` is null.
+bool GetExecutableInfo(Library* library, ExecutableInfo* info);
+
+// The (argc, argv, envp) that init functions (DT_PREINIT_ARRAY, DT_INIT,
+// DT_INIT_ARRAY) are called with from now on, as bionic's linker calls them.
+// Until this is called they get argc 0 and null argv/envp. The arrays must
+// outlive every later load.
+void SetInitArguments(int argc, char** argv, char** envp);
+
 }  // namespace gesher::elf
