@@ -122,6 +122,7 @@ final class CameraSteps {
             image.close();
         }, mHandler);
         still.setOnImageAvailableListener(r -> {
+          try {
             Image image = r.acquireNextImage();
             if (image == null) return;
             ByteBuffer b = image.getPlanes()[0].getBuffer();
@@ -133,6 +134,9 @@ final class CameraSteps {
                     && (jpeg[1] & 0xff) == 0xd8) + ", decodes to " + (bitmap == null ? "nothing"
                     : bitmap.getWidth() + "x" + bitmap.getHeight()));
             image.close();
+          } catch (RuntimeException e) {
+            mEvents.add("still image failed: " + e);
+          }
         }, mHandler);
 
         CameraDevice[] device = new CameraDevice[1];
@@ -215,6 +219,18 @@ final class CameraSteps {
                         + (result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)
                                 > 0) + ", JPEG quality "
                         + result.get(android.hardware.camera2.CaptureResult.JPEG_QUALITY));
+            }
+
+            @Override
+            public void onCaptureFailed(CameraCaptureSession s, CaptureRequest request,
+                    android.hardware.camera2.CaptureFailure failure) {
+                mEvents.add("still capture failed, reason " + failure.getReason());
+            }
+
+            @Override
+            public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest request,
+                    android.view.Surface target, long frameNumber) {
+                mEvents.add("still buffer lost (frame " + frameNumber + ")");
             }
         }, mHandler);
         Report.line("camera: still capture: " + next("capture completed", 10000) + "; "

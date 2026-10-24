@@ -470,6 +470,11 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     }
                     if (CameraFrames.deliver(surface, nv12, mCapture.width, mCapture.height,
                             timestamp, jpeg) != CameraFrames.OK) {
+                        CameraService.log("frame " + f.frameNumber + ": stream "
+                                + f.request.streamIds[i] + " (format 0x"
+                                + Integer.toHexString(s.format) + ") took no frame"
+                                + (s.format == CameraService.HAL_BLOB ? ", JPEG "
+                                + (jpeg == null ? "none" : jpeg.length + " bytes") : ""));
                         mCallbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_BUFFER,
                                 extras(f.request.requestId, f.subsequenceId, f.frameNumber,
                                         f.request.streamIds[i]));
