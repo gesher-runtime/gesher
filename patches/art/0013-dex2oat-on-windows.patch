@@ -26,3 +26,16 @@ index 58ef563..02649ee 100644
    compiled_method_storage_.DumpMemoryUsage(oss, extended);
    return oss.str();
  }
+diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
+index 88bf067..3027b6c 100644
+--- a/libartbase/base/mem_map.cc
++++ b/libartbase/base/mem_map.cc
+@@ -873,7 +873,7 @@ int MemMap::MadviseDontFork() {
+ }
+ 
+ bool MemMap::Sync() {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher: gesher-base's msync (FlushViewOfFile)
+   // TODO: add FlushViewOfFile support.
+   PLOG(ERROR) << "MemMap::Sync unsupported on Windows.";
+   return false;
