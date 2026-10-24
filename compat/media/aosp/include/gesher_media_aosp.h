@@ -39,6 +39,16 @@ static inline char* gesher_strcasestr(const char* haystack, const char* needle) 
 }
 #define strcasestr gesher_strcasestr
 
+// bionic's memrchr (OggExtractor).
+static inline void* gesher_memrchr(const void* s, int c, size_t n) {
+  const unsigned char* p = (const unsigned char*)s;
+  while (n-- > 0) {
+    if (p[n] == (unsigned char)c) return (void*)(p + n);
+  }
+  return NULL;
+}
+#define memrchr gesher_memrchr
+
 // PacketVideo's unused-argument macro (mp3dec's sources take it from oscl).
 #ifndef OSCL_UNUSED_ARG
 #define OSCL_UNUSED_ARG(x) ((void)(x))

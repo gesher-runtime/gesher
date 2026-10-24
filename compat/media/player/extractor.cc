@@ -7,6 +7,7 @@
 #include <media/NdkMediaFormatPriv.h>
 #include <media/stagefright/MediaBufferBase.h>
 #include <media/stagefright/MediaBufferGroup.h>
+#include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/foundation/AMessage.h>
 
 #include <cstdlib>

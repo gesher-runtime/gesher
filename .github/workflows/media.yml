@@ -6,35 +6,13 @@ name: media
 # natives themselves (compat/media) are in dalvikvm, built by the build job;
 # the Windows test job runs tests/windows/tracks/38-media.ps1 on both.
 #
-# While the AOSP extractors and codecs (cmake/aosp/media_codecs.cmake) are
-# ported, the codecs job builds them with ninja -k 0, beside the build job, to
-# see every error at once; nothing waits for it.
 on:
   workflow_call:
 
 permissions:
   contents: read
 
-env:
-  LLVM_MINGW_TAG: "20261006"
-  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
-
 jobs:
-  codecs:
-    runs-on: ubuntu-24.04
-    # Informational while the port goes on: the test job waits for this
-    # workflow, not for this job to pass.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./.github/actions/setup-build
-        with:
-          ccache-key: media-codecs
-
-      - name: Build the extractors and codecs
-        run: ninja -C out -k 0 media_codecs_all
-
   media:
     runs-on: ubuntu-24.04
     steps:
