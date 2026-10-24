@@ -68,7 +68,7 @@ diff --git a/core/jni/android_database_SQLiteConnection.cpp b/core/jni/android_d
 +        {"nativeOpen", "(Ljava/lang/String;ILjava/lang/String;ZZII)J", GESHER_JNI(nativeOpen)},
          {"nativeClose", "(JZ)V",
 -         (void*)static_cast<void (*)(JNIEnv*, jclass, jlong, jboolean)>(nativeClose)},
-+         GESHER_JNI(static_cast)<void (*)(JNIEnv*, jclass, jlong, jboolean)>(nativeClose)},
++         GESHER_JNI(static_cast<void (*)(JNIEnv*, jclass, jlong, jboolean)>(nativeClose))},
          {"nativeRegisterCustomScalarFunction",
           "(JLjava/lang/String;Ljava/util/function/UnaryOperator;)V",
 -         (void*)nativeRegisterCustomScalarFunction},

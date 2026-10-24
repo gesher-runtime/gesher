@@ -51,4 +51,4 @@ set_source_files_properties(
   ${_fwjni}/android_database_CursorWindow.cpp ${_fwjni}/android_database_SQLiteCommon.cpp
   ${_fwjni}/android_database_SQLiteConnection.cpp ${_fwjni}/android_database_SQLiteDebug.cpp
   ${_fwjni}/android_database_SQLiteGlobal.cpp ${_fwjni}/android_database_SQLiteRawStatement.cpp
-  PROPERTIES COMPILE_OPTIONS "-Wno-sign-compare;-Wno-missing-field-initializers;-Wno-implicit-fallthrough;-Wno-unused-but-set-variable")
+  PROPERTIES COMPILE_OPTIONS "-Wno-unused-function;-Wno-sign-compare;-Wno-missing-field-initializers;-Wno-implicit-fallthrough;-Wno-unused-but-set-variable")
