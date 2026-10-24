@@ -153,6 +153,8 @@ public final class Services {
         f.setAccessible(true);
         f.set(null, sm.asInterface());
         ServiceManager.initServiceCache(new TreeMap<>(all));
+        // Devices (docs/devices.md): media.camera, in the app's process in every mode.
+        CameraService.installInProcess();
     }
 
     /** servicemanager in a single process: the services above, and nothing else. */

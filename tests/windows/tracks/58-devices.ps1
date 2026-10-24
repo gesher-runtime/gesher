@@ -114,20 +114,46 @@ function SensorsTestCheck([string] $Mode, [string] $Out, [int] $Code) {
       "${sn}light event Gesher Test Light Sensor 250.00,0.00,0.00 accuracy 3", "${sn}done")) $Code $Mode
 }
 
+$cm = 'devices: camera: '
+# Cameras without hardware: Media Foundation finds no capture device on the runners.
+function CameraEmptyCheck([string] $Mode, [string] $Out, [int] $Code) {
+  if ($Out -match 'camera: ((no )?Media Foundation[^;\r\n]*)') { $mf = $Matches[1] } else { $mf = '(not logged)' }
+  DevCheck "devices: camera ($Mode): CameraManager over Media Foundation; no camera here ($mf): an empty id list, openCamera throws, legacy Camera none, no ACTION_IMAGE_CAPTURE activity" $Out @(
+    ,@("${cm}0 cameras", "${cm}legacy android.hardware.Camera.getNumberOfCameras() 0",
+      "${cm}legacy Camera.open() answers null", "${cm}ACTION_IMAGE_CAPTURE resolves to null",
+      "${cm}no cameras; openCamera(`"0`") throws IllegalArgumentException", "${cm}done")) $Code $Mode
+}
+# GESHER_CAMERA_TEST's camera, below the camera service: Camera2 end to end.
+function CameraTestCheck([string] $Mode, [string] $Out, [int] $Code) {
+  DevCheck "devices: camera ($Mode): GESHER_CAMERA_TEST's camera through Camera2: characteristics, openCamera, a session, repeating preview into a YUV ImageReader, a JPEG still capture, close" $Out @(
+    ,@("${cm}1 cameras: 0",
+      "${cm}0 facing 1, level 4, YUV_420_888 [640x480, 320x240], JPEG [640x480, 320x240]",
+      "${cm}openCamera opened 0", "${cm}createCaptureSession configured",
+      "${cm}repeating preview: first frame preview 640x480 format 35, 3 planes, Y(10,100)=110, timestamp>0 true",
+      "${cm}preview frames keep coming: true, results true",
+      "${cm}still capture: capture completed, sensor timestamp>0 true, JPEG quality 90; still JPEG 320x240, starts FFD8 true, decodes to 320x240",
+      "${cm}close closed 0", "${cm}done")) $Code $Mode
+}
+
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
 $code = $LASTEXITCODE
 LocationChecks 'single process' $out $code $false
 SensorsEmptyCheck 'single process' $out $code
+CameraEmptyCheck 'single process' $out $code
 $env:GESHER_SENSOR_TEST = '1'
-$env:GESHER_DEVICES_STEPS = 'sensors'
+$env:GESHER_CAMERA_TEST = '1'
+$env:GESHER_DEVICES_STEPS = 'sensors,camera'
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
-SensorsTestCheck 'single process' $out $LASTEXITCODE
+$code = $LASTEXITCODE
+SensorsTestCheck 'single process' $out $code
+CameraTestCheck 'single process' $out $code
 Remove-Item Env:GESHER_DEVICES_STEPS
 
 # The Gesher device: the location service in the system server, the app in a process
 # of its own, across binder (listeners, the PendingIntent's broadcast, parcelled Locations).
-# A device of its own, started with GESHER_SENSOR_TEST (its app processes inherit it).
+# A device of its own, started with GESHER_SENSOR_TEST and GESHER_CAMERA_TEST (its app
+# processes inherit them).
 $launcherDev = $dvmDev + 'com.gesher.app.Launcher'
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
 $out = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--keep-task') 500
@@ -136,5 +162,7 @@ $serverLog = Join-Path $root 'logs/system_server.log'
 $out += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
 LocationChecks 'Gesher device' $out $code $true
 SensorsTestCheck 'Gesher device' $out $code
+CameraTestCheck 'Gesher device' $out $code
 Remove-Item Env:GESHER_SENSOR_TEST
+Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
