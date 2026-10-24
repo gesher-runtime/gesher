@@ -413,6 +413,11 @@ public final class ApkPackage {
             // As installed packages carry it: LoadedApk loads code only with it.
             ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
         }
+        if (parsed.isRtlSupported()) {
+            // android:supportsRtl (rtl track): the flag PackageImpl derives in hideAsFinal,
+            // which this parse never reaches; without it views ignore RTL layouts.
+            ai.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
+        }
         ai.dataDir = mDataDir;
         ai.credentialProtectedDataDir = mDataDir;
         ai.deviceProtectedDataDir = mDataDir;
