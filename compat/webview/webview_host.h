@@ -51,9 +51,25 @@ enum Event : int32_t {
                        // c: Content-Disposition
   kFocus = 14,         // arg: 1 gained, 0 lost, 2 tab past the end, 3 before the start
   kProcessFailed = 15, // arg: COREWEBVIEW2_PROCESS_FAILED_KIND
-  kNewWindow = 16,     // arg: 1 if user initiated; a: url
+  kNewWindow = 16,     // id: request id (CompleteNewWindow); arg: 1 if user
+                       // initiated; a: url; b: "dialog" for a popup's features
   kCapture = 17,       // id: callback id; arg: HRESULT; bytes: PNG
   kParked = 18,        // id: request id (the container is parked)
+  kWebMessage = 19,    // a: the message as JSON (chrome.webview.postMessage); b: source
+  kDevToolsResult = 20,  // id: callback id; arg: HRESULT; a: the result (JSON)
+  kDevToolsEvent = 21,   // a: event name; b: its parameters (JSON); ListenDevTools
+  kPermission = 22,    // id: request id (CompletePermission); arg:
+                       // COREWEBVIEW2_PERMISSION_KIND; a: url; b: "1" if user initiated
+  kCloseWindow = 23,   // window.close()
+  kBasicAuth = 24,     // id: request id (CompleteBasicAuth); a: url; b: the challenge
+  kClientCert = 25,    // id: request id (CompleteClientCert); arg: port; a: host;
+                       // b: the mutually trusted certificates, a JSON array of
+                       // {subject, issuer, name, pem}; c: the allowed CAs (JSON array)
+  kServerCertError = 26,  // id: request id (CompleteServerCertError); arg:
+                          // COREWEBVIEW2_WEB_ERROR_STATUS; a: url; b: the certificate (PEM)
+  kFind = 27,          // id: active match index (WebView2's, -1 none); arg: match
+                       // count; a: "count", "active", "done" or "unsupported"
+  kFileDialog = 28,    // id: callback id; arg: HRESULT; a: the files, '\n'-separated
 };
 
 // Global results (Listener-less operations: cookies, browsing data).
@@ -118,8 +134,10 @@ class Host {
 
   void Destroy();  // the Host goes; OnDestroyed follows on the WebView thread
 
-  // Navigation. headers: "Name: value\r\n..." or empty.
-  void Navigate(const std::wstring& url, const std::wstring& headers);
+  // Navigation. headers: "Name: value\r\n..." or empty. A method other than
+  // GET (postUrl: POST) sends `body`.
+  void Navigate(const std::wstring& url, const std::wstring& headers,
+                const std::wstring& method = L"GET", std::vector<uint8_t> body = {});
   void NavigateToString(const std::wstring& html);
   enum Command : int32_t {
     kReload = 1,
@@ -135,12 +153,28 @@ class Host {
   // Where the WebView is: its rectangle (x, y, width, height) and the part of
   // it that is visible (clip_*), both in the parent's client coordinates.
   // A new parent (or null: park it) moves the container there first.
-  // `holes`: rectangles (parent client coordinates) of the app's views drawn
-  // over the WebView (a floating button): cut out of the container's window
-  // region so the app's own pixels show (and take the mouse) there.
+  // `shapes`: the container's window region (parent client coordinates):
+  // the app's views drawn over the WebView (a floating button) are cut out of
+  // it so the app's own pixels show (and take the mouse) there, and a WebView
+  // clipped to a rounded outline keeps only that shape.
+  struct Shape {
+    enum Kind : int32_t {
+      kHoleRect = 0,
+      kHoleRoundRect = 1,  // radius
+      kHoleOval = 2,       // the ellipse in rect
+      kHolePolygon = 3,    // points
+      kClipRoundRect = 10,  // the WebView's own outline
+      kClipOval = 11,
+      kClipPolygon = 12,
+    };
+    int32_t kind = kHoleRect;
+    RECT rect = {0, 0, 0, 0};
+    int32_t radius = 0;
+    std::vector<POINT> points;
+  };
   void SetBounds(HWND parent, int x, int y, int width, int height, int clip_x, int clip_y,
                  int clip_width, int clip_height, bool visible,
-                 const std::vector<RECT>& holes = {});
+                 const std::vector<Shape>& shapes = {});
   // Parks the container; Listener gets kParked(id) once it is done.
   void Park(int64_t id);
 
@@ -150,6 +184,7 @@ class Host {
     bool pinch_zoom = true;
     bool devtools = false;
     bool intercept_all = false;  // every request to OnResourceRequest
+    bool reputation_checking = true;  // SmartScreen (WebSettings' Safe Browsing)
     std::wstring user_agent;     // empty: WebView2's
   };
   void SetSettings(const Settings& settings);
@@ -168,6 +203,37 @@ class Host {
   void CompleteDialog(int64_t id, bool accept, const std::wstring& text);
   // A PNG of what the WebView shows (CapturePreview): kCapture(id).
   void CapturePreview(int64_t callback_id);
+
+  // chrome.webview's message event in the page (PostWebMessageAsJson).
+  void PostWebMessage(const std::wstring& json);
+  // A DevTools protocol method: kDevToolsResult(id) with its result.
+  void CallDevTools(const std::wstring& method, const std::wstring& params_json,
+                    int64_t callback_id);
+  // A DevTools protocol event comes as kDevToolsEvent from now on.
+  void ListenDevTools(const std::wstring& event);
+
+  // Answers to the requests WebView2 holds a deferral for.
+  // COREWEBVIEW2_PERMISSION_STATE; `remember`: the profile keeps it.
+  void CompletePermission(int64_t id, int32_t state, bool remember);
+  // The page's window.open gets `window`'s WebView (not navigated yet), or
+  // none (null).
+  void CompleteNewWindow(int64_t id, Host* window);
+  void CompleteBasicAuth(int64_t id, bool proceed, const std::wstring& user,
+                         const std::wstring& password);
+  // choice: the index of a certificate kClientCert listed; -1 goes on
+  // without one; -2 cancels the request.
+  void CompleteClientCert(int64_t id, int32_t choice);
+  // allow: the page loads despite the certificate error (for this session).
+  void CompleteServerCertError(int64_t id, bool allow);
+
+  // Find in page (ICoreWebView2Find); results come as kFind.
+  enum FindOp : int32_t { kFindStart = 1, kFindNext = 2, kFindPrevious = 3, kFindStop = 4 };
+  void Find(int32_t op, const std::wstring& term, bool case_sensitive, bool whole_word);
+
+  // A Windows file dialog (IFileOpenDialog) owned by the WebView's top-level
+  // window: kFileDialog(id). filters: "Name|*.a;*.b" lines.
+  void ShowFileDialog(int64_t callback_id, bool multiple, const std::wstring& title,
+                      const std::wstring& filters);
 
   // Cookies and browsing data (any WebView's profile: they share one). The
   // result comes to the global callback.
