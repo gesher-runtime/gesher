@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -124,6 +125,33 @@ int main() {
     uint64_t args[3] = {30, 12, reinterpret_cast<uint64_t>(tramp)};
     uint64_t r = api->call(fn, args, 3);
     Check("guest calls a host function through a trampoline (30+12)", r == 42);
+  }
+
+  // 5. Performance: a CPU-bound guest loop (sum of 0..n-1) timed against the
+  //    same loop compiled natively, to record the translation overhead
+  //    (docs/arm64.md). Reported as INFO; not a pass/fail gate.
+  {
+    // guest: x0 = n; sum 0..n-1 in a tight loop; returns the sum.
+    //   mov x1,#0; mov x2,#0; L: cmp x2,x0; b.ge E; add x1,x1,x2;
+    //   add x2,x2,#1; b L; E: mov x0,x1; ret
+    uint32_t code[] = {0xD2800001u, 0xD2800002u, 0xEB00005Fu, 0x5400008Au,
+                       0x8B020021u, 0x91000442u, 0x17FFFFFCu, 0xAA0103E0u, kRet};
+    void* fn = GuestPage(code, 9);
+    api->add_code(fn, sizeof(code), "sumloop");
+    const uint64_t n = 200000000ull;
+    uint64_t args[1] = {n};
+    auto t0 = std::chrono::steady_clock::now();
+    uint64_t g = api->call(fn, args, 1);
+    auto t1 = std::chrono::steady_clock::now();
+    volatile uint64_t h = 0;
+    for (uint64_t i = 0; i < n; ++i) h += i;
+    auto t2 = std::chrono::steady_clock::now();
+    double gms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    double hms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    Check("CPU-bound guest loop matches native result", g == h);
+    std::printf("INFO  arm64 perf: %llu-iteration loop: guest %.1f ms, native %.1f ms, "
+                "overhead x%.1f\n",
+                static_cast<unsigned long long>(n), gms, hms, hms > 0 ? gms / hms : 0.0);
   }
 
   std::printf("\n");
