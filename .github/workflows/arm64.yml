@@ -35,6 +35,10 @@ env:
   FMT_VERSION: "11.0.2"
   # Boost headers (interval containers) dynarmic needs to build.
   BOOST_VERSION: "1.83.0"
+  # The Android NDK for the arm64-v8a guest test .so files (as native-libs.yml).
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
 
 jobs:
   build:
@@ -45,6 +49,7 @@ jobs:
           sparse-checkout: |
             compat/arm64
             cmake/toolchain-llvm-mingw.cmake
+            tests/native
 
       - name: Cache toolchain
         id: toolchain
@@ -65,7 +70,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps
-          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p2
 
       - name: Fetch and patch dynarmic, fmt and Boost
         if: steps.deps.outputs.cache-hit != 'true'
@@ -95,6 +100,10 @@ jobs:
           #    std::integer_sequence on this clang.
           sed -i 's@template<class T, template<class, T\.\.\.> class VLT, T\.\.\. values>@template<class T, template<class VT, VT...> class VLT, T... values>@' \
             dynarmic/externals/mcl/include/mcl/mp/typelist/lift_sequence.hpp
+          #  - dynarmic: ir_emitter.h uses std::vector without including <vector>
+          #    (this clang's libc++ no longer provides it transitively).
+          sed -i 's@#include <mcl/stdint.hpp>@#include <vector>\n\n#include <mcl/stdint.hpp>@' \
+            dynarmic/src/dynarmic/ir/ir_emitter.h
           grep -q 'FMT_USE_CONSTEVAL 1' dynarmic/externals/fmt/include/fmt/base.h && { echo 'fmt patch failed'; exit 1; } || true
 
           # Boost headers (interval containers): header-only, extract just boost/.
@@ -121,6 +130,38 @@ jobs:
           cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe dist-arm64/
           cp deps/dynarmic/LICENSE.txt dist-arm64/DYNARMIC-NOTICES.txt
           "$llvm/bin/llvm-objdump" -p dist-arm64/gesher_arm64.dll | grep -iE 'Export|gesher_arm64' | head
+          ls -la dist-arm64
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Build the arm64-v8a guest test .so files
+        run: |
+          set -euo pipefail
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
+            -o dist-arm64/trivial_arm64.so tests/native/trivial.c
+          # Step 2 (guest): bionic libc/libm/libdl/liblog/pthread through the
+          # shim, over the guest->host trampolines. No stack protector / TLS yet.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector \
+            -Wl,-soname,libc_test.so \
+            -o dist-arm64/libc_test_arm64.so tests/native/libc_test.c -llog -ldl -lm
+          ro="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          echo "--- trivial_arm64.so ---"; "$ro" -h dist-arm64/trivial_arm64.so | grep -E 'Machine|Type'
+          echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
           ls -la dist-arm64
 
       - uses: actions/upload-artifact@v4

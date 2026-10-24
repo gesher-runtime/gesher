@@ -20,11 +20,29 @@
 
 #include <windows.h>
 
+#include <gesher/arm64_runtime.h>
+
 #include "fs_rewrite.h"
 #include "tls.h"
 
 // DT_RELR's entry type; this elf.h predates it.
 using Elf64_Relr = uint64_t;
+
+// AArch64 e_machine and relocations (this elf.h may lack the aarch64 set).
+#ifndef EM_AARCH64
+#define EM_AARCH64 183
+#endif
+#ifndef R_AARCH64_ABS64
+#define R_AARCH64_ABS64 257
+#define R_AARCH64_GLOB_DAT 1025
+#define R_AARCH64_JUMP_SLOT 1026
+#define R_AARCH64_RELATIVE 1027
+#define R_AARCH64_TLS_DTPMOD64 1028
+#define R_AARCH64_TLS_DTPREL64 1029
+#define R_AARCH64_TLS_TPREL64 1030
+#define R_AARCH64_TLSDESC 1031
+#define R_AARCH64_IRELATIVE 1032
+#endif
 
 // Loaded Android code is System V ABI (docs/decisions/0006-managed-abi.md), so
 // every call into it (init, ifunc resolvers) goes through a sysv_abi pointer.
@@ -70,6 +88,7 @@ struct Library {
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
   bool is_closed = false;
+  bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
 
   // Dynamic section data (pointers into the mapping).
   const Elf64_Sym* symtab = nullptr;
@@ -273,10 +292,17 @@ void* ResolveIfunc(void* addr) {
   return reinterpret_cast<Resolver>(addr)();
 }
 
-// The address of a defined symbol, resolving IFUNCs.
+// The address of a defined symbol, resolving IFUNCs. For a guest aarch64
+// object the IFUNC resolver is guest code, run through the translator.
 void* SymbolAddress(const Library* lib, const Elf64_Sym* sym) {
   void* addr = lib->load_bias + sym->st_value;
-  if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC) addr = ResolveIfunc(addr);
+  if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC) {
+    if (lib->is_aarch64) {
+      addr = reinterpret_cast<void*>(gesher::arm64::Call(addr, nullptr, 0));
+    } else {
+      addr = ResolveIfunc(addr);
+    }
+  }
   return addr;
 }
 
@@ -426,7 +452,9 @@ bool MapSegments(Library* lib, const uint8_t* data, std::string* error) {
   return true;
 }
 
-// After relocation, set each segment's final protection.
+// After relocation, set each segment's final protection. For a guest aarch64
+// object, executable segments are made readable but NOT executable: the host
+// never runs guest code, the translator reads it (ADR 0047).
 bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
@@ -434,12 +462,27 @@ bool ProtectSegments(Library* lib, const uint8_t* data, std::string* error) {
     if (phdr[i].p_type != PT_LOAD) continue;
     uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
     size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
-    if (mprotect(start, len, ProtFor(phdr[i].p_flags)) != 0) {
+    int prot = ProtFor(phdr[i].p_flags);
+    if (lib->is_aarch64 && (prot & PROT_EXEC)) prot = (prot & ~PROT_EXEC) | PROT_READ;
+    if (mprotect(start, len, prot) != 0) {
       Fail(error, "mprotect of a segment failed");
       return false;
     }
   }
   return true;
+}
+
+// Registers a guest aarch64 object's executable segments with the translator,
+// so branches into them run as guest code.
+void RegisterGuestCode(Library* lib, const uint8_t* data) {
+  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
+  const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
+  for (int i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type != PT_LOAD || !(phdr[i].p_flags & PF_X)) continue;
+    uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
+    size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
+    gesher::arm64::AddCode(start, len, lib->soname.c_str());
+  }
 }
 
 // Parses PT_DYNAMIC and PT_TLS.
@@ -647,6 +690,86 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
   return true;
 }
 
+// Applies one RELA relocation for a guest aarch64 object. A function symbol
+// that resolves to a host (shim) address is bound to a guest trampoline so the
+// guest's call crosses the ABI boundary (ADR 0047); data and guest-internal
+// symbols keep their real (shared-address-space) address.
+bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
+  uint32_t type = ELF64_R_TYPE(r.r_info);
+  uint32_t sym_index = ELF64_R_SYM(r.r_info);
+  uint64_t* where = reinterpret_cast<uint64_t*>(lib->load_bias + r.r_offset);
+
+  auto resolve_value = [&](bool as_function, uint64_t* out) -> bool {
+    const Elf64_Sym* sym = &lib->symtab[sym_index];
+    const char* name = lib->strtab + sym->st_name;
+    ResolvedSymbol rs = ResolveForReloc(lib, name);
+    if (!rs.found) {
+      if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) { *out = 0; return true; }
+      if (lib->stub_unresolved) {
+        // An unresolved import: a host stub that reports the call, bound to a
+        // guest trampoline so the guest can call it.
+        void* stub = MakeUnresolvedStub(name);
+        *out = reinterpret_cast<uint64_t>(gesher::arm64::BindHostFunction(stub));
+        std::fprintf(stderr, "gesher elf: %s: '%s' is not implemented (stubbed)\n",
+                     lib->name.c_str(), name);
+        return stub != nullptr;
+      }
+      Fail(error, lib->name + ": unresolved symbol '" + name + "'");
+      return false;
+    }
+    bool is_func = as_function || ELF64_ST_TYPE(sym->st_info) == STT_FUNC ||
+                   ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC;
+    if (is_func && rs.lib == nullptr) {
+      // A host function: bind a guest trampoline the guest calls (SVC bridge).
+      *out = reinterpret_cast<uint64_t>(gesher::arm64::BindHostFunction(rs.address));
+    } else {
+      // A guest function, or any data object (shared address space).
+      *out = reinterpret_cast<uint64_t>(rs.address);
+    }
+    return true;
+  };
+
+  switch (type) {
+    case R_AARCH64_RELATIVE:
+      *where = reinterpret_cast<uint64_t>(lib->load_bias) + r.r_addend;
+      break;
+    case R_AARCH64_JUMP_SLOT: {
+      uint64_t v;
+      if (!resolve_value(true, &v)) return false;
+      *where = v;
+      break;
+    }
+    case R_AARCH64_GLOB_DAT:
+    case R_AARCH64_ABS64: {
+      uint64_t v;
+      if (!resolve_value(false, &v)) return false;
+      *where = v + r.r_addend;
+      break;
+    }
+    case R_AARCH64_IRELATIVE: {
+      // The resolver is guest code; it returns the resolved guest address.
+      uint64_t resolved = gesher::arm64::Call(lib->load_bias + r.r_addend, nullptr, 0);
+      *where = resolved;
+      break;
+    }
+    case R_AARCH64_TLS_TPREL64: {
+      // Local/initial-exec: offset from the thread pointer (TPIDR_EL0).
+      if (!lib->tls.is_static) {
+        Fail(error, lib->name + ": TLS_TPREL against a module that did not fit the static area");
+        return false;
+      }
+      uint64_t sym_value = 0;
+      if (sym_index != 0) sym_value = lib->symtab[sym_index].st_value;
+      *where = static_cast<uint64_t>(lib->tls.tp_offset) + sym_value + r.r_addend;
+      break;
+    }
+    default:
+      Fail(error, lib->name + ": unsupported aarch64 relocation type " + std::to_string(type));
+      return false;
+  }
+  return true;
+}
+
 bool ApplyRelr(Library* lib) {
   // DT_RELR: a compact encoding of R_X86_64_RELATIVE relocations.
   uint64_t* where = nullptr;
@@ -669,7 +792,16 @@ bool ApplyRelr(Library* lib) {
 }
 
 bool Relocate(Library* lib, std::string* error) {
-  if (lib->relr) ApplyRelr(lib);
+  if (lib->relr) ApplyRelr(lib);  // DT_RELR is arch-neutral (load-bias add)
+  if (lib->is_aarch64) {
+    for (size_t i = 0; i < lib->rela_count; ++i) {
+      if (!ApplyRelaAarch64(lib, lib->rela[i], error)) return false;
+    }
+    for (size_t i = 0; i < lib->jmprel_count; ++i) {
+      if (!ApplyRelaAarch64(lib, lib->jmprel[i], error)) return false;
+    }
+    return true;
+  }
   for (size_t i = 0; i < lib->rela_count; ++i) {
     if (!ApplyRela(lib, lib->rela[i], error)) return false;
   }
@@ -682,6 +814,17 @@ bool Relocate(Library* lib, std::string* error) {
 void RunInit(Library* lib) {
   if (lib->init_done) return;
   lib->init_done = true;
+  if (lib->is_aarch64) {
+    // Init functions are guest code: run them through the translator.
+    if (lib->init_func) gesher::arm64::Call(reinterpret_cast<void*>(lib->init_func), nullptr, 0);
+    for (size_t i = 0; i < lib->init_array_count; ++i) {
+      auto f = lib->init_array[i];
+      if (f && f != reinterpret_cast<void (SYSV*)()>(-1)) {
+        gesher::arm64::Call(reinterpret_cast<void*>(f), nullptr, 0);
+      }
+    }
+    return;
+  }
   if (lib->init_func) lib->init_func();
   for (size_t i = 0; i < lib->init_array_count; ++i) {
     if (lib->init_array[i] && lib->init_array[i] != reinterpret_cast<void (SYSV*)()>(-1)) {
@@ -703,13 +846,21 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 ||
       ehdr->e_ident[EI_CLASS] != ELFCLASS64 || ehdr->e_ident[EI_DATA] != ELFDATA2LSB ||
-      ehdr->e_machine != EM_X86_64 || ehdr->e_type != ET_DYN) {
-    Fail(error, std::string(name) + ": not an ELF64 little-endian x86-64 shared object");
+      (ehdr->e_machine != EM_X86_64 && ehdr->e_machine != EM_AARCH64) ||
+      ehdr->e_type != ET_DYN) {
+    Fail(error, std::string(name) + ": not an ELF64 little-endian x86-64 or aarch64 shared object");
+    return nullptr;
+  }
+  const bool aarch64 = ehdr->e_machine == EM_AARCH64;
+  if (aarch64 && !gesher::arm64::EnsureLoaded()) {
+    Fail(error, std::string(name) + ": an arm64-v8a object, but the arm64 translator (" +
+                    "gesher_arm64.dll) is not available");
     return nullptr;
   }
 
   auto* lib = new Library();
   lib->name = name;
+  lib->is_aarch64 = aarch64;
   lib->stub_unresolved = options.stub_unresolved_functions;
   if (!MapSegments(lib, data, error)) {
     delete lib;
@@ -717,19 +868,34 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   }
   ParseDynamic(lib, data);
 
-  // %fs accesses become %gs ones before any of the object's code runs (IFUNC
-  // resolvers run during relocation).
-  if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, &lib->fs, error)) {
-    delete lib;
-    return nullptr;
+  if (!aarch64) {
+    // x86-64 only: %fs accesses become %gs ones before any of the object's code
+    // runs (IFUNC resolvers run during relocation). Guest arm64 code reaches
+    // TLS through TPIDR_EL0, which the translator supplies (ADR 0047).
+    if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, &lib->fs, error)) {
+      delete lib;
+      return nullptr;
+    }
   }
 
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (lib->tls.present) TlsAssignModule(&lib->tls);
+    if (lib->tls.present) {
+      if (aarch64) {
+        lib->tls.tp_offset = gesher::arm64::TlsRegister(lib->tls.total_size, lib->tls.align);
+        lib->tls.is_static = lib->tls.tp_offset >= 0;
+        lib->tls.module_id = 0;  // dynamic TLS via the translator, not compat/elf
+      } else {
+        TlsAssignModule(&lib->tls);
+      }
+    }
     Loaded().push_back(lib);
     ++g_load_count;
   }
+
+  // Register the guest executable segments with the translator before any guest
+  // code runs (init arrays, IFUNC resolvers).
+  if (aarch64) RegisterGuestCode(lib, data);
 
   if (!ResolveNeeded(lib, options, error)) {
     return nullptr;
@@ -737,8 +903,17 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   if (!Relocate(lib, error)) {
     return nullptr;
   }
-  // The relocated TLS image goes into threads that already have a block.
-  if (lib->tls.present) TlsPublishModule(&lib->tls);
+  if (lib->tls.present) {
+    if (aarch64) {
+      if (lib->tls.is_static) {
+        gesher::arm64::TlsPublish(lib->tls.tp_offset, lib->tls.init_image, lib->tls.init_size,
+                                  lib->tls.total_size);
+      }
+    } else {
+      // The relocated TLS image goes into threads that already have a block.
+      TlsPublishModule(&lib->tls);
+    }
+  }
   if (!ProtectSegments(lib, data, error)) {
     return nullptr;
   }
