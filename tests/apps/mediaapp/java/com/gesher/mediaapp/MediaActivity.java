@@ -317,6 +317,36 @@ public class MediaActivity extends Activity {
             t.release();
         }
         Thread.sleep(GAP_MS);
+
+        // 7. AudioTrack.Builder's defaults (Signal Generator's track): no sample rate (the
+        // output's), no buffer size (a single frame asked for; the minimum given).
+        {
+            AudioTrack t = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                    .build();
+            int rate = t.getSampleRate();
+            int frames = rate * 3 / 10;
+            short[] pcm = tone16(rate, 1, 750, frames, 0.5);
+            int min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT) / 2;
+            boolean bufferOk = t.getBufferSizeInFrames() >= min;
+            t.play();
+            long t0 = System.nanoTime();
+            int written = t.write(pcm, 0, pcm.length);
+            long ms = (System.nanoTime() - t0) / 1000000;
+            t.stop();
+            int pos = drain(t, frames, 3000);
+            say("audiotrack 7 builder defaults: rate " + rate + ", buffer at least the minimum "
+                    + bufferOk + ", wrote " + written + " in time " + (ms < 1000) + ", position "
+                    + pos + "/" + frames);
+            t.release();
+        }
+        Thread.sleep(GAP_MS);
     }
 
     // --- AudioManager ------------------------------------------------------------------------

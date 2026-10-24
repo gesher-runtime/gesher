@@ -285,9 +285,14 @@ foreach ($a in $manifestData.apps) {
   if (-not $problems) {
     # "trace": true: the app's process streams ART's method trace into the results
     # (GESHER_APP_METHOD_TRACE, docs/services.md), on a device started for it alone.
+    # "display": "WxH": the app's device has that display (GESHER_DISPLAY), e.g. a
+    # landscape one for an app whose activity asks for landscape (Gesher does not rotate
+    # windows for screenOrientation yet), on a device started for it alone.
     $traceDir = $null
+    $ownDevice = $a.trace -or $a.display
+    if ($ownDevice) { & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null }
+    if ($a.display) { $env:GESHER_DISPLAY = [string]$a.display; $info += "display $($a.display)" }
     if ($a.trace) {
-      & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
       $traceDir = Join-Path $env:TEMP "gesher-e2e-trace-$pkg"
       New-Item -ItemType Directory -Force $traceDir | Out-Null
       $env:GESHER_APP_METHOD_TRACE = ($traceDir -replace '^[A-Za-z]:', '') -replace '\\', '/'
@@ -295,9 +300,11 @@ foreach ($a in $manifestData.apps) {
     try {
       $r = RunWindow $a "`"$app\gesher-app.cmd`" `"$apk`" --hidden-window" 'launch'
     } finally {
-      if ($traceDir) {
+      if ($ownDevice) {
         & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
-        Remove-Item Env:GESHER_APP_METHOD_TRACE -ErrorAction SilentlyContinue
+        Remove-Item Env:GESHER_APP_METHOD_TRACE, Env:GESHER_DISPLAY -ErrorAction SilentlyContinue
+      }
+      if ($traceDir) {
         Get-ChildItem $traceDir -Filter *.trace -ErrorAction SilentlyContinue | Copy-Item -Destination $OutDir
       }
     }

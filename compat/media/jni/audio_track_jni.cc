@@ -93,6 +93,19 @@ void PostToJava(const std::shared_ptr<GlobalRef>& weak, int what, int arg1, int 
   CheckException(env, "AudioTrack.postEventFromNative");
 }
 
+// The smallest buffer of a streaming track, in its frames: two mixer periods
+// at the output rate, at least 20 ms (and 256 frames), about what AudioFlinger
+// asks of a normal track. getMinBufferSize answers it, and a track asked for
+// less gets it, as AudioFlinger raises a track's frame count to its minimum:
+// AudioTrack.Builder without setBufferSizeInBytes asks for a single frame.
+int64_t MinTrackFrames(jint rate) {
+  OutputInfo info = GetOutputInfo();
+  int64_t frames = std::max<int64_t>(
+      static_cast<int64_t>(2) * info.period_frames * rate / std::max<uint32_t>(info.sample_rate, 1),
+      rate / 50);
+  return std::max<int64_t>(frames, 256);
+}
+
 jint JNICALL AudioTrack_setup(JNIEnv* env, jobject thiz, jobject weak_this, jobject attributes,
                               jintArray jSampleRate, jint channelPositionMask, jint channelIndexMask,
                               jint audioFormat, jint buffSizeInBytes, jint memoryMode,
@@ -140,6 +153,9 @@ jint JNICALL AudioTrack_setup(JNIEnv* env, jobject thiz, jobject weak_this, jobj
   p.is_static = memoryMode == kModeStatic;
   size_t frame = BytesPerSample(format) * static_cast<size_t>(channels);
   p.capacity_frames = static_cast<size_t>(std::max(buffSizeInBytes, 0)) / frame;
+  if (!p.is_static) {
+    p.capacity_frames = std::max(p.capacity_frames, static_cast<size_t>(MinTrackFrames(rate)));
+  }
   p.session_id = session;
   p.name = "AudioTrack";
   std::string error;
@@ -361,14 +377,8 @@ jint JNICALL AudioTrack_getMinBuffSize(JNIEnv*, jclass, jint rate, jint channels
   bool ok;
   PcmFormat f = ToPcm(format, &ok);
   if (!ok || rate <= 0 || channels <= 0) return kBadValue;
-  // Two mixer periods at the output rate, in the track's frames, with at
-  // least 20 ms: about what AudioFlinger asks of a normal track.
-  OutputInfo info = GetOutputInfo();
-  int64_t frames = std::max<int64_t>(
-      static_cast<int64_t>(2) * info.period_frames * rate / std::max<uint32_t>(info.sample_rate, 1),
-      rate / 50);
-  frames = std::max<int64_t>(frames, 256);
-  return static_cast<jint>(frames * channels * static_cast<int64_t>(BytesPerSample(f)));
+  return static_cast<jint>(static_cast<int64_t>(MinTrackFrames(rate)) * channels *
+                           static_cast<int64_t>(BytesPerSample(f)));
 }
 
 jint JNICALL AudioTrack_attachAuxEffect(JNIEnv*, jobject, jint) { return kOk; }
