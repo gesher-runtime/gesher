@@ -10,7 +10,9 @@ import android.app.INotificationManager;
 import android.app.IUiModeManager;
 import android.app.IUiModeManagerCallback;
 import android.app.UiModeManager;
+import android.content.ContentResolver;
 import android.content.Context;
+import android.content.IContentService;
 import android.content.pm.IPackageManager;
 import android.content.pm.UserInfo;
 import android.content.res.Configuration;
@@ -18,6 +20,8 @@ import android.graphics.Point;
 import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
+import android.hardware.input.IInputManager;
+import android.media.IAudioService;
 import android.os.IBinder;
 import android.os.IServiceManager;
 import android.os.IUserManager;
@@ -31,6 +35,7 @@ import android.view.IWindowManager;
 import com.android.internal.view.IInputMethodManager;
 
 import com.gesher.app.DeviceProfile;
+import com.gesher.app.input.VirtualKeyboard;
 
 import java.lang.reflect.Field;
 import java.util.Collection;
@@ -86,6 +91,17 @@ public final class Services {
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        // input: InputManagerService with the virtual keyboard (docs/input.md): its device
+        // and key character map (Generic.kcm), for KeyEvent.getUnicodeChar, the text
+        // views' key listeners and VelocityTracker.
+        services.put(Context.INPUT_SERVICE, StandIn.of(IInputManager.class,
+                new VirtualKeyboard.InputManager()).asBinder());
+        // No StandIn proxy: IAudioService's methods name android.bluetooth.BluetoothDevice,
+        // which framework.jar does not have (a Proxy resolves every method's types).
+        services.put(Context.AUDIO_SERVICE,
+                new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
+        services.put(ContentResolver.CONTENT_SERVICE_NAME,
+                StandIn.of(IContentService.class, new ContentService()).asBinder());
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManager()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
@@ -213,6 +229,42 @@ public final class Services {
         }
     }
 
+    /**
+     * content: ContentService, without observers' notifications. A text view's key listener
+     * observes the text settings (TextKeyListener.initPrefs: registerContentObserver).
+     */
+    public static final class ContentService extends IContentService.Default {
+        @Override
+        public void registerContentObserver(android.net.Uri uri, boolean notifyForDescendants,
+                android.database.IContentObserver observer, int userHandle,
+                int targetSdkVersion) {
+            // Nothing changes the observed content behind the app's back; never notified.
+        }
+
+        @Override
+        public void unregisterContentObserver(android.database.IContentObserver observer) {
+        }
+
+        @Override
+        public void notifyChange(android.net.Uri[] uris, android.database.IContentObserver observer,
+                boolean observerWantsSelfNotifications, int flags, int userHandle,
+                int targetSdkVersion, String callingPackage) {
+        }
+    }
+    /**
+     * audio: AudioService, silent. A click on a view plays its sound effect
+     * (View.performClick → AudioManager.playSoundEffect), which needs the service.
+     */
+    public static final class AudioService extends IAudioService.Default {
+        @Override
+        public void playSoundEffect(int effectType, int userId) {
+            // No sound.
+        }
+
+        @Override
+        public void playSoundEffectVolume(int effectType, float volume) {
+        }
+    }
     /**
      * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
      * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.

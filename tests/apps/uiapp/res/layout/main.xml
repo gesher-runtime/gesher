@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- At 160 dpi (1 dp = 1 px) on a 400x800 window: red 0-200, green and blue halves
-     200-400, yellow 400-520 with black text, white below. -->
+<!-- At 160 dpi (1 dp = 1 px) on a 400x800 window: red 0-200; a green Button (left half)
+     and a blue View 200-400; yellow 400-520 with black text; a white EditText 520-600; a
+     gray TextView echoing it 600-680; a ScrollView 680-800 over magenta, orange and purple
+     blocks (magenta shows until it scrolls). -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -15,11 +18,16 @@
         android:layout_width="match_parent"
         android:layout_height="200dp"
         android:orientation="horizontal">
-        <View
+        <!-- A plain green Button: no text, no elevation (no shadow), no ripple bounds
+             outside it. Its onClick turns the red View cyan. -->
+        <Button
+            android:id="@+id/button"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:background="#FF00FF00" />
+            android:background="#FF00FF00"
+            android:stateListAnimator="@null"
+            android:text="" />
         <View
             android:layout_width="0dp"
             android:layout_height="match_parent"
@@ -35,4 +43,46 @@
         android:text="@string/greeting"
         android:textColor="#FF000000"
         android:textSize="48sp" />
+    <EditText
+        android:id="@+id/edit"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:background="#FFFFFFFF"
+        android:gravity="center"
+        android:inputType="text"
+        android:singleLine="true"
+        android:textColor="#FF000000"
+        android:textSize="32sp" />
+    <TextView
+        android:id="@+id/echo"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:background="#FFC0C0C0"
+        android:gravity="center"
+        android:textColor="#FF000000"
+        android:textSize="32sp" />
+    <ScrollView
+        android:id="@+id/scroll"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:scrollbars="none"
+        android:overScrollMode="never">
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:background="#FFFF00FF" />
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:background="#FFFF8000" />
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:background="#FF800080" />
+        </LinearLayout>
+    </ScrollView>
 </LinearLayout>

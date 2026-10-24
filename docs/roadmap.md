@@ -167,15 +167,21 @@ needs: [framework-build.md](framework-build.md).
       back its pixels (ci run 40048707298: uiapp.apk's layout and text drawn
       by hwui's CPU pipeline, read back with PrintWindow, both runners and
       the installer; not through ANGLE/WARP yet)
-- [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
-      and `KeyEvent`; a click reaches `onClick`, tested in CI
+- [x] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
+      and `KeyEvent`; a click reaches `onClick`, tested in CI (ci run
+      40056527378: uiapp.apk, single process, the Gesher device and the
+      installer)
   - [x] libinput's transport and the framework's input natives (InputChannel,
         InputEventReceiver/Sender, KeyEvent, MotionEvent, KeyCharacterMap with
         Generic.kcm, VelocityTracker); a Gesher window's mouse, wheel and key
         messages (and touch, injected) to a Java InputEventReceiver, finished
         (ci run 40038368343, both runners; docs/input.md)
-  - [ ] A click in an app's window reaches `onClick` (the window session
-        attaches its InputChannel: `WindowInput.attach`)
+  - [x] A click in an app's window reaches `onClick` (the window session
+        attaches its InputChannel: `WindowInput.attach`); keys and a WM_CHAR
+        reach a focused EditText, the wheel scrolls a ScrollView, the user
+        resizes the window (at least its minimum) and it redraws at the new
+        size (ci run 40056527378, both runners and the installer;
+        docs/graphics.md)
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
   - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
         Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
