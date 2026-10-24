@@ -77,7 +77,12 @@ ADR 0033 brought nterp, the JIT and AOT code to Windows and left four gaps
 - Native methods called from compiled code go through compiled stubs (the
   boot image's AOT stubs, the JIT's for app natives).
 - An oat file's code is a view of the file, shared between processes until
-  written, instead of a private copy in each process.
+  written, instead of a private copy in each process. That makes AOT for the
+  extensions affordable: boot-image.yml compiles framework.jar and
+  gesher-app.jar with `speed` too (298,365 methods with compiled code in all,
+  75.7 MB of oat file for framework.jar), with no measurable startup cost.
+- Without placeholders, gesher-base's `memfd_create` fails for ART (ENOSYS)
+  and the JIT keeps its single mapping.
 - Each thread gives ART 8 KiB less stack (the guarantee is now outside ART's
   usable stack); `GrowStack` grows down to ART's region instead of stopping
   64 KiB above the bottom.
