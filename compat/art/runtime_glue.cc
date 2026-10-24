@@ -1,6 +1,5 @@
 // Gesher: small pieces libart-runtime expects from modules Gesher does not
-// build (yet). What dalvikvm takes from libart-compiler instead is in
-// compiler_standins.cc (dex2oat links the real compiler).
+// build (yet).
 
 #include "base/flags.h"
 #include "com_android_art_rw_flags.h"
