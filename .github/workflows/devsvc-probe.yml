@@ -1,0 +1,24 @@
+# Temporary (devsvc track): what the Windows runners offer for toasts, the
+# clipboard and power status. Removed once the track's checks run in ci.
+name: devsvc-probe
+on:
+  push:
+    branches: [wip/devsvc]
+    paths: [.github/workflows/devsvc-probe.yml, tests/windows/devsvc/toast-probe.ps1]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/windows/devsvc
+      - name: Probe
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/devsvc/toast-probe.ps1
+          query user 2>&1
+          whoami
