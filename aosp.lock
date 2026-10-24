@@ -21,8 +21,10 @@ external/libpng
 external/cpu_features
 system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
-external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/
+external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/ icu4c/source/data/misc/windowsZones.txt
 external/okhttp Android.bp repackaged/
+# Time zone data, as the com.android.tzdata module ships it (docs/posix.md).
+system/timezone output_data/
 external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
 # SQLite (cmake/aosp/sqlite.cmake): sqlite-default is sqlite-autoconf-3500400.

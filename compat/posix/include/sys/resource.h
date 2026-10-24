@@ -49,6 +49,15 @@ struct rusage {
 int getrlimit(int resource, struct rlimit* rlim);
 int setrlimit(int resource, const struct rlimit* rlim);
 int getrusage(int who, struct rusage* usage);
+int prlimit(pid_t pid, int resource, const struct rlimit* new_limit, struct rlimit* old_limit);
+#define prlimit64 prlimit
+#define RLIMIT_LOCKS      10
+#define RLIMIT_SIGPENDING 11
+#define RLIMIT_MSGQUEUE   12
+#define RLIMIT_NICE       13
+#define RLIMIT_RTPRIO     14
+#define RLIMIT_RTTIME     15
+#define RLIMIT_NLIMITS    16
 // On Linux (and Android) PRIO_PROCESS with a thread id sets that thread's
 // nice value; Gesher maps nice values onto Windows thread priorities.
 int getpriority(int which, id_t who);

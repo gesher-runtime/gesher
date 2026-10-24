@@ -17,8 +17,21 @@
 
 namespace {
 
-// Android gives each app its own uid; Gesher reports the first app uid.
-constexpr uid_t kAppUid = 10000;
+// Android gives each app its own uid; Gesher reports the first app uid, or
+// $GESHER_UID when whoever started the process set one (read once, as a
+// process's uid does not change).
+uid_t AppUid() {
+  static const uid_t uid = [] {
+    const char* env = getenv("GESHER_UID");
+    char* end = nullptr;
+    unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;
+    return env != nullptr && *env != '\0' && *end == '\0' && value < 0x7fffffff
+               ? static_cast<uid_t>(value)
+               : static_cast<uid_t>(10000);
+  }();
+  return uid;
+}
+#define kAppUid AppUid()
 
 std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 
@@ -37,34 +50,6 @@ bool FinalPath(HANDLE h, std::string* out) {
   }
   *out = gesher::LinuxPath(buf);
   return true;
-}
-
-// Linux's /proc/self/fd/<n> (or /proc/<own pid>/fd/<n>) links to the file
-// open as fd n. Returns 1 with its path in `out`, 0 if `path` is not such a
-// name, -1 with errno set if it is but has no file (ENOENT: fd n is closed).
-int ProcFdTarget(const char* path, std::string* out) {
-  std::string name = path;
-  std::string self = "/proc/self/fd/";
-  std::string own = "/proc/" + std::to_string(GetCurrentProcessId()) + "/fd/";
-  size_t prefix;
-  if (name.rfind(self, 0) == 0) {
-    prefix = self.size();
-  } else if (name.rfind(own, 0) == 0) {
-    prefix = own.size();
-  } else {
-    return 0;
-  }
-  std::string digits = name.substr(prefix);
-  if (digits.empty() || digits.size() > 9 ||
-      digits.find_first_not_of("0123456789") != std::string::npos) {
-    return 0;
-  }
-  HANDLE h = gesher::HandleFromFd(std::stoi(digits));
-  if (h == INVALID_HANDLE_VALUE) {
-    errno = ENOENT;
-    return -1;
-  }
-  return FinalPath(h, out) ? 1 : -1;
 }
 
 }  // namespace
@@ -285,7 +270,6 @@ uid_t geteuid(void) { return kAppUid; }
 gid_t getgid(void) { return kAppUid; }
 gid_t getegid(void) { return kAppUid; }
 pid_t gettid(void) { return static_cast<pid_t>(GetCurrentThreadId()); }
-pid_t getppid(void) { return 1; }
 pid_t setsid(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 
 // One process group per process.
@@ -341,26 +325,6 @@ ssize_t pwrite64(int fd, const void* buf, size_t count, off_t offset) {
   return pwrite(fd, buf, count, offset);
 }
 
-// Gesher does not create symlinks, so nothing is one but the /proc/self/fd
-// links.
-ssize_t readlink(const char* path, char* buf, size_t size) {
-  std::string target;
-  int found = path != nullptr ? ProcFdTarget(path, &target) : 0;
-  if (found < 0) return -1;
-  if (found == 0) return errno = EINVAL, -1;
-  size_t n = target.size() < size ? target.size() : size;  // not NUL-terminated
-  memcpy(buf, target.data(), n);
-  return static_cast<ssize_t>(n);
-}
-int symlink(const char*, const char*) { return errno = EPERM, -1; }
-
-int link(const char* oldpath, const char* newpath) {
-  if (!CreateHardLinkW(gesher::Widen(newpath).c_str(), gesher::Widen(oldpath).c_str(), nullptr)) {
-    return gesher::FailWithLastError();
-  }
-  return 0;
-}
-
 int nice(int inc) {
   (void)inc;
   return 0;
@@ -387,34 +351,43 @@ long random(void) { return gesher_rand(); }
 void srandom(unsigned int seed) { gesher_srand(seed); }
 
 // The result is a Linux path (path.cc): without the drive when it is the
-// current one, and the names under /dev and /proc as they are.
+// current one, /mnt/<drive>/... when it is another; symbolic links resolved,
+// /proc links too (/proc/self/fd/<n>, /proc/self/exe); other names under
+// /dev and /proc as they are.
 char* realpath(const char* path, char* resolved_path) {
   if (path == nullptr) {
     errno = EINVAL;
     return nullptr;
   }
   std::string out;
-  int fd_link = ProcFdTarget(path, &out);
-  if (fd_link < 0) return nullptr;
+  std::string current = path;
   std::wstring wpath;
-  gesher::PathKind kind = fd_link > 0       ? gesher::PathKind::kFile
-                          : path[0] != '\0' ? gesher::MapPath(path, &wpath)
-                                            : gesher::PathKind::kMissing;
-  if (kind != gesher::PathKind::kFile) {
-    if (kind == gesher::PathKind::kMissing) {
+  gesher::PathKind kind = path[0] != '\0' ? gesher::MapPath(path, &wpath) : gesher::PathKind::kMissing;
+  for (int depth = 0; kind == gesher::PathKind::kVirtual; ++depth) {
+    unsigned type = gesher::procfs::Type(wpath);
+    if (type == 0) {
       errno = ENOENT;
       return nullptr;
     }
-    // A device or /proc file: the name as given, repeated slashes folded.
-    std::string device;
-    for (const char* p = path; *p != '\0'; ++p) {
-      if (*p != '/' || device.empty() || device.back() != '/') device += *p;
+    if (type != S_IFLNK) {
+      out = "/" + gesher::Narrow(wpath.c_str());
+      break;
     }
-    if (resolved_path == nullptr) return _strdup(device.c_str());
-    memcpy(resolved_path, device.c_str(), device.size() + 1);
-    return resolved_path;
+    std::string target;
+    if (!gesher::procfs::ReadLink(wpath, &target)) return nullptr;
+    if (target.empty() || target[0] != '/' || depth > 8) {
+      out = target;  // pipe:[n], socket:[n]: not a path
+      break;
+    }
+    kind = gesher::MapPath(target.c_str(), &wpath);
+    current = target;
+    out = target;
   }
-  if (fd_link == 0) {
+  if (kind == gesher::PathKind::kMissing) {
+    errno = ENOENT;
+    return nullptr;
+  }
+  if (kind == gesher::PathKind::kFile) {
     HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
@@ -424,6 +397,12 @@ char* realpath(const char* path, char* resolved_path) {
     bool ok = FinalPath(h, &out);
     CloseHandle(h);
     if (!ok) return nullptr;
+  } else if (kind != gesher::PathKind::kVirtual) {
+    // A device: the name as given, repeated slashes folded.
+    out.clear();
+    for (const char* p = current.c_str(); *p != '\0'; ++p) {
+      if (*p != '/' || out.empty() || out.back() != '/') out += *p;
+    }
   }
   if (resolved_path == nullptr) return _strdup(out.c_str());
   if (out.size() >= 4096) {
