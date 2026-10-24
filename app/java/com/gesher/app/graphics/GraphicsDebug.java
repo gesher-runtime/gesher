@@ -15,7 +15,11 @@ public final class GraphicsDebug {
     return nRenderer();
   }
 
-  /** For SkiaGL, ANGLE's GL_RENDERER and versions; otherwise why the CPU pipeline renders. */
+  /**
+   * What asked for SkiaGL (GESHER_HWUI_RENDERER or debug.hwui.renderer) and, for SkiaGL,
+   * ANGLE's GL_RENDERER and versions, otherwise why the CPU pipeline renders; "the default"
+   * when nothing asked.
+   */
   public static String rendererDetail() {
     return nRendererDetail();
   }

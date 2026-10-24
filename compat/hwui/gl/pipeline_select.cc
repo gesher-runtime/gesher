@@ -47,19 +47,19 @@ RenderPipelineType gesher_hwui_choose_pipeline() {
   }
   if (want.empty() || want == "skiacpu") return RenderPipelineType::SkiaCpu;
   if (want != "skiagl") {
-    *g_detail = from + "=" + want + " is not built";
+    *g_detail = from + "=" + want + ": not built";
     Say(*g_detail + "; using the CPU pipeline (SkiaCpu)");
     return RenderPipelineType::SkiaCpu;
   }
   std::string detail;
   if (!gesher_hwui_gl_usable(&detail)) {
-    *g_detail = detail;
+    *g_detail = from + "=skiagl: " + detail;
     Say(from + "=skiagl, but OpenGL ES over ANGLE is not usable (" + detail +
         "); using the CPU pipeline (SkiaCpu)");
     return RenderPipelineType::SkiaCpu;
   }
   g_name = "skiagl";
-  *g_detail = detail;
+  *g_detail = from + "=skiagl: " + detail;
   Say("SkiaGL pipeline (" + from + "=skiagl): ANGLE " + detail);
   return RenderPipelineType::SkiaGL;
 }

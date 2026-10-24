@@ -36,11 +36,26 @@ GraphicsDex 'HardwareRenderer: the CPU pipeline''s frame (child node, text, bitm
 $env:GESHER_HWUI_RENDERER = 'skiagl'
 $env:GESHER_EGL_DEVICE = 'warp'
 GraphicsDex 'HardwareRenderer: SkiaGL over ANGLE (WARP) into the Win32 window, the same frame as the CPU pipeline' `
-  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl')
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl', 'GESHER_HWUI_RENDERER')
 Remove-Item Env:GESHER_EGL_DEVICE
+Remove-Item Env:GESHER_HWUI_RENDERER
+
+# The same chosen by Android's switch, the system property debug.hwui.renderer
+# (in $ANDROID_ROOT/build.prop, which dalvikvm loads at start; here a copy of
+# the test root's with the line added), on ANGLE's default device.
+$propRoot = Join-Path $env:RUNNER_TEMP 'gesher-root-skiagl'
+New-Item -ItemType Directory -Force $propRoot | Out-Null
+@(Get-Content (Join-Path $root 'system/build.prop')) + 'debug.hwui.renderer=skiagl' |
+  Set-Content (Join-Path $propRoot 'build.prop')
+$androidRoot = $env:ANDROID_ROOT
+$env:ANDROID_ROOT = NoDrive $propRoot
+GraphicsDex 'HardwareRenderer: SkiaGL chosen by debug.hwui.renderer, on ANGLE''s default device, the same frame' `
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl', 'debug.hwui.renderer')
+$env:ANDROID_ROOT = $androidRoot
 
 # Without ANGLE (the files of $Dir, hard-linked, less libEGL.dll and
 # libGLESv2.dll), skiagl falls back to the CPU pipeline with a line saying so.
+$env:GESHER_HWUI_RENDERER = 'skiagl'
 $noAngle = Join-Path $env:RUNNER_TEMP 'dist-no-angle'
 New-Item -ItemType Directory -Force $noAngle | Out-Null
 foreach ($file in Get-ChildItem -File $Dir) {
@@ -54,6 +69,6 @@ foreach ($file in Get-ChildItem -File $Dir) {
 $distDir = $Dir
 $Dir = $noAngle
 GraphicsDex 'HardwareRenderer: skiagl without ANGLE falls back to the CPU pipeline, the same frame' `
-  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback')
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback', 'GESHER_HWUI_RENDERER')
 $Dir = $distDir
 Remove-Item Env:GESHER_HWUI_RENDERER
