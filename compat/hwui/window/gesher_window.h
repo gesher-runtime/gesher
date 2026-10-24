@@ -69,7 +69,10 @@ class Window {
   void Show();
   void Hide();
   // Shows the window off the desktop (left of the virtual screen, no taskbar
-  // button, not activated), for tests that read it back with PrintWindow.
+  // button, not activated), for tests that read it back with PrintWindow. It
+  // stays there whatever resizes it (WM_WINDOWPOSCHANGING): a window partly
+  // on the desktop is drawn only where it is on it, and PrintWindow reads the
+  // rest stale (the parts outside the virtual screen are never painted).
   void ShowOffscreen();
   void SetTitle(const std::string& title_utf8);
   // Lets the user resize (and maximize) the window, or not.
@@ -150,6 +153,8 @@ class Window {
   std::deque<WindowEvent> events_;
   int buttons_ = 0;
   bool tracking_leave_ = false;  // TrackMouseEvent(TME_LEAVE) is armed
+  // Shown off the desktop (ShowOffscreen): resizes keep it there.
+  std::atomic<bool> offscreen_{false};
   // Modifier keys held as the window's key messages say (shift 1, ctrl 2,
   // alt 4), ORed with GetKeyState's: posted key messages (tests, input
   // injected by other programs) do not change the thread's key state.
