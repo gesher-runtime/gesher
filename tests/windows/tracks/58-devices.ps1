@@ -44,7 +44,7 @@ function DevCheck([string] $Name, [string] $Out, [object[]] $Sequences, [int] $C
   $script:failed++
   if ($Tag -and -not $script:devPrinted[$Tag]) {
     $script:devPrinted[$Tag] = $true
-    ($Out -split "`n" | Where-Object { $_ -match 'devices|location|gesher-app|system_server|Exception|Error|FATAL| at ' } |
+    ($Out -split "`n" | Where-Object { $_ -match 'devices|location|camera|sensors|gesher-app|system_server|Exception|Error|FATAL| at ' } |
       Select-Object -First 200) | Out-Host
   }
 }
@@ -125,6 +125,7 @@ function CameraEmptyCheck([string] $Mode, [string] $Out, [int] $Code) {
 }
 # GESHER_CAMERA_TEST's camera, below the camera service: Camera2 end to end.
 function CameraTestCheck([string] $Mode, [string] $Out, [int] $Code) {
+  $before = $script:failed
   DevCheck "devices: camera ($Mode): GESHER_CAMERA_TEST's camera through Camera2: characteristics, openCamera, a session, repeating preview into a YUV ImageReader, a JPEG still capture, close" $Out @(
     ,@("${cm}1 cameras: 0",
       "${cm}0 facing 1, level 4, YUV_420_888 [640x480, 320x240], JPEG [640x480, 320x240]",
@@ -132,7 +133,10 @@ function CameraTestCheck([string] $Mode, [string] $Out, [int] $Code) {
       "${cm}repeating preview: first frame preview 640x480 format 35, 3 planes, Y(10,100)=110, timestamp>0 true",
       "${cm}preview frames keep coming: true, results true",
       "${cm}still capture: capture completed, sensor timestamp>0 true, JPEG quality 90; still JPEG 320x240, starts FFD8 true, decodes to 320x240",
-      "${cm}close closed 0", "${cm}done")) $Code $Mode
+      "${cm}close closed 0", "${cm}done")) $Code "camera $Mode"
+  if ($script:failed -gt $before) {
+    ($Out -split "`n" | Where-Object { $_ -match 'camera|Camera|Image|still' } | Select-Object -Last 80) | Out-Host
+  }
   # The frames came through Media Foundation: its source reader over the test camera's
   # IMFMediaSource (YUY2, converted to NV12 by the reader's video processing).
   $opens = [regex]::Matches($Out, 'camera: opened gesher-test at (\d+x\d+) through ([^\r\n]*)')
