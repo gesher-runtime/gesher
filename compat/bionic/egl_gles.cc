@@ -45,6 +45,7 @@
 #include "abi_types.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/egl_angle.h>
 #include <gesher/elf_loader.h>
 
 #include <android/native_window.h>
@@ -570,3 +571,49 @@ void Register() {
 
 }  // namespace
 }  // namespace gesher::bionic::gl
+
+// --- for code in the executable (Microsoft ABI): gesher/egl_angle.h -------------------------------
+// hwui's EglManager (compat/hwui/gl/angle_gl.cc, ADR 0030) takes the same
+// displays, configs and window surfaces as an app's .so.
+
+extern "C" void* gesher_egl_proc(const char* name) {
+  namespace gl = gesher::bionic::gl;
+  if (name == nullptr || !gl::AngleAvailable()) return nullptr;
+  const gl::Angle& a = gl::GetAngle();
+  if (FARPROC p = GetProcAddress(a.gles, name)) return reinterpret_cast<void*>(p);
+  if (FARPROC p = GetProcAddress(a.egl, name)) return reinterpret_cast<void*>(p);
+  using GetProc = __eglMustCastToProperFunctionPointerType(EGLAPIENTRY*)(const char*);
+  auto get_proc = reinterpret_cast<GetProc>(
+      reinterpret_cast<void*>(GetProcAddress(a.egl, "eglGetProcAddress")));
+  return get_proc != nullptr ? reinterpret_cast<void*>(get_proc(name)) : nullptr;
+}
+
+extern "C" void* gesher_egl_default_display(void) {
+  return gesher::bionic::gl::DefaultDisplay();
+}
+
+extern "C" unsigned gesher_egl_choose_config(void* display, const int32_t* attribs, void** configs,
+                                             int32_t config_size, int32_t* num_config) {
+  return gesher::bionic::gl::ChooseConfig(display, attribs, configs, config_size, num_config);
+}
+
+extern "C" unsigned gesher_egl_get_config_attrib(void* display, void* config, int32_t attribute,
+                                                 int32_t* value) {
+  return gesher::bionic::gl::GetConfigAttrib(display, config, attribute, value);
+}
+
+extern "C" void* gesher_egl_create_window_surface(void* display, void* config,
+                                                  ANativeWindow* window, const int32_t* attribs) {
+  return gesher::bionic::gl::CreateWindowSurface(display, config, window, attribs);
+}
+
+extern "C" unsigned gesher_egl_destroy_surface(void* display, void* surface) {
+  return gesher::bionic::gl::DestroySurface(display, surface);
+}
+
+extern "C" void* gesher_egl_surface_hwnd(void* surface) {
+  namespace gl = gesher::bionic::gl;
+  std::lock_guard<std::mutex> lock(gl::g_surface_mutex);
+  auto it = gl::WindowSurfaces().find(surface);
+  return it != gl::WindowSurfaces().end() ? static_cast<void*>(it->second.hwnd) : nullptr;
+}

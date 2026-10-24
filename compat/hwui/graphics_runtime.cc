@@ -4,7 +4,8 @@
 // looks up ColorSpace.get()), less the device-only classes (TextureLayer,
 // Movie, PdfDocument, PdfEditor) and YuvImage (libultrahdr), plus Surface,
 // whose natives libandroid_runtime has, and gesher-app's Win32 window. hwui renders with its CPU pipeline
-// (SkiaCpu) until the GL one runs over ANGLE (docs/graphics.md).
+// (SkiaCpu) unless SkiaGL over ANGLE is asked for and works (compat/hwui/gl/pipeline_select.cc,
+// docs/angle.md).
 //
 // Each registration is skipped, with a log line, when its class is not on the
 // class path, as android_runtime.cc does for its own.
@@ -17,6 +18,7 @@
 #include "GraphicsJNI.h"
 #include "Properties.h"
 #include "include/core/SkGraphics.h"
+#include "pipeline_select.h"
 
 extern int register_android_graphics_Bitmap(JNIEnv*);
 extern int register_android_graphics_BitmapFactory(JNIEnv*);
@@ -75,6 +77,8 @@ extern int register_android_view_Surface(JNIEnv* env);
 
 // compat/hwui/window/window_jni.cc: gesher-app's window (Win32Surface).
 extern int register_com_gesher_app_window_NativeWindow(JNIEnv* env);
+// compat/hwui/gl/graphics_debug_jni.cc: which pipeline renders, GL read-back.
+extern int register_com_gesher_app_graphics_GraphicsDebug(JNIEnv* env);
 
 namespace {
 
@@ -143,6 +147,7 @@ const Registration kRegistrations[] = {
     {"android/graphics/HardwareRenderer", register_android_view_ThreadedRenderer},
     {"android/view/Surface", register_android_view_Surface},
     {"com/gesher/app/window/NativeWindow", register_com_gesher_app_window_NativeWindow},
+    {"com/gesher/app/graphics/GraphicsDebug", register_com_gesher_app_graphics_GraphicsDebug},
 };
 
 bool HasClass(JNIEnv* env, const char* name) {
@@ -161,8 +166,7 @@ int register_gesher_graphics(JNIEnv* env) {
   JavaVM* vm = nullptr;
   env->GetJavaVM(&vm);
   GraphicsJNI::setJavaVM(vm);
-  android::uirenderer::Properties::overrideRenderPipelineType(
-      android::uirenderer::RenderPipelineType::SkiaCpu);
+  android::uirenderer::Properties::overrideRenderPipelineType(gesher_hwui_choose_pipeline());
   SkGraphics::Init();
   for (const Registration& r : kRegistrations) {
     if (!HasClass(env, r.className)) {

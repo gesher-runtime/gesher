@@ -144,8 +144,13 @@ needs: [framework-build.md](framework-build.md).
       window, both runners; lifecycle.apk still reaches onResume)
 - [x] ANGLE: EGL and GLES over Direct3D 11, built in CI (ci run
       39990699626: angle_probe on windows-2022 and windows-2025, D3D11 and
-      WARP; docs/angle.md). hwui does not draw through it yet (its GL
-      pipeline, an EGL window surface on the Win32 window)
+      WARP; docs/angle.md)
+  - [x] hwui's SkiaGL pipeline (Skia's Ganesh GL) over ANGLE, chosen with
+        `GESHER_HWUI_RENDERER`/`debug.hwui.renderer` = `skiagl` (the CPU
+        pipeline stays the default and the fallback): HardwareRenderer draws a
+        RenderNode tree with text and a bitmap into a Win32 window through an
+        EGL window surface, the same frame as the CPU pipeline (ci run
+        40047748570, both runners, WARP; ADR 0030)
 - [ ] A Win32 window as the Activity's surface (`ANativeWindow`), opened
       through a window manager stand-in
 - [ ] A simple Activity drawn in a Win32 window, tested in CI by reading

@@ -25,8 +25,12 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   AVX2/AVX-512 paths are off, as on Android. `compat/hwui/skia_prefix.h`
   undoes gesher-base's `rand()` macro for Skia (it has locals named `rand`).
   Third-party code is built without `-Werror`/warnings and with `-g0`.
+  Ganesh, Skia's GPU backend, with its OpenGL ES half over ANGLE, is built
+  too (from the `android` variant's sources; docs/angle.md, ADR 0030).
 - **hwui** (`cmake/aosp/hwui.cmake`): `libhwui`'s host variant (SkiaCpu
-  pipeline, `HWUI_NULL_GPU`), with HarfBuzz, minikin, libui-types and
+  pipeline, `HWUI_NULL_GPU`; plus the device's SkiaGL pipeline over ANGLE,
+  chosen with `GESHER_HWUI_RENDERER` or `debug.hwui.renderer` = `skiagl`:
+  docs/angle.md, ADR 0030), with HarfBuzz, minikin, libui-types and
   libhostgraphics (the host ANativeWindow/Surface/BufferQueue). hwui's
   Windows code paths are its non-`__linux__` branches. `compat/hwui` stands in
   for what Soong generates or Gesher does not build: `HWUIProperties.sysprop.h`,
@@ -79,7 +83,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   names to them through its System V thunks; `gesher_window_create(title,
   w, h)` gives a test a window and its ANativeWindow without Java.
 - **CI**: `.github/workflows/graphics.yml` (push to wip/graphics on its inputs,
-  workflow_dispatch, workflow_call): builds `skia_probe` and `window_probe`
+  workflow_dispatch, workflow_call): builds `skia_probe`, `skia_gl_probe`
+  (run by 31-angle.ps1, next to ANGLE's DLLs) and `window_probe`
   (`ninja -k 0`) and uploads them as artifact `graphics`, then builds
   `graphics_all` (every graphics library), printing the errors; job `probe`
   runs both probes on windows-2022 when the workflow runs on its own. Graphics
@@ -143,6 +148,13 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   its RenderThread with the SkiaCpu pipeline into the Win32Surface, then
   `NativeWindow.present()`; PrintWindow reads magenta, white and the cyan
   child back.
+- **hwui's SkiaGL pipeline over ANGLE** (ci runs 40045622565 and
+  40047748570, both runners; docs/angle.md, ADR 0030): the same kind of tree
+  with text and a bitmap, rendered with SkiaGL into the window (an EGL window
+  surface on its HWND), equals the CPU pipeline's frame (`PASS  dalvikvm:
+  HardwareRenderer: SkiaGL over ANGLE (WARP) into the Win32 window, the same
+  frame as the CPU pipeline`); `debug.hwui.renderer=skiagl` selects it too,
+  and without ANGLE the CPU pipeline renders.
 - **Window input additions** (input track, docs/input.md): the window also
   queues WM_MOUSEHWHEEL (`delta_x`), WM_MOUSELEAVE (`kMouseLeave`, with
   TrackMouseEvent) and WM_POINTER* for touch and pen (`kTouch*`, `pointer`,
@@ -258,7 +270,9 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    `VirtualKeyboard.InputManager` as the "input" service (VelocityTracker,
    KeyCharacterMap.load). Then CI posts WM_LBUTTONDOWN/UP and checks onClick
    and changed pixels.
-5. **ANGLE**: a separate agent works on branch wip/angle.
+5. **ANGLE**: built and shipped (docs/angle.md); hwui's SkiaGL pipeline
+   runs on it when asked for (`GESHER_HWUI_RENDERER=skiagl`), verified with
+   HardwareRenderer into a window. Next: an Activity's window with SkiaGL.
 
 ### Open problems and dead ends
 
