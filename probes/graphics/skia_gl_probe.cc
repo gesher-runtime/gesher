@@ -220,23 +220,23 @@ int main(int argc, char** argv) {
             from_gpu.getColor(140, 36) == SK_ColorBLUE &&
             from_gpu.getColor(164, 36) == SK_ColorYELLOW,
         "GPU: bitmap scaled 2x");
-  int text_gpu = 0, text_cpu = 0, differ = 0, far = 0, worst = 0;
+  int text_gpu = 0, text_cpu = 0, differ = 0, distant = 0, worst = 0;
   for (int y = 0; y < h; y++) {
     for (int x = 0; x < w; x++) {
       SkColor g = from_gpu.getColor(x, y), c = from_cpu.getColor(x, y);
       int d = Diff(g, c);
       worst = std::max(worst, d);
       if (d > 2) differ++;
-      if (d > 64) far++;
+      if (d > 64) distant++;
       if (y >= 60 && SkColorGetR(g) < 128) text_gpu++;
       if (y >= 60 && SkColorGetR(c) < 128) text_cpu++;
     }
   }
   std::printf("INFO  GPU vs CPU: %d of %d pixels differ by more than 2 (worst %d, %d by more than "
               "64); text pixels %d GPU, %d CPU\n",
-              differ, w * h, worst, far, text_gpu, text_cpu);
+              differ, w * h, worst, distant, text_gpu, text_cpu);
   check(text_gpu > 150 && std::abs(text_gpu - text_cpu) <= text_cpu / 10, "GPU: text drawn");
-  check(differ <= w * h / 50 && far <= w * h / 500, "GPU frame matches the CPU raster frame");
+  check(differ <= w * h / 50 && distant <= w * h / 500, "GPU frame matches the CPU raster frame");
 
   gr->flushAndSubmit(GrSyncCpu::kYes);
   gpu.reset();
