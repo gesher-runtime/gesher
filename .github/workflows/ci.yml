@@ -55,6 +55,8 @@ jobs:
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
           tools/fonts/collect-fonts.sh third_party/aosp dist
+          # Android's CA certificates and the networking libraries' licenses (docs/network.md).
+          tools/net/collect.sh third_party/aosp dist
           ls -la dist
 
       - uses: actions/upload-artifact@v4

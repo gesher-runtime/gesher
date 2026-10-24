@@ -1,0 +1,192 @@
+# Networking (docs/network.md, ADR 0037): Java's sockets, DNS and NIO over
+# gesher-base, BoringSSL (NativeBN, Conscrypt), OkHttp behind HttpURLConnection,
+# the system CA certificates from Windows' store, and HTTPS on the internet.
+# Dot-sourced by run-tests.ps1: Check, RunDex, NoDrive, $Dir, $root, $bcp and
+# $failed are its.
+
+# Runs gesher.NetTest (net-tests.dex, tests/dex-net) on the core boot class path,
+# with a time limit; each of its "OK"/"FAIL" lines becomes a PASS/FAIL line here.
+function NetDex([string] $Name, [string[]] $Arguments, [int] $Seconds = 300, [hashtable] $Environment = @{}) {
+  if (-not (Test-Path "$Dir/net-tests.dex")) {
+    Write-Host "FAIL  net: $Name (net-tests.dex is missing)"
+    $script:failed++
+    return ''
+  }
+  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+  foreach ($a in @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+                   '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/net-tests.dex"), 'gesher.NetTest') + $Arguments) {
+    $psi.ArgumentList.Add($a)
+  }
+  $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
+  $psi.Environment['GESHER_TRACE_CACERTS'] = '1'
+  foreach ($k in $Environment.Keys) { $psi.Environment[$k] = $Environment[$k] }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  $p = [Diagnostics.Process]::Start($psi)
+  $stdout = $p.StandardOutput.ReadToEndAsync()
+  $stderr = $p.StandardError.ReadToEndAsync()
+  $timedOut = -not $p.WaitForExit($Seconds * 1000)
+  if ($timedOut) { $p.Kill($true); $p.WaitForExit() }
+  $null = $stdout.Wait(10000), $stderr.Wait(10000)
+  $code = if ($timedOut) { -1 } else { $p.ExitCode }
+  $out = $stdout.Result + "`n" + $stderr.Result
+  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+  foreach ($line in $out -split "`r?`n") {
+    if ($line -match '^OK    (.*)$') { Write-Host "PASS  net: $($Matches[1])" }
+    elseif ($line -match '^FAIL  (.*)$') { Write-Host "FAIL  net: $($Matches[1])"; $script:failed++ }
+    elseif ($line -match '^gesher: system CA certificates') { Write-Host "INFO  $line" }
+  }
+  if ($code -eq 0 -and $out.Contains('NetTest all passed')) {
+    Write-Host ("PASS  net: {0} ({1:N1} s)" -f $Name, $watch.Elapsed.TotalSeconds)
+  } else {
+    Write-Host ("FAIL  net: {0} (exit 0x{1:X8})" -f $Name, $code)
+    if (Test-Path "$Dir/dalvikvm.map") {
+      $out | python "$PSScriptRoot/../../../tools/symbolize.py" "$Dir/dalvikvm.map" | Out-Host
+    } else {
+      Write-Host $out
+    }
+    $script:failed++
+  }
+  return $out
+}
+
+$cacerts = Join-Path $root 'system/etc/security/cacerts'
+
+# On this machine: DNS, TCP and UDP on loopback, NIO, HTTP through OkHttp, BigInteger
+# (NativeBN), the JCA providers (Conscrypt, BouncyCastle) and the default SSLContext.
+$null = NetDex 'sockets, DNS, NIO, HTTP and crypto on this machine' @('local')
+
+# The system CA certificates: Android's own and Windows' roots, in the directory
+# Conscrypt and the network security config read.
+$files = @(Get-ChildItem $cacerts -ErrorAction SilentlyContinue | Where-Object Name -match '^[0-9a-f]{8}\.\d+$')
+$bundled = @(Get-ChildItem "$Dir/cacerts" -ErrorAction SilentlyContinue).Count
+if ($bundled -gt 100 -and $files.Count -ge $bundled -and (Test-Path (Join-Path $cacerts '.gesher-cacerts'))) {
+  Write-Host "PASS  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) ($bundled Android's, the rest from Windows' stores)"
+} else {
+  Write-Host "FAIL  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) files, $bundled bundled"
+  $failed++
+}
+
+# TCP and UDP echo servers that are not Java: .NET's, on another thread of this script.
+$tcp = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+$tcp.Start()
+$echoPort = $tcp.LocalEndpoint.Port
+$udp = [Net.Sockets.UdpClient]::new([Net.IPEndPoint]::new([Net.IPAddress]::Loopback, $echoPort))
+$echoJobs = @(
+  Start-ThreadJob -ArgumentList $tcp -ScriptBlock {
+    param($listener)
+    while ($true) {
+      $c = $listener.AcceptTcpClient()
+      try {
+        $s = $c.GetStream()
+        $buffer = [byte[]]::new(65536)
+        while (($n = $s.Read($buffer, 0, $buffer.Length)) -gt 0) { $s.Write($buffer, 0, $n) }
+      } catch { } finally { $c.Close() }
+    }
+  }
+  Start-ThreadJob -ArgumentList $udp -ScriptBlock {
+    param($client)
+    while ($true) {
+      $from = [Net.IPEndPoint]::new([Net.IPAddress]::Any, 0)
+      $data = $client.Receive([ref]$from)
+      $null = $client.Send($data, $data.Length, $from)
+    }
+  })
+try {
+  $null = NetDex "TCP and UDP echo by .NET servers on 127.0.0.1:$echoPort" @('echo', "$echoPort") 120
+} finally {
+  $tcp.Stop(); $udp.Close()
+  $echoJobs | Stop-Job -PassThru | Remove-Job -Force
+}
+
+# A root installed in Windows (as a company or a content filter installs theirs) is
+# trusted by Android apps: an HTTPS server on 127.0.0.1 with a certificate for
+# localhost from a test root is rejected until the root is in the machine's ROOT
+# store, trusted once it is, and rejected again once it is removed.
+Add-Type -AssemblyName System.Security
+$now = [DateTimeOffset]::UtcNow
+$rootKey = [Security.Cryptography.RSA]::Create(2048)
+$rootReq = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+  'CN=Gesher Net Test Root, O=Gesher CI', $rootKey, [Security.Cryptography.HashAlgorithmName]::SHA256,
+  [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$rootReq.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+$rootReq.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+  [Security.Cryptography.X509Certificates.X509KeyUsageFlags]'KeyCertSign, CrlSign, DigitalSignature', $true))
+$rootReq.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($rootReq.PublicKey, $false))
+$rootCert = $rootReq.CreateSelfSigned($now.AddDays(-1), $now.AddDays(30))
+$leafKey = [Security.Cryptography.RSA]::Create(2048)
+$leafReq = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+  'CN=localhost', $leafKey, [Security.Cryptography.HashAlgorithmName]::SHA256,
+  [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$san = [Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+$san.AddDnsName('localhost')
+$san.AddIpAddress([Net.IPAddress]::Loopback)
+$leafReq.CertificateExtensions.Add($san.Build())
+$eku = [Security.Cryptography.OidCollection]::new()
+$null = $eku.Add([Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.1'))
+$leafReq.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($eku, $false))
+$leafReq.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+$serial = [byte[]]::new(16); [Security.Cryptography.RandomNumberGenerator]::Fill($serial); $serial[0] = 0x42
+$leaf = $leafReq.Create($rootCert, $now.AddDays(-1), $now.AddDays(29), $serial)
+# SChannel wants the key in a key container: through a PFX.
+$leafPfx = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($leaf, $leafKey).Export(
+  [Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'gesher')
+$serverCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPfx, 'gesher',
+  [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+$rootPublic = [Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCert.Export(
+  [Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+
+$tls = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+$tls.Start()
+$tlsPort = $tls.LocalEndpoint.Port
+$tlsJob = Start-ThreadJob -ArgumentList $tls, $serverCert -ScriptBlock {
+  param($listener, $cert)
+  while ($true) {
+    $c = $listener.AcceptTcpClient()
+    try {
+      $ssl = [Net.Security.SslStream]::new($c.GetStream(), $false)
+      $ssl.ReadTimeout = 20000
+      $ssl.AuthenticateAsServer($cert, $false, [Security.Authentication.SslProtocols]::Tls12, $false)
+      $head = ''
+      $b = [byte[]]::new(1)
+      while (-not $head.EndsWith("`r`n`r`n") -and $ssl.Read($b, 0, 1) -eq 1) { $head += [char]$b[0] }
+      $body = [Text.Encoding]::ASCII.GetBytes('trusted through the Windows ROOT store')
+      $reply = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
+      $ssl.Write($reply); $ssl.Write($body); $ssl.Flush()
+      $ssl.Close()
+    } catch { } finally { $c.Close() }
+  }
+}
+$machineRoot = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
+$url = "https://localhost:$tlsPort/"
+try {
+  $null = NetDex 'a test root not in Windows'' store is not trusted' @('https', $url, 'reject') 180
+  $machineRoot.Open('ReadWrite')
+  $machineRoot.Add($rootPublic)
+  $machineRoot.Close()
+  $out = NetDex 'a test root added to Windows'' machine ROOT store is trusted' @('https', $url, 'ok') 180
+  # The root is in the system CA directory, under its subject hash.
+  $found = @(Get-ChildItem $cacerts | Where-Object { (Get-Content -Raw $_.FullName).Contains([Convert]::ToBase64String($rootPublic.RawData).Substring(0, 64)) })
+  if ($found.Count -eq 1) {
+    Write-Host "PASS  net: the Windows root is in `$ANDROID_ROOT/etc/security/cacerts as $($found[0].Name)"
+  } else {
+    Write-Host "FAIL  net: the Windows root is in `$ANDROID_ROOT/etc/security/cacerts $($found.Count) times"
+    $failed++
+  }
+  $null = NetDex 'GESHER_WINDOWS_CERTS=0: only Android''s CAs, the Windows root is not trusted' @('https', $url, 'reject') 180 @{ GESHER_WINDOWS_CERTS = '0' }
+  $machineRoot.Open('ReadWrite')
+  $machineRoot.Remove($rootPublic)
+  $machineRoot.Close()
+  $null = NetDex 'the test root removed from Windows'' store is not trusted any more' @('https', $url, 'reject') 180
+} finally {
+  try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  $tls.Stop()
+  $tlsJob | Stop-Job -PassThru | Remove-Job -Force
+}
+
+# On the internet (the runners have it): DNS, HTTPS GETs with TLS 1.3 and SNI, and
+# certificates that must be rejected (expired, another host's, self-signed, an
+# untrusted root).
+$null = NetDex 'DNS and HTTPS on the internet, bad certificates rejected' @('internet') 300
