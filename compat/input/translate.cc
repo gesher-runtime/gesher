@@ -181,6 +181,7 @@ bool Translator::IsInput(const WindowEvent& event) {
     case WindowEvent::kTouchMove:
     case WindowEvent::kTouchUp:
     case WindowEvent::kTouchCancel:
+    case WindowEvent::kOutside:
       return true;
     default:
       return false;
@@ -206,6 +207,9 @@ void Translator::Translate(const WindowEvent& event, int64_t now_ns,
     case WindowEvent::kTouchUp:
     case WindowEvent::kTouchCancel:
       TouchEvent(event, now_ns, out);
+      break;
+    case WindowEvent::kOutside:
+      Outside(event, now_ns, out);
       break;
     case WindowEvent::kFocus: {
       AndroidEvent e;
@@ -319,6 +323,35 @@ void Translator::Mouse(const WindowEvent& event, int64_t t, std::vector<AndroidE
     default:
       return;
   }
+}
+
+void Translator::Outside(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out) {
+  // ACTION_OUTSIDE: one event, at the press's place in this window (the same
+  // app's windows: InputDispatcher zeroes the coordinates only across uids).
+  // It starts and ends nothing, so the translator's own state stays.
+  const bool touch = event.tool != 0;
+  const bool pen = event.tool == 2;
+  AndroidEvent e;
+  e.kind = AndroidEvent::kMotion;
+  e.device_id = touch ? (pen ? kStylusDeviceId : kTouchDeviceId) : kMouseDeviceId;
+  e.source = !touch ? AINPUT_SOURCE_MOUSE
+             : pen  ? (AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_TOUCHSCREEN)
+                    : AINPUT_SOURCE_TOUCHSCREEN;
+  e.action = AMOTION_EVENT_ACTION_OUTSIDE;
+  e.meta_state = MetaState(event.modifiers);
+  e.down_time = t;
+  e.event_time = t;
+  e.cursor_x = touch ? android::AMOTION_EVENT_INVALID_CURSOR_POSITION : X(event.x);
+  e.cursor_y = touch ? android::AMOTION_EVENT_INVALID_CURSOR_POSITION : Y(event.y);
+  e.pointer_count = 1;
+  e.properties[0].clear();
+  e.properties[0].id = 0;
+  e.properties[0].toolType = !touch ? ToolType::MOUSE : pen ? ToolType::STYLUS : ToolType::FINGER;
+  e.coords[0].clear();
+  e.coords[0].setAxisValue(AMOTION_EVENT_AXIS_X, X(event.x));
+  e.coords[0].setAxisValue(AMOTION_EVENT_AXIS_Y, Y(event.y));
+  e.coords[0].setAxisValue(AMOTION_EVENT_AXIS_PRESSURE, 1.0f);
+  out->push_back(e);
 }
 
 void Translator::Key(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out) {

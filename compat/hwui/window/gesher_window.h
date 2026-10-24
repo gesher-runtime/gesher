@@ -41,6 +41,13 @@ struct WindowEvent {
     kTouchUp = 13,     // x, y, pointer, tool
     kTouchCancel = 14, // pointer, tool
     kMouseLeave = 15,
+    // Lifecycle track (docs/lifecycle.md): the window was minimized (button
+    // 0) or restored from it (button 1); a press outside a window that
+    // watches outside touches (FLAG_WATCH_OUTSIDE_TOUCH: Android's
+    // ACTION_OUTSIDE), at x, y of this window's client area, tool 0 for the
+    // mouse, else the touch's.
+    kVisibility = 16,
+    kOutside = 17,
   };
   int32_t type = 0;
   float x = 0, y = 0;
@@ -154,8 +161,8 @@ class Window {
   // Where the window's input goes instead of its own queue (null: its own):
   // pointer events (mouse, wheel, touch; a gesture stays with the window its
   // first contact went to), keys and characters. `outside`: windows that
-  // watch touches outside them (FLAG_WATCH_OUTSIDE_TOUCH), sent a press and
-  // release where a gesture starts. Coordinates are translated through the
+  // watch touches outside them (FLAG_WATCH_OUTSIDE_TOUCH), sent a kOutside
+  // event where a gesture starts (Android's ACTION_OUTSIDE). Coordinates are translated through the
   // screen. A window that goes away is dropped from every route.
   void SetInputRoute(Window* pointer, Window* keys, const std::vector<Window*>& outside);
   // The client area in screen coordinates: {left, top, right, bottom}.
@@ -221,6 +228,8 @@ class Window {
   bool tracking_leave_ = false;  // TrackMouseEvent(TME_LEAVE) is armed
   // Shown off the desktop (ShowOffscreen): resizes keep it there.
   std::atomic<bool> offscreen_{false};
+  // Minimized (WM_SIZE SIZE_MINIMIZED), until restored.
+  bool minimized_ = false;
   // Modifier keys held as the window's key messages say (shift 1, ctrl 2,
   // alt 4), ORed with GetKeyState's: posted key messages (tests, input
   // injected by other programs) do not change the thread's key state.

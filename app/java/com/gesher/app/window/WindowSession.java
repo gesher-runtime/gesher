@@ -113,12 +113,31 @@ public final class WindowSession extends IWindowSession.Stub {
         void onClose(WindowSession session, IBinder window, WindowManager.LayoutParams attrs);
     }
 
+    /**
+     * What the user does to an Activity's top-level window that its lifecycle follows
+     * (docs/lifecycle.md). Runs on the thread that added the window. The default tells the
+     * system server ({@link #serverLifecycle}); gesher-app's single process drives its one
+     * Activity itself (WindowMode.show).
+     */
+    public interface LifecycleHandler {
+        /**
+         * The window was minimized ({@code visible} false: its task goes to the back, its
+         * Activities stop) or restored (true: the task comes to the front, its top Activity
+         * resumes). {@code token}: the Activity's; {@code taskId}: its task, or -1.
+         */
+        void onTaskVisibility(IBinder token, int taskId, boolean visible);
+
+        /** The user activated the window (shown windows): its task comes to the front. */
+        void onTaskActivated(IBinder token, int taskId);
+    }
+
     private static WindowSession sInstance;
 
     private final boolean mShow;
     private final WindowLayout mLayout = new WindowLayout();
     private final ArrayMap<IBinder, AppWindow> mWindows = new ArrayMap<>();
     private volatile CloseHandler mCloseHandler = WindowSession::finishActivity;
+    private volatile LifecycleHandler mLifecycleHandler = serverLifecycle();
     /** Windows added so far (AppWindow.seq). Guarded by mWindows. */
     private long mNextSeq;
     /** The top-level window shown or focused last: a toast's owner. Guarded by mWindows. */
@@ -177,6 +196,8 @@ public final class WindowSession extends IWindowSession.Stub {
         int requestedHeight = WindowLayout.UNSPECIFIED_LENGTH;
         /** What updateGroup last logged of the group of this top-level window. */
         String groupState;
+        /** A top-level window the user minimized (WM_SIZE SIZE_MINIMIZED), until restored. */
+        boolean minimized;
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -238,6 +259,55 @@ public final class WindowSession extends IWindowSession.Stub {
 
     public void setCloseHandler(CloseHandler handler) {
         mCloseHandler = handler != null ? handler : WindowSession::finishActivity;
+    }
+
+    public void setLifecycleHandler(LifecycleHandler handler) {
+        mLifecycleHandler = handler != null ? handler : serverLifecycle();
+    }
+
+    /**
+     * The default lifecycle handler: the system server moves the Activity's task, as a
+     * desktop's window manager has Android's do (ActivityClient.moveActivityTaskToBack,
+     * IActivityTaskManager.moveTaskToFront).
+     */
+    public static LifecycleHandler serverLifecycle() {
+        return new LifecycleHandler() {
+            @Override
+            public void onTaskVisibility(IBinder token, int taskId, boolean visible) {
+                try {
+                    if (!visible) {
+                        android.app.ActivityClient.getInstance().moveActivityTaskToBack(token,
+                                true /* nonRoot */);
+                    } else if (taskId >= 0) {
+                        moveTaskToFront(taskId);
+                    }
+                } catch (RuntimeException e) {
+                    log("task " + taskId + (visible ? " to the front" : " to the back") + ": "
+                            + e);
+                }
+            }
+
+            @Override
+            public void onTaskActivated(IBinder token, int taskId) {
+                if (taskId < 0) return;
+                try {
+                    moveTaskToFront(taskId);
+                } catch (RuntimeException e) {
+                    log("task " + taskId + " to the front: " + e);
+                }
+            }
+        };
+    }
+
+    private static void moveTaskToFront(int taskId) {
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        try {
+            android.app.ActivityTaskManager.getService().moveTaskToFront(
+                    thread != null ? thread.getApplicationThread() : null,
+                    ActivityThread.currentPackageName(), taskId, 0, null);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /** The default close handler: finish the window's Activity, if this process has it. */
@@ -480,9 +550,32 @@ public final class WindowSession extends IWindowSession.Stub {
             case WindowInput.EVENT_CHAR:
                 w.handler.post(() -> deliverChar(key, (char) a));
                 break;
+            case WindowInput.EVENT_VISIBILITY:
+                w.handler.post(() -> onVisibility(key, a != 0));
+                break;
             default:
                 break;
         }
+    }
+
+    /**
+     * The user minimized ({@code visible} false) or restored a top-level window
+     * (docs/lifecycle.md): its Activity's task goes to the back (its Activities stop, as
+     * those of an Android task that is not visible) or comes to the front (its top Activity
+     * resumes), through the lifecycle handler. While it is minimized, the windows of its
+     * group stay as they are when their Activities stop (Windows keeps the taskbar button
+     * and hides the owned popups) instead of being hidden.
+     */
+    private void onVisibility(IBinder key, boolean visible) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.nativeWindow == null || w.popup || w.minimized == !visible) return;
+        w.minimized = !visible;
+        log("window \"" + w.title() + "\" " + (visible ? "restored" : "minimized")
+                + (w.taskId >= 0 ? ", task " + w.taskId : ""));
+        mLifecycleHandler.onTaskVisibility(w.attrs.token, w.taskId, visible);
     }
 
     /** The user closed the Win32 window: the close handler (by default, finish its Activity). */
@@ -721,6 +814,7 @@ public final class WindowSession extends IWindowSession.Stub {
         boolean close = false;
         while ((type = w.nativeWindow.pollEvent(mEvent)) != 0) {
             if (type == NativeWindow.EVENT_CLOSE) close = true;
+            if (type == WindowInput.EVENT_VISIBILITY) onVisibility(key, mEvent[3] != 0);
         }
         if (close) close(key);
     }
@@ -1226,6 +1320,12 @@ public final class WindowSession extends IWindowSession.Stub {
             if (!w.popup) mActiveRoot = w;
         }
         if (keys != null && keys != w && keys.nativeWindow != null) keys.nativeWindow.activate();
+        // The user activated a task's window: the task comes to the front (resumed), as a
+        // click on a freeform task does on Android's desktop.
+        if (root.taskId >= 0 && !root.minimized
+                && root.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            mLifecycleHandler.onTaskActivated(root.attrs.token, root.taskId);
+        }
     }
 
     /** Back (KEYCODE_BACK: VK_BROWSER_BACK) in a window, pressed and released. */
@@ -1344,7 +1444,7 @@ public final class WindowSession extends IWindowSession.Stub {
             if (w.popup && wasShown) updateGroup(root(w));
             AppWindow below = w.parent;
             if (below != null && below.appHidden && below.nativeWindow != null
-                    && !hasActivityPopup(below)) {
+                    && !hasActivityPopup(below) && !root(below).minimized) {
                 hideWindow(below);  // its Activity stayed stopped
             }
         }
@@ -1406,7 +1506,12 @@ public final class WindowSession extends IWindowSession.Stub {
         } else {
             if (outSurface != null) outSurface.release();
             if (w.nativeWindow != null && w.shown) {
-                if (hasActivityPopup(w)) {
+                if (root(w).minimized) {
+                    // Its Activity stopped as the user minimized its window: the window
+                    // stays minimized (its taskbar button), not hidden, until restored.
+                    if (!w.appHidden) log("window \"" + w.title() + "\" stays minimized");
+                    w.appHidden = true;
+                } else if (hasActivityPopup(w)) {
                     // Its Activity stopped under an Activity with a translucent or floating
                     // theme: it stays on the screen (its last frame) as the one below it does
                     // on a device, until that one goes.

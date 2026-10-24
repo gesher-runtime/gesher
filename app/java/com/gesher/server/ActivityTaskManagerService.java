@@ -19,6 +19,7 @@ import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
+import android.app.servertransaction.StartActivityItem;
 import android.app.servertransaction.StopActivityItem;
 import android.content.ComponentName;
 import android.content.Context;
@@ -86,8 +87,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** How long startActivityAndWait waits for the activity to be idle. */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
-    enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STOPPING, STOPPED,
-            DESTROYING, DESTROYED }
+    /** STARTED: made visible again without being resumed (StartActivityItem). */
+    enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
+            STOPPED, DESTROYING, DESTROYED }
 
     /** An app process attached to the server. */
     final class ProcessRecord {
@@ -138,6 +140,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final List<ResultInfo> pendingResults = new ArrayList<>();
         /** The state it saved when it was last stopped. */
         Bundle savedState;
+        /**
+         * Its theme is translucent or floating (ActivityTheme): it does not occlude the
+         * activities below it, as ActivityRecord.occludesParent; convertToTranslucent and
+         * convertFromTranslucent change it.
+         */
+        boolean translucent;
+        /** Resumed once the activity in front ({@link #waitingFor}) is paused. */
+        boolean resumeAfterPause;
 
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
@@ -179,6 +189,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private int mNextTaskId = 1;
+    /** Tasks moved to the back (their window minimized): none of their activities is visible. */
+    private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -394,6 +406,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         int callingPid = Binder.getCallingPid();
         int launchFlags = intent.getFlags();
         ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
+        // Whether it leaves the activity below it visible (its theme), read before the lock.
+        boolean translucent = ActivityTheme.isTranslucentOrFloating(info);
         ActivityRecord r = null;
         ActivityRecord deliverTo = null;
         ActivityRecord pause = null;
@@ -412,6 +426,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 ActivityRecord resultRecord = requestCode >= 0 ? source : null;
                 r = new ActivityRecord(info, launch, taskId, callingPid, callingPackage,
                         resultRecord, resultWho, requestCode);
+                r.translucent = translucent;
+                // A start in a task moved to the back brings it to the front.
+                mHiddenTasks.remove(taskId);
                 // The activity in front (one activity is resumed at a time) is paused first.
                 ActivityRecord front = front(r);
                 mActivities.add(r);
@@ -448,6 +465,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 + callerName(callingPackage, callingPid) + ": task " + r.taskId
                 + (r.app != null ? ", in " + r.app : ", waiting for a process")
                 + (r.waitingFor != null ? ", after pausing " + r.waitingFor.name() : "")
+                + (r.translucent ? ", translucent or floating (the activity below stays"
+                        + " visible)" : "")
                 + (r.resultTo != null ? ", result to " + r.resultTo.name() + " (request "
                         + r.requestCode + ")" : ""));
         if (bind != null) bindApplication(bind);
@@ -1013,6 +1032,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 pause(r, true);
                 return true;
             case PAUSED:
+            case STARTED:
                 stop(r);
                 return true;
             case STOPPED:
@@ -1140,15 +1160,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void activityResumed(ActivityRecord r) {
         List<ActivityRecord> toStop;
+        List<ActivityRecord> toStart;
         synchronized (this) {
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
             if (r.state == State.LAUNCHING || r.state == State.RESUMING) r.state = State.RESUMED;
             toStop = stopping(r);
+            toStart = starting();
             notifyAll();
         }
         SystemServer.log("activityResumed: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+        for (ActivityRecord a : toStart) makeVisible(a);
     }
 
     void activityIdle(ActivityRecord r) {
@@ -1165,12 +1188,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /**
      * ActivityTaskSupervisor.processStoppingAndFinishingActivities: the activities paused
      * for another one are stopped once an activity in front of them reports it is resumed
-     * (it is visible) or idle. Guarded by this.
+     * (it is visible) or idle, if they are no longer visible ({@link #isVisible}: an
+     * activity under a translucent or floating one stays paused, visible). Guarded by this.
      */
     private List<ActivityRecord> stopping(ActivityRecord reporting) {
         List<ActivityRecord> toStop = new ArrayList<>();
         for (ActivityRecord a : mActivities) {
-            if (a != reporting && a.stopWhenIdle && a.state == State.PAUSED && !a.finishing) {
+            if (a != reporting && a.stopWhenIdle && a.state == State.PAUSED && !a.finishing
+                    && !isVisible(a)) {
                 a.stopWhenIdle = false;
                 toStop.add(a);
             }
@@ -1178,18 +1203,207 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return toStop;
     }
 
+    /**
+     * EnsureActivitiesVisibleHelper, lite: whether an activity is visible. A task moved to
+     * the back (its window minimized) shows nothing; in a task, an activity is visible
+     * unless one above it occludes it (one that is not translucent or floating:
+     * ActivityRecord.occludesParent). Tasks are windows of their own on the Windows
+     * desktop (Android's desktop windowing), so another task never hides this one's
+     * activities. Guarded by this.
+     */
+    private boolean isVisible(ActivityRecord a) {
+        if (a.finishing || a.state == State.DESTROYED || a.state == State.DESTROYING) return false;
+        if (mHiddenTasks.contains(a.taskId)) return false;
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord above = mActivities.get(i);
+            if (above == a) return true;
+            if (above.taskId != a.taskId || above.finishing || above.state == State.DESTROYED) {
+                continue;
+            }
+            if (!above.translucent) return false;
+        }
+        return true;
+    }
+
+    /** Whether the activity is visible (willActivityBeVisible). */
+    synchronized boolean willBeVisible(ActivityRecord a) {
+        return isVisible(a);
+    }
+
+    /**
+     * The stopped activities that are visible again (the one above them finished, went
+     * translucent, or their task came to the front): to be started, not resumed. Guarded
+     * by this.
+     */
+    private List<ActivityRecord> starting() {
+        List<ActivityRecord> toStart = new ArrayList<>();
+        for (ActivityRecord a : mActivities) {
+            if (a.state == State.STOPPED && a.app != null && a.app.ready && !a.finishing
+                    && isVisible(a)) {
+                toStart.add(a);
+            }
+        }
+        return toStart;
+    }
+
+    /**
+     * ActivityRecord.makeActiveIfNeeded for an activity that is visible but not in front:
+     * StartActivityItem (onRestart, onStart; its window shows again), not resumed.
+     */
+    private void makeVisible(ActivityRecord r) {
+        synchronized (this) {
+            if (r.state != State.STOPPED || r.finishing) return;
+            r.state = State.STARTED;
+            notifyAll();
+        }
+        ClientTransaction t = new ClientTransaction(r.app.thread);
+        t.addTransactionItem(new StartActivityItem(r.token, null /* sceneTransitionInfo */));
+        schedule(r, t, "StartActivityItem (visible, not resumed)");
+    }
+
+    /**
+     * ActivityClientController.moveActivityTaskToBack (the user minimized the task's window,
+     * or the activity asked: Activity.moveTaskToBack): the task is no longer visible. Its
+     * resumed activity is paused, then stopped; the other visible ones are stopped (each
+     * saves its state, ActivityThread's handleStopActivity).
+     */
+    boolean moveTaskToBack(ActivityRecord r, boolean nonRoot) {
+        List<ActivityRecord> toPause = new ArrayList<>();
+        List<ActivityRecord> toStop = new ArrayList<>();
+        int taskId = r.taskId;
+        synchronized (this) {
+            if (!nonRoot) {
+                // Only the task's root activity may move it back (Android's rule).
+                ActivityRecord root = null;
+                for (ActivityRecord a : mActivities) {
+                    if (a.taskId == taskId && !a.finishing) {
+                        root = a;
+                        break;
+                    }
+                }
+                if (root != r) return false;
+            }
+            if (!mHiddenTasks.add(taskId)) return true;
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId != taskId || a.finishing || a.app == null) continue;
+                switch (a.state) {
+                    case LAUNCHING:
+                    case RESUMING:
+                    case RESUMED:
+                        toPause.add(a);
+                        break;
+                    case PAUSED:
+                    case STARTED:
+                        toStop.add(a);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        SystemServer.log("moving task " + taskId + " to the back: " + toPause.size()
+                + " to pause, " + toStop.size() + " to stop");
+        for (ActivityRecord a : toPause) pause(a, false);
+        for (ActivityRecord a : toStop) stop(a);
+        return true;
+    }
+
+    /**
+     * IActivityTaskManager.moveTaskToFront (the user restored or activated the task's
+     * window): the task is visible again; its top activity is resumed (after the activity
+     * in front of another task is paused), the ones visible under it started.
+     */
+    @Override
+    public void moveTaskToFront(IApplicationThread app, String callingPackage, int taskId,
+            int flags, Bundle options) {
+        ActivityRecord top;
+        ActivityRecord pause = null;
+        boolean resumeNow = false;
+        List<ActivityRecord> toStart;
+        boolean wasHidden;
+        synchronized (this) {
+            wasHidden = mHiddenTasks.remove(taskId);
+            top = topOf(taskId);
+            if (top == null || top.app == null || !top.app.ready) return;
+            switch (top.state) {
+                case PAUSED:
+                case STARTED:
+                case STOPPING:
+                case STOPPED:
+                    break;
+                default:
+                    if (!wasHidden) return;  // already in front
+                    top = null;  // on its way to the front
+            }
+            if (top != null) {
+                ActivityRecord front = front(top);
+                if (front != null && front.taskId != taskId && !front.finishing) {
+                    top.waitingFor = front;
+                    top.resumeAfterPause = true;
+                    if (front.state != State.PAUSING) pause = front;
+                } else {
+                    resumeNow = true;
+                }
+            }
+            toStart = starting();
+            if (top != null) toStart.remove(top);
+        }
+        SystemServer.log("moving task " + taskId + " to the front"
+                + (top != null ? ": resuming " + top.name() : "")
+                + (pause != null ? " after pausing " + pause.name() : ""));
+        if (pause != null) pause(pause, false);
+        if (resumeNow) resume(top);
+        for (ActivityRecord a : toStart) makeVisible(a);
+    }
+
+    /**
+     * Activity.setTranslucent (convertToTranslucent / convertFromTranslucent): whether the
+     * activity occludes the ones below it changes; those now visible are started, those
+     * now hidden stopped.
+     */
+    boolean setTranslucent(ActivityRecord r, boolean translucent) {
+        List<ActivityRecord> toStop = new ArrayList<>();
+        List<ActivityRecord> toStart;
+        synchronized (this) {
+            if (r.translucent == translucent) return true;
+            r.translucent = translucent;
+            for (ActivityRecord a : mActivities) {
+                if (a != r && (a.state == State.PAUSED || a.state == State.STARTED)
+                        && !a.finishing && a.app != null && !isVisible(a)) {
+                    a.stopWhenIdle = false;
+                    toStop.add(a);
+                }
+            }
+            toStart = starting();
+        }
+        SystemServer.log(r.name() + (translucent ? " converted to translucent"
+                : " converted from translucent"));
+        for (ActivityRecord a : toStop) stop(a);
+        for (ActivityRecord a : toStart) makeVisible(a);
+        return true;
+    }
+
     void activityPaused(ActivityRecord r) {
         List<ActivityRecord> launch = new ArrayList<>();
+        List<ActivityRecord> resumeAfter = new ArrayList<>();
         ActivityRecord resume = null;
         boolean finishing;
+        boolean stopNow;
         synchronized (this) {
             r.state = State.PAUSED;
             finishing = r.finishing;
+            // Paused as its task went to the back: stopped now (nothing in front of it will
+            // report idle).
+            stopNow = !finishing && mHiddenTasks.contains(r.taskId);
+            if (stopNow) r.stopWhenIdle = false;
             for (ActivityRecord a : mActivities) {
                 if (a.waitingFor == r) {
                     a.waitingFor = null;
                     if (a.state == State.INITIALIZING && a.app != null && a.app.ready) {
                         launch.add(a);
+                    } else if (a.resumeAfterPause) {
+                        a.resumeAfterPause = false;
+                        if (!a.finishing && a.app != null) resumeAfter.add(a);
                     }
                 }
             }
@@ -1207,6 +1421,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (resume != null) {
                     switch (resume.state) {
                         case PAUSED:
+                        case STARTED:
                         case STOPPING:
                         case STOPPED:
                             break;
@@ -1219,8 +1434,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("activityPaused: " + r.name());
         for (ActivityRecord a : launch) realStartActivity(a);
+        for (ActivityRecord a : resumeAfter) resume(a);
         if (resume != null) resume(resume);
-        if (finishing) stop(r);
+        if (finishing || stopNow) stop(r);
     }
 
     void activityStopped(ActivityRecord r, Bundle savedState) {
