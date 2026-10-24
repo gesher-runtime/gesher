@@ -93,7 +93,7 @@ static void Paths(const std::string& dir) {
   if (d != nullptr) closedir(d);
   CHECK(found);
   CHECK(access(hebrew.c_str(), R_OK | W_OK) == 0);
-  CHECK(access(hebrew.c_str(), X_OK) == -1 && errno == EACCES);
+  CHECK(access(hebrew.c_str(), X_OK) == 0);  // no execute permission on Windows: any file runs
   CHECK(access((dir + "/missing").c_str(), F_OK) == -1 && errno == ENOENT);
   CHECK(access("/dev/null", R_OK | W_OK) == 0);
   CHECK(access("/proc/self/status", R_OK) == 0);

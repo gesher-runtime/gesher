@@ -250,13 +250,13 @@ int Access(const char* path, int mode, bool follow) {
   bool ok = GetFileInformationByHandle(h, &info);
   CloseHandle(h);
   if (!ok) return gesher::FailWithLastError();
-  // The permissions stat reports: 0755 for directories, 0644 or (read-only)
-  // 0444 for files.
+  // Read-only files are not writable. Windows has no execute permission: any
+  // file may be run (an app's ELF executables through gesher-exec, docs/exec.md;
+  // apps check File.canExecute() before they start one), so X_OK holds for
+  // files as it does for directories.
   bool directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   bool read_only = !directory && (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
-  if (((mode & W_OK) != 0 && read_only) || ((mode & X_OK) != 0 && !directory)) {
-    return errno = EACCES, -1;
-  }
+  if ((mode & W_OK) != 0 && read_only) return errno = EACCES, -1;
   return 0;
 }
 

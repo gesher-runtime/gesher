@@ -56,7 +56,8 @@ Linux paths, `/dev` and `/proc` names, `/mnt/<drive>`, and paths longer than
   once, open or not), read-only files included.
 - Permissions: the owner's write bit is `FILE_ATTRIBUTE_READONLY` (`chmod`,
   `fchmod`, `open(O_CREAT)`'s mode, `stat`, `access(W_OK)`); files have no
-  execute bit, directories do (`access(X_OK)` agrees with `stat`).
+  execute bit in `stat`, directories do; `access(X_OK)` holds for every file
+  (any file may be run, and apps ask `File.canExecute()` first).
 - Symbolic links are NTFS symbolic links (and junctions, read only): `lstat`
   reports `S_IFLNK`, `readlink` gives the target as a Linux path (relative ones
   stay relative), `O_NOFOLLOW` refuses one with `ELOOP`, `unlink` removes a
