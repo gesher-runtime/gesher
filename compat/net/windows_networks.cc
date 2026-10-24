@@ -62,12 +62,20 @@ std::string Field(std::string s) {
   return s;
 }
 
+// Formatted by hand: InetNtopA is ws2_32's inet_ntop, whose import library member also
+// defines the name gesher-base defines (ADR 0009). IPv6 uncompressed, which Java reads.
 std::string Address(const SOCKADDR* sa) {
-  char text[INET6_ADDRSTRLEN] = {};
+  char text[64] = {};
   if (sa->sa_family == AF_INET) {
-    InetNtopA(AF_INET, &reinterpret_cast<const sockaddr_in*>(sa)->sin_addr, text, sizeof(text));
+    const auto* b = reinterpret_cast<const unsigned char*>(
+        &reinterpret_cast<const sockaddr_in*>(sa)->sin_addr);
+    snprintf(text, sizeof(text), "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
   } else if (sa->sa_family == AF_INET6) {
-    InetNtopA(AF_INET6, &reinterpret_cast<const sockaddr_in6*>(sa)->sin6_addr, text, sizeof(text));
+    const auto* b = reinterpret_cast<const unsigned char*>(
+        &reinterpret_cast<const sockaddr_in6*>(sa)->sin6_addr);
+    snprintf(text, sizeof(text), "%x:%x:%x:%x:%x:%x:%x:%x", b[0] << 8 | b[1], b[2] << 8 | b[3],
+             b[4] << 8 | b[5], b[6] << 8 | b[7], b[8] << 8 | b[9], b[10] << 8 | b[11],
+             b[12] << 8 | b[13], b[14] << 8 | b[15]);
   }
   return text;
 }
@@ -135,11 +143,14 @@ DWORD BestInterface(int family) {
   if (family == AF_INET) {
     auto* in = reinterpret_cast<sockaddr_in*>(&dest);
     in->sin_family = AF_INET;
-    InetPtonA(AF_INET, "8.8.8.8", &in->sin_addr);
+    static const unsigned char kGoogleDns[4] = {8, 8, 8, 8};
+    memcpy(&in->sin_addr, kGoogleDns, 4);
   } else {
     auto* in6 = reinterpret_cast<sockaddr_in6*>(&dest);
     in6->sin6_family = AF_INET6;
-    InetPtonA(AF_INET6, "2001:4860:4860::8888", &in6->sin6_addr);
+    static const unsigned char kGoogleDns6[16] = {0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0,
+                                                  0, 0, 0, 0, 0, 0, 0x88, 0x88};
+    memcpy(&in6->sin6_addr, kGoogleDns6, 16);
   }
   DWORD index = 0;
   if (GetBestInterfaceEx(reinterpret_cast<sockaddr*>(&dest), &index) != NO_ERROR) return 0;
@@ -241,7 +252,7 @@ std::string Snapshot() {
     for (auto* d = a->FirstDnsServerAddress; d != nullptr; d = d->Next) {
       std::string dns = Address(d->Address.lpSockaddr);
       // Windows' site-local placeholders (fec0:0:0:ffff::1..3) are not servers.
-      if (dns.rfind("fec0:0:0:ffff::", 0) == 0) continue;
+      if (dns.rfind("fec0:0:0:ffff:", 0) == 0) continue;
       snprintf(line, sizeof(line), "dns\t%lu\t%s\n", index, dns.c_str());
       out += line;
     }
