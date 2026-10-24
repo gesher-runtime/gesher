@@ -153,6 +153,15 @@ public final class GesherAppProcess {
             t.printStackTrace();
             code = 1;
         }
+        String methodTrace = System.getenv("GESHER_APP_METHOD_TRACE");
+        if (methodTrace != null && !methodTrace.isEmpty()) {
+            // The trace's last buffer, with how the process got here (docs/e2e.md).
+            try {
+                dalvik.system.VMDebug.stopMethodTracing();
+            } catch (Throwable ignored) {
+                // not tracing
+            }
+        }
         System.out.flush();
         System.err.flush();
         System.exit(code);
