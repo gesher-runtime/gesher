@@ -56,6 +56,16 @@ doing what `art/test/common/gtest_main.cc` does except gtest_extras'
 as ART's host test setup expects (a `linux-x86` build tree, core-oj.jar under
 `$ANDROID_ROOT/apex/com.android.art/javalib`, `$TMPDIR`).
 
+`patches/art/0450-posix-gtests-on-windows.patch` makes two test sources
+compile off Linux: `testing.cc` assigns `std::filesystem::path` to a
+`std::string` (a `wstring` path on Windows: `.string()` added), and
+`fd_file_test.cc`'s `Rename` test calls `CreateSparseSourceFile`, declared only
+`#ifdef __linux__` (the guard also takes `GESHER`).
+
+Not built: `base/aconfig_flags_test.cc`, which `static_assert`s the release
+configuration's test flag values (`test`, `v_apis` true); Gesher's aconfig
+values (`config/aconfig/art.values`) leave them false.
+
 Excluded by name (gtest filter in `21-posix.ps1`):
 
 - `ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile`: reads
