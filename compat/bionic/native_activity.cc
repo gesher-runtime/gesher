@@ -325,8 +325,7 @@ jlong JNICALL LoadNativeCode(JNIEnv* env, jobject clazz, jstring path, jstring f
     rawSavedState = env->GetByteArrayElements(savedState, nullptr);
     rawSavedSize = env->GetArrayLength(savedState);
   }
-  std::fprintf(stderr, "gesher NativeActivity: %s: calling %s
-", pathStr.c_str(), funcStr.c_str());
+  std::fprintf(stderr, "gesher NativeActivity: %s: calling %s\n", pathStr.c_str(), funcStr.c_str());
   std::fflush(stderr);
   using CreateFunc = void(BIONIC_SYSV*)(ANativeActivity*, void*, size_t);
   EnterLoadedCode();
@@ -682,8 +681,11 @@ class InputQueue : public android::MessageHandler {
 
  private:
   sp<android::MessageHandler> handler() {
-    if (handler_ == nullptr) handler_ = sp<android::WeakMessageHandler>::make(
-          android::wp<android::MessageHandler>(static_cast<android::MessageHandler*>(this)));
+    if (handler_ == nullptr) {
+      // The Java InputQueue holds a strong reference while events are finished.
+      sp<android::MessageHandler> self = sp<android::MessageHandler>::fromExisting(this);
+      handler_ = sp<android::WeakMessageHandler>::make(android::wp<android::MessageHandler>(self));
+    }
     return handler_;
   }
 
@@ -828,7 +830,13 @@ int32_t BIONIC_SYSV MotionGetPointerId(const AInputEvent* e, size_t i) {
 int32_t BIONIC_SYSV MotionGetToolType(const AInputEvent* e, size_t i) {
   return static_cast<int32_t>(Motion(e)->getToolType(i));
 }
-#define GESHER_POINTER_FLOAT(Suffix)                                                         float BIONIC_SYSV MotionGet##Suffix(const AInputEvent* e, size_t i) {                         return Motion(e)->get##Suffix(i);                                                         }                                                                                           float BIONIC_SYSV MotionGet##Suffix##Historical(const AInputEvent* e, size_t i, size_t h) {     return Motion(e)->getHistorical##Suffix(i, h);                                            }
+#define GESHER_POINTER_FLOAT(Suffix)                                                          \
+  float BIONIC_SYSV MotionGet##Suffix(const AInputEvent* e, size_t i) {                       \
+    return Motion(e)->get##Suffix(i);                                                         \
+  }                                                                                           \
+  float BIONIC_SYSV MotionGet##Suffix##Historical(const AInputEvent* e, size_t i, size_t h) { \
+    return Motion(e)->getHistorical##Suffix(i, h);                                            \
+  }
 GESHER_POINTER_FLOAT(RawX)
 GESHER_POINTER_FLOAT(RawY)
 GESHER_POINTER_FLOAT(X)
@@ -925,8 +933,9 @@ void Register() {
     void* fn;
   };
 #define E(name, fn) {name, reinterpret_cast<void*>(&fn)}
-#define PF(Suffix, Fn) E("AMotionEvent_get" #Suffix, MotionGet##Fn), \
-                       E("AMotionEvent_getHistorical" #Suffix, MotionGet##Fn##Historical)
+#define PF(Suffix)                                  \
+  E("AMotionEvent_get" #Suffix, MotionGet##Suffix), \
+      E("AMotionEvent_getHistorical" #Suffix, MotionGet##Suffix##Historical)
   static const Entry kEntries[] = {
       E("ANativeActivity_finish", ActivityFinish),
       E("ANativeActivity_setWindowFormat", ActivitySetWindowFormat),
