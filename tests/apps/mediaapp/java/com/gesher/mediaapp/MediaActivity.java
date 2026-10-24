@@ -6,6 +6,8 @@ package com.gesher.mediaapp;
 
 import android.app.Activity;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceInfo;
+import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTimestamp;
@@ -16,6 +18,10 @@ import android.os.HandlerThread;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -37,6 +43,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     twice: 1000 Hz, 3 x 0.2 s
  * <li>AudioTrack streaming, 16-bit mono 24000 Hz played at 48000 Hz (setPlaybackRate):
  *     600 Hz data heard at 1200 Hz, 0.6 s of data in 0.3 s
+ * <li>AudioManager: STREAM_MUSIC at volume 7 of 15: 700 Hz, 0.3 s, at 7/15 of the level
+ * <li>(none: a notification tone while the ringer is silent)
+ * <li>AudioManager: STREAM_NOTIFICATION, the ringer back to normal: 1300 Hz, 0.3 s
  * </ol>
  */
 public class MediaActivity extends Activity {
@@ -53,6 +62,7 @@ public class MediaActivity extends Activity {
         events.start();
         try {
             audioTrack(new Handler(events.getLooper()));
+            audioManager(new Handler(events.getLooper()));
             say("done");
         } catch (Throwable t) {
             say("failed: " + t);
@@ -274,5 +284,130 @@ public class MediaActivity extends Activity {
             t.release();
         }
         Thread.sleep(GAP_MS);
+    }
+
+    // --- AudioManager ------------------------------------------------------------------------
+
+    /** Plays a 16-bit mono 48000 Hz tone on a track of `usage`, to its end. */
+    static void playTone(int usage, double hz, double seconds) throws InterruptedException {
+        int frames = (int) (48000 * seconds);
+        AudioTrack t = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder().setUsage(usage).build())
+                .setAudioFormat(new AudioFormat.Builder().setSampleRate(48000)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setBufferSizeInBytes(9600)
+                .build();
+        short[] pcm = tone16(48000, 1, hz, frames, 0.5);
+        t.play();
+        t.write(pcm, 0, pcm.length);
+        t.stop();
+        drain(t, frames, 3000);
+        t.release();
+    }
+
+    void audioManager(Handler handler) throws Exception {
+        AudioManager am = getSystemService(AudioManager.class);
+        int music = AudioManager.STREAM_MUSIC;
+        say("audiomanager volumes: music " + am.getStreamVolume(music) + "/"
+                + am.getStreamMaxVolume(music) + " min " + am.getStreamMinVolume(music)
+                + ", ring " + am.getStreamVolume(AudioManager.STREAM_RING) + "/"
+                + am.getStreamMaxVolume(AudioManager.STREAM_RING) + ", system follows ring "
+                + (am.getStreamVolume(AudioManager.STREAM_SYSTEM)
+                        == am.getStreamVolume(AudioManager.STREAM_RING)));
+
+        // Music at 7 of 15: the tone plays at 7/15 of its level.
+        am.setStreamVolume(music, 7, 0);
+        int set = am.getStreamVolume(music);
+        playTone(AudioAttributes.USAGE_MEDIA, 700, 0.3);
+        am.adjustStreamVolume(music, AudioManager.ADJUST_RAISE, 0);
+        int raised = am.getStreamVolume(music);
+        am.adjustStreamVolume(music, AudioManager.ADJUST_MUTE, 0);
+        boolean muted = am.isStreamMute(music);
+        int mutedVolume = am.getStreamVolume(music);
+        am.adjustStreamVolume(music, AudioManager.ADJUST_UNMUTE, 0);
+        int unmuted = am.getStreamVolume(music);
+        am.setStreamVolume(music, am.getStreamMaxVolume(music), 0);
+        say("audiomanager set music 7: " + set + ", raise " + raised + ", mute " + muted + " "
+                + mutedVolume + ", unmute " + unmuted + ", back to "
+                + am.getStreamVolume(music));
+        Thread.sleep(GAP_MS);
+
+        // The ringer: silent mutes the ring and notification streams.
+        am.setRingerMode(AudioManager.RINGER_MODE_SILENT);
+        say("audiomanager ringer silent: mode " + am.getRingerMode() + ", ring volume "
+                + am.getStreamVolume(AudioManager.STREAM_RING) + ", notification muted "
+                + am.isStreamMute(AudioManager.STREAM_NOTIFICATION));
+        playTone(AudioAttributes.USAGE_NOTIFICATION, 1500, 0.3);  // not heard
+        Thread.sleep(GAP_MS);
+        am.setRingerMode(AudioManager.RINGER_MODE_NORMAL);
+        say("audiomanager ringer normal: mode " + am.getRingerMode() + ", notification volume "
+                + am.getStreamVolume(AudioManager.STREAM_NOTIFICATION) + "/"
+                + am.getStreamMaxVolume(AudioManager.STREAM_NOTIFICATION));
+        playTone(AudioAttributes.USAGE_NOTIFICATION, 1300, 0.3);
+        Thread.sleep(GAP_MS);
+
+        // Devices.
+        AudioDeviceInfo[] outs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
+        AudioDeviceInfo[] ins = am.getDevices(AudioManager.GET_DEVICES_INPUTS);
+        StringBuilder d = new StringBuilder();
+        for (AudioDeviceInfo info : outs) {
+            int[] rates = info.getSampleRates();
+            d.append(" [type ").append(info.getType()).append(", sink ").append(info.isSink())
+                    .append(", name ").append(info.getProductName())
+                    .append(", 48000 Hz ").append(Arrays.stream(rates).anyMatch(r -> r == 48000))
+                    .append(", stereo ").append(Arrays.stream(info.getChannelCounts())
+                            .anyMatch(c -> c == 2))
+                    .append(']');
+        }
+        say("audiomanager devices: " + outs.length + " output(s)" + d + ", " + ins.length
+                + " input(s)");
+
+        // Focus: B takes it from A for a while, gives it back, then takes it for good.
+        List<String> changes = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch three = new CountDownLatch(3);
+        AudioManager.OnAudioFocusChangeListener a = change -> {
+            changes.add("A" + change);
+            three.countDown();
+        };
+        AudioManager.OnAudioFocusChangeListener b = change -> changes.add("B" + change);
+        AudioAttributes media = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA).build();
+        AudioFocusRequest ra = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(media).setOnAudioFocusChangeListener(a, handler).build();
+        AudioFocusRequest rbTransient = new AudioFocusRequest.Builder(
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(media).setOnAudioFocusChangeListener(b, handler).build();
+        AudioFocusRequest rb = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(media).setOnAudioFocusChangeListener(b, handler).build();
+        int g1 = am.requestAudioFocus(ra);
+        int g2 = am.requestAudioFocus(rbTransient);
+        Thread.sleep(200);
+        am.abandonAudioFocusRequest(rbTransient);
+        Thread.sleep(200);
+        int g3 = am.requestAudioFocus(rb);
+        boolean all = three.await(3, TimeUnit.SECONDS);
+        am.abandonAudioFocusRequest(rb);
+        am.abandonAudioFocusRequest(ra);
+        say("audiomanager focus: granted " + g1 + g2 + g3 + ", changes " + changes
+                + (all ? "" : " (not all)"));
+
+        // isMusicActive while a track plays.
+        AudioTrack t = new AudioTrack.Builder()
+                .setAudioFormat(new AudioFormat.Builder().setSampleRate(48000)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setBufferSizeInBytes(96000).build();
+        short[] silence = new short[48000];
+        t.write(silence, 0, silence.length);
+        boolean before = am.isMusicActive();
+        t.play();
+        Thread.sleep(300);
+        boolean during = am.isMusicActive();
+        t.stop();
+        t.release();
+        Thread.sleep(500);
+        say("audiomanager music active: before " + before + ", playing " + during + ", after "
+                + am.isMusicActive());
     }
 }
