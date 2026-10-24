@@ -22,8 +22,9 @@ verified SHA is fine.
 Merged so far:
 - popups: 9edfef6 (code verified at 6ce1d20, ci 40129561197). ADR 0040.
 - rtl: 3aae3be (verified at 1c9b6b2, ci 40133992911). ADR 0044.
-- Integration ci run 40135350639 on 6cea4ca (popups + rtl): result not yet
-  read (GitHub API rate limit). Read it first.
+- Integration ci run 40135350639 on 6cea4ca (popups + rtl): all green.
+- exec: merged (verified at 059b267, ci 40137662101; Puzzles passes e2e).
+  ADR 0035.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
