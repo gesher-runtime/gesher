@@ -483,6 +483,31 @@ public final class WindowSession extends IWindowSession.Stub {
         } catch (RemoteException e) {
             log("window \"" + w.title() + "\": resized: " + e);
         }
+        if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
+            // Debugging: where ViewRootImpl is a second later.
+            w.handler.postDelayed(() -> log("window debug: after the resize "
+                    + viewRootState(viewRoot(w))), 1500);
+        }
+    }
+
+    /** Debugging: a few fields of a ViewRootImpl's layout state. */
+    private static String viewRootState(ViewRootImpl root) {
+        if (root == null) return "no ViewRootImpl";
+        StringBuilder s = new StringBuilder();
+        for (String name : new String[] {"mWinFrame", "mWidth", "mHeight", "mLayoutRequested",
+                "mTraversalScheduled", "mIsInTraversal", "mNumPausedForSync", "mStopped",
+                "mAppVisible", "mForceNextWindowRelayout", "mLastPerformTraversalsSkipDrawReason"}) {
+            try {
+                Field f = ViewRootImpl.class.getDeclaredField(name);
+                f.setAccessible(true);
+                s.append(name).append('=').append(f.get(root)).append(' ');
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                s.append(name).append("=? ");
+            }
+        }
+        View v = root.getView();
+        if (v != null) s.append("view ").append(v.getWidth()).append('x').append(v.getHeight());
+        return s.toString();
     }
 
     private KeyCharacterMap mKeyMap;
@@ -681,6 +706,12 @@ public final class WindowSession extends IWindowSession.Stub {
         Rect frame = result.frames.frame;
         int width = frame.width();
         int height = frame.height();
+        if (System.getenv("GESHER_WINDOW_DEBUG") != null && w.nativeWindow != null
+                && (w.nativeWindow.getWidth() != width || w.nativeWindow.getHeight() != height
+                        || !w.bounds.isEmpty())) {
+            log("window debug: relayout " + requestedWidth + "x" + requestedHeight + " in "
+                    + w.bounds.toShortString() + ": frame " + frame.toShortString());
+        }
         int res = 0;
         if (viewVisibility == View.VISIBLE && width > 0 && height > 0) {
             if (ensureNativeWindow(w, width, height)) {
