@@ -298,6 +298,10 @@ public final class Main {
         System.out.println(tag + ": loaded " + props + " properties from " + buildProp);
         System.out.flush();
 
+        // 2b. The default locales: Windows' languages and regional format, or
+        //     $GESHER_LOCALES (com.gesher.app.locale.SystemLocale, docs/fonts.md).
+        com.gesher.app.locale.SystemLocale.applyDefault();
+
         // 3. The main Looper.
         Looper.prepareMainLooper();
 
@@ -308,6 +312,10 @@ public final class Main {
             throw new IllegalStateException("framework-res.apk not found: " + frameworkRes);
         }
         AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
+
+        // 5. android.webkit.WebView on WebView2 (docs/webview.md): Gesher's
+        //    WebViewFactoryProvider, set before any app code runs.
+        com.gesher.app.webview.GesherWebView.install();
     }
 
     /** The system server's package manager, waited for through servicemanager. */

@@ -1,0 +1,91 @@
+name: exec
+
+# Builds the exec track's test programs (docs/exec.md) on the Linux runner and
+# uploads them for the Windows test job: an Android x86-64 ELF executable
+# (libexectest.so, a PIE named like a library, as apps ship them) with a
+# DT_NEEDED library, built with the pinned NDK as native-libs.yml builds its
+# .so files, and the dex of gesher.ExecTest, which runs it through
+# ProcessBuilder in dalvikvm. ci.yml calls this workflow.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # The same NDK and d8 as native-libs.yml (and their caches).
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  R8_VERSION: "9.5.26"
+
+concurrency:
+  group: ${{ github.workflow }}-exec-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exec:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/exec
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Build the ELF test executable
+        run: |
+          set -euo pipefail
+          bin="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p dist-exec
+          # API 26 (emulated thread-locals), the NDK's defaults for app code:
+          # PIE, stack protector.
+          "$bin/x86_64-linux-android26-clang" -shared -fPIC -O2 -fstack-protector-strong \
+            -Wl,-soname,libexechelper.so -o dist-exec/libexechelper.so tests/exec/exec_helper.c
+          "$bin/x86_64-linux-android26-clang" -O2 -fstack-protector-strong -Wall -Werror \
+            -o dist-exec/libexectest.so tests/exec/exec_test.c -Ldist-exec -lexechelper
+          echo "--- libexectest.so ---"
+          "$bin/llvm-readelf" -h -l -d dist-exec/libexectest.so | grep -E 'Type:|Entry|INTERP|interpreter|NEEDED|FLAGS'
+          "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexectest.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar \
+            "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - name: Build gesher.ExecTest's dex
+        run: |
+          set -euo pipefail
+          mkdir -p work/classes work/dex
+          javac --release 11 -encoding UTF-8 -d work/classes tests/exec/java/gesher/*.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
+            --output work/dex $(find work/classes -name '*.class')
+          cp work/dex/classes.dex dist-exec/exec-test.dex
+          ls -la dist-exec
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec
+          path: dist-exec/

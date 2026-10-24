@@ -82,6 +82,7 @@ int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_
 int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
 int register_gesher_Shell(JNIEnv* env);  // compat/shell/shell_natives.cc (shell track)
 int register_gesher_media(JNIEnv* env);  // compat/media/jni (media track, docs/media.md)
+int register_gesher_WindowsHost(JNIEnv* env);  // compat/devsvc/devsvc_natives.cc (devsvc track)
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -414,6 +415,7 @@ static const struct {
     {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},
     {"gesher_Shell", "com/gesher/app/shell/Shell", register_gesher_Shell},
     {"gesher_media", "android/media/AudioSystem", register_gesher_media},
+    {"gesher_WindowsHost", "com/gesher/server/WindowsHost", register_gesher_WindowsHost},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 

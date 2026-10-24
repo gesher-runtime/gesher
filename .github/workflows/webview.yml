@@ -1,0 +1,170 @@
+name: webview
+
+# android.webkit.WebView on Microsoft Edge WebView2 (docs/webview.md, ADR
+# 0041). The WebView2 probe (probes/webview: compat/webview's host without
+# Java) needs only llvm-mingw and the WebView2 SDK, so it builds in minutes;
+# with `apk`, the test app webapp.apk (tests/apps/webapp) is built too, from
+# the framework job's artifacts of the same run.
+#
+#   gh workflow run webview --ref <branch>
+#
+# ci.yml calls this workflow (apk: true) after its framework job; its
+# artifact "webview" (the probes, WebView2Loader.dll, webapp.apk) is
+# downloaded by the test and package jobs.
+on:
+  push:
+    branches: ['wip/webview']
+    paths:
+      - 'compat/webview/**'
+      - 'probes/webview/**'
+      - 'cmake/webview2_sdk.cmake'
+      - '.github/workflows/webview.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      apk:
+        description: Build webapp.apk from the framework job's artifacts
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-webview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same toolchain cache as .github/actions/setup-build.
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - name: Install build tools
+        run: sudo apt-get install -y --no-install-recommends ninja-build
+
+      # Both loader variants; the static one is an experiment that may fail
+      # without failing the job (the step summary says how it went).
+      - name: Build the WebView2 probes
+        run: |
+          cmake -S probes/webview -B out-webview -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$HOME/toolchain/$LLVM_MINGW_NAME" -DCMAKE_BUILD_TYPE=Release
+          set +e
+          ninja -C out-webview -k 0 > probe-build.log 2>&1
+          set -e
+          grep -E 'error|undefined|FAILED' probe-build.log | head -120 || true
+          {
+            echo "### WebView2 probes"
+            for exe in webview2_probe webview2_probe_dll; do
+              if [[ -f out-webview/$exe.exe ]]; then echo "- $exe.exe built"; else echo "- **$exe.exe failed**"; fi
+            done
+            echo
+            echo '```'
+            grep -E 'error|undefined symbol' probe-build.log | head -40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          test -f out-webview/webview2_probe_dll.exe
+
+      - name: Collect the probes
+        run: |
+          mkdir -p dist-webview
+          cp out-webview/*.exe out-webview/WebView2Loader.dll dist-webview/
+          ls -la dist-webview
+
+      - uses: actions/setup-java@v4
+        if: inputs.apk
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/download-artifact@v4
+        if: inputs.apk
+        with:
+          name: framework-classes
+          path: fw-classes
+
+      - uses: actions/download-artifact@v4
+        if: inputs.apk
+        with:
+          name: framework
+          path: fw
+
+      - name: Build webapp.apk
+        if: inputs.apk
+        run: |
+          mkdir -p fw-classes/classes fw-classes/coremod
+          (cd fw-classes/classes && unzip -q ../framework-classes.zip)
+          (cd fw-classes/coremod && unzip -q ../coremod.zip)
+          tests/apps/webapp/build.sh dist-webview --framework-res fw/framework-res.apk \
+            --framework-classes fw-classes/classes --core-classes fw-classes/coremod
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webview
+          path: dist-webview/
+
+      - name: Upload the build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webview-build-log
+          path: probe-build.log
+
+  # The probes alone, when this workflow runs on its own; ci.yml's test jobs
+  # run them with everything else (tests/windows/tracks/37-webview.ps1).
+  probe:
+    if: github.workflow == 'webview' && !cancelled()
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/windows/webview
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: webview
+          path: dist
+
+      - name: WebView2 Runtime
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/windows/webview/Runtime.ps1
+
+      - name: WebView2 probes
+        shell: pwsh
+        run: |
+          $code = 0
+          foreach ($exe in 'webview2_probe_dll', 'webview2_probe') {
+            if (-not (Test-Path "dist/$exe.exe")) { Write-Host "INFO  $exe.exe was not built"; continue }
+            Write-Host "== $exe"
+            $p = Start-Process "dist/$exe.exe" -NoNewWindow -PassThru -RedirectStandardOutput "$exe.log" -RedirectStandardError "$exe.err"
+            if (-not $p.WaitForExit(180000)) { $p.Kill($true); Write-Host "FAIL  $exe timed out"; $code = 1 }
+            Get-Content "$exe.log", "$exe.err" -ErrorAction SilentlyContinue | Out-Host
+            if ($p.ExitCode -ne 0) { Write-Host "FAIL  $exe exit $($p.ExitCode)"; $code = 1 }
+          }
+          exit $code
