@@ -127,6 +127,10 @@ public class DbActivity extends Activity {
                 java.util.Locale.US).format(new java.util.Date(0)));
         icu("DateFormat.getDateFormat", () -> android.text.format.DateFormat.getDateFormat(this)
                 .format(new java.util.Date(0)));
+        // Linkify with phone numbers (libphonenumber), as list items linkify note titles.
+        icu("Linkify", () -> String.valueOf(android.text.util.Linkify.addLinks(
+                new android.text.SpannableString("see https://example.org or call 555-1234"),
+                android.text.util.Linkify.ALL)));
         icu("icu DateFormat", () -> android.icu.text.DateFormat.getDateInstance(
                 android.icu.text.DateFormat.MEDIUM).format(new java.util.Date(0)));
     }

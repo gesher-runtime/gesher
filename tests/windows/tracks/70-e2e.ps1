@@ -22,11 +22,12 @@ Check 'e2e: SQLite (SQLiteOpenHelper onCreate and onUpgrade, a transaction, a Cu
 
 # Number and date formats (ICU's NumberFormat service, SimpleDateFormat), as
 # list items format dates; the same run of dbapp.apk.
-Check 'e2e: number and date formats (java.text and ICU NumberFormat, SimpleDateFormat, DateFormat) in dbapp.apk' {
+Check 'e2e: number and date formats (java.text and ICU NumberFormat, SimpleDateFormat, DateFormat) and Linkify in dbapp.apk' {
   $global:LASTEXITCODE = $dbExit
   $dbOut
 } @('DbActivity format java.text.NumberFormat: ok 42',
     'DbActivity format icu NumberFormat: ok 1,234.5',
     'DbActivity format SimpleDateFormat: ok 1970-01-01',
     'DbActivity format DateFormat.getDateFormat: ok',
-    'DbActivity format icu DateFormat: ok')
+    'DbActivity format icu DateFormat: ok',
+    'DbActivity format Linkify: ok true')
