@@ -73,7 +73,10 @@ set(_device_standin_sources
   android/hardware/OverlayProperties=${_fwjni}/android_hardware_OverlayProperties.cpp
   android/tracing/perfetto/Producer=${_fwjni}/android_tracing_PerfettoProducer.cpp
   android/tracing/perfetto/DataSource=${_fwjni}/android_tracing_PerfettoDataSource.cpp
-  android/tracing/perfetto/TracingContext=${_fwjni}/android_tracing_PerfettoDataSource.cpp:gMethodsTracingContext)
+  android/tracing/perfetto/TracingContext=${_fwjni}/android_tracing_PerfettoDataSource.cpp:gMethodsTracingContext
+  # No sensors (docs/e2e.md): SystemSensorManager's list ends at index 0.
+  android/hardware/SystemSensorManager=${_fwjni}/android_hardware_SensorManager.cpp:gSystemSensorManagerMethods
+  android/hardware/SystemSensorManager.BaseEventQueue=${_fwjni}/android_hardware_SensorManager.cpp:gBaseEventQueueMethods)
 set(_device_standin_inputs)
 foreach(_s ${_device_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")

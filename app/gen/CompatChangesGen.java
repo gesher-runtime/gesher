@@ -81,11 +81,21 @@ public final class CompatChangesGen {
         Files.writeString(dir.resolve("CompatChangeTable.java"), s, StandardCharsets.UTF_8);
         System.out.println("CompatChangesGen: " + changes.size() + " changes (" + counts[1]
                 + " disabled, " + counts[2] + " enabled since an SDK, " + counts[3]
-                + " enabled after an SDK, " + counts[4] + " logging only)");
+                + " enabled after an SDK, " + counts[4] + " logging only) in " + sClasses
+                + " classes; " + sChangeIds + " @ChangeId, " + sCompatAnnotations
+                + " compat annotations" + (sSample != null ? " (" + sSample + ")" : ""));
+        if (changes.isEmpty()) {
+            System.err.println("CompatChangesGen: no @ChangeId field found in " + classes);
+            System.exit(1);
+        }
     }
 
     /** The changes a class file declares. */
+    static int sClasses, sChangeIds, sCompatAnnotations;
+    static String sSample;
+
     static void scan(byte[] bytes, TreeMap<Long, Change> out) throws IOException {
+        sClasses++;
         DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(bytes));
         if (in.readInt() != 0xCAFEBABE) return;
         in.readUnsignedShort();
@@ -140,9 +150,11 @@ public final class CompatChangesGen {
                             Object v = elementValue(an, pool);
                             if (key.equals("targetSdkVersion") && v instanceof Integer iv) target = iv;
                         }
+                        if (type.contains("compat/annotation") && sSample == null) sSample = type;
                         if (!type.startsWith(ANNOTATIONS)) continue;
+                        sCompatAnnotations++;
                         switch (type.substring(ANNOTATIONS.length())) {
-                            case "ChangeId;" -> changeId = true;
+                            case "ChangeId;" -> { changeId = true; sChangeIds++; }
                             case "Disabled;" -> kind = 1;
                             case "EnabledSince;" -> { kind = 2; sdk = target != null ? target : 0; }
                             case "EnabledAfter;" -> { kind = 3; sdk = target != null ? target : 0; }
