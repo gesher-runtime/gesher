@@ -81,7 +81,8 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.app.IActivityClientController android.content.pm.IPackageManager \
   android.view.IWindowManager android.view.IWindowSession \
   android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
-  android.app.INotificationManager android.app.IUiModeManager
+  android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
+  android.media.IAudioService
 
 mkdir -p "$work/classes"
 find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"
