@@ -113,6 +113,16 @@ public final class Services {
         // mount: no storage volumes (native-libs track: NativeActivity asks for its
         // OBB and external files directories, which are then null).
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
+        // What real apps fetch as they start (docs/e2e.md): without these getSystemService
+        // answers null.
+        services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
+                new DeviceServices.PowerService()).asBinder());
+        services.put(Context.THERMAL_SERVICE, StandIn.of(android.os.IThermalService.class,
+                new DeviceServices.ThermalService()).asBinder());
+        services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
+                new DeviceServices.AlarmService()).asBinder());
+        services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
+                new DeviceServices.ClipboardService()).asBinder());
         return services;
     }
 
