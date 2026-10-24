@@ -73,7 +73,7 @@ function LocationChecks([string] $Mode, [string] $Out, [int] $Code, [bool] $Pend
       "${d}getCurrentLocation current gps 31.7767,35.2345 acc 5 mock true",
       "${d}after removeUpdates(PendingIntent) listener gps 32.0853,34.7818 acc 5 mock true",
       "${d}and nothing else (nothing within 1000 ms)"),
-    @('location: registerLocationPendingIntent gps for com.gesher.devices', $pi)) $Code $Mode
+    @('location: registerLocationPendingIntent gps for com.gesher.devices'), @($pi)) $Code $Mode
   DevCheck "devices: location ($Mode): provider disabled and enabled reach the listener; nothing after removeUpdates(listener)" $Out @(
     ,@("${d}test gps disabled: listener onProviderDisabled gps, enabled false",
       "${d}test gps enabled again: listener onProviderEnabled gps",
@@ -94,16 +94,47 @@ function LocationChecks([string] $Mode, [string] $Out, [int] $Code, [bool] $Pend
   }
 }
 
+$sn = 'devices: sensors: '
+# Sensors without hardware: the runners have none (Windows.Devices.Sensors' GetDefault
+# answers null for each kind), so the list is empty and registering fails cleanly.
+function SensorsEmptyCheck([string] $Mode, [string] $Out, [int] $Code) {
+  if ($Out -match 'sensors: (accelerometer: [^\r\n]*)') { $win = $Matches[1] } else { $win = '(not logged)' }
+  DevCheck "devices: sensors ($Mode): SystemSensorManager over Windows.Devices.Sensors; no sensors here, an empty list, registerListener false ($win)" $Out @(
+    ,@("${sn}0 sensors", "${sn}no accelerometer; registerListener answers false", "${sn}no light sensor",
+      "${sn}done")) $Code $Mode
+}
+# GESHER_SENSOR_TEST's sensors, below the framework's natives: the whole path.
+function SensorsTestCheck([string] $Mode, [string] $Out, [int] $Code) {
+  DevCheck "devices: sensors ($Mode): GESHER_SENSOR_TEST's accelerometer and light sensor through SystemSensorManager: the list, events on a Handler, flush, unregisterListener" $Out @(
+    ,@("${sn}2 sensors: Gesher Test Accelerometer (android.sensor.accelerometer), Gesher Test Light Sensor (android.sensor.light)",
+      "${sn}accelerometer Gesher Test Accelerometer, range 78.4532, min delay 10000 us",
+      "${sn}registerListener(accelerometer) true, first event Gesher Test Accelerometer 0.00,0.00,9.81 accuracy 3",
+      "${sn}accelerometer events keep coming: 4 more", "${sn}flush: flush Gesher Test Accelerometer",
+      "${sn}after unregisterListener (nothing within 500 ms)",
+      "${sn}light event Gesher Test Light Sensor 250.00,0.00,0.00 accuracy 3", "${sn}done")) $Code $Mode
+}
+
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
-LocationChecks 'single process' $out $LASTEXITCODE $false
+$code = $LASTEXITCODE
+LocationChecks 'single process' $out $code $false
+SensorsEmptyCheck 'single process' $out $code
+$env:GESHER_SENSOR_TEST = '1'
+$env:GESHER_DEVICES_STEPS = 'sensors'
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
+SensorsTestCheck 'single process' $out $LASTEXITCODE
+Remove-Item Env:GESHER_DEVICES_STEPS
 
 # The Gesher device: the location service in the system server, the app in a process
 # of its own, across binder (listeners, the PendingIntent's broadcast, parcelled Locations).
+# A device of its own, started with GESHER_SENSOR_TEST (its app processes inherit it).
 $launcherDev = $dvmDev + 'com.gesher.app.Launcher'
+$null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
 $out = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--keep-task') 500
 $code = $LASTEXITCODE
 $serverLog = Join-Path $root 'logs/system_server.log'
 $out += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
 LocationChecks 'Gesher device' $out $code $true
+SensorsTestCheck 'Gesher device' $out $code
+Remove-Item Env:GESHER_SENSOR_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
