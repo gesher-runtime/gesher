@@ -56,6 +56,7 @@ final class SettingsProvider extends ContentProvider {
         system.put(Settings.System.TEXT_AUTO_CAPS, "1");
         system.put(Settings.System.TEXT_AUTO_PUNCTUATE, "1");
         system.put(Settings.System.TEXT_SHOW_PASSWORD, "1");
+        AudioService.putDefaultSounds(system);  // the default ringtones (docs/media.md)
         Map<String, String> secure = mTables.get(SECURE);
         secure.put(Settings.Secure.ANDROID_ID, "6765736865720000");  // "gesher" in hex
         secure.put(Settings.Secure.USER_SETUP_COMPLETE, "1");

@@ -865,6 +865,22 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   }
   played_time_ns_ = MonotonicNs();
 
+  // Starved for a while (an underrun, or a writer that stopped writing without
+  // stop()): the frames the filter still holds back count as played, and the
+  // resampler starts over with the next data. Otherwise the last few frames
+  // would wait for data that may never come (AAudio's getFramesRead, a
+  // position that must reach what was written).
+  if (starved && out_done == 0 && rs.primed) {
+    if (++starved_ticks_ >= 2) {
+      int64_t end = rs.start_index + static_cast<int64_t>(rs.frames());
+      if (end > rs.played_index) played_ += static_cast<uint64_t>(end - rs.played_index);
+      rs.Reset();
+      starved_ticks_ = 0;
+    }
+  } else if (!starved) {
+    starved_ticks_ = 0;
+  }
+
   // Drop history the filter no longer needs.
   int64_t keep_from = static_cast<int64_t>(std::floor(rs.t)) - static_cast<int64_t>(width) - 1;
   if (keep_from > 4096) {

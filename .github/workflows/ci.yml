@@ -124,7 +124,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image]
+    needs: [build, framework, graphics, angle, boot-image, media]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -157,6 +157,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
+          path: dist
+
+      # Gesher's default sounds (docs/media.md): dist/media/audio.
+      - uses: actions/download-artifact@v4
+        with:
+          name: media
           path: dist
 
       - name: Build installer

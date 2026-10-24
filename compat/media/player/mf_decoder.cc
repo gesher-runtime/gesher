@@ -5,6 +5,7 @@
 // the feature lack it, and then AAC is unsupported, not a missing DLL.
 
 #undef WIN32_LEAN_AND_MEAN
+#undef NOGDI  // mmreg.h and mfapi.h name GDI's BITMAPINFOHEADER
 #include <windows.h>
 #include <mfapi.h>
 #include <mferror.h>

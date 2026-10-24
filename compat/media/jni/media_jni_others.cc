@@ -1,6 +1,6 @@
 // Gesher: libmedia_jni's classes other than MediaPlayer (docs/media.md):
 // MediaMetadataRetriever over the extractors (the container's metadata and
-// the tracks'), and stand-ins for the codec, muxer, recorder and DRM classes
+// the tracks'), MediaExtractor (media_extractor_jni.cc), and stand-ins for the codec, muxer, recorder and DRM classes
 // until their stages (roadmap phase 8).
 
 #include <jni.h>
@@ -201,7 +201,8 @@ int RegisterMediaJniOthers(JNIEnv* env) {
   }
   // Until their stages (phase 8, stages 2 and 3): every native answers zero,
   // false or null.
-  for (const char* cls : {"android/media/MediaExtractor", "android/media/MediaCodec",
+  RegisterMediaExtractor(env);
+  for (const char* cls : {"android/media/MediaCodec",
                           "android/media/MediaCodecList", "android/media/MediaMuxer",
                           "android/media/MediaRecorder", "android/media/MediaSync",
                           "android/media/MediaHTTPConnection", "android/media/MediaCrypto",

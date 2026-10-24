@@ -42,7 +42,7 @@ jobs:
         with:
           sparse-checkout: |
             tests/apps
-            tests/media
+            compat/media/sounds
 
       - uses: actions/download-artifact@v4
         with:
@@ -77,6 +77,36 @@ jobs:
             work/build-tools.zip work/build-tools.tmp
           mv work/build-tools.tmp/* work/build-tools-36.1
 
+      # The test media: a tone per format (tests/apps/mediaapp/gen-media.sh).
+      - name: Generate the test media
+        run: |
+          sudo apt-get update -q > /dev/null
+          sudo apt-get install -y --no-install-recommends ffmpeg > /dev/null
+          tests/apps/mediaapp/gen-media.sh
+          # Gesher's default ringtone, notification and alarm sounds, for the
+          # tests and the installer.
+          compat/media/sounds/gen-system-sounds.sh out
+
+      # mediaapp's NDK audio test library (AAudio, OpenSL ES), with the NDK
+      # native-libs.yml caches.
+      - name: Restore the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-r27c
+          key: ndk-27.2.12479018
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 5 -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip && rm ndk.zip
+
+      - name: Build libmedia_ndk_test.so
+        run: |
+          mkdir -p tests/apps/mediaapp/lib/x86_64
+          android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang             -shared -fPIC -O2 -Wall -Werror -Wno-unused-parameter -Wl,-soname,libmedia_ndk_test.so             -o tests/apps/mediaapp/lib/x86_64/libmedia_ndk_test.so tests/apps/mediaapp/jni/media_ndk_test.c             -laaudio -lOpenSLES -lm
+
       - name: Build mediaapp.apk
         run: |
           chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign
@@ -91,4 +121,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: media
-          path: out/*.apk
+          path: |
+            out/*.apk
+            out/media/
