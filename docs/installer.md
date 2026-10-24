@@ -30,8 +30,8 @@ Everything is per user, under `HKCU\Software\Classes`:
 
 Opening an APK this way runs it the way `gesher-app my.apk` does: it is
 installed (or updated) on the user's Gesher device and its launcher Activity
-started through the device's system server, headless, with the app's output in
-a console window (see `app/README.md` and
+started through the device's system server, in a window of the app's process
+(ADR 0029), with the app's output in a console window (see `app/README.md` and
 [0026](decisions/0026-services-persistent-device.md)). The first launch starts
 the device (binderd, servicemanager, the system server) in the background; it
 outlives the console and serves later launches until `gesher-app shutdown` or

@@ -1,6 +1,6 @@
 # 0029. Graphics: an app's windows are drawn by its own process
 
-Status: accepted (graphics track, Phase 3). The coordinator may renumber.
+Status: accepted (graphics track, Phase 3; verified in ci run 40048707298). The coordinator may renumber.
 
 ## Context
 
@@ -41,7 +41,9 @@ in; the question is which process serves it.
   (`BLASTBufferQueue.nativeGetSurface`'s provider, window_jni.cc). hwui's
   renderer draws into it with the CPU pipeline, which queues each frame
   (frameworks/base patch 0103), so frames show without anything else
-  presenting them. **`finishDrawing`** shows the window (unless hidden),
+  presenting them. **`finishDrawing`** shows the window (hidden windows are shown
+  off the desktop: a tool window left of the virtual screen, not activated,
+  since PrintWindow reads nothing back from a window that was never shown),
   **`remove`** closes it.
 - **The window**: titled with the Activity's label (the window's accessibility
   title, else its title), with the process's AppUserModelID set on the window
@@ -56,8 +58,8 @@ in; the question is which process serves it.
   (`scheduleExit`). In a single process, gesher-app's driver does the same
   steps itself.
 - **Window mode per launch**: `gesher-app` (the Launcher) takes `--window`
-  (the default, also for a double-clicked .apk), `--hidden-window` (never
-  shown: CI reads windows back with PrintWindow), or `--headless` (no Win32
+  (the default, also for a double-clicked .apk), `--hidden-window` (off the
+  desktop: CI reads windows back with PrintWindow), or `--headless` (no Win32
   windows: the system server's `StandInWindowSession`, no surface, no
   renderer; the task is removed once the activity is idle, as before);
   `$GESHER_APP_WINDOW` gives the default. The launcher tells the system
