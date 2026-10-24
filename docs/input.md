@@ -133,6 +133,84 @@ new VirtualKeyboard.InputManager())`) so that `KeyCharacterMap.load`,
 InputManagerGlobal for its strategy and throws a NullPointerException
 without an input service) work in apps.
 
+## Text input (ime track)
+
+Goal: text input like a native Windows app's: any keyboard layout, IMEs
+(Japanese, Chinese, Korean) composing inline, the emoji panel (Win+.) and
+dictation, the IME's windows at the caret, Enter as the editor's action,
+and InputMethodManager real enough for apps. ADR 0039 has the decisions.
+
+```
+ window thread (subclassed procedure, ime.cc)        connection thread            app process (Java)
+ WM_KEYDOWN: peek its WM_CHAR ─┬─ key the KCM types ─► gesher::Window ─► KeyEvent ═══► ViewRootImpl ─► TextView
+                               └─ other text / dead ─► (key taken)
+ WM_CHAR, WM_UNICHAR, VK_PACKET ─► TextEvent ─► marker WM_CHAR ─► in order ─► onTextEvent ─► WindowsInputMethod
+ WM_IME_COMPOSITION (IMM32)     ─► TextEvent ─┘   (waits for earlier events,           │  commitText / setComposingText /
+ Enter with an editor action    ─► TextEvent      later ones wait for its finish)      │  finishComposingText /
+                                                                                       │  performEditorAction
+ caret, IME on/off ◄── WindowInput.setCaret / setTextInput ◄── CursorAnchorInfo, EditorInfo ◄─┘ (IRemoteInputConnection)
+```
+
+- **The input method service** (`com.gesher.server.InputMethodManagerService`,
+  registered by `Services` as `input_method`): one input method,
+  `com.gesher.app/.input.WindowsInputMethod` ("Windows text input"); its
+  subtypes are the session's keyboard layouts (`GetKeyboardLayoutList`,
+  locale tags and display names; mode `keyboard`, extra value
+  `KeyboardLayout=<hkl>`), the current subtype the focused window's thread's
+  layout. `startInputOrWindowGainedFocus` makes the client active and binds
+  it (`onStartInputResult`, SUCCESS_WITH_IME_SESSION) to the window's
+  session from the process's `Host`; `getInputMethodList`,
+  `getEnabledInputMethodList`, `getCurrentInputMethodInfoAsUser`,
+  `getEnabledInputMethodSubtypeList`, `getCurrentInputMethodSubtype` and
+  the rest answer as on a device with one IME. Showing and hiding the soft
+  input do not reach the service on Android 16: they go through the
+  window's insets to the window session (`updateRequestedVisibleTypes`).
+- **The input method** (`com.gesher.app.input.WindowsInputMethod`): the host
+  in the process with the Win32 windows (installed by `WindowMode.install`:
+  in a single process on Services' instance; in an app process of the
+  Gesher device on an instance of its own that
+  `IInputMethodManagerGlobalInvoker`'s cache points to). Each window
+  (`addWindow` from the window session) is an `IInputMethodSession`; the
+  binding has an InputChannel too, so key events pass the input method
+  stage as on a device (all handed back). On startInput the native side
+  learns whether an editor has the focus (`inputType` not TYPE_NULL), whether
+  it takes compositions (text, not a password, not IME_FLAG_FORCE_ASCII)
+  and its Enter action (`imeOptions` action unless multi-line or
+  IME_FLAG_NO_ENTER_ACTION); the input method asks the editor for its cursor
+  (`requestCursorUpdates` MONITOR|IMMEDIATE). Text events become
+  `commitText`, `setComposingText` (underlined, the target clause
+  highlighted, the IME's caret through `setSelection`),
+  `finishComposingText`, `performEditorAction` on the editor's
+  `IRemoteInputConnection`; each is finished when a query after it answers.
+  Without an editor, typed text reaches the focused view as an
+  `ACTION_MULTIPLE` KeyEvent. `viewClicked` while composing completes the
+  composition.
+- **The window procedure's side** (`compat/input/ime.cc`, subclassing each
+  attached window): see ime.h and ADR 0039: keys whose character Generic.kcm
+  would not type with the thread's modifiers are taken while an editor has
+  the focus (their WM_CHAR is the text), VK_PACKET and VK_PROCESSKEY always;
+  a key whose KeyEvent types its character drops that WM_CHAR; control
+  characters are their keys' business. IMM32 compositions inline
+  (ISC_SHOWUICOMPOSITIONWINDOW cleared, GCS_RESULTSTR/COMPSTR/CURSORPOS/
+  COMPATTR), WM_IME_CHAR, WM_UNICHAR, IMR_QUERYCHARPOSITION. Without an
+  editor (or in a password field) the window has no input context.
+- **The caret**: CursorAnchorInfo's insertion marker through its matrix,
+  less the window's origin on the display, is the window's caret
+  (`WindowInput.setCaret`): the system caret (CreateCaret, hidden),
+  ImmSetCompositionWindow (CFS_POINT) and ImmSetCandidateWindow
+  (CFS_EXCLUDE).
+- **The touch keyboard** (`compat/input/touch_keyboard.cc`): when the app
+  shows the soft input and its editor was focused by a finger or a pen,
+  InputPane.TryShow through IInputPaneInterop::GetForWindow (looked up in
+  combase.dll); TryHide when it hides it.
+- **Clipboard**: Ctrl+C/X/V go to TextView as KeyEvents and use Android's
+  clipboard service (`DeviceServices.ClipboardService`, in the services
+  domain); it is not Windows' clipboard yet.
+
+### Status and next steps (ime track)
+
+STATUS_PLACEHOLDER
+
 ## Status
 
 ### Done and CI-verified
@@ -224,10 +302,10 @@ holds no state of the window session's, so it is usable from there as is.
   a single process, in an app process of the Gesher device and with the
   installed gesher-app (ci run 40056527378, below).
 
-- Text input: WM_CHARs Generic.kcm cannot type reach the focused view as
-  `ACTION_MULTIPLE` KeyEvents (the window session, above); with a non-US
-  keyboard layout a key then types both its US character (its KeyEvent)
-  and the layout's (its WM_CHAR). No InputConnection (IME) path.
+- Text input: see "Text input (ime track)" above: other keyboard layouts,
+  IMEs and Unicode input go through the input method to the focused
+  editor's InputConnection; without an editor, characters the key map
+  cannot type still reach the focused view as `ACTION_MULTIPLE` KeyEvents.
 - One process: an InputChannel's fd cannot cross processes yet (gesher-base
   does not duplicate sockets into another process).
 - SOCK_SEQPACKET as UDP: no hangup on close; a full buffer drops (bounded by
