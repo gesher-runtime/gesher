@@ -11,9 +11,12 @@ import android.app.IAlarmManager;
 import android.app.PendingIntent;
 import android.app.SyncNotedAppOp;
 import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.ClipDescription;
 import android.content.IClipboard;
 import android.content.IOnPrimaryClipChangedListener;
+import android.content.pm.ParceledListSlice;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IPowerManager;
 import android.os.IThermalService;
@@ -22,6 +25,8 @@ import android.os.RemoteException;
 import android.os.WorkSource;
 
 import com.android.internal.app.IAppOpsService;
+import com.android.internal.appwidget.IAppWidgetHost;
+import com.android.internal.appwidget.IAppWidgetService;
 
 /**
  * System services real apps look up as soon as they start (docs/e2e.md), which the
@@ -167,6 +172,44 @@ final class DeviceServices {
                 boolean shouldCollectMessage, int attributionFlags, int attributionChainId) {
             return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
                     packageName);
+        }
+    }
+
+    /**
+     * {@code appwidget}: a launcher that hosts no widgets yet. Apps ask which of their
+     * widgets exist (none) to update them; pinning is not supported.
+     */
+    static final class AppWidgetService extends IAppWidgetService.Default {
+        @Override
+        public int[] getAppWidgetIds(ComponentName providerComponent) {
+            return new int[0];
+        }
+
+        @Override
+        public int[] getAppWidgetIdsForHost(String callingPackage, int hostId) {
+            return new int[0];
+        }
+
+        @Override
+        public ParceledListSlice getInstalledProvidersForProfile(int categoryFilter,
+                int profileId, String packageName) {
+            return ParceledListSlice.emptyList();
+        }
+
+        @Override
+        public ParceledListSlice startListening(IAppWidgetHost host, String callingPackage,
+                int hostId, int[] appWidgetIds) {
+            return ParceledListSlice.emptyList();
+        }
+
+        @Override
+        public Bundle getAppWidgetOptions(String callingPackage, int appWidgetId) {
+            return new Bundle();
+        }
+
+        @Override
+        public int getMaxBitmapMemory() {
+            return 6 * 1080 * 2400;
         }
     }
 

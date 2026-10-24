@@ -349,10 +349,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private synchronized ApplicationSharedMemory sharedMemory() throws IOException {
         if (mSharedMemory == null) {
             ApplicationSharedMemory m = ApplicationSharedMemory.create();
-            // SystemServer writes PackageManagerService's features; the headless device
-            // declares none.
+            // SystemServer writes PackageManagerService's features: the device's
+            // (PackageManagerService.FEATURES).
             m.writeSystemFeaturesCache(new SystemFeaturesCache(
-                    new ArrayMap<String, FeatureInfo>()).getSdkFeatureVersions());
+                    new ArrayMap<String, FeatureInfo>(PackageManagerService.FEATURES))
+                    .getSdkFeatureVersions());
             // WindowManagerService keeps the animator duration scale there: 1.
             m.setCurrentAnimatorScale(1f);
             mSharedMemory = m;
