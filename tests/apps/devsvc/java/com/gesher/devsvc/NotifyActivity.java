@@ -15,9 +15,9 @@ import android.os.Handler;
 import android.os.Looper;
 
 /**
- * Notifications: posts two (one with progress and an action), then 10 s later cancels the
- * first, 8 s later cancels all, and finishes (the test looks at the toast history of
- * Windows in between).
+ * Notifications: posts one, 5 s later another (with progress and an action; the
+ * listener is bound by then), 10 s later cancels it, 8 s later cancels all, and finishes
+ * (the test looks at the toast history of Windows in between).
  */
 public class NotifyActivity extends Activity {
     static final String CHANNEL = "updates";
@@ -30,22 +30,30 @@ public class NotifyActivity extends Activity {
                 NotificationManager.IMPORTANCE_DEFAULT));
         PendingIntent open = PendingIntent.getActivity(this, 0,
                 new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
-        nm.notify(7, new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("Gesher notification")
-                .setContentText("from devsvc")
-                .setProgress(100, 40, false)
-                .setContentIntent(open)
-                .addAction(new Notification.Action.Builder(null, "Open", open).build())
-                .build());
         nm.notify("second", 8, new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("Second notification")
                 .setContentText("tagged")
                 .build());
-        Report.line("notifications: posted 7 and second/8, active "
-                + nm.getActiveNotifications().length);
+        Report.line("notifications: posted second/8");
         Handler h = new Handler(Looper.getMainLooper());
+        // The listener is bound once the first notification is posted: 7 comes after.
+        h.postDelayed(() -> {
+            nm.notify(7, new Notification.Builder(this, CHANNEL)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle("Gesher notification")
+                    .setContentText("from devsvc")
+                    .setProgress(100, 40, false)
+                    .setContentIntent(open)
+                    .addAction(new Notification.Action.Builder(null, "Open", open).build())
+                    .build());
+            Report.line("notifications: posted 7, active "
+                    + nm.getActiveNotifications().length);
+            cancelLater(nm, h);
+        }, 5000);
+    }
+
+    private void cancelLater(NotificationManager nm, Handler h) {
         h.postDelayed(() -> {
             nm.cancel(7);
             Report.line("notifications: cancelled 7, active " + nm.getActiveNotifications().length);
