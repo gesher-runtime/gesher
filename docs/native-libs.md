@@ -314,9 +314,12 @@ gesher-app.
 ## Status and next steps
 
 _Last updated 2026-10-24 by the native-libraries track; branch
-`wip/native-libs`. Steps 1-8 are done and CI-verified (latest: ci
-`40056663098`, commit 8752003, green on windows-2022 and windows-2025);
-see "After that" for what is left._
+`wip/native-libs`, on phase3/integration (f155384: graphics' input wiring,
+hwui-gl, the boot image, the shell). Steps 1-8 are done and CI-verified
+(latest: ci `40062149757`, commit 4d4360c, green on windows-2022 and
+windows-2025; its windows-2025 job passed on the second attempt, the first
+failing only graphics' uiapp resize check, `cyan at 600x700`, which passed
+in the same job on the other attempt); see "After that" for what is left._
 
 ### Done and CI-verified
 
@@ -537,7 +540,16 @@ see "After that" for what is left._
   shown off the desktop (ADR 0029's hidden mode) reads back all white; the
   check then moves the window onto the desktop (not activated) and reads it
   again, which gives the frame (INFO lines say which); windows-2025 reads it
-  where it is. The first full run (ci `40055843083`) passed everything but
+  where it is. On integration (ci `40060031474`) the check failed three
+  ways, fixed in ci `40062149757` (commit 4d4360c): an `__android_log_print`
+  line was split by Java's `System.out` writing to the same file (the CRT
+  wrote the unbuffered stderr line in pieces; `LogWrite` now writes each line
+  with one `WriteFile`); the off-desktop GL read-back now fails on
+  windows-2025 too, and moved onto the desktop the 400x800 client area is
+  taller than some runners' screens, so its bottom 63 rows read back white
+  (the GL check uses the top corners; the window goes back off the desktop
+  before the CPU frame is read, with `PW_CLIENTONLY`). The first full run
+  (ci `40055843083`) passed everything but
   that read-back; its EGL config was ANGLE's first, a 10-bit one (visual id
   43); the app now takes the first 8-bit one, as the NDK's samples do.
 - Roadmap: the "ELF loader" box (ci `39955700023`), the
