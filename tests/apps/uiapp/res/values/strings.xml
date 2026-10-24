@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher UI</string>
+    <string name="activity_label">Gesher UI test</string>
+    <string name="greeting">Gesher</string>
+</resources>

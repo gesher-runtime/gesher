@@ -1,0 +1,119 @@
+diff --git a/dex2oat/dex2oat.cc b/dex2oat/dex2oat.cc
+index d279e93..dd2a114 100644
+--- a/dex2oat/dex2oat.cc
++++ b/dex2oat/dex2oat.cc
+@@ -1574,8 +1574,23 @@ class Dex2Oat final {
+       }
+       size_t bcp_df_pos = 0u;
+       size_t bcp_df_end = bcp_dex_files.size();
++#if defined(GESHER)
++      // Gesher: boot images are compiled with bare file names as locations, and
++      // the dex files of the images an extension depends on get their actual
++      // paths when the images load (OatFileBase::Setup): those match by name.
++      auto same_location = [](const std::string& location, const std::string& bcp_location) {
++        return location == bcp_location ||
++               (bcp_location.find('/') == std::string::npos &&
++                location.ends_with("/" + bcp_location));
++      };
++#else
++      auto same_location = [](const std::string& location, const std::string& bcp_location) {
++        return location == bcp_location;
++      };
++#endif
+       for (const std::string& bcp_location : runtime_->GetBootClassPathLocations()) {
+-        if (bcp_df_pos == bcp_df_end || bcp_dex_files[bcp_df_pos]->GetLocation() != bcp_location) {
++        if (bcp_df_pos == bcp_df_end ||
++            !same_location(bcp_dex_files[bcp_df_pos]->GetLocation(), bcp_location)) {
+           LOG(ERROR) << "Missing dex file for boot class component " << bcp_location;
+           return dex2oat::ReturnCode::kOther;
+         }
+diff --git a/dex2oat/driver/compiler_driver.cc b/dex2oat/driver/compiler_driver.cc
+index 58ef563..02649ee 100644
+--- a/dex2oat/driver/compiler_driver.cc
++++ b/dex2oat/driver/compiler_driver.cc
+@@ -16,7 +16,9 @@
+ 
+ #include "compiler_driver.h"
+ 
++#if !defined(_WIN32)
+ #include <malloc.h>  // For mallinfo
++#endif
+ #include <unistd.h>
+ 
+ #include <string_view>
+@@ -2971,11 +2973,13 @@ std::string CompilerDriver::GetMemoryUsageString(bool extended) const {
+   const size_t java_alloc = heap->GetBytesAllocated();
+   oss << "arena alloc=" << PrettySize(max_arena_alloc_) << " (" << max_arena_alloc_ << "B)";
+   oss << " java alloc=" << PrettySize(java_alloc) << " (" << java_alloc << "B)";
++#if !defined(_WIN32)  // Windows' C runtime has no mallinfo.
+   const struct mallinfo info = mallinfo();
+   const size_t allocated_space = static_cast<size_t>(info.uordblks);
+   const size_t free_space = static_cast<size_t>(info.fordblks);
+   oss << " native alloc=" << PrettySize(allocated_space) << " (" << allocated_space << "B)"
+       << " free=" << PrettySize(free_space) << " (" << free_space << "B)";
++#endif
+   compiled_method_storage_.DumpMemoryUsage(oss, extended);
+   return oss.str();
+ }
+diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
+index 88bf067..3027b6c 100644
+--- a/libartbase/base/mem_map.cc
++++ b/libartbase/base/mem_map.cc
+@@ -873,7 +873,7 @@ int MemMap::MadviseDontFork() {
+ }
+ 
+ bool MemMap::Sync() {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher: gesher-base's msync (FlushViewOfFile)
+   // TODO: add FlushViewOfFile support.
+   PLOG(ERROR) << "MemMap::Sync unsupported on Windows.";
+   return false;
+diff --git a/dex2oat/linker/oat_writer.cc b/dex2oat/linker/oat_writer.cc
+index b1c8bb1..fd94406 100644
+--- a/dex2oat/linker/oat_writer.cc
++++ b/dex2oat/linker/oat_writer.cc
+@@ -3452,7 +3452,15 @@ bool OatWriter::WriteDexFiles(File* file,
+     // replaced with kElfSegmentAlignment.
+     size_t page_aligned_size = RoundUp(vdex_size_with_dex_files, MemMap::GetPageSize());
+     if (!use_existing_vdex) {
++#if defined(_WIN32)
++      // Gesher: Windows cannot shrink a file while a view of it is mapped, and
++      // FinishVdexFile would cut the page-aligned length back when what follows
++      // the dex files is shorter than the page's rest. The file ends with the
++      // dex files here, and FinishVdexFile writes the rest with pwrite.
++      if (file->SetLength(vdex_size_with_dex_files) != 0) {
++#else
+       if (file->SetLength(page_aligned_size) != 0) {
++#endif
+         PLOG(ERROR) << "Failed to resize vdex file " << file->GetPath();
+         return false;
+       }
+@@ -3741,6 +3749,17 @@ bool OatWriter::FinishVdexFile(File* vdex_file, verifier::VerifierDeps* verifier
+ 
+   uint8_t* vdex_begin = vdex_begin_;
+   MemMap extra_map;
++#if defined(_WIN32)
++  // Gesher: the file ended with the dex files (WriteDexFiles), so the mapped
++  // view does not reach what follows them: write it to the file instead.
++  if (extract_dex_files_into_vdex_) {
++    DCHECK(vdex_begin != nullptr);
++    if (!vdex_file->PwriteFully(buffer.data(), buffer.size(), old_vdex_size)) {
++      PLOG(ERROR) << "Failed to write the vdex file's tail " << vdex_file->GetPath();
++      return false;
++    }
++  } else
++#else
+   if (extract_dex_files_into_vdex_) {
+     DCHECK(vdex_begin != nullptr);
+     // Write data to the last already mmapped page of the vdex file.
+@@ -3768,7 +3787,9 @@ bool OatWriter::FinishVdexFile(File* vdex_file, verifier::VerifierDeps* verifier
+       }
+       memcpy(extra_map.Begin(), buffer.data() + first_chunk_size, tail_size);
+     }
+-  } else {
++  } else
++#endif  // _WIN32
++  {
+     DCHECK(vdex_begin == nullptr);
+     std::string error_msg;
+     extra_map = MemMap::MapFile(

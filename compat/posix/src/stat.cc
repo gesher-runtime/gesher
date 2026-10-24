@@ -51,6 +51,10 @@ int FromHandle(HANDLE h, struct stat* buf) {
   buf->st_dev = info.dwVolumeSerialNumber;
   buf->st_ino = (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
   buf->st_nlink = info.nNumberOfLinks;
+  // Unlinked while open, where the delete is not POSIX-style (the volume or
+  // Windows version lacks it): the name stays until the last handle closes,
+  // but Linux's count has already dropped.
+  if (standard.DeletePending && buf->st_nlink > 0) buf->st_nlink--;
   // Permissions are not modelled: what the CRT reports, without its guess
   // at executables from the file name.
   bool read_only = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
@@ -94,6 +98,7 @@ int stat(const char* path, struct stat* buf) {
     case gesher::PathKind::kNull:
     case gesher::PathKind::kZero:
     case gesher::PathKind::kRandom:
+    case gesher::PathKind::kBinder:
       Clear(buf);
       buf->st_mode = S_IFCHR | 0666;
       return 0;

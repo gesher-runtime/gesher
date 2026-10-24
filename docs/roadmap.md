@@ -103,6 +103,22 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [ ] Executable file mappings (`.oat` code)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
+- [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
+      dex2oat.exe, built for Windows on the same libart, compiles the boot class
+      path in CI (primary image and the framework.jar and gesher-app.jar
+      extensions, no compiled code); every test run and the installed Gesher
+      load it, with no imageless fallback; startup Hello 105 -> 55 ms,
+      lifecycle.apk to `Activity.onCreate` 783 -> 483 ms (ci run 40055199839)
+- [x] Compiled code on Windows ([compiled-code.md](compiled-code.md),
+      [0033](decisions/0033-codegen-compiled-code-on-windows.md)): nterp, the
+      JIT and AOT code in the boot image's primary image, the x86-64 code
+      generator reaching `Thread*` through a fixed TLS slot, faults delivered as
+      signals. Stress (exceptions, GC, threads, JNI through compiled frames) and
+      a subset of ART's run-tests pass under the switch interpreter, nterp, AOT
+      and the JIT; a CPU-bound benchmark runs about 2.5x (nterp) and 5-6x (JIT)
+      the switch interpreter. Remaining: deep-recursion `StackOverflowError`
+      under nterp/JIT (needs an alternate signal stack), compiled JNI stubs,
+      AOT for the extensions, dual-mapped JIT cache.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
@@ -126,9 +142,131 @@ needs: [framework-build.md](framework-build.md).
 - [x] `framework.jar` on the boot class path, tested on Windows (FrameworkSmoke)
 - [x] `epoll` and `eventfd` in gesher-base, for `Looper`
       (`probes/posix/epoll_probe.cc`)
-- [ ] libutils, libcutils and libandroidfw in full
+- [x] libutils, libcutils and libandroidfw in full, with AOSP's gtests on
+      Windows (ci run 39956255117; exclusions in `docs/core-libs.md`)
 - [x] `libandroid_runtime`'s host natives linked in: assets, resources,
       `Log`, `SystemProperties`, `MessageQueue`, `Parcel`, `Binder`
 - [x] In-process stand-ins for the services the lifecycle calls
 - [x] `gesher-app <app.apk>`: an `Activity` reaches `onResume` with its
       resources and manifest loaded (tested in CI, and through the installer)
+
+## Phase 3 checklist
+
+- [x] Skia for Windows (CPU raster first), built in CI (ci run 39953186255:
+      skia_probe on windows-2022 and windows-2025)
+- [x] hwui's natives on Skia (Canvas, Paint, Path, Matrix, RenderNode,
+      Bitmap) in place of the Phase 2 stand-ins (ci run 39999789786:
+      android.graphics on framework.jar and HardwareRenderer into a Win32
+      window, both runners; lifecycle.apk still reaches onResume)
+- [x] ANGLE: EGL and GLES over Direct3D 11, built in CI (ci run
+      39990699626: angle_probe on windows-2022 and windows-2025, D3D11 and
+      WARP; docs/angle.md)
+  - [x] hwui's SkiaGL pipeline (Skia's Ganesh GL) over ANGLE, chosen with
+        `GESHER_HWUI_RENDERER`/`debug.hwui.renderer` = `skiagl` (the CPU
+        pipeline stays the default and the fallback): HardwareRenderer draws a
+        RenderNode tree with text and a bitmap into a Win32 window through an
+        EGL window surface, the same frame as the CPU pipeline (ci run
+        40047748570, both runners, WARP; ADR 0030)
+- [x] A Win32 window as the Activity's surface (`ANativeWindow`), opened
+      through a window manager stand-in (ci run 40048707298: the window
+      session in the drawing process, ADR 0029; single process and an app
+      process of the Gesher device)
+- [x] A simple Activity drawn in a Win32 window, tested in CI by reading
+      back its pixels (ci run 40048707298: uiapp.apk's layout and text drawn
+      by hwui's CPU pipeline, read back with PrintWindow, both runners and
+      the installer; not through ANGLE/WARP yet)
+- [x] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
+      and `KeyEvent`; a click reaches `onClick`, tested in CI (ci run
+      40056527378: uiapp.apk, single process, the Gesher device and the
+      installer)
+  - [x] libinput's transport and the framework's input natives (InputChannel,
+        InputEventReceiver/Sender, KeyEvent, MotionEvent, KeyCharacterMap with
+        Generic.kcm, VelocityTracker); a Gesher window's mouse, wheel and key
+        messages (and touch, injected) to a Java InputEventReceiver, finished
+        (ci run 40038368343, both runners; docs/input.md)
+  - [x] A click in an app's window reaches `onClick` (the window session
+        attaches its InputChannel: `WindowInput.attach`); keys and a WM_CHAR
+        reach a focused EditText, the wheel scrolls a ScrollView, the user
+        resizes the window (at least its minimum) and it redraws at the new
+        size (ci run 40056527378, both runners and the installer;
+        docs/graphics.md)
+- [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+  - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
+        Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
+        through SharedMemory: `Typeface.DEFAULT`, families and aliases,
+        Hebrew through the fallback chain drawn right to left, a Hebrew
+        `StaticLayout` paragraph, bold/italic; shipped by the installer and
+        loaded by the installed gesher-app (ci run 40011630189, both runners;
+        docs/fonts.md)
+  - [ ] RTL text in a View (TextView in a window) and further scripts
+
+## Phase 4 checklist
+
+- [x] Binder across processes: `/dev/binder` over Windows IPC, with
+      `servicemanager`
+- [ ] The framework's own system services (PackageManager parses the APK,
+      ActivityManager starts the Activity) in place of gesher-app's stand-ins
+  - [x] The APK parsed by the framework's PackageParser2 (ci run 39984218373)
+  - [x] A system server process registering package, activity,
+        activity_task, window, display and user with servicemanager;
+        `gesher-app --system-server` uses them across processes, and the
+        launcher starts binderd, servicemanager and the server (ci runs
+        39984218373, 39986921774)
+  - [x] The app attached to the server (`attachApplication`,
+        `bindApplication`, `ClientTransaction`s), the server driving the
+        lifecycle to onResume and finishing it (pause, stop, destroy) in
+        `gesher-app --system-server` (ci run 40001194804)
+  - [x] The rest of the app model through the server: activities starting
+        activities (results, standard, singleTop), started, bound and
+        foreground services, registered and manifest broadcast receivers,
+        the app's content providers and a settings stand-in (ci run
+        40007889523)
+  - [x] A persistent Gesher device: one system server shared by every
+        launch (started detached by the first, found under a mutex, stopped
+        by `gesher-app shutdown`, when idle or with its job), installed
+        packages (`install`, `uninstall`, `list`), app processes the server
+        starts on demand and ends; another package's activity and provider
+        in its own process; `gesher-app my.apk` and the `.apk` association
+        use it (ci run 40019524773)
+- [x] `.apk` file association from the installer (per user; see
+      `docs/installer.md`), tested in CI by the package job
+- [x] Installed apps in the Start menu: a shortcut per launchable package
+      (`Gesher Apps\<label>.lnk`, `gesher-app launch <package>`) with the
+      app's label and launcher icon (PNG/WebP mipmaps, adaptive icons, the
+      framework's default) as a multi-size `.ico`, and an AppUserModelID the
+      app's processes set too; removed by `gesher-app uninstall` and with
+      Gesher; Gesher's own icon for Setup, its entries and `.apk` files
+      (ci run 40024847287; docs/installer.md, ADR 0028)
+
+- [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
+      pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
+      input changes the window, close ends the process; the `.apk`
+      association's command and a Start menu shortcut)
+  - [x] RPN calculator, Editor, Currency, NoNonsense Notes and Unit
+        Converter Ultimate pass; the `.apk` association and Start menu
+        shortcut start RPN (ci run 40077182991)
+  - [x] What they needed: SQLite and android.database's natives,
+        PropertyValuesHolder's, power/alarm/clipboard/appops/appwidget/search
+        stand-ins, a no-network ConnectivityManager, a shared storage volume,
+        app-compat changes by target SDK, system features, startActivities,
+        PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
+        libphonenumber placeholder
+  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+        process)
+
+## Phase 6 checklist
+
+- [x] ELF loader for x86-64 Android `.so` files on Windows
+- [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
+      over gesher-base (libandroid's non-graphics APIs)
+- [x] `System.loadLibrary` of an app's NDK library from its APK's
+      `lib/x86_64`, with JNI calls both ways, tested in CI
+- [x] The NDK's graphics from an app's `.so`: `ANativeWindow_*` and EGL/GLES
+      (libEGL/libGLESv1_CM/libGLESv2/libGLESv3 over ANGLE) on a Win32
+      window, read back in CI on D3D11 and WARP (ci run 40013029994;
+      docs/native-libs.md step 7)
+- [x] `android.app.NativeActivity` (android_native_app_glue): an app with no
+      Java code in its Activity's window, GLES 2 and `ANativeWindow_lock`,
+      AChoreographer, a click and a key through AInputQueue, single process
+      and on the device (ci run 40056663098; docs/native-libs.md step 8,
+      ADR 0032)

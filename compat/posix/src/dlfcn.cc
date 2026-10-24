@@ -1,8 +1,12 @@
 // gesher-base: <dlfcn.h> over LoadLibrary / GetProcAddress for Windows DLLs.
-// Android ELF libraries will be handled by Gesher's ELF loader (phase 6).
+// Android ELF libraries go to the ELF loader registered through
+// <gesher/elf_dlopen.h> (phase 6).
 
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <gesher/builtin_library.h>
+#include <gesher/elf_dlopen.h>
+#include <unistd.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -10,6 +14,7 @@
 // psapi.h needs windows.h first.
 #include <psapi.h>
 
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -68,9 +73,59 @@ BuiltinLibrary* AsBuiltin(void* handle) {
   return nullptr;
 }
 
+// --- ELF objects (<gesher/elf_dlopen.h>) ------------------------------------
+
+std::atomic<const gesher_elf_dlopen_ops*> elf_ops{nullptr};
+
+// Handles the ELF loader returned, under builtins_mutex.
+std::vector<void*>& ElfHandles() {
+  static std::vector<void*> handles;
+  return handles;
+}
+
+bool IsElfHandle(void* handle) {
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  for (void* h : ElfHandles()) {
+    if (h == handle) return true;
+  }
+  return false;
+}
+
+// Whether the file at `path` starts with the ELF magic.
+bool IsElfFile(const char* path) {
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return false;
+  unsigned char magic[4] = {};
+  bool elf = read(fd, magic, sizeof(magic)) == 4 && magic[0] == 0x7f && magic[1] == 'E' &&
+             magic[2] == 'L' && magic[3] == 'F';
+  close(fd);
+  return elf;
+}
+
+void* OpenElf(const char* filename, int flags) {
+  const gesher_elf_dlopen_ops* ops = elf_ops.load();
+  if (ops == nullptr) {
+    last_error = std::string("dlopen ") + filename + ": an ELF object, and no ELF loader";
+    has_error = true;
+    return nullptr;
+  }
+  char error[1024] = {};
+  void* handle = ops->open(filename, flags, error, sizeof(error));
+  if (handle == nullptr) {
+    last_error = std::string("dlopen ") + filename + ": " + error;
+    has_error = true;
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(builtins_mutex);
+  ElfHandles().push_back(handle);
+  return handle;
+}
+
 }  // namespace
 
 extern "C" {
+
+void gesher_set_elf_dlopen(const gesher_elf_dlopen_ops* ops) { elf_ops.store(ops); }
 
 void gesher_register_builtin_library(const char* name, const gesher_builtin_symbol* symbols,
                                      size_t count) {
@@ -81,6 +136,7 @@ void gesher_register_builtin_library(const char* name, const gesher_builtin_symb
 void* dlopen(const char* filename, int flags) {
   if (filename == nullptr) return GetModuleHandleW(nullptr);
   if (BuiltinLibrary* library = FindBuiltin(filename)) return library;
+  if (IsElfFile(filename)) return OpenElf(filename, flags);
   std::wstring path = gesher::Widen(filename);
   HMODULE module = (flags & RTLD_NOLOAD) != 0
       ? GetModuleHandleW(path.c_str())
@@ -98,6 +154,14 @@ void* dlsym(void* handle, const char* symbol) {
     last_error = "dlsym " + std::string(symbol) + ": not in " + library->name;
     has_error = true;
     return nullptr;
+  }
+  if (IsElfHandle(handle)) {
+    void* p = elf_ops.load()->sym(handle, symbol);
+    if (p == nullptr) {
+      last_error = "dlsym " + std::string(symbol) + ": not found in the ELF object";
+      has_error = true;
+    }
+    return p;
   }
   if (handle != RTLD_DEFAULT && handle != RTLD_NEXT) {
     FARPROC p = GetProcAddress(static_cast<HMODULE>(handle), symbol);
@@ -124,6 +188,7 @@ void* dlsym(void* handle, const char* symbol) {
 
 int dlclose(void* handle) {
   if (handle == GetModuleHandleW(nullptr) || AsBuiltin(handle) != nullptr) return 0;
+  if (IsElfHandle(handle)) return elf_ops.load()->close(handle);
   if (!FreeLibrary(static_cast<HMODULE>(handle))) {
     SetError("dlclose", nullptr);
     return -1;

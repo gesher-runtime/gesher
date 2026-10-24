@@ -41,14 +41,33 @@ endif()
 # gesher-base: POSIX/Linux interfaces implemented on Win32.
 include(compat/posix/posix.cmake)
 
+# gesher: the ELF loader for x86-64 Android .so files (Phase 6).
+include(compat/elf/elf.cmake)
+# gesher: the bionic shim the loaded .so files link against (Phase 6).
+include(compat/bionic/bionic.cmake)
+
 include(cmake/aosp/third_party.cmake)
 include(cmake/aosp/system.cmake)
 include(cmake/aosp/art.cmake)
 include(cmake/aosp/art_runtime.cmake)
+# dex2oat, for Gesher's boot image (docs/boot-image.md).
+include(cmake/aosp/dex2oat.cmake)
 include(cmake/aosp/icu.cmake)
 include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)
+include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
+# Framework natives real apps need: SQLite, android.database, animators (docs/e2e.md).
+include(cmake/aosp/framework_e2e.cmake)
+# gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
+include(cmake/aosp/shell.cmake)
+# gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).
+include(compat/bionic/jni.cmake)
+include(cmake/aosp/googletest.cmake)
+include(cmake/aosp/core_libs_tests.cmake)
+include(cmake/aosp/graphics.cmake)
+# Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
+include(cmake/aosp/input.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
@@ -68,3 +87,12 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(libutils_probe probes/system/libutils_probe.cc)
 target_compile_options(libutils_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(libutils_probe PRIVATE utils)
+
+# Phase 6: can Windows user code use %fs for bionic's TLS (WRFSBASE)?
+add_executable(fsbase_probe probes/elf/fsbase_probe.cc)
+target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
+
+# Phase 6: the ELF loader loads an x86-64 Android .so and calls its exports.
+add_executable(elf_load_test tests/native/elf_load_test.cc)
+target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)

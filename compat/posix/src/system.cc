@@ -23,10 +23,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <windows.h>
+#include <psapi.h>
 
 #include <string>
 #include <vector>
 
+#include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
@@ -100,10 +102,23 @@ int uname(struct utsname* buf) {
 
 // --- statvfs -----------------------------------------------------------------
 
+// Android's own directories (`/data`: SQLiteGlobal's default page size is
+// StatFs("/data")'s block size; `/system`) are not on the disk (ADR 0010): an
+// absolute path that does not exist answers for the volume it would be on, its
+// nearest existing ancestor's.
 int statvfs(const char* path, struct statvfs* buf) {
   ULARGE_INTEGER avail, total, free;
-  if (!GetDiskFreeSpaceExW(gesher::Widen(path).c_str(), &avail, &total, &free)) {
-    return gesher::FailWithLastError();
+  std::wstring w = gesher::Widen(path);
+  while (!GetDiskFreeSpaceExW(w.c_str(), &avail, &total, &free)) {
+    DWORD error = GetLastError();
+    size_t slash = w.find_last_of(L"/\\");
+    bool missing = error == ERROR_PATH_NOT_FOUND || error == ERROR_FILE_NOT_FOUND;
+    if (!missing || (path[0] != '/' && path[0] != '\\') || slash == std::wstring::npos ||
+        w.size() <= 1) {
+      SetLastError(error);
+      return gesher::FailWithLastError();
+    }
+    w.resize(slash == 0 ? 1 : slash);
   }
   FillStatvfs(avail, total, free, buf);
   return 0;
@@ -213,12 +228,15 @@ int sched_setparam(pid_t, const struct sched_param*) { return 0; }
 // --- ioctl, wait --------------------------------------------------------------
 
 // FIONREAD and FIONBIO, the ioctls Android's Java libraries use on files,
-// pipes and sockets; there are no device ioctls (ENOTTY).
+// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc),
+// others fail with ENOTTY.
 int ioctl(int fd, unsigned long request, ...) {
   va_list args;
   va_start(args, request);
   int* argp = va_arg(args, int*);
   va_end(args);
+  int binder_result;
+  if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (request == FIONREAD) return gesher::ws::Available(state.socket, argp);
@@ -373,9 +391,18 @@ bool SocketIo(int fd, const struct iovec* iov, int iovcnt, bool write, ssize_t* 
   return true;
 }
 
+// Linux checks the fd and the count before transferring anything, so a bad
+// fd fails even with no buffers.
+bool BadVector(int fd, int iovcnt) {
+  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, true;
+  if (iovcnt < 0 || iovcnt > IOV_MAX) return errno = EINVAL, true;
+  return false;
+}
+
 }  // namespace
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
@@ -388,6 +415,7 @@ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, true, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
@@ -400,6 +428,7 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
@@ -411,6 +440,7 @@ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 }
 
 ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (BadVector(fd, iovcnt)) return -1;
   ssize_t total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pwrite(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
@@ -489,6 +519,46 @@ char* strsignal(int sig) {
   }
 }
 
-int dl_iterate_phdr(int (*)(struct dl_phdr_info*, size_t, void*), void*) { return 0; }
+// dl_iterate_phdr reports every loaded Windows module (the main executable
+// first, where libart is statically linked) with one synthetic PT_LOAD
+// program header spanning the module's image. ART uses this to find the
+// range of libart's own code (OatQuickMethodHeader::IsStub, which the stack
+// walker calls for every quick/nterp frame) and to symbolize addresses. ELF
+// objects the gesher loader mapped report their real headers through
+// <link.h>'s loader-side iteration (compat/bionic/shim.cc); they are not
+// Windows modules and do not appear here.
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info*, size_t, void*), void* data) {
+  HMODULE mods[512];
+  DWORD needed = 0;
+  HANDLE proc = GetCurrentProcess();
+  if (!EnumProcessModules(proc, mods, sizeof(mods), &needed)) return 0;
+  size_t count = needed / sizeof(HMODULE);
+  if (count > 512) count = 512;
+  // One persistent PT_LOAD phdr per module (the callback keeps no copy, but
+  // the pointer must stay valid for the call).
+  static thread_local Elf64_Phdr phdr;
+  for (size_t i = 0; i < count; ++i) {
+    auto base = reinterpret_cast<uintptr_t>(mods[i]);
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) continue;
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) continue;
+    phdr = {};
+    phdr.p_type = PT_LOAD;
+    phdr.p_flags = PF_R | PF_X | PF_W;
+    phdr.p_vaddr = 0;
+    phdr.p_memsz = nt->OptionalHeader.SizeOfImage;
+    char name[MAX_PATH] = "";
+    GetModuleFileNameA(mods[i], name, sizeof(name));
+    struct dl_phdr_info info = {};
+    info.dlpi_addr = base;
+    info.dlpi_name = name;
+    info.dlpi_phdr = &phdr;
+    info.dlpi_phnum = 1;
+    int r = callback(&info, sizeof(info), data);
+    if (r != 0) return r;
+  }
+  return 0;
+}
 
 }  // extern "C"

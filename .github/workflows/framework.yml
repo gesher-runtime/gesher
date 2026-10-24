@@ -334,8 +334,22 @@ jobs:
       - name: Build gesher-app and lifecycle.apk
         run: |
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/uiapp/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/components/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/peer/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/dbapp/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
 
@@ -344,13 +358,31 @@ jobs:
           mkdir -p dist-framework
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
-            out/app/lifecycle.apk dist-framework/
+            out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk dist-framework/
+          cp out/app/services-tests.dex dist-framework/
+          cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
 
       - uses: actions/upload-artifact@v4
         with:
           name: framework
           path: dist-framework/
+
+      # The framework's classes and the coremod, to compile gesher-app's Java
+      # against off CI (app/build.sh --framework-classes/--core-classes).
+      - name: Pack the framework's classes
+        run: |
+          (cd out/framework/classes && zip -qr "$GITHUB_WORKSPACE/framework-classes.zip" .)
+          (cd out/coremod && zip -qr "$GITHUB_WORKSPACE/coremod.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-classes
+          path: |
+            framework-classes.zip
+            coremod.zip
+          retention-days: 3
+          compression-level: 0
 
       - name: Save the framework's JVM tools
         if: always() && steps.jvm.outputs.cache-hit != 'true' && hashFiles('out/framework/jvm-tools/kotlinc/bin/kotlinc') != ''

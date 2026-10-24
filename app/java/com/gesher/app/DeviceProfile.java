@@ -13,17 +13,67 @@ import android.view.DisplayInfo;
 import android.view.Surface;
 
 /**
- * The headless device the app sees: one display, a phone-sized portrait screen, en-US.
+ * The device the app sees: one display, a phone-sized portrait screen, en-US.
  * The display stand-in reports it, and the process configuration is derived from it, as
  * system_server derives it from DisplayManagerService and the window manager.
+ *
+ * <p>The display is 400x800 at 160 dpi (a phone's 400x800 dp, one pixel a dp, as a window
+ * on a desktop at 100% scaling) unless the Java system property
+ * {@code gesher.display} or the environment variable {@code GESHER_DISPLAY} says otherwise
+ * ({@code WIDTHxHEIGHT} or {@code WIDTHxHEIGHT@DPI}, pixels), or {@link #set} changes it
+ * before anything reads it (gesher-app's {@code --display}). An app window shown on the
+ * desktop is this size (com.gesher.app.window.WindowSession).
  */
 public final class DeviceProfile {
-    public static final int WIDTH = 1080;
-    public static final int HEIGHT = 2400;
-    public static final int DENSITY_DPI = 420;
+    public static int WIDTH = 400;
+    public static int HEIGHT = 800;
+    public static int DENSITY_DPI = 160;
     public static final float REFRESH_RATE = 60f;
 
+    static {
+        String spec = System.getProperty("gesher.display");
+        if (spec == null || spec.isEmpty()) spec = System.getenv("GESHER_DISPLAY");
+        if (spec != null && !spec.isEmpty()) {
+            parseAndSet(spec);
+        }
+    }
+
     private DeviceProfile() {
+    }
+
+    /** Sets the display: before the process configuration or the display is first read. */
+    public static void set(int width, int height, int densityDpi) {
+        if (width < 1 || height < 1 || densityDpi < 1) {
+            throw new IllegalArgumentException("bad display " + width + "x" + height + "@"
+                    + densityDpi);
+        }
+        WIDTH = width;
+        HEIGHT = height;
+        DENSITY_DPI = densityDpi;
+    }
+
+    /** {@link #set} from {@code WIDTHxHEIGHT[@DPI]} (the density stays when not given). */
+    public static void parseAndSet(String spec) {
+        try {
+            String size = spec;
+            int dpi = DENSITY_DPI;
+            int at = spec.indexOf('@');
+            if (at >= 0) {
+                size = spec.substring(0, at);
+                dpi = Integer.parseInt(spec.substring(at + 1).trim());
+            }
+            int x = size.toLowerCase().indexOf('x');
+            set(Integer.parseInt(size.substring(0, x).trim()),
+                    Integer.parseInt(size.substring(x + 1).trim()), dpi);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("display spec '" + spec
+                    + "' is not WIDTHxHEIGHT[@DPI]", e);
+        }
+    }
+
+    /** A description: {@code 1080x2400@420}. */
+    public static String describe() {
+        return WIDTH + "x" + HEIGHT + "@" + DENSITY_DPI;
     }
 
     public static int widthDp() {

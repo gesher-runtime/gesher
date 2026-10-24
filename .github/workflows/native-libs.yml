@@ -1,0 +1,177 @@
+name: native-libs
+
+# Builds the Android NDK test .so files for the native-libraries track
+# (Phase 6) on the Linux runner and uploads them for the Windows test job.
+# ci.yml calls this workflow; it also runs on its own:
+#
+#   gh workflow run native-libs --ref <branch>
+#
+# The NDK is pinned. It also builds the JNI test's dex, the libc++_shared test
+# library, and a test APK packaging native code under lib/x86_64.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  # API level for the test libraries' target.
+  ANDROID_API: "26"
+  # d8, for the JNI test's dex (as tests/build-test-apps.sh).
+  R8_VERSION: "9.5.26"
+
+concurrency:
+  group: ${{ github.workflow }}-native-libs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-libs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/native
+            tests/apps/nativeapp
+            tests/apps/glapp
+            tests/apps/nativeactivity
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Build the test .so files
+        run: |
+          set -euo pipefail
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${ANDROID_API}-clang"
+          mkdir -p dist-native
+          # Step 1: a self-contained library, no libc, no TLS, no stack guard.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
+            -o dist-native/trivial.so tests/native/trivial.c
+          # Step 2: a library using bionic's libc, libm, libdl, liblog and
+          # pthread through the shim. No stack protector and no thread_local,
+          # so it does not touch %fs (ADR 0014).
+          "$cc" -shared -fPIC -O2 -fno-stack-protector             -Wl,-soname,libc_test.so             -o dist-native/libc_test.so tests/native/libc_test.c -llog -ldl -lm
+          # Step 3: libraries built the way the NDK builds app code by default,
+          # with the stack protector (%fs:0x28) and thread-locals: emulated at
+          # API 26, ELF TLS (general-dynamic, local-dynamic, initial-exec) at
+          # API 29, plus a TLS library fs_test29.so dlopen()s while a thread
+          # runs. The loader rewrites their %fs accesses (ADR 0014).
+          cc29="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
+          "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
+          "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
+          "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c
+          echo "--- fs_test29.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d -r -l dist-native/fs_test29.so
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"             -d dist-native/fs_test29.so | grep '%fs:' | head -40 || true
+          echo "--- trivial.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -hdS dist-native/trivial.so | sed -n '1,40p'
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -d dist-native/trivial.so
+          echo "--- libc_test.so ---"
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"             -d --dyn-syms dist-native/libc_test.so
+          # Instructions that use %fs (the stack guard, ELF TLS): ADR 0014.
+          for so in dist-native/*.so; do
+            n=$("$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump" -d "$so"               | grep -c '%fs:' || true)
+            echo "$so: $n instruction(s) using %fs"
+          done
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar             "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - name: Build the JNI and libc++ test libraries
+        run: |
+          set -euo pipefail
+          bin="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # Step 4: JNI natives, by name and through RegisterNatives, calling
+          # back into ART; stack protector and an initial-exec thread-local.
+          "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,libjni_test.so -o dist-native/jni_test.so tests/native/jni_test.c
+          # Its Java side, run by dalvikvm.
+          mkdir -p work/jni-classes work/jni-dex
+          javac --release 11 -encoding UTF-8 -d work/jni-classes tests/native/java/gesher/*.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26             --output work/jni-dex $(find work/jni-classes -name '*.class')
+          cp work/jni-dex/classes.dex dist-native/jni-test.dex
+          # Step 5: C++ against libc++_shared.so (the NDK's), which the loader
+          # finds next to it; C++ exceptions thrown and caught inside.
+          "$bin/x86_64-linux-android29-clang++" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,libcxx_test.so -o dist-native/libcxx_test.so tests/native/libcxx_test.cpp
+          cp "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so"             dist-native/
+          echo "--- libcxx_test.so ---"
+          "$bin/llvm-readelf" -d dist-native/libcxx_test.so | grep -E 'NEEDED|SONAME'
+          echo "--- libc++_shared.so: needed, and what it imports ---"
+          "$bin/llvm-readelf" -d dist-native/libc++_shared.so | grep -E 'NEEDED|SONAME'
+          "$bin/llvm-readelf" --dyn-syms -W dist-native/libc++_shared.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
+          echo "--- jni_test.so imports ---"
+          "$bin/llvm-readelf" --dyn-syms -W dist-native/jni_test.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
+
+      # aapt2 and zipalign (build-tools r36.1, as tests/apps/lifecycle uses) and
+      # the SDK's android.jar, for the test APK.
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+          ls sdk sdk/build-tools
+
+      # gesher-app's test app with native code: lib/x86_64/libnativeapp.so and
+      # libc++_shared.so in the APK (tests/apps/nativeapp).
+      - name: Build the native test APK
+        run: |
+          tests/apps/nativeapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
+
+      # The graphics half of the NDK: lib/x86_64/libglapp.so (ANativeWindow
+      # and EGL/GLES) in glapp.apk, and the same library beside it for
+      # tests/native/gl_window_test.cc (tests/apps/glapp).
+      - name: Build the graphics test APK
+        run: |
+          tests/apps/glapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
+
+      # android.app.NativeActivity: nativeactivity.apk, no Java code, its
+      # lib/x86_64/libnativeactivity.so on android_native_app_glue
+      # (tests/apps/nativeactivity).
+      - name: Build the NativeActivity test APK
+        run: |
+          tests/apps/nativeactivity/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-libs
+          path: dist-native/

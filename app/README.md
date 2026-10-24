@@ -17,7 +17,17 @@ dalvikvm -Xbootclasspath:core-oj.jar:core-libart.jar:core-icu4j.jar:framework.ja
 Options: `--build-prop FILE` (default `$ANDROID_ROOT/build.prop`),
 `--framework-res FILE` (default `$ANDROID_ROOT/framework/framework-res.apk`),
 `--activity CLASS` (default: the MAIN/LAUNCHER activity), `--data-dir DIR`
-(default `$ANDROID_DATA/data/<package>`), `--strict-services` (see below).
+(default `$ANDROID_DATA/data/<package>`), `--strict-services` (see below),
+`--system-server` (an app process attached to a system server process, the
+framework's way, below; the Gesher device, a persistent system server that
+starts app processes itself, is `com.gesher.app.Launcher`'s, further below),
+`--ez KEY true|false` (a boolean extra in the launch
+intent, as `am start --ez`; with `--system-server`), `--keep-task` (with
+`--system-server`: the launcher does not remove the task once the activity is
+idle; the run ends when the app's last activity finishes), `--window` /
+`--hidden-window` (the Activity's UI in a Win32 window, drawn by hwui, until
+the window is closed; hidden: off the desktop, for tests; `--display WxH[@DPI]`,
+default 400x800@160; docs/graphics.md, ADR 0029).
 On Windows, `tools/package/gesher-app.cmd` sets up the directories and the
 boot class path and runs it.
 
@@ -37,7 +47,9 @@ framework.jar lacks (below), which must never shadow real ones.
 
 `com.gesher.app.Main`, on the main thread:
 
-0. `Digests.install()`: the JCA providers that exist on Gesher's boot class
+0. `Digests.install()` (which also gives an X.509 CertificateFactory over
+   libcore's `X509CertImpl`, for the network security config): the JCA
+   providers that exist on Gesher's boot class
    path (libcore's list names Conscrypt and BouncyCastle, which are not
    there yet), and SHA-1, SHA-256 and MD5 digests, which the framework needs
    from its first steps.
@@ -53,14 +65,21 @@ framework.jar lacks (below), which must never shadow real ones.
    Windows ([0010](../docs/decisions/0010-paths.md)); creating the system
    AssetManager first makes `Resources.getSystem()` and every app
    AssetManager use this one.
-5. Reads the APK's binary manifest with `ApkAssets.openXml`
-   (`AppManifest`): package, `uses-sdk`, the `<application>`'s class, label,
-   theme and flags, and each `<activity>`'s name, label, theme and intent
-   filters. It builds the `ApplicationInfo`, `ActivityInfo`s and
-   `PackageInfo` PackageManagerService would. (Splits, shared libraries,
-   permissions, providers, services, receivers, aliases and meta-data are not
-   read; `ParsingPackageUtils` can replace it later.)
-6. Installs the stand-in services (below) through
+5. Parses the APK as PackageManagerService does at install
+   (`com.gesher.server.ApkPackage`): framework.jar's `PackageParser2`
+   (`ParsingPackageUtils`: the whole manifest, with services, receivers,
+   providers, permissions, meta-data and intent filters), then
+   `PackageInfoCommonUtils.generate` for the `PackageInfo`,
+   `ApplicationInfo` and `ActivityInfo`s, plus what installing adds (source
+   and data paths, uid, `FLAG_INSTALLED`). The launcher Activity is the first
+   with a MAIN/LAUNCHER intent filter. Certificates are not collected.
+   It prints `gesher-app: <package> parsed by PackageParser2: N activities, ...`.
+   The APK's native libraries, `lib/x86_64/*.so`, are copied into
+   `ApplicationInfo.nativeLibraryDir` (`<data-dir>/lib`, `NativeLibs`), the
+   app class loader's library path, as the package manager does for
+   `extractNativeLibs`; dalvikvm loads them with Gesher's ELF loader
+   ([native-libs.md](../docs/native-libs.md)).
+6. Serves the stand-in services (below) in this process, through
    `ServiceManager.initServiceCache`.
 7. Posts the launch to the main Looper and runs `Looper.loop()`. The main
    Looper may not quit, so the launch ends by posting a message that throws
@@ -106,33 +125,171 @@ package, no pause/stop/destroy, no `performTopResumedActivityChanged`.
 
 ## The stand-in services
 
-`StandInServices` registers in-process services under the names an app looks
-up, the way `RavenwoodSystemServer` does. Each is a subclass of the AIDL
-interface's generated `IFoo.Default` that overrides what the lifecycle calls,
-so javac checks every override against the interface. `StandIn` puts a
-`java.lang.reflect.Proxy` in front of it and attaches the proxy to a local
-`Binder` under the interface's descriptor, so `IFoo.Stub.asInterface(binder)`
-returns it with no Parcel round trip. A call to a method the stand-in does not
-override is logged once on stderr
-(`gesher-app: stand-in IFoo.bar not implemented; returning a default`) and
-gets `Default`'s answer (null, 0, false); with `--strict-services` (or
-`GESHER_APP_STRICT_SERVICES=1`) it throws instead. The log is the list of
-what to implement next.
+The services are in `com.gesher.server` (`Services`, `PackageManagerService`,
+`WindowManagerService`), shared by gesher-app's single-process mode and the
+system server process (below), the way `RavenwoodSystemServer` serves
+Ravenwood's tests. Each is a subclass of the AIDL interface's generated
+`IFoo.Default` that overrides what the lifecycle calls, so javac checks every
+override against the interface. `StandIn` puts a `java.lang.reflect.Proxy` in
+front of it: a call to a method the stand-in does not override is logged once
+on stderr (`gesher-app: stand-in IFoo.bar not implemented; returning a
+default`; `system_server:` in the server) and gets `Default`'s answer (null,
+0, false); with `--strict-services` (or `GESHER_APP_STRICT_SERVICES=1`) it
+throws instead. The log is the list of what to implement next.
+
+The Binder of each service is `com.gesher.server.stub.IFooStub`, a concrete
+`IFoo.Stub` delegating every method to the proxy, which `app/gen/StubGen.java`
+writes at build time by reflection over framework.jar's interface (a Stub is
+abstract, so it cannot be a proxy itself). Its AIDL-generated `onTransact`
+serves other processes; in the same process `IFoo.Stub.asInterface` returns
+the stub itself, with no Parcel round trip.
 
 | Name | Interface | Answers |
 |---|---|---|
-| `activity` | `IActivityManager` | `getContentProvider` → null (no providers: Settings and friends fall back to defaults), `checkPermission` → granted, `getCurrentUser` → user 0 |
-| `activity_task` | `IActivityTaskManager` | `getActivityClientController` → a stand-in `IActivityClientController` (`getDisplayId` → 0, `getTaskForActivity` → 1) |
-| `package` | `IPackageManager` | `getPackageInfo`, `getApplicationInfo`, `getActivityInfo` for the app's package (from the manifest); `hasSystemFeature` → false; `getNameForUid`, `getPackagesForUid` → the app |
-| `window` | `IWindowManager` | `openSession` → a stand-in `IWindowSession` (all defaults); display sizes; no navigation bar; animator scales 1 |
-| `display` | `IDisplayManager` | one display (`DeviceProfile`: 1080×2400, 420 dpi, 60 Hz, on); callbacks accepted and never called |
+| `activity` | `IActivityManager` (`ActivityManagerService`) | `getContentProvider` → null (no providers: Settings and friends fall back to defaults), `checkPermission`/`checkPermissionForDevice` → granted, `getCurrentUser` → user 0; `attachApplication`/`finishAttachApplication` (below); `handleApplicationWtf` logged, the app not killed |
+| `activity_task` | `IActivityTaskManager` (`ActivityTaskManagerService`) | `startActivity`, `startActivityAndWait`, `removeTask`, `getTasks` (below); `getActivityClientController` → `ActivityClientController` (the app's reports; `getDisplayId` → 0, `getTaskForActivity` → the task, 1 for the single-process driver's token) |
+| `package` | `IPackageManager` | the parsed packages: `getPackageInfo`, `getApplicationInfo`, `getActivityInfo`, `resolveIntent`, `queryIntentActivities` (intent filters matched with `IntentFilter.match`), `getInstalledPackages`/`Applications`, `isPackageAvailable`, `getTargetSdkVersion`; `hasSystemFeature` → false; `getNameForUid`, `getPackagesForUid` → the packages (all share one uid) |
+| `window` | `IWindowManager` | `openSession` → `StandInWindowSession` (windows added headless: ADD_OKAY, the display's frames, no surface) or what `WindowManagerService.setSessionFactory` makes; display sizes; no navigation bar; animator scales 1 |
+| `display` | `IDisplayManager` | one display (`DeviceProfile`: 1080×2400, 420 dpi, 60 Hz, on); callbacks accepted and never called; sRGB, default overlay properties |
 | `user` | `IUserManager` | user 0, the system user, running and unlocked |
+| `input_method` | `IInputMethodManager` | no input method; clients accepted (a window's ViewRootImpl needs the service) |
 
-`ServiceManager` asks `IServiceManager` for any name not in its cache.
-Without a binder driver there is no servicemanager to ask, so a stand-in
+In single-process mode, `ServiceManager` asks `IServiceManager` for any name
+not in its cache. Without a binder driver there is no servicemanager to ask,
+so a stand-in
 `IServiceManager` (knowing the services above, and any `addService`d later)
 replaces `ServiceManager.sServiceManager`; other names get null, as on a
 device for a service that does not exist.
+
+## The system server: services in another process
+
+`com.gesher.server.SystemServer` is system_server, lite: given APKs, it parses
+them (`ApkPackage`, as PackageManagerService scans installed packages at
+boot), creates the services above, registers `package`, `activity`,
+`activity_task`, `window`, `display`, `user` and `input_method` with
+servicemanager and serves them on four binder threads (its main thread and
+three more: it calls into apps while their main threads call it). It needs binderd and servicemanager on
+`$GESHER_BINDER` ([services.md](../docs/services.md)) and runs from the same
+boot class path as gesher-app:
+
+```
+set GESHER_BINDER=mydev
+binderd mydev & servicemanager
+dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.server.SystemServer app.apk
+dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Main --system-server app.apk
+```
+
+It prints `system_server: <package> parsed by PackageParser2: ...` and
+`system_server: registered package, activity, ... with servicemanager`.
+`gesher-app --system-server` then waits for `package` in servicemanager, reads
+the APK's package name (`ApkLiteParseUtils`) and runs as an app process the
+framework's way (`android.app.GesherAppProcess`,
+[0024](../docs/decisions/0024-services-app-process.md)): two binder threads,
+`new ActivityThread()` and `attach(false, 0)` (→
+`IActivityManager.attachApplication`), then `Looper.loop()`. A launcher thread
+plays `am start -W`: `startActivityAndWait` with the MAIN/LAUNCHER intent (or
+`--activity`, plus `--ez` extras). The server binds the process
+(`bindApplication`, with the ApplicationSharedMemory region as a file
+descriptor), and on `finishAttachApplication` sends a `ClientTransaction` of
+`LaunchActivityItem` + `ResumeActivityItem`: framework.jar's own
+`handleBindApplication`, `handleLaunchActivity` and `handleResumeActivity` run
+(the decor view is added through the window session and laid out; nothing is
+drawn). Once the activity is idle, the launcher removes its task
+(`removeTask`); the server pauses, stops and destroys it with
+`PauseActivityItem`, `StopActivityItem` and `DestroyActivityItem`, each after
+the app reported the previous step, then tells the process to exit
+(`scheduleExit`), and gesher-app prints `gesher-app: done`. An activity that
+calls `finish()` goes through the same three steps. `GesherAppDriver` is not
+used in this mode. Every `ServiceManager.getService` of the app goes to
+servicemanager.
+
+The rest of the app model runs through the server too
+([0025](../docs/decisions/0025-services-app-components.md)): activities
+starting activities (explicit or through the manifest's intent filters, the
+one in front paused first, results, standard and singleTop), started and
+bound services (the Binder from `onBind` reaches clients in the same process
+as itself), foreground services (the notification goes to a stand-in
+`notification` service), registered and manifest broadcast receivers, the
+app's own content providers (installed at `bindApplication`) and a stand-in
+`settings` provider for `Settings.System/Secure/Global`.
+`tests/apps/components` exercises them (`--keep-task`).
+
+Headless stand-ins on this path, until the graphics track's: the graphics and
+view natives the window code reaches (`compat/framework/attach_standins.cc`),
+the window session, frames timed by messages
+(`debug.choreographer.vsync=false`: no vsync source), no hardware renderer
+(the window session gives no surface; `GESHER_APP_HWUI=1` keeps it), and an
+empty `sans-serif` typeface when there is no `/system/etc/fonts.xml`
+(`handleBindApplication` needs a default family; text cannot be measured with
+it, so a test app's theme has no action bar). The app process sets the
+runtime's target SDK from the app's, as the zygote does. `GESHER_APP_TRACE_LOOPER=1` prints each message the
+app's main Looper dispatches.
+
+On Windows, `gesher-app my.apk --system-server` (`tools/package/gesher-app.ps1`)
+starts binderd and servicemanager for a binder device of its own and the
+system server with the APK, runs the app, and stops the three when it exits
+(their logs: `%LOCALAPPDATA%\Gesher\logs\run-*`). `gesher-app my.apk
+--single-process` runs the single-process mode. Without either, gesher-app
+runs the app on the Gesher device (below).
+
+## The Gesher device: a persistent system server
+
+`com.gesher.app.Launcher` ([0026](../docs/decisions/0026-services-persistent-device.md))
+is what `gesher-app` runs by default:
+
+```
+dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Launcher COMMAND
+  launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
+         [--window | --hidden-window | --headless [--keep-task]]
+  install APK | uninstall PACKAGE | list | status | start | shutdown
+```
+
+The first command starts the user's Gesher device, detached (no console window;
+it outlives the console): binderd and servicemanager on a binder device of its
+own, and `com.gesher.server.SystemServer --persistent`. Later commands find it
+(`$ANDROID_DATA/system/gesher-device`, under a named mutex) and use it; one
+whose system server is gone is cleaned up and replaced. It stops on
+`shutdown` or after `$GESHER_IDLE_TIMEOUT` seconds (default 600) with no app
+process; the system server keeps binderd, servicemanager and the app processes
+in a job that ends them with it.
+
+- `install` copies the APK into `$ANDROID_DATA/app/<package>-<n>/base.apk`
+  (`lib/x86_64` extracted next to it), lists it in
+  `$ANDROID_DATA/system/packages.list` and adds it to the running package
+  manager; the system server loads the list at start (`com.gesher.server.Installer`).
+  The same APK again changes nothing; another one updates the package (its
+  processes stopped first). `uninstall` removes code, data and entry. `list` asks
+  the package manager (`getInstalledPackages`, `getPackageInfo`).
+- `launch` installs or updates the APK, then plays the launcher: `startActivityAndWait`
+  with the MAIN/LAUNCHER intent from no app process. The system server starts the
+  package's process: a dalvikvm with its own runtime options running
+  `android.app.GesherAppProcess --package P --start-seq N --target-sdk S`
+  (`com.gesher.server.Zygote`), whose output goes to `logs/<package>.log`; it attaches
+  with its start sequence number and is driven as above. The launcher copies the log
+  to the console and waits until the package's process is gone, then exits with its
+  exit code (`gesher-app: done` when it is 0). By default the app's windows are Win32
+  windows its own process creates and draws (`--window`; `--hidden-window`: off the
+  desktop; [0029](../docs/decisions/0029-graphics-app-windows.md)): the app runs until
+  they are closed, which finishes the activity. `--headless` (or
+  `GESHER_APP_WINDOW=headless`): no windows, and the launcher removes the task once the
+  activity is idle (unless `--keep-task`).
+- The system server starts a package's process whenever something needs it: an
+  activity (also from another app, through an implicit intent), a service, a manifest
+  receiver, a content provider (`getContentProvider` waits until the new process
+  publishes it). A process exits when it has no activity, service or client of its
+  providers left. `tests/apps/peer` and components' `CrossActivity` exercise it across
+  two packages.
+- The control calls without a framework API (install, uninstall, status, shutdown, a
+  package's last exit code) go to the system server's `gesher` service
+  (`com.gesher.server.GesherService`).
+- `launch PACKAGE` starts an installed package without its APK. After `install` (and
+  `launch APK`'s install step) the launcher makes the package's Start menu shortcut,
+  `Gesher Apps\<label>.lnk` running `gesher-app launch PACKAGE`, with the app's icon
+  drawn by the framework into a `.ico` and the AppUserModelID `Gesher.App.<package>`
+  that the system server also gives the package's processes
+  (`GESHER_APP_USER_MODEL_ID`; `GesherAppProcess` sets it); `uninstall` removes it
+  (`com.gesher.app.shell`, [docs/installer.md](../docs/installer.md),
+  [0028](../docs/decisions/0028-shell-start-menu-apps.md)).
 
 ## Classes framework.jar does not have
 
@@ -149,7 +306,15 @@ Nearby, OnDevicePersonalization, OnDeviceIntelligence, DeviceLock,
 Virtualization, ConfigInfrastructure, EnhancedConfirmation, Profiling,
 Ranging, and the telephony module's `TelephonyServicesInitializer`) and
 empty placeholders for `LocationManager`, `CountryDetector` and
-`TetheringManager`. Those services are simply not registered. When
+`TetheringManager`. Those services are simply not registered. The framework's
+app-process path reaches a few more module classes; `app/java` has
+placeholders for them (they need framework types): `android.net.TrafficStats`
+(`handleBindApplication` calls `init`; no traffic accounting),
+`android.app.sdksandbox.sandboxactivity.SdkSandboxActivityAuthority` and
+`ActivityContextInfo` (no intent starts an SDK sandbox activity),
+`android.util.StatsEvent`/`StatsLog` (no statsd: events are dropped), and
+`android.health.connect.HealthConnectManager` (`AppOpsManager.permissionToOp` asks it
+whether a permission is a health permission: none is). When
 framework.jar (or a module jar ahead of gesher-app.jar on the boot class path)
 brings the real class, it wins.
 
@@ -166,7 +331,9 @@ tests/apps/lifecycle/build.sh <out> --framework-res <framework-res.apk> \
   --framework-classes <dir|jar> [--core-classes <dir>]
 ```
 
-`app/build.sh` writes `gesher-app.jar` (one `classes.dex`) and `build.prop`;
+`app/build.sh` generates the service stubs (`app/gen/StubGen.java`, run on the
+JDK with framework.jar's classes on the class path) and writes
+`gesher-app.jar` (one `classes.dex`) and `build.prop`;
 the test app's script writes `lifecycle.apk` (aapt2 against
 framework-res.apk, javac, d8, zipalign; unsigned, as gesher-app does not
 verify signatures). Both download d8 9.5.26 (or use `R8_JAR`); the test app's

@@ -22,64 +22,81 @@ target_link_libraries(incfs_utils PUBLIC utils base)
 target_compile_options(incfs_utils PRIVATE -Wall -Werror)
 
 # --- libandroidfw (frameworks/base/libs/androidfw/Android.bp) ----------------
-# The host/Windows source set (with libandroidfw_pathutils), less what needs
-# libraries Gesher does not build: the PNG files (libpng; aapt2's) and
-# CursorWindow (libbinder's Parcel; SQLite is left out until views).
+# The device's source set (docs/core-libs.md), with libandroidfw_pathutils:
+# the PNG files over external/libpng, CursorWindow over libbinder's Parcel,
+# and the android-only BackupData and BackupHelpers.
 set(_afw "${_fw}/libs/androidfw")
 add_library(androidfw STATIC
   ${_afw}/ApkAssets.cpp ${_afw}/ApkParsing.cpp ${_afw}/Asset.cpp ${_afw}/AssetDir.cpp
   ${_afw}/AssetManager.cpp ${_afw}/AssetManager2.cpp ${_afw}/AssetsProvider.cpp
   ${_afw}/AttributeResolution.cpp ${_afw}/BigBuffer.cpp ${_afw}/BigBufferStream.cpp
-  ${_afw}/ChunkIterator.cpp ${_afw}/ConfigDescription.cpp ${_afw}/FileStream.cpp
-  ${_afw}/Idmap.cpp ${_afw}/LoadedArsc.cpp ${_afw}/Locale.cpp ${_afw}/LocaleData.cpp
-  ${_afw}/LocaleDataLookup.cpp ${_afw}/misc.cpp ${_afw}/NinePatch.cpp ${_afw}/ObbFile.cpp
-  ${_afw}/PosixUtils.cpp ${_afw}/ResourceTimer.cpp ${_afw}/ResourceTypes.cpp
+  ${_afw}/ChunkIterator.cpp ${_afw}/ConfigDescription.cpp ${_afw}/CursorWindow.cpp
+  ${_afw}/FileStream.cpp ${_afw}/Idmap.cpp ${_afw}/LoadedArsc.cpp ${_afw}/Locale.cpp
+  ${_afw}/LocaleData.cpp ${_afw}/LocaleDataLookup.cpp ${_afw}/misc.cpp ${_afw}/NinePatch.cpp
+  ${_afw}/ObbFile.cpp ${_afw}/PosixUtils.cpp ${_afw}/Png.cpp ${_afw}/PngChunkFilter.cpp
+  ${_afw}/PngCrunch.cpp ${_afw}/ResourceTimer.cpp ${_afw}/ResourceTypes.cpp
   ${_afw}/ResourceUtils.cpp ${_afw}/StreamingZipInflater.cpp ${_afw}/StringPool.cpp
   ${_afw}/TypeWrappers.cpp ${_afw}/Util.cpp ${_afw}/ZipFileRO.cpp ${_afw}/ZipUtils.cpp
+  # android
+  ${_afw}/BackupData.cpp ${_afw}/BackupHelpers.cpp
+  # libandroidfw_pathutils
   ${_afw}/PathUtils.cpp)
 target_include_directories(androidfw PUBLIC ${_afw}/include ${_afw}/include_pathutils
   # native_headers: <android/configuration.h>
   ${AOSP_DIR}/frameworks/native/include
   PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework/include)
-target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z)
+target_link_libraries(androidfw PUBLIC incfs_utils utils cutils log base ziparchive z
+  PRIVATE png binder)
 target_compile_definitions(androidfw PRIVATE STATIC_ANDROIDFW_FOR_TOOLS)
 # libandroidfw_defaults: gnu++2b, -Werror -Wunreachable-code, and on Windows
 # -Wno-missing-field-initializers. Soong's global flags let these pass too: a
 # variable-length array (LocaleData), a variable unused while the
 # resource_readwrite_flags flag is off (LoadedArsc), and bitwise operations
-# between unnamed enums (ResourceTypes.h, deprecated in C++20).
+# between unnamed enums (ResourceTypes.h, deprecated in C++20), and labels
+# CursorWindow's error paths leave unused.
 set_target_properties(androidfw PROPERTIES CXX_STANDARD 23)
 target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
   -Wno-missing-field-initializers -Wno-vla-cxx-extension -Wno-unused-variable
-  -Wno-deprecated-anon-enum-enum-conversion)
+  -Wno-deprecated-anon-enum-enum-conversion -Wno-unused-label)
 
-# Stand-ins for hwui's natives (compat/framework/hwui_standins.cc), their
-# tables generated from hwui's JNI sources.
-set(_hwui_standin_sources
-  android/graphics/RenderNode=${_fw}/libs/hwui/jni/android_graphics_RenderNode.cpp
-  android/graphics/Paint=${_fw}/libs/hwui/jni/Paint.cpp:methods
-  android/graphics/Matrix=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:methods
-  android/graphics/Matrix.ExtraNatives=${_fw}/libs/hwui/jni/android_graphics_Matrix.cpp:extra_methods
-  android/graphics/Path=${_fw}/libs/hwui/jni/Path.cpp:methods)
-set(_hwui_standin_inputs)
-foreach(_s ${_hwui_standin_sources})
+# Stand-ins for device-only natives (compat/framework/device_standins.cc:
+# SurfaceControl, SurfaceSession, BLASTBufferQueue, OverlayProperties,
+# Perfetto's), their tables generated from the framework's JNI sources.
+# hwui's natives are real (cmake/aosp/hwui.cmake, docs/graphics.md).
+# InputChannel and InputEventReceiver are attach_standins.cc's (its
+# nativeGetFrameMetricsObserver gives hwui a real observer: 0 crashes the
+# render thread in CanvasContext::addFrameMetricsObserver).
+set(_device_standin_sources
+  android/view/SurfaceControl=${_fwjni}/android_view_SurfaceControl.cpp:sSurfaceControlMethods
+  android/view/SurfaceSession=${_fwjni}/android_view_SurfaceSession.cpp
+  android/graphics/BLASTBufferQueue=${_fwjni}/android_graphics_BLASTBufferQueue.cpp
+  android/hardware/OverlayProperties=${_fwjni}/android_hardware_OverlayProperties.cpp
+  android/tracing/perfetto/Producer=${_fwjni}/android_tracing_PerfettoProducer.cpp
+  android/tracing/perfetto/DataSource=${_fwjni}/android_tracing_PerfettoDataSource.cpp
+  android/tracing/perfetto/TracingContext=${_fwjni}/android_tracing_PerfettoDataSource.cpp:gMethodsTracingContext
+  # No sensors (docs/e2e.md): SystemSensorManager's list ends at index 0.
+  android/hardware/SystemSensorManager=${_fwjni}/android_hardware_SensorManager.cpp:gSystemSensorManagerMethods
+  android/hardware/SystemSensorManager.BaseEventQueue=${_fwjni}/android_hardware_SensorManager.cpp:gBaseEventQueueMethods)
+set(_device_standin_inputs)
+foreach(_s ${_device_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")
   string(REGEX REPLACE ":[A-Za-z_]+$" "" _f "${_f}")
-  list(APPEND _hwui_standin_inputs "${_f}")
+  list(APPEND _device_standin_inputs "${_f}")
 endforeach()
 add_custom_command(
-  OUTPUT ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py
-          ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc ${_hwui_standin_sources}
-  DEPENDS ${CMAKE_SOURCE_DIR}/compat/framework/gen_hwui_standins.py ${_hwui_standin_inputs}
-  COMMENT "hwui stand-in tables")
+  OUTPUT ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/compat/framework/gen_device_standins.py
+          ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc ${_device_standin_sources}
+  DEPENDS ${CMAKE_SOURCE_DIR}/compat/framework/gen_device_standins.py ${_device_standin_inputs}
+  COMMENT "device-only stand-in tables")
 
 add_library(framework_runtime OBJECT
-  ${CMAKE_SOURCE_DIR}/compat/framework/hwui_standins.cc
-  ${CMAKE_BINARY_DIR}/gen/hwui_standins_tables.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/device_standins.cc
+  ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc
   ${_fwjni}/android_content_res_ApkAssets.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_Parcel.cpp
+  ${_fwjni}/android_os_ServiceManagerNative.cpp
   ${_fwjni}/android_os_SystemClock.cpp
   ${_fwjni}/android_os_SystemProperties.cpp
   ${_fwjni}/android_os_Trace.cpp
@@ -93,6 +110,11 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/android_util_jar_StrictJarFile.cpp
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/attach_standins.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/shared_memory.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include

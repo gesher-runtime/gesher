@@ -1,0 +1,33 @@
+# GN arguments for ANGLE's Windows build (docs/angle.md): libEGL.dll and
+# libGLESv2.dll, release, x64, Direct3D 11 backend only. Used by
+# compat/angle/build-angle.ps1; a change here changes angle.yml's cache key.
+
+is_debug = false
+target_cpu = "x64"
+is_component_build = false
+symbol_level = 0
+dcheck_always_on = false
+
+# Ninja (third_party/ninja from DEPS), not Siso; no Chromium clang plugins.
+use_siso = false
+clang_use_chrome_plugins = false
+treat_warnings_as_errors = false
+
+# Direct3D 11 only. WARP is D3D11's software rasterizer, reached through the
+# same backend (EGL_PLATFORM_ANGLE_DEVICE_TYPE_D3D_WARP_ANGLE).
+angle_enable_d3d11 = true
+angle_enable_d3d9 = false
+angle_enable_gl = false
+angle_enable_vulkan = false
+angle_enable_swiftshader = false
+angle_enable_wgpu = false
+angle_enable_null = false
+angle_enable_cl = false
+
+# Nothing for tests, traces or capture.
+angle_build_tests = false
+build_angle_deqp_tests = false
+angle_has_histograms = false
+angle_has_rapidjson = false
+angle_has_frame_capture = false
+angle_build_vulkan_system_info = false

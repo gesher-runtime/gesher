@@ -60,6 +60,13 @@ public class LifecycleActivity extends Activity {
                 + ", greeting=" + getString(R.string.greeting)
                 + ", theme attr=" + marker
                 + ", windowActionBar=" + actionBar);
+        // A launch with this extra (gesher-app --ez com.gesher.lifecycle.FINISH true)
+        // finishes the activity itself: the system server then pauses, stops and
+        // destroys it.
+        if (getIntent().getBooleanExtra("com.gesher.lifecycle.FINISH", false)) {
+            report("LifecycleActivity finish()");
+            finish();
+        }
     }
 
     @Override
