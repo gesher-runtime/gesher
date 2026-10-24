@@ -1,8 +1,8 @@
 diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
-index 3adb6b1..bb4ce07 100644
+index 3adb6b1..efef1bf 100644
 --- a/runtime/class_linker.cc
 +++ b/runtime/class_linker.cc
-@@ -1448,6 +1448,70 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+@@ -1448,6 +1448,72 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
      }
    }
  
@@ -11,8 +11,10 @@ index 3adb6b1..bb4ce07 100644
 +  // compiler) jump through `%gs:offset`, where Thread* is on Linux; on Windows
 +  // %gs holds the TEB and Gesher keeps Thread* in a TLS slot (ADR 0006). The
 +  // boot image's methods get libart's own stubs instead, which are what the
-+  // class linker uses without an image, from here on.
-+  {
++  // class linker uses without an image, from here on. Not in dex2oat, which
++  // runs no managed code natively and writes the image's stubs into the
++  // extensions it compiles.
++  if (!runtime->IsAotCompiler()) {
 +    const void* const oat_stubs[] = {
 +        quick_resolution_trampoline_, quick_imt_conflict_trampoline_,
 +        quick_generic_jni_trampoline_, quick_to_interpreter_bridge_trampoline_,

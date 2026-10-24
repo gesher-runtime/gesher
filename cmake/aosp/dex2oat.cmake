@@ -89,5 +89,6 @@ target_link_libraries(art_dex2oat PUBLIC art_compiler)
 
 # --- dex2oat ----------------------------------------------------------------
 add_executable(dex2oat ${_d2o}/dex2oat.cc ${_d2o}/dex2oat_options.cc
-  ${CMAKE_SOURCE_DIR}/compat/art/sha1_bcrypt.cc)
+  ${CMAKE_SOURCE_DIR}/compat/art/sha1_bcrypt.cc
+  ${CMAKE_SOURCE_DIR}/compat/art/disassembler_standin.cc)
 target_link_libraries(dex2oat PRIVATE art_dex2oat bcrypt)
