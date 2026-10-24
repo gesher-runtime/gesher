@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <windows.h>
+#include <psapi.h>
 
 #include <string>
 #include <vector>
@@ -505,6 +506,46 @@ char* strsignal(int sig) {
   }
 }
 
-int dl_iterate_phdr(int (*)(struct dl_phdr_info*, size_t, void*), void*) { return 0; }
+// dl_iterate_phdr reports every loaded Windows module (the main executable
+// first, where libart is statically linked) with one synthetic PT_LOAD
+// program header spanning the module's image. ART uses this to find the
+// range of libart's own code (OatQuickMethodHeader::IsStub, which the stack
+// walker calls for every quick/nterp frame) and to symbolize addresses. ELF
+// objects the gesher loader mapped report their real headers through
+// <link.h>'s loader-side iteration (compat/bionic/shim.cc); they are not
+// Windows modules and do not appear here.
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info*, size_t, void*), void* data) {
+  HMODULE mods[512];
+  DWORD needed = 0;
+  HANDLE proc = GetCurrentProcess();
+  if (!EnumProcessModules(proc, mods, sizeof(mods), &needed)) return 0;
+  size_t count = needed / sizeof(HMODULE);
+  if (count > 512) count = 512;
+  // One persistent PT_LOAD phdr per module (the callback keeps no copy, but
+  // the pointer must stay valid for the call).
+  static thread_local Elf64_Phdr phdr;
+  for (size_t i = 0; i < count; ++i) {
+    auto base = reinterpret_cast<uintptr_t>(mods[i]);
+    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) continue;
+    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) continue;
+    phdr = {};
+    phdr.p_type = PT_LOAD;
+    phdr.p_flags = PF_R | PF_X | PF_W;
+    phdr.p_vaddr = 0;
+    phdr.p_memsz = nt->OptionalHeader.SizeOfImage;
+    char name[MAX_PATH] = "";
+    GetModuleFileNameA(mods[i], name, sizeof(name));
+    struct dl_phdr_info info = {};
+    info.dlpi_addr = base;
+    info.dlpi_name = name;
+    info.dlpi_phdr = &phdr;
+    info.dlpi_phnum = 1;
+    int r = callback(&info, sizeof(info), data);
+    if (r != 0) return r;
+  }
+  return 0;
+}
 
 }  // extern "C"
