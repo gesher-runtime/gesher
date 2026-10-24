@@ -202,14 +202,36 @@ function UiAppPixels($px) {
 
 # Problems with regions of $px: each @(name, x0, y0, x1, y1, 0xRRGGBB[, share])
 # must be at least `share` (0.98) that color.
-function Regions($px, $regions) {
+function Regions($px, $regions, [switch] $Quiet) {
   $out = @()
   foreach ($r in $regions) {
     $share = if ($r.Count -gt 6) { $r[6] } else { 0.98 }
     $area = ($r[3] - $r[1]) * ($r[4] - $r[2])
     $n = [GesherWin32]::Count($px, $r[1], $r[2], $r[3], $r[4], $r[5], 40)
-    Write-Host "INFO  $($r[0]): $n of $area pixels"
+    if (-not $Quiet) { Write-Host "INFO  $($r[0]): $n of $area pixels" }
     if ($n -lt $area * $share) { $out += "$($r[0]): $n of $area pixels" }
+  }
+  return $out
+}
+
+# Reads the window back until $regions hold (Regions) or $Seconds pass: a
+# frame may still be on its way. Returns the problems of the last read; on
+# failure also shows a coarse grid of the window's colors.
+function WaitRegions([IntPtr] $hwnd, $regions, [int] $Seconds = 20) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  do {
+    $px = [GesherWin32]::Capture($hwnd)
+    if ($null -ne $px -and -not @(Regions $px $regions -Quiet)) { break }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+  if ($null -eq $px) { return @('PrintWindow failed') }
+  $out = @(Regions $px $regions)
+  if ($out) {
+    $w = $px[0]; $h = $px[1]
+    for ($y = $h / 16; $y -lt $h; $y += $h / 8) {
+      $row = for ($x = $w / 16; $x -lt $w; $x += $w / 8) { '{0:x6}' -f $px[2 + [int]$y * $w + [int]$x] }
+      Write-Host "INFO    y $([int]$y): $($row -join ' ')"
+    }
   }
   return $out
 }
@@ -236,8 +258,7 @@ function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
   $out = @()
   [GesherWin32]::Click($hwnd, 100, 300)
   if (-not (WaitForLog $ReadLog 'UiActivity onClick: button')) { $out += 'no onClick' } else {
-    Start-Sleep 2
-    $out += @(Regions ([GesherWin32]::Capture($hwnd)) @(, @('cyan after the click', 0, 0, 400, 200, 0x00ffff)))
+    $out += @(WaitRegions $hwnd @(, @('cyan after the click', 0, 0, 400, 200, 0x00ffff)))
   }
   [GesherWin32]::TypeKeys($hwnd, 'Gesher')
   if (-not (WaitForLog $ReadLog 'UiActivity echo: Gesher')) {
@@ -271,12 +292,11 @@ function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
   elseif (-not (WaitForLog $ReadLog "UiActivity content $($min[0])x$($min[1])" 60)) { $out += "no layout at $($min[0])x$($min[1])" }
   [GesherWin32]::SetClientSize($hwnd, 600, 700)
   if (-not (WaitForLog $ReadLog 'UiActivity content 600x700' 60)) { $out += 'no layout at 600x700' } else {
-    Start-Sleep 3
-    $px = [GesherWin32]::Capture($hwnd)
-    if ($px[0] -ne 600 -or $px[1] -ne 700) { $out += "client area $($px[0])x$($px[1]) after resizing to 600x700" }
+    $size = [GesherWin32]::ClientSize($hwnd)
+    if ($size[0] -ne 600 -or $size[1] -ne 700) { $out += "client area $($size[0])x$($size[1]) after resizing to 600x700" }
     else {
-      $out += @(Regions $px @(@('cyan at 600x700', 0, 0, 600, 200, 0x00ffff), @('green at 600x700', 0, 200, 300, 400, 0x00ff00),
-                              @('blue at 600x700', 300, 200, 600, 400, 0x0000ff)))
+      $out += @(WaitRegions $hwnd @(@('cyan at 600x700', 0, 0, 600, 200, 0x00ffff), @('green at 600x700', 0, 200, 300, 400, 0x00ff00),
+                                    @('blue at 600x700', 300, 200, 600, 400, 0x0000ff)))
     }
   }
   return $out
