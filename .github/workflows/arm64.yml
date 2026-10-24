@@ -1,0 +1,149 @@
+name: arm64
+
+# gesher_arm64.dll (docs/arm64.md, ADR 0047): the arm64 translator (dynarmic,
+# A64 frontend + x86-64 backend), cross-compiled with the project's llvm-mingw
+# into a proxy DLL dalvikvm LoadLibrary()s. dynarmic and its externals stay out
+# of the main build graph entirely.
+#
+#   gh workflow run arm64 --ref <branch>
+#
+# ci.yml calls this workflow too; its artifact "arm64" (gesher_arm64.dll, the
+# step-1 smoke test, and DYNARMIC-NOTICES.txt) is downloaded by the test and
+# package jobs.
+on:
+  push:
+    branches: ['wip/arm64']
+    paths:
+      - 'compat/arm64/**'
+      - '.github/workflows/arm64.yml'
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  # yuzu-mirror/dynarmic, pinned (ADR 0047). 0BSD; A64 frontend, x86-64 backend.
+  DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
+  # fmt replacing dynarmic's vendored 10.1.0 (removed libc++ <__std_stream>).
+  FMT_VERSION: "11.0.2"
+  # Boost headers (interval containers) dynarmic needs to build.
+  BOOST_VERSION: "1.83.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compat/arm64
+            cmake/toolchain-llvm-mingw.cmake
+
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - name: Cache dynarmic, fmt and Boost headers
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}
+
+      - name: Fetch and patch dynarmic, fmt and Boost
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+
+          # dynarmic at the pinned commit, with its vendored externals.
+          git init -q dynarmic
+          git -C dynarmic fetch -q --depth 1 https://github.com/yuzu-mirror/dynarmic "$DYNARMIC_COMMIT"
+          git -C dynarmic checkout -q FETCH_HEAD
+
+          # Replace the vendored fmt (10.1.0) with a newer one that builds on
+          # the pinned llvm-mingw clang (docs/arm64.md).
+          curl -fsSL -o fmt.tar.gz "https://github.com/fmtlib/fmt/archive/refs/tags/$FMT_VERSION.tar.gz"
+          tar -xzf fmt.tar.gz
+          rm -rf dynarmic/externals/fmt
+          mv "fmt-$FMT_VERSION" dynarmic/externals/fmt
+          rm fmt.tar.gz
+
+          # Patch for the 2026 clang (docs/arm64.md, ADR 0047):
+          #  - fmt: force FMT_USE_CONSTEVAL 0 (FMT_STRING trips a consteval
+          #    evaluation error in fmt's own sources on this clang).
+          sed -i 's/^#  define FMT_USE_CONSTEVAL 1$/#  define FMT_USE_CONSTEVAL 0/' \
+            dynarmic/externals/fmt/include/fmt/base.h
+          #  - mcl: the template-template parameter no longer matches
+          #    std::integer_sequence on this clang.
+          sed -i 's@template<class T, template<class, T\.\.\.> class VLT, T\.\.\. values>@template<class T, template<class VT, VT...> class VLT, T... values>@' \
+            dynarmic/externals/mcl/include/mcl/mp/typelist/lift_sequence.hpp
+          grep -q 'FMT_USE_CONSTEVAL 1' dynarmic/externals/fmt/include/fmt/base.h && { echo 'fmt patch failed'; exit 1; } || true
+
+          # Boost headers (interval containers): header-only, extract just boost/.
+          curl -fsSL -o boost.tar.bz2 "https://archives.boost.io/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 "boost_${BOOST_VERSION//./_}/boost"
+          mv "boost_${BOOST_VERSION//./_}" boost
+          rm boost.tar.bz2
+
+      - name: Build gesher_arm64.dll and the smoke test
+        run: |
+          set -euo pipefail
+          llvm="$HOME/toolchain/$LLVM_MINGW_NAME"
+          "$llvm/bin/x86_64-w64-mingw32-clang" --version | head -1
+          cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
+            -DBoost_INCLUDE_DIR="$PWD/deps/boost"
+          ninja -C out-arm64 gesher_arm64 arm64_smoke_test
+          mkdir -p dist-arm64
+          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe dist-arm64/
+          cp deps/dynarmic/LICENSE.txt dist-arm64/DYNARMIC-NOTICES.txt
+          "$llvm/bin/llvm-objdump" -p dist-arm64/gesher_arm64.dll | grep -iE 'Export|gesher_arm64' | head
+          ls -la dist-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64
+          path: dist-arm64/
+
+  # The step-1 smoke test on both runner images when this workflow runs on its
+  # own; ci.yml's test jobs run it from tests/windows/tracks/47-arm64.ps1.
+  smoke:
+    if: github.workflow == 'arm64' && !cancelled()
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+
+      - name: arm64 translator smoke test
+        shell: pwsh
+        run: |
+          Copy-Item dist/gesher_arm64.dll .
+          & dist/arm64_smoke_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
