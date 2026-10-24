@@ -28,6 +28,8 @@ Merged so far:
 - devsvc: merged (verified at a02e84a, ci 40137762701 attempt 2; attempt 1's
   windows-2022 failure was a one-off rtlapp-under-ar-EG flake, passed on
   rerun: watch for it). ADR 0038.
+- webview: merged (verified at 9c610d6, ci 40139785905; Notes passes e2e).
+  ADR 0041.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
