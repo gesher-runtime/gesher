@@ -141,6 +141,22 @@ function WaitFirstFrame($p, [string] $log, [int] $seconds) {
   return [IntPtr]::Zero
 }
 
+# The app's newest window of the size of $hwnd's that has drawn and still exists: an app
+# may replace its activity's window with another activity's (Puzzles' GamePlay goes up to
+# its chooser at once; a click there starts a game in GamePlay). Dialogs (other sizes) are
+# not taken.
+function FrontWindow([string] $log, [IntPtr] $hwnd) {
+  $ms = [regex]::Matches((ReadText $log), ' (\d+x\d+): first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+  $size = $null
+  foreach ($m in $ms) { if ([Convert]::ToInt64($m.Groups[2].Value, 16) -eq $hwnd.ToInt64()) { $size = $m.Groups[1].Value } }
+  if ($null -eq $size) { return $hwnd }
+  for ($i = $ms.Count - 1; $i -ge 0; $i--) {
+    $h = [IntPtr][Convert]::ToInt64($ms[$i].Groups[2].Value, 16)
+    if ($ms[$i].Groups[1].Value -eq $size -and [GesherWin32]::IsWindow($h)) { return $h }
+  }
+  return $hwnd
+}
+
 # Captures until two reads a second apart agree (the app settled) or $seconds pass.
 function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
   $deadline = (Get-Date).AddSeconds($seconds)
@@ -207,6 +223,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     return $res
   }
   Start-Sleep 3
+  $hwnd = FrontWindow $log $hwnd
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
   $png = Join-Path $OutDir "$pkg.$tag.png"
@@ -225,6 +242,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       if ($act.click) { [GesherWin32]::Click($hwnd, [int]$act.click[0], [int]$act.click[1]); $what = "click at $($act.click[0]),$($act.click[1])" }
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
       Start-Sleep 2
+      $hwnd = FrontWindow $log $hwnd
       $after = CaptureSettled $hwnd 20
       $changed = PixelDiff $before $after
       SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")
@@ -242,6 +260,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
     if ($m.Success) {
       $res.Info += "the app's log shows '$($m.Value.Trim())'"
+      $hwnd = FrontWindow $log $hwnd
       SavePng (CaptureSettled $hwnd 20) (Join-Path $OutDir "$pkg.$tag.after-log.png")
     } else {
       $res.Problems += "the app's log never showed /$($a.waitLog)/ within 120 s of the actions"
