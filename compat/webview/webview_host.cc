@@ -434,7 +434,8 @@ std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers) {
 
 // window.<interface>.<method>(...) reaches the Listener through this host
 // object: the bridge script (com.gesher.app.webview.JsBridge) calls
-// chrome.webview.hostObjects.sync.gesherBridge.call(interface, method, argsJson).
+// chrome.webview.hostObjects.sync.gesherBridge.callJava(interface, method, argsJson)
+// (not "call": the proxy is a function, whose .call is Function.prototype.call).
 class Bridge final : public IDispatch {
  public:
   explicit Bridge(std::weak_ptr<Impl> impl, bool callable = false)
@@ -469,7 +470,7 @@ class Bridge final : public IDispatch {
                                           DISPID* ids) override {
     HRESULT hr = S_OK;
     for (UINT i = 0; i < count; ++i) {
-      if (names[i] != nullptr && _wcsicmp(names[i], L"call") == 0) {
+      if (names[i] != nullptr && _wcsicmp(names[i], L"callJava") == 0) {
         ids[i] = kCall;
       } else {
         ids[i] = DISPID_UNKNOWN;
@@ -493,7 +494,7 @@ class Bridge final : public IDispatch {
       }
       fflush(stderr);
     }
-    // Without type information WebView2's proxy reads "call" as a property
+    // Without type information WebView2's proxy may read "callJava" as a property
     // and then calls what it got: hand out a callable object for it.
     if (id == kCall && !callable_ && (flags & DISPATCH_PROPERTYGET) != 0 && argc == 0) {
       if (result != nullptr) {
@@ -544,7 +545,7 @@ class Bridge final : public IDispatch {
   }
   std::atomic<ULONG> refs_{1};
   std::weak_ptr<Impl> impl_;
-  bool callable_;  // the object "call" reads as
+  bool callable_;  // the object "callJava" reads as
 };
 
 // Registers the controller's and the WebView's handlers. The WebView thread.
