@@ -17,6 +17,8 @@ add_custom_target(art_gtests)
 add_library(art_gtest_common STATIC EXCLUDE_FROM_ALL
   ${_art}/libartbase/base/testing.cc
   ${_art}/libartbase/base/common_art_test.cc
+  # libart-runtime-gtest's CommonRuntimeTest (flags_test.cc's fixtures).
+  ${_art}/runtime/common_runtime_test.cc
   ${CMAKE_SOURCE_DIR}/tests/art-gtests/art_gtest_main.cc)
 target_include_directories(art_gtest_common PUBLIC
   ${AOSP_DIR}/libnativehelper/header_only_include
