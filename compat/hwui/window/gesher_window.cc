@@ -270,6 +270,7 @@ bool Window::SetIcon(const std::string& ico_path_utf8) {
 }
 
 void Window::Show() {
+  offscreen_ = false;
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_SHOWNORMAL);
 }
 
@@ -282,6 +283,7 @@ void Window::ShowOffscreen() {
   // A tool window (no taskbar button) left of the virtual screen, shown
   // without activation: off the desktop, but drawn and composed like any
   // shown window (PrintWindow reads nothing back from a hidden one).
+  offscreen_ = true;
   SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
                     GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
   RECT r;
@@ -486,6 +488,26 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     case WM_PRINTCLIENT:
       Paint(reinterpret_cast<HDC>(wparam));
       return 0;
+    case WM_WINDOWPOSCHANGING: {
+      // DefWindowProc applies the minimum and maximum sizes first.
+      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
+      auto* pos = reinterpret_cast<WINDOWPOS*>(lparam);
+      if (offscreen_ && !(pos->flags & SWP_NOSIZE)) {
+        // A window shown off the desktop stays left of the virtual screen as
+        // it grows: where it reaches onto the desktop, Windows paints only
+        // that part (PrintWindow then reads the rest stale).
+        RECT wr;
+        GetWindowRect(hwnd, &wr);
+        const int x = (pos->flags & SWP_NOMOVE) ? wr.left : pos->x;
+        const int limit = GetSystemMetrics(SM_XVIRTUALSCREEN) - 64;
+        if (x + pos->cx > limit) {
+          pos->x = limit - pos->cx;
+          pos->y = (pos->flags & SWP_NOMOVE) ? wr.top : pos->y;
+          pos->flags &= ~SWP_NOMOVE;
+        }
+      }
+      return r;
+    }
     case WM_GETMINMAXINFO: {
       // Allow windows larger than the screen (a phone-sized window on a
       // small CI desktop).
