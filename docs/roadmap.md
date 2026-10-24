@@ -238,6 +238,22 @@ needs: [framework-build.md](framework-build.md).
       Gesher; Gesher's own icon for Setup, its entries and `.apk` files
       (ci run 40024847287; docs/installer.md, ADR 0028)
 
+- [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
+      pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
+      input changes the window, close ends the process; the `.apk`
+      association's command and a Start menu shortcut)
+  - [x] RPN calculator, Editor, Currency, NoNonsense Notes and Unit
+        Converter Ultimate pass; the `.apk` association and Start menu
+        shortcut start RPN (ci run 40077182991)
+  - [x] What they needed: SQLite and android.database's natives,
+        PropertyValuesHolder's, power/alarm/clipboard/appops/appwidget/search
+        stand-ins, a no-network ConnectivityManager, a shared storage volume,
+        app-compat changes by target SDK, system features, startActivities,
+        PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
+        libphonenumber placeholder
+  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+        process)
+
 ## Phase 6 checklist
 
 - [x] ELF loader for x86-64 Android `.so` files on Windows

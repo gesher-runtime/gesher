@@ -254,6 +254,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 requestCode, started);
     }
 
+    /**
+     * A stack of activities (TaskStackBuilder, PendingIntent.getActivities), lite: the
+     * last one, the one in front, is started, in a task of its own when the first intent
+     * asks for a new task. ActivityStarter records the ones below it and creates them when
+     * the user goes back; here they are left out, so going back leaves the app
+     * (docs/e2e.md).
+     */
+    @Override
+    public int startActivities(IApplicationThread caller, String callingPackage,
+            String callingFeatureId, Intent[] intents, String[] resolvedTypes, IBinder resultTo,
+            Bundle options, int userId) {
+        if (intents == null || intents.length == 0) return ActivityManager.START_SUCCESS;
+        int last = intents.length - 1;
+        Intent intent = new Intent(intents[last]);
+        intent.addFlags(intents[0].getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (last > 0) {
+            SystemServer.log("startActivities: " + intents.length + " activities; starting the"
+                    + " last, " + intent.toShortString(false, true, true, false)
+                    + " (the ones below are not recorded)");
+        }
+        ActivityRecord[] started = new ActivityRecord[1];
+        return start(caller, intent, resolvedTypes != null ? resolvedTypes[last] : null,
+                callingPackage, resultTo, null, -1, started);
+    }
+
     @Override
     public WaitResult startActivityAndWait(IApplicationThread caller, String callingPackage,
             String callingFeatureId, Intent intent, String resolvedType, IBinder resultTo,

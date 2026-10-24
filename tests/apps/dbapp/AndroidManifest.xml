@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What real apps keep their data with (docs/e2e.md): SQLite through
+     SQLiteOpenHelper and Cursors, and SharedPreferences. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.dbapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application android:label="@string/app_name">
+        <activity
+            android:name=".DbActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

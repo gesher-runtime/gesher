@@ -4,6 +4,7 @@
  */
 package com.gesher.server;
 
+import android.app.ActivityManager;
 import android.app.ApplicationThreadConstants;
 import android.app.ContentProviderHolder;
 import android.app.IActivityManager;
@@ -12,6 +13,7 @@ import android.app.IServiceConnection;
 import android.app.Notification;
 import android.content.ComponentName;
 import android.content.IIntentReceiver;
+import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
@@ -48,6 +50,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private final BroadcastController mBroadcasts;
     private final ContentProviders mProviders;
     private ApplicationSharedMemory mSharedMemory;  // created on the first bind
+    private final PendingIntents mPendingIntents;
 
     ActivityManagerService(ActivityTaskManagerService atm, PackageManagerService pm,
             NotificationManagerService notifications) {
@@ -55,6 +58,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
         mServices = new ActiveServices(atm, pm, notifications);
         mBroadcasts = new BroadcastController(atm, pm);
         mProviders = new ContentProviders(pm, atm);
+        mPendingIntents = new PendingIntents(this);
         atm.setActivityManager(this);
     }
 
@@ -131,6 +135,80 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     @Override
     public void removeContentProvider(IBinder connection, boolean stable) {
+    }
+
+    // --- PendingIntents (PendingIntents) ---------------------------------------------------
+
+    @Override
+    public IIntentSender getIntentSenderWithFeature(int type, String packageName,
+            String featureId, IBinder token, String resultWho, int requestCode, Intent[] intents,
+            String[] resolvedTypes, int flags, Bundle options, int userId) {
+        return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
+                flags);
+    }
+
+    @Override
+    public IIntentSender getIntentSender(int type, String packageName, IBinder token,
+            String resultWho, int requestCode, Intent[] intents, String[] resolvedTypes,
+            int flags, Bundle options, int userId) {
+        return mPendingIntents.get(type, packageName, requestCode, intents, resolvedTypes,
+                flags);
+    }
+
+    @Override
+    public void cancelIntentSender(IIntentSender sender) {
+        mPendingIntents.cancel(sender);
+    }
+
+    @Override
+    public ActivityManager.PendingIntentInfo getInfoForIntentSender(IIntentSender sender) {
+        PendingIntents.Record r = mPendingIntents.record(sender);
+        if (r == null) return new ActivityManager.PendingIntentInfo(null, -1, false,
+                ActivityManager.INTENT_SENDER_UNKNOWN);
+        return new ActivityManager.PendingIntentInfo(r.packageName, r.uid,
+                (r.flags & android.app.PendingIntent.FLAG_IMMUTABLE) != 0, r.type);
+    }
+
+    @Override
+    public boolean registerIntentSenderCancelListenerEx(IIntentSender sender,
+            com.android.internal.os.IResultReceiver receiver) {
+        PendingIntents.Record r = mPendingIntents.record(sender);
+        return r != null && !r.canceled;
+    }
+
+    @Override
+    public Intent getIntentForIntentSender(IIntentSender sender) {
+        PendingIntents.Record r = mPendingIntents.record(sender);
+        return r != null ? new Intent(r.last()) : null;
+    }
+
+    @Override
+    public boolean isIntentSenderAnActivity(IIntentSender sender) {
+        PendingIntents.Record r = mPendingIntents.record(sender);
+        return r != null && r.type == ActivityManager.INTENT_SENDER_ACTIVITY;
+    }
+
+    @Override
+    public int sendIntentSender(IApplicationThread caller, IIntentSender target,
+            IBinder allowlistToken, int code, Intent intent, String resolvedType,
+            IIntentReceiver finishedReceiver, String requiredPermission, Bundle options) {
+        return mPendingIntents.send(mPendingIntents.record(target), intent, resolvedType);
+    }
+
+    int sendBroadcastFor(String packageName, Intent intent, String resolvedType) {
+        return mBroadcasts.broadcastIntent(intent, resolvedType, packageName,
+                android.os.Process.myPid());
+    }
+
+    int startActivityFor(String packageName, Intent intent, String resolvedType) {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return mAtm.startActivity(null, packageName, null, intent, resolvedType, null, null, -1,
+                0, null, null);
+    }
+
+    void startServiceFor(String packageName, Intent intent, String resolvedType,
+            boolean foreground) {
+        mServices.startService(null, intent, resolvedType, foreground, packageName);
     }
 
     // --- services (ActiveServices) -------------------------------------------------------
@@ -334,7 +412,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
                 DeviceProfile.configuration(), CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO,
                 null /* services */, coreSettings, "unknown" /* buildSerial */,
                 null /* autofillOptions */, null /* contentCaptureOptions */,
-                new long[0] /* disabledCompatChanges */, new long[0] /* loggableCompatChanges */,
+                CompatChanges.disabledFor(ai.targetSdkVersion), new long[0] /* loggableCompatChanges */,
                 false /* logChangeChecksToStatsD */, null /* serializedSystemFontMap */,
                 sharedMemory, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis());
         if (!(thread.asBinder() instanceof Binder)) {
@@ -349,10 +427,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
     private synchronized ApplicationSharedMemory sharedMemory() throws IOException {
         if (mSharedMemory == null) {
             ApplicationSharedMemory m = ApplicationSharedMemory.create();
-            // SystemServer writes PackageManagerService's features; the headless device
-            // declares none.
+            // SystemServer writes PackageManagerService's features: the device's
+            // (PackageManagerService.FEATURES).
             m.writeSystemFeaturesCache(new SystemFeaturesCache(
-                    new ArrayMap<String, FeatureInfo>()).getSdkFeatureVersions());
+                    new ArrayMap<String, FeatureInfo>(PackageManagerService.FEATURES))
+                    .getSdkFeatureVersions());
             // WindowManagerService keeps the animator duration scale there: 1.
             m.setCurrentAnimatorScale(1f);
             mSharedMemory = m;

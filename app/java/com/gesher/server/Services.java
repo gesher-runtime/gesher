@@ -110,9 +110,28 @@ public final class Services {
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         services.put(Context.UI_MODE_SERVICE,
                 StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
-        // mount: no storage volumes (native-libs track: NativeActivity asks for its
-        // OBB and external files directories, which are then null).
+        // mount: one volume, the primary emulated shared storage, as on a device: in
+        // $ANDROID_DATA/media/<user> (Environment.getExternalStorageDirectory and
+        // isExternalStorageManager take the first volume; real apps ask, docs/e2e.md).
         services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
+        // What real apps fetch as they start (docs/e2e.md): without these getSystemService
+        // answers null.
+        services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
+                new DeviceServices.PowerService()).asBinder());
+        services.put(Context.THERMAL_SERVICE, StandIn.of(android.os.IThermalService.class,
+                new DeviceServices.ThermalService()).asBinder());
+        services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
+                new DeviceServices.AlarmService()).asBinder());
+        services.put(Context.APP_OPS_SERVICE, StandIn.of(
+                com.android.internal.app.IAppOpsService.class,
+                new DeviceServices.AppOpsService()).asBinder());
+        services.put(Context.APPWIDGET_SERVICE, StandIn.of(
+                com.android.internal.appwidget.IAppWidgetService.class,
+                new DeviceServices.AppWidgetService()).asBinder());
+        services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
+                new DeviceServices.SearchService()).asBinder());
+        services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
+                new DeviceServices.ClipboardService()).asBinder());
         return services;
     }
 
@@ -280,7 +299,20 @@ public final class Services {
     public static final class StorageService extends IStorageManager.Default {
         @Override
         public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
-            return new StorageVolume[0];
+            java.io.File path = new java.io.File(android.os.Environment.getDataDirectory(),
+                    "media/" + userId);
+            path.mkdirs();
+            return new StorageVolume[] {new StorageVolume("emulated;" + userId, path, path,
+                    "Internal shared storage", true /* primary */, false /* removable */,
+                    true /* emulated */, false /* externallyManaged */,
+                    false /* allowMassStorage */, 0 /* maxFileSize: no limit */,
+                    android.os.UserHandle.of(userId), null /* uuid */, null /* fsUuid */,
+                    android.os.Environment.MEDIA_MOUNTED)};
+        }
+
+        @Override
+        public void mkdirs(String callingPkg, String path) {
+            new java.io.File(path).mkdirs();
         }
     }
 

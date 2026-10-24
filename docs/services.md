@@ -49,6 +49,13 @@ which survives an abort (it found the HealthConnectManager placeholder's need).
 ## Status and next steps
 
 ### Done and verified
+- **Real apps** ([e2e.md](e2e.md), ADR 0034; ci run 40077182991): stand-ins
+  for `power`, `thermalservice`, `alarm`, `clipboard`, `appops`, `appwidget`
+  and `search` (`DeviceServices.java`), a primary shared storage volume in
+  `mount`, system features, `startActivities`, PendingIntents
+  (`PendingIntents.java`) and bindApplication's `disabledCompatChanges` by
+  target SDK (`CompatChanges.java`, generated from the framework's
+  `@ChangeId` fields).
 - **CI run 40019524773** (ci, both windows-2022 and windows-2025, 63 PASS and
   0 failed each, and the package job; commit 5a62b99): the persistent Gesher
   device, [0026](decisions/0026-services-persistent-device.md). Every earlier
