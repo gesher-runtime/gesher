@@ -163,6 +163,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem installer
 
+      # Uploaded before the checks below: the e2e job tests this installer even when one
+      # of them fails.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gesher-setup
+          path: installer/*.exe
+
       - name: Install, run Hello, uninstall
         shell: pwsh
         run: |
@@ -429,17 +436,14 @@ jobs:
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gesher-setup
-          path: installer/*.exe
-
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid
   # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
   # read back, given input and closed: tests/e2e/run-e2e.ps1.
   e2e:
     needs: [package]
+    # The package job uploads the installer before its own checks.
+    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
