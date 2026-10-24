@@ -6,11 +6,12 @@
 # GC with frames on the stack, threads and monitors, JNI, proxies) and the
 # CPU-bound benchmark (Bench.java), whose checksum must be the same in all:
 #   switch:  -Xint, the switch interpreter
-#   nterp:   GESHER_ART_NO_AOT=1, no JIT: nterp for every method
-#   aot:     no JIT: the boot image's compiled code, nterp for the rest
-#   jit:     the JIT on, over the boot image's compiled code
+#   nterp:   no JIT: app code on nterp, boot library on AOT code
+#   jit:     the JIT on for app code, boot library on AOT code
 # and the stress test once more under GESHER_ART_INTERPRET_ONLY=1 (the
-# diagnosis switch: everything as before compiled code).
+# diagnosis switch: everything as before compiled code). The boot image's
+# primary image is AOT-compiled (--compiler-filter=speed), so the nterp and
+# jit modes exercise AOT code (boot image compiled-method count > 0).
 
 $image = "-Ximage:$(NoDrive "$root/system")/framework/boot.art"
 $codegenDex = NoDrive "$Dir/codegen-tests.dex"
@@ -65,25 +66,27 @@ function ReportFailure([string] $Name, $r) {
   $script:failed++
 }
 
-# First, Hello under nterp with every fault traced (fault_signals.cc): the
-# runtime's own faults, before the heavier checks.
+# First, Hello under nterp with every fault traced (fault_signals.cc): the app
+# runs on nterp and calls into the boot image's AOT code, before the heavier
+# checks.
 $r = RunDalvikvm @("-Xbootclasspath:$bcp", $image, '-Xusejit:false', '-cp', (NoDrive "$Dir/hello.dex"), 'gesher.Hello') `
-  @{ GESHER_TRACE_SIGNALS = '1'; GESHER_ART_NO_AOT = '1' } 60
+  @{ GESHER_TRACE_SIGNALS = '1' } 60
+$aot = $r.Out -match 'gesher: boot image: [1-9]\d* methods with compiled code'
 if ($r.Exit -eq 0 -and $r.Out.Contains('Hello from ART on Windows') -and $r.Out.Contains('gesher: execution: nterp')) {
-  Write-Host "PASS  codegen: Hello under nterp ($(@($r.Out -split "`n" | Where-Object { $_ -match 'gesher-signal:' }).Count) faults traced)"
+  Write-Host "PASS  codegen: Hello on nterp + AOT boot image ($(@($r.Out -split "`n" | Where-Object { $_ -match 'gesher-signal:' }).Count) faults traced, AOT: $aot)"
   $nterpOk = $true
 } else {
-  ReportFailure 'Hello under nterp' $r
+  ReportFailure 'Hello on nterp + AOT boot image' $r
   $nterpOk = $false
 }
 
-# What a mode's output must show, besides the program's own result.
+# What a mode's output must show, besides the program's own result. nterp and
+# jit run app code on nterp / the JIT and the boot library on AOT code.
 function ModeOk([string] $Name, [string] $Out) {
   switch ($Name) {
     'switch' { return $Out.Contains('gesher: execution: switch interpreter') }
     'interpret-only' { return $Out.Contains('gesher: execution: switch interpreter, implicit null checks off, implicit stack overflow checks off') }
     'nterp' { return $Out.Contains('gesher: execution: nterp, implicit null checks on, implicit stack overflow checks on') }
-    'aot' { return $Out.Contains('gesher: execution: nterp') -and $Out -match 'gesher: boot image: [1-9]\d* methods with compiled code' }
     'jit' { return $Out -match 'Current number of JIT code cache entries: [1-9]' }
   }
   return $false
@@ -93,24 +96,14 @@ $jitArgs = @('-Xusejit:true', '-XX:DumpJITInfoOnShutdown')
 $modes = [ordered]@{
   'switch' = @{ Args = @('-Xint', '-Xusejit:false'); Env = @{} }
   'interpret-only' = @{ Args = @('-Xusejit:false'); Env = @{ GESHER_ART_INTERPRET_ONLY = '1' }; NoBench = $true }
-  'nterp' = @{ Args = @('-Xusejit:false'); Env = @{ GESHER_ART_NO_AOT = '1' } }
-  'aot' = @{ Args = @('-Xusejit:false'); Env = @{} }
+  'nterp' = @{ Args = @('-Xusejit:false'); Env = @{} }
   'jit' = @{ Args = $jitArgs; Env = @{} }
 }
 
 # Without a working nterp, the compiled modes would only time out one by one.
 if (-not $nterpOk) {
   Write-Host 'INFO  codegen: nterp does not run Hello; only the interpreter modes run'
-  foreach ($k in 'nterp', 'aot', 'jit') { $modes.Remove($k) }
-}
-
-# A boot image without compiled code (--compiler-filter=verify) has no AOT mode.
-if ($nterpOk) {
-  $probe = RunMode @('-Xusejit:false') @('gesher.Bench', '0') @{}
-  if ($probe.Out -match 'gesher: boot image: 0 methods with compiled code') {
-    Write-Host 'INFO  codegen: the boot image has no compiled code; no aot mode'
-    $modes.Remove('aot')
-  }
+  foreach ($k in 'nterp', 'jit') { $modes.Remove($k) }
 }
 
 # The switch interpreter and interpret-only mode recover from a deep-recursion
