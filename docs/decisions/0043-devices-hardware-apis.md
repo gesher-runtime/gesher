@@ -49,6 +49,14 @@ no camera, no sensors and deny desktop apps the location.
 5. **CI verifies with test sources injected below the framework APIs**
    (`GESHER_SENSOR_TEST`, `GESHER_CAMERA_TEST`, test location providers), plus
    the real Windows calls' answers on the runners (no device, access denied).
+   The test camera sits as low as a process can put it without registering
+   anything with Windows: it is an IMFMediaSource of Gesher's own (YUY2, as
+   webcams offer), read by the same Media Foundation source reader, video
+   processing and sample copying as a real camera. A virtual camera
+   (`MFCreateVirtualCamera`) was not used: it needs the source as a
+   registered COM server run by the Frame Server service, which CI runners
+   may not have; it would add device enumeration and activation to what CI
+   covers, nothing above.
 
 ## Consequences
 

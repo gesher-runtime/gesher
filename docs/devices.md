@@ -135,36 +135,53 @@ Windows without them (no location service, no Media Foundation) gets clean
 ## Status and next steps
 
 ### Done and verified
-- **CI run 40134370867** (ci, both windows-2022 and windows-2025, every job
-  green; commit 2b3d509): location and sensors, single process and on the
-  Gesher device:
+- **CI run 40142590418** (ci at f62f1aa, merged with origin/phase4/integration
+  at 6751717; every job green: test on windows-2022 and windows-2025, package,
+  e2e): location, sensors and cameras, single process and on the Gesher device.
+  The devices checks, the same on both runners:
   - `PASS  devices: location (single process): LocationManager from framework-location, the gps/network/fused/passive providers, no geocoder`
   - `PASS  devices: location (single process): a test provider in gps' place: requestLocationUpdates to a listener and a PendingIntent, getLastKnownLocation, getCurrentLocation, removeUpdates`
   - `PASS  devices: location (single process): provider disabled and enabled reach the listener; nothing after removeUpdates(listener)`
   - `PASS  devices: location (single process): fused as apps without Play services ask (LocationRequest, an Executor), test providers removed, Geocoder throws IOException`
   - `PASS  devices: location (single process): Windows.Devices.Geolocation answers: access denied, status not initialized; network provider: disabled (Windows gives this program no location)`
   - `PASS  devices: sensors (single process): SystemSensorManager over Windows.Devices.Sensors; no sensors here, an empty list, registerListener false (accelerometer: none, gyrometer: none, magnetometer: none, light: none, orientation: none)`
+  - `PASS  devices: camera (single process): CameraManager over Media Foundation; no camera here (Media Foundation: 0 video capture devices): an empty id list, openCamera throws, legacy Camera none, no ACTION_IMAGE_CAPTURE activity`
   - `PASS  devices: sensors (single process): GESHER_SENSOR_TEST's accelerometer and light sensor through SystemSensorManager: the list, events on a Handler, flush, unregisterListener`
-  - the same five location checks and the test-sensor check on the Gesher device
-    (the location service in the system server, the app in its own process,
-    listeners and the PendingIntent's broadcast across binder).
+  - `PASS  devices: camera (single process): GESHER_CAMERA_TEST's camera through Camera2: characteristics, openCamera, a session, repeating preview into a YUV ImageReader, a JPEG still capture, close`
+  - `PASS  devices: camera (single process): the test camera's frames through Media Foundation: test camera (GESHER_CAMERA_TEST) as a Media Foundation media source, 2 YUY2 sizes; opened at 640x480 through Media Foundation (IMFSourceReader over the test media source, YUY2 to NV12)`
+  - `PASS  devices: permissions (single process): without ACCESS_*_LOCATION LocationManager throws SecurityException; without CAMERA openCamera throws SecurityException`
+  - the five location checks, the test-sensor check and both camera checks
+    again on the Gesher device (location service in the system server, the
+    app in its own process, `media.camera` in the app's process).
+- Earlier: ci run 40134370867 (location and sensors, both runners).
 - The runners deny desktop apps the location (RequestAccessAsync: Denied):
   the WinRT calls themselves work and fail cleanly there. On a Windows 11 PC
   with location on, the same code gets a position (Wi-Fi/IP, checked by hand
   with a probe of location_win.cc: accuracy 20 km, source IP address).
 
-### Next steps
-1. Cameras (in progress): Java side (`CameraService`, `CameraDeviceUser`,
-   `WindowsCamera`, `CameraFrames` in com.gesher.server), the in-process
-   `media.camera` (single process: `Services`; device: the app process),
-   devices.apk's camera steps, 58-devices.ps1 checks.
-2. Legacy `android.hardware.Camera`: answer "no cameras" cleanly.
-3. ADR 0043, roadmap boxes.
+### Not verified (no hardware on the runners)
+- A real camera: device enumeration and activation, the Frame Server and
+  driver, MJPG decoding, the camera privacy setting, real exposure/timing
+  (see Cameras above). The source reader, its YUY2-to-NV12 processing, sample
+  copying and everything above are what a real camera uses too, and are
+  checked.
+- Real sensors' value conversion (checked against the SDK's definitions only).
+- A real position from Windows in CI (by hand only).
+
+### Next steps (beyond the brief)
+1. Preview into SurfaceView/TextureView once the graphics stack gives them a
+   native window.
+2. A Gesher camera activity for ACTION_IMAGE_CAPTURE; the legacy
+   android.hardware.Camera over the same service.
+3. A virtual camera (MFCreateVirtualCamera) where Frame Server is available.
 
 ### Open problems, dead ends ruled out
 - Windows.Devices.Sensors' classes all activate on the runners (their statics
   interfaces resolve) and `GetDefault` answers null: there are no sensors to
-  read values from, so the value conversion of real sensors is checked only by
-  reading the SDK's definitions, not on hardware.
+  read values from.
 - The local llvm-mingw (scratch) syntax-checks compat/devices against AOSP's
   headers without building AOSP; CI builds it.
+- CameraManager's getRotationOverride walks ActivityManager.getAppTasks():
+  Gesher's ActivityTaskManagerService answers an empty list (it answered null).
+- android.media.PublicFormatUtils' natives come from libui's PublicFormat.cpp,
+  which Gesher does not build: camera_frames.cc maps the formats itself.
