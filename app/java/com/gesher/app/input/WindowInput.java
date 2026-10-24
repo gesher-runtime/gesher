@@ -45,6 +45,28 @@ public final class WindowInput implements AutoCloseable {
   public static final int MODIFIER_ALT = 4;
   public static final int MODIFIER_CAPS_LOCK = 8;
 
+  /** {@link TextListener}'s kinds (compat/input/text_input.h's TextEvent). */
+  public static final int TEXT_COMMIT = 1;
+  public static final int TEXT_COMPOSE = 2;
+  public static final int TEXT_COMPOSE_END = 3;
+  public static final int TEXT_EDITOR_ACTION = 4;
+
+  /**
+   * Text for the window's focused editor (docs/input.md, "Text input"), in order with the
+   * window's input events: what follows waits until {@link #finishTextEvent} (or a second).
+   */
+  public interface TextListener {
+    /**
+     * On the connection's thread. TEXT_COMMIT: {@code text} is typed. TEXT_COMPOSE: {@code
+     * text} is the IME's composition ("" when it is cancelled), {@code cursor} its caret,
+     * {@code targetStart}/{@code targetEnd} the clause being converted (-1: none).
+     * TEXT_COMPOSE_END: the composition ended. TEXT_EDITOR_ACTION: Enter, {@code cursor}
+     * the editor's IME action.
+     */
+    void onTextEvent(WindowInput input, int seq, int kind, String text, int cursor,
+        int targetStart, int targetEnd);
+  }
+
   /** Window events that are not input, and focus changes. */
   public interface Listener {
     /**
@@ -69,8 +91,9 @@ public final class WindowInput implements AutoCloseable {
     public Listener listener;
   }
 
-  private long mPtr;
+  private volatile long mPtr;
   private final Listener mListener;
+  private volatile TextListener mTextListener;
 
   private WindowInput(Listener listener) {
     mListener = listener;
@@ -99,6 +122,71 @@ public final class WindowInput implements AutoCloseable {
         tool);
   }
 
+  /**
+   * Where text for the window's editor goes; null: typed text reaches the {@link Listener}
+   * as EVENT_CHARs, compositions are dropped.
+   */
+  public void setTextListener(TextListener listener) {
+    mTextListener = listener;
+  }
+
+  /** The text event {@code seq} is applied: the window's next events may go. */
+  public synchronized void finishTextEvent(int seq) {
+    long ptr = mPtr;
+    if (ptr != 0) nFinishTextEvent(ptr, seq);
+  }
+
+  /**
+   * What the window's focused editor takes: {@code active}, an editor with an
+   * InputConnection has the focus (keys whose character the key map would not type become
+   * text, IMEs may compose when {@code ime}); {@code enterAction}, the EditorInfo IME action
+   * Enter performs (0: Enter is a key).
+   */
+  public synchronized void setTextInput(boolean active, boolean ime, int enterAction) {
+    long ptr = mPtr;
+    if (ptr != 0) nSetTextInput(ptr, active, ime, enterAction);
+  }
+
+  /** The editor's caret in client pixels: the system caret and the IME's windows follow it. */
+  public synchronized void setCaret(int x, int y, int width, int height) {
+    long ptr = mPtr;
+    if (ptr != 0) nSetCaret(ptr, x, y, width, height);
+  }
+
+  /** Ends the IME's composition: committed, or cancelled. */
+  public synchronized void completeComposition(boolean cancel) {
+    long ptr = mPtr;
+    if (ptr != 0) nCompleteComposition(ptr, cancel);
+  }
+
+  /**
+   * Shows or hides Windows' touch keyboard for the window (InputPane.TryShow/TryHide): 1
+   * when it did, 0 when Windows declined, else a failed HRESULT.
+   */
+  public int showTouchKeyboard(boolean show) {
+    long ptr;
+    synchronized (this) {
+      ptr = mPtr;
+    }
+    return ptr != 0 ? nShowTouchKeyboard(ptr, show) : -1;
+  }
+
+  /** The session's keyboard layouts: {hkl (hex), BCP 47 locale, display name} each. */
+  public static String[][] keyboardLayouts() {
+    String[] flat = nKeyboardLayouts();
+    if (flat == null) return new String[0][];
+    String[][] out = new String[flat.length / 3][];
+    for (int i = 0; i < out.length; i++) {
+      out[i] = new String[] {flat[i * 3], flat[i * 3 + 1], flat[i * 3 + 2]};
+    }
+    return out;
+  }
+
+  /** The keyboard layout (HKL) of the thread of window {@code hwnd} (0: this thread). */
+  public static long keyboardLayout(long hwnd) {
+    return nKeyboardLayout(hwnd);
+  }
+
   /** {published, finished, finished as handled, in flight, dropped}. */
   public long[] stats() {
     return nStats(ptr());
@@ -107,10 +195,14 @@ public final class WindowInput implements AutoCloseable {
   /** Stops the connection; the window's queue is left to others. */
   @Override
   public void close() {
-    if (mPtr != 0) {
-      nDetach(mPtr);
+    long ptr;
+    synchronized (this) {
+      // The input method calls below see it closed; the connection's thread may still be
+      // in a listener (nDetach joins it), so the lock is not held for that.
+      ptr = mPtr;
       mPtr = 0;
     }
+    if (ptr != 0) nDetach(ptr);
   }
 
   /** PostMessage to a window: tests drive a Gesher window with Win32 messages. */
@@ -131,6 +223,22 @@ public final class WindowInput implements AutoCloseable {
     }
   }
 
+  // Called from native code, on the connection's thread.
+  private void onTextEvent(int seq, int kind, String text, int cursor, int targetStart,
+      int targetEnd) {
+    TextListener listener = mTextListener;
+    if (listener != null) {
+      listener.onTextEvent(this, seq, kind, text, cursor, targetStart, targetEnd);
+      return;
+    }
+    if (kind == TEXT_COMMIT && mListener != null && text != null) {
+      for (int i = 0; i < text.length(); i++) {
+        mListener.onWindowEvent(EVENT_CHAR, text.charAt(i), 0);
+      }
+    }
+    finishTextEvent(seq);
+  }
+
   private long ptr() {
     if (mPtr == 0) {
       throw new IllegalStateException("closed");
@@ -147,4 +255,12 @@ public final class WindowInput implements AutoCloseable {
   private static native long[] nStats(long ptr);
   private static native boolean nPostMessage(long hwnd, int msg, long wParam, long lParam);
   private static native long nClientToScreen(long hwnd, int x, int y);
+  private static native void nSetTextInput(long ptr, boolean active, boolean ime,
+      int enterAction);
+  private static native void nSetCaret(long ptr, int x, int y, int width, int height);
+  private static native void nCompleteComposition(long ptr, boolean cancel);
+  private static native void nFinishTextEvent(long ptr, int seq);
+  private static native int nShowTouchKeyboard(long ptr, boolean show);
+  private static native String[] nKeyboardLayouts();
+  private static native long nKeyboardLayout(long hwnd);
 }

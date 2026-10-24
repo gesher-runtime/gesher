@@ -104,8 +104,9 @@ public final class Services {
                 new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
         services.put(ContentResolver.CONTENT_SERVICE_NAME,
                 StandIn.of(IContentService.class, new ContentService()).asBinder());
+        // input_method: Windows' text input (docs/input.md "Text input", ADR 0039).
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
-                new InputMethodManager()).asBinder());
+                new InputMethodManagerService()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         services.put(Context.UI_MODE_SERVICE,
@@ -236,20 +237,6 @@ public final class Services {
         @Override
         public Point getStableDisplaySize() {
             return new Point(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        }
-    }
-
-    /**
-     * input_method: InputMethodManagerService, with no input method. A window's
-     * ViewRootImpl needs the service to exist (InputMethodManager's instance); every
-     * call answers its default (no IME, nothing shown).
-     */
-    public static final class InputMethodManager extends IInputMethodManager.Default {
-        @Override
-        public void addClient(com.android.internal.inputmethod.IInputMethodClient client,
-                com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
-                int untrustedDisplayId) {
-            // No input method will ever bind to it.
         }
     }
 
