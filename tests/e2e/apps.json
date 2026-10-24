@@ -11,7 +11,7 @@
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/lpar/RPN",
       "why": "A calculator: one Activity of plain framework widgets (Buttons in a layout), pure Java, no AndroidX; asks for the vibrator.",
-      "actions": [ { "keys": "12" } ]
+      "actions": [ { "click": [120, 680] }, { "click": [200, 680] } ]
     },
     {
       "package": "org.billthefarmer.editor",
@@ -40,7 +40,7 @@
       "label": "NoNonsense Notes",
       "versionName": "7.2.7",
       "versionCode": 72700,
-      "sha256": "",
+      "sha256": "0d79884020f2a09e0787282e345d7e8808826e0fb09135f620007015b30630b0",
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/spacecowboy/NotePad",
       "why": "Notes and to-do lists: SQLite through its own ContentProvider (SQLiteOpenHelper, Cursors), AndroidX AppCompat and Material, preferences.",
@@ -51,18 +51,18 @@
       "label": "Unit Converter Ultimate",
       "versionName": "5.7.3",
       "versionCode": 50703,
-      "sha256": "",
+      "sha256": "2569924fcb71d96699f48cbc06620bb5708b88b36624df72c4badb7a2c6ebbcb",
       "license": "Apache-2.0",
       "source": "https://github.com/physphil/UnitConverterUltimate",
       "why": "A unit converter: AndroidX AppCompat, Material components (navigation drawer, toolbar), RecyclerView, fragments, Java and Kotlin.",
-      "actions": [ { "click": [200, 300] }, { "keys": "3" } ]
+      "actions": [ { "click": [60, 340] }, { "keys": "3" } ]
     },
     {
       "package": "name.boyle.chris.sgtpuzzles",
       "label": "Simon Tatham's Puzzles",
       "versionName": "2025-09-12-1919-23762278-fdroid",
       "versionCode": 149,
-      "sha256": "",
+      "sha256": "6b36d5537984523c57984a784156eb853a92c940fded286483687484f3d652e4",
       "license": "MIT",
       "source": "https://github.com/chrisboyle/sgtpuzzles",
       "why": "NDK: the puzzles are C code (lib/x86_64/libpuzzles.so) driven over JNI, drawing on a Canvas through Java callbacks; AndroidX AppCompat.",

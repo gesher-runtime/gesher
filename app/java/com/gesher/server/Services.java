@@ -125,6 +125,9 @@ public final class Services {
         services.put(Context.APP_OPS_SERVICE, StandIn.of(
                 com.android.internal.app.IAppOpsService.class,
                 new DeviceServices.AppOpsService()).asBinder());
+        services.put(Context.APPWIDGET_SERVICE, StandIn.of(
+                com.android.internal.appwidget.IAppWidgetService.class,
+                new DeviceServices.AppWidgetService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new DeviceServices.ClipboardService()).asBinder());
         return services;
