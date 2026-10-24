@@ -68,3 +68,52 @@ index 88bf067..3027b6c 100644
    // TODO: add FlushViewOfFile support.
    PLOG(ERROR) << "MemMap::Sync unsupported on Windows.";
    return false;
+diff --git a/dex2oat/linker/oat_writer.cc b/dex2oat/linker/oat_writer.cc
+index b1c8bb1..fd94406 100644
+--- a/dex2oat/linker/oat_writer.cc
++++ b/dex2oat/linker/oat_writer.cc
+@@ -3452,7 +3452,15 @@ bool OatWriter::WriteDexFiles(File* file,
+     // replaced with kElfSegmentAlignment.
+     size_t page_aligned_size = RoundUp(vdex_size_with_dex_files, MemMap::GetPageSize());
+     if (!use_existing_vdex) {
++#if defined(_WIN32)
++      // Gesher: Windows cannot shrink a file while a view of it is mapped, and
++      // FinishVdexFile would cut the page-aligned length back when what follows
++      // the dex files is shorter than the page's rest. The file ends with the
++      // dex files here, and FinishVdexFile writes the rest with pwrite.
++      if (file->SetLength(vdex_size_with_dex_files) != 0) {
++#else
+       if (file->SetLength(page_aligned_size) != 0) {
++#endif
+         PLOG(ERROR) << "Failed to resize vdex file " << file->GetPath();
+         return false;
+       }
+@@ -3741,6 +3749,17 @@ bool OatWriter::FinishVdexFile(File* vdex_file, verifier::VerifierDeps* verifier
+ 
+   uint8_t* vdex_begin = vdex_begin_;
+   MemMap extra_map;
++#if defined(_WIN32)
++  // Gesher: the file ended with the dex files (WriteDexFiles), so the mapped
++  // view does not reach what follows them: write it to the file instead.
++  if (extract_dex_files_into_vdex_) {
++    DCHECK(vdex_begin != nullptr);
++    if (!vdex_file->PwriteFully(buffer.data(), buffer.size(), old_vdex_size)) {
++      PLOG(ERROR) << "Failed to write the vdex file's tail " << vdex_file->GetPath();
++      return false;
++    }
++  } else
++#else
+   if (extract_dex_files_into_vdex_) {
+     DCHECK(vdex_begin != nullptr);
+     // Write data to the last already mmapped page of the vdex file.
+@@ -3768,7 +3787,9 @@ bool OatWriter::FinishVdexFile(File* vdex_file, verifier::VerifierDeps* verifier
+       }
+       memcpy(extra_map.Begin(), buffer.data() + first_chunk_size, tail_size);
+     }
+-  } else {
++  } else
++#endif  // _WIN32
++  {
+     DCHECK(vdex_begin == nullptr);
+     std::string error_msg;
+     extra_map = MemMap::MapFile(
