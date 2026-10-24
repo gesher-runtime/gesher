@@ -28,15 +28,16 @@ Running your own program
 
 The .dex file must be on the same drive as Gesher (usually C:).
 
-Running an Android app, headless (gesher-app)
----------------------------------------------
+Running an Android app (gesher-app)
+-----------------------------------
 Android's framework (framework.jar, framework-res.apk) comes with Gesher.
-gesher-app installs an app and starts its launcher Activity without a window,
-as on Android: on a "Gesher device" of your own, a system server (with
-binderd and servicemanager) that every launch shares and that starts each
-app in a process of its own. The app's output shows in the console; once the
-Activity is resumed and idle, the launcher closes it (no window yet) and the
-program ends with the app's process. The bundled test app:
+gesher-app installs an app and starts its launcher Activity, as on Android:
+on a "Gesher device" of your own, a system server (with binderd and
+servicemanager) that every launch shares and that starts each app in a
+process of its own. The Activity shows in a window of its own (drawn by
+Android's renderer, on the CPU); closing the window finishes the Activity,
+and the program ends with the app's process. The app's output shows in the
+console. The bundled test app:
 
     gesher-app "%LOCALAPPDATA%\Programs\Gesher\lifecycle.apk"
 
@@ -61,8 +62,11 @@ its name and icon; it starts the app as
 Uninstalling the app removes its entry; uninstalling Gesher removes the
 folder.
 
-Other options: --activity .Other (another Activity), --keep-task (let the
-app run until it finishes), --ez KEY true|false (an extra in the intent).
+Other options: --activity .Other (another Activity), --ez KEY true|false
+(an extra in the intent), --headless (no window: once the Activity is idle
+the launcher closes it; with --keep-task the app runs until it finishes;
+GESHER_APP_WINDOW=headless makes it the default), --hidden-window (the
+window is drawn off the desktop).
 The logs are in %LOCALAPPDATA%\Gesher\logs (<package>.log for an app).
 
 Without the device, the app alone in one process with stand-in services:
@@ -75,14 +79,12 @@ runs gesher-app.cmd).
 
 What works, and what doesn't yet
 --------------------------------
-- No windows yet: Android apps run headless (gesher-app); drawing and input
-  are the next phase of the project. Only apps without native (.so) code.
-  The framework's natives cover what an Activity's lifecycle needs
-  (resources, Looper, Parcel, Binder); drawing is stubbed out and the system
+- Windows show what the app draws, but take no input yet (clicks and
+  keys are the next step); every window is a top-level window.
+  The framework's natives cover what an Activity's lifecycle and its views
+  need (resources, Looper, Parcel, Binder, android.graphics); the system
   services are Gesher's own, partly stand-ins, so apps beyond the bundled
-  test app may stop at a missing native method or service. Apps whose theme
-  has an action bar need fonts, which are not installed yet: try
-  --single-process for them.
+  test app may stop at a missing native method or service.
 - Interpreter only (no JIT and no boot image), so startup takes a few seconds.
 - java.lang, collections, strings, ICU (text, locales), basic file I/O.
 - Not yet: starting processes (ProcessBuilder), WatchService,

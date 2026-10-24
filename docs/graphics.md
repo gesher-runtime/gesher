@@ -65,6 +65,35 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   (`reserved[0]`)/`queueBuffer`, `query`, `perform`); the NDK functions
   (`native_window.cc`); `com.gesher.app.window.NativeWindow` (gesher-app)
   and its natives (`window_jni.cc`).
+- **An app's window** (ADR 0029, `app/java/com/gesher/app/window`): the
+  window session, `WindowSession` (an `IWindowSession.Stub`), runs in the
+  process that draws, as `WindowManagerGlobal`'s session: in gesher-app's
+  process (`--single-process --window`) or in an app process the Gesher
+  device's system server started (`GesherAppProcess`, the default).
+  `addToDisplay` records the window (frames, configuration, insets from
+  `WindowLayout` on DeviceProfile's display, 400x800@160 by default) and
+  opens its input channel pair; `relayout` creates or resizes its Win32
+  window (`NativeWindow`) and hands out a stand-in `SurfaceControl` tagged
+  with it, whose `BLASTBufferQueue` gives ViewRootImpl the window's
+  `Surface` (`gesher_set_blast_surface_provider`, window_jni.cc). hwui's
+  `ThreadedRenderer` draws the views with the CPU pipeline, which dequeues a
+  buffer per frame and queues it in `swapBuffers` (frameworks/base patch
+  0103), so frames reach the window by themselves; `Win32Surface` presents
+  the buffer that was queued (held from dequeue to queue/cancel).
+  `finishDrawing` shows the window (or, `--hidden-window`, shows it off the
+  desktop: a tool window left of the virtual screen, not activated;
+  PrintWindow reads nothing back from a window never shown). The window's
+  title is the Activity's label; it carries the process's AppUserModelID
+  (`SHGetPropertyStoreForWindow`, from `$GESHER_APP_USER_MODEL_ID`) and the
+  package's Start menu icon (`WM_SETICON`, `<data>/gesher-shell`). Closing it
+  (`WM_CLOSE`) calls `Activity.finish()`: on the device the system server
+  destroys the activity and ends the process; `remove` closes the window.
+  Window mode per launch (`--window`, `--hidden-window`, `--headless`,
+  `$GESHER_APP_WINDOW`): the launcher tells the system server (`gesher`
+  service, `WINDOW_MODE`), which starts the package's processes with it;
+  headless processes keep the system server's `StandInWindowSession` and no
+  renderer. `GESHER_WINDOW_DEBUG=1` logs the first frames' pixels, the back
+  buffer and an in-process PrintWindow.
 - **ANativeWindow for libandroid** (native-libs track): dalvikvm defines, as
   Microsoft-ABI C functions, hostgraphics' `ANativeWindow_acquire/release/
   getWidth/getHeight/getFormat/dequeueBuffer/cancelBuffer/setDequeueTimeout/
@@ -144,39 +173,63 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   `NativeWindow.present()`; PrintWindow reads magenta, white and the cyan
   child back.
 
+- **An Activity's UI in a Win32 window** (ci run 40048707298, commit
+  440822d, both runners and the installer; tests/windows/tracks/34-windows.ps1,
+  tests/windows/graphics/WindowChecks.ps1, tests/apps/uiapp): uiapp.apk's
+  layout (red, green and blue Views, a yellow TextView with black text, white
+  below) drawn by hwui into the window and read back from outside the process
+  with PrintWindow (`red: 80000 of 80000 pixels`, ...,
+  `TextView: 46142 yellow and 1392 dark (text) pixels of 48000`), `hardware
+  accelerated true`, title `Gesher UI test`; WM_CLOSE finishes the Activity
+  and the run ends:
+  - `PASS  gesher-app: uiapp.apk drawn in a Win32 window by hwui (layout
+    colors and text read back with PrintWindow), WM_CLOSE finishes it
+    (single process)`
+  - `PASS  gesher-app: the Gesher device: uiapp.apk's process (started by the
+    system server) draws it in a Win32 window of its own, titled with the
+    Activity's label, under the package's AppUserModelID; WM_CLOSE finishes
+    it, the process ends` (the window's owner is the app process's pid; its
+    AppUserModelID `Gesher.App.com.gesher.uiapp`; the system server's
+    scheduleExit, `the process of com.gesher.uiapp ended (exit code 0)`)
+  - `PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a
+    Win32 window of its app process (hwui's frame read back with PrintWindow;
+    the Activity's label, AppUserModelID Gesher.App.com.gesher.uiapp, its
+    icon); closing it ends the app` (the installed gesher-app.cmd
+    `uiapp.apk --hidden-window`; the window's icon is the shortcut's .ico)
+  - Every services and installer check still passes with the device's
+    lifecycle runs headless (`GESHER_APP_WINDOW=headless` in 50-services.ps1
+    and the package job).
+
 ### Stand-ins and gaps (what is not real yet)
 
 - **Device-only natives** answer zero/null or fresh handles
   (`device_standins.cc`): SurfaceControl (+ Transaction), SurfaceSession,
-  BLASTBufferQueue. `BLASTBufferQueue.nativeGetSurface` returns what
-  `gesher_set_blast_surface_provider` installs (nothing installs one yet:
-  null).
+  BLASTBufferQueue, OverlayProperties, Perfetto's. Handles carry a tag:
+  `BLASTBufferQueue.nativeGetSurface` returns the Surface of the window its
+  SurfaceControl was tagged with. InputChannel and InputEventReceiver are
+  attach_standins.cc's (services track): no input reaches the views yet.
+- **The system server does not know the app's windows** (ADR 0029): no
+  server-side window list, focus or z-order; dialogs and popups are
+  top-level windows of their own, not owned by or placed relative to their
+  parent. No vsync (`debug.choreographer.vsync=false`: frames timed by
+  messages).
 - **Surface natives missing on the host**: core/jni's host
   `android_view_Surface.cpp` has no `nativeCreateFromSurfaceControl`,
   `nativeGetFromSurfaceControl`, `nativeGetFromBlastBufferQueue`,
   `nativeReadFromParcel`/`nativeWriteToParcel` (`#ifdef __ANDROID__`).
   `Surface.copyFrom(SurfaceControl)` and the BLAST paths that call them
   throw UnsatisfiedLinkError.
-- **Presenting hwui's CPU frames**: SkiaCpuPipeline draws into the Surface's
-  buffer in place and its `swapBuffers` returns false; nothing queues the
-  buffer. Today `NativeWindow.present()` copies it to the window. For an
-  app's real UI either patch `SkiaCpuPipeline` (keep the ANativeWindow and
-  the dequeued buffer from `setSurface`, `queueBuffer` them in
-  `swapBuffers`; a frameworks/base patch, one AOSP cache churn) or present
-  from a frame-complete callback.
-- **No system fonts**: `/system/etc/fonts.xml` and `/system/fonts/` are read
-  as paths on the current drive (ADR 0010), which do not exist. Typeface's
-  static initializer survives (empty font map; `Typeface.DEFAULT` is not
-  fully initialized), but `Typeface.CustomFallbackBuilder.build()`,
-  `Typeface.create(...)` and text drawn with the default typeface fail. The
-  graphics test makes its Typeface without a system fallback
-  (`nativeCreateFromArray` with fallback 0, by reflection).
+- **CPU drawing only**: hwui's CPU pipeline (Skia raster); hwui's GL
+  pipeline over ANGLE is not wired up.
+- **System fonts** come from the fonts track (docs/fonts.md: fonts.xml in
+  `$ANDROID_ROOT/etc`, the font map through SharedMemory); SystemFonts'
+  own `/system/etc/fonts.xml` read still fails and logs a stack trace.
 - **hwui logs "Using Fontation backend"** (its host default); the calls go
   to FreeType (`fontations_fallback.cc`).
 - **Window details**: one buffer per surface; a resize reaches the next
-  lock/dequeue, but hwui's CPU pipeline keeps the buffer it got in
-  `setSurface` until its surface is set again. Window close is only an
-  event. Per-monitor DPI aware, sizes in pixels; CI runs at 96 DPI.
+  lock/dequeue. Windows are not resizable by the user (sizes follow the
+  app's layout). Per-monitor DPI aware, sizes in pixels, density 160 by
+  default whatever the monitor's scaling; CI runs at 96 DPI.
 
 ### CI runs
 
@@ -196,57 +249,56 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 - ci 39998298499: GraphicsTest crashed in nativeCreateFromArray (the test's
   FontFamily was collected; reproduced locally with the CI build).
 - ci 39999789786: green on both runners and the installer: every graphics check passes (`Canvas.drawText: glyphs drawn (781 dark pixels)`, `Paint.measureText/getTextBounds (104.0, ...)`).
+- ci 40004411293 (48dc3f6, before the merge of phase3/integration): the
+  installer's `--system-server` run failed (no servicemanager); the window
+  checks were not in CI yet.
+- ci 40041602417 (15192ab): uiapp/build.sh was not executable.
+- ci 40042614479 (22df217): hwui's render thread crashed in
+  `CanvasContext::addFrameMetricsObserver`: the device stand-ins'
+  InputEventReceiver table (registered last) answered 0 for
+  `nativeGetFrameMetricsObserver`; now attach_standins.cc's (a real observer)
+  are the only ones. The device launcher check quoted every argument, which
+  `Zygote.vmCommandLine` does not parse.
+- ci 40045238767 (52e3d3e): windows created, titled, closed, destroyed, the
+  process ended; PrintWindow read black.
+- ci 40047759587 (d531d1e, GESHER_WINDOW_DEBUG): hwui's frame was right in the
+  queued buffer and the window's back buffer; PrintWindow of a never-shown
+  window reads nothing (window_probe shows its window).
+- ci 40048707298 (440822d): green on both runners and the installer, the
+  window checks included (hidden windows shown off the desktop).
 
-### Next concrete steps (the next agent: an app's real UI, input, fonts)
+### Next concrete steps (the next agent: input)
 
-1. **The window path for an Activity.** The services track made
-   `com.gesher.server.WindowManagerService` the `window` service: a real
-   IWindowSession plugs in through
-   `WindowManagerService.setSessionFactory(Function<IWindowSessionCallback,
-   IWindowSession>)` (an `IWindowSession.Stub` to serve it across processes;
-   in-process any implementation works). Another services agent is making
-   the app process run the real ActivityThread path
-   (`handleResumeActivity` → `WindowManager.addView`) with a minimal session
-   stand-in to replace. Java window code goes in
-   `app/java/com/gesher/app/window` (NativeWindow is there).
-   - `addToDisplayAsUser` → `ADD_OKAY|ADD_FLAG_APP_VISIBLE` with frames;
-     `relayout` fills WindowRelayoutResult frames/config/insets, sizes or
-     creates the NativeWindow and hands out a SurfaceControl (a stand-in
-     handle, non-zero from `nativeCopyFromSurfaceControl`) via
-     `outSurfaceControl`.
-   - ViewRootImpl reaches its Surface through `updateBlastSurfaceIfNeeded`
-     (`new BLASTBufferQueue`, `update`, `createSurfaceWithHandle` →
-     `nativeGetSurface`): install a provider with
-     `gesher_set_blast_surface_provider`
-     (`compat/framework/include/gesher_device_standins.h`) that returns
-     `android_view_Surface_createFromSurface` of the window's Win32Surface
-     (window_jni.cc has the pattern; map the BLAST handle to its window).
-     `mSurface.transferFrom(blastSurface)` is Java-only.
-   - `inputFeatures |= INPUT_FEATURE_NO_INPUT_CHANNEL`;
-     `SystemProperties.set("debug.choreographer.vsync", "false")` before
-     Choreographer is used (no DisplayEventReceiver natives).
-   - Software drawing first (no ThreadedRenderer: ViewRootImpl then draws
-     with `Surface.lockCanvas`, which is verified); then the ThreadedRenderer
-     with a present hook (see "Presenting hwui's CPU frames").
-   - DeviceProfile: make WIDTH/HEIGHT/DENSITY non-constant
-     (`Integer.getInteger("gesher.display.width", 1080)`), e.g. 480x800@160
-     for the window test.
-2. **CI window test**: tests/apps/<window app> (colored Views + Button), run
-   gesher-app with a window, read pixels with `NativeWindow.capture()` in
-   the app process or PrintWindow from PowerShell (find the window by title).
-3. **Fonts**: SystemFonts reads `/system/etc/fonts.xml` and `/system/fonts/`
-   (hard-coded): either a small framework patch making them
-   `$ANDROID_ROOT/etc` and `$ANDROID_ROOT/fonts` (Ravenwood replaces
-   `getFontsXmlDir`/`getSystemFontDir` the same way), or install there; ship
-   Roboto + NotoSansHebrew + data/fonts/fonts.xml. Then `Typeface.DEFAULT`
-   initializes and TextView draws.
-4. **Input**: MotionEvent natives need libinput's Input.cpp (+
-   InputEventLabels, aidl IInputConstants headers via GESHER_AIDL,
-   HmacKeyManager from libs/attestation). `gesher::Window`'s event queue
-   (`WindowEvent`, an eventfd a Looper can watch) is ready to feed
-   `ViewRootImpl.dispatchInputEvent`; CI posts WM_LBUTTONDOWN/UP and checks
-   onClick and changed pixels.
-5. **ANGLE**: a separate agent works on branch wip/angle.
+1. **Input** (the input track built the natives and the Win32 → Android
+   translation on wip/input, merged into phase3/integration; its C API
+   attaches an InputChannel to a window). The hook is in
+   `app/java/com/gesher/app/window/WindowSession.java`:
+   - `addToDisplayAsUser` opens the window's channel pair
+     (`openInputChannel`: `InputChannel.openInputChannelPair(title)`,
+     `pair[1].copyTo(outInputChannel)` for ViewRootImpl's
+     WindowInputEventReceiver, `pair[0]` kept in `AppWindow.inputChannel`).
+     With the stand-in natives the pair is null and `outInputChannel` stays
+     empty; with the real ones ViewRootImpl gets a valid channel.
+   - `attachInput(AppWindow w)` runs when the window's Win32 window is
+     created (`ensureNativeWindow`, from `relayout`): it is empty; put
+     `com.gesher.app.input.WindowInput.attach(w.nativeWindow.getHwnd(),
+     w.inputChannel, options)` there (and close it in `closeNativeWindow`,
+     which disposes the channel). Once attached it is the only reader of the
+     window's event queue: skip `listenForEvents` and route close (→
+     `mCloseHandler.onClose(this, key, w.attrs)`), resize and focus through
+     the options' listener.
+   - Register the input track's `VirtualKeyboard.InputManager` as the
+     `input` service (in-process: `Services`; on the device, the system
+     server); do not set `INPUT_FEATURE_NO_INPUT_CHANNEL`.
+   - CI: uiapp.apk with a Button (tests/apps/uiapp), post WM_LBUTTONDOWN/UP
+     to the hidden window from 34-windows.ps1 and check onClick and changed
+     pixels (WindowChecks.ps1 reads the window back).
+2. **hwui on ANGLE**: hwui's GL pipeline (SkiaOpenGLPipeline) on an EGL
+   window surface over the Win32 window (docs/angle.md), instead of the CPU
+   pipeline.
+3. **Window polish**: owned windows for dialogs and popups, resizing by the
+   user (relayout with the new size), density from the monitor's DPI,
+   vsync from DWM (`DwmFlush`) for Choreographer.
 
 ### Open problems and dead ends
 

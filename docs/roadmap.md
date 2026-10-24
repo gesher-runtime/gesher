@@ -146,10 +146,14 @@ needs: [framework-build.md](framework-build.md).
       39990699626: angle_probe on windows-2022 and windows-2025, D3D11 and
       WARP; docs/angle.md). hwui does not draw through it yet (its GL
       pipeline, an EGL window surface on the Win32 window)
-- [ ] A Win32 window as the Activity's surface (`ANativeWindow`), opened
-      through a window manager stand-in
-- [ ] A simple Activity drawn in a Win32 window, tested in CI by reading
-      back its pixels (WARP)
+- [x] A Win32 window as the Activity's surface (`ANativeWindow`), opened
+      through a window manager stand-in (ci run 40048707298: the window
+      session in the drawing process, ADR 0029; single process and an app
+      process of the Gesher device)
+- [x] A simple Activity drawn in a Win32 window, tested in CI by reading
+      back its pixels (ci run 40048707298: uiapp.apk's layout and text drawn
+      by hwui's CPU pipeline, read back with PrintWindow, both runners and
+      the installer; not through ANGLE/WARP yet)
 - [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
       and `KeyEvent`; a click reaches `onClick`, tested in CI
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
