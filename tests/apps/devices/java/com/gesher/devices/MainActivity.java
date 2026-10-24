@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
         Report.line("MainActivity onCreate");
         if (wanted("location")) step("location", () -> new LocationSteps(this).run());
         if (wanted("sensors")) step("sensors", () -> new SensorSteps(this).run());
+        if (wanted("camera")) step("camera", () -> new CameraSteps(this).run());
         Report.line("all steps ran");
         finish();
     }

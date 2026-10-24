@@ -425,6 +425,32 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
   return result;
 }
 
+// CameraFrames.nativeToNv21: NV12 (w x h) as NV21 (tw x th), for YuvImage's JPEG encoder.
+jbyteArray CameraFrames_toNv21(JNIEnv* env, jclass, jbyteArray nv12, jint w, jint h, jint tw,
+                               jint th) {
+  if (nv12 == nullptr || env->GetArrayLength(nv12) < w * h * 3 / 2 || tw <= 0 || th <= 0 ||
+      tw % 2 != 0 || th % 2 != 0) {
+    jniThrowException(env, "java/lang/IllegalArgumentException", "bad frame");
+    return nullptr;
+  }
+  std::vector<uint8_t> out(static_cast<size_t>(tw) * th * 3 / 2);
+  size_t ySize = static_cast<size_t>(tw) * th;
+  std::vector<uint8_t> u(ySize / 4), v(ySize / 4);
+  jbyte* frame = env->GetByteArrayElements(nv12, nullptr);
+  Nv12ToI420(reinterpret_cast<uint8_t*>(frame), w, h, out.data(), u.data(), v.data(), tw, th);
+  env->ReleaseByteArrayElements(nv12, frame, JNI_ABORT);
+  for (size_t i = 0; i < u.size(); ++i) {
+    out[ySize + 2 * i] = v[i];
+    out[ySize + 2 * i + 1] = u[i];
+  }
+  jbyteArray result = env->NewByteArray(static_cast<jsize>(out.size()));
+  if (result != nullptr) {
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(out.size()),
+                            reinterpret_cast<const jbyte*>(out.data()));
+  }
+  return result;
+}
+
 // CameraFrames.nativeIsReader: whether `surface` is an ImageReader's (Gesher's).
 jboolean CameraFrames_isReader(JNIEnv* env, jclass, jobject surface) {
   return ReaderForSurface(env, surface) != nullptr;
@@ -518,6 +544,35 @@ const JNINativeMethod gSurfaceUtilsMethods[] = {
 const JNINativeMethod gCameraFramesMethods[] = {
     {"nativeDeliver", "(" SURFACE "[BIIJ[B)I", GESHER_JNI(CameraFrames_deliver)},
     {"nativeIsReader", "(" SURFACE ")Z", GESHER_JNI(CameraFrames_isReader)},
+    {"nativeToNv21", "([BIIII)[B", GESHER_JNI(CameraFrames_toNv21)},
+};
+
+// --- android.hardware.Camera (the legacy API): no cameras, cleanly -----------------------
+// Apps on the legacy API see none (Camera2 has them all); opening one fails as
+// with no camera service: RuntimeException("Fail to connect to camera service").
+
+jint LegacyCamera_getNumberOfCameras(JNIEnv*, jclass, jobject, jint) { return 0; }
+
+void LegacyCamera_getCameraInfo(JNIEnv* env, jclass, jint, jobject, jobject, jint, jobject) {
+  jniThrowRuntimeException(env, "Unknown camera ID");
+}
+
+jint LegacyCamera_setup(JNIEnv*, jobject, jobject, jint, jobject, jboolean, jobject, jint) {
+  return -19;  // -ENODEV
+}
+
+void LegacyCamera_release(JNIEnv*, jobject) {}
+
+const JNINativeMethod gLegacyCameraMethods[] = {
+    {"_getNumberOfCameras", "(Landroid/os/Parcel;I)I", GESHER_JNI(LegacyCamera_getNumberOfCameras)},
+    {"_getCameraInfo",
+     "(ILandroid/content/res/CameraCompatibilityInfo;Landroid/os/Parcel;ILandroid/hardware/"
+     "Camera$CameraInfo;)V",
+     GESHER_JNI(LegacyCamera_getCameraInfo)},
+    {"native_setup",
+     "(Ljava/lang/Object;ILandroid/content/res/CameraCompatibilityInfo;ZLandroid/os/Parcel;I)I",
+     GESHER_JNI(LegacyCamera_setup)},
+    {"native_release", "()V", GESHER_JNI(LegacyCamera_release)},
 };
 
 // ImageReader's static initializer loads libmedia_jni.so: when no other part of
@@ -539,6 +594,8 @@ int register_gesher_camera_frames(JNIEnv* env) {
                         NELEM(gSurfaceUtilsMethods));
   RegisterGesherNatives(env, "com/gesher/server/CameraFrames", gCameraFramesMethods,
                         NELEM(gCameraFramesMethods));
+  RegisterGesherNatives(env, "android/hardware/Camera", gLegacyCameraMethods,
+                        NELEM(gLegacyCameraMethods));
   if (dlopen("libmedia_jni.so", RTLD_NOW) == nullptr) {
     gesher_register_builtin_library("libmedia_jni.so", kMediaJni,
                                     sizeof(kMediaJni) / sizeof(kMediaJni[0]));
