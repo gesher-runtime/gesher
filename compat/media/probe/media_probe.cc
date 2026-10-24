@@ -11,6 +11,7 @@
 //   media_probe wasapi             opens WASAPI shared mode on the default endpoint
 //                                  and renders 200 ms (a tone with GESHER_PROBE_AUDIBLE,
 //                                  else silence), or says why it cannot
+//   media_probe mf                 lists the Media Foundation decoders this machine has
 //
 // The engine's own tests: what the framework adds on top (AudioTrack and the rest)
 // is tested through test apps.
@@ -353,6 +354,53 @@ int Wasapi() {
   return 0;
 }
 
+// Which Media Foundation decoders this machine has (loaded at run time:
+// Windows Server has Media Foundation only as a feature).
+int MediaFoundation() {
+  HMODULE mf = LoadLibraryW(L"mfplat.dll");
+  if (mf == nullptr) {
+    printf("mf: no mfplat.dll (error %lu)\n", GetLastError());
+    return 0;
+  }
+  using Startup = HRESULT(WINAPI*)(ULONG, DWORD);
+  using EnumEx = HRESULT(WINAPI*)(GUID, UINT32, const void*, const void*, IUnknown***, UINT32*);
+  auto startup = reinterpret_cast<Startup>(reinterpret_cast<void*>(GetProcAddress(mf, "MFStartup")));
+  auto enumEx = reinterpret_cast<EnumEx>(reinterpret_cast<void*>(GetProcAddress(mf, "MFTEnumEx")));
+  if (startup == nullptr || enumEx == nullptr) {
+    printf("mf: mfplat.dll lacks MFStartup/MFTEnumEx\n");
+    return 0;
+  }
+  HRESULT hr = startup(0x20070 /* MF_VERSION */, 0);
+  printf("mf: MFStartup 0x%08lx\n", static_cast<unsigned long>(hr));
+  struct TypeInfo {
+    GUID major, sub;
+  };
+  auto fourcc = [](uint32_t d1) {
+    return GUID{d1, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
+  };
+  const GUID kAudioDecoder = {0x9EA73FB4, 0xEF7A, 0x4559, {0x8D, 0x5D, 0x71, 0x9D, 0x8F, 0x04, 0x26, 0xC7}};
+  const GUID kVideoDecoder = {0xD6C02D4B, 0x6833, 0x45B4, {0x97, 0x1A, 0x05, 0xA4, 0xB0, 0x4B, 0xAB, 0x91}};
+  const GUID kAudio = fourcc(0x73647561), kVideo = fourcc(0x73646976);
+  struct Want {
+    const char* name;
+    bool video;
+    uint32_t sub;
+  } wants[] = {{"AAC", false, 0x1610}, {"MP3", false, 0x0055}, {"FLAC", false, 0xF1AC},
+               {"Opus", false, 0x704F}, {"H.264", true, 0x34363248}, {"HEVC", true, 0x43564548},
+               {"VP9", true, 0x30395056}, {"AV1", true, 0x31305641}, {"MPEG-4 part 2", true, 0x5634504D}};
+  for (const Want& w : wants) {
+    TypeInfo in = {w.video ? kVideo : kAudio, fourcc(w.sub)};
+    IUnknown** acts = nullptr;
+    UINT32 count = 0;
+    hr = enumEx(w.video ? kVideoDecoder : kAudioDecoder, 0x1 | 0x2 | 0x4 | 0x10 | 0x40, &in, nullptr,
+                &acts, &count);
+    printf("mf: %s decoders: %u (0x%08lx)\n", w.name, count, static_cast<unsigned long>(hr));
+    for (UINT32 i = 0; i < count; i++) acts[i]->Release();
+    if (acts != nullptr) CoTaskMemFree(acts);
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -360,6 +408,7 @@ int main(int argc, char** argv) {
   if (argc >= 2 && strcmp(argv[1], "tones") == 0) return Tones();
   if (argc >= 3 && strcmp(argv[1], "analyze") == 0) return Analyze(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "wasapi") == 0) return Wasapi();
+  if (argc >= 2 && strcmp(argv[1], "mf") == 0) return MediaFoundation();
   fprintf(stderr, "usage: media_probe tones | analyze <wav> | wasapi\n");
   return 2;
 }
