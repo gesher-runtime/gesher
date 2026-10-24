@@ -1,0 +1,72 @@
+name: boot-image
+
+# Gesher's boot image (docs/boot-image.md, ADR 0031): dex2oat.exe, built
+# with the runtime by ci.yml's build job, compiles the boot class path on a
+# Windows runner (tools/boot-image/compile.ps1) into framework/x86_64/: the
+# primary image for core-oj, core-libart and core-icu4j, and extensions for
+# framework.jar and gesher-app.jar. ci.yml calls it after the build and
+# framework jobs; its artifact "boot-image" goes into the dist of the test
+# and package jobs.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools/boot-image
+            tools/symbolize.py
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+
+      - name: Compile the boot image
+        shell: pwsh
+        # BOOT_IMAGE_VERBOSE: compiler logs dex2oat's phases; a dex2oat that
+        # hangs is stopped after the timeout, with its threads' stacks.
+        run: pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image -TimeoutMinutes 12
+
+      # A first look before the test jobs: Hello runs on the image.
+      - name: Hello on the boot image
+        shell: pwsh
+        run: |
+          function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+          $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
+          foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+          Copy-Item dist/icudt*l.dat (Join-Path $root 'i18n/etc/icu')
+          $env:ANDROID_ROOT = NoDrive "$root/system"
+          $env:ANDROID_ART_ROOT = NoDrive "$root/art"
+          $env:ANDROID_DATA = NoDrive "$root/data"
+          $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
+          $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
+          $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
+          $env:GESHER_TRACE_FAULTS = '1'
+          $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$PWD/dist/$_.jar" }) -join ':'
+          $out = & dist/dalvikvm.exe "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$PWD/boot-image/framework/boot.art")" `
+            -Xint '-Xusejit:false' -cp (NoDrive "$PWD/dist/hello.dex") gesher.Hello 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and (Test-Path dist/dalvikvm.map)) {
+            $out | python tools/symbolize.py dist/dalvikvm.map | Out-Host
+          }
+          Write-Host $out
+          if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows') -or $out -notmatch 'gesher: boot image loaded') {
+            throw ('Hello did not run on the boot image (exit 0x{0:X8})' -f $code)
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-image
+          path: boot-image/

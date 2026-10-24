@@ -50,7 +50,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
@@ -88,6 +88,12 @@ jobs:
   angle:
     uses: ./.github/workflows/angle.yml
 
+  # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
+  # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
+  boot-image:
+    needs: [build, framework]
+    uses: ./.github/workflows/boot-image.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -112,7 +118,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle]
+    needs: [build, framework, graphics, angle, boot-image]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -142,6 +148,11 @@ jobs:
           name: angle
           path: dist
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
+          path: dist
+
       - name: Build installer
         shell: pwsh
         run: |
@@ -156,6 +167,10 @@ jobs:
         shell: pwsh
         run: |
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          # Every run of the installed Gesher below must load the installed boot
+          # image (docs/boot-image.md): without it the runtime fails instead of
+          # falling back to imageless running, and it says what it loaded.
+          $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -166,6 +181,7 @@ jobs:
           if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows')) {
             throw "Hello through the installed gesher failed (exit $code)"
           }
+          if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt') {
@@ -188,6 +204,8 @@ jobs:
           $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
           Write-Host $fonts
           if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
+          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
+          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The default: the Gesher device (binderd, servicemanager and a
           # persistent system server, detached), the APK installed, its
@@ -412,7 +430,7 @@ jobs:
           path: installer/*.exe
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image]
     strategy:
       fail-fast: false
       matrix:
@@ -453,6 +471,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: angle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
           path: dist
 
       - name: Run tests

@@ -49,6 +49,14 @@ $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
 $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
 $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
+# Gesher's boot image (docs/boot-image.md), where -Ximage below looks for it:
+# with GESHER_REQUIRE_BOOT_IMAGE, a run that cannot load it fails instead of
+# falling back to imageless running (tracks/60-boot-image.ps1 times both).
+if (Test-Path "$Dir/framework/x86_64/boot.art") {
+  New-Item -ItemType Directory -Force (Join-Path $root 'system/framework/x86_64') | Out-Null
+  Copy-Item "$Dir/framework/x86_64/*" (Join-Path $root 'system/framework/x86_64')
+  $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
+}
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $env:GESHER_TRACE_FAULTS = '1'  # report a fault where it happens (crash.cc)
 $out = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `

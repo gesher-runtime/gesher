@@ -103,6 +103,14 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [ ] Executable file mappings (`.oat` code)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
+- [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
+      dex2oat.exe, built for Windows on the same libart, compiles the boot class
+      path in CI (primary image and the framework.jar and gesher-app.jar
+      extensions, no compiled code); every test run and the installed Gesher
+      load it, with no imageless fallback; startup Hello 105 -> 55 ms,
+      lifecycle.apk to `Activity.onCreate` 783 -> 483 ms (ci run 40055199839)
+- [ ] AOT-compiled code in the boot image, the JIT and nterp with it (the code
+      generator on ADR 0006's thread register)
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
