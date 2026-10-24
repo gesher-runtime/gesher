@@ -68,6 +68,8 @@ include(cmake/aosp/core_libs_tests.cmake)
 include(cmake/aosp/graphics.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
+include(compat/devices/devices.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
