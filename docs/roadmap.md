@@ -197,7 +197,7 @@ needs: [framework-build.md](framework-build.md).
       second Activity taking the task window's place (ci run 40129561197,
       both runners, single process and the Gesher device; the e2e apps stay
       green)
-- [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+- [x] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
   - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
         Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
         through SharedMemory: `Typeface.DEFAULT`, families and aliases,
@@ -205,7 +205,16 @@ needs: [framework-build.md](framework-build.md).
         `StaticLayout` paragraph, bold/italic; shipped by the installer and
         loaded by the installed gesher-app (ci run 40011630189, both runners;
         docs/fonts.md)
-  - [ ] RTL text in a View (TextView in a window) and further scripts
+  - [x] RTL text in a View (TextView in a window) and further scripts:
+        Hebrew and Arabic TextViews drawn right to left (bidi runs with Latin
+        and digits in order, Arabic joined), alignment by gravity,
+        textDirection and textAlignment, layouts mirrored under an RTL locale
+        (`android:supportsRtl`), arrow keys moving an RTL EditText's cursor
+        visually; Arabic, Thai, Devanagari bundled (Noto), CJK, color emoji,
+        symbols and further scripts from Windows' fonts in place; the locale
+        list, layout direction and regional preferences from Windows (or
+        `$GESHER_LOCALES`); single process and the Gesher device (ci run
+        40133992911, both runners and the installer; docs/fonts.md, ADR 0044)
 
 ## Phase 4 checklist
 
