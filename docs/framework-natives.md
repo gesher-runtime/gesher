@@ -26,15 +26,16 @@ Gesher-owned: an `android.app.Activity` stub (`getDlWarning` returns null)
 and a small `android.os.Process` set (thread priority, argv0, CPU time),
 grown as `UnsatisfiedLinkError`s appear. The lifecycle also reached, and
 Gesher stands in for: `android.os.PerfettoTrace` (categories never enabled;
-MessageQueue builds them), `android.graphics.ColorSpace$Rgb`
-(DisplayManagerGlobal creates the named color spaces), and hwui's
-`RenderNode`, `Paint`, `Matrix` and `Path`, which View and Drawable
-constructors call: their tables are generated from hwui's JNI sources
-(`compat/framework/gen_hwui_standins.py`) and answer zero, or a fresh
-object, as nothing is drawn yet. See
+MessageQueue builds them). Phase 2 also stood in for
+`android.graphics.ColorSpace$Rgb` and hwui's `RenderNode`, `Paint`, `Matrix`
+and `Path`; Phase 3 replaced those by hwui's real natives
+(docs/graphics.md), and the generated zero-answer tables
+(`compat/framework/gen_device_standins.py`) now cover the device-only
+classes: `SurfaceControl`, `SurfaceSession`, `BLASTBufferQueue`. See
 [0013](decisions/0013-framework-natives.md).
 
-Left out until views: hwui and `android.graphics.*`, Surface, input,
+Left out until views (hwui, `android.graphics.*` and Surface came with
+Phase 3, docs/graphics.md): input,
 SQLite, CursorWindow, minikin, FileObserver, HwBinder. ART resolves natives
 lazily, so an unregistered class fails only when one of its natives is
 called. The first target stops at `performResume`, before `makeVisible`.
@@ -47,9 +48,13 @@ and hwui). `compat/framework/android_runtime.cc` holds the host
 ## Libraries
 
 - Already built: libbase, liblog, libziparchive, zlib, libnativehelper, ICU4C.
-- New: libcutils (Windows set plus host trace and ashmem), libutils and
-  libutils_binder (Windows set plus `Looper.cpp`), libandroidfw (without the
-  PNG files), libincfs-utils (`map_ptr`), the `android.content.res.flags` C++
+- New: libcutils, libutils, libutils_binder and libandroidfw in full: each
+  builds its Android.bp device source set (libcutils with host trace and
+  ashmem, libutils with its pthread threading under `GESHER`), plus
+  libutilscallstack (CallStack over a Windows x64 unwinder) and libpng; AOSP's
+  own gtests of these libraries run on Windows. Details, exclusions and CI
+  runs: [core-libs.md](core-libs.md).
+- Also new: libincfs-utils (`map_ptr`), the `android.content.res.flags` C++
   aconfig, libbinder (built without `__ANDROID__`, so a missing
   `/dev/binder` only logs), a `hwbinder/IPCThreadState.h` shim.
 

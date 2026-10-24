@@ -19,18 +19,34 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <android_runtime/AndroidRuntime.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
+#include <utils/AndroidThreads.h>
 
 #include "core_jni_helpers.h"
 
+#include "gesher_device_standins.h"
+
 // android_util_Binder.cpp defines its register function outside the namespace,
-// as hwui_standins.cc does.
+// as compat/hwui/graphics_runtime.cc does.
 int register_android_os_Binder(JNIEnv* env);
-int register_gesher_hwui_standins(JNIEnv* env);
+// hwui's natives (android.graphics, RenderNode, HardwareRenderer) and
+// Surface's: compat/hwui/graphics_runtime.cc, docs/graphics.md.
+int register_gesher_graphics(JNIEnv* env);
+int register_gesher_attach_standins(JNIEnv* env);
+// libandroid_runtime's input natives (InputChannel, InputEventReceiver/Sender,
+// KeyEvent, MotionEvent, KeyCharacterMap, VelocityTracker) and gesher-app's
+// input classes: compat/input/input_jni.cc, docs/input.md.
+int register_gesher_input(JNIEnv* env);
+// android.os.SharedMemory over memfds: compat/framework/shared_memory.cc.
+int register_gesher_shared_memory(JNIEnv* env);
+// android.app.NativeActivity's and android.view.InputQueue's natives for an
+// app's ELF libraries: compat/bionic/native_activity.cc, docs/native-libs.md.
+int register_gesher_native_activity(JNIEnv* env);
 
 namespace android {
 
@@ -42,6 +58,7 @@ int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
+int register_android_os_ServiceManagerNative(JNIEnv* env);
 int register_android_os_SystemClock(JNIEnv* env);
 int register_android_os_SystemProperties(JNIEnv* env);
 int register_android_os_Trace(JNIEnv* env);
@@ -49,14 +66,25 @@ int register_android_text_AndroidCharacter(JNIEnv* env);
 int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
+int register_android_animation_PropertyValuesHolder(JNIEnv* env);
+int register_android_database_CursorWindow(JNIEnv* env);
+int register_android_database_SQLiteConnection(JNIEnv* env);
+int register_android_database_SQLiteDebug(JNIEnv* env);
+int register_android_database_SQLiteGlobal(JNIEnv* env);
+int register_android_database_SQLiteRawStatement(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
+// services_natives.cc: the app process attached to a system server.
+int register_gesher_ApplicationSharedMemory(JNIEnv* env);
+int register_gesher_ClassLoaderFactory(JNIEnv* env);
+int register_gesher_ActivityThread(JNIEnv* env);
+int register_gesher_DebugStore(JNIEnv* env);
+int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
+int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
+int register_gesher_Shell(JNIEnv* env);  // compat/shell/shell_natives.cc (shell track)
 
-// --- libutils' androidSetThreadName ----------------------------------------------
-// libutils' Windows Threads.cpp leaves it out; libbinder's ProcessState names
-// its pooled threads with it.
-extern "C" void androidSetThreadName(const char* name) {
-  pthread_setname_np(pthread_self(), name);
-}
+// libutils' androidSetThreadName, which libbinder's ProcessState names its
+// pooled threads with, comes from libutils' pthread Threads.cpp (system/core
+// 0003, docs/core-libs.md).
 
 // --- AndroidRuntime statics ---------------------------------------------------
 // There is no AndroidRuntime instance (no Zygote; ART is started by dalvikvm
@@ -66,6 +94,43 @@ static JavaVM* gGesherJavaVM = nullptr;
 
 /* static */ JavaVM* AndroidRuntime::getJavaVM() {
   return gGesherJavaVM;
+}
+
+// --- threads that can call Java ----------------------------------------------------
+// AndroidRuntime::startReg's androidSetCreateThreadFunc(javaCreateThreadEtc):
+// threads libutils creates for Java (libbinder's pooled binder threads,
+// which run Java Binders' onTransact) are attached to the VM for their
+// lifetime, as AndroidRuntime.cpp's javaThreadShell does.
+
+struct JavaThreadStart {
+  android_thread_func_t entry;
+  void* user_data;
+  char* name;
+};
+
+static int JavaThreadShell(void* arg) {
+  JavaThreadStart start = *static_cast<JavaThreadStart*>(arg);
+  delete static_cast<JavaThreadStart*>(arg);
+  JavaVMAttachArgs args = {JNI_VERSION_1_4, start.name, nullptr};
+  JNIEnv* env = nullptr;
+  if (gGesherJavaVM->AttachCurrentThread(&env, &args) != JNI_OK) {
+    ALOGE("libandroid_runtime: attaching thread %s failed", start.name);
+    free(start.name);
+    return -1;
+  }
+  int result = start.entry(start.user_data);
+  gGesherJavaVM->DetachCurrentThread();
+  free(start.name);
+  return result;
+}
+
+static int JavaCreateThreadEtc(android_thread_func_t entry, void* user_data,
+                               const char* thread_name, int32_t thread_priority,
+                               size_t thread_stack_size, android_thread_id_t* thread_id) {
+  LOG_ALWAYS_FATAL_IF(thread_name == nullptr, "threadName not provided to javaCreateThreadEtc");
+  auto* start = new JavaThreadStart{entry, user_data, strdup(thread_name)};
+  return androidCreateRawThreadEtc(JavaThreadShell, start, thread_name, thread_priority,
+                                   thread_stack_size, thread_id);
 }
 
 /* static */ JNIEnv* AndroidRuntime::getJNIEnv() {
@@ -222,45 +287,6 @@ static int register_android_os_PerfettoTrace(JNIEnv* env) {
                               NELEM(gPerfettoCategoryMethods));
 }
 
-// --- android.graphics (Gesher stubs until hwui) ----------------------------------
-// hwui and Skia are left out until views (docs/framework-natives.md). The
-// headless lifecycle still builds a few graphics objects whose natives only
-// hold data: DisplayManagerGlobal creates ColorSpace's named spaces. Their
-// native side keeps the transfer parameters and the D50 transform, as hwui's
-// SkColorSpace would, and nothing reads them yet.
-
-struct GesherColorSpace {
-  float transfer[7];
-  float xyz[9];
-};
-
-static void ColorSpace_free(void* ptr) {
-  delete static_cast<GesherColorSpace*>(ptr);
-}
-
-static jlong ColorSpace_getNativeFinalizer(JNIEnv*, jclass) {
-  return reinterpret_cast<jlong>(&ColorSpace_free);
-}
-
-static jlong ColorSpace_create(JNIEnv* env, jclass, jfloat a, jfloat b, jfloat c, jfloat d,
-                               jfloat e, jfloat f, jfloat g, jfloatArray xyz) {
-  auto* space = new GesherColorSpace{{a, b, c, d, e, f, g}, {}};
-  if (xyz != nullptr && env->GetArrayLength(xyz) >= 9) {
-    env->GetFloatArrayRegion(xyz, 0, 9, space->xyz);
-  }
-  return reinterpret_cast<jlong>(space);
-}
-
-static const JNINativeMethod gColorSpaceRgbMethods[] = {
-    {"nativeGetNativeFinalizer", "()J", GESHER_JNI(ColorSpace_getNativeFinalizer)},
-    {"nativeCreate", "(FFFFFFF[F)J", GESHER_JNI(ColorSpace_create)},
-};
-
-static int register_android_graphics_ColorSpace(JNIEnv* env) {
-  return RegisterMethodsOrDie(env, "android/graphics/ColorSpace$Rgb$Native",
-                              gColorSpaceRgbMethods, NELEM(gColorSpaceRgbMethods));
-}
-
 // --- gesher.NativeCanary --------------------------------------------------------
 // @CriticalNative ABI canaries for the managed-code boundary: enough integer
 // and floating-point arguments that a System V / Microsoft calling-convention
@@ -331,6 +357,7 @@ static const struct {
     {"android_os_PerfettoTrace", "android/os/PerfettoTrackEventExtra",
      register_android_os_PerfettoTrace},
     {"android_os_Process", "android/os/Process", register_android_os_Process},
+    {"gesher_shared_memory", "android/os/SharedMemory", ::register_gesher_shared_memory},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
     {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",
@@ -340,6 +367,8 @@ static const struct {
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
     {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
+    {"android_os_ServiceManagerNative", "android/os/ServiceManagerProxy",
+     register_android_os_ServiceManagerNative},
     {"android_content_res_ApkAssets", "android/content/res/ApkAssets",
      register_android_content_res_ApkAssets},
     {"android_content_AssetManager", "android/content/res/AssetManager",
@@ -348,10 +377,41 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
-    {"android_graphics_ColorSpace", "android/graphics/ColorSpace$Rgb$Native",
-     register_android_graphics_ColorSpace},
-    {"gesher_hwui_standins", "android/graphics/RenderNode", ::register_gesher_hwui_standins},
+    // What real apps need (cmake/aosp/framework_e2e.cmake, docs/e2e.md): ObjectAnimator's
+    // property setters, android.database over SQLite.
+    {"android_animation_PropertyValuesHolder", "android/animation/PropertyValuesHolder",
+     register_android_animation_PropertyValuesHolder},
+    {"android_database_CursorWindow", "android/database/CursorWindow",
+     register_android_database_CursorWindow},
+    {"android_database_SQLiteConnection", "android/database/sqlite/SQLiteConnection",
+     register_android_database_SQLiteConnection},
+    {"android_database_SQLiteGlobal", "android/database/sqlite/SQLiteGlobal",
+     register_android_database_SQLiteGlobal},
+    {"android_database_SQLiteDebug", "android/database/sqlite/SQLiteDebug",
+     register_android_database_SQLiteDebug},
+    {"android_database_SQLiteRawStatement", "android/database/sqlite/SQLiteRawStatement",
+     register_android_database_SQLiteRawStatement},
+    // Stand-ins for graphics and view natives on the attached app process's path
+    // (attach_standins.cc); before the graphics rows, so real natives replace them.
+    {"gesher_attach_standins", "android/graphics/Canvas", ::register_gesher_attach_standins},
+    // hwui (AndroidRuntime.cpp registers it through libhwui's
+    // register_android_graphics_classes), then the device-only stand-ins.
+    {"gesher_graphics", "android/graphics/RenderNode", ::register_gesher_graphics},
+    // The input natives, after the stand-ins they replace (each class is checked).
+    {"gesher_input", "android/view/KeyEvent", ::register_gesher_input},
+    {"gesher_native_activity", "android/app/NativeActivity", ::register_gesher_native_activity},
+    {"gesher_device_standins", "android/view/SurfaceControl", ::register_gesher_device_standins},
     {"android_app_Activity", "android/app/Activity", register_android_app_Activity},
+    {"gesher_ApplicationSharedMemory", "com/android/internal/os/ApplicationSharedMemory",
+     register_gesher_ApplicationSharedMemory},
+    {"gesher_ClassLoaderFactory", "com/android/internal/os/ClassLoaderFactory",
+     register_gesher_ClassLoaderFactory},
+    {"gesher_ActivityThread", "android/app/ActivityThread", register_gesher_ActivityThread},
+    {"gesher_DebugStore", "com/android/internal/os/DebugStore", register_gesher_DebugStore},
+    {"gesher_PropertyInvalidatedCache", "android/app/PropertyInvalidatedCache",
+     register_gesher_PropertyInvalidatedCache},
+    {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},
+    {"gesher_Shell", "com/gesher/app/shell/Shell", register_gesher_Shell},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 
@@ -363,6 +423,7 @@ extern "C" jint JNI_OnLoad_android_runtime(JavaVM* vm, void*) {
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
     return JNI_ERR;
   }
+  androidSetCreateThreadFunc(android::JavaCreateThreadEtc);
   for (const auto& r : android::gRegJNI) {
     jclass clazz = env->FindClass(r.className);
     if (clazz == nullptr) {

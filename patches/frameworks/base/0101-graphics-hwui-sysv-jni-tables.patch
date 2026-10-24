@@ -1,0 +1,2591 @@
+diff --git a/libs/hwui/jni/AnimatedImageDrawable.cpp b/libs/hwui/jni/AnimatedImageDrawable.cpp
+--- a/libs/hwui/jni/AnimatedImageDrawable.cpp
++++ b/libs/hwui/jni/AnimatedImageDrawable.cpp
+@@ -290,24 +290,24 @@
+ 
+ static const JNINativeMethod gAnimatedImageDrawableMethods[] = {
+         {"nCreate", "(JLandroid/graphics/ImageDecoder;IIJZLandroid/graphics/Rect;)J",
+-         (void*)AnimatedImageDrawable_nCreate},
+-        {"nGetNativeFinalizer", "()J", (void*)AnimatedImageDrawable_nGetNativeFinalizer},
+-        {"nDraw", "(JJ)J", (void*)AnimatedImageDrawable_nDraw},
+-        {"nSetAlpha", "(JI)V", (void*)AnimatedImageDrawable_nSetAlpha},
+-        {"nGetAlpha", "(J)I", (void*)AnimatedImageDrawable_nGetAlpha},
+-        {"nSetColorFilter", "(JJ)V", (void*)AnimatedImageDrawable_nSetColorFilter},
+-        {"nIsRunning", "(J)Z", (void*)AnimatedImageDrawable_nIsRunning},
+-        {"nStart", "(J)Z", (void*)AnimatedImageDrawable_nStart},
+-        {"nStop", "(J)Z", (void*)AnimatedImageDrawable_nStop},
+-        {"nGetRepeatCount", "(J)I", (void*)AnimatedImageDrawable_nGetRepeatCount},
+-        {"nSetRepeatCount", "(JI)V", (void*)AnimatedImageDrawable_nSetRepeatCount},
++         GESHER_JNI(AnimatedImageDrawable_nCreate)},
++        {"nGetNativeFinalizer", "()J", GESHER_JNI(AnimatedImageDrawable_nGetNativeFinalizer)},
++        {"nDraw", "(JJ)J", GESHER_JNI(AnimatedImageDrawable_nDraw)},
++        {"nSetAlpha", "(JI)V", GESHER_JNI(AnimatedImageDrawable_nSetAlpha)},
++        {"nGetAlpha", "(J)I", GESHER_JNI(AnimatedImageDrawable_nGetAlpha)},
++        {"nSetColorFilter", "(JJ)V", GESHER_JNI(AnimatedImageDrawable_nSetColorFilter)},
++        {"nIsRunning", "(J)Z", GESHER_JNI(AnimatedImageDrawable_nIsRunning)},
++        {"nStart", "(J)Z", GESHER_JNI(AnimatedImageDrawable_nStart)},
++        {"nStop", "(J)Z", GESHER_JNI(AnimatedImageDrawable_nStop)},
++        {"nGetRepeatCount", "(J)I", GESHER_JNI(AnimatedImageDrawable_nGetRepeatCount)},
++        {"nSetRepeatCount", "(JI)V", GESHER_JNI(AnimatedImageDrawable_nSetRepeatCount)},
+         {"nSetOnAnimationEndListener", "(JLjava/lang/ref/WeakReference;)V",
+-         (void*)AnimatedImageDrawable_nSetOnAnimationEndListener},
+-        {"nNativeByteSize", "(J)J", (void*)AnimatedImageDrawable_nNativeByteSize},
+-        {"nSetMirrored", "(JZ)V", (void*)AnimatedImageDrawable_nSetMirrored},
+-        {"nSetBounds", "(JLandroid/graphics/Rect;)V", (void*)AnimatedImageDrawable_nSetBounds},
+-        {"nSetFilterBitmap", "(JZ)Z", (void*)AnimatedImageDrawable_nSetFilterBitmap},
+-        {"nGetFilterBitmap", "(J)Z", (void*)AnimatedImageDrawable_nGetFilterBitmap},
++         GESHER_JNI(AnimatedImageDrawable_nSetOnAnimationEndListener)},
++        {"nNativeByteSize", "(J)J", GESHER_JNI(AnimatedImageDrawable_nNativeByteSize)},
++        {"nSetMirrored", "(JZ)V", GESHER_JNI(AnimatedImageDrawable_nSetMirrored)},
++        {"nSetBounds", "(JLandroid/graphics/Rect;)V", GESHER_JNI(AnimatedImageDrawable_nSetBounds)},
++        {"nSetFilterBitmap", "(JZ)Z", GESHER_JNI(AnimatedImageDrawable_nSetFilterBitmap)},
++        {"nGetFilterBitmap", "(J)Z", GESHER_JNI(AnimatedImageDrawable_nGetFilterBitmap)},
+ };
+ 
+ int register_android_graphics_drawable_AnimatedImageDrawable(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Bitmap.cpp b/libs/hwui/jni/Bitmap.cpp
+--- a/libs/hwui/jni/Bitmap.cpp
++++ b/libs/hwui/jni/Bitmap.cpp
+@@ -1416,63 +1416,63 @@
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gBitmapMethods[] = {
+-        {"nativeCreate", "([IIIIIIZJ)Landroid/graphics/Bitmap;", (void*)Bitmap_creator},
+-        {"nativeCopy", "(JIZ)Landroid/graphics/Bitmap;", (void*)Bitmap_copy},
+-        {"nativeCopyAshmem", "(J)Landroid/graphics/Bitmap;", (void*)Bitmap_copyAshmem},
+-        {"nativeCopyAshmemConfig", "(JI)Landroid/graphics/Bitmap;", (void*)Bitmap_copyAshmemConfig},
+-        {"nativeGetAshmemFD", "(J)I", (void*)Bitmap_getAshmemFd},
+-        {"nativeGetNativeFinalizer", "()J", (void*)Bitmap_getNativeFinalizer},
+-        {"nativeGetNativeNoop", "()J", (void*)Bitmap_getNativeNoop},
+-        {"nativeRecycle", "(J)V", (void*)Bitmap_recycle},
+-        {"nativeReconfigure", "(JIIIZ)V", (void*)Bitmap_reconfigure},
+-        {"nativeCompress", "(JIILjava/io/OutputStream;[B)Z", (void*)Bitmap_compress},
+-        {"nativeErase", "(JI)V", (void*)Bitmap_erase},
+-        {"nativeErase", "(JJJ)V", (void*)Bitmap_eraseLong},
+-        {"nativeRowBytes", "(J)I", (void*)Bitmap_rowBytes},
+-        {"nativeConfig", "(J)I", (void*)Bitmap_config},
+-        {"nativeHasAlpha", "(J)Z", (void*)Bitmap_hasAlpha},
+-        {"nativeIsPremultiplied", "(J)Z", (void*)Bitmap_isPremultiplied},
+-        {"nativeSetHasAlpha", "(JZZ)V", (void*)Bitmap_setHasAlpha},
+-        {"nativeSetPremultiplied", "(JZ)V", (void*)Bitmap_setPremultiplied},
+-        {"nativeHasMipMap", "(J)Z", (void*)Bitmap_hasMipMap},
+-        {"nativeSetHasMipMap", "(JZ)V", (void*)Bitmap_setHasMipMap},
++        {"nativeCreate", "([IIIIIIZJ)Landroid/graphics/Bitmap;", GESHER_JNI(Bitmap_creator)},
++        {"nativeCopy", "(JIZ)Landroid/graphics/Bitmap;", GESHER_JNI(Bitmap_copy)},
++        {"nativeCopyAshmem", "(J)Landroid/graphics/Bitmap;", GESHER_JNI(Bitmap_copyAshmem)},
++        {"nativeCopyAshmemConfig", "(JI)Landroid/graphics/Bitmap;", GESHER_JNI(Bitmap_copyAshmemConfig)},
++        {"nativeGetAshmemFD", "(J)I", GESHER_JNI(Bitmap_getAshmemFd)},
++        {"nativeGetNativeFinalizer", "()J", GESHER_JNI(Bitmap_getNativeFinalizer)},
++        {"nativeGetNativeNoop", "()J", GESHER_JNI(Bitmap_getNativeNoop)},
++        {"nativeRecycle", "(J)V", GESHER_JNI(Bitmap_recycle)},
++        {"nativeReconfigure", "(JIIIZ)V", GESHER_JNI(Bitmap_reconfigure)},
++        {"nativeCompress", "(JIILjava/io/OutputStream;[B)Z", GESHER_JNI(Bitmap_compress)},
++        {"nativeErase", "(JI)V", GESHER_JNI(Bitmap_erase)},
++        {"nativeErase", "(JJJ)V", GESHER_JNI(Bitmap_eraseLong)},
++        {"nativeRowBytes", "(J)I", GESHER_JNI(Bitmap_rowBytes)},
++        {"nativeConfig", "(J)I", GESHER_JNI(Bitmap_config)},
++        {"nativeHasAlpha", "(J)Z", GESHER_JNI(Bitmap_hasAlpha)},
++        {"nativeIsPremultiplied", "(J)Z", GESHER_JNI(Bitmap_isPremultiplied)},
++        {"nativeSetHasAlpha", "(JZZ)V", GESHER_JNI(Bitmap_setHasAlpha)},
++        {"nativeSetPremultiplied", "(JZ)V", GESHER_JNI(Bitmap_setPremultiplied)},
++        {"nativeHasMipMap", "(J)Z", GESHER_JNI(Bitmap_hasMipMap)},
++        {"nativeSetHasMipMap", "(JZ)V", GESHER_JNI(Bitmap_setHasMipMap)},
+         {"nativeCreateFromParcel", "(Landroid/os/Parcel;)Landroid/graphics/Bitmap;",
+-         (void*)Bitmap_createFromParcel},
+-        {"nativeWriteToParcel", "(JILandroid/os/Parcel;)Z", (void*)Bitmap_writeToParcel},
+-        {"nativeExtractAlpha", "(JJ[I)Landroid/graphics/Bitmap;", (void*)Bitmap_extractAlpha},
+-        {"nativeGenerationId", "(J)I", (void*)Bitmap_getGenerationId},
+-        {"nativeGetPixel", "(JII)I", (void*)Bitmap_getPixel},
+-        {"nativeGetColor", "(JII)J", (void*)Bitmap_getColor},
+-        {"nativeGetPixels", "(J[IIIIIII)V", (void*)Bitmap_getPixels},
+-        {"nativeSetPixel", "(JIII)V", (void*)Bitmap_setPixel},
+-        {"nativeSetPixels", "(J[IIIIIII)V", (void*)Bitmap_setPixels},
+-        {"nativeCopyPixelsToBuffer", "(JLjava/nio/Buffer;)V", (void*)Bitmap_copyPixelsToBuffer},
+-        {"nativeCopyPixelsFromBuffer", "(JLjava/nio/Buffer;)V", (void*)Bitmap_copyPixelsFromBuffer},
+-        {"nativeSameAs", "(JJ)Z", (void*)Bitmap_sameAs},
+-        {"nativePrepareToDraw", "(J)V", (void*)Bitmap_prepareToDraw},
+-        {"nativeGetAllocationByteCount", "(J)I", (void*)Bitmap_getAllocationByteCount},
++         GESHER_JNI(Bitmap_createFromParcel)},
++        {"nativeWriteToParcel", "(JILandroid/os/Parcel;)Z", GESHER_JNI(Bitmap_writeToParcel)},
++        {"nativeExtractAlpha", "(JJ[I)Landroid/graphics/Bitmap;", GESHER_JNI(Bitmap_extractAlpha)},
++        {"nativeGenerationId", "(J)I", GESHER_JNI(Bitmap_getGenerationId)},
++        {"nativeGetPixel", "(JII)I", GESHER_JNI(Bitmap_getPixel)},
++        {"nativeGetColor", "(JII)J", GESHER_JNI(Bitmap_getColor)},
++        {"nativeGetPixels", "(J[IIIIIII)V", GESHER_JNI(Bitmap_getPixels)},
++        {"nativeSetPixel", "(JIII)V", GESHER_JNI(Bitmap_setPixel)},
++        {"nativeSetPixels", "(J[IIIIIII)V", GESHER_JNI(Bitmap_setPixels)},
++        {"nativeCopyPixelsToBuffer", "(JLjava/nio/Buffer;)V", GESHER_JNI(Bitmap_copyPixelsToBuffer)},
++        {"nativeCopyPixelsFromBuffer", "(JLjava/nio/Buffer;)V", GESHER_JNI(Bitmap_copyPixelsFromBuffer)},
++        {"nativeSameAs", "(JJ)Z", GESHER_JNI(Bitmap_sameAs)},
++        {"nativePrepareToDraw", "(J)V", GESHER_JNI(Bitmap_prepareToDraw)},
++        {"nativeGetAllocationByteCount", "(J)I", GESHER_JNI(Bitmap_getAllocationByteCount)},
+         {"nativeCopyPreserveInternalConfig", "(J)Landroid/graphics/Bitmap;",
+-         (void*)Bitmap_copyPreserveInternalConfig},
++         GESHER_JNI(Bitmap_copyPreserveInternalConfig)},
+         {"nativeWrapHardwareBufferBitmap",
+          "(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;",
+-         (void*)Bitmap_wrapHardwareBufferBitmap},
++         GESHER_JNI(Bitmap_wrapHardwareBufferBitmap)},
+         {"nativeGetHardwareBuffer", "(J)Landroid/hardware/HardwareBuffer;",
+-         (void*)Bitmap_getHardwareBuffer},
++         GESHER_JNI(Bitmap_getHardwareBuffer)},
+         {"nativeComputeColorSpace", "(J)Landroid/graphics/ColorSpace;",
+-         (void*)Bitmap_computeColorSpace},
+-        {"nativeSetColorSpace", "(JJ)V", (void*)Bitmap_setColorSpace},
+-        {"nativeIsSRGB", "(J)Z", (void*)Bitmap_isSRGB},
+-        {"nativeIsSRGBLinear", "(J)Z", (void*)Bitmap_isSRGBLinear},
+-        {"nativeSetImmutable", "(J)V", (void*)Bitmap_setImmutable},
+-        {"nativeExtractGainmap", "(J)Landroid/graphics/Gainmap;", (void*)Bitmap_extractGainmap},
+-        {"nativeSetGainmap", "(JJ)V", (void*)Bitmap_setGainmap},
+-        {"nativeGetSourceId", "(J)J", (void*)Bitmap_getSourceId},
+-        {"nativeSetSourceId", "(JJ)V", (void*)Bitmap_setSourceId},
++         GESHER_JNI(Bitmap_computeColorSpace)},
++        {"nativeSetColorSpace", "(JJ)V", GESHER_JNI(Bitmap_setColorSpace)},
++        {"nativeIsSRGB", "(J)Z", GESHER_JNI(Bitmap_isSRGB)},
++        {"nativeIsSRGBLinear", "(J)Z", GESHER_JNI(Bitmap_isSRGBLinear)},
++        {"nativeSetImmutable", "(J)V", GESHER_JNI(Bitmap_setImmutable)},
++        {"nativeExtractGainmap", "(J)Landroid/graphics/Gainmap;", GESHER_JNI(Bitmap_extractGainmap)},
++        {"nativeSetGainmap", "(JJ)V", GESHER_JNI(Bitmap_setGainmap)},
++        {"nativeGetSourceId", "(J)J", GESHER_JNI(Bitmap_getSourceId)},
++        {"nativeSetSourceId", "(JJ)V", GESHER_JNI(Bitmap_setSourceId)},
+ 
+         // ------------ @CriticalNative ----------------
+-        {"nativeIsImmutable", "(J)Z", (void*)Bitmap_isImmutable},
+-        {"nativeIsBackedByAshmem", "(J)Z", (void*)Bitmap_isBackedByAshmem},
+-        {"nativeHasGainmap", "(J)Z", (void*)Bitmap_hasGainmap},
++        {"nativeIsImmutable", "(J)Z", GESHER_JNI(Bitmap_isImmutable)},
++        {"nativeIsBackedByAshmem", "(J)Z", GESHER_JNI(Bitmap_isBackedByAshmem)},
++        {"nativeHasGainmap", "(J)Z", GESHER_JNI(Bitmap_hasGainmap)},
+ 
+ };
+ 
+diff --git a/libs/hwui/jni/BitmapFactory.cpp b/libs/hwui/jni/BitmapFactory.cpp
+--- a/libs/hwui/jni/BitmapFactory.cpp
++++ b/libs/hwui/jni/BitmapFactory.cpp
+@@ -766,27 +766,27 @@
+ static const JNINativeMethod gMethods[] = {
+     {   "nativeDecodeStream",
+         "(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+-        (void*)nativeDecodeStream
++        GESHER_JNI(nativeDecodeStream)
+     },
+ 
+     {   "nativeDecodeFileDescriptor",
+         "(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+-        (void*)nativeDecodeFileDescriptor
++        GESHER_JNI(nativeDecodeFileDescriptor)
+     },
+ 
+     {   "nativeDecodeAsset",
+         "(JLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+-        (void*)nativeDecodeAsset
++        GESHER_JNI(nativeDecodeAsset)
+     },
+ 
+     {   "nativeDecodeByteArray",
+         "([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+-        (void*)nativeDecodeByteArray
++        GESHER_JNI(nativeDecodeByteArray)
+     },
+ 
+     {   "nativeIsSeekable",
+         "(Ljava/io/FileDescriptor;)Z",
+-        (void*)nativeIsSeekable
++        GESHER_JNI(nativeIsSeekable)
+     },
+ };
+ 
+diff --git a/libs/hwui/jni/BitmapRegionDecoder.cpp b/libs/hwui/jni/BitmapRegionDecoder.cpp
+--- a/libs/hwui/jni/BitmapRegionDecoder.cpp
++++ b/libs/hwui/jni/BitmapRegionDecoder.cpp
+@@ -480,32 +480,32 @@
+ static const JNINativeMethod gBitmapRegionDecoderMethods[] = {
+     {   "nativeDecodeRegion",
+         "(JIIIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;",
+-        (void*)nativeDecodeRegion},
+-
+-    {   "nativeGetHeight", "(J)I", (void*)nativeGetHeight},
+-
+-    {   "nativeGetWidth", "(J)I", (void*)nativeGetWidth},
+-
+-    {   "nativeClean", "(J)V", (void*)nativeClean},
++        GESHER_JNI(nativeDecodeRegion)},
++
++    {   "nativeGetHeight", "(J)I", GESHER_JNI(nativeGetHeight)},
++
++    {   "nativeGetWidth", "(J)I", GESHER_JNI(nativeGetWidth)},
++
++    {   "nativeClean", "(J)V", GESHER_JNI(nativeClean)},
+ 
+     {   "nativeNewInstance",
+         "([BII)Landroid/graphics/BitmapRegionDecoder;",
+-        (void*)nativeNewInstanceFromByteArray
++        GESHER_JNI(nativeNewInstanceFromByteArray)
+     },
+ 
+     {   "nativeNewInstance",
+         "(Ljava/io/InputStream;[B)Landroid/graphics/BitmapRegionDecoder;",
+-        (void*)nativeNewInstanceFromStream
++        GESHER_JNI(nativeNewInstanceFromStream)
+     },
+ 
+     {   "nativeNewInstance",
+         "(Ljava/io/FileDescriptor;)Landroid/graphics/BitmapRegionDecoder;",
+-        (void*)nativeNewInstanceFromFileDescriptor
++        GESHER_JNI(nativeNewInstanceFromFileDescriptor)
+     },
+ 
+     {   "nativeNewInstance",
+         "(J)Landroid/graphics/BitmapRegionDecoder;",
+-        (void*)nativeNewInstanceFromAsset
++        GESHER_JNI(nativeNewInstanceFromAsset)
+     },
+ };
+ 
+diff --git a/libs/hwui/jni/Camera.cpp b/libs/hwui/jni/Camera.cpp
+--- a/libs/hwui/jni/Camera.cpp
++++ b/libs/hwui/jni/Camera.cpp
+@@ -117,22 +117,22 @@
+ static const JNINativeMethod gCameraMethods[] = {
+     /* name, signature, funcPtr */
+ 
+-    { "nativeConstructor",   "()V",    (void*)Camera_constructor   },
+-    { "nativeDestructor",    "()V",    (void*)Camera_destructor    },
+-    { "save",                "()V",    (void*)Camera_save          },
+-    { "restore",             "()V",    (void*)Camera_restore       },
+-    { "translate",           "(FFF)V", (void*)Camera_translate     },
+-    { "rotateX",             "(F)V",   (void*)Camera_rotateX       },
+-    { "rotateY",             "(F)V",   (void*)Camera_rotateY       },
+-    { "rotateZ",             "(F)V",   (void*)Camera_rotateZ       },
+-    { "rotate",              "(FFF)V", (void*)Camera_rotate        },
+-    { "setLocation",         "(FFF)V", (void*)Camera_setLocation   },
+-    { "getLocationX",        "()F",    (void*)Camera_getLocationX  },
+-    { "getLocationY",        "()F",    (void*)Camera_getLocationY  },
+-    { "getLocationZ",        "()F",    (void*)Camera_getLocationZ  },
+-    { "nativeGetMatrix",     "(J)V",   (void*)Camera_getMatrix     },
+-    { "nativeApplyToCanvas", "(J)V",   (void*)Camera_applyToCanvas },
+-    { "dotWithNormal",       "(FFF)F", (void*)Camera_dotWithNormal }
++    { "nativeConstructor",   "()V",    GESHER_JNI(Camera_constructor)   },
++    { "nativeDestructor",    "()V",    GESHER_JNI(Camera_destructor)    },
++    { "save",                "()V",    GESHER_JNI(Camera_save)          },
++    { "restore",             "()V",    GESHER_JNI(Camera_restore)       },
++    { "translate",           "(FFF)V", GESHER_JNI(Camera_translate)     },
++    { "rotateX",             "(F)V",   GESHER_JNI(Camera_rotateX)       },
++    { "rotateY",             "(F)V",   GESHER_JNI(Camera_rotateY)       },
++    { "rotateZ",             "(F)V",   GESHER_JNI(Camera_rotateZ)       },
++    { "rotate",              "(FFF)V", GESHER_JNI(Camera_rotate)        },
++    { "setLocation",         "(FFF)V", GESHER_JNI(Camera_setLocation)   },
++    { "getLocationX",        "()F",    GESHER_JNI(Camera_getLocationX)  },
++    { "getLocationY",        "()F",    GESHER_JNI(Camera_getLocationY)  },
++    { "getLocationZ",        "()F",    GESHER_JNI(Camera_getLocationZ)  },
++    { "nativeGetMatrix",     "(J)V",   GESHER_JNI(Camera_getMatrix)     },
++    { "nativeApplyToCanvas", "(J)V",   GESHER_JNI(Camera_applyToCanvas) },
++    { "dotWithNormal",       "(FFF)F", GESHER_JNI(Camera_dotWithNormal) }
+ };
+ 
+ int register_android_graphics_Camera(JNIEnv* env) {
+diff --git a/libs/hwui/jni/CanvasProperty.cpp b/libs/hwui/jni/CanvasProperty.cpp
+--- a/libs/hwui/jni/CanvasProperty.cpp
++++ b/libs/hwui/jni/CanvasProperty.cpp
+@@ -38,8 +38,8 @@
+ // ----------------------------------------------------------------------------
+ 
+ static const JNINativeMethod gMethods[] = {
+-    { "nCreateFloat", "(F)J", (void*) createFloat },
+-    { "nCreatePaint", "(J)J", (void*) createPaint },
++    { "nCreateFloat", "(F)J", GESHER_JNI(createFloat) },
++    { "nCreatePaint", "(J)J", GESHER_JNI(createPaint) },
+ };
+ 
+ int register_android_graphics_CanvasProperty(JNIEnv* env) {
+diff --git a/libs/hwui/jni/ColorFilter.cpp b/libs/hwui/jni/ColorFilter.cpp
+--- a/libs/hwui/jni/ColorFilter.cpp
++++ b/libs/hwui/jni/ColorFilter.cpp
+@@ -180,36 +180,36 @@
+ };
+ 
+ static const JNINativeMethod colorfilter_methods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)ColorFilterGlue::GetNativeFinalizer}};
++        {"nativeGetFinalizer", "()J", GESHER_JNI(ColorFilterGlue::GetNativeFinalizer)}};
+ 
+ static const JNINativeMethod blendmode_methods[] = {
+-        {"native_CreateBlendModeFilter", "(II)J", (void*)ColorFilterGlue::CreateBlendModeFilter},
++        {"native_CreateBlendModeFilter", "(II)J", GESHER_JNI(ColorFilterGlue::CreateBlendModeFilter)},
+ };
+ 
+ static const JNINativeMethod lighting_methods[] = {
+-        {"native_CreateLightingFilter", "(II)J", (void*)ColorFilterGlue::CreateLightingFilter},
+-        {"native_SetLightingFilterAdd", "(JI)V", (void*)ColorFilterGlue::SetLightingFilterAdd},
+-        {"native_SetLightingFilterMul", "(JI)V", (void*)ColorFilterGlue::SetLightingFilterMul}};
++        {"native_CreateLightingFilter", "(II)J", GESHER_JNI(ColorFilterGlue::CreateLightingFilter)},
++        {"native_SetLightingFilterAdd", "(JI)V", GESHER_JNI(ColorFilterGlue::SetLightingFilterAdd)},
++        {"native_SetLightingFilterMul", "(JI)V", GESHER_JNI(ColorFilterGlue::SetLightingFilterMul)}};
+ 
+ static const JNINativeMethod colormatrix_methods[] = {
+-        {"nativeColorMatrixFilter", "([F)J", (void*)ColorFilterGlue::CreateColorMatrixFilter},
+-        {"nativeSetColorMatrix", "(J[F)V", (void*)ColorFilterGlue::SetColorMatrix}};
++        {"nativeColorMatrixFilter", "([F)J", GESHER_JNI(ColorFilterGlue::CreateColorMatrixFilter)},
++        {"nativeSetColorMatrix", "(J[F)V", GESHER_JNI(ColorFilterGlue::SetColorMatrix)}};
+ 
+ static const JNINativeMethod runtime_color_filter_methods[] = {
+         {"nativeCreateRuntimeColorFilter", "(Ljava/lang/String;)J",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_createColorFilter},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_createColorFilter)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[FZ)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateUniformsFloatArray},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateUniformsFloatArray)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;FFFFI)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateUniformsFloats},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateUniformsFloats)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[I)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateUniformsIntArray},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateUniformsIntArray)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;IIIII)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateUniformsInts},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateUniformsInts)},
+         {"nativeUpdateChild", "(JLjava/lang/String;J)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateChild},
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateChild)},
+         {"nativeUpdateInputColorFilter", "(JLjava/lang/String;J)V",
+-         (void*)ColorFilterGlue::RuntimeColorFilter_updateInputColorFilter}};
++         GESHER_JNI(ColorFilterGlue::RuntimeColorFilter_updateInputColorFilter)}};
+ 
+ int register_android_graphics_ColorFilter(JNIEnv* env) {
+     android::RegisterMethodsOrDie(env, "android/graphics/ColorFilter", colorfilter_methods,
+diff --git a/libs/hwui/jni/FontFamily.cpp b/libs/hwui/jni/FontFamily.cpp
+--- a/libs/hwui/jni/FontFamily.cpp
++++ b/libs/hwui/jni/FontFamily.cpp
+@@ -219,14 +219,14 @@
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gFontFamilyMethods[] = {
+-    { "nInitBuilder",           "(Ljava/lang/String;I)J", (void*)FontFamily_initBuilder },
+-    { "nCreateFamily",          "(J)J", (void*)FontFamily_create },
+-    { "nGetBuilderReleaseFunc", "()J", (void*)FontFamily_getBuilderReleaseFunc },
+-    { "nGetFamilyReleaseFunc",  "()J", (void*)FontFamily_getFamilyReleaseFunc },
+-    { "nAddFont",               "(JLjava/nio/ByteBuffer;III)Z", (void*)FontFamily_addFont },
++    { "nInitBuilder",           "(Ljava/lang/String;I)J", GESHER_JNI(FontFamily_initBuilder) },
++    { "nCreateFamily",          "(J)J", GESHER_JNI(FontFamily_create) },
++    { "nGetBuilderReleaseFunc", "()J", GESHER_JNI(FontFamily_getBuilderReleaseFunc) },
++    { "nGetFamilyReleaseFunc",  "()J", GESHER_JNI(FontFamily_getFamilyReleaseFunc) },
++    { "nAddFont",               "(JLjava/nio/ByteBuffer;III)Z", GESHER_JNI(FontFamily_addFont) },
+     { "nAddFontWeightStyle",    "(JLjava/nio/ByteBuffer;III)Z",
+-            (void*)FontFamily_addFontWeightStyle },
+-    { "nAddAxisValue",         "(JIF)V", (void*)FontFamily_addAxisValue },
++            GESHER_JNI(FontFamily_addFontWeightStyle) },
++    { "nAddAxisValue",         "(JIF)V", GESHER_JNI(FontFamily_addAxisValue) },
+ };
+ 
+ int register_android_graphics_FontFamily(JNIEnv* env)
+diff --git a/libs/hwui/jni/Gainmap.cpp b/libs/hwui/jni/Gainmap.cpp
+--- a/libs/hwui/jni/Gainmap.cpp
++++ b/libs/hwui/jni/Gainmap.cpp
+@@ -297,31 +297,31 @@
+ // ----------------------------------------------------------------------------
+ 
+ static const JNINativeMethod gGainmapMethods[] = {
+-        {"nGetFinalizer", "()J", (void*)Gainmap_getNativeFinalizer},
+-        {"nCreateEmpty", "()J", (void*)Gainmap_createEmpty},
+-        {"nCreateCopy", "(J)J", (void*)Gainmap_createCopy},
+-        {"nSetBitmap", "(JLandroid/graphics/Bitmap;)V", (void*)Gainmap_setBitmap},
+-        {"nSetRatioMin", "(JFFF)V", (void*)Gainmap_setRatioMin},
+-        {"nGetRatioMin", "(J[F)V", (void*)Gainmap_getRatioMin},
+-        {"nSetRatioMax", "(JFFF)V", (void*)Gainmap_setRatioMax},
+-        {"nGetRatioMax", "(J[F)V", (void*)Gainmap_getRatioMax},
+-        {"nSetGamma", "(JFFF)V", (void*)Gainmap_setGamma},
+-        {"nGetGamma", "(J[F)V", (void*)Gainmap_getGamma},
+-        {"nSetEpsilonSdr", "(JFFF)V", (void*)Gainmap_setEpsilonSdr},
+-        {"nGetEpsilonSdr", "(J[F)V", (void*)Gainmap_getEpsilonSdr},
+-        {"nSetEpsilonHdr", "(JFFF)V", (void*)Gainmap_setEpsilonHdr},
+-        {"nGetEpsilonHdr", "(J[F)V", (void*)Gainmap_getEpsilonHdr},
+-        {"nSetDisplayRatioHdr", "(JF)V", (void*)Gainmap_setDisplayRatioHdr},
+-        {"nGetDisplayRatioHdr", "(J)F", (void*)Gainmap_getDisplayRatioHdr},
+-        {"nSetDisplayRatioSdr", "(JF)V", (void*)Gainmap_setDisplayRatioSdr},
+-        {"nGetDisplayRatioSdr", "(J)F", (void*)Gainmap_getDisplayRatioSdr},
+-        {"nSetAlternativeColorSpace", "(JJ)V", (void*)Gainmap_setAlternativeColorSpace},
++        {"nGetFinalizer", "()J", GESHER_JNI(Gainmap_getNativeFinalizer)},
++        {"nCreateEmpty", "()J", GESHER_JNI(Gainmap_createEmpty)},
++        {"nCreateCopy", "(J)J", GESHER_JNI(Gainmap_createCopy)},
++        {"nSetBitmap", "(JLandroid/graphics/Bitmap;)V", GESHER_JNI(Gainmap_setBitmap)},
++        {"nSetRatioMin", "(JFFF)V", GESHER_JNI(Gainmap_setRatioMin)},
++        {"nGetRatioMin", "(J[F)V", GESHER_JNI(Gainmap_getRatioMin)},
++        {"nSetRatioMax", "(JFFF)V", GESHER_JNI(Gainmap_setRatioMax)},
++        {"nGetRatioMax", "(J[F)V", GESHER_JNI(Gainmap_getRatioMax)},
++        {"nSetGamma", "(JFFF)V", GESHER_JNI(Gainmap_setGamma)},
++        {"nGetGamma", "(J[F)V", GESHER_JNI(Gainmap_getGamma)},
++        {"nSetEpsilonSdr", "(JFFF)V", GESHER_JNI(Gainmap_setEpsilonSdr)},
++        {"nGetEpsilonSdr", "(J[F)V", GESHER_JNI(Gainmap_getEpsilonSdr)},
++        {"nSetEpsilonHdr", "(JFFF)V", GESHER_JNI(Gainmap_setEpsilonHdr)},
++        {"nGetEpsilonHdr", "(J[F)V", GESHER_JNI(Gainmap_getEpsilonHdr)},
++        {"nSetDisplayRatioHdr", "(JF)V", GESHER_JNI(Gainmap_setDisplayRatioHdr)},
++        {"nGetDisplayRatioHdr", "(J)F", GESHER_JNI(Gainmap_getDisplayRatioHdr)},
++        {"nSetDisplayRatioSdr", "(JF)V", GESHER_JNI(Gainmap_setDisplayRatioSdr)},
++        {"nGetDisplayRatioSdr", "(J)F", GESHER_JNI(Gainmap_getDisplayRatioSdr)},
++        {"nSetAlternativeColorSpace", "(JJ)V", GESHER_JNI(Gainmap_setAlternativeColorSpace)},
+         {"nGetAlternativeColorSpace", "(J)Landroid/graphics/ColorSpace;",
+-         (void*)Gainmap_getAlternativeColorSpace},
+-        {"nSetDirection", "(JI)V", (void*)Gainmap_setDirection},
+-        {"nGetDirection", "(J)I", (void*)Gainmap_getDirection},
+-        {"nWriteGainmapToParcel", "(JLandroid/os/Parcel;)V", (void*)Gainmap_writeToParcel},
+-        {"nReadGainmapFromParcel", "(JLandroid/os/Parcel;)V", (void*)Gainmap_readFromParcel},
++         GESHER_JNI(Gainmap_getAlternativeColorSpace)},
++        {"nSetDirection", "(JI)V", GESHER_JNI(Gainmap_setDirection)},
++        {"nGetDirection", "(J)I", GESHER_JNI(Gainmap_getDirection)},
++        {"nWriteGainmapToParcel", "(JLandroid/os/Parcel;)V", GESHER_JNI(Gainmap_writeToParcel)},
++        {"nReadGainmapFromParcel", "(JLandroid/os/Parcel;)V", GESHER_JNI(Gainmap_readFromParcel)},
+ };
+ 
+ int register_android_graphics_Gainmap(JNIEnv* env) {
+diff --git a/libs/hwui/jni/ImageDecoder.cpp b/libs/hwui/jni/ImageDecoder.cpp
+--- a/libs/hwui/jni/ImageDecoder.cpp
++++ b/libs/hwui/jni/ImageDecoder.cpp
+@@ -536,18 +536,18 @@
+ }
+ 
+ static const JNINativeMethod gImageDecoderMethods[] = {
+-    { "nCreate",        "(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",    (void*) ImageDecoder_nCreateAsset },
+-    { "nCreate",        "(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", (void*) ImageDecoder_nCreateByteBuffer },
+-    { "nCreate",        "([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", (void*) ImageDecoder_nCreateByteArray },
+-    { "nCreate",        "(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", (void*) ImageDecoder_nCreateInputStream },
+-    { "nCreate",        "(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", (void*) ImageDecoder_nCreateFd },
++    { "nCreate",        "(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",    GESHER_JNI(ImageDecoder_nCreateAsset) },
++    { "nCreate",        "(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", GESHER_JNI(ImageDecoder_nCreateByteBuffer) },
++    { "nCreate",        "([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", GESHER_JNI(ImageDecoder_nCreateByteArray) },
++    { "nCreate",        "(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", GESHER_JNI(ImageDecoder_nCreateInputStream) },
++    { "nCreate",        "(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;", GESHER_JNI(ImageDecoder_nCreateFd) },
+     { "nDecodeBitmap",  "(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;",
+-                                                                 (void*) ImageDecoder_nDecodeBitmap },
+-    { "nGetSampledSize","(JI)Landroid/util/Size;",               (void*) ImageDecoder_nGetSampledSize },
+-    { "nGetPadding",    "(JLandroid/graphics/Rect;)V",           (void*) ImageDecoder_nGetPadding },
+-    { "nClose",         "(J)V",                                  (void*) ImageDecoder_nClose},
+-    { "nGetMimeType",   "(J)Ljava/lang/String;",                 (void*) ImageDecoder_nGetMimeType },
+-    { "nGetColorSpace", "(J)Landroid/graphics/ColorSpace;",      (void*) ImageDecoder_nGetColorSpace },
++                                                                 GESHER_JNI(ImageDecoder_nDecodeBitmap) },
++    { "nGetSampledSize","(JI)Landroid/util/Size;",               GESHER_JNI(ImageDecoder_nGetSampledSize) },
++    { "nGetPadding",    "(JLandroid/graphics/Rect;)V",           GESHER_JNI(ImageDecoder_nGetPadding) },
++    { "nClose",         "(J)V",                                  GESHER_JNI(ImageDecoder_nClose)},
++    { "nGetMimeType",   "(J)Ljava/lang/String;",                 GESHER_JNI(ImageDecoder_nGetMimeType) },
++    { "nGetColorSpace", "(J)Landroid/graphics/ColorSpace;",      GESHER_JNI(ImageDecoder_nGetColorSpace) },
+ };
+ 
+ int register_android_graphics_ImageDecoder(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Interpolator.cpp b/libs/hwui/jni/Interpolator.cpp
+--- a/libs/hwui/jni/Interpolator.cpp
++++ b/libs/hwui/jni/Interpolator.cpp
+@@ -65,12 +65,12 @@
+  * JNI registration.
+  */
+ static const JNINativeMethod gInterpolatorMethods[] = {
+-    { "nativeConstructor",      "(II)J",        (void*)Interpolator_constructor     },
+-    { "nativeDestructor",       "(J)V",         (void*)Interpolator_destructor      },
+-    { "nativeReset",            "(JII)V",       (void*)Interpolator_reset           },
+-    { "nativeSetKeyFrame",      "(JII[F[F)V",   (void*)Interpolator_setKeyFrame     },
+-    { "nativeSetRepeatMirror",  "(JFZ)V",       (void*)Interpolator_setRepeatMirror },
+-    { "nativeTimeToValues",     "(JI[F)I",      (void*)Interpolator_timeToValues    }
++    { "nativeConstructor",      "(II)J",        GESHER_JNI(Interpolator_constructor)     },
++    { "nativeDestructor",       "(J)V",         GESHER_JNI(Interpolator_destructor)      },
++    { "nativeReset",            "(JII)V",       GESHER_JNI(Interpolator_reset)           },
++    { "nativeSetKeyFrame",      "(JII[F[F)V",   GESHER_JNI(Interpolator_setKeyFrame)     },
++    { "nativeSetRepeatMirror",  "(JFZ)V",       GESHER_JNI(Interpolator_setRepeatMirror) },
++    { "nativeTimeToValues",     "(JI[F)I",      GESHER_JNI(Interpolator_timeToValues)    }
+ };
+ 
+ int register_android_graphics_Interpolator(JNIEnv* env)
+diff --git a/libs/hwui/jni/MaskFilter.cpp b/libs/hwui/jni/MaskFilter.cpp
+--- a/libs/hwui/jni/MaskFilter.cpp
++++ b/libs/hwui/jni/MaskFilter.cpp
+@@ -65,21 +65,21 @@
+ };
+ 
+ static const JNINativeMethod gMaskFilterMethods[] = {
+-    { "nativeDestructor",   "(J)V",     (void*)SkMaskFilterGlue::destructor      }
++    { "nativeDestructor",   "(J)V",     GESHER_JNI(SkMaskFilterGlue::destructor)      }
+ };
+ 
+ static const JNINativeMethod gBlurMaskFilterMethods[] = {
+-    { "nativeConstructor",  "(FI)J",    (void*)SkMaskFilterGlue::createBlur      }
++    { "nativeConstructor",  "(FI)J",    GESHER_JNI(SkMaskFilterGlue::createBlur)      }
+ };
+ 
+ static const JNINativeMethod gEmbossMaskFilterMethods[] = {
+-    { "nativeConstructor",  "([FFFF)J", (void*)SkMaskFilterGlue::createEmboss    }
++    { "nativeConstructor",  "([FFFF)J", GESHER_JNI(SkMaskFilterGlue::createEmboss)    }
+ };
+ 
+ static const JNINativeMethod gTableMaskFilterMethods[] = {
+-    { "nativeNewTable", "([B)J", (void*)SkMaskFilterGlue::createTable    },
+-    { "nativeNewClip",  "(II)J", (void*)SkMaskFilterGlue::createClipTable    },
+-    { "nativeNewGamma", "(F)J", (void*)SkMaskFilterGlue::createGammaTable    }
++    { "nativeNewTable", "([B)J", GESHER_JNI(SkMaskFilterGlue::createTable)    },
++    { "nativeNewClip",  "(II)J", GESHER_JNI(SkMaskFilterGlue::createClipTable)    },
++    { "nativeNewGamma", "(F)J", GESHER_JNI(SkMaskFilterGlue::createGammaTable)    }
+ };
+ 
+ int register_android_graphics_MaskFilter(JNIEnv* env)
+diff --git a/libs/hwui/jni/MeshSpecification.cpp b/libs/hwui/jni/MeshSpecification.cpp
+--- a/libs/hwui/jni/MeshSpecification.cpp
++++ b/libs/hwui/jni/MeshSpecification.cpp
+@@ -131,20 +131,20 @@
+ }
+ 
+ static const JNINativeMethod gMeshSpecificationMethods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)getMeshSpecificationFinalizer},
++        {"nativeGetFinalizer", "()J", GESHER_JNI(getMeshSpecificationFinalizer)},
+         {"nativeMake",
+          "([Landroid/graphics/MeshSpecification$Attribute;I[Landroid/graphics/"
+          "MeshSpecification$Varying;"
+          "Ljava/lang/String;Ljava/lang/String;)J",
+-         (void*)Make},
++         GESHER_JNI(Make)},
+         {"nativeMakeWithCS",
+          "([Landroid/graphics/MeshSpecification$Attribute;I"
+          "[Landroid/graphics/MeshSpecification$Varying;Ljava/lang/String;Ljava/lang/String;J)J",
+-         (void*)MakeWithCS},
++         GESHER_JNI(MakeWithCS)},
+         {"nativeMakeWithAlpha",
+          "([Landroid/graphics/MeshSpecification$Attribute;I"
+          "[Landroid/graphics/MeshSpecification$Varying;Ljava/lang/String;Ljava/lang/String;JI)J",
+-         (void*)MakeWithAlpha}};
++         GESHER_JNI(MakeWithAlpha)}};
+ 
+ int register_android_graphics_MeshSpecification(JNIEnv* env) {
+     android::RegisterMethodsOrDie(env, "android/graphics/MeshSpecification",
+diff --git a/libs/hwui/jni/NinePatch.cpp b/libs/hwui/jni/NinePatch.cpp
+--- a/libs/hwui/jni/NinePatch.cpp
++++ b/libs/hwui/jni/NinePatch.cpp
+@@ -150,12 +150,12 @@
+ /////////////////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gNinePatchMethods[] = {
+-    { "isNinePatchChunk", "([B)Z", (void*) SkNinePatchGlue::isNinePatchChunk },
++    { "isNinePatchChunk", "([B)Z", GESHER_JNI(SkNinePatchGlue::isNinePatchChunk) },
+     { "validateNinePatchChunk", "([B)J",
+-            (void*) SkNinePatchGlue::validateNinePatchChunk },
+-    { "nativeFinalize", "(J)V", (void*) SkNinePatchGlue::finalize },
++            GESHER_JNI(SkNinePatchGlue::validateNinePatchChunk) },
++    { "nativeFinalize", "(J)V", GESHER_JNI(SkNinePatchGlue::finalize) },
+     { "nativeGetTransparentRegion", "(JJLandroid/graphics/Rect;)J",
+-            (void*) SkNinePatchGlue::getTransparentRegion }
++            GESHER_JNI(SkNinePatchGlue::getTransparentRegion) }
+ };
+ 
+ int register_android_graphics_NinePatch(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Paint.cpp b/libs/hwui/jni/Paint.cpp
+--- a/libs/hwui/jni/Paint.cpp
++++ b/libs/hwui/jni/Paint.cpp
+@@ -1177,115 +1177,115 @@
+ }; // namespace PaintGlue
+ 
+ static const JNINativeMethod methods[] = {
+-        {"nGetNativeFinalizer", "()J", (void*)PaintGlue::getNativeFinalizer},
+-        {"nInit", "()J", (void*)PaintGlue::init},
+-        {"nInitWithPaint", "(J)J", (void*)PaintGlue::initWithPaint},
+-        {"nBreakText", "(J[CIIFI[F)I", (void*)PaintGlue::breakTextC},
+-        {"nBreakText", "(JLjava/lang/String;ZFI[F)I", (void*)PaintGlue::breakTextS},
+-        {"nGetTextAdvances", "(J[CIIIII[FI)F", (void*)PaintGlue::getTextAdvances___CIIIII_FI},
++        {"nGetNativeFinalizer", "()J", GESHER_JNI(PaintGlue::getNativeFinalizer)},
++        {"nInit", "()J", GESHER_JNI(PaintGlue::init)},
++        {"nInitWithPaint", "(J)J", GESHER_JNI(PaintGlue::initWithPaint)},
++        {"nBreakText", "(J[CIIFI[F)I", GESHER_JNI(PaintGlue::breakTextC)},
++        {"nBreakText", "(JLjava/lang/String;ZFI[F)I", GESHER_JNI(PaintGlue::breakTextS)},
++        {"nGetTextAdvances", "(J[CIIIII[FI)F", GESHER_JNI(PaintGlue::getTextAdvances___CIIIII_FI)},
+         {"nGetTextAdvances", "(JLjava/lang/String;IIIII[FI)F",
+-         (void*)PaintGlue::getTextAdvances__StringIIIII_FI},
+-
+-        {"nGetTextRunCursor", "(J[CIIIII)I", (void*)PaintGlue::getTextRunCursor___C},
++         GESHER_JNI(PaintGlue::getTextAdvances__StringIIIII_FI)},
++
++        {"nGetTextRunCursor", "(J[CIIIII)I", GESHER_JNI(PaintGlue::getTextRunCursor___C)},
+         {"nGetTextRunCursor", "(JLjava/lang/String;IIIII)I",
+-         (void*)PaintGlue::getTextRunCursor__String},
+-        {"nGetTextPath", "(JI[CIIFFJ)V", (void*)PaintGlue::getTextPath___C},
+-        {"nGetTextPath", "(JILjava/lang/String;IIFFJ)V", (void*)PaintGlue::getTextPath__String},
++         GESHER_JNI(PaintGlue::getTextRunCursor__String)},
++        {"nGetTextPath", "(JI[CIIFFJ)V", GESHER_JNI(PaintGlue::getTextPath___C)},
++        {"nGetTextPath", "(JILjava/lang/String;IIFFJ)V", GESHER_JNI(PaintGlue::getTextPath__String)},
+         {"nGetStringBounds", "(JLjava/lang/String;IIILandroid/graphics/Rect;)V",
+-         (void*)PaintGlue::getStringBounds},
++         GESHER_JNI(PaintGlue::getStringBounds)},
+         {"nGetCharArrayBounds", "(J[CIIILandroid/graphics/Rect;)V",
+-         (void*)PaintGlue::getCharArrayBounds},
+-        {"nHasGlyph", "(JILjava/lang/String;)Z", (void*)PaintGlue::hasGlyph},
+-        {"nGetRunAdvance", "(J[CIIIIZI)F", (void*)PaintGlue::getRunAdvance___CIIIIZI_F},
++         GESHER_JNI(PaintGlue::getCharArrayBounds)},
++        {"nHasGlyph", "(JILjava/lang/String;)Z", GESHER_JNI(PaintGlue::hasGlyph)},
++        {"nGetRunAdvance", "(J[CIIIIZI)F", GESHER_JNI(PaintGlue::getRunAdvance___CIIIIZI_F)},
+         {"nGetRunCharacterAdvance",
+          "(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F",
+-         (void*)PaintGlue::getRunCharacterAdvance___CIIIIZI_FI_F},
+-        {"nGetOffsetForAdvance", "(J[CIIIIZF)I", (void*)PaintGlue::getOffsetForAdvance___CIIIIZF_I},
++         GESHER_JNI(PaintGlue::getRunCharacterAdvance___CIIIIZI_FI_F)},
++        {"nGetOffsetForAdvance", "(J[CIIIIZF)I", GESHER_JNI(PaintGlue::getOffsetForAdvance___CIIIIZF_I)},
+         {"nGetFontMetricsIntForText", "(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V",
+-         (void*)PaintGlue::getFontMetricsIntForText___C},
++         GESHER_JNI(PaintGlue::getFontMetricsIntForText___C)},
+         {"nGetFontMetricsIntForText",
+          "(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V",
+-         (void*)PaintGlue::getFontMetricsIntForText___String},
++         GESHER_JNI(PaintGlue::getFontMetricsIntForText___String)},
+ 
+         // --------------- @FastNative ----------------------
+ 
+-        {"nSetTextLocales", "(JLjava/lang/String;)I", (void*)PaintGlue::setTextLocales},
++        {"nSetTextLocales", "(JLjava/lang/String;)I", GESHER_JNI(PaintGlue::setTextLocales)},
+         {"nSetFontFeatureSettings", "(JLjava/lang/String;)V",
+-         (void*)PaintGlue::setFontFeatureSettings},
++         GESHER_JNI(PaintGlue::setFontFeatureSettings)},
+         {"nGetFontMetrics", "(JLandroid/graphics/Paint$FontMetrics;Z)F",
+-         (void*)PaintGlue::getFontMetrics},
++         GESHER_JNI(PaintGlue::getFontMetrics)},
+         {"nGetFontMetricsInt", "(JLandroid/graphics/Paint$FontMetricsInt;Z)I",
+-         (void*)PaintGlue::getFontMetricsInt},
++         GESHER_JNI(PaintGlue::getFontMetricsInt)},
+ 
+         // --------------- @CriticalNative ------------------
+ 
+-        {"nReset", "(J)V", (void*)PaintGlue::reset},
+-        {"nSet", "(JJ)V", (void*)PaintGlue::assign},
+-        {"nGetFlags", "(J)I", (void*)PaintGlue::getFlags},
+-        {"nSetFlags", "(JI)V", (void*)PaintGlue::setFlags},
+-        {"nGetHinting", "(J)I", (void*)PaintGlue::getHinting},
+-        {"nSetHinting", "(JI)V", (void*)PaintGlue::setHinting},
+-        {"nSetAntiAlias", "(JZ)V", (void*)PaintGlue::setAntiAlias},
+-        {"nSetSubpixelText", "(JZ)V", (void*)PaintGlue::setSubpixelText},
+-        {"nSetLinearText", "(JZ)V", (void*)PaintGlue::setLinearText},
+-        {"nSetUnderlineText", "(JZ)V", (void*)PaintGlue::setUnderlineText},
+-        {"nSetStrikeThruText", "(JZ)V", (void*)PaintGlue::setStrikeThruText},
+-        {"nSetFakeBoldText", "(JZ)V", (void*)PaintGlue::setFakeBoldText},
+-        {"nSetFilterBitmap", "(JZ)V", (void*)PaintGlue::setFilterBitmap},
+-        {"nSetDither", "(JZ)V", (void*)PaintGlue::setDither},
+-        {"nGetStyle", "(J)I", (void*)PaintGlue::getStyle},
+-        {"nSetStyle", "(JI)V", (void*)PaintGlue::setStyle},
+-        {"nSetColor", "(JI)V", (void*)PaintGlue::setColor},
+-        {"nSetColor", "(JJJ)V", (void*)PaintGlue::setColorLong},
+-        {"nSetAlpha", "(JI)V", (void*)PaintGlue::setAlpha},
+-        {"nGetStrokeWidth", "(J)F", (void*)PaintGlue::getStrokeWidth},
+-        {"nSetStrokeWidth", "(JF)V", (void*)PaintGlue::setStrokeWidth},
+-        {"nGetStrokeMiter", "(J)F", (void*)PaintGlue::getStrokeMiter},
+-        {"nSetStrokeMiter", "(JF)V", (void*)PaintGlue::setStrokeMiter},
+-        {"nGetStrokeCap", "(J)I", (void*)PaintGlue::getStrokeCap},
+-        {"nSetStrokeCap", "(JI)V", (void*)PaintGlue::setStrokeCap},
+-        {"nGetStrokeJoin", "(J)I", (void*)PaintGlue::getStrokeJoin},
+-        {"nSetStrokeJoin", "(JI)V", (void*)PaintGlue::setStrokeJoin},
+-        {"nGetFillPath", "(JJJ)Z", (void*)PaintGlue::getFillPath},
+-        {"nSetShader", "(JJ)J", (void*)PaintGlue::setShader},
+-        {"nSetColorFilter", "(JJ)J", (void*)PaintGlue::setColorFilter},
+-        {"nSetXfermode", "(JI)V", (void*)PaintGlue::setXfermode},
+-        {"nSetXfermode", "(JJ)V", (void*)PaintGlue::setRuntimeXfermode},
+-        {"nSetPathEffect", "(JJ)J", (void*)PaintGlue::setPathEffect},
+-        {"nSetMaskFilter", "(JJ)J", (void*)PaintGlue::setMaskFilter},
+-        {"nSetTypeface", "(JJ)V", (void*)PaintGlue::setTypeface},
+-        {"nGetTextAlign", "(J)I", (void*)PaintGlue::getTextAlign},
+-        {"nSetTextAlign", "(JI)V", (void*)PaintGlue::setTextAlign},
++        {"nReset", "(J)V", GESHER_JNI(PaintGlue::reset)},
++        {"nSet", "(JJ)V", GESHER_JNI(PaintGlue::assign)},
++        {"nGetFlags", "(J)I", GESHER_JNI(PaintGlue::getFlags)},
++        {"nSetFlags", "(JI)V", GESHER_JNI(PaintGlue::setFlags)},
++        {"nGetHinting", "(J)I", GESHER_JNI(PaintGlue::getHinting)},
++        {"nSetHinting", "(JI)V", GESHER_JNI(PaintGlue::setHinting)},
++        {"nSetAntiAlias", "(JZ)V", GESHER_JNI(PaintGlue::setAntiAlias)},
++        {"nSetSubpixelText", "(JZ)V", GESHER_JNI(PaintGlue::setSubpixelText)},
++        {"nSetLinearText", "(JZ)V", GESHER_JNI(PaintGlue::setLinearText)},
++        {"nSetUnderlineText", "(JZ)V", GESHER_JNI(PaintGlue::setUnderlineText)},
++        {"nSetStrikeThruText", "(JZ)V", GESHER_JNI(PaintGlue::setStrikeThruText)},
++        {"nSetFakeBoldText", "(JZ)V", GESHER_JNI(PaintGlue::setFakeBoldText)},
++        {"nSetFilterBitmap", "(JZ)V", GESHER_JNI(PaintGlue::setFilterBitmap)},
++        {"nSetDither", "(JZ)V", GESHER_JNI(PaintGlue::setDither)},
++        {"nGetStyle", "(J)I", GESHER_JNI(PaintGlue::getStyle)},
++        {"nSetStyle", "(JI)V", GESHER_JNI(PaintGlue::setStyle)},
++        {"nSetColor", "(JI)V", GESHER_JNI(PaintGlue::setColor)},
++        {"nSetColor", "(JJJ)V", GESHER_JNI(PaintGlue::setColorLong)},
++        {"nSetAlpha", "(JI)V", GESHER_JNI(PaintGlue::setAlpha)},
++        {"nGetStrokeWidth", "(J)F", GESHER_JNI(PaintGlue::getStrokeWidth)},
++        {"nSetStrokeWidth", "(JF)V", GESHER_JNI(PaintGlue::setStrokeWidth)},
++        {"nGetStrokeMiter", "(J)F", GESHER_JNI(PaintGlue::getStrokeMiter)},
++        {"nSetStrokeMiter", "(JF)V", GESHER_JNI(PaintGlue::setStrokeMiter)},
++        {"nGetStrokeCap", "(J)I", GESHER_JNI(PaintGlue::getStrokeCap)},
++        {"nSetStrokeCap", "(JI)V", GESHER_JNI(PaintGlue::setStrokeCap)},
++        {"nGetStrokeJoin", "(J)I", GESHER_JNI(PaintGlue::getStrokeJoin)},
++        {"nSetStrokeJoin", "(JI)V", GESHER_JNI(PaintGlue::setStrokeJoin)},
++        {"nGetFillPath", "(JJJ)Z", GESHER_JNI(PaintGlue::getFillPath)},
++        {"nSetShader", "(JJ)J", GESHER_JNI(PaintGlue::setShader)},
++        {"nSetColorFilter", "(JJ)J", GESHER_JNI(PaintGlue::setColorFilter)},
++        {"nSetXfermode", "(JI)V", GESHER_JNI(PaintGlue::setXfermode)},
++        {"nSetXfermode", "(JJ)V", GESHER_JNI(PaintGlue::setRuntimeXfermode)},
++        {"nSetPathEffect", "(JJ)J", GESHER_JNI(PaintGlue::setPathEffect)},
++        {"nSetMaskFilter", "(JJ)J", GESHER_JNI(PaintGlue::setMaskFilter)},
++        {"nSetTypeface", "(JJ)V", GESHER_JNI(PaintGlue::setTypeface)},
++        {"nGetTextAlign", "(J)I", GESHER_JNI(PaintGlue::getTextAlign)},
++        {"nSetTextAlign", "(JI)V", GESHER_JNI(PaintGlue::setTextAlign)},
+         {"nSetTextLocalesByMinikinLocaleListId", "(JI)V",
+-         (void*)PaintGlue::setTextLocalesByMinikinLocaleListId},
+-        {"nGetElegantTextHeight", "(J)I", (void*)PaintGlue::getElegantTextHeight},
+-        {"nSetElegantTextHeight", "(JI)V", (void*)PaintGlue::setElegantTextHeight},
+-        {"nGetTextSize", "(J)F", (void*)PaintGlue::getTextSize},
+-        {"nSetTextSize", "(JF)V", (void*)PaintGlue::setTextSize},
+-        {"nGetTextScaleX", "(J)F", (void*)PaintGlue::getTextScaleX},
+-        {"nSetTextScaleX", "(JF)V", (void*)PaintGlue::setTextScaleX},
+-        {"nGetTextSkewX", "(J)F", (void*)PaintGlue::getTextSkewX},
+-        {"nSetTextSkewX", "(JF)V", (void*)PaintGlue::setTextSkewX},
+-        {"nGetLetterSpacing", "(J)F", (void*)PaintGlue::getLetterSpacing},
+-        {"nSetLetterSpacing", "(JF)V", (void*)PaintGlue::setLetterSpacing},
+-        {"nGetWordSpacing", "(J)F", (void*)PaintGlue::getWordSpacing},
+-        {"nSetWordSpacing", "(JF)V", (void*)PaintGlue::setWordSpacing},
+-        {"nGetStartHyphenEdit", "(J)I", (void*)PaintGlue::getStartHyphenEdit},
+-        {"nGetEndHyphenEdit", "(J)I", (void*)PaintGlue::getEndHyphenEdit},
+-        {"nSetStartHyphenEdit", "(JI)V", (void*)PaintGlue::setStartHyphenEdit},
+-        {"nSetEndHyphenEdit", "(JI)V", (void*)PaintGlue::setEndHyphenEdit},
+-        {"nAscent", "(J)F", (void*)PaintGlue::ascent},
+-        {"nDescent", "(J)F", (void*)PaintGlue::descent},
+-        {"nGetUnderlinePosition", "(J)F", (void*)PaintGlue::getUnderlinePosition},
+-        {"nGetUnderlineThickness", "(J)F", (void*)PaintGlue::getUnderlineThickness},
+-        {"nGetStrikeThruPosition", "(J)F", (void*)PaintGlue::getStrikeThruPosition},
+-        {"nGetStrikeThruThickness", "(J)F", (void*)PaintGlue::getStrikeThruThickness},
+-        {"nSetShadowLayer", "(JFFFJJ)V", (void*)PaintGlue::setShadowLayer},
+-        {"nHasShadowLayer", "(J)Z", (void*)PaintGlue::hasShadowLayer},
+-        {"nEqualsForTextMeasurement", "(JJ)Z", (void*)PaintGlue::equalsForTextMeasurement},
+-        {"nCreateFontVariationBuilder", "(I)J", (void*)PaintGlue::createFontVariationBuilder},
+-        {"nAddFontVariationToBuilder", "(JIF)V", (void*)PaintGlue::addFontVariationToBuilder},
+-        {"nSetFontVariationOverride", "(JJ)V", (void*)PaintGlue::setFontVariationOverride},
++         GESHER_JNI(PaintGlue::setTextLocalesByMinikinLocaleListId)},
++        {"nGetElegantTextHeight", "(J)I", GESHER_JNI(PaintGlue::getElegantTextHeight)},
++        {"nSetElegantTextHeight", "(JI)V", GESHER_JNI(PaintGlue::setElegantTextHeight)},
++        {"nGetTextSize", "(J)F", GESHER_JNI(PaintGlue::getTextSize)},
++        {"nSetTextSize", "(JF)V", GESHER_JNI(PaintGlue::setTextSize)},
++        {"nGetTextScaleX", "(J)F", GESHER_JNI(PaintGlue::getTextScaleX)},
++        {"nSetTextScaleX", "(JF)V", GESHER_JNI(PaintGlue::setTextScaleX)},
++        {"nGetTextSkewX", "(J)F", GESHER_JNI(PaintGlue::getTextSkewX)},
++        {"nSetTextSkewX", "(JF)V", GESHER_JNI(PaintGlue::setTextSkewX)},
++        {"nGetLetterSpacing", "(J)F", GESHER_JNI(PaintGlue::getLetterSpacing)},
++        {"nSetLetterSpacing", "(JF)V", GESHER_JNI(PaintGlue::setLetterSpacing)},
++        {"nGetWordSpacing", "(J)F", GESHER_JNI(PaintGlue::getWordSpacing)},
++        {"nSetWordSpacing", "(JF)V", GESHER_JNI(PaintGlue::setWordSpacing)},
++        {"nGetStartHyphenEdit", "(J)I", GESHER_JNI(PaintGlue::getStartHyphenEdit)},
++        {"nGetEndHyphenEdit", "(J)I", GESHER_JNI(PaintGlue::getEndHyphenEdit)},
++        {"nSetStartHyphenEdit", "(JI)V", GESHER_JNI(PaintGlue::setStartHyphenEdit)},
++        {"nSetEndHyphenEdit", "(JI)V", GESHER_JNI(PaintGlue::setEndHyphenEdit)},
++        {"nAscent", "(J)F", GESHER_JNI(PaintGlue::ascent)},
++        {"nDescent", "(J)F", GESHER_JNI(PaintGlue::descent)},
++        {"nGetUnderlinePosition", "(J)F", GESHER_JNI(PaintGlue::getUnderlinePosition)},
++        {"nGetUnderlineThickness", "(J)F", GESHER_JNI(PaintGlue::getUnderlineThickness)},
++        {"nGetStrikeThruPosition", "(J)F", GESHER_JNI(PaintGlue::getStrikeThruPosition)},
++        {"nGetStrikeThruThickness", "(J)F", GESHER_JNI(PaintGlue::getStrikeThruThickness)},
++        {"nSetShadowLayer", "(JFFFJJ)V", GESHER_JNI(PaintGlue::setShadowLayer)},
++        {"nHasShadowLayer", "(J)Z", GESHER_JNI(PaintGlue::hasShadowLayer)},
++        {"nEqualsForTextMeasurement", "(JJ)Z", GESHER_JNI(PaintGlue::equalsForTextMeasurement)},
++        {"nCreateFontVariationBuilder", "(I)J", GESHER_JNI(PaintGlue::createFontVariationBuilder)},
++        {"nAddFontVariationToBuilder", "(JIF)V", GESHER_JNI(PaintGlue::addFontVariationToBuilder)},
++        {"nSetFontVariationOverride", "(JJ)V", GESHER_JNI(PaintGlue::setFontVariationOverride)},
+ };
+ 
+ int register_android_graphics_Paint(JNIEnv* env) {
+diff --git a/libs/hwui/jni/PaintFilter.cpp b/libs/hwui/jni/PaintFilter.cpp
+--- a/libs/hwui/jni/PaintFilter.cpp
++++ b/libs/hwui/jni/PaintFilter.cpp
+@@ -57,11 +57,11 @@
+ };
+ 
+ static const JNINativeMethod drawfilter_methods[] = {
+-    {"nativeDestructor", "(J)V", (void*) PaintFilterGlue::finalizer}
++    {"nativeDestructor", "(J)V", GESHER_JNI(PaintFilterGlue::finalizer)}
+ };
+ 
+ static const JNINativeMethod paintflags_methods[] = {
+-    {"nativeConstructor","(II)J", (void*) PaintFilterGlue::CreatePaintFlagsFilter}
++    {"nativeConstructor","(II)J", GESHER_JNI(PaintFilterGlue::CreatePaintFlagsFilter)}
+ };
+ 
+ int register_android_graphics_DrawFilter(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Path.cpp b/libs/hwui/jni/Path.cpp
+--- a/libs/hwui/jni/Path.cpp
++++ b/libs/hwui/jni/Path.cpp
+@@ -532,53 +532,53 @@
+ };
+ 
+ static const JNINativeMethod methods[] = {
+-        {"nInit", "()J", (void*)SkPathGlue::init},
+-        {"nInit", "(J)J", (void*)SkPathGlue::init_Path},
+-        {"nGetFinalizer", "()J", (void*)SkPathGlue::getFinalizer},
+-        {"nSet", "(JJ)V", (void*)SkPathGlue::set},
+-        {"nComputeBounds", "(JLandroid/graphics/RectF;)V", (void*)SkPathGlue::computeBounds},
+-        {"nIncReserve", "(JI)V", (void*)SkPathGlue::incReserve},
+-        {"nMoveTo", "(JFF)V", (void*)SkPathGlue::moveTo__FF},
+-        {"nRMoveTo", "(JFF)V", (void*)SkPathGlue::rMoveTo},
+-        {"nLineTo", "(JFF)V", (void*)SkPathGlue::lineTo__FF},
+-        {"nRLineTo", "(JFF)V", (void*)SkPathGlue::rLineTo},
+-        {"nQuadTo", "(JFFFF)V", (void*)SkPathGlue::quadTo__FFFF},
+-        {"nRQuadTo", "(JFFFF)V", (void*)SkPathGlue::rQuadTo},
+-        {"nConicTo", "(JFFFFF)V", (void*)SkPathGlue::conicTo},
+-        {"nRConicTo", "(JFFFFF)V", (void*)SkPathGlue::rConicTo},
+-        {"nCubicTo", "(JFFFFFF)V", (void*)SkPathGlue::cubicTo__FFFFFF},
+-        {"nRCubicTo", "(JFFFFFF)V", (void*)SkPathGlue::rCubicTo},
+-        {"nArcTo", "(JFFFFFFZ)V", (void*)SkPathGlue::arcTo},
+-        {"nClose", "(J)V", (void*)SkPathGlue::close},
+-        {"nAddRect", "(JFFFFI)V", (void*)SkPathGlue::addRect},
+-        {"nAddOval", "(JFFFFI)V", (void*)SkPathGlue::addOval},
+-        {"nAddCircle", "(JFFFI)V", (void*)SkPathGlue::addCircle},
+-        {"nAddArc", "(JFFFFFF)V", (void*)SkPathGlue::addArc},
+-        {"nAddRoundRect", "(JFFFFFFI)V", (void*)SkPathGlue::addRoundRectXY},
+-        {"nAddRoundRect", "(JFFFF[FI)V", (void*)SkPathGlue::addRoundRect8},
+-        {"nAddPath", "(JJFF)V", (void*)SkPathGlue::addPath__PathFF},
+-        {"nAddPath", "(JJ)V", (void*)SkPathGlue::addPath__Path},
+-        {"nAddPath", "(JJJ)V", (void*)SkPathGlue::addPath__PathMatrix},
+-        {"nInterpolate", "(JJFJ)Z", (void*)SkPathGlue::interpolate},
+-        {"nOffset", "(JFF)V", (void*)SkPathGlue::offset__FF},
+-        {"nSetLastPoint", "(JFF)V", (void*)SkPathGlue::setLastPoint},
+-        {"nTransform", "(JJJ)V", (void*)SkPathGlue::transform__MatrixPath},
+-        {"nTransform", "(JJ)V", (void*)SkPathGlue::transform__Matrix},
+-        {"nOp", "(JJIJ)Z", (void*)SkPathGlue::op},
+-        {"nApproximate", "(JF)[F", (void*)SkPathGlue::approximate},
++        {"nInit", "()J", GESHER_JNI(SkPathGlue::init)},
++        {"nInit", "(J)J", GESHER_JNI(SkPathGlue::init_Path)},
++        {"nGetFinalizer", "()J", GESHER_JNI(SkPathGlue::getFinalizer)},
++        {"nSet", "(JJ)V", GESHER_JNI(SkPathGlue::set)},
++        {"nComputeBounds", "(JLandroid/graphics/RectF;)V", GESHER_JNI(SkPathGlue::computeBounds)},
++        {"nIncReserve", "(JI)V", GESHER_JNI(SkPathGlue::incReserve)},
++        {"nMoveTo", "(JFF)V", GESHER_JNI(SkPathGlue::moveTo__FF)},
++        {"nRMoveTo", "(JFF)V", GESHER_JNI(SkPathGlue::rMoveTo)},
++        {"nLineTo", "(JFF)V", GESHER_JNI(SkPathGlue::lineTo__FF)},
++        {"nRLineTo", "(JFF)V", GESHER_JNI(SkPathGlue::rLineTo)},
++        {"nQuadTo", "(JFFFF)V", GESHER_JNI(SkPathGlue::quadTo__FFFF)},
++        {"nRQuadTo", "(JFFFF)V", GESHER_JNI(SkPathGlue::rQuadTo)},
++        {"nConicTo", "(JFFFFF)V", GESHER_JNI(SkPathGlue::conicTo)},
++        {"nRConicTo", "(JFFFFF)V", GESHER_JNI(SkPathGlue::rConicTo)},
++        {"nCubicTo", "(JFFFFFF)V", GESHER_JNI(SkPathGlue::cubicTo__FFFFFF)},
++        {"nRCubicTo", "(JFFFFFF)V", GESHER_JNI(SkPathGlue::rCubicTo)},
++        {"nArcTo", "(JFFFFFFZ)V", GESHER_JNI(SkPathGlue::arcTo)},
++        {"nClose", "(J)V", GESHER_JNI(SkPathGlue::close)},
++        {"nAddRect", "(JFFFFI)V", GESHER_JNI(SkPathGlue::addRect)},
++        {"nAddOval", "(JFFFFI)V", GESHER_JNI(SkPathGlue::addOval)},
++        {"nAddCircle", "(JFFFI)V", GESHER_JNI(SkPathGlue::addCircle)},
++        {"nAddArc", "(JFFFFFF)V", GESHER_JNI(SkPathGlue::addArc)},
++        {"nAddRoundRect", "(JFFFFFFI)V", GESHER_JNI(SkPathGlue::addRoundRectXY)},
++        {"nAddRoundRect", "(JFFFF[FI)V", GESHER_JNI(SkPathGlue::addRoundRect8)},
++        {"nAddPath", "(JJFF)V", GESHER_JNI(SkPathGlue::addPath__PathFF)},
++        {"nAddPath", "(JJ)V", GESHER_JNI(SkPathGlue::addPath__Path)},
++        {"nAddPath", "(JJJ)V", GESHER_JNI(SkPathGlue::addPath__PathMatrix)},
++        {"nInterpolate", "(JJFJ)Z", GESHER_JNI(SkPathGlue::interpolate)},
++        {"nOffset", "(JFF)V", GESHER_JNI(SkPathGlue::offset__FF)},
++        {"nSetLastPoint", "(JFF)V", GESHER_JNI(SkPathGlue::setLastPoint)},
++        {"nTransform", "(JJJ)V", GESHER_JNI(SkPathGlue::transform__MatrixPath)},
++        {"nTransform", "(JJ)V", GESHER_JNI(SkPathGlue::transform__Matrix)},
++        {"nOp", "(JJIJ)Z", GESHER_JNI(SkPathGlue::op)},
++        {"nApproximate", "(JF)[F", GESHER_JNI(SkPathGlue::approximate)},
+ 
+         // ------- @FastNative below here ----------------------
+-        {"nIsRect", "(JLandroid/graphics/RectF;)Z", (void*)SkPathGlue::isRect},
++        {"nIsRect", "(JLandroid/graphics/RectF;)Z", GESHER_JNI(SkPathGlue::isRect)},
+ 
+         // ------- @CriticalNative below here ------------------
+-        {"nGetGenerationID", "(J)I", (void*)SkPathGlue::getGenerationID},
+-        {"nIsInterpolatable", "(JJ)Z", (void*)SkPathGlue::isInterpolatable},
+-        {"nReset", "(J)V", (void*)SkPathGlue::reset},
+-        {"nRewind", "(J)V", (void*)SkPathGlue::rewind},
+-        {"nIsEmpty", "(J)Z", (void*)SkPathGlue::isEmpty},
+-        {"nIsConvex", "(J)Z", (void*)SkPathGlue::isConvex},
+-        {"nGetFillType", "(J)I", (void*)SkPathGlue::getFillType},
+-        {"nSetFillType", "(JI)V", (void*)SkPathGlue::setFillType},
++        {"nGetGenerationID", "(J)I", GESHER_JNI(SkPathGlue::getGenerationID)},
++        {"nIsInterpolatable", "(JJ)Z", GESHER_JNI(SkPathGlue::isInterpolatable)},
++        {"nReset", "(J)V", GESHER_JNI(SkPathGlue::reset)},
++        {"nRewind", "(J)V", GESHER_JNI(SkPathGlue::rewind)},
++        {"nIsEmpty", "(J)Z", GESHER_JNI(SkPathGlue::isEmpty)},
++        {"nIsConvex", "(J)Z", GESHER_JNI(SkPathGlue::isConvex)},
++        {"nGetFillType", "(J)I", GESHER_JNI(SkPathGlue::getFillType)},
++        {"nSetFillType", "(JI)V", GESHER_JNI(SkPathGlue::setFillType)},
+ };
+ 
+ int register_android_graphics_Path(JNIEnv* env) {
+diff --git a/libs/hwui/jni/PathEffect.cpp b/libs/hwui/jni/PathEffect.cpp
+--- a/libs/hwui/jni/PathEffect.cpp
++++ b/libs/hwui/jni/PathEffect.cpp
+@@ -65,31 +65,31 @@
+ ////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gPathEffectMethods[] = {
+-    { "nativeDestructor", "(J)V", (void*)SkPathEffectGlue::destructor }
++    { "nativeDestructor", "(J)V", GESHER_JNI(SkPathEffectGlue::destructor) }
+ };
+ 
+ static const JNINativeMethod gComposePathEffectMethods[] = {
+-    { "nativeCreate", "(JJ)J", (void*)SkPathEffectGlue::Compose_constructor }
++    { "nativeCreate", "(JJ)J", GESHER_JNI(SkPathEffectGlue::Compose_constructor) }
+ };
+ 
+ static const JNINativeMethod gSumPathEffectMethods[] = {
+-    { "nativeCreate", "(JJ)J", (void*)SkPathEffectGlue::Sum_constructor }
++    { "nativeCreate", "(JJ)J", GESHER_JNI(SkPathEffectGlue::Sum_constructor) }
+ };
+ 
+ static const JNINativeMethod gDashPathEffectMethods[] = {
+-    { "nativeCreate", "([FF)J", (void*)SkPathEffectGlue::Dash_constructor }
++    { "nativeCreate", "([FF)J", GESHER_JNI(SkPathEffectGlue::Dash_constructor) }
+ };
+ 
+ static const JNINativeMethod gPathDashPathEffectMethods[] = {
+-    { "nativeCreate", "(JFFI)J", (void*)SkPathEffectGlue::OneD_constructor }
++    { "nativeCreate", "(JFFI)J", GESHER_JNI(SkPathEffectGlue::OneD_constructor) }
+ };
+ 
+ static const JNINativeMethod gCornerPathEffectMethods[] = {
+-    { "nativeCreate", "(F)J", (void*)SkPathEffectGlue::Corner_constructor }
++    { "nativeCreate", "(F)J", GESHER_JNI(SkPathEffectGlue::Corner_constructor) }
+ };
+ 
+ static const JNINativeMethod gDiscretePathEffectMethods[] = {
+-    { "nativeCreate", "(FF)J", (void*)SkPathEffectGlue::Discrete_constructor }
++    { "nativeCreate", "(FF)J", GESHER_JNI(SkPathEffectGlue::Discrete_constructor) }
+ };
+ 
+ int register_android_graphics_PathEffect(JNIEnv* env)
+diff --git a/libs/hwui/jni/PathIterator.cpp b/libs/hwui/jni/PathIterator.cpp
+--- a/libs/hwui/jni/PathIterator.cpp
++++ b/libs/hwui/jni/PathIterator.cpp
+@@ -78,14 +78,14 @@
+ };
+ 
+ static const JNINativeMethod methods[] = {
+-        {"nCreate", "(J)J", (void*)SkPathIteratorGlue::create},
+-        {"nGetFinalizer", "()J", (void*)SkPathIteratorGlue::getFinalizer},
++        {"nCreate", "(J)J", GESHER_JNI(SkPathIteratorGlue::create)},
++        {"nGetFinalizer", "()J", GESHER_JNI(SkPathIteratorGlue::getFinalizer)},
+ 
+         // ------- @CriticalNative below here ------------------
+ 
+-        {"nPeek", "(J)I", (void*)SkPathIteratorGlue::peek},
+-        {"nNext", "(JJ)I", (void*)SkPathIteratorGlue::next},
+-        {"nNextHost", "(J[F)I", (void*)SkPathIteratorGlue::nextHost},
++        {"nPeek", "(J)I", GESHER_JNI(SkPathIteratorGlue::peek)},
++        {"nNext", "(JJ)I", GESHER_JNI(SkPathIteratorGlue::next)},
++        {"nNextHost", "(J[F)I", GESHER_JNI(SkPathIteratorGlue::nextHost)},
+ };
+ 
+ int register_android_graphics_PathIterator(JNIEnv* env) {
+diff --git a/libs/hwui/jni/PathMeasure.cpp b/libs/hwui/jni/PathMeasure.cpp
+--- a/libs/hwui/jni/PathMeasure.cpp
++++ b/libs/hwui/jni/PathMeasure.cpp
+@@ -146,15 +146,15 @@
+ };
+ 
+ static const JNINativeMethod methods[] = {
+-    {"native_create",       "(JZ)J",        (void*) SkPathMeasureGlue::create      },
+-    {"native_setPath",      "(JJZ)V",       (void*) SkPathMeasureGlue::setPath     },
+-    {"native_getLength",    "(J)F",         (void*) SkPathMeasureGlue::getLength   },
+-    {"native_getPosTan",    "(JF[F[F)Z",    (void*) SkPathMeasureGlue::getPosTan   },
+-    {"native_getMatrix",    "(JFJI)Z",      (void*) SkPathMeasureGlue::getMatrix   },
+-    {"native_getSegment",   "(JFFJZ)Z",     (void*) SkPathMeasureGlue::getSegment  },
+-    {"native_isClosed",     "(J)Z",         (void*) SkPathMeasureGlue::isClosed    },
+-    {"native_nextContour",  "(J)Z",         (void*) SkPathMeasureGlue::nextContour },
+-    {"native_destroy",      "(J)V",         (void*) SkPathMeasureGlue::destroy     }
++    {"native_create",       "(JZ)J",        GESHER_JNI(SkPathMeasureGlue::create)      },
++    {"native_setPath",      "(JJZ)V",       GESHER_JNI(SkPathMeasureGlue::setPath)     },
++    {"native_getLength",    "(J)F",         GESHER_JNI(SkPathMeasureGlue::getLength)   },
++    {"native_getPosTan",    "(JF[F[F)Z",    GESHER_JNI(SkPathMeasureGlue::getPosTan)   },
++    {"native_getMatrix",    "(JFJI)Z",      GESHER_JNI(SkPathMeasureGlue::getMatrix)   },
++    {"native_getSegment",   "(JFFJZ)Z",     GESHER_JNI(SkPathMeasureGlue::getSegment)  },
++    {"native_isClosed",     "(J)Z",         GESHER_JNI(SkPathMeasureGlue::isClosed)    },
++    {"native_nextContour",  "(J)Z",         GESHER_JNI(SkPathMeasureGlue::nextContour) },
++    {"native_destroy",      "(J)V",         GESHER_JNI(SkPathMeasureGlue::destroy)     }
+ };
+ 
+ int register_android_graphics_PathMeasure(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Region.cpp b/libs/hwui/jni/Region.cpp
+--- a/libs/hwui/jni/Region.cpp
++++ b/libs/hwui/jni/Region.cpp
+@@ -311,38 +311,38 @@
+ ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gRegionIterMethods[] = {
+-    { "nativeConstructor",  "(J)J",                         (void*)RegionIter_constructor   },
+-    { "nativeDestructor",   "(J)V",                         (void*)RegionIter_destructor    },
+-    { "nativeNext",         "(JLandroid/graphics/Rect;)Z",  (void*)RegionIter_next          }
++    { "nativeConstructor",  "(J)J",                         GESHER_JNI(RegionIter_constructor)   },
++    { "nativeDestructor",   "(J)V",                         GESHER_JNI(RegionIter_destructor)    },
++    { "nativeNext",         "(JLandroid/graphics/Rect;)Z",  GESHER_JNI(RegionIter_next)          }
+ };
+ 
+ static const JNINativeMethod gRegionMethods[] = {
+     // these are static methods
+-    { "nativeConstructor",      "()J",                              (void*)Region_constructor       },
+-    { "nativeDestructor",       "(J)V",                             (void*)Region_destructor        },
+-    { "nativeSetRegion",        "(JJ)V",                            (void*)Region_setRegion         },
+-    { "nativeSetRect",          "(JIIII)Z",                         (void*)Region_setRect           },
+-    { "nativeSetPath",          "(JJJ)Z",                           (void*)Region_setPath           },
+-    { "nativeGetBounds",        "(JLandroid/graphics/Rect;)Z",      (void*)Region_getBounds         },
+-    { "nativeGetBoundaryPath",  "(JJ)Z",                            (void*)Region_getBoundaryPath   },
+-    { "nativeOp",               "(JIIIII)Z",                        (void*)Region_op0               },
+-    { "nativeOp",               "(JLandroid/graphics/Rect;JI)Z",    (void*)Region_op1               },
+-    { "nativeOp",               "(JJJI)Z",                          (void*)Region_op2               },
++    { "nativeConstructor",      "()J",                              GESHER_JNI(Region_constructor)       },
++    { "nativeDestructor",       "(J)V",                             GESHER_JNI(Region_destructor)        },
++    { "nativeSetRegion",        "(JJ)V",                            GESHER_JNI(Region_setRegion)         },
++    { "nativeSetRect",          "(JIIII)Z",                         GESHER_JNI(Region_setRect)           },
++    { "nativeSetPath",          "(JJJ)Z",                           GESHER_JNI(Region_setPath)           },
++    { "nativeGetBounds",        "(JLandroid/graphics/Rect;)Z",      GESHER_JNI(Region_getBounds)         },
++    { "nativeGetBoundaryPath",  "(JJ)Z",                            GESHER_JNI(Region_getBoundaryPath)   },
++    { "nativeOp",               "(JIIIII)Z",                        GESHER_JNI(Region_op0)               },
++    { "nativeOp",               "(JLandroid/graphics/Rect;JI)Z",    GESHER_JNI(Region_op1)               },
++    { "nativeOp",               "(JJJI)Z",                          GESHER_JNI(Region_op2)               },
+     // these are methods that take the java region object
+-    { "isEmpty",                "()Z",                              (void*)Region_isEmpty           },
+-    { "isRect",                 "()Z",                              (void*)Region_isRect            },
+-    { "isComplex",              "()Z",                              (void*)Region_isComplex         },
+-    { "contains",               "(II)Z",                            (void*)Region_contains          },
+-    { "quickContains",          "(IIII)Z",                          (void*)Region_quickContains     },
+-    { "quickReject",            "(IIII)Z",                          (void*)Region_quickRejectIIII   },
+-    { "quickReject",            "(Landroid/graphics/Region;)Z",     (void*)Region_quickRejectRgn    },
+-    { "scale",                  "(FLandroid/graphics/Region;)V",    (void*)Region_scale             },
+-    { "translate",              "(IILandroid/graphics/Region;)V",   (void*)Region_translate         },
+-    { "nativeToString",         "(J)Ljava/lang/String;",            (void*)Region_toString          },
++    { "isEmpty",                "()Z",                              GESHER_JNI(Region_isEmpty)           },
++    { "isRect",                 "()Z",                              GESHER_JNI(Region_isRect)            },
++    { "isComplex",              "()Z",                              GESHER_JNI(Region_isComplex)         },
++    { "contains",               "(II)Z",                            GESHER_JNI(Region_contains)          },
++    { "quickContains",          "(IIII)Z",                          GESHER_JNI(Region_quickContains)     },
++    { "quickReject",            "(IIII)Z",                          GESHER_JNI(Region_quickRejectIIII)   },
++    { "quickReject",            "(Landroid/graphics/Region;)Z",     GESHER_JNI(Region_quickRejectRgn)    },
++    { "scale",                  "(FLandroid/graphics/Region;)V",    GESHER_JNI(Region_scale)             },
++    { "translate",              "(IILandroid/graphics/Region;)V",   GESHER_JNI(Region_translate)         },
++    { "nativeToString",         "(J)Ljava/lang/String;",            GESHER_JNI(Region_toString)          },
+     // parceling methods
+-    { "nativeCreateFromParcel", "(Landroid/os/Parcel;)J",           (void*)Region_createFromParcel  },
+-    { "nativeWriteToParcel",    "(JLandroid/os/Parcel;)Z",          (void*)Region_writeToParcel     },
+-    { "nativeEquals",           "(JJ)Z",                            (void*)Region_equals            },
++    { "nativeCreateFromParcel", "(Landroid/os/Parcel;)J",           GESHER_JNI(Region_createFromParcel)  },
++    { "nativeWriteToParcel",    "(JLandroid/os/Parcel;)Z",          GESHER_JNI(Region_writeToParcel)     },
++    { "nativeEquals",           "(JJ)Z",                            GESHER_JNI(Region_equals)            },
+ };
+ 
+ int register_android_graphics_Region(JNIEnv* env)
+diff --git a/libs/hwui/jni/RenderEffect.cpp b/libs/hwui/jni/RenderEffect.cpp
+--- a/libs/hwui/jni/RenderEffect.cpp
++++ b/libs/hwui/jni/RenderEffect.cpp
+@@ -165,16 +165,16 @@
+ }
+ 
+ static const JNINativeMethod gRenderEffectMethods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)getRenderEffectFinalizer},
+-        {"nativeCreateOffsetEffect", "(FFJ)J", (void*)createOffsetEffect},
+-        {"nativeCreateBlurEffect", "(FFJI)J", (void*)createBlurEffect},
+-        {"nativeCreateBitmapEffect", "(JFFFFFFFF)J", (void*)createBitmapEffect},
+-        {"nativeCreateColorFilterEffect", "(JJ)J", (void*)createColorFilterEffect},
+-        {"nativeCreateBlendModeEffect", "(JJI)J", (void*)createBlendModeEffect},
+-        {"nativeCreateChainEffect", "(JJ)J", (void*)createChainEffect},
+-        {"nativeCreateShaderEffect", "(J)J", (void*)createShaderEffect},
++        {"nativeGetFinalizer", "()J", GESHER_JNI(getRenderEffectFinalizer)},
++        {"nativeCreateOffsetEffect", "(FFJ)J", GESHER_JNI(createOffsetEffect)},
++        {"nativeCreateBlurEffect", "(FFJI)J", GESHER_JNI(createBlurEffect)},
++        {"nativeCreateBitmapEffect", "(JFFFFFFFF)J", GESHER_JNI(createBitmapEffect)},
++        {"nativeCreateColorFilterEffect", "(JJ)J", GESHER_JNI(createColorFilterEffect)},
++        {"nativeCreateBlendModeEffect", "(JJI)J", GESHER_JNI(createBlendModeEffect)},
++        {"nativeCreateChainEffect", "(JJ)J", GESHER_JNI(createChainEffect)},
++        {"nativeCreateShaderEffect", "(J)J", GESHER_JNI(createShaderEffect)},
+         {"nativeCreateRuntimeShaderEffect", "(JLjava/lang/String;)J",
+-         (void*)createRuntimeShaderEffect}};
++         GESHER_JNI(createRuntimeShaderEffect)}};
+ 
+ int register_android_graphics_RenderEffect(JNIEnv* env) {
+     android::RegisterMethodsOrDie(env, "android/graphics/RenderEffect",
+diff --git a/libs/hwui/jni/RuntimeXfermode.cpp b/libs/hwui/jni/RuntimeXfermode.cpp
+--- a/libs/hwui/jni/RuntimeXfermode.cpp
++++ b/libs/hwui/jni/RuntimeXfermode.cpp
+@@ -108,21 +108,21 @@
+ }
+ 
+ static const JNINativeMethod gRuntimeXfermodeMethods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)RuntimeXfermode_getNativeFinalizer},
++        {"nativeGetFinalizer", "()J", GESHER_JNI(RuntimeXfermode_getNativeFinalizer)},
+         {"nativeCreateBlenderBuilder", "(Ljava/lang/String;)J",
+-         (void*)RuntimeXfermode_createBuilder},
+-        {"nativeCreateNativeInstance", "(J)J", (void*)RuntimeXfermode_create},
++         GESHER_JNI(RuntimeXfermode_createBuilder)},
++        {"nativeCreateNativeInstance", "(J)J", GESHER_JNI(RuntimeXfermode_create)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[FZ)V",
+-         (void*)RuntimeXfermode_updateFloatArrayUniforms},
++         GESHER_JNI(RuntimeXfermode_updateFloatArrayUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;FFFFI)V",
+-         (void*)RuntimeXfermode_updateFloatUniforms},
++         GESHER_JNI(RuntimeXfermode_updateFloatUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[I)V",
+-         (void*)RuntimeXfermode_updateIntArrayUniforms},
++         GESHER_JNI(RuntimeXfermode_updateIntArrayUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;IIIII)V",
+-         (void*)RuntimeXfermode_updateIntUniforms},
+-        {"nativeUpdateChild", "(JLjava/lang/String;J)V", (void*)RuntimeXfermode_updateChild},
++         GESHER_JNI(RuntimeXfermode_updateIntUniforms)},
++        {"nativeUpdateChild", "(JLjava/lang/String;J)V", GESHER_JNI(RuntimeXfermode_updateChild)},
+         {"nativeUpdateColorFilter", "(JLjava/lang/String;J)V",
+-         (void*)RuntimeXfermode_updateColorFilter},
++         GESHER_JNI(RuntimeXfermode_updateColorFilter)},
+ };
+ 
+ int register_android_graphics_RuntimeXfermode(JNIEnv* env) {
+diff --git a/libs/hwui/jni/Shader.cpp b/libs/hwui/jni/Shader.cpp
+--- a/libs/hwui/jni/Shader.cpp
++++ b/libs/hwui/jni/Shader.cpp
+@@ -363,47 +363,47 @@
+ ///////////////////////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gShaderMethods[] = {
+-    { "nativeGetFinalizer",   "()J",    (void*)Shader_getNativeFinalizer },
++    { "nativeGetFinalizer",   "()J",    GESHER_JNI(Shader_getNativeFinalizer) },
+ };
+ 
+ static const JNINativeMethod gBitmapShaderMethods[] = {
+-        {"nativeCreate", "(JJIIIZZJ)J", (void*)BitmapShader_constructor},
++        {"nativeCreate", "(JJIIIZZJ)J", GESHER_JNI(BitmapShader_constructor)},
+ 
+ };
+ 
+ static const JNINativeMethod gLinearGradientMethods[] = {
+-    { "nativeCreate",     "(JFFFF[J[FIJ)J",  (void*)LinearGradient_create     },
++    { "nativeCreate",     "(JFFFF[J[FIJ)J",  GESHER_JNI(LinearGradient_create)     },
+ };
+ 
+ static const JNINativeMethod gRadialGradientMethods[] = {
+-    { "nativeCreate",     "(JFFFFFF[J[FIJ)J",  (void*)RadialGradient_create     },
++    { "nativeCreate",     "(JFFFFFF[J[FIJ)J",  GESHER_JNI(RadialGradient_create)     },
+ };
+ 
+ static const JNINativeMethod gSweepGradientMethods[] = {
+-    { "nativeCreate",     "(JFF[J[FJ)J",  (void*)SweepGradient_create     },
++    { "nativeCreate",     "(JFF[J[FJ)J",  GESHER_JNI(SweepGradient_create)     },
+ };
+ 
+ static const JNINativeMethod gComposeShaderMethods[] = {
+-    { "nativeCreate",      "(JJJI)J",   (void*)ComposeShader_create     },
++    { "nativeCreate",      "(JJJI)J",   GESHER_JNI(ComposeShader_create)     },
+ };
+ 
+ static const JNINativeMethod gRuntimeShaderMethods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)RuntimeShader_getNativeFinalizer},
+-        {"nativeCreateShader", "(JJ)J", (void*)RuntimeShader_no},
+-        {"nativeCreateShader", "(JJJ)J", (void*)RuntimeShader_create},
+-        {"nativeCreateBuilder", "(Ljava/lang/String;)J", (void*)RuntimeShader_createShaderBuilder},
++        {"nativeGetFinalizer", "()J", GESHER_JNI(RuntimeShader_getNativeFinalizer)},
++        {"nativeCreateShader", "(JJ)J", GESHER_JNI(RuntimeShader_no)},
++        {"nativeCreateShader", "(JJJ)J", GESHER_JNI(RuntimeShader_create)},
++        {"nativeCreateBuilder", "(Ljava/lang/String;)J", GESHER_JNI(RuntimeShader_createShaderBuilder)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[FZ)V",
+-         (void*)RuntimeShader_updateFloatArrayUniforms},
++         GESHER_JNI(RuntimeShader_updateFloatArrayUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;FFFFI)V",
+-         (void*)RuntimeShader_updateFloatUniforms},
++         GESHER_JNI(RuntimeShader_updateFloatUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;[I)V",
+-         (void*)RuntimeShader_updateIntArrayUniforms},
++         GESHER_JNI(RuntimeShader_updateIntArrayUniforms)},
+         {"nativeUpdateUniforms", "(JLjava/lang/String;IIIII)V",
+-         (void*)RuntimeShader_updateIntUniforms},
+-        {"nativeUpdateShader", "(JLjava/lang/String;J)V", (void*)RuntimeShader_updateShader},
++         GESHER_JNI(RuntimeShader_updateIntUniforms)},
++        {"nativeUpdateShader", "(JLjava/lang/String;J)V", GESHER_JNI(RuntimeShader_updateShader)},
+         {"nativeUpdateColorFilter", "(JLjava/lang/String;J)V",
+-         (void*)RuntimeShader_updateColorFilter},
+-        {"nativeUpdateChild", "(JLjava/lang/String;J)V", (void*)RuntimeShader_updateChild},
++         GESHER_JNI(RuntimeShader_updateColorFilter)},
++        {"nativeUpdateChild", "(JLjava/lang/String;J)V", GESHER_JNI(RuntimeShader_updateChild)},
+ };
+ 
+ int register_android_graphics_Shader(JNIEnv* env)
+diff --git a/libs/hwui/jni/Typeface.cpp b/libs/hwui/jni/Typeface.cpp
+--- a/libs/hwui/jni/Typeface.cpp
++++ b/libs/hwui/jni/Typeface.cpp
+@@ -390,27 +390,27 @@
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gTypefaceMethods[] = {
+-        {"nativeCreateFromTypeface", "(JI)J", (void*)Typeface_createFromTypeface},
++        {"nativeCreateFromTypeface", "(JI)J", GESHER_JNI(Typeface_createFromTypeface)},
+         {"nativeCreateFromTypefaceWithExactStyle", "(JIZ)J",
+-         (void*)Typeface_createFromTypefaceWithExactStyle},
++         GESHER_JNI(Typeface_createFromTypefaceWithExactStyle)},
+         {"nativeCreateFromTypefaceWithVariation", "(JLjava/util/List;)J",
+-         (void*)Typeface_createFromTypefaceWithVariation},
+-        {"nativeCreateWeightAlias", "(JI)J", (void*)Typeface_createWeightAlias},
+-        {"nativeGetReleaseFunc", "()J", (void*)Typeface_getReleaseFunc},
+-        {"nativeGetStyle", "(J)I", (void*)Typeface_getStyle},
+-        {"nativeGetWeight", "(J)I", (void*)Typeface_getWeight},
+-        {"nativeCreateFromArray", "([JJII)J", (void*)Typeface_createFromArray},
+-        {"nativeSetDefault", "(J)V", (void*)Typeface_setDefault},
+-        {"nativeGetSupportedAxes", "(J)[I", (void*)Typeface_getSupportedAxes},
++         GESHER_JNI(Typeface_createFromTypefaceWithVariation)},
++        {"nativeCreateWeightAlias", "(JI)J", GESHER_JNI(Typeface_createWeightAlias)},
++        {"nativeGetReleaseFunc", "()J", GESHER_JNI(Typeface_getReleaseFunc)},
++        {"nativeGetStyle", "(J)I", GESHER_JNI(Typeface_getStyle)},
++        {"nativeGetWeight", "(J)I", GESHER_JNI(Typeface_getWeight)},
++        {"nativeCreateFromArray", "([JJII)J", GESHER_JNI(Typeface_createFromArray)},
++        {"nativeSetDefault", "(J)V", GESHER_JNI(Typeface_setDefault)},
++        {"nativeGetSupportedAxes", "(J)[I", GESHER_JNI(Typeface_getSupportedAxes)},
+         {"nativeRegisterGenericFamily", "(Ljava/lang/String;J)V",
+-         (void*)Typeface_registerGenericFamily},
+-        {"nativeWriteTypefaces", "(Ljava/nio/ByteBuffer;I[J)I", (void*)Typeface_writeTypefaces},
+-        {"nativeReadTypefaces", "(Ljava/nio/ByteBuffer;I)[J", (void*)Typeface_readTypefaces},
++         GESHER_JNI(Typeface_registerGenericFamily)},
++        {"nativeWriteTypefaces", "(Ljava/nio/ByteBuffer;I[J)I", GESHER_JNI(Typeface_writeTypefaces)},
++        {"nativeReadTypefaces", "(Ljava/nio/ByteBuffer;I)[J", GESHER_JNI(Typeface_readTypefaces)},
+         {"nativeForceSetStaticFinalField", "(Ljava/lang/String;Landroid/graphics/Typeface;)V",
+-         (void*)Typeface_forceSetStaticFinalField},
+-        {"nativeWarmUpCache", "(Ljava/lang/String;)V", (void*)Typeface_warmUpCache},
+-        {"nativeAddFontCollections", "(J)V", (void*)Typeface_addFontCollection},
+-        {"nativeRegisterLocaleList", "(Ljava/lang/String;)V", (void*)Typeface_registerLocaleList},
++         GESHER_JNI(Typeface_forceSetStaticFinalField)},
++        {"nativeWarmUpCache", "(Ljava/lang/String;)V", GESHER_JNI(Typeface_warmUpCache)},
++        {"nativeAddFontCollections", "(J)V", GESHER_JNI(Typeface_addFontCollection)},
++        {"nativeRegisterLocaleList", "(Ljava/lang/String;)V", GESHER_JNI(Typeface_registerLocaleList)},
+ };
+ 
+ int register_android_graphics_Typeface(JNIEnv* env)
+diff --git a/libs/hwui/jni/android_graphics_Canvas.cpp b/libs/hwui/jni/android_graphics_Canvas.cpp
+--- a/libs/hwui/jni/android_graphics_Canvas.cpp
++++ b/libs/hwui/jni/android_graphics_Canvas.cpp
+@@ -784,80 +784,80 @@
+ }; // namespace CanvasJNI
+ 
+ static const JNINativeMethod gMethods[] = {
+-        {"nGetNativeFinalizer", "()J", (void*)CanvasJNI::getNativeFinalizer},
+-        {"nFreeCaches", "()V", (void*)CanvasJNI::freeCaches},
+-        {"nFreeTextLayoutCaches", "()V", (void*)CanvasJNI::freeTextLayoutCaches},
+-        {"nSetCompatibilityVersion", "(I)V", (void*)CanvasJNI::setCompatibilityVersion},
++        {"nGetNativeFinalizer", "()J", GESHER_JNI(CanvasJNI::getNativeFinalizer)},
++        {"nFreeCaches", "()V", GESHER_JNI(CanvasJNI::freeCaches)},
++        {"nFreeTextLayoutCaches", "()V", GESHER_JNI(CanvasJNI::freeTextLayoutCaches)},
++        {"nSetCompatibilityVersion", "(I)V", GESHER_JNI(CanvasJNI::setCompatibilityVersion)},
+ 
+         // ------------ @FastNative ----------------
+-        {"nInitRaster", "(J)J", (void*)CanvasJNI::initRaster},
+-        {"nSetBitmap", "(JJ)V", (void*)CanvasJNI::setBitmap},
+-        {"nGetClipBounds", "(JLandroid/graphics/Rect;)Z", (void*)CanvasJNI::getClipBounds},
++        {"nInitRaster", "(J)J", GESHER_JNI(CanvasJNI::initRaster)},
++        {"nSetBitmap", "(JJ)V", GESHER_JNI(CanvasJNI::setBitmap)},
++        {"nGetClipBounds", "(JLandroid/graphics/Rect;)Z", GESHER_JNI(CanvasJNI::getClipBounds)},
+ 
+         // ------------ @CriticalNative ----------------
+-        {"nIsOpaque", "(J)Z", (void*)CanvasJNI::isOpaque},
+-        {"nIsHighContrastText", "(J)Z", (void*)CanvasJNI::isHighContrastText},
+-        {"nGetWidth", "(J)I", (void*)CanvasJNI::getWidth},
+-        {"nGetHeight", "(J)I", (void*)CanvasJNI::getHeight},
+-        {"nSave", "(JI)I", (void*)CanvasJNI::save},
+-        {"nSaveLayer", "(JFFFFJ)I", (void*)CanvasJNI::saveLayer},
+-        {"nSaveLayerAlpha", "(JFFFFI)I", (void*)CanvasJNI::saveLayerAlpha},
+-        {"nSaveUnclippedLayer", "(JIIII)I", (void*)CanvasJNI::saveUnclippedLayer},
+-        {"nRestoreUnclippedLayer", "(JIJ)V", (void*)CanvasJNI::restoreUnclippedLayer},
+-        {"nGetSaveCount", "(J)I", (void*)CanvasJNI::getSaveCount},
+-        {"nRestore", "(J)Z", (void*)CanvasJNI::restore},
+-        {"nRestoreToCount", "(JI)V", (void*)CanvasJNI::restoreToCount},
+-        {"nGetMatrix", "(JJ)V", (void*)CanvasJNI::getMatrix},
+-        {"nSetMatrix", "(JJ)V", (void*)CanvasJNI::setMatrix},
+-        {"nConcat", "(JJ)V", (void*)CanvasJNI::concat},
+-        {"nConcat", "(J[F)V", (void*)CanvasJNI::concat44},
+-        {"nRotate", "(JF)V", (void*)CanvasJNI::rotate},
+-        {"nScale", "(JFF)V", (void*)CanvasJNI::scale},
+-        {"nSkew", "(JFF)V", (void*)CanvasJNI::skew},
+-        {"nTranslate", "(JFF)V", (void*)CanvasJNI::translate},
+-        {"nQuickReject", "(JJ)Z", (void*)CanvasJNI::quickRejectPath},
+-        {"nQuickReject", "(JFFFF)Z", (void*)CanvasJNI::quickRejectRect},
+-        {"nClipRect", "(JFFFFI)Z", (void*)CanvasJNI::clipRect},
+-        {"nClipPath", "(JJI)Z", (void*)CanvasJNI::clipPath},
+-        {"nClipShader", "(JJI)V", (void*)CanvasJNI::clipShader},
+-        {"nSetDrawFilter", "(JJ)V", (void*)CanvasJNI::setPaintFilter},
++        {"nIsOpaque", "(J)Z", GESHER_JNI(CanvasJNI::isOpaque)},
++        {"nIsHighContrastText", "(J)Z", GESHER_JNI(CanvasJNI::isHighContrastText)},
++        {"nGetWidth", "(J)I", GESHER_JNI(CanvasJNI::getWidth)},
++        {"nGetHeight", "(J)I", GESHER_JNI(CanvasJNI::getHeight)},
++        {"nSave", "(JI)I", GESHER_JNI(CanvasJNI::save)},
++        {"nSaveLayer", "(JFFFFJ)I", GESHER_JNI(CanvasJNI::saveLayer)},
++        {"nSaveLayerAlpha", "(JFFFFI)I", GESHER_JNI(CanvasJNI::saveLayerAlpha)},
++        {"nSaveUnclippedLayer", "(JIIII)I", GESHER_JNI(CanvasJNI::saveUnclippedLayer)},
++        {"nRestoreUnclippedLayer", "(JIJ)V", GESHER_JNI(CanvasJNI::restoreUnclippedLayer)},
++        {"nGetSaveCount", "(J)I", GESHER_JNI(CanvasJNI::getSaveCount)},
++        {"nRestore", "(J)Z", GESHER_JNI(CanvasJNI::restore)},
++        {"nRestoreToCount", "(JI)V", GESHER_JNI(CanvasJNI::restoreToCount)},
++        {"nGetMatrix", "(JJ)V", GESHER_JNI(CanvasJNI::getMatrix)},
++        {"nSetMatrix", "(JJ)V", GESHER_JNI(CanvasJNI::setMatrix)},
++        {"nConcat", "(JJ)V", GESHER_JNI(CanvasJNI::concat)},
++        {"nConcat", "(J[F)V", GESHER_JNI(CanvasJNI::concat44)},
++        {"nRotate", "(JF)V", GESHER_JNI(CanvasJNI::rotate)},
++        {"nScale", "(JFF)V", GESHER_JNI(CanvasJNI::scale)},
++        {"nSkew", "(JFF)V", GESHER_JNI(CanvasJNI::skew)},
++        {"nTranslate", "(JFF)V", GESHER_JNI(CanvasJNI::translate)},
++        {"nQuickReject", "(JJ)Z", GESHER_JNI(CanvasJNI::quickRejectPath)},
++        {"nQuickReject", "(JFFFF)Z", GESHER_JNI(CanvasJNI::quickRejectRect)},
++        {"nClipRect", "(JFFFFI)Z", GESHER_JNI(CanvasJNI::clipRect)},
++        {"nClipPath", "(JJI)Z", GESHER_JNI(CanvasJNI::clipPath)},
++        {"nClipShader", "(JJI)V", GESHER_JNI(CanvasJNI::clipShader)},
++        {"nSetDrawFilter", "(JJ)V", GESHER_JNI(CanvasJNI::setPaintFilter)},
+ };
+ 
+ // If called from Canvas these are regular JNI
+ // If called from DisplayListCanvas they are @FastNative
+ static const JNINativeMethod gDrawMethods[] = {
+-        {"nDrawColor", "(JII)V", (void*)CanvasJNI::drawColor},
+-        {"nDrawColor", "(JJJI)V", (void*)CanvasJNI::drawColorLong},
+-        {"nDrawPaint", "(JJ)V", (void*)CanvasJNI::drawPaint},
+-        {"nDrawPoint", "(JFFJ)V", (void*)CanvasJNI::drawPoint},
+-        {"nDrawPoints", "(J[FIIJ)V", (void*)CanvasJNI::drawPoints},
+-        {"nDrawLine", "(JFFFFJ)V", (void*)CanvasJNI::drawLine},
+-        {"nDrawLines", "(J[FIIJ)V", (void*)CanvasJNI::drawLines},
+-        {"nDrawRect", "(JFFFFJ)V", (void*)CanvasJNI::drawRect},
+-        {"nDrawRegion", "(JJJ)V", (void*)CanvasJNI::drawRegion},
+-        {"nDrawRoundRect", "(JFFFFFFJ)V", (void*)CanvasJNI::drawRoundRect},
+-        {"nDrawDoubleRoundRect", "(JFFFFFFFFFFFFJ)V", (void*)CanvasJNI::drawDoubleRoundRectXY},
+-        {"nDrawDoubleRoundRect", "(JFFFF[FFFFF[FJ)V", (void*)CanvasJNI::drawDoubleRoundRectRadii},
+-        {"nDrawCircle", "(JFFFJ)V", (void*)CanvasJNI::drawCircle},
+-        {"nDrawOval", "(JFFFFJ)V", (void*)CanvasJNI::drawOval},
+-        {"nDrawArc", "(JFFFFFFZJ)V", (void*)CanvasJNI::drawArc},
+-        {"nDrawPath", "(JJJ)V", (void*)CanvasJNI::drawPath},
+-        {"nDrawVertices", "(JII[FI[FI[II[SIIJ)V", (void*)CanvasJNI::drawVertices},
+-        {"nDrawMesh", "(JJIJ)V", (void*)CanvasJNI::drawMesh},
+-        {"nDrawNinePatch", "(JJJFFFFJII)V", (void*)CanvasJNI::drawNinePatch},
+-        {"nDrawBitmapMatrix", "(JJJJ)V", (void*)CanvasJNI::drawBitmapMatrix},
+-        {"nDrawBitmapMesh", "(JJII[FI[IIJ)V", (void*)CanvasJNI::drawBitmapMesh},
+-        {"nDrawBitmap", "(JJFFJIII)V", (void*)CanvasJNI::drawBitmap},
+-        {"nDrawBitmap", "(JJFFFFFFFFJII)V", (void*)CanvasJNI::drawBitmapRect},
+-        {"nDrawBitmap", "(J[IIIFFIIZJ)V", (void*)CanvasJNI::drawBitmapArray},
+-        {"nDrawGlyphs", "(J[I[FIIIJJ)V", (void*)CanvasJNI::drawGlyphs},
+-        {"nDrawText", "(J[CIIFFIJ)V", (void*)CanvasJNI::drawTextChars},
+-        {"nDrawText", "(JLjava/lang/String;IIFFIJ)V", (void*)CanvasJNI::drawTextString},
+-        {"nDrawTextRun", "(J[CIIIIFFZJJ)V", (void*)CanvasJNI::drawTextRunChars},
+-        {"nDrawTextRun", "(JLjava/lang/String;IIIIFFZJ)V", (void*)CanvasJNI::drawTextRunString},
+-        {"nDrawTextOnPath", "(J[CIIJFFIJ)V", (void*)CanvasJNI::drawTextOnPathChars},
+-        {"nDrawTextOnPath", "(JLjava/lang/String;JFFIJ)V", (void*)CanvasJNI::drawTextOnPathString},
+-        {"nPunchHole", "(JFFFFFFF)V", (void*)CanvasJNI::punchHole}};
++        {"nDrawColor", "(JII)V", GESHER_JNI(CanvasJNI::drawColor)},
++        {"nDrawColor", "(JJJI)V", GESHER_JNI(CanvasJNI::drawColorLong)},
++        {"nDrawPaint", "(JJ)V", GESHER_JNI(CanvasJNI::drawPaint)},
++        {"nDrawPoint", "(JFFJ)V", GESHER_JNI(CanvasJNI::drawPoint)},
++        {"nDrawPoints", "(J[FIIJ)V", GESHER_JNI(CanvasJNI::drawPoints)},
++        {"nDrawLine", "(JFFFFJ)V", GESHER_JNI(CanvasJNI::drawLine)},
++        {"nDrawLines", "(J[FIIJ)V", GESHER_JNI(CanvasJNI::drawLines)},
++        {"nDrawRect", "(JFFFFJ)V", GESHER_JNI(CanvasJNI::drawRect)},
++        {"nDrawRegion", "(JJJ)V", GESHER_JNI(CanvasJNI::drawRegion)},
++        {"nDrawRoundRect", "(JFFFFFFJ)V", GESHER_JNI(CanvasJNI::drawRoundRect)},
++        {"nDrawDoubleRoundRect", "(JFFFFFFFFFFFFJ)V", GESHER_JNI(CanvasJNI::drawDoubleRoundRectXY)},
++        {"nDrawDoubleRoundRect", "(JFFFF[FFFFF[FJ)V", GESHER_JNI(CanvasJNI::drawDoubleRoundRectRadii)},
++        {"nDrawCircle", "(JFFFJ)V", GESHER_JNI(CanvasJNI::drawCircle)},
++        {"nDrawOval", "(JFFFFJ)V", GESHER_JNI(CanvasJNI::drawOval)},
++        {"nDrawArc", "(JFFFFFFZJ)V", GESHER_JNI(CanvasJNI::drawArc)},
++        {"nDrawPath", "(JJJ)V", GESHER_JNI(CanvasJNI::drawPath)},
++        {"nDrawVertices", "(JII[FI[FI[II[SIIJ)V", GESHER_JNI(CanvasJNI::drawVertices)},
++        {"nDrawMesh", "(JJIJ)V", GESHER_JNI(CanvasJNI::drawMesh)},
++        {"nDrawNinePatch", "(JJJFFFFJII)V", GESHER_JNI(CanvasJNI::drawNinePatch)},
++        {"nDrawBitmapMatrix", "(JJJJ)V", GESHER_JNI(CanvasJNI::drawBitmapMatrix)},
++        {"nDrawBitmapMesh", "(JJII[FI[IIJ)V", GESHER_JNI(CanvasJNI::drawBitmapMesh)},
++        {"nDrawBitmap", "(JJFFJIII)V", GESHER_JNI(CanvasJNI::drawBitmap)},
++        {"nDrawBitmap", "(JJFFFFFFFFJII)V", GESHER_JNI(CanvasJNI::drawBitmapRect)},
++        {"nDrawBitmap", "(J[IIIFFIIZJ)V", GESHER_JNI(CanvasJNI::drawBitmapArray)},
++        {"nDrawGlyphs", "(J[I[FIIIJJ)V", GESHER_JNI(CanvasJNI::drawGlyphs)},
++        {"nDrawText", "(J[CIIFFIJ)V", GESHER_JNI(CanvasJNI::drawTextChars)},
++        {"nDrawText", "(JLjava/lang/String;IIFFIJ)V", GESHER_JNI(CanvasJNI::drawTextString)},
++        {"nDrawTextRun", "(J[CIIIIFFZJJ)V", GESHER_JNI(CanvasJNI::drawTextRunChars)},
++        {"nDrawTextRun", "(JLjava/lang/String;IIIIFFZJ)V", GESHER_JNI(CanvasJNI::drawTextRunString)},
++        {"nDrawTextOnPath", "(J[CIIJFFIJ)V", GESHER_JNI(CanvasJNI::drawTextOnPathChars)},
++        {"nDrawTextOnPath", "(JLjava/lang/String;JFFIJ)V", GESHER_JNI(CanvasJNI::drawTextOnPathString)},
++        {"nPunchHole", "(JFFFFFFF)V", GESHER_JNI(CanvasJNI::punchHole)}};
+ 
+ int register_android_graphics_Canvas(JNIEnv* env) {
+     int ret = 0;
+diff --git a/libs/hwui/jni/android_graphics_Color.cpp b/libs/hwui/jni/android_graphics_Color.cpp
+--- a/libs/hwui/jni/android_graphics_Color.cpp
++++ b/libs/hwui/jni/android_graphics_Color.cpp
+@@ -41,8 +41,8 @@
+ }
+ 
+ static const JNINativeMethod gColorMethods[] = {
+-    { "nativeRGBToHSV",    "(III[F)V", (void*)Color_RGBToHSV   },
+-    { "nativeHSVToColor",  "(I[F)I",   (void*)Color_HSVToColor }
++    { "nativeRGBToHSV",    "(III[F)V", GESHER_JNI(Color_RGBToHSV)   },
++    { "nativeHSVToColor",  "(I[F)I",   GESHER_JNI(Color_HSVToColor) }
+ };
+ 
+ namespace android {
+diff --git a/libs/hwui/jni/android_graphics_ColorSpace.cpp b/libs/hwui/jni/android_graphics_ColorSpace.cpp
+--- a/libs/hwui/jni/android_graphics_ColorSpace.cpp
++++ b/libs/hwui/jni/android_graphics_ColorSpace.cpp
+@@ -141,8 +141,8 @@
+ }
+ 
+ static const JNINativeMethod gColorSpaceRgbMethods[] = {
+-    {   "nativeGetNativeFinalizer", "()J", (void*)ColorSpace_getNativeFinalizer },
+-    {   "nativeCreate", "(FFFFFFF[F)J", (void*)ColorSpace_creator }
++    {   "nativeGetNativeFinalizer", "()J", GESHER_JNI(ColorSpace_getNativeFinalizer) },
++    {   "nativeCreate", "(FFFFFFF[F)J", GESHER_JNI(ColorSpace_creator) }
+ };
+ 
+ namespace android {
+diff --git a/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp b/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp
+--- a/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp
++++ b/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp
+@@ -168,22 +168,22 @@
+ const char* const kClassPathName = "android/graphics/RecordingCanvas";
+ 
+ static JNINativeMethod gMethods[] = {
+-        {"nGetMaximumTextureWidth", "()I", (void*)android_view_DisplayListCanvas_getMaxTextureSize},
++        {"nGetMaximumTextureWidth", "()I", GESHER_JNI(android_view_DisplayListCanvas_getMaxTextureSize)},
+         {"nGetMaximumTextureHeight", "()I",
+-         (void*)android_view_DisplayListCanvas_getMaxTextureSize},
++         GESHER_JNI(android_view_DisplayListCanvas_getMaxTextureSize)},
+         // ------------ @CriticalNative --------------
+         {"nCreateDisplayListCanvas", "(JII)J",
+-         (void*)android_view_DisplayListCanvas_createDisplayListCanvas},
++         GESHER_JNI(android_view_DisplayListCanvas_createDisplayListCanvas)},
+         {"nResetDisplayListCanvas", "(JJII)V",
+-         (void*)android_view_DisplayListCanvas_resetDisplayListCanvas},
+-        {"nEnableZ", "(JZ)V", (void*)android_view_DisplayListCanvas_enableZ},
+-        {"nFinishRecording", "(JJ)V", (void*)android_view_DisplayListCanvas_finishRecording},
+-        {"nDrawRenderNode", "(JJ)V", (void*)android_view_DisplayListCanvas_drawRenderNode},
+-        {"nDrawTextureLayer", "(JJ)V", (void*)android_view_DisplayListCanvas_drawTextureLayer},
+-        {"nDrawCircle", "(JJJJJ)V", (void*)android_view_DisplayListCanvas_drawCircleProps},
+-        {"nDrawRoundRect", "(JJJJJJJJ)V", (void*)android_view_DisplayListCanvas_drawRoundRectProps},
+-        {"nDrawWebViewFunctor", "(JI)V", (void*)android_view_DisplayListCanvas_drawWebViewFunctor},
+-        {"nDrawRipple", "(JJJJJJJIJ)V", (void*)android_view_DisplayListCanvas_drawRippleProps},
++         GESHER_JNI(android_view_DisplayListCanvas_resetDisplayListCanvas)},
++        {"nEnableZ", "(JZ)V", GESHER_JNI(android_view_DisplayListCanvas_enableZ)},
++        {"nFinishRecording", "(JJ)V", GESHER_JNI(android_view_DisplayListCanvas_finishRecording)},
++        {"nDrawRenderNode", "(JJ)V", GESHER_JNI(android_view_DisplayListCanvas_drawRenderNode)},
++        {"nDrawTextureLayer", "(JJ)V", GESHER_JNI(android_view_DisplayListCanvas_drawTextureLayer)},
++        {"nDrawCircle", "(JJJJJ)V", GESHER_JNI(android_view_DisplayListCanvas_drawCircleProps)},
++        {"nDrawRoundRect", "(JJJJJJJJ)V", GESHER_JNI(android_view_DisplayListCanvas_drawRoundRectProps)},
++        {"nDrawWebViewFunctor", "(JI)V", GESHER_JNI(android_view_DisplayListCanvas_drawWebViewFunctor)},
++        {"nDrawRipple", "(JJJJJJJIJ)V", GESHER_JNI(android_view_DisplayListCanvas_drawRippleProps)},
+ };
+ 
+ int register_android_view_DisplayListCanvas(JNIEnv* env) {
+diff --git a/libs/hwui/jni/android_graphics_HardwareBufferRenderer.cpp b/libs/hwui/jni/android_graphics_HardwareBufferRenderer.cpp
+--- a/libs/hwui/jni/android_graphics_HardwareBufferRenderer.cpp
++++ b/libs/hwui/jni/android_graphics_HardwareBufferRenderer.cpp
+@@ -147,17 +147,17 @@
+ 
+ static const JNINativeMethod gMethods[] = {
+         {"nCreateHardwareBufferRenderer", "(Landroid/hardware/HardwareBuffer;J)J",
+-         (void*)android_graphics_HardwareBufferRenderer_create},
++         GESHER_JNI(android_graphics_HardwareBufferRenderer_create)},
+         {"nRender", "(JIIIJLjava/util/function/Consumer;)I",
+-         (void*)android_graphics_HardwareBufferRenderer_render},
++         GESHER_JNI(android_graphics_HardwareBufferRenderer_render)},
+         {"nCreateRootRenderNode", "()J",
+-         (void*)android_graphics_HardwareBufferRenderer_createRootNode},
++         GESHER_JNI(android_graphics_HardwareBufferRenderer_createRootNode)},
+         {"nSetLightGeometry", "(JFFFF)V",
+-         (void*)android_graphics_HardwareBufferRenderer_setLightGeometry},
+-        {"nSetLightAlpha", "(JFF)V", (void*)android_graphics_HardwareBufferRenderer_setLightAlpha},
+-        {"nGetFinalizer", "()J", (void*)android_graphics_HardwareBufferRenderer_getFinalizer},
++         GESHER_JNI(android_graphics_HardwareBufferRenderer_setLightGeometry)},
++        {"nSetLightAlpha", "(JFF)V", GESHER_JNI(android_graphics_HardwareBufferRenderer_setLightAlpha)},
++        {"nGetFinalizer", "()J", GESHER_JNI(android_graphics_HardwareBufferRenderer_getFinalizer)},
+         {"nDestroyRootRenderNode", "(J)V",
+-         (void*)android_graphics_hardwareBufferRenderer_destroyRootNode}};
++         GESHER_JNI(android_graphics_hardwareBufferRenderer_destroyRootNode)}};
+ 
+ int register_android_graphics_HardwareBufferRenderer(JNIEnv* env) {
+     jclass hardwareBufferRendererClazz =
+diff --git a/libs/hwui/jni/android_graphics_HardwareRenderer.cpp b/libs/hwui/jni/android_graphics_HardwareRenderer.cpp
+--- a/libs/hwui/jni/android_graphics_HardwareRenderer.cpp
++++ b/libs/hwui/jni/android_graphics_HardwareRenderer.cpp
+@@ -981,115 +981,115 @@
+ 
+ static const JNINativeMethod gMethods[] = {
+         {"nRotateProcessStatsBuffer", "()V",
+-         (void*)android_view_ThreadedRenderer_rotateProcessStatsBuffer},
++         GESHER_JNI(android_view_ThreadedRenderer_rotateProcessStatsBuffer)},
+         {"nSetProcessStatsBuffer", "(I)V",
+-         (void*)android_view_ThreadedRenderer_setProcessStatsBuffer},
+-        {"nGetRenderThreadTid", "(J)I", (void*)android_view_ThreadedRenderer_getRenderThreadTid},
+-        {"nCreateRootRenderNode", "()J", (void*)android_view_ThreadedRenderer_createRootRenderNode},
+-        {"nCreateProxy", "(ZJ)J", (void*)android_view_ThreadedRenderer_createProxy},
+-        {"nDeleteProxy", "(J)V", (void*)android_view_ThreadedRenderer_deleteProxy},
++         GESHER_JNI(android_view_ThreadedRenderer_setProcessStatsBuffer)},
++        {"nGetRenderThreadTid", "(J)I", GESHER_JNI(android_view_ThreadedRenderer_getRenderThreadTid)},
++        {"nCreateRootRenderNode", "()J", GESHER_JNI(android_view_ThreadedRenderer_createRootRenderNode)},
++        {"nCreateProxy", "(ZJ)J", GESHER_JNI(android_view_ThreadedRenderer_createProxy)},
++        {"nDeleteProxy", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_deleteProxy)},
+         {"nLoadSystemProperties", "(J)Z",
+-         (void*)android_view_ThreadedRenderer_loadSystemProperties},
+-        {"nSetName", "(JLjava/lang/String;)V", (void*)android_view_ThreadedRenderer_setName},
++         GESHER_JNI(android_view_ThreadedRenderer_loadSystemProperties)},
++        {"nSetName", "(JLjava/lang/String;)V", GESHER_JNI(android_view_ThreadedRenderer_setName)},
+         {"nSetSurface", "(JLandroid/view/Surface;Z)V",
+-         (void*)android_view_ThreadedRenderer_setSurface},
+-        {"nSetSurfaceControl", "(JJ)V", (void*)android_view_ThreadedRenderer_setSurfaceControl},
+-        {"nPause", "(J)Z", (void*)android_view_ThreadedRenderer_pause},
+-        {"nSetStopped", "(JZ)V", (void*)android_view_ThreadedRenderer_setStopped},
+-        {"nSetLightAlpha", "(JFF)V", (void*)android_view_ThreadedRenderer_setLightAlpha},
+-        {"nSetLightGeometry", "(JFFFF)V", (void*)android_view_ThreadedRenderer_setLightGeometry},
+-        {"nSetOpaque", "(JZ)V", (void*)android_view_ThreadedRenderer_setOpaque},
+-        {"nSetColorMode", "(JI)F", (void*)android_view_ThreadedRenderer_setColorMode},
++         GESHER_JNI(android_view_ThreadedRenderer_setSurface)},
++        {"nSetSurfaceControl", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_setSurfaceControl)},
++        {"nPause", "(J)Z", GESHER_JNI(android_view_ThreadedRenderer_pause)},
++        {"nSetStopped", "(JZ)V", GESHER_JNI(android_view_ThreadedRenderer_setStopped)},
++        {"nSetLightAlpha", "(JFF)V", GESHER_JNI(android_view_ThreadedRenderer_setLightAlpha)},
++        {"nSetLightGeometry", "(JFFFF)V", GESHER_JNI(android_view_ThreadedRenderer_setLightGeometry)},
++        {"nSetOpaque", "(JZ)V", GESHER_JNI(android_view_ThreadedRenderer_setOpaque)},
++        {"nSetColorMode", "(JI)F", GESHER_JNI(android_view_ThreadedRenderer_setColorMode)},
+         {"nSetTargetSdrHdrRatio", "(JF)V",
+-         (void*)android_view_ThreadedRenderer_setTargetSdrHdrRatio},
+-        {"nSetSdrWhitePoint", "(JF)V", (void*)android_view_ThreadedRenderer_setSdrWhitePoint},
+-        {"nSetIsHighEndGfx", "(Z)V", (void*)android_view_ThreadedRenderer_setIsHighEndGfx},
+-        {"nSetIsLowRam", "(Z)V", (void*)android_view_ThreadedRenderer_setIsLowRam},
++         GESHER_JNI(android_view_ThreadedRenderer_setTargetSdrHdrRatio)},
++        {"nSetSdrWhitePoint", "(JF)V", GESHER_JNI(android_view_ThreadedRenderer_setSdrWhitePoint)},
++        {"nSetIsHighEndGfx", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setIsHighEndGfx)},
++        {"nSetIsLowRam", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setIsLowRam)},
+         {"nSetIsSystemOrPersistent", "(Z)V",
+-         (void*)android_view_ThreadedRenderer_setIsSystemOrPersistent},
+-        {"nSyncAndDrawFrame", "(J[JI)I", (void*)android_view_ThreadedRenderer_syncAndDrawFrame},
+-        {"nDestroy", "(JJ)V", (void*)android_view_ThreadedRenderer_destroy},
++         GESHER_JNI(android_view_ThreadedRenderer_setIsSystemOrPersistent)},
++        {"nSyncAndDrawFrame", "(J[JI)I", GESHER_JNI(android_view_ThreadedRenderer_syncAndDrawFrame)},
++        {"nDestroy", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_destroy)},
+         {"nRegisterAnimatingRenderNode", "(JJ)V",
+-         (void*)android_view_ThreadedRenderer_registerAnimatingRenderNode},
++         GESHER_JNI(android_view_ThreadedRenderer_registerAnimatingRenderNode)},
+         {"nRegisterVectorDrawableAnimator", "(JJ)V",
+-         (void*)android_view_ThreadedRenderer_registerVectorDrawableAnimator},
+-        {"nCreateTextureLayer", "(J)J", (void*)android_view_ThreadedRenderer_createTextureLayer},
+-        {"nBuildLayer", "(JJ)V", (void*)android_view_ThreadedRenderer_buildLayer},
+-        {"nCopyLayerInto", "(JJJ)Z", (void*)android_view_ThreadedRenderer_copyLayerInto},
+-        {"nPushLayerUpdate", "(JJ)V", (void*)android_view_ThreadedRenderer_pushLayerUpdate},
+-        {"nCancelLayerUpdate", "(JJ)V", (void*)android_view_ThreadedRenderer_cancelLayerUpdate},
++         GESHER_JNI(android_view_ThreadedRenderer_registerVectorDrawableAnimator)},
++        {"nCreateTextureLayer", "(J)J", GESHER_JNI(android_view_ThreadedRenderer_createTextureLayer)},
++        {"nBuildLayer", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_buildLayer)},
++        {"nCopyLayerInto", "(JJJ)Z", GESHER_JNI(android_view_ThreadedRenderer_copyLayerInto)},
++        {"nPushLayerUpdate", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_pushLayerUpdate)},
++        {"nCancelLayerUpdate", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_cancelLayerUpdate)},
+         {"nDetachSurfaceTexture", "(JJ)V",
+-         (void*)android_view_ThreadedRenderer_detachSurfaceTexture},
++         GESHER_JNI(android_view_ThreadedRenderer_detachSurfaceTexture)},
+         {"nDestroyHardwareResources", "(J)V",
+-         (void*)android_view_ThreadedRenderer_destroyHardwareResources},
+-        {"nTrimMemory", "(I)V", (void*)android_view_ThreadedRenderer_trimMemory},
++         GESHER_JNI(android_view_ThreadedRenderer_destroyHardwareResources)},
++        {"nTrimMemory", "(I)V", GESHER_JNI(android_view_ThreadedRenderer_trimMemory)},
+         {"nOverrideProperty", "(Ljava/lang/String;Ljava/lang/String;)V",
+-         (void*)android_view_ThreadedRenderer_overrideProperty},
+-        {"nFence", "(J)V", (void*)android_view_ThreadedRenderer_fence},
+-        {"nStopDrawing", "(J)V", (void*)android_view_ThreadedRenderer_stopDrawing},
+-        {"nNotifyFramePending", "(J)V", (void*)android_view_ThreadedRenderer_notifyFramePending},
++         GESHER_JNI(android_view_ThreadedRenderer_overrideProperty)},
++        {"nFence", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_fence)},
++        {"nStopDrawing", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_stopDrawing)},
++        {"nNotifyFramePending", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_notifyFramePending)},
+         {"nDumpProfileInfo", "(JLjava/io/FileDescriptor;I)V",
+-         (void*)android_view_ThreadedRenderer_dumpProfileInfo},
++         GESHER_JNI(android_view_ThreadedRenderer_dumpProfileInfo)},
+         {"nDumpGlobalProfileInfo", "(Ljava/io/FileDescriptor;I)V",
+-         (void*)android_view_ThreadedRenderer_dumpGlobalProfileInfo},
++         GESHER_JNI(android_view_ThreadedRenderer_dumpGlobalProfileInfo)},
+         {"setupPersistentGraphicsCache",
+          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+-         (void*)android_view_ThreadedRenderer_setupPersistentGraphicsCache},
+-        {"nAddRenderNode", "(JJZ)V", (void*)android_view_ThreadedRenderer_addRenderNode},
+-        {"nRemoveRenderNode", "(JJ)V", (void*)android_view_ThreadedRenderer_removeRenderNode},
+-        {"nDrawRenderNode", "(JJ)V", (void*)android_view_ThreadedRendererd_drawRenderNode},
++         GESHER_JNI(android_view_ThreadedRenderer_setupPersistentGraphicsCache)},
++        {"nAddRenderNode", "(JJZ)V", GESHER_JNI(android_view_ThreadedRenderer_addRenderNode)},
++        {"nRemoveRenderNode", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_removeRenderNode)},
++        {"nDrawRenderNode", "(JJ)V", GESHER_JNI(android_view_ThreadedRendererd_drawRenderNode)},
+         {"nSetContentDrawBounds", "(JIIII)V",
+-         (void*)android_view_ThreadedRenderer_setContentDrawBounds},
+-        {"nForceDrawNextFrame", "(J)V", (void*)android_view_ThreadedRenderer_forceDrawNextFrame},
++         GESHER_JNI(android_view_ThreadedRenderer_setContentDrawBounds)},
++        {"nForceDrawNextFrame", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_forceDrawNextFrame)},
+         {"nSetPictureCaptureCallback",
+          "(JLandroid/graphics/HardwareRenderer$PictureCapturedCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setPictureCapturedCallbackJNI},
++         GESHER_JNI(android_view_ThreadedRenderer_setPictureCapturedCallbackJNI)},
+         {"nSetASurfaceTransactionCallback",
+          "(JLandroid/graphics/HardwareRenderer$ASurfaceTransactionCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setASurfaceTransactionCallback},
++         GESHER_JNI(android_view_ThreadedRenderer_setASurfaceTransactionCallback)},
+         {"nSetPrepareSurfaceControlForWebviewCallback",
+          "(JLandroid/graphics/HardwareRenderer$PrepareSurfaceControlForWebviewCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setPrepareSurfaceControlForWebviewCallback},
++         GESHER_JNI(android_view_ThreadedRenderer_setPrepareSurfaceControlForWebviewCallback)},
+         {"nSetFrameCallback", "(JLandroid/graphics/HardwareRenderer$FrameDrawingCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setFrameCallback},
++         GESHER_JNI(android_view_ThreadedRenderer_setFrameCallback)},
+         {"nSetFrameCommitCallback", "(JLandroid/graphics/HardwareRenderer$FrameCommitCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setFrameCommitCallback},
++         GESHER_JNI(android_view_ThreadedRenderer_setFrameCommitCallback)},
+         {"nSetFrameCompleteCallback",
+          "(JLandroid/graphics/HardwareRenderer$FrameCompleteCallback;)V",
+-         (void*)android_view_ThreadedRenderer_setFrameCompleteCallback},
+-        {"nAddObserver", "(JJ)V", (void*)android_view_ThreadedRenderer_addObserver},
+-        {"nRemoveObserver", "(JJ)V", (void*)android_view_ThreadedRenderer_removeObserver},
++         GESHER_JNI(android_view_ThreadedRenderer_setFrameCompleteCallback)},
++        {"nAddObserver", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_addObserver)},
++        {"nRemoveObserver", "(JJ)V", GESHER_JNI(android_view_ThreadedRenderer_removeObserver)},
+         {"nCopySurfaceInto",
+          "(Landroid/view/Surface;IIIILandroid/graphics/HardwareRenderer$CopyRequest;)V",
+-         (void*)android_view_ThreadedRenderer_copySurfaceInto},
++         GESHER_JNI(android_view_ThreadedRenderer_copySurfaceInto)},
+         {"nCreateHardwareBitmap", "(JII)Landroid/graphics/Bitmap;",
+-         (void*)android_view_ThreadedRenderer_createHardwareBitmapFromRenderNode},
+-        {"disableVsync", "()V", (void*)android_view_ThreadedRenderer_disableVsync},
+-        {"nSetHighContrastText", "(Z)V", (void*)android_view_ThreadedRenderer_setHighContrastText},
+-        {"nSetDebuggingEnabled", "(Z)V", (void*)android_view_ThreadedRenderer_setDebuggingEnabled},
+-        {"nSetIsolatedProcess", "(Z)V", (void*)android_view_ThreadedRenderer_setIsolatedProcess},
+-        {"nSetContextPriority", "(I)V", (void*)android_view_ThreadedRenderer_setContextPriority},
+-        {"nAllocateBuffers", "(J)V", (void*)android_view_ThreadedRenderer_allocateBuffers},
+-        {"nSetForceDark", "(JI)V", (void*)android_view_ThreadedRenderer_setForceDark},
++         GESHER_JNI(android_view_ThreadedRenderer_createHardwareBitmapFromRenderNode)},
++        {"disableVsync", "()V", GESHER_JNI(android_view_ThreadedRenderer_disableVsync)},
++        {"nSetHighContrastText", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setHighContrastText)},
++        {"nSetDebuggingEnabled", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setDebuggingEnabled)},
++        {"nSetIsolatedProcess", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setIsolatedProcess)},
++        {"nSetContextPriority", "(I)V", GESHER_JNI(android_view_ThreadedRenderer_setContextPriority)},
++        {"nAllocateBuffers", "(J)V", GESHER_JNI(android_view_ThreadedRenderer_allocateBuffers)},
++        {"nSetForceDark", "(JI)V", GESHER_JNI(android_view_ThreadedRenderer_setForceDark)},
+         {"nSetDisplayDensityDpi", "(I)V",
+-         (void*)android_view_ThreadedRenderer_setDisplayDensityDpi},
+-        {"nInitDisplayInfo", "(IIFIJJZZZ)V", (void*)android_view_ThreadedRenderer_initDisplayInfo},
+-        {"preload", "()I", (void*)android_view_ThreadedRenderer_preload},
++         GESHER_JNI(android_view_ThreadedRenderer_setDisplayDensityDpi)},
++        {"nInitDisplayInfo", "(IIFIJJZZZ)V", GESHER_JNI(android_view_ThreadedRenderer_initDisplayInfo)},
++        {"preload", "()I", GESHER_JNI(android_view_ThreadedRenderer_preload)},
+         {"preInitBufferAllocator", "()V",
+-         (void*)android_view_ThreadedRenderer_preInitBufferAllocator},
++         GESHER_JNI(android_view_ThreadedRenderer_preInitBufferAllocator)},
+         {"isWebViewOverlaysEnabled", "()Z",
+-         (void*)android_view_ThreadedRenderer_isWebViewOverlaysEnabled},
+-        {"nSetDrawingEnabled", "(Z)V", (void*)android_view_ThreadedRenderer_setDrawingEnabled},
+-        {"nIsDrawingEnabled", "()Z", (void*)android_view_ThreadedRenderer_isDrawingEnabled},
++         GESHER_JNI(android_view_ThreadedRenderer_isWebViewOverlaysEnabled)},
++        {"nSetDrawingEnabled", "(Z)V", GESHER_JNI(android_view_ThreadedRenderer_setDrawingEnabled)},
++        {"nIsDrawingEnabled", "()Z", GESHER_JNI(android_view_ThreadedRenderer_isDrawingEnabled)},
+         {"nSetRtAnimationsEnabled", "(Z)V",
+-         (void*)android_view_ThreadedRenderer_setRtAnimationsEnabled},
++         GESHER_JNI(android_view_ThreadedRenderer_setRtAnimationsEnabled)},
+         {"nNotifyCallbackPending", "(J)V",
+-         (void*)android_view_ThreadedRenderer_notifyCallbackPending},
++         GESHER_JNI(android_view_ThreadedRenderer_notifyCallbackPending)},
+         {"nNotifyExpensiveFrame", "(J)V",
+-         (void*)android_view_ThreadedRenderer_notifyExpensiveFrame},
++         GESHER_JNI(android_view_ThreadedRenderer_notifyExpensiveFrame)},
+         {"nNotifyGpuLoadUp", "(J)V",
+-         (void*)android_view_ThreadedRenderer_notifyGpuLoadUp},
+-        {"nTrimCaches", "(I)V", (void*)android_view_ThreadedRenderer_trimCaches},
++         GESHER_JNI(android_view_ThreadedRenderer_notifyGpuLoadUp)},
++        {"nTrimCaches", "(I)V", GESHER_JNI(android_view_ThreadedRenderer_trimCaches)},
+ };
+ 
+ static JavaVM* mJvm = nullptr;
+diff --git a/libs/hwui/jni/android_graphics_Matrix.cpp b/libs/hwui/jni/android_graphics_Matrix.cpp
+--- a/libs/hwui/jni/android_graphics_Matrix.cpp
++++ b/libs/hwui/jni/android_graphics_Matrix.cpp
+@@ -327,55 +327,55 @@
+ 
+ static const JNINativeMethod methods[] = {
+     // ------- @FastNative below here ---------------
+-    {"nMapPoints","(J[FI[FIIZ)V", (void*) SkMatrixGlue::mapPoints},
++    {"nMapPoints","(J[FI[FIIZ)V", GESHER_JNI(SkMatrixGlue::mapPoints)},
+     {"nMapRect","(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z",
+-            (void*) SkMatrixGlue::mapRect__RectFRectF},
++            GESHER_JNI(SkMatrixGlue::mapRect__RectFRectF)},
+     {"nSetRectToRect","(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z",
+-            (void*) SkMatrixGlue::setRectToRect},
+-    {"nSetPolyToPoly","(J[FI[FII)Z", (void*) SkMatrixGlue::setPolyToPoly},
+-    {"nGetValues","(J[F)V", (void*) SkMatrixGlue::getValues},
+-    {"nSetValues","(J[F)V", (void*) SkMatrixGlue::setValues},
++            GESHER_JNI(SkMatrixGlue::setRectToRect)},
++    {"nSetPolyToPoly","(J[FI[FII)Z", GESHER_JNI(SkMatrixGlue::setPolyToPoly)},
++    {"nGetValues","(J[F)V", GESHER_JNI(SkMatrixGlue::getValues)},
++    {"nSetValues","(J[F)V", GESHER_JNI(SkMatrixGlue::setValues)},
+ 
+     // ------- @CriticalNative below here ---------------
+-    {"nIsIdentity","(J)Z", (void*) SkMatrixGlue::isIdentity},
+-    {"nIsAffine","(J)Z", (void*) SkMatrixGlue::isAffine},
+-    {"nRectStaysRect","(J)Z", (void*) SkMatrixGlue::rectStaysRect},
+-    {"nReset","(J)V", (void*) SkMatrixGlue::reset},
+-    {"nSet","(JJ)V", (void*) SkMatrixGlue::set},
+-    {"nSetTranslate","(JFF)V", (void*) SkMatrixGlue::setTranslate},
+-    {"nSetScale","(JFFFF)V", (void*) SkMatrixGlue::setScale__FFFF},
+-    {"nSetScale","(JFF)V", (void*) SkMatrixGlue::setScale__FF},
+-    {"nSetRotate","(JFFF)V", (void*) SkMatrixGlue::setRotate__FFF},
+-    {"nSetRotate","(JF)V", (void*) SkMatrixGlue::setRotate__F},
+-    {"nSetSinCos","(JFFFF)V", (void*) SkMatrixGlue::setSinCos__FFFF},
+-    {"nSetSinCos","(JFF)V", (void*) SkMatrixGlue::setSinCos__FF},
+-    {"nSetSkew","(JFFFF)V", (void*) SkMatrixGlue::setSkew__FFFF},
+-    {"nSetSkew","(JFF)V", (void*) SkMatrixGlue::setSkew__FF},
+-    {"nSetConcat","(JJJ)V", (void*) SkMatrixGlue::setConcat},
+-    {"nPreTranslate","(JFF)V", (void*) SkMatrixGlue::preTranslate},
+-    {"nPreScale","(JFFFF)V", (void*) SkMatrixGlue::preScale__FFFF},
+-    {"nPreScale","(JFF)V", (void*) SkMatrixGlue::preScale__FF},
+-    {"nPreRotate","(JFFF)V", (void*) SkMatrixGlue::preRotate__FFF},
+-    {"nPreRotate","(JF)V", (void*) SkMatrixGlue::preRotate__F},
+-    {"nPreSkew","(JFFFF)V", (void*) SkMatrixGlue::preSkew__FFFF},
+-    {"nPreSkew","(JFF)V", (void*) SkMatrixGlue::preSkew__FF},
+-    {"nPreConcat","(JJ)V", (void*) SkMatrixGlue::preConcat},
+-    {"nPostTranslate","(JFF)V", (void*) SkMatrixGlue::postTranslate},
+-    {"nPostScale","(JFFFF)V", (void*) SkMatrixGlue::postScale__FFFF},
+-    {"nPostScale","(JFF)V", (void*) SkMatrixGlue::postScale__FF},
+-    {"nPostRotate","(JFFF)V", (void*) SkMatrixGlue::postRotate__FFF},
+-    {"nPostRotate","(JF)V", (void*) SkMatrixGlue::postRotate__F},
+-    {"nPostSkew","(JFFFF)V", (void*) SkMatrixGlue::postSkew__FFFF},
+-    {"nPostSkew","(JFF)V", (void*) SkMatrixGlue::postSkew__FF},
+-    {"nPostConcat","(JJ)V", (void*) SkMatrixGlue::postConcat},
+-    {"nInvert","(JJ)Z", (void*) SkMatrixGlue::invert},
+-    {"nMapRadius","(JF)F", (void*) SkMatrixGlue::mapRadius},
+-    {"nEquals", "(JJ)Z", (void*) SkMatrixGlue::equals}
++    {"nIsIdentity","(J)Z", GESHER_JNI(SkMatrixGlue::isIdentity)},
++    {"nIsAffine","(J)Z", GESHER_JNI(SkMatrixGlue::isAffine)},
++    {"nRectStaysRect","(J)Z", GESHER_JNI(SkMatrixGlue::rectStaysRect)},
++    {"nReset","(J)V", GESHER_JNI(SkMatrixGlue::reset)},
++    {"nSet","(JJ)V", GESHER_JNI(SkMatrixGlue::set)},
++    {"nSetTranslate","(JFF)V", GESHER_JNI(SkMatrixGlue::setTranslate)},
++    {"nSetScale","(JFFFF)V", GESHER_JNI(SkMatrixGlue::setScale__FFFF)},
++    {"nSetScale","(JFF)V", GESHER_JNI(SkMatrixGlue::setScale__FF)},
++    {"nSetRotate","(JFFF)V", GESHER_JNI(SkMatrixGlue::setRotate__FFF)},
++    {"nSetRotate","(JF)V", GESHER_JNI(SkMatrixGlue::setRotate__F)},
++    {"nSetSinCos","(JFFFF)V", GESHER_JNI(SkMatrixGlue::setSinCos__FFFF)},
++    {"nSetSinCos","(JFF)V", GESHER_JNI(SkMatrixGlue::setSinCos__FF)},
++    {"nSetSkew","(JFFFF)V", GESHER_JNI(SkMatrixGlue::setSkew__FFFF)},
++    {"nSetSkew","(JFF)V", GESHER_JNI(SkMatrixGlue::setSkew__FF)},
++    {"nSetConcat","(JJJ)V", GESHER_JNI(SkMatrixGlue::setConcat)},
++    {"nPreTranslate","(JFF)V", GESHER_JNI(SkMatrixGlue::preTranslate)},
++    {"nPreScale","(JFFFF)V", GESHER_JNI(SkMatrixGlue::preScale__FFFF)},
++    {"nPreScale","(JFF)V", GESHER_JNI(SkMatrixGlue::preScale__FF)},
++    {"nPreRotate","(JFFF)V", GESHER_JNI(SkMatrixGlue::preRotate__FFF)},
++    {"nPreRotate","(JF)V", GESHER_JNI(SkMatrixGlue::preRotate__F)},
++    {"nPreSkew","(JFFFF)V", GESHER_JNI(SkMatrixGlue::preSkew__FFFF)},
++    {"nPreSkew","(JFF)V", GESHER_JNI(SkMatrixGlue::preSkew__FF)},
++    {"nPreConcat","(JJ)V", GESHER_JNI(SkMatrixGlue::preConcat)},
++    {"nPostTranslate","(JFF)V", GESHER_JNI(SkMatrixGlue::postTranslate)},
++    {"nPostScale","(JFFFF)V", GESHER_JNI(SkMatrixGlue::postScale__FFFF)},
++    {"nPostScale","(JFF)V", GESHER_JNI(SkMatrixGlue::postScale__FF)},
++    {"nPostRotate","(JFFF)V", GESHER_JNI(SkMatrixGlue::postRotate__FFF)},
++    {"nPostRotate","(JF)V", GESHER_JNI(SkMatrixGlue::postRotate__F)},
++    {"nPostSkew","(JFFFF)V", GESHER_JNI(SkMatrixGlue::postSkew__FFFF)},
++    {"nPostSkew","(JFF)V", GESHER_JNI(SkMatrixGlue::postSkew__FF)},
++    {"nPostConcat","(JJ)V", GESHER_JNI(SkMatrixGlue::postConcat)},
++    {"nInvert","(JJ)Z", GESHER_JNI(SkMatrixGlue::invert)},
++    {"nMapRadius","(JF)F", GESHER_JNI(SkMatrixGlue::mapRadius)},
++    {"nEquals", "(JJ)Z", GESHER_JNI(SkMatrixGlue::equals)}
+ };
+ 
+ static const JNINativeMethod extra_methods[] = {
+-        {"nGetNativeFinalizer", "()J", (void*)SkMatrixGlue::getNativeFinalizer},
+-        {"nCreate", "(J)J", (void*)SkMatrixGlue::create},
++        {"nGetNativeFinalizer", "()J", GESHER_JNI(SkMatrixGlue::getNativeFinalizer)},
++        {"nCreate", "(J)J", GESHER_JNI(SkMatrixGlue::create)},
+ };
+ 
+ static jclass sClazz;
+diff --git a/libs/hwui/jni/android_graphics_Mesh.cpp b/libs/hwui/jni/android_graphics_Mesh.cpp
+--- a/libs/hwui/jni/android_graphics_Mesh.cpp
++++ b/libs/hwui/jni/android_graphics_Mesh.cpp
+@@ -184,14 +184,14 @@
+ }
+ 
+ static const JNINativeMethod gMeshMethods[] = {
+-        {"nativeGetFinalizer", "()J", (void*)getMeshFinalizer},
+-        {"nativeMake", "(JILjava/nio/Buffer;ZIIFFFF)J", (void*)make},
++        {"nativeGetFinalizer", "()J", GESHER_JNI(getMeshFinalizer)},
++        {"nativeMake", "(JILjava/nio/Buffer;ZIIFFFF)J", GESHER_JNI(make)},
+         {"nativeMakeIndexed", "(JILjava/nio/Buffer;ZIILjava/nio/ShortBuffer;ZIIFFFF)J",
+-         (void*)makeIndexed},
+-        {"nativeUpdateUniforms", "(JLjava/lang/String;[FZ)V", (void*)updateFloatArrayUniforms},
+-        {"nativeUpdateUniforms", "(JLjava/lang/String;FFFFI)V", (void*)updateFloatUniforms},
+-        {"nativeUpdateUniforms", "(JLjava/lang/String;[I)V", (void*)updateIntArrayUniforms},
+-        {"nativeUpdateUniforms", "(JLjava/lang/String;IIIII)V", (void*)updateIntUniforms}};
++         GESHER_JNI(makeIndexed)},
++        {"nativeUpdateUniforms", "(JLjava/lang/String;[FZ)V", GESHER_JNI(updateFloatArrayUniforms)},
++        {"nativeUpdateUniforms", "(JLjava/lang/String;FFFFI)V", GESHER_JNI(updateFloatUniforms)},
++        {"nativeUpdateUniforms", "(JLjava/lang/String;[I)V", GESHER_JNI(updateIntArrayUniforms)},
++        {"nativeUpdateUniforms", "(JLjava/lang/String;IIIII)V", GESHER_JNI(updateIntUniforms)}};
+ 
+ int register_android_graphics_Mesh(JNIEnv* env) {
+     android::RegisterMethodsOrDie(env, "android/graphics/Mesh", gMeshMethods, NELEM(gMeshMethods));
+diff --git a/libs/hwui/jni/android_graphics_RenderNode.cpp b/libs/hwui/jni/android_graphics_RenderNode.cpp
+--- a/libs/hwui/jni/android_graphics_RenderNode.cpp
++++ b/libs/hwui/jni/android_graphics_RenderNode.cpp
+@@ -805,111 +805,111 @@
+         // ----------------------------------------------------------------------------
+         // Regular JNI
+         // ----------------------------------------------------------------------------
+-        {"nCreate", "(Ljava/lang/String;)J", (void*)android_view_RenderNode_create},
+-        {"nGetNativeFinalizer", "()J", (void*)android_view_RenderNode_getNativeFinalizer},
+-        {"nOutput", "(J)V", (void*)android_view_RenderNode_output},
+-        {"nGetUsageSize", "(J)I", (void*)android_view_RenderNode_getUsageSize},
+-        {"nGetAllocatedSize", "(J)I", (void*)android_view_RenderNode_getAllocatedSize},
+-        {"nAddAnimator", "(JJ)V", (void*)android_view_RenderNode_addAnimator},
+-        {"nEndAllAnimators", "(J)V", (void*)android_view_RenderNode_endAllAnimators},
+-        {"nForceEndAnimators", "(J)V", (void*)android_view_RenderNode_forceEndAnimators},
++        {"nCreate", "(Ljava/lang/String;)J", GESHER_JNI(android_view_RenderNode_create)},
++        {"nGetNativeFinalizer", "()J", GESHER_JNI(android_view_RenderNode_getNativeFinalizer)},
++        {"nOutput", "(J)V", GESHER_JNI(android_view_RenderNode_output)},
++        {"nGetUsageSize", "(J)I", GESHER_JNI(android_view_RenderNode_getUsageSize)},
++        {"nGetAllocatedSize", "(J)I", GESHER_JNI(android_view_RenderNode_getAllocatedSize)},
++        {"nAddAnimator", "(JJ)V", GESHER_JNI(android_view_RenderNode_addAnimator)},
++        {"nEndAllAnimators", "(J)V", GESHER_JNI(android_view_RenderNode_endAllAnimators)},
++        {"nForceEndAnimators", "(J)V", GESHER_JNI(android_view_RenderNode_forceEndAnimators)},
+         {"nRequestPositionUpdates", "(JLjava/lang/ref/WeakReference;)V",
+-         (void*)android_view_RenderNode_requestPositionUpdates},
++         GESHER_JNI(android_view_RenderNode_requestPositionUpdates)},
+ 
+         // ----------------------------------------------------------------------------
+         // Critical JNI via @CriticalNative annotation in RenderNode.java
+         // ----------------------------------------------------------------------------
+-        {"nDiscardDisplayList", "(J)V", (void*)android_view_RenderNode_discardDisplayList},
+-        {"nIsValid", "(J)Z", (void*)android_view_RenderNode_isValid},
+-        {"nSetLayerType", "(JI)Z", (void*)android_view_RenderNode_setLayerType},
+-        {"nGetLayerType", "(J)I", (void*)android_view_RenderNode_getLayerType},
+-        {"nSetLayerPaint", "(JJ)Z", (void*)android_view_RenderNode_setLayerPaint},
+-        {"nSetStaticMatrix", "(JJ)Z", (void*)android_view_RenderNode_setStaticMatrix},
+-        {"nSetAnimationMatrix", "(JJ)Z", (void*)android_view_RenderNode_setAnimationMatrix},
+-        {"nGetAnimationMatrix", "(JJ)Z", (void*)android_view_RenderNode_getAnimationMatrix},
+-        {"nSetClipToBounds", "(JZ)Z", (void*)android_view_RenderNode_setClipToBounds},
+-        {"nGetClipToBounds", "(J)Z", (void*)android_view_RenderNode_getClipToBounds},
+-        {"nSetClipBounds", "(JIIII)Z", (void*)android_view_RenderNode_setClipBounds},
+-        {"nSetClipBoundsEmpty", "(J)Z", (void*)android_view_RenderNode_setClipBoundsEmpty},
+-        {"nSetProjectBackwards", "(JZ)Z", (void*)android_view_RenderNode_setProjectBackwards},
+-        {"nSetProjectionReceiver", "(JZ)Z", (void*)android_view_RenderNode_setProjectionReceiver},
+-
+-        {"nSetOutlineRoundRect", "(JIIIIFF)Z", (void*)android_view_RenderNode_setOutlineRoundRect},
+-        {"nSetOutlinePath", "(JJF)Z", (void*)android_view_RenderNode_setOutlinePath},
+-        {"nSetOutlineEmpty", "(J)Z", (void*)android_view_RenderNode_setOutlineEmpty},
+-        {"nSetOutlineNone", "(J)Z", (void*)android_view_RenderNode_setOutlineNone},
+-        {"nClearStretch", "(J)Z", (void*)android_view_RenderNode_clearStretch},
+-        {"nStretch", "(JFFFF)Z", (void*)android_view_RenderNode_stretch},
+-        {"nHasShadow", "(J)Z", (void*)android_view_RenderNode_hasShadow},
+-        {"nSetSpotShadowColor", "(JI)Z", (void*)android_view_RenderNode_setSpotShadowColor},
+-        {"nGetSpotShadowColor", "(J)I", (void*)android_view_RenderNode_getSpotShadowColor},
+-        {"nSetAmbientShadowColor", "(JI)Z", (void*)android_view_RenderNode_setAmbientShadowColor},
+-        {"nGetAmbientShadowColor", "(J)I", (void*)android_view_RenderNode_getAmbientShadowColor},
+-        {"nSetClipToOutline", "(JZ)Z", (void*)android_view_RenderNode_setClipToOutline},
+-        {"nSetRevealClip", "(JZFFF)Z", (void*)android_view_RenderNode_setRevealClip},
+-
+-        {"nSetAlpha", "(JF)Z", (void*)android_view_RenderNode_setAlpha},
+-        {"nSetRenderEffect", "(JJ)Z", (void*)android_view_RenderNode_setRenderEffect},
++        {"nDiscardDisplayList", "(J)V", GESHER_JNI(android_view_RenderNode_discardDisplayList)},
++        {"nIsValid", "(J)Z", GESHER_JNI(android_view_RenderNode_isValid)},
++        {"nSetLayerType", "(JI)Z", GESHER_JNI(android_view_RenderNode_setLayerType)},
++        {"nGetLayerType", "(J)I", GESHER_JNI(android_view_RenderNode_getLayerType)},
++        {"nSetLayerPaint", "(JJ)Z", GESHER_JNI(android_view_RenderNode_setLayerPaint)},
++        {"nSetStaticMatrix", "(JJ)Z", GESHER_JNI(android_view_RenderNode_setStaticMatrix)},
++        {"nSetAnimationMatrix", "(JJ)Z", GESHER_JNI(android_view_RenderNode_setAnimationMatrix)},
++        {"nGetAnimationMatrix", "(JJ)Z", GESHER_JNI(android_view_RenderNode_getAnimationMatrix)},
++        {"nSetClipToBounds", "(JZ)Z", GESHER_JNI(android_view_RenderNode_setClipToBounds)},
++        {"nGetClipToBounds", "(J)Z", GESHER_JNI(android_view_RenderNode_getClipToBounds)},
++        {"nSetClipBounds", "(JIIII)Z", GESHER_JNI(android_view_RenderNode_setClipBounds)},
++        {"nSetClipBoundsEmpty", "(J)Z", GESHER_JNI(android_view_RenderNode_setClipBoundsEmpty)},
++        {"nSetProjectBackwards", "(JZ)Z", GESHER_JNI(android_view_RenderNode_setProjectBackwards)},
++        {"nSetProjectionReceiver", "(JZ)Z", GESHER_JNI(android_view_RenderNode_setProjectionReceiver)},
++
++        {"nSetOutlineRoundRect", "(JIIIIFF)Z", GESHER_JNI(android_view_RenderNode_setOutlineRoundRect)},
++        {"nSetOutlinePath", "(JJF)Z", GESHER_JNI(android_view_RenderNode_setOutlinePath)},
++        {"nSetOutlineEmpty", "(J)Z", GESHER_JNI(android_view_RenderNode_setOutlineEmpty)},
++        {"nSetOutlineNone", "(J)Z", GESHER_JNI(android_view_RenderNode_setOutlineNone)},
++        {"nClearStretch", "(J)Z", GESHER_JNI(android_view_RenderNode_clearStretch)},
++        {"nStretch", "(JFFFF)Z", GESHER_JNI(android_view_RenderNode_stretch)},
++        {"nHasShadow", "(J)Z", GESHER_JNI(android_view_RenderNode_hasShadow)},
++        {"nSetSpotShadowColor", "(JI)Z", GESHER_JNI(android_view_RenderNode_setSpotShadowColor)},
++        {"nGetSpotShadowColor", "(J)I", GESHER_JNI(android_view_RenderNode_getSpotShadowColor)},
++        {"nSetAmbientShadowColor", "(JI)Z", GESHER_JNI(android_view_RenderNode_setAmbientShadowColor)},
++        {"nGetAmbientShadowColor", "(J)I", GESHER_JNI(android_view_RenderNode_getAmbientShadowColor)},
++        {"nSetClipToOutline", "(JZ)Z", GESHER_JNI(android_view_RenderNode_setClipToOutline)},
++        {"nSetRevealClip", "(JZFFF)Z", GESHER_JNI(android_view_RenderNode_setRevealClip)},
++
++        {"nSetAlpha", "(JF)Z", GESHER_JNI(android_view_RenderNode_setAlpha)},
++        {"nSetRenderEffect", "(JJ)Z", GESHER_JNI(android_view_RenderNode_setRenderEffect)},
+         {"nSetBackdropRenderEffect", "(JJ)Z",
+-         (void*)android_view_RenderNode_setBackdropRenderEffect},
++         GESHER_JNI(android_view_RenderNode_setBackdropRenderEffect)},
+         {"nSetHasOverlappingRendering", "(JZ)Z",
+-         (void*)android_view_RenderNode_setHasOverlappingRendering},
+-        {"nSetUsageHint", "(JI)V", (void*)android_view_RenderNode_setUsageHint},
+-        {"nSetElevation", "(JF)Z", (void*)android_view_RenderNode_setElevation},
+-        {"nSetTranslationX", "(JF)Z", (void*)android_view_RenderNode_setTranslationX},
+-        {"nSetTranslationY", "(JF)Z", (void*)android_view_RenderNode_setTranslationY},
+-        {"nSetTranslationZ", "(JF)Z", (void*)android_view_RenderNode_setTranslationZ},
+-        {"nSetRotation", "(JF)Z", (void*)android_view_RenderNode_setRotation},
+-        {"nSetRotationX", "(JF)Z", (void*)android_view_RenderNode_setRotationX},
+-        {"nSetRotationY", "(JF)Z", (void*)android_view_RenderNode_setRotationY},
+-        {"nSetScaleX", "(JF)Z", (void*)android_view_RenderNode_setScaleX},
+-        {"nSetScaleY", "(JF)Z", (void*)android_view_RenderNode_setScaleY},
+-        {"nSetPivotX", "(JF)Z", (void*)android_view_RenderNode_setPivotX},
+-        {"nSetPivotY", "(JF)Z", (void*)android_view_RenderNode_setPivotY},
+-        {"nResetPivot", "(J)Z", (void*)android_view_RenderNode_resetPivot},
+-        {"nSetCameraDistance", "(JF)Z", (void*)android_view_RenderNode_setCameraDistance},
+-        {"nSetLeft", "(JI)Z", (void*)android_view_RenderNode_setLeft},
+-        {"nSetTop", "(JI)Z", (void*)android_view_RenderNode_setTop},
+-        {"nSetRight", "(JI)Z", (void*)android_view_RenderNode_setRight},
+-        {"nSetBottom", "(JI)Z", (void*)android_view_RenderNode_setBottom},
+-        {"nGetLeft", "(J)I", (void*)android_view_RenderNode_getLeft},
+-        {"nGetTop", "(J)I", (void*)android_view_RenderNode_getTop},
+-        {"nGetRight", "(J)I", (void*)android_view_RenderNode_getRight},
+-        {"nGetBottom", "(J)I", (void*)android_view_RenderNode_getBottom},
++         GESHER_JNI(android_view_RenderNode_setHasOverlappingRendering)},
++        {"nSetUsageHint", "(JI)V", GESHER_JNI(android_view_RenderNode_setUsageHint)},
++        {"nSetElevation", "(JF)Z", GESHER_JNI(android_view_RenderNode_setElevation)},
++        {"nSetTranslationX", "(JF)Z", GESHER_JNI(android_view_RenderNode_setTranslationX)},
++        {"nSetTranslationY", "(JF)Z", GESHER_JNI(android_view_RenderNode_setTranslationY)},
++        {"nSetTranslationZ", "(JF)Z", GESHER_JNI(android_view_RenderNode_setTranslationZ)},
++        {"nSetRotation", "(JF)Z", GESHER_JNI(android_view_RenderNode_setRotation)},
++        {"nSetRotationX", "(JF)Z", GESHER_JNI(android_view_RenderNode_setRotationX)},
++        {"nSetRotationY", "(JF)Z", GESHER_JNI(android_view_RenderNode_setRotationY)},
++        {"nSetScaleX", "(JF)Z", GESHER_JNI(android_view_RenderNode_setScaleX)},
++        {"nSetScaleY", "(JF)Z", GESHER_JNI(android_view_RenderNode_setScaleY)},
++        {"nSetPivotX", "(JF)Z", GESHER_JNI(android_view_RenderNode_setPivotX)},
++        {"nSetPivotY", "(JF)Z", GESHER_JNI(android_view_RenderNode_setPivotY)},
++        {"nResetPivot", "(J)Z", GESHER_JNI(android_view_RenderNode_resetPivot)},
++        {"nSetCameraDistance", "(JF)Z", GESHER_JNI(android_view_RenderNode_setCameraDistance)},
++        {"nSetLeft", "(JI)Z", GESHER_JNI(android_view_RenderNode_setLeft)},
++        {"nSetTop", "(JI)Z", GESHER_JNI(android_view_RenderNode_setTop)},
++        {"nSetRight", "(JI)Z", GESHER_JNI(android_view_RenderNode_setRight)},
++        {"nSetBottom", "(JI)Z", GESHER_JNI(android_view_RenderNode_setBottom)},
++        {"nGetLeft", "(J)I", GESHER_JNI(android_view_RenderNode_getLeft)},
++        {"nGetTop", "(J)I", GESHER_JNI(android_view_RenderNode_getTop)},
++        {"nGetRight", "(J)I", GESHER_JNI(android_view_RenderNode_getRight)},
++        {"nGetBottom", "(J)I", GESHER_JNI(android_view_RenderNode_getBottom)},
+         {"nSetLeftTopRightBottom", "(JIIII)Z",
+-         (void*)android_view_RenderNode_setLeftTopRightBottom},
+-        {"nOffsetLeftAndRight", "(JI)Z", (void*)android_view_RenderNode_offsetLeftAndRight},
+-        {"nOffsetTopAndBottom", "(JI)Z", (void*)android_view_RenderNode_offsetTopAndBottom},
++         GESHER_JNI(android_view_RenderNode_setLeftTopRightBottom)},
++        {"nOffsetLeftAndRight", "(JI)Z", GESHER_JNI(android_view_RenderNode_offsetLeftAndRight)},
++        {"nOffsetTopAndBottom", "(JI)Z", GESHER_JNI(android_view_RenderNode_offsetTopAndBottom)},
+ 
+         {"nHasOverlappingRendering", "(J)Z",
+-         (void*)android_view_RenderNode_hasOverlappingRendering},
+-        {"nGetClipToOutline", "(J)Z", (void*)android_view_RenderNode_getClipToOutline},
+-        {"nGetAlpha", "(J)F", (void*)android_view_RenderNode_getAlpha},
+-        {"nGetCameraDistance", "(J)F", (void*)android_view_RenderNode_getCameraDistance},
+-        {"nGetScaleX", "(J)F", (void*)android_view_RenderNode_getScaleX},
+-        {"nGetScaleY", "(J)F", (void*)android_view_RenderNode_getScaleY},
+-        {"nGetElevation", "(J)F", (void*)android_view_RenderNode_getElevation},
+-        {"nGetTranslationX", "(J)F", (void*)android_view_RenderNode_getTranslationX},
+-        {"nGetTranslationY", "(J)F", (void*)android_view_RenderNode_getTranslationY},
+-        {"nGetTranslationZ", "(J)F", (void*)android_view_RenderNode_getTranslationZ},
+-        {"nGetRotation", "(J)F", (void*)android_view_RenderNode_getRotation},
+-        {"nGetRotationX", "(J)F", (void*)android_view_RenderNode_getRotationX},
+-        {"nGetRotationY", "(J)F", (void*)android_view_RenderNode_getRotationY},
+-        {"nIsPivotExplicitlySet", "(J)Z", (void*)android_view_RenderNode_isPivotExplicitlySet},
+-        {"nHasIdentityMatrix", "(J)Z", (void*)android_view_RenderNode_hasIdentityMatrix},
+-
+-        {"nGetTransformMatrix", "(JJ)V", (void*)android_view_RenderNode_getTransformMatrix},
++         GESHER_JNI(android_view_RenderNode_hasOverlappingRendering)},
++        {"nGetClipToOutline", "(J)Z", GESHER_JNI(android_view_RenderNode_getClipToOutline)},
++        {"nGetAlpha", "(J)F", GESHER_JNI(android_view_RenderNode_getAlpha)},
++        {"nGetCameraDistance", "(J)F", GESHER_JNI(android_view_RenderNode_getCameraDistance)},
++        {"nGetScaleX", "(J)F", GESHER_JNI(android_view_RenderNode_getScaleX)},
++        {"nGetScaleY", "(J)F", GESHER_JNI(android_view_RenderNode_getScaleY)},
++        {"nGetElevation", "(J)F", GESHER_JNI(android_view_RenderNode_getElevation)},
++        {"nGetTranslationX", "(J)F", GESHER_JNI(android_view_RenderNode_getTranslationX)},
++        {"nGetTranslationY", "(J)F", GESHER_JNI(android_view_RenderNode_getTranslationY)},
++        {"nGetTranslationZ", "(J)F", GESHER_JNI(android_view_RenderNode_getTranslationZ)},
++        {"nGetRotation", "(J)F", GESHER_JNI(android_view_RenderNode_getRotation)},
++        {"nGetRotationX", "(J)F", GESHER_JNI(android_view_RenderNode_getRotationX)},
++        {"nGetRotationY", "(J)F", GESHER_JNI(android_view_RenderNode_getRotationY)},
++        {"nIsPivotExplicitlySet", "(J)Z", GESHER_JNI(android_view_RenderNode_isPivotExplicitlySet)},
++        {"nHasIdentityMatrix", "(J)Z", GESHER_JNI(android_view_RenderNode_hasIdentityMatrix)},
++
++        {"nGetTransformMatrix", "(JJ)V", GESHER_JNI(android_view_RenderNode_getTransformMatrix)},
+         {"nGetInverseTransformMatrix", "(JJ)V",
+-         (void*)android_view_RenderNode_getInverseTransformMatrix},
+-
+-        {"nGetPivotX", "(J)F", (void*)android_view_RenderNode_getPivotX},
+-        {"nGetPivotY", "(J)F", (void*)android_view_RenderNode_getPivotY},
+-        {"nGetWidth", "(J)I", (void*)android_view_RenderNode_getWidth},
+-        {"nGetHeight", "(J)I", (void*)android_view_RenderNode_getHeight},
+-        {"nSetAllowForceDark", "(JZ)Z", (void*)android_view_RenderNode_setAllowForceDark},
+-        {"nGetAllowForceDark", "(J)Z", (void*)android_view_RenderNode_getAllowForceDark},
+-        {"nGetUniqueId", "(J)J", (void*)android_view_RenderNode_getUniqueId},
+-        {"nSetIsTextureView", "(J)V", (void*)android_view_RenderNode_setIsTextureView},
++         GESHER_JNI(android_view_RenderNode_getInverseTransformMatrix)},
++
++        {"nGetPivotX", "(J)F", GESHER_JNI(android_view_RenderNode_getPivotX)},
++        {"nGetPivotY", "(J)F", GESHER_JNI(android_view_RenderNode_getPivotY)},
++        {"nGetWidth", "(J)I", GESHER_JNI(android_view_RenderNode_getWidth)},
++        {"nGetHeight", "(J)I", GESHER_JNI(android_view_RenderNode_getHeight)},
++        {"nSetAllowForceDark", "(JZ)Z", GESHER_JNI(android_view_RenderNode_setAllowForceDark)},
++        {"nGetAllowForceDark", "(J)Z", GESHER_JNI(android_view_RenderNode_getAllowForceDark)},
++        {"nGetUniqueId", "(J)J", GESHER_JNI(android_view_RenderNode_getUniqueId)},
++        {"nSetIsTextureView", "(J)V", GESHER_JNI(android_view_RenderNode_setIsTextureView)},
+ };
+ 
+ int register_android_view_RenderNode(JNIEnv* env) {
+diff --git a/libs/hwui/jni/android_graphics_animation_NativeInterpolatorFactory.cpp b/libs/hwui/jni/android_graphics_animation_NativeInterpolatorFactory.cpp
+--- a/libs/hwui/jni/android_graphics_animation_NativeInterpolatorFactory.cpp
++++ b/libs/hwui/jni/android_graphics_animation_NativeInterpolatorFactory.cpp
+@@ -89,17 +89,17 @@
+ const char* const kClassPathName = "android/graphics/animation/NativeInterpolatorFactory";
+ 
+ static const JNINativeMethod gMethods[] = {
+-    { "createAccelerateDecelerateInterpolator", "()J", (void*) createAccelerateDecelerateInterpolator },
+-    { "createAccelerateInterpolator", "(F)J", (void*) createAccelerateInterpolator },
+-    { "createAnticipateInterpolator", "(F)J", (void*) createAnticipateInterpolator },
+-    { "createAnticipateOvershootInterpolator", "(F)J", (void*) createAnticipateOvershootInterpolator },
+-    { "createBounceInterpolator", "()J", (void*) createBounceInterpolator },
+-    { "createCycleInterpolator", "(F)J", (void*) createCycleInterpolator },
+-    { "createDecelerateInterpolator", "(F)J", (void*) createDecelerateInterpolator },
+-    { "createLinearInterpolator", "()J", (void*) createLinearInterpolator },
+-    { "createOvershootInterpolator", "(F)J", (void*) createOvershootInterpolator },
+-    { "createPathInterpolator", "([F[F)J", (void*) createPathInterpolator },
+-    { "createLutInterpolator", "([F)J", (void*) createLutInterpolator },
++    { "createAccelerateDecelerateInterpolator", "()J", GESHER_JNI(createAccelerateDecelerateInterpolator) },
++    { "createAccelerateInterpolator", "(F)J", GESHER_JNI(createAccelerateInterpolator) },
++    { "createAnticipateInterpolator", "(F)J", GESHER_JNI(createAnticipateInterpolator) },
++    { "createAnticipateOvershootInterpolator", "(F)J", GESHER_JNI(createAnticipateOvershootInterpolator) },
++    { "createBounceInterpolator", "()J", GESHER_JNI(createBounceInterpolator) },
++    { "createCycleInterpolator", "(F)J", GESHER_JNI(createCycleInterpolator) },
++    { "createDecelerateInterpolator", "(F)J", GESHER_JNI(createDecelerateInterpolator) },
++    { "createLinearInterpolator", "()J", GESHER_JNI(createLinearInterpolator) },
++    { "createOvershootInterpolator", "(F)J", GESHER_JNI(createOvershootInterpolator) },
++    { "createPathInterpolator", "([F[F)J", GESHER_JNI(createPathInterpolator) },
++    { "createLutInterpolator", "([F)J", GESHER_JNI(createLutInterpolator) },
+ };
+ 
+ int register_android_graphics_animation_NativeInterpolatorFactory(JNIEnv* env) {
+diff --git a/libs/hwui/jni/android_graphics_animation_RenderNodeAnimator.cpp b/libs/hwui/jni/android_graphics_animation_RenderNodeAnimator.cpp
+--- a/libs/hwui/jni/android_graphics_animation_RenderNodeAnimator.cpp
++++ b/libs/hwui/jni/android_graphics_animation_RenderNodeAnimator.cpp
+@@ -187,19 +187,19 @@
+ const char* const kClassPathName = "android/graphics/animation/RenderNodeAnimator";
+ 
+ static const JNINativeMethod gMethods[] = {
+-    { "nCreateAnimator", "(IF)J", (void*) createAnimator },
+-    { "nCreateCanvasPropertyFloatAnimator", "(JF)J", (void*) createCanvasPropertyFloatAnimator },
+-    { "nCreateCanvasPropertyPaintAnimator", "(JIF)J", (void*) createCanvasPropertyPaintAnimator },
+-    { "nCreateRevealAnimator", "(IIFF)J", (void*) createRevealAnimator },
+-    { "nSetStartValue", "(JF)V", (void*) setStartValue },
+-    { "nSetDuration", "(JJ)V", (void*) setDuration },
+-    { "nGetDuration", "(J)J", (void*) getDuration },
+-    { "nSetStartDelay", "(JJ)V", (void*) setStartDelay },
+-    { "nSetInterpolator", "(JJ)V", (void*) setInterpolator },
+-    { "nSetAllowRunningAsync", "(JZ)V", (void*) setAllowRunningAsync },
+-    { "nSetListener", "(JLandroid/graphics/animation/RenderNodeAnimator;)V", (void*) setListener},
+-    { "nStart", "(J)V", (void*) start},
+-    { "nEnd", "(J)V", (void*) end },
++    { "nCreateAnimator", "(IF)J", GESHER_JNI(createAnimator) },
++    { "nCreateCanvasPropertyFloatAnimator", "(JF)J", GESHER_JNI(createCanvasPropertyFloatAnimator) },
++    { "nCreateCanvasPropertyPaintAnimator", "(JIF)J", GESHER_JNI(createCanvasPropertyPaintAnimator) },
++    { "nCreateRevealAnimator", "(IIFF)J", GESHER_JNI(createRevealAnimator) },
++    { "nSetStartValue", "(JF)V", GESHER_JNI(setStartValue) },
++    { "nSetDuration", "(JJ)V", GESHER_JNI(setDuration) },
++    { "nGetDuration", "(J)J", GESHER_JNI(getDuration) },
++    { "nSetStartDelay", "(JJ)V", GESHER_JNI(setStartDelay) },
++    { "nSetInterpolator", "(JJ)V", GESHER_JNI(setInterpolator) },
++    { "nSetAllowRunningAsync", "(JZ)V", GESHER_JNI(setAllowRunningAsync) },
++    { "nSetListener", "(JLandroid/graphics/animation/RenderNodeAnimator;)V", GESHER_JNI(setListener)},
++    { "nStart", "(J)V", GESHER_JNI(start)},
++    { "nEnd", "(J)V", GESHER_JNI(end) },
+ };
+ 
+ int register_android_graphics_animation_RenderNodeAnimator(JNIEnv* env) {
+diff --git a/libs/hwui/jni/android_graphics_drawable_AnimatedVectorDrawable.cpp b/libs/hwui/jni/android_graphics_drawable_AnimatedVectorDrawable.cpp
+--- a/libs/hwui/jni/android_graphics_drawable_AnimatedVectorDrawable.cpp
++++ b/libs/hwui/jni/android_graphics_drawable_AnimatedVectorDrawable.cpp
+@@ -183,23 +183,23 @@
+ }
+ 
+ static const JNINativeMethod gMethods[] = {
+-    {"nCreateAnimatorSet", "()J", (void*)createAnimatorSet},
+-    {"nSetVectorDrawableTarget", "(JJ)V", (void*)setVectorDrawableTarget},
+-    {"nAddAnimator", "(JJJJJII)V", (void*)addAnimator},
+-    {"nSetPropertyHolderData", "(J[FI)V", (void*)setFloatPropertyHolderData},
+-    {"nSetPropertyHolderData", "(J[II)V", (void*)setIntPropertyHolderData},
+-    {"nStart", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V", (void*)start},
+-    {"nReverse", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V", (void*)reverse},
++    {"nCreateAnimatorSet", "()J", GESHER_JNI(createAnimatorSet)},
++    {"nSetVectorDrawableTarget", "(JJ)V", GESHER_JNI(setVectorDrawableTarget)},
++    {"nAddAnimator", "(JJJJJII)V", GESHER_JNI(addAnimator)},
++    {"nSetPropertyHolderData", "(J[FI)V", GESHER_JNI(setFloatPropertyHolderData)},
++    {"nSetPropertyHolderData", "(J[II)V", GESHER_JNI(setIntPropertyHolderData)},
++    {"nStart", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V", GESHER_JNI(start)},
++    {"nReverse", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V", GESHER_JNI(reverse)},
+ 
+     // ------------- @FastNative -------------------
+ 
+-    {"nCreateGroupPropertyHolder", "(JIFF)J", (void*)createGroupPropertyHolder},
+-    {"nCreatePathDataPropertyHolder", "(JJJ)J", (void*)createPathDataPropertyHolder},
+-    {"nCreatePathColorPropertyHolder", "(JIII)J", (void*)createPathColorPropertyHolder},
+-    {"nCreatePathPropertyHolder", "(JIFF)J", (void*)createPathPropertyHolder},
+-    {"nCreateRootAlphaPropertyHolder", "(JFF)J", (void*)createRootAlphaPropertyHolder},
+-    {"nEnd", "(J)V", (void*)end},
+-    {"nReset", "(J)V", (void*)reset},
++    {"nCreateGroupPropertyHolder", "(JIFF)J", GESHER_JNI(createGroupPropertyHolder)},
++    {"nCreatePathDataPropertyHolder", "(JJJ)J", GESHER_JNI(createPathDataPropertyHolder)},
++    {"nCreatePathColorPropertyHolder", "(JIII)J", GESHER_JNI(createPathColorPropertyHolder)},
++    {"nCreatePathPropertyHolder", "(JIFF)J", GESHER_JNI(createPathPropertyHolder)},
++    {"nCreateRootAlphaPropertyHolder", "(JFF)J", GESHER_JNI(createRootAlphaPropertyHolder)},
++    {"nEnd", "(J)V", GESHER_JNI(end)},
++    {"nReset", "(J)V", GESHER_JNI(reset)},
+ };
+ 
+ const char* const kClassPathName = "android/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT";
+diff --git a/libs/hwui/jni/android_graphics_drawable_VectorDrawable.cpp b/libs/hwui/jni/android_graphics_drawable_VectorDrawable.cpp
+--- a/libs/hwui/jni/android_graphics_drawable_VectorDrawable.cpp
++++ b/libs/hwui/jni/android_graphics_drawable_VectorDrawable.cpp
+@@ -354,67 +354,67 @@
+ }
+ 
+ static const JNINativeMethod gMethods[] = {
+-        {"nDraw", "(JJJLandroid/graphics/Rect;ZZ)I", (void*)draw},
+-        {"nGetFullPathProperties", "(J[BI)Z", (void*)getFullPathProperties},
+-        {"nGetGroupProperties", "(J[FI)Z", (void*)getGroupProperties},
+-        {"nSetPathString", "(JLjava/lang/String;I)V", (void*)setPathString},
+-        {"nSetName", "(JLjava/lang/String;)V", (void*)setNodeName},
++        {"nDraw", "(JJJLandroid/graphics/Rect;ZZ)I", GESHER_JNI(draw)},
++        {"nGetFullPathProperties", "(J[BI)Z", GESHER_JNI(getFullPathProperties)},
++        {"nGetGroupProperties", "(J[FI)Z", GESHER_JNI(getGroupProperties)},
++        {"nSetPathString", "(JLjava/lang/String;I)V", GESHER_JNI(setPathString)},
++        {"nSetName", "(JLjava/lang/String;)V", GESHER_JNI(setNodeName)},
+ 
+         // ------------- @FastNative ----------------
+ 
+-        {"nCreateTree", "(J)J", (void*)createTree},
+-        {"nCreateTreeFromCopy", "(JJ)J", (void*)createTreeFromCopy},
+-        {"nSetRendererViewportSize", "(JFF)V", (void*)setTreeViewportSize},
+-        {"nSetRootAlpha", "(JF)Z", (void*)setRootAlpha},
+-        {"nGetRootAlpha", "(J)F", (void*)getRootAlpha},
+-        {"nSetAntiAlias", "(JZ)V", (void*)setAntiAlias},
+-        {"nSetAllowCaching", "(JZ)V", (void*)setAllowCaching},
+-
+-        {"nCreateFullPath", "()J", (void*)createEmptyFullPath},
+-        {"nCreateFullPath", "(J)J", (void*)createFullPath},
+-        {"nUpdateFullPathProperties", "(JFIFIFFFFFIII)V", (void*)updateFullPathPropertiesAndStrokeStyles},
+-        {"nUpdateFullPathFillGradient", "(JJ)V", (void*)updateFullPathFillGradient},
+-        {"nUpdateFullPathStrokeGradient", "(JJ)V", (void*)updateFullPathStrokeGradient},
+-
+-        {"nCreateClipPath", "()J", (void*)createEmptyClipPath},
+-        {"nCreateClipPath", "(J)J", (void*)createClipPath},
+-        {"nCreateGroup", "()J", (void*)createEmptyGroup},
+-        {"nCreateGroup", "(J)J", (void*)createGroup},
+-        {"nUpdateGroupProperties", "(JFFFFFFF)V", (void*)updateGroupProperties},
+-
+-        {"nAddChild", "(JJ)V", (void*)addChild},
+-        {"nGetRotation", "(J)F", (void*)getRotation},
+-        {"nSetRotation", "(JF)V", (void*)setRotation},
+-        {"nGetPivotX", "(J)F", (void*)getPivotX},
+-        {"nSetPivotX", "(JF)V", (void*)setPivotX},
+-        {"nGetPivotY", "(J)F", (void*)getPivotY},
+-        {"nSetPivotY", "(JF)V", (void*)setPivotY},
+-        {"nGetScaleX", "(J)F", (void*)getScaleX},
+-        {"nSetScaleX", "(JF)V", (void*)setScaleX},
+-        {"nGetScaleY", "(J)F", (void*)getScaleY},
+-        {"nSetScaleY", "(JF)V", (void*)setScaleY},
+-        {"nGetTranslateX", "(J)F", (void*)getTranslateX},
+-        {"nSetTranslateX", "(JF)V", (void*)setTranslateX},
+-        {"nGetTranslateY", "(J)F", (void*)getTranslateY},
+-        {"nSetTranslateY", "(JF)V", (void*)setTranslateY},
+-
+-        {"nSetPathData", "(JJ)V", (void*)setPathData},
+-        {"nGetStrokeWidth", "(J)F", (void*)getStrokeWidth},
+-        {"nSetStrokeWidth", "(JF)V", (void*)setStrokeWidth},
+-        {"nGetStrokeColor", "(J)I", (void*)getStrokeColor},
+-        {"nSetStrokeColor", "(JI)V", (void*)setStrokeColor},
+-        {"nGetStrokeAlpha", "(J)F", (void*)getStrokeAlpha},
+-        {"nSetStrokeAlpha", "(JF)V", (void*)setStrokeAlpha},
+-        {"nGetFillColor", "(J)I", (void*)getFillColor},
+-        {"nSetFillColor", "(JI)V", (void*)setFillColor},
+-        {"nGetFillAlpha", "(J)F", (void*)getFillAlpha},
+-        {"nSetFillAlpha", "(JF)V", (void*)setFillAlpha},
+-        {"nGetTrimPathStart", "(J)F", (void*)getTrimPathStart},
+-        {"nSetTrimPathStart", "(JF)V", (void*)setTrimPathStart},
+-        {"nGetTrimPathEnd", "(J)F", (void*)getTrimPathEnd},
+-        {"nSetTrimPathEnd", "(JF)V", (void*)setTrimPathEnd},
+-        {"nGetTrimPathOffset", "(J)F", (void*)getTrimPathOffset},
+-        {"nSetTrimPathOffset", "(JF)V", (void*)setTrimPathOffset},
++        {"nCreateTree", "(J)J", GESHER_JNI(createTree)},
++        {"nCreateTreeFromCopy", "(JJ)J", GESHER_JNI(createTreeFromCopy)},
++        {"nSetRendererViewportSize", "(JFF)V", GESHER_JNI(setTreeViewportSize)},
++        {"nSetRootAlpha", "(JF)Z", GESHER_JNI(setRootAlpha)},
++        {"nGetRootAlpha", "(J)F", GESHER_JNI(getRootAlpha)},
++        {"nSetAntiAlias", "(JZ)V", GESHER_JNI(setAntiAlias)},
++        {"nSetAllowCaching", "(JZ)V", GESHER_JNI(setAllowCaching)},
++
++        {"nCreateFullPath", "()J", GESHER_JNI(createEmptyFullPath)},
++        {"nCreateFullPath", "(J)J", GESHER_JNI(createFullPath)},
++        {"nUpdateFullPathProperties", "(JFIFIFFFFFIII)V", GESHER_JNI(updateFullPathPropertiesAndStrokeStyles)},
++        {"nUpdateFullPathFillGradient", "(JJ)V", GESHER_JNI(updateFullPathFillGradient)},
++        {"nUpdateFullPathStrokeGradient", "(JJ)V", GESHER_JNI(updateFullPathStrokeGradient)},
++
++        {"nCreateClipPath", "()J", GESHER_JNI(createEmptyClipPath)},
++        {"nCreateClipPath", "(J)J", GESHER_JNI(createClipPath)},
++        {"nCreateGroup", "()J", GESHER_JNI(createEmptyGroup)},
++        {"nCreateGroup", "(J)J", GESHER_JNI(createGroup)},
++        {"nUpdateGroupProperties", "(JFFFFFFF)V", GESHER_JNI(updateGroupProperties)},
++
++        {"nAddChild", "(JJ)V", GESHER_JNI(addChild)},
++        {"nGetRotation", "(J)F", GESHER_JNI(getRotation)},
++        {"nSetRotation", "(JF)V", GESHER_JNI(setRotation)},
++        {"nGetPivotX", "(J)F", GESHER_JNI(getPivotX)},
++        {"nSetPivotX", "(JF)V", GESHER_JNI(setPivotX)},
++        {"nGetPivotY", "(J)F", GESHER_JNI(getPivotY)},
++        {"nSetPivotY", "(JF)V", GESHER_JNI(setPivotY)},
++        {"nGetScaleX", "(J)F", GESHER_JNI(getScaleX)},
++        {"nSetScaleX", "(JF)V", GESHER_JNI(setScaleX)},
++        {"nGetScaleY", "(J)F", GESHER_JNI(getScaleY)},
++        {"nSetScaleY", "(JF)V", GESHER_JNI(setScaleY)},
++        {"nGetTranslateX", "(J)F", GESHER_JNI(getTranslateX)},
++        {"nSetTranslateX", "(JF)V", GESHER_JNI(setTranslateX)},
++        {"nGetTranslateY", "(J)F", GESHER_JNI(getTranslateY)},
++        {"nSetTranslateY", "(JF)V", GESHER_JNI(setTranslateY)},
++
++        {"nSetPathData", "(JJ)V", GESHER_JNI(setPathData)},
++        {"nGetStrokeWidth", "(J)F", GESHER_JNI(getStrokeWidth)},
++        {"nSetStrokeWidth", "(JF)V", GESHER_JNI(setStrokeWidth)},
++        {"nGetStrokeColor", "(J)I", GESHER_JNI(getStrokeColor)},
++        {"nSetStrokeColor", "(JI)V", GESHER_JNI(setStrokeColor)},
++        {"nGetStrokeAlpha", "(J)F", GESHER_JNI(getStrokeAlpha)},
++        {"nSetStrokeAlpha", "(JF)V", GESHER_JNI(setStrokeAlpha)},
++        {"nGetFillColor", "(J)I", GESHER_JNI(getFillColor)},
++        {"nSetFillColor", "(JI)V", GESHER_JNI(setFillColor)},
++        {"nGetFillAlpha", "(J)F", GESHER_JNI(getFillAlpha)},
++        {"nSetFillAlpha", "(JF)V", GESHER_JNI(setFillAlpha)},
++        {"nGetTrimPathStart", "(J)F", GESHER_JNI(getTrimPathStart)},
++        {"nSetTrimPathStart", "(JF)V", GESHER_JNI(setTrimPathStart)},
++        {"nGetTrimPathEnd", "(J)F", GESHER_JNI(getTrimPathEnd)},
++        {"nSetTrimPathEnd", "(JF)V", GESHER_JNI(setTrimPathEnd)},
++        {"nGetTrimPathOffset", "(J)F", GESHER_JNI(getTrimPathOffset)},
++        {"nSetTrimPathOffset", "(JF)V", GESHER_JNI(setTrimPathOffset)},
+ };
+ 
+ int register_android_graphics_drawable_VectorDrawable(JNIEnv* env) {
+diff --git a/libs/hwui/jni/android_util_PathParser.cpp b/libs/hwui/jni/android_util_PathParser.cpp
+--- a/libs/hwui/jni/android_util_PathParser.cpp
++++ b/libs/hwui/jni/android_util_PathParser.cpp
+@@ -98,18 +98,18 @@
+ }
+ 
+ static const JNINativeMethod gMethods[] = {
+-    {"nParseStringForPath", "(JLjava/lang/String;I)V", (void*)parseStringForPath},
+-    {"nCreatePathDataFromString", "(Ljava/lang/String;I)J", (void*)createPathDataFromStringPath},
++    {"nParseStringForPath", "(JLjava/lang/String;I)V", GESHER_JNI(parseStringForPath)},
++    {"nCreatePathDataFromString", "(Ljava/lang/String;I)J", GESHER_JNI(createPathDataFromStringPath)},
+ 
+     // ---------------- @FastNative -----------------
+ 
+-    {"nCreateEmptyPathData", "()J", (void*)createEmptyPathData},
+-    {"nCreatePathData", "(J)J", (void*)createPathData},
+-    {"nInterpolatePathData", "(JJJF)Z", (void*)interpolatePathData},
+-    {"nFinalize", "(J)V", (void*)deletePathData},
+-    {"nCanMorph", "(JJ)Z", (void*)canMorphPathData},
+-    {"nSetPathData", "(JJ)V", (void*)setPathData},
+-    {"nCreatePathFromPathData", "(JJ)V", (void*)setSkPathFromPathData},
++    {"nCreateEmptyPathData", "()J", GESHER_JNI(createEmptyPathData)},
++    {"nCreatePathData", "(J)J", GESHER_JNI(createPathData)},
++    {"nInterpolatePathData", "(JJJF)Z", GESHER_JNI(interpolatePathData)},
++    {"nFinalize", "(J)V", GESHER_JNI(deletePathData)},
++    {"nCanMorph", "(JJ)Z", GESHER_JNI(canMorphPathData)},
++    {"nSetPathData", "(JJ)V", GESHER_JNI(setPathData)},
++    {"nCreatePathFromPathData", "(JJ)V", GESHER_JNI(setSkPathFromPathData)},
+ };
+ 
+ int register_android_util_PathParser(JNIEnv* env) {
+diff --git a/libs/hwui/jni/fonts/Font.cpp b/libs/hwui/jni/fonts/Font.cpp
+--- a/libs/hwui/jni/fonts/Font.cpp
++++ b/libs/hwui/jni/fonts/Font.cpp
+@@ -399,40 +399,40 @@
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gFontBuilderMethods[] = {
+-        {"nInitBuilder", "()J", (void*)Font_Builder_initBuilder},
+-        {"nAddAxis", "(JIF)V", (void*)Font_Builder_addAxis},
++        {"nInitBuilder", "()J", GESHER_JNI(Font_Builder_initBuilder)},
++        {"nAddAxis", "(JIF)V", GESHER_JNI(Font_Builder_addAxis)},
+         {"nBuild", "(JLjava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/String;IZI)J",
+-         (void*)Font_Builder_build},
+-        {"nClone", "(JJIZI)J", (void*)Font_Builder_clone},
++         GESHER_JNI(Font_Builder_build)},
++        {"nClone", "(JJIZI)J", GESHER_JNI(Font_Builder_clone)},
+ };
+ 
+ static const JNINativeMethod gFontMethods[] = {
+-        {"nGetMinikinFontPtr", "(J)J", (void*)Font_getMinikinFontPtr},
+-        {"nCloneFont", "(J)J", (void*)Font_cloneFont},
+-        {"nNewByteBuffer", "(J)Ljava/nio/ByteBuffer;", (void*)Font_newByteBuffer},
+-        {"nGetBufferAddress", "(J)J", (void*)Font_getBufferAddress},
+-        {"nGetReleaseNativeFont", "()J", (void*)Font_getReleaseNativeFontFunc},
+-        {"nGetGlyphBounds", "(JIJLandroid/graphics/RectF;)F", (void*)Font_getGlyphBounds},
++        {"nGetMinikinFontPtr", "(J)J", GESHER_JNI(Font_getMinikinFontPtr)},
++        {"nCloneFont", "(J)J", GESHER_JNI(Font_cloneFont)},
++        {"nNewByteBuffer", "(J)Ljava/nio/ByteBuffer;", GESHER_JNI(Font_newByteBuffer)},
++        {"nGetBufferAddress", "(J)J", GESHER_JNI(Font_getBufferAddress)},
++        {"nGetReleaseNativeFont", "()J", GESHER_JNI(Font_getReleaseNativeFontFunc)},
++        {"nGetGlyphBounds", "(JIJLandroid/graphics/RectF;)F", GESHER_JNI(Font_getGlyphBounds)},
+         {"nGetFontMetrics", "(JJLandroid/graphics/Paint$FontMetrics;)F",
+-         (void*)Font_getFontMetrics},
+-        {"nGetFontPath", "(J)Ljava/lang/String;", (void*)Font_getFontPath},
+-        {"nGetLocaleList", "(J)Ljava/lang/String;", (void*)Font_getLocaleList},
+-        {"nGetPackedStyle", "(J)I", (void*)Font_getPackedStyle},
+-        {"nGetIndex", "(J)I", (void*)Font_getIndex},
+-        {"nGetAxisCount", "(J)I", (void*)Font_getAxisCount},
+-        {"nGetAxisInfo", "(JI)J", (void*)Font_getAxisInfo},
+-        {"nGetSourceId", "(J)I", (void*)Font_getSourceId},
++         GESHER_JNI(Font_getFontMetrics)},
++        {"nGetFontPath", "(J)Ljava/lang/String;", GESHER_JNI(Font_getFontPath)},
++        {"nGetLocaleList", "(J)Ljava/lang/String;", GESHER_JNI(Font_getLocaleList)},
++        {"nGetPackedStyle", "(J)I", GESHER_JNI(Font_getPackedStyle)},
++        {"nGetIndex", "(J)I", GESHER_JNI(Font_getIndex)},
++        {"nGetAxisCount", "(J)I", GESHER_JNI(Font_getAxisCount)},
++        {"nGetAxisInfo", "(JI)J", GESHER_JNI(Font_getAxisInfo)},
++        {"nGetSourceId", "(J)I", GESHER_JNI(Font_getSourceId)},
+ 
+         // System font accessors
+-        {"nGetAvailableFontSet", "()[J", (void*)Font_getAvailableFontSet},
++        {"nGetAvailableFontSet", "()[J", GESHER_JNI(Font_getAvailableFontSet)},
+ };
+ 
+ static const JNINativeMethod gFontFileUtilMethods[] = {
+-    { "nGetFontRevision", "(Ljava/nio/ByteBuffer;I)J", (void*) FontFileUtil_getFontRevision },
++    { "nGetFontRevision", "(Ljava/nio/ByteBuffer;I)J", GESHER_JNI(FontFileUtil_getFontRevision) },
+     { "nGetFontPostScriptName", "(Ljava/nio/ByteBuffer;I)Ljava/lang/String;",
+-        (void*) FontFileUtil_getFontPostScriptName },
++        GESHER_JNI(FontFileUtil_getFontPostScriptName) },
+     { "nIsPostScriptType1Font", "(Ljava/nio/ByteBuffer;I)I",
+-        (void*) FontFileUtil_isPostScriptType1Font },
++        GESHER_JNI(FontFileUtil_isPostScriptType1Font) },
+ };
+ 
+ int register_android_graphics_fonts_Font(JNIEnv* env) {
+diff --git a/libs/hwui/jni/fonts/FontFamily.cpp b/libs/hwui/jni/fonts/FontFamily.cpp
+--- a/libs/hwui/jni/fonts/FontFamily.cpp
++++ b/libs/hwui/jni/fonts/FontFamily.cpp
+@@ -117,17 +117,17 @@
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ static const JNINativeMethod gFontFamilyBuilderMethods[] = {
+-        {"nInitBuilder", "()J", (void*)FontFamily_Builder_initBuilder},
+-        {"nAddFont", "(JJ)V", (void*)FontFamily_Builder_addFont},
+-        {"nBuild", "(JLjava/lang/String;IZZI)J", (void*)FontFamily_Builder_build},
+-        {"nGetReleaseNativeFamily", "()J", (void*)FontFamily_Builder_GetReleaseFunc},
++        {"nInitBuilder", "()J", GESHER_JNI(FontFamily_Builder_initBuilder)},
++        {"nAddFont", "(JJ)V", GESHER_JNI(FontFamily_Builder_addFont)},
++        {"nBuild", "(JLjava/lang/String;IZZI)J", GESHER_JNI(FontFamily_Builder_build)},
++        {"nGetReleaseNativeFamily", "()J", GESHER_JNI(FontFamily_Builder_GetReleaseFunc)},
+ };
+ 
+ static const JNINativeMethod gFontFamilyMethods[] = {
+-        {"nGetFontSize", "(J)I", (void*)FontFamily_getFontSize},
+-        {"nGetFont", "(JI)J", (void*)FontFamily_getFont},
+-        {"nGetLangTags", "(J)Ljava/lang/String;", (void*)FontFamily_getLangTags},
+-        {"nGetVariant", "(J)I", (void*)FontFamily_getVariant},
++        {"nGetFontSize", "(J)I", GESHER_JNI(FontFamily_getFontSize)},
++        {"nGetFont", "(JI)J", GESHER_JNI(FontFamily_getFont)},
++        {"nGetLangTags", "(J)Ljava/lang/String;", GESHER_JNI(FontFamily_getLangTags)},
++        {"nGetVariant", "(J)I", GESHER_JNI(FontFamily_getVariant)},
+ };
+ 
+ int register_android_graphics_fonts_FontFamily(JNIEnv* env) {
+diff --git a/libs/hwui/jni/text/GraphemeBreak.cpp b/libs/hwui/jni/text/GraphemeBreak.cpp
+--- a/libs/hwui/jni/text/GraphemeBreak.cpp
++++ b/libs/hwui/jni/text/GraphemeBreak.cpp
+@@ -53,7 +53,7 @@
+          "I"   // end
+          "[Z"  // isGraphemeBreak
+          ")V",
+-         (void*)nIsGraphemeBreak},
++         GESHER_JNI(nIsGraphemeBreak)},
+ };
+ 
+ int register_android_graphics_text_GraphemeBreak(JNIEnv* env) {
+diff --git a/libs/hwui/jni/text/LineBreaker.cpp b/libs/hwui/jni/text/LineBreaker.cpp
+--- a/libs/hwui/jni/text/LineBreaker.cpp
++++ b/libs/hwui/jni/text/LineBreaker.cpp
+@@ -136,10 +136,10 @@
+          "[I"  // indents
+          "Z"   // useBoundsForWidth
+          ")J",
+-         (void*)nInit},
++         GESHER_JNI(nInit)},
+ 
+         // Critical Natives
+-        {"nGetReleaseFunc", "()J", (void*)nGetReleaseFunc},
++        {"nGetReleaseFunc", "()J", GESHER_JNI(nGetReleaseFunc)},
+ 
+         // Regular JNI
+         {"nComputeLineBreaks",
+@@ -155,16 +155,16 @@
+          "F"   // defaultTabStop
+          "I"   // indentsOffset
+          ")J",
+-         (void*)nComputeLineBreaks},
++         GESHER_JNI(nComputeLineBreaks)},
+ 
+         // Result accessors, CriticalNatives
+-        {"nGetLineCount", "(J)I", (void*)nGetLineCount},
+-        {"nGetLineBreakOffset", "(JI)I", (void*)nGetLineBreakOffset},
+-        {"nGetLineWidth", "(JI)F", (void*)nGetLineWidth},
+-        {"nGetLineAscent", "(JI)F", (void*)nGetLineAscent},
+-        {"nGetLineDescent", "(JI)F", (void*)nGetLineDescent},
+-        {"nGetLineFlag", "(JI)I", (void*)nGetLineFlag},
+-        {"nGetReleaseResultFunc", "()J", (void*)nGetReleaseResultFunc},
++        {"nGetLineCount", "(J)I", GESHER_JNI(nGetLineCount)},
++        {"nGetLineBreakOffset", "(JI)I", GESHER_JNI(nGetLineBreakOffset)},
++        {"nGetLineWidth", "(JI)F", GESHER_JNI(nGetLineWidth)},
++        {"nGetLineAscent", "(JI)F", GESHER_JNI(nGetLineAscent)},
++        {"nGetLineDescent", "(JI)F", GESHER_JNI(nGetLineDescent)},
++        {"nGetLineFlag", "(JI)I", GESHER_JNI(nGetLineFlag)},
++        {"nGetReleaseResultFunc", "()J", GESHER_JNI(nGetReleaseResultFunc)},
+ };
+ 
+ int register_android_graphics_text_LineBreaker(JNIEnv* env) {
+diff --git a/libs/hwui/jni/text/MeasuredText.cpp b/libs/hwui/jni/text/MeasuredText.cpp
+--- a/libs/hwui/jni/text/MeasuredText.cpp
++++ b/libs/hwui/jni/text/MeasuredText.cpp
+@@ -159,21 +159,21 @@
+ 
+ static const JNINativeMethod gMTBuilderMethods[] = {
+         // MeasuredParagraphBuilder native functions.
+-        {"nInitBuilder", "()J", (void*)nInitBuilder},
+-        {"nAddStyleRun", "(JJIIZIIZ)V", (void*)nAddStyleRun},
+-        {"nAddReplacementRun", "(JJIIF)V", (void*)nAddReplacementRun},
+-        {"nBuildMeasuredText", "(JJ[CZZZZ)J", (void*)nBuildMeasuredText},
+-        {"nFreeBuilder", "(J)V", (void*)nFreeBuilder},
++        {"nInitBuilder", "()J", GESHER_JNI(nInitBuilder)},
++        {"nAddStyleRun", "(JJIIZIIZ)V", GESHER_JNI(nAddStyleRun)},
++        {"nAddReplacementRun", "(JJIIF)V", GESHER_JNI(nAddReplacementRun)},
++        {"nBuildMeasuredText", "(JJ[CZZZZ)J", GESHER_JNI(nBuildMeasuredText)},
++        {"nFreeBuilder", "(J)V", GESHER_JNI(nFreeBuilder)},
+ };
+ 
+ static const JNINativeMethod gMTMethods[] = {
+         // MeasuredParagraph native functions.
+-        {"nGetWidth", "(JII)F", (void*)nGetWidth},                             // Critical Natives
+-        {"nGetBounds", "(J[CIILandroid/graphics/Rect;)V", (void*)nGetBounds},  // Regular JNI
+-        {"nGetExtent", "(J[CII)J", (void*)nGetExtent},                         // Regular JNI
+-        {"nGetReleaseFunc", "()J", (void*)nGetReleaseFunc},                    // Critical Natives
+-        {"nGetMemoryUsage", "(J)I", (void*)nGetMemoryUsage},                   // Critical Native
+-        {"nGetCharWidthAt", "(JI)F", (void*)nGetCharWidthAt},                  // Critical Native
++        {"nGetWidth", "(JII)F", GESHER_JNI(nGetWidth)},                             // Critical Natives
++        {"nGetBounds", "(J[CIILandroid/graphics/Rect;)V", GESHER_JNI(nGetBounds)},  // Regular JNI
++        {"nGetExtent", "(J[CII)J", GESHER_JNI(nGetExtent)},                         // Regular JNI
++        {"nGetReleaseFunc", "()J", GESHER_JNI(nGetReleaseFunc)},                    // Critical Natives
++        {"nGetMemoryUsage", "(J)I", GESHER_JNI(nGetMemoryUsage)},                   // Critical Native
++        {"nGetCharWidthAt", "(JI)F", GESHER_JNI(nGetCharWidthAt)},                  // Critical Native
+ };
+ 
+ int register_android_graphics_text_MeasuredText(JNIEnv* env) {
+diff --git a/libs/hwui/jni/text/TextShaper.cpp b/libs/hwui/jni/text/TextShaper.cpp
+--- a/libs/hwui/jni/text/TextShaper.cpp
++++ b/libs/hwui/jni/text/TextShaper.cpp
+@@ -298,7 +298,7 @@
+         "Z"  // isRtl
+         "J)"  // paint
+         "J",  // LayoutPtr
+-        (void*) TextShaper_shapeTextRunChars},
++        GESHER_JNI(TextShaper_shapeTextRunChars)},
+ 
+     {"nativeShapeTextRun", "("
+         "Ljava/lang/String;"  // text
+@@ -309,28 +309,28 @@
+         "Z"  // isRtl
+         "J)"  // paint
+         "J",  // LayoutPtr
+-        (void*) TextShaper_shapeTextRunString},
++        GESHER_JNI(TextShaper_shapeTextRunString)},
+ 
+ };
+ 
+ static const JNINativeMethod gResultMethods[] = {
+-        {"nGetGlyphCount", "(J)I", (void*)TextShaper_Result_getGlyphCount},
+-        {"nGetTotalAdvance", "(J)F", (void*)TextShaper_Result_getTotalAdvance},
+-        {"nGetAscent", "(J)F", (void*)TextShaper_Result_getAscent},
+-        {"nGetDescent", "(J)F", (void*)TextShaper_Result_getDescent},
+-        {"nGetGlyphId", "(JI)I", (void*)TextShaper_Result_getGlyphId},
+-        {"nGetX", "(JI)F", (void*)TextShaper_Result_getX},
+-        {"nGetY", "(JI)F", (void*)TextShaper_Result_getY},
+-        {"nGetFont", "(JI)J", (void*)TextShaper_Result_getFont},
+-        {"nGetFakeBold", "(JI)Z", (void*)TextShaper_Result_getFakeBold},
+-        {"nGetFakeItalic", "(JI)Z", (void*)TextShaper_Result_getFakeItalic},
+-        {"nGetWeightOverride", "(JI)F", (void*)TextShaper_Result_getWeightOverride},
+-        {"nGetItalicOverride", "(JI)F", (void*)TextShaper_Result_getItalicOverride},
+-        {"nReleaseFunc", "()J", (void*)TextShaper_Result_nReleaseFunc},
+-
+-        {"nGetFontCount", "(J)I", (void*)TextShaper_Result_getFontCount},
+-        {"nGetFontRef", "(JI)J", (void*)TextShaper_Result_getFontRef},
+-        {"nGetFontId", "(JI)I", (void*)TextShaper_Result_getFontId},
++        {"nGetGlyphCount", "(J)I", GESHER_JNI(TextShaper_Result_getGlyphCount)},
++        {"nGetTotalAdvance", "(J)F", GESHER_JNI(TextShaper_Result_getTotalAdvance)},
++        {"nGetAscent", "(J)F", GESHER_JNI(TextShaper_Result_getAscent)},
++        {"nGetDescent", "(J)F", GESHER_JNI(TextShaper_Result_getDescent)},
++        {"nGetGlyphId", "(JI)I", GESHER_JNI(TextShaper_Result_getGlyphId)},
++        {"nGetX", "(JI)F", GESHER_JNI(TextShaper_Result_getX)},
++        {"nGetY", "(JI)F", GESHER_JNI(TextShaper_Result_getY)},
++        {"nGetFont", "(JI)J", GESHER_JNI(TextShaper_Result_getFont)},
++        {"nGetFakeBold", "(JI)Z", GESHER_JNI(TextShaper_Result_getFakeBold)},
++        {"nGetFakeItalic", "(JI)Z", GESHER_JNI(TextShaper_Result_getFakeItalic)},
++        {"nGetWeightOverride", "(JI)F", GESHER_JNI(TextShaper_Result_getWeightOverride)},
++        {"nGetItalicOverride", "(JI)F", GESHER_JNI(TextShaper_Result_getItalicOverride)},
++        {"nReleaseFunc", "()J", GESHER_JNI(TextShaper_Result_nReleaseFunc)},
++
++        {"nGetFontCount", "(J)I", GESHER_JNI(TextShaper_Result_getFontCount)},
++        {"nGetFontRef", "(JI)J", GESHER_JNI(TextShaper_Result_getFontRef)},
++        {"nGetFontId", "(JI)I", GESHER_JNI(TextShaper_Result_getFontId)},
+ };
+ 
+ int register_android_graphics_text_TextShaper(JNIEnv* env) {
+diff --git a/core/jni/android_view_Surface.cpp b/core/jni/android_view_Surface.cpp
+--- a/core/jni/android_view_Surface.cpp
++++ b/core/jni/android_view_Surface.cpp
+@@ -471,38 +471,38 @@
+ static const JNINativeMethod gSurfaceMethods[] = {
+ #ifdef __ANDROID__
+         {"nativeCreateFromSurfaceTexture", "(Landroid/graphics/SurfaceTexture;)J",
+-         (void*)nativeCreateFromSurfaceTexture},
+-#endif
+-        {"nativeRelease", "(J)V", (void*)nativeRelease},
+-        {"nativeIsValid", "(J)Z", (void*)nativeIsValid},
+-        {"nativeIsConsumerRunningBehind", "(J)Z", (void*)nativeIsConsumerRunningBehind},
++         GESHER_JNI(nativeCreateFromSurfaceTexture)},
++#endif
++        {"nativeRelease", "(J)V", GESHER_JNI(nativeRelease)},
++        {"nativeIsValid", "(J)Z", GESHER_JNI(nativeIsValid)},
++        {"nativeIsConsumerRunningBehind", "(J)Z", GESHER_JNI(nativeIsConsumerRunningBehind)},
+         {"nativeLockCanvas", "(JLandroid/graphics/Canvas;Landroid/graphics/Rect;)J",
+-         (void*)nativeLockCanvas},
++         GESHER_JNI(nativeLockCanvas)},
+         {"nativeUnlockCanvasAndPost", "(JLandroid/graphics/Canvas;)V",
+-         (void*)nativeUnlockCanvasAndPost},
+-        {"nativeAllocateBuffers", "(J)V", (void*)nativeAllocateBuffers},
+-#ifdef __ANDROID__
+-        {"nativeCreateFromSurfaceControl", "(J)J", (void*)nativeCreateFromSurfaceControl},
+-        {"nativeGetFromSurfaceControl", "(JJ)J", (void*)nativeGetFromSurfaceControl},
+-        {"nativeReadFromParcel", "(JLandroid/os/Parcel;)J", (void*)nativeReadFromParcel},
+-        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", (void*)nativeWriteToParcel},
+-#endif
+-        {"nativeGetWidth", "(J)I", (void*)nativeGetWidth},
+-        {"nativeGetHeight", "(J)I", (void*)nativeGetHeight},
+-        {"nativeGetNextFrameNumber", "(J)J", (void*)nativeGetNextFrameNumber},
+-        {"nativeSetScalingMode", "(JI)I", (void*)nativeSetScalingMode},
+-        {"nativeForceScopedDisconnect", "(J)I", (void*)nativeForceScopedDisconnect},
++         GESHER_JNI(nativeUnlockCanvasAndPost)},
++        {"nativeAllocateBuffers", "(J)V", GESHER_JNI(nativeAllocateBuffers)},
++#ifdef __ANDROID__
++        {"nativeCreateFromSurfaceControl", "(J)J", GESHER_JNI(nativeCreateFromSurfaceControl)},
++        {"nativeGetFromSurfaceControl", "(JJ)J", GESHER_JNI(nativeGetFromSurfaceControl)},
++        {"nativeReadFromParcel", "(JLandroid/os/Parcel;)J", GESHER_JNI(nativeReadFromParcel)},
++        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", GESHER_JNI(nativeWriteToParcel)},
++#endif
++        {"nativeGetWidth", "(J)I", GESHER_JNI(nativeGetWidth)},
++        {"nativeGetHeight", "(J)I", GESHER_JNI(nativeGetHeight)},
++        {"nativeGetNextFrameNumber", "(J)J", GESHER_JNI(nativeGetNextFrameNumber)},
++        {"nativeSetScalingMode", "(JI)I", GESHER_JNI(nativeSetScalingMode)},
++        {"nativeForceScopedDisconnect", "(J)I", GESHER_JNI(nativeForceScopedDisconnect)},
+ #ifdef __ANDROID__
+         {"nativeAttachAndQueueBufferWithColorSpace", "(JLandroid/hardware/HardwareBuffer;I)I",
+-         (void*)nativeAttachAndQueueBufferWithColorSpace},
+-#endif
+-        {"nativeSetSharedBufferModeEnabled", "(JZ)I", (void*)nativeSetSharedBufferModeEnabled},
+-        {"nativeSetAutoRefreshEnabled", "(JZ)I", (void*)nativeSetAutoRefreshEnabled},
+-        {"nativeSetFrameRate", "(JFII)I", (void*)nativeSetFrameRate},
+-#ifdef __ANDROID__
+-        {"nativeGetFromBlastBufferQueue", "(JJ)J", (void*)nativeGetFromBlastBufferQueue},
+-#endif
+-        {"nativeDestroy", "(J)V", (void*)nativeDestroy},
++         GESHER_JNI(nativeAttachAndQueueBufferWithColorSpace)},
++#endif
++        {"nativeSetSharedBufferModeEnabled", "(JZ)I", GESHER_JNI(nativeSetSharedBufferModeEnabled)},
++        {"nativeSetAutoRefreshEnabled", "(JZ)I", GESHER_JNI(nativeSetAutoRefreshEnabled)},
++        {"nativeSetFrameRate", "(JFII)I", GESHER_JNI(nativeSetFrameRate)},
++#ifdef __ANDROID__
++        {"nativeGetFromBlastBufferQueue", "(JJ)J", GESHER_JNI(nativeGetFromBlastBufferQueue)},
++#endif
++        {"nativeDestroy", "(J)V", GESHER_JNI(nativeDestroy)},
+ };
+ 
+ int register_android_view_Surface(JNIEnv* env)

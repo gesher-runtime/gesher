@@ -37,6 +37,15 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-libcore" $(find "$work/classes-libcore" -name '*.class')
 cp "$work/dex-libcore/classes.dex" "$out/libcore-tests.dex"
 
+# Compiled code and nterp (tests/dex-codegen): the benchmark and the stress test.
+javac --release 11 -d "$work/classes-codegen" "$root"/tests/dex-codegen/*.java
+mkdir -p "$work/dex-codegen"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-codegen" $(find "$work/classes-codegen" -name '*.class')
+cp "$work/dex-codegen/classes.dex" "$out/codegen-tests.dex"
+# Some of ART's own run-tests (art/test), for the same checks.
+"$root/tests/build-art-run-tests.sh" "$out" "$r8"
+
 # framework.jar on the boot class path (tests/dex-framework).
 javac --release 11 -d "$work/classes-framework" "$root"/tests/dex-framework/*.java
 mkdir -p "$work/dex-framework"

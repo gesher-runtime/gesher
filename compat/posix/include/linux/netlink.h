@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 
 #define NETLINK_ROUTE 0
+#define NETLINK_KOBJECT_UEVENT 15
 
 struct sockaddr_nl {
   sa_family_t nl_family;

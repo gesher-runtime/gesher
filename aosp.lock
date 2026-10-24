@@ -17,6 +17,7 @@ external/fmtlib
 external/dlmalloc
 external/lz4
 external/lzma C/
+external/libpng
 external/cpu_features
 system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
@@ -24,10 +25,25 @@ external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_brid
 external/okhttp Android.bp repackaged/
 external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
+# SQLite (cmake/aosp/sqlite.cmake): sqlite-default is sqlite-autoconf-3500400.
+external/sqlite android/ dist/sqlite-autoconf-3500400/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/jni/android_graphics_RenderNode.cpp libs/hwui/jni/Paint.cpp libs/hwui/jni/android_graphics_Matrix.cpp libs/hwui/jni/Path.cpp core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl
+frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl
+
+# Graphics (docs/graphics.md): Skia, the libraries it, minikin and hwui build
+# on, and the fonts.
+external/skia /Android.bp /include/ /src/ /modules/skcms/ /client_utils/android/ /win/ /tools/SkSharingProc.cpp /tools/SkSharingProc.h
+external/freetype
+external/libjpeg-turbo
+external/webp
+external/wuffs-mirror-release-c
+external/harfbuzz_ng /Android.bp /src/
+external/vulkan-headers /include/
+frameworks/minikin /Android.bp /include/ /libs/minikin/
+external/roboto-fonts /Android.bp /font/ /NOTICE
+external/noto-fonts /notosanshebrew/ /notoserif/
 
 # The framework build (tools/framework/build.py) and its host tools
 # (tools/host). Projects with only *.bp give the planner their Soong module
@@ -42,7 +58,7 @@ external/conscrypt *.bp
 external/cronet *.bp
 external/error_prone *.bp
 external/gflags
-external/googletest googletest/
+external/googletest googletest/ googlemock/
 external/javapoet *.bp
 external/jsoncpp
 external/jsr305 *.bp
@@ -54,14 +70,14 @@ external/perfetto *.bp
 external/protobuf
 external/rappor *.bp
 external/tagsoup *.bp
-frameworks/av *.bp
+frameworks/av *.bp media/ndk/include/
 frameworks/hardware/interfaces *.bp
 frameworks/libs/systemui *.bp
-frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/
+frameworks/native *.bp include/android/ libs/binder/ libs/binderthreadstate/include/ cmds/servicemanager/ /include/ libs/ui/ libs/nativewindow/ libs/nativebase/ libs/nativedisplay/ libs/arect/ libs/input/ libs/math/ opengl/include/ libs/attestation/ libs/gui/include/gui/TraceUtils.h
 bionic libc/kernel/uapi/linux/android/
 frameworks/opt/telephony *.bp
 frameworks/proto_logging
-hardware/interfaces *.bp
+hardware/interfaces *.bp graphics/common/aidl/
 packages/apps/EyeDropper *.bp
 packages/modules/AdServices *.bp
 packages/modules/AppSearch *.bp

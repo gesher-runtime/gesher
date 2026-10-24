@@ -24,6 +24,7 @@
 #include <string_view>
 #include <vector>
 
+#include "binder_internal.h"
 #include "internal.h"
 
 namespace gesher {
@@ -54,6 +55,7 @@ PathKind VirtualKind(std::string_view path) {
     if (parts[1] == "null") return PathKind::kNull;
     if (parts[1] == "zero") return PathKind::kZero;
     if (parts[1] == "random" || parts[1] == "urandom") return PathKind::kRandom;
+    if (parts[1] == "binder") return BinderDeviceExists() ? PathKind::kBinder : PathKind::kMissing;
   }
   if (parts.size() == 3 && parts[0] == "proc" && parts[2] == "cmdline" &&
       (parts[1] == "self" || parts[1] == std::to_string(GetCurrentProcessId()))) {
@@ -213,6 +215,7 @@ int OpenPath(const char* path, int flags) {
     case PathKind::kZero:
     case PathKind::kRandom: return OpenDevice(kind, flags);
     case PathKind::kCmdline: return OpenCmdline(flags);
+    case PathKind::kBinder: return OpenBinder(flags);
     case PathKind::kMissing: break;
   }
   return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
@@ -389,6 +392,57 @@ int mkdir(const char* path) {
     default:
       return errno = EEXIST, -1;
   }
+}
+
+// Linux's unlink removes the name at once, even while the file is open; the
+// CRT's DeleteFile may leave it in place (delete pending) until the last
+// handle closes. The POSIX-semantics delete gives Linux's behaviour where the
+// volume has it, the classic one otherwise; a scanner's brief open of a new
+// file is waited out.
+int unlink(const char* path) {
+  if (path == nullptr) return errno = EFAULT, -1;
+  std::wstring windows;
+  switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
+    case PathKind::kFile:
+      break;
+    case PathKind::kMissing:
+      return errno = ENOENT, -1;
+    default:
+      return errno = EACCES, -1;  // the /dev and /proc names
+  }
+  HANDLE h = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+    Sleep(10);
+  }
+  if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  FILE_ATTRIBUTE_TAG_INFO tag;
+  if (GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+      (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    CloseHandle(h);
+    return errno = EISDIR, -1;
+  }
+  FILE_DISPOSITION_INFO_EX posix = {FILE_DISPOSITION_FLAG_DELETE |
+                                    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
+                                    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
+  // FileDispositionInfoEx (21), which older SDK headers declare only for
+  // newer _WIN32_WINNT values.
+  BOOL ok = SetFileInformationByHandle(h, static_cast<FILE_INFO_BY_HANDLE_CLASS>(21), &posix,
+                                       sizeof(posix));
+  if (!ok) {
+    FILE_DISPOSITION_INFO classic = {TRUE};
+    ok = SetFileInformationByHandle(h, FileDispositionInfo, &classic, sizeof(classic));
+  }
+  DWORD error = GetLastError();
+  CloseHandle(h);
+  if (!ok) {
+    SetLastError(error);
+    return gesher::FailWithLastError();
+  }
+  return 0;
 }
 
 int mkdirat(int dirfd, const char* path, mode_t) {

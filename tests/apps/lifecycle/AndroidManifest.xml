@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- A test app for gesher-app: one launcher Activity that reports each lifecycle
-     callback, a string resource and an attribute of its theme. -->
+     callback, a string resource and an attribute of its theme. Its icon is a legacy
+     PNG mipmap, red only at xxxhdpi (the shell track's tests). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gesher.lifecycle"
     android:versionCode="1"
@@ -8,6 +9,7 @@
     <application
         android:name=".LifecycleApplication"
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
         android:theme="@style/LifecycleTheme">
         <activity
             android:name=".LifecycleActivity"

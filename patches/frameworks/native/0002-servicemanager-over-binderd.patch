@@ -1,0 +1,41 @@
+diff --git a/libs/binder/BackendUnifiedServiceManager.cpp b/libs/binder/BackendUnifiedServiceManager.cpp
+index 7fbb00b..20ad53a 100644
+--- a/libs/binder/BackendUnifiedServiceManager.cpp
++++ b/libs/binder/BackendUnifiedServiceManager.cpp
+@@ -24,6 +24,9 @@
+ #include <cutils/sockets.h>
+ #include <sys/socket.h>
+ #include <sys/un.h>
++#if defined(GESHER)
++#include <stdlib.h>
++#endif
+ 
+ #if defined(__BIONIC__) && !defined(__ANDROID_VNDK__)
+ #include <android-base/properties.h>
+@@ -516,7 +519,12 @@ static bool hasOutOfProcessServiceManager() {
+ // service management on host or when libbinder is compiled without any
+ // kernel binder suport. Please use setDefaultServiceManager for host
+ // processes that want to use service manager APIs.
+-#if !defined(BINDER_WITH_KERNEL_IPC) || !defined(__BIONIC__)
++#if defined(GESHER)
++    // Gesher: servicemanager runs in its own process when a binderd serves
++    // /dev/binder, named by $GESHER_BINDER (docs/services.md).
++    const char* device = getenv("GESHER_BINDER");
++    return device != nullptr && device[0] != '\0';
++#elif !defined(BINDER_WITH_KERNEL_IPC) || !defined(__BIONIC__)
+     return false;
+ #else
+ #ifdef __ANDROID_VNDK__
+@@ -554,7 +562,12 @@ sp<BackendUnifiedServiceManager> getBackendUnifiedServiceManager() {
+         while (hasOutOfProcessServiceManager() && sm == nullptr) {
+             // There is either a kernel binder service manager, or an RPC binder
+             // service manager
++#if defined(GESHER)
++            // access() does not know /dev/binder on Windows; open does.
++            sp<ProcessState> ps = ProcessState::self();
++#else
+             sp<ProcessState> ps = ProcessState::selfIfKernelBinderEnabled();
++#endif
+             if (ps) {
+                 // Service management over kernel binder
+                 sm = interface_cast<AidlServiceManager>(ps->getContextObject(nullptr));

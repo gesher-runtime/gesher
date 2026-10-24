@@ -2,7 +2,10 @@
 ;   iscc /DBuildDir=<dir with the build output> /DAppVersion=<x.y.z> gesher.iss
 ; Installs per user (no administrator rights) into
 ; %LOCALAPPDATA%\Programs\Gesher, puts `gesher` and `gesher-app` on the user's
-; PATH and adds a Start menu entry that runs the bundled Hello.
+; PATH, adds a Start menu entry that runs the bundled Hello and opens `.apk`
+; files with gesher-app (docs/installer.md). Apps installed with gesher-app get
+; Start menu shortcuts in {userprograms}\Gesher Apps (com.gesher.app.shell),
+; which the uninstaller removes.
 
 #ifndef BuildDir
   #error Pass /DBuildDir=<build output directory>
@@ -25,11 +28,16 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 ChangesEnvironment=yes
+ChangesAssociations=yes
 OutputBaseFilename=gesher-setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=Gesher {#AppVersion}
+; Gesher's icon (tools/icons/make-icons.py): Setup, Add/Remove Programs, the
+; Start menu entries and the .apk file type.
+SetupIconFile=gesher.ico
+UninstallDisplayIcon={app}\gesher.ico
 
 [Files]
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -42,24 +50,89 @@ Source: "{#BuildDir}\framework.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\framework-res.apk"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\build.prop"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
+; The boot image (docs/boot-image.md): the boot class path's classes, verified
+; and linked by dex2oat, which dalvikvm maps instead of loading them one by one.
+Source: "{#BuildDir}\framework\x86_64\*"; DestDir: "{app}\framework\x86_64"; Flags: ignoreversion
+; ANGLE (docs/angle.md): OpenGL ES and EGL over Direct3D 11, BSD-licensed;
+; its license and those of the code linked into it are in ANGLE-NOTICES.txt.
+Source: "{#BuildDir}\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; The system fonts and fonts.xml (docs/fonts.md): Roboto and DroidSansMono
+; (Apache 2.0), Noto Sans Hebrew and Noto Serif (OFL 1.1); gesher-app.ps1
+; installs them as $ANDROID_ROOT/fonts and $ANDROID_ROOT/etc/fonts.xml.
+Source: "{#BuildDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
+Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"
+Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
 
+[Registry]
+; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
+; an APK with gesher-app. Gesher always joins `.apk`'s "Open with" list, but
+; becomes the default only when no other ProgID owns `.apk` (ApkUnclaimed), and
+; never touches Explorer's UserChoice. The uninstaller removes `.apk`'s default
+; only while it still names Gesher.Apk (CurUninstallStepChanged).
+Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
+Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "Android app (Gesher)"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico,0"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
+
+[UninstallRun]
+; The Gesher device (binderd, servicemanager, the system server and app
+; processes, docs/services.md) runs from {app} and keeps files of
+; {localappdata}\Gesher open: it is stopped first.
+Filename: "{cmd}"; Parameters: "/d /c """"{app}\gesher-app.cmd"" shutdown"""; Flags: runhidden waituntilterminated; RunOnceId: "GesherDeviceShutdown"
+
 [UninstallDelete]
-; The runtime's directories (gesher.ps1).
+; The runtime's directories (gesher.ps1), the installed packages and the logs.
 Type: filesandordirs; Name: "{localappdata}\Gesher"
+; The installed apps' Start menu shortcuts (gesher-app install; their icons are
+; in the packages' data directories, above).
+Type: filesandordirs; Name: "{userprograms}\Gesher Apps"
 
 [Code]
 const
   EnvKey = 'Environment';
+  ApkKey = 'Software\Classes\.apk';
+  ApkProgId = 'Gesher.Apk';
+
+// True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
+// per-user and per-machine view, so another app's machine-wide association
+// counts too.
+function ApkUnclaimed(): Boolean;
+var
+  ProgId: String;
+begin
+  if not RegQueryStringValue(HKEY_CLASSES_ROOT, '.apk', '', ProgId) then
+    ProgId := '';
+  Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
+end;
+
+// An update replaces files a running Gesher device uses: it is stopped first.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Launcher: String;
+  Code: Integer;
+begin
+  Launcher := ExpandConstant('{app}\gesher-app.cmd');
+  if FileExists(Launcher) then
+    Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
+      ewWaitUntilTerminated, Code);
+  Result := '';
+end;
 
 function PathEntries(): String;
 begin
@@ -96,6 +169,10 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    if RegQueryStringValue(HKEY_CURRENT_USER, ApkKey, '', Path) and
+       (CompareText(Path, ApkProgId) = 0) then
+      RegDeleteValue(HKEY_CURRENT_USER, ApkKey, '');
+    RegDeleteKeyIfEmpty(HKEY_CURRENT_USER, ApkKey);
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if HasEntry(Path, Dir) then

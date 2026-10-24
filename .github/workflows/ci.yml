@@ -50,9 +50,11 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
+          # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
+          tools/fonts/collect-fonts.sh third_party/aosp dist
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -65,6 +67,32 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     uses: ./.github/workflows/framework.yml
+
+  # Phase 6 (native libraries): the Android NDK test .so files, built on the
+  # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
+  native-libs:
+    uses: ./.github/workflows/native-libs.yml
+
+  # The core libraries' own unit tests (AOSP's cc_test modules), built for
+  # the test job: .github/workflows/libs.yml.
+  libs:
+    uses: ./.github/workflows/libs.yml
+
+  # Skia, hwui and the graphics probes (docs/graphics.md):
+  # .github/workflows/graphics.yml, which also runs on its own.
+  graphics:
+    uses: ./.github/workflows/graphics.yml
+
+  # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
+  # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
+  angle:
+    uses: ./.github/workflows/angle.yml
+
+  # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
+  # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
+  boot-image:
+    needs: [build, framework]
+    uses: ./.github/workflows/boot-image.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
@@ -90,12 +118,15 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework]
+    needs: [build, framework, graphics, angle, boot-image]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tools/package
+          sparse-checkout: |
+            tools/package
+            tests/windows/shell
+            tests/windows/graphics
 
       - uses: actions/download-artifact@v4
         with:
@@ -105,6 +136,21 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: framework
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
           path: dist
 
       - name: Build installer
@@ -117,10 +163,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem installer
 
+      # Uploaded before the checks below: the e2e job tests this installer even when one
+      # of them fails.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gesher-setup
+          path: installer/*.exe
+
       - name: Install, run Hello, uninstall
         shell: pwsh
         run: |
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          # Every run of the installed Gesher below must load the installed boot
+          # image (docs/boot-image.md): without it the runtime fails instead of
+          # falling back to imageless running, and it says what it loaded.
+          $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
           Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -131,33 +188,291 @@ jobs:
           if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows')) {
             throw "Hello through the installed gesher failed (exit $code)"
           }
+          if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
+          # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.
+          foreach ($f in 'fonts\fonts.xml', 'licenses\FONTS-NOTICES.txt') {
+            if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
+          }
+          foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
+            if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
+          }
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
+            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
+          }
+          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
+          Write-Host $fonts
+          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
+          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
+          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The default: the Gesher device (binderd, servicemanager and a
+          # persistent system server, detached), the APK installed, its
+          # process started by the system server (docs/services.md).
+          $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
+          function DevicePids {
+            if (-not (Test-Path $device)) { return @() }
+            $pids = @()
+            foreach ($line in Get-Content $device) {
+              if ($line -match '^(system_server|servicemanager|binderd)=(\d+)$') { $pids += [int]$Matches[2] }
+            }
+            return @($pids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          }
+          # lifecycle.apk runs headless (no window; its task is removed once it
+          # is idle); uiapp.apk's window is checked below.
+          $env:GESHER_APP_WINDOW = 'headless'
           $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
           $code = $LASTEXITCODE
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done') {
-            throw "The installed gesher-app did not take lifecycle.apk to onResume (exit $code)"
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
+              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+            throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }
+          if ((DevicePids).Count -ne 3) { throw "The Gesher device is not running after the launch: $(DevicePids)" }
+          $list = & "$app\gesher-app.cmd" list 2>&1 | Out-String
+          Write-Host $list
+          if ($list -notmatch 'connected to the running Gesher device' -or $list -notmatch 'package:com\.gesher\.lifecycle ') {
+            throw "gesher-app list does not show the installed lifecycle.apk"
+          }
+          'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Installed apps as Windows apps (docs/installer.md): the first launch
+          # made the app's Start menu shortcut, and its process set the
+          # package's AppUserModelID.
+          . tests\windows\shell\ShellChecks.ps1
+          $programs = [Environment]::GetFolderPath('Programs')
+          $appsFolder = Join-Path $programs 'Gesher Apps'
+          $lnk = Join-Path $appsFolder 'Gesher Lifecycle.lnk'
+          $lifecycleIco = "$env:LOCALAPPDATA\Gesher\data\data\com.gesher.lifecycle\gesher-shell\icon.ico"
+          if (-not (Test-Path $lnk)) {
+            Get-ChildItem $programs -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName | Out-Host
+            throw "The first launch of lifecycle.apk made no Start menu shortcut $lnk"
+          }
+          if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
+          'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0 -or (Test-Path $lnk) -or (Test-Path $lifecycleIco)) { throw "gesher-app uninstall left the shortcut or its icon (exit $code)" }
+          'PASS  installer: gesher-app uninstall removes the app''s Start menu shortcut and icon' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # gesher-app install: the shortcut, as the Start menu reads it.
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0 -or -not (Test-Path $lnk)) { throw "gesher-app install made no shortcut $lnk (exit $code)" }
+          $wsh = New-Object -ComObject WScript.Shell
+          $link = $wsh.CreateShortcut($lnk)
+          $aumid = Get-LinkAppUserModelId $lnk
+          Write-Host "$lnk -> $($link.TargetPath) $($link.Arguments) (in $($link.WorkingDirectory); icon $($link.IconLocation); AppUserModelID $aumid)"
+          $problems = @()
+          if ($link.TargetPath -ne "$app\gesher-app.cmd") { $problems += "target $($link.TargetPath)" }
+          if ($link.Arguments -ne 'launch com.gesher.lifecycle') { $problems += "arguments $($link.Arguments)" }
+          if ($link.WorkingDirectory -ne $app) { $problems += "working directory $($link.WorkingDirectory)" }
+          if ($link.IconLocation -ne "$lifecycleIco,0") { $problems += "icon $($link.IconLocation)" }
+          if ($aumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "AppUserModelID $aumid" }
+          $problems += @(Test-AppIco $lifecycleIco @{ '2,2' = 'transparent'; '128,128' = @(0xD3, 0x2F, 0x2F) })
+          if ($problems) { throw "The shortcut of lifecycle.apk: $($problems -join '; ')" }
+          'PASS  installer: gesher-app install makes Gesher Apps\Gesher Lifecycle.lnk: gesher-app launch com.gesher.lifecycle, the app''s icon as a multi-size .ico, AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The shortcut's command line, as the Start menu starts it.
+          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$($link.TargetPath)`" $($link.Arguments) 2>&1`"")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.WorkingDirectory = $link.WorkingDirectory
+          $p = [Diagnostics.Process]::Start($psi)
+          $out = $p.StandardOutput.ReadToEnd()
+          $p.WaitForExit()
+          Write-Host (($out -split "`n" | Select-Object -Last 8) -join "`n")
+          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or
+              $out -notmatch 'LifecycleActivity onResume') {
+            throw "The shortcut's command line did not run lifecycle.apk (exit $($p.ExitCode))"
+          }
+          'PASS  installer: the Start menu shortcut''s command line runs the installed app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # An adaptive icon (components.apk: a WebP foreground over a color).
+          $components = Join-Path $env:TEMP 'components.apk'  # on Gesher's drive
+          Copy-Item dist\components.apk $components
+          $out = & "$app\gesher-app.cmd" install $components 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          $componentsLnk = Join-Path $appsFolder 'Gesher Components.lnk'
+          $componentsIco = "$env:LOCALAPPDATA\Gesher\data\data\com.gesher.components\gesher-shell\icon.ico"
+          if ($code -ne 0 -or -not (Test-Path $componentsLnk)) { throw "gesher-app install made no shortcut $componentsLnk (exit $code)" }
+          $problems = @(Test-AppIco $componentsIco @{ '2,2' = 'transparent'; '128,128' = @(0xFF, 0xFF, 0xFF); '128,30' = @(0x1E, 0x63, 0xD6) })
+          if ($wsh.CreateShortcut($componentsLnk).IconLocation -ne "$componentsIco,0") { $problems += 'not its icon' }
+          if ((Get-LinkAppUserModelId $componentsLnk) -ne 'Gesher.App.com.gesher.components') { $problems += 'not its AppUserModelID' }
+          if ($problems) { throw "The shortcut of components.apk: $($problems -join '; ')" }
+          'PASS  installer: components.apk''s shortcut has its adaptive icon (foreground over background, masked)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" shutdown 2>&1 | Out-String
+          Write-Host $out
+          Start-Sleep 1
+          if ($LASTEXITCODE -ne 0 -or (DevicePids).Count -ne 0 -or (Test-Path $device)) {
+            throw "gesher-app shutdown left the Gesher device running: $(DevicePids)"
+          }
+          'PASS  installer: gesher-app shutdown stops the Gesher device''s processes' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Multi-process: binderd, servicemanager and the system server
+          # (com.gesher.server.SystemServer) started by the launcher, the app
+          # in a process of its own.
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --system-server 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
+          }
+          'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The .apk association: run the open command the installer registered,
+          # with %1 set to the bundled APK, as Explorer would.
+          $cls = 'HKCU:\Software\Classes'
+          $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
+          if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
+          if ($null -eq (Get-ItemProperty "$cls\.apk\OpenWithProgids").'Gesher.Apk') { throw '.apk OpenWithProgids lacks Gesher.Apk' }
+          $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
+          Write-Host "Gesher.Apk open command: $open"
+          $cmdLine = $open.Replace('%1', "$app\lifecycle.apk")
+          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"$cmdLine 2>&1`"")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $p = [Diagnostics.Process]::Start($psi)
+          $out = $p.StandardOutput.ReadToEnd()
+          $p.WaitForExit()
+          Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
+          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
+            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
+          }
+          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Gesher's icon: the .apk file type's, and the Start menu entries'.
+          $defaultIcon = (Get-ItemProperty "$cls\Gesher.Apk\DefaultIcon" -ErrorAction SilentlyContinue).'(default)'
+          if ($defaultIcon -ne "$app\gesher.ico,0") { throw "Gesher.Apk's DefaultIcon is '$defaultIcon'" }
+          $sizes = @(Read-Ico "$app\gesher.ico" | ForEach-Object Width)
+          foreach ($s in 16, 32, 48, 256) { if ($sizes -notcontains $s) { throw "gesher.ico has no ${s}x$s image ($($sizes -join ', '))" } }
+          if ($wsh.CreateShortcut("$programs\Gesher Hello.lnk").IconLocation -ne "$app\gesher.ico,0") { throw 'The Gesher Hello shortcut lacks Gesher''s icon' }
+          'PASS  installer: .apk files and the Start menu entries get Gesher''s icon (DefaultIcon, gesher.ico)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The device outlives the console that started it.
+          $running = DevicePids
+          if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
+          'PASS  installer: the Gesher device started by a double-click keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # An app's window on the device (docs/graphics.md, ADR 0029): the
+          # installed gesher-app launches uiapp.apk with a hidden window; the
+          # app process the system server starts draws its UI into a Win32
+          # window of its own (read back with PrintWindow), with the
+          # Activity's label, the package's AppUserModelID and its shortcut's
+          # icon; input reaches its views (a click, keys, a WM_CHAR, the wheel,
+          # resizing: WindowChecks.ps1's UiAppInput); WM_CLOSE finishes the
+          # Activity and the process ends.
+          . tests\windows\graphics\WindowChecks.ps1
+          $uiapp = Join-Path $env:TEMP 'uiapp.apk'  # on Gesher's drive
+          Copy-Item dist\uiapp.apk $uiapp
+          $uiLog = Join-Path $env:TEMP 'uiapp-launch.log'
+          $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$app\gesher-app.cmd`" `"$uiapp`" --hidden-window > `"$uiLog`" 2>&1`"")
+          $psi.UseShellExecute = $false
+          $p = [Diagnostics.Process]::Start($psi)
+          $hwnd = [IntPtr]::Zero
+          $deadline = (Get-Date).AddSeconds(400)
+          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+            $m = [regex]::Match("$(Get-Content -Raw $uiLog -ErrorAction SilentlyContinue)", 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+            if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16); break }
+            Start-Sleep -Milliseconds 250
+          }
+          $problems = @()
+          if ($hwnd -eq [IntPtr]::Zero) { $problems += 'no first frame' } else {
+            Start-Sleep 3
+            $px = [GesherWin32]::Capture($hwnd)
+            if ($null -eq $px) { $problems += 'PrintWindow failed' } else { $problems += @(UiAppPixels $px) }
+            $text = Get-Content -Raw $uiLog
+            $m = [regex]::Match($text, 'app process for com\.gesher\.uiapp: pid (\d+)')
+            $owner = [GesherWin32]::ProcessId($hwnd)
+            if (-not $m.Success -or [int]$m.Groups[1].Value -ne $owner) { $problems += "the window is process $owner's, not the app process's" }
+            $title = [GesherWin32]::Title($hwnd); $id = [GesherWin32]::AppUserModelId($hwnd)
+            Write-Host "uiapp's window: title '$title', process $owner, AppUserModelID '$id', icon: $([GesherWin32]::HasIcon($hwnd))"
+            if ($title -ne 'Gesher UI test') { $problems += "title '$title'" }
+            if ($id -ne 'Gesher.App.com.gesher.uiapp') { $problems += "AppUserModelID '$id'" }
+            if (-not [GesherWin32]::HasIcon($hwnd)) { $problems += 'no window icon' }
+            $inputProblems = @(UiAppInput $hwnd { Get-Content -Raw $uiLog -ErrorAction SilentlyContinue })
+            $problems += $inputProblems
+            [void][GesherWin32]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
+          }
+          if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += 'did not end after WM_CLOSE' }
+          elseif ($p.ExitCode -ne 0) { $problems += "exit $($p.ExitCode)" }
+          $text = Get-Content -Raw $uiLog -ErrorAction SilentlyContinue
+          foreach ($want in 'UiActivity onDestroy', 'the process of com.gesher.uiapp ended (exit code 0)', 'gesher-app: done') {
+            if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+          }
+          if ($problems) {
+            Write-Host $text
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            throw "uiapp.apk's window on the Gesher device: $($problems -join '; ')"
+          }
+          'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Something of the Start menu that is not Gesher's, which uninstalling must keep.
+          $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
+          Set-Content $sentinel 'not Gesher''s'
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
+          $left = @($running | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+          if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
+          if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
+          'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
+          if (Test-Path "$cls\Gesher.Apk") { throw 'Uninstall left the Gesher.Apk ProgID' }
+          if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
+          if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
+          'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $appsFolder) { throw "Uninstall left $appsFolder" }
+          if (-not (Test-Path $sentinel)) { throw "Uninstall removed $sentinel" }
+          Remove-Item $sentinel
+          'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
+  # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
+  # clean runner runs real, unmodified open-source apps from F-Droid
+  # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
+  # read back, given input and closed: tests/e2e/run-e2e.ps1.
+  e2e:
+    needs: [package]
+    # The package job uploads the installer before its own checks.
+    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/e2e
+            tests/windows/graphics
+
+      - uses: actions/download-artifact@v4
         with:
           name: gesher-setup
-          path: installer/*.exe
+          path: installer
+
+      - name: Run real apps
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: e2e-results/
 
   test:
-    needs: [build, framework]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image]
     strategy:
       fail-fast: false
       matrix:
@@ -178,6 +493,31 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: framework
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-libs
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libs-tests
+          path: dist/libs-tests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
           path: dist
 
       - name: Run tests
