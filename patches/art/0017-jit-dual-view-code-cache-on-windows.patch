@@ -1,3 +1,16 @@
+diff --git a/libartbase/base/mem_map.cc b/libartbase/base/mem_map.cc
+index 3027b6c..58ab4ad 100644
+--- a/libartbase/base/mem_map.cc
++++ b/libartbase/base/mem_map.cc
+@@ -864,7 +864,7 @@ void MemMap::FillWithZero(bool release_eagerly) {
+ }
+ 
+ int MemMap::MadviseDontFork() {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)  // Gesher: gesher-base's madvise (no fork)
+   if (base_begin_ != nullptr || base_size_ != 0) {
+     return madvise(base_begin_, base_size_, MADV_DONTFORK);
+   }
 diff --git a/libartbase/base/memfd.cc b/libartbase/base/memfd.cc
 index f965a08..8dde83a 100644
 --- a/libartbase/base/memfd.cc
