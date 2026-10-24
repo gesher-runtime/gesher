@@ -43,6 +43,7 @@ import android.window.OnBackInvokedCallbackInfo;
 import com.gesher.app.DeviceProfile;
 import com.gesher.app.input.VirtualKeyboard;
 import com.gesher.app.input.WindowInput;
+import com.gesher.app.input.WindowsInputMethod;
 import com.gesher.server.WindowManagerService;
 
 import java.io.FileDescriptor;
@@ -365,6 +366,11 @@ public final class WindowSession extends IWindowSession.Stub {
             log("window \"" + w.title() + "\": no input (" + e + ")");
             w.input = null;
         }
+        // Text for the window's editor: Windows' text input (input track, ADR 0039).
+        WindowsInputMethod ime = WindowsInputMethod.get();
+        if (ime != null && w.input != null) {
+            ime.addWindow(key, w.input, w.handler, w.title(), w.nativeWindow.getHwnd());
+        }
     }
 
     /**
@@ -639,6 +645,8 @@ public final class WindowSession extends IWindowSession.Stub {
     }
 
     private void closeNativeWindow(AppWindow w) {
+        WindowsInputMethod ime = WindowsInputMethod.get();
+        if (ime != null) ime.removeWindow(w.client.asBinder());
         if (w.input != null) {
             // Before the window and the channel go (joins the connection's thread).
             w.input.close();
@@ -936,6 +944,11 @@ public final class WindowSession extends IWindowSession.Stub {
             ImeTracker.Token imeStatsToken) {
         AppWindow w = window(window);
         if (w != null) w.requestedVisibleTypes = requestedVisibleTypes;
+        // showSoftInput/hideSoftInputFromWindow (input track, ADR 0039).
+        WindowsInputMethod ime = WindowsInputMethod.get();
+        if (ime != null && window != null) {
+            ime.onRequestedVisibleTypes(window.asBinder(), requestedVisibleTypes);
+        }
     }
 
     @Override

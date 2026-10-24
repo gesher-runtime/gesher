@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- gesher-app's text input test app (tests/windows/tracks/35-ime.ps1): editors with
+     different IME actions, typed into through Windows' text input (docs/input.md). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.imeapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/ImeTheme">
+        <activity
+            android:name=".ImeActivity"
+            android:label="@string/activity_label"
+            android:windowSoftInputMode="stateVisible"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

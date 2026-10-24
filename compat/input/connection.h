@@ -11,6 +11,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -18,6 +19,8 @@
 
 #include "gesher_input.h"
 #include "gesher_window.h"
+#include "ime.h"
+#include "text_input.h"
 #include "translate.h"
 
 namespace gesher {
@@ -34,6 +37,12 @@ struct ConnectionOptions {
   // Runs on the connection's thread as it ends (a JNI caller detaches it
   // from the VM).
   std::function<void()> on_thread_exit;
+  // Text for the focused editor (text_input.h), on the connection's thread,
+  // in order with the input events: each waits until the events before it
+  // are finished, and the events after it wait until FinishTextEvent(seq)
+  // (or a second). Without it, typed text goes to on_window_event as kChar
+  // events, one per UTF-16 unit, and compositions are dropped.
+  std::function<void(const TextEvent& event, uint32_t seq)> on_text_event;
 };
 
 class Connection {
@@ -50,16 +59,26 @@ class Connection {
   void Inject(const WindowEvent& event);
   gesher_input_stats Stats() const;
 
+  // The window's input method side (ime.h); any thread.
+  void SetTextInput(const TextInputState& state);
+  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height);
+  void CompleteComposition(bool cancel);
+  int32_t ShowTouchKeyboard(bool show);
+  // The text event `seq` (on_text_event) is applied: what follows it may go.
+  void FinishTextEvent(uint32_t seq);
+
  private:
   void Run();
   void Handle(const WindowEvent& event);
   void Enqueue(const AndroidEvent& event);
   void ReadResponses();
   void SendPending();
+  void HandleText(const TextEvent& event);
   android::status_t Publish(uint32_t seq, const AndroidEvent& event);
   int64_t EventTime(const WindowEvent& event);
 
   Window* window_;
+  std::unique_ptr<ImeWindow> ime_;
   std::shared_ptr<android::InputChannel> channel_;
   android::InputPublisher publisher_;
   ConnectionOptions options_;
@@ -76,6 +95,13 @@ class Connection {
   uint32_t next_seq_ = 1;
   int32_t next_event_id_ = 1;
   int64_t last_time_ = 0;
+  // Text events waiting in pending_ (AndroidEvent::kText's text_id).
+  std::unordered_map<uint32_t, TextEvent> texts_;
+  uint32_t next_text_id_ = 1;
+  uint32_t text_seq_ = 0;       // the last text event handed out
+  bool text_waiting_ = false;   // until it is finished (or text_deadline_)
+  int64_t text_deadline_ = 0;
+  std::atomic<uint32_t> text_finished_{0};
 
   std::atomic<uint64_t> published_{0}, finished_{0}, handled_{0}, dropped_{0};
   std::atomic<uint64_t> in_flight_count_{0};
