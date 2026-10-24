@@ -178,17 +178,23 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   [void][ImeInput]::Keys(0x19)  # VK_KANJI: the IME on
   Start-Sleep -Seconds 2
   [void][ImeInput]::Keys(0x4E, 0x49, 0x48, 0x4F, 0x4E, 0x4E)
-  $composed = WaitCount $ReadLog 'ImeActivity text last: [^\r\n]*composing [^\r\n]*\\u306b\\u307b\\u3093' 1 60
+  $composed = WaitCount $ReadLog 'ImeActivity text last: [^\r\n]*composing [^\r\n]*\\u306b\\u307b\\u3093' 1 120
   $compose = [regex]::Matches("$(& $ReadLog)", 'ImeActivity text last: [^\r\n]*composing[^\r\n]*') | ForEach-Object { $_.Value } | Select-Object -Last 1
   [void][ImeInput]::Keys(0x20)  # convert
-  $converted = WaitCount $ReadLog 'ImeActivity text last: [^\r\n]*composing [^\r\n]*''\\u[4-9][0-9a-f]{3}' 1 60
+  $converted = WaitCount $ReadLog 'ImeActivity text last: [^\r\n]*composing [^\r\n]*''\\u[4-9][0-9a-f]{3}' 1 180
   [void][ImeInput]::Keys(0x20)  # the candidate list
-  Start-Sleep -Seconds 3
+  # Windows Server 2022's Microsoft IME may take a minute to show it.
+  $deadline = (Get-Date).AddSeconds(150)
+  do {
+    Start-Sleep -Seconds 2
+    $windows = [ImeInput]::ProcessWindows($ProcessId)
+  } while (-not ($windows | Where-Object { $_ -match 'cand' }) -and (Get-Date) -lt $deadline)
+  Start-Sleep -Seconds 1
   $windows = [ImeInput]::ProcessWindows($ProcessId)
   $caret = [ImeInput]::Caret($hwnd)
   [void][ImeInput]::Keys(0x0D)  # commit
   $t = ''
-  $deadline = (Get-Date).AddSeconds(60)
+  $deadline = (Get-Date).AddSeconds(150)
   do {
     $t = ImeText $ReadLog 'last'
     if ($t -match '^(\\u[4-9][0-9a-f]{3}){2}$') { break }
@@ -213,7 +219,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   [GesherWin32]::Click($hwnd, 200, 270)
   $ok = WaitForLog $ReadLog 'ImeActivity focus password' 20
   [void][ImeInput]::Keys(0x50, 0x57)
-  $t = WaitText $ReadLog 'password' 'pw'
+  $t = WaitText $ReadLog 'password' 'pw' 120
   $ok = $ok -and $t -ceq 'pw' -and ("$(& $ReadLog)" -match 'gesher-ime: input started in window "Gesher IME test": inputType 0x81[^\r\n]*compositions false')
   ImeCheck $Mode 'a password field: typed into, no IME compositions' $ok "text $t"
 }

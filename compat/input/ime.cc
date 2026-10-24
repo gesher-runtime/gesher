@@ -207,6 +207,8 @@ struct ImeWindow::Impl {
     bool any = false;
     if (flags & GCS_RESULTSTR) {
       EmitText(ReadString(imc, GCS_RESULTSTR));
+      // Committed: nothing is composed unless a new string comes with it.
+      composing = false;
       any = true;
     }
     if (flags & GCS_COMPSTR) {
