@@ -181,3 +181,18 @@ try {
 } finally {
   Set-TimeZone -Id $originalZone
 }
+
+# --- inotify from Java ------------------------------------------------------------
+# java.nio.file.WatchService (LinuxWatchService) and android.os.FileObserver
+# (framework.jar) over gesher-base's inotify.
+$watchDir = Join-Path $root "data/posix-watch-$PID"
+Check 'dalvikvm: java.nio.file.WatchService over inotify' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/libcore-tests.dex") gesher.WatchServiceTest (NoDrive "$watchDir/ws")
+} @('WatchServiceTest all passed')
+$bcpFramework = (('core-oj', 'core-libart', 'core-icu4j', 'framework') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'dalvikvm: android.os.FileObserver over inotify (framework.jar)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpFramework" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/posix-tests.dex") gesher.FileObserverTest (NoDrive "$watchDir/fo")
+} @('FileObserverTest all passed')
+Remove-Item -Recurse -Force $watchDir -ErrorAction SilentlyContinue

@@ -413,7 +413,8 @@ int inotify_init1(int flags) {
   Inotify* raw = in.get();
   in->worker = std::thread([raw] { raw->Run(); });
   // Every fd gesher-base reserves is uninheritable: IN_CLOEXEC holds always.
-  return gesher::RegisterInotify(std::move(in), in->ready);
+  std::shared_ptr<gesher::EventFd> ready = in->ready;
+  return gesher::RegisterInotify(std::move(in), std::move(ready));
 }
 
 int inotify_init(void) { return inotify_init1(0); }
