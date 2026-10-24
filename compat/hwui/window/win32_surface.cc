@@ -206,8 +206,7 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
     // buffer (the next dequeue resizes it if the size changed meanwhile).
     if (queued != nullptr && queued != buffer_) {
       if (getenv("GESHER_WINDOW_DEBUG") != nullptr) {
-        fprintf(stderr, "Win32Surface: frame %llu queued in a buffer of %dx%d, the surface's is %dx%d
-",
+        fprintf(stderr, "Win32Surface: frame %llu queued in a buffer of %dx%d, the surface's is %dx%d\n",
                 static_cast<unsigned long long>(frames_ + 1), queued->width, queued->height,
                 buffer_ != nullptr ? buffer_->width : 0, buffer_ != nullptr ? buffer_->height : 0);
       }
@@ -216,8 +215,7 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
     if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr && frames_ < 4) {
       size_t drawn = 0;
       for (uint32_t p : buffer_->pixels) drawn += p != 0xff000000u;
-      fprintf(stderr, "Win32Surface: frame %llu: %zu of %zu pixels drawn (%dx%d, format %d)
-",
+      fprintf(stderr, "Win32Surface: frame %llu: %zu of %zu pixels drawn (%dx%d, format %d)\n",
               static_cast<unsigned long long>(frames_ + 1), drawn, buffer_->pixels.size(),
               buffer_->width, buffer_->height, buffer_->format);
     }
