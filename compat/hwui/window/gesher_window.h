@@ -76,6 +76,9 @@ class Window {
   void SetResizable(bool resizable);
   // Resizes the window so its client area is width x height pixels.
   void SetClientSize(int width, int height);
+  // The smallest client area the user can resize the window to (pixels; 0:
+  // no minimum). SetWindowPos keeps to it too.
+  void SetMinClientSize(int width, int height);
   // The window's icon (title bar, taskbar, Alt+Tab) from an .ico file; false
   // when it cannot be read.
   bool SetIcon(const std::string& ico_path_utf8);
@@ -119,6 +122,7 @@ class Window {
   void Queue(const WindowEvent& event);
   void Paint(void* hdc);
   void ResizeBuffer(int width, int height);  // with mutex_ held
+  int Modifiers() const;  // the window's thread
 
   void* hwnd_ = nullptr;
   int event_fd_ = -1;
@@ -146,6 +150,11 @@ class Window {
   std::deque<WindowEvent> events_;
   int buttons_ = 0;
   bool tracking_leave_ = false;  // TrackMouseEvent(TME_LEAVE) is armed
+  // Modifier keys held as the window's key messages say (shift 1, ctrl 2,
+  // alt 4), ORed with GetKeyState's: posted key messages (tests, input
+  // injected by other programs) do not change the thread's key state.
+  int held_modifiers_ = 0;
+  std::atomic<int> min_client_width_{0}, min_client_height_{0};
 };
 
 }  // namespace gesher
