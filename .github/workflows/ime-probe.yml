@@ -1,0 +1,20 @@
+# Temporary (ime track): probes the runners' IMEs. Removed once read.
+name: ime-probe
+on:
+  push:
+    branches: [wip/ime]
+    paths: [.github/workflows/ime-probe.yml, tests/windows/ime/probe.*]
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/windows/ime
+      - shell: pwsh
+        run: tests/windows/ime/probe.ps1
