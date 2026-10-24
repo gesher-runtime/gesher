@@ -57,8 +57,8 @@ include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
-# SQLite and android.database's natives (docs/e2e.md).
-include(cmake/aosp/sqlite.cmake)
+# Framework natives real apps need: SQLite, android.database, animators (docs/e2e.md).
+include(cmake/aosp/framework_e2e.cmake)
 # gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
 include(cmake/aosp/shell.cmake)
 # gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).

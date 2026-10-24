@@ -1,5 +1,8 @@
-# SQLite and android.database's natives (docs/e2e.md): what SQLiteDatabase,
-# SQLiteOpenHelper, Room and ContentProviders over them need.
+# Framework natives real apps need that the headless and graphics work did not
+# (docs/e2e.md): SQLite and android.database's natives (SQLiteDatabase,
+# SQLiteOpenHelper, Room and ContentProviders over them), and
+# PropertyValuesHolder's (ObjectAnimator, as in every Material button's
+# StateListAnimator).
 #
 # libsqlite mirrors external/sqlite/dist/Android.bp's host configuration
 # (sqlite-default, which is sqlite-autoconf-3500400 in android-16.0.0_r4, with
@@ -8,10 +11,10 @@
 # databases are files opened with CreateFileW, and Linux paths are paths on
 # the current drive, as everywhere in Gesher (ADR 0010). No gesher-base here.
 #
-# frameworks/base's android_database_*.cpp go into libandroid_runtime
-# (framework_runtime), their JNI tables made System V by
-# patches/frameworks/base/0200-e2e-sqlite-sysv-jni-tables.patch
-# (tools/jni-sysv-patch.py <checkout> sqlite).
+# frameworks/base's android_database_*.cpp and android_animation_*.cpp go into
+# libandroid_runtime (framework_runtime), their JNI tables made System V by
+# patches/frameworks/base/0200-e2e-sysv-jni-tables.patch
+# (tools/jni-sysv-patch.py <checkout> e2e).
 
 set(_sqlite "${AOSP_DIR}/external/sqlite")
 set(_sqlite_dist "${_sqlite}/dist/sqlite-autoconf-3500400")
@@ -39,6 +42,7 @@ target_compile_options(sqlite PRIVATE -Wno-unused-parameter -ftrivial-auto-var-i
   $<$<COMPILE_LANGUAGE:CXX>:-Wall -Werror -Wno-unused-function -Wno-unused-variable>)
 
 target_sources(framework_runtime PRIVATE
+  ${_fwjni}/android_animation_PropertyValuesHolder.cpp
   ${_fwjni}/android_database_CursorWindow.cpp
   ${_fwjni}/android_database_SQLiteCommon.cpp
   ${_fwjni}/android_database_SQLiteConnection.cpp
@@ -48,6 +52,7 @@ target_sources(framework_runtime PRIVATE
 target_link_libraries(framework_runtime PUBLIC sqlite)
 # libandroid_runtime's flags are -Wall -Werror (no -Wextra, which framework_runtime adds).
 set_source_files_properties(
+  ${_fwjni}/android_animation_PropertyValuesHolder.cpp
   ${_fwjni}/android_database_CursorWindow.cpp ${_fwjni}/android_database_SQLiteCommon.cpp
   ${_fwjni}/android_database_SQLiteConnection.cpp ${_fwjni}/android_database_SQLiteDebug.cpp
   ${_fwjni}/android_database_SQLiteGlobal.cpp ${_fwjni}/android_database_SQLiteRawStatement.cpp

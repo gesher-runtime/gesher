@@ -101,7 +101,7 @@ function Analyze($px) {
   $r = [GesherE2E]::Analyze([int[]]$px)
   return [pscustomobject]@{ Width = $px[0]; Height = $px[1]; Background = ('{0:x6}' -f $r[0]); Other = $r[1]; Text = $r[2]; Colors = $r[3] }
 }
-function Diff($a, $b) {
+function PixelDiff($a, $b) {
   if ($null -eq $a -or $null -eq $b) { return [int]::MaxValue }
   return [GesherE2E]::Diff([int[]]$a, [int[]]$b)
 }
@@ -148,7 +148,7 @@ function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
   do {
     Start-Sleep 1
     $px = [GesherWin32]::Capture($hwnd)
-    if ($null -ne $px -and (Diff $last $px) -eq 0) { return $px }
+    if ($null -ne $px -and (PixelDiff $last $px) -eq 0) { return $px }
     $last = $px
   } while ((Get-Date) -lt $deadline)
   return $last
@@ -226,7 +226,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       elseif ($act.keys) { [GesherWin32]::TypeKeys($hwnd, [string]$act.keys); $what = "keys '$($act.keys)'" }
       Start-Sleep 2
       $after = CaptureSettled $hwnd 20
-      $changed = Diff $before $after
+      $changed = PixelDiff $before $after
       SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")
       $res.Info += "$what changed $changed pixels"
       if ($changed -lt 30) { $res.Problems += "$what did not change the window ($changed pixels)" }

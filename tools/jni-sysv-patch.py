@@ -2,7 +2,7 @@
 """Generates the frameworks/base patch that registers System V JNI entries.
 
   jni-sysv-patch.py <frameworks/base checkout> > patches/frameworks/base/0002-sysv-jni-tables.patch
-  jni-sysv-patch.py <frameworks/base checkout> sqlite > patches/frameworks/base/0200-e2e-sqlite-sysv-jni-tables.patch
+  jni-sysv-patch.py <frameworks/base checkout> e2e > patches/frameworks/base/0200-e2e-sysv-jni-tables.patch
 
 ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md).
 The framework's JNI tables are written by hand, `{"name", "sig", (void*) fn}`,
@@ -39,8 +39,9 @@ FILES = [
     'core/jni/com_android_internal_util_VirtualRefBasePtr.cpp',
 ]
 
-# android.database's natives (cmake/aosp/sqlite.cmake), in a patch of their own.
-SQLITE_FILES = [
+# Natives real apps need (cmake/aosp/framework_e2e.cmake, docs/e2e.md), in a patch of their own.
+E2E_FILES = [
+    'core/jni/android_animation_PropertyValuesHolder.cpp',
     'core/jni/android_database_CursorWindow.cpp',
     'core/jni/android_database_SQLiteConnection.cpp',
     'core/jni/android_database_SQLiteDebug.cpp',
@@ -114,10 +115,10 @@ def rewrite(path, text):
 
 
 def main():
-    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['sqlite']):
+    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['e2e']):
         sys.exit(__doc__)
     checkout = sys.argv[1]
-    files = SQLITE_FILES if sys.argv[2:] == ['sqlite'] else FILES
+    files = E2E_FILES if sys.argv[2:] == ['e2e'] else FILES
     sys.stdout.reconfigure(newline='\n')  # LF on Windows too
     for path in files:
         old = subprocess.run(['git', '-C', checkout, 'show', 'HEAD:' + path], check=True,
