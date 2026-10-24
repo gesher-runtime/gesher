@@ -245,7 +245,16 @@ public final class WindowSession extends IWindowSession.Stub {
                 WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
-        out.mergedConfiguration.setConfiguration(global, new Configuration());
+        Configuration override = new Configuration();
+        if (!w.bounds.isEmpty()) {
+            // Resized by the user: the window's bounds, as a freeform task's on a device.
+            // ViewRootImpl computes its frames from them (relayoutWindow's local layout), so
+            // the frames alone would not move it. The rest of the configuration (screen size
+            // in dp) stays the display's: no Activity is relaunched.
+            override.windowConfiguration.setBounds(bounds);
+            override.windowConfiguration.setAppBounds(bounds);
+        }
+        out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
     }
 
