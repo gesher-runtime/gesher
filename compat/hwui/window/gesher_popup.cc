@@ -99,15 +99,14 @@ bool Window::RouteEvent(const WindowEvent& event) {
     gesture_active_ = true;
     gesture_target_ = route_pointer_ != this ? route_pointer_ : nullptr;
     gesture_routed_ = gesture_target_ != nullptr;
-    // Windows watching touches outside them see where this one starts.
+    // Windows watching touches outside them get ACTION_OUTSIDE where this one
+    // starts, as InputDispatcher sends it to FLAG_WATCH_OUTSIDE_TOUCH windows.
     for (Window* w : route_outside_) {
       if (w == this || w == gesture_target_) continue;
-      WindowEvent press = Translated(event, static_cast<HWND>(hwnd_), static_cast<HWND>(w->hwnd_));
-      WindowEvent release = press;
-      release.type = event.type == WindowEvent::kTouchDown ? WindowEvent::kTouchUp
-                                                           : WindowEvent::kMouseUp;
-      w->QueueOwn(press);
-      w->QueueOwn(release);
+      WindowEvent outside = Translated(event, static_cast<HWND>(hwnd_), static_cast<HWND>(w->hwnd_));
+      outside.type = WindowEvent::kOutside;
+      outside.tool = event.type == WindowEvent::kTouchDown ? (event.tool == 2 ? 2 : 1) : 0;
+      w->QueueOwn(outside);
     }
   }
   if (gesture_active_) {

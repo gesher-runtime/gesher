@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Which qualifiers the resources were resolved with (values-w600dp). -->
+    <string name="width_name">w600dp</string>
+</resources>

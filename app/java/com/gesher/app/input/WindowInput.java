@@ -38,6 +38,10 @@ public final class WindowInput implements AutoCloseable {
   public static final int EVENT_TOUCH_UP = 13;
   public static final int EVENT_TOUCH_CANCEL = 14;
   public static final int EVENT_MOUSE_LEAVE = 15;
+  /** The window was minimized (a = 0) or restored (a = 1): a listener event. */
+  public static final int EVENT_VISIBILITY = 16;
+  /** A press outside a window watching outside touches: published as ACTION_OUTSIDE. */
+  public static final int EVENT_OUTSIDE = 17;
 
   /** gesher::WindowEvent's modifiers. */
   public static final int MODIFIER_SHIFT = 1;
@@ -51,7 +55,8 @@ public final class WindowInput implements AutoCloseable {
      * On the connection's thread. {@code type} is an EVENT_* constant; for
      * EVENT_RESIZE a and b are the client area's width and height in pixels,
      * for EVENT_FOCUS a is 1 when the window gains focus, for EVENT_CHAR a is
-     * the UTF-16 code unit and b the modifiers.
+     * the UTF-16 code unit and b the modifiers, for EVENT_VISIBILITY a is 0
+     * when the window was minimized and 1 when it was restored.
      */
     void onWindowEvent(int type, int a, int b);
   }
