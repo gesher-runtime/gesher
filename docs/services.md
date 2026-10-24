@@ -96,7 +96,24 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
 ### Status and next steps (devsvc)
 Branch `wip/devsvc` (worktree `C:\work\gesher-devsvc`), from main 86aa4c7.
 
-- **Last CI-verified SHA: none fully green yet.** Closest: **ci run
+- **Latest: ci run 40137762701 at a02e84a** (b1d04d8 plus a merge of
+  origin/phase4/integration 5561615). build, framework, boot-image, package,
+  e2e and test (windows-2025) are green. **All 10 devsvc checks PASS on BOTH
+  runners**, including the fixed `devsvc: clock: WM_TIMECHANGE becomes TIME_SET
+  for registered and manifest receivers` and `devsvc: alarms: with the app's
+  process ended, an exact RTC_WAKEUP alarm starts a process for its manifest
+  receiver (PendingIntent broadcast)`. test (windows-2022) failed on ONE check
+  that is not devsvc's: the rtl track's `gesher-app: the Gesher device under
+  ar-EG: rtlapp.apk ...` (no first frame, exit 0x00000001, nothing from its app
+  process). It came in with the merge; it passed on windows-2025 in the same run.
+  The only other FAIL line is the informational "%fs base survives Sleep(1)".
+  **Exact next step:** rerun only the failed job (`gh run rerun 40137762701
+  -R gesher-runtime/gesher --failed`) and watch it with `--interval 120`. If
+  rtlapp fails again on 2022, report it to the coordinator as an rtl/integration
+  issue (it is not in devsvc's domain). If it passes, a02e84a is the verified
+  SHA: tick the devsvc boxes in docs/roadmap.md (Phase 4, "Device-state
+  services backed by Windows") and quote the PASS lines here.
+- Earlier: no fully green run before 40137762701. Closest: **ci run
   40133991534 at 30ba276** — every build job, package and e2e green; the test
   jobs failed on both runners only on two devsvc checks (fixed in 68a913f,
   see below). On both windows-2022 and windows-2025 it passed:
