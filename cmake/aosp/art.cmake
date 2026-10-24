@@ -18,7 +18,10 @@ target_compile_definitions(art_defaults INTERFACE
   ART_DEFAULT_GC_TYPE_IS_CMC ART_USE_GENERATIONAL_GC=1 ART_USE_TLAB=1
   ART_STACK_OVERFLOW_GAP_arm=8192 ART_STACK_OVERFLOW_GAP_arm64=8192
   ART_STACK_OVERFLOW_GAP_riscv64=8192 ART_STACK_OVERFLOW_GAP_x86=8192
-  ART_STACK_OVERFLOW_GAP_x86_64=8192
+  # x86-64: 32 KiB, not 8: on Windows the fault of an implicit stack overflow
+  # check is handled on the thread's own stack (no sigaltstack), below the
+  # probing frame (ADR 0033).
+  ART_STACK_OVERFLOW_GAP_x86_64=32768
   ART_PAGE_SIZE_AGNOSTIC=1 USE_D8_DESUGAR=1
   ART_FRAME_SIZE_LIMIT=1744
   ART_BASE_ADDRESS=0x60000000

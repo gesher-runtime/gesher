@@ -7,15 +7,19 @@
 #   boot.art/.oat/.vdex, boot-core-libart.*, boot-core-icu4j.*  the primary image
 #   boot-framework.*                                           framework.jar's extension
 #   boot-gesher-app.*                                          gesher-app.jar's extension
-# The image has no compiled code (--compiler-filter=verify): the runtime runs
-# with the interpreter, and the image holds the boot class path's classes,
-# verified, linked and, where dex2oat could, initialized, with their strings.
+# -Filter is the primary image's compiler filter, -ExtensionFilter the
+# extensions': `speed` compiles every method with the optimizing compiler (AOT
+# code, docs/compiled-code.md); `verify` compiles none, the image then holds
+# the boot class path's classes, verified, linked and, where dex2oat could,
+# initialized, with their strings, and the runtime runs them with nterp.
 # Dex locations are bare file names, so the image loads wherever the jars are.
 #
 # BOOT_IMAGE_VERBOSE=compiler (or other -verbose: tags) logs dex2oat's phases.
 param(
   [Parameter(Mandatory)] [string] $Dist,
   [Parameter(Mandatory)] [string] $Out,
+  [string] $Filter = 'verify',
+  [string] $ExtensionFilter = 'verify',
   [int] $TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
@@ -49,7 +53,7 @@ $common = @(
   # for page by page (msync), slow on Windows for large sizes.
   '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx512m', '--runtime-arg', '-XX:LargeObjectSpace=map',
   "--android-root=$(NoDrive "$root/system")",
-  '--instruction-set=x86_64', '--compiler-filter=verify', '--image-format=lz4',
+  '--instruction-set=x86_64', '--image-format=lz4',
   '--no-generate-mini-debug-info', '--no-watch-dog', '--avoid-storing-invocation', '-j4')
 
 # One image chunk: `count` jars from `first`, on top of the images named in $boot.
@@ -63,8 +67,9 @@ function Compile([int] $first, [int] $count, [string] $boot) {
     $a += "--dex-file=$(NoDrive "$dist/$jar.jar")", "--dex-location=$jar.jar"
   }
   if ($boot) { $a += "--boot-image=$boot" } else { $a += '--base=0x60000000' }
+  $a += "--compiler-filter=$(if ($boot) { $ExtensionFilter } else { $Filter })"
   if ($env:BOOT_IMAGE_VERBOSE) { $a += '--runtime-arg', "-verbose:$env:BOOT_IMAGE_VERBOSE", '--dump-timings' }
-  $what = ($jars[$first..($first + $count - 1)] -join ', ')
+  $what = "$($jars[$first..($first + $count - 1)] -join ', ') ($(if ($boot) { $ExtensionFilter } else { $Filter }))"
   Write-Host "dex2oat: $what"
   $log = Join-Path $root "dex2oat-$first.log"
   $watch = [Diagnostics.Stopwatch]::StartNew()
