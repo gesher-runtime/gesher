@@ -287,17 +287,24 @@ int Analyze(const char* path) {
       }
     }
     size_t s0 = b * block, s1 = std::min(frames, (e + 1) * block);
-    // Zero crossings (upward) of the louder channel, interpolated.
+    // Zero crossings (upward) of the louder channel, interpolated. A crossing
+    // counts only after the signal went below -30% of its rms (hysteresis):
+    // the low-level noise lossy codecs leave around a tone's start and end
+    // would otherwise add crossings (an MP3 tone of 523 Hz measured 540).
     double el = 0, er = 0;
     for (size_t i = s0; i < s1; i++) {
       el += left[i] * left[i];
       er += right[i] * right[i];
     }
     const std::vector<float>& x = el >= er ? left : right;
+    const double threshold = -0.3 * std::sqrt(std::max(el, er) / (s1 - s0));
     double first = -1, last = -1;
     int crossings = 0;
+    bool armed = false;
     for (size_t i = s0 + 1; i < s1; i++) {
-      if (x[i - 1] < 0 && x[i] >= 0) {
+      if (x[i] < threshold) armed = true;
+      if (armed && x[i - 1] < 0 && x[i] >= 0) {
+        armed = false;
         double t = (i - 1) + x[i - 1] / (x[i - 1] - x[i]);
         if (first < 0) first = t;
         last = t;

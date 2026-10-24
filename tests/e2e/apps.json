@@ -1,5 +1,5 @@
 {
-  "comment": "Real, unmodified open-source apps from F-Droid's official repository (https://f-droid.org/repo), pinned by version and SHA-256, for tests/e2e/run-e2e.ps1 (docs/e2e.md). APKs are downloaded in CI only. knownFailure: why the app does not pass yet (docs/e2e.md); its FAIL line does not fail the job.",
+  "comment": "Real, unmodified open-source apps from F-Droid's official repository (https://f-droid.org/repo), pinned by version and SHA-256, for tests/e2e/run-e2e.ps1 (docs/e2e.md). APKs are downloaded in CI only. knownFailure: why the app does not pass yet (docs/e2e.md); its FAIL line does not fail the job. display: WxH, the app runs on a device of its own with that display (GESHER_DISPLAY).",
   "repo": "https://f-droid.org/repo",
   "apps": [
     {
@@ -65,8 +65,9 @@
       "sha256": "e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601",
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/billthefarmer/siggen",
-      "why": "Audio (docs/media.md): a tone generator that plays through AudioTrack from onResume on; custom views (scale, knob, display), pure Java, no AndroidX.",
-      "actions": [ { "click": [298, 196] }, { "click": [172, 196] } ]
+      "why": "Audio (docs/media.md): a tone generator that plays through AudioTrack (Builder defaults: the output's rate, the minimum buffer) from onResume on; custom views (scale, knob, display), pure Java, no AndroidX. Its activity asks for landscape (userLandscape) and its views size themselves only when their parent is wider than tall; Gesher does not rotate a window for screenOrientation yet, so its device has a landscape display.",
+      "display": "800x400",
+      "actions": [ { "click": [600, 116] }, { "click": [600, 161] } ]
     },
     {
       "package": "name.boyle.chris.sgtpuzzles",

@@ -121,7 +121,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
   Remove-Item Env:GESHER_AUDIO_CAPTURE
   Stop-Job $httpServer; Remove-Job $httpServer -Force
   $appWav = Get-ChildItem $appCapture -Filter 'audio-*.wav' | Sort-Object LastWriteTime | Select-Object -Last 1
-  Check 'media: AudioTrack in mediaapp.apk: streaming (short, byte, direct ByteBuffer writes) and static tracks, 8-bit/16-bit/float, mono and stereo, a marker, periodic notifications, loop points, setPlaybackRate, getTimestamp' {
+  Check 'media: AudioTrack in mediaapp.apk: streaming (short, byte, direct ByteBuffer writes) and static tracks, 8-bit/16-bit/float, mono and stereo, a marker, periodic notifications, loop points, setPlaybackRate, getTimestamp, AudioTrack.Builder''s defaults' {
     $global:LASTEXITCODE = $mediaExit
     $mediaOut
   } @('MediaTest audiotrack output: native rate 48000, min buffer (44100 mono 16-bit) ok, property rate 48000, frames per buffer ok',
@@ -131,6 +131,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
       'MediaTest audiotrack 4 bytebuffer 16-bit stereo 22050 volume 0.5: wrote 35280, position 8820/8820, periodic notifications 4, underruns ok',
       'MediaTest audiotrack 5 legacy static loop: stream 3, wrote 12800, setLoopPoints 0',
       'MediaTest audiotrack 6 playback rate: set 0, rate 48000, wrote 14400, position 14400/14400',
+      'MediaTest audiotrack 7 builder defaults: rate 48000, buffer at least the minimum true, wrote 14400 in time true, position 14400/14400',
       'MediaTest done', 'gesher-app: done')
   Check 'media: AudioManager in mediaapp.apk: stream volumes (aliases, set, adjust, mute), the ringer mode, getDevices, audio focus (a transient loss, the gain back, a loss), isMusicActive' {
     $global:LASTEXITCODE = $mediaExit
@@ -183,7 +184,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
   } else {
     CheckSounds 'media: mediaapp.apk''s sounds reach the output (AudioTrack, AudioManager volumes, MediaPlayer, SoundPool): each tone at its frequency, duration and level, at its stream''s volume (none while the ringer is silent)' $appWav.FullName @(
       @(440, 0.5, 0.354), @(500, 0.4, 0.354), @(660, 0.4, 0.354), @(880, 0.4, 0.177),
-      @(1000, 0.6, 0.354), @(1200, 0.3, 0.354),
+      @(1000, 0.6, 0.354), @(1200, 0.3, 0.354), @(750, 0.3, 0.354),
       # AudioManager: music at 7/15; the silent ringer's notification is not heard.
       @(700, 0.3, 0.165), @(1300, 0.3, 0.354),
       # MediaPlayer: MP3, M4A, Vorbis, Opus, FLAC, WAV, ADTS, mu-law; the seek; the loop; http.
