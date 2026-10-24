@@ -1,3 +1,48 @@
+diff --git a/core/jni/android_animation_PropertyValuesHolder.cpp b/core/jni/android_animation_PropertyValuesHolder.cpp
+--- a/core/jni/android_animation_PropertyValuesHolder.cpp
++++ b/core/jni/android_animation_PropertyValuesHolder.cpp
+@@ -141,29 +141,29 @@
+ 
+ static const JNINativeMethod gMethods[] = {
+     {   "nGetIntMethod", "(Ljava/lang/Class;Ljava/lang/String;)J",
+-            (void*)android_animation_PropertyValuesHolder_getIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_getIntMethod) },
+     {   "nGetFloatMethod", "(Ljava/lang/Class;Ljava/lang/String;)J",
+-            (void*)android_animation_PropertyValuesHolder_getFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_getFloatMethod) },
+     {   "nGetMultipleFloatMethod", "(Ljava/lang/Class;Ljava/lang/String;I)J",
+-            (void*)android_animation_PropertyValuesHolder_getMultipleFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_getMultipleFloatMethod) },
+     {   "nGetMultipleIntMethod", "(Ljava/lang/Class;Ljava/lang/String;I)J",
+-            (void*)android_animation_PropertyValuesHolder_getMultipleIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_getMultipleIntMethod) },
+     {   "nCallIntMethod", "(Ljava/lang/Object;JI)V",
+-            (void*)android_animation_PropertyValuesHolder_callIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callIntMethod) },
+     {   "nCallFloatMethod", "(Ljava/lang/Object;JF)V",
+-            (void*)android_animation_PropertyValuesHolder_callFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callFloatMethod) },
+     {   "nCallTwoFloatMethod", "(Ljava/lang/Object;JFF)V",
+-            (void*)android_animation_PropertyValuesHolder_callTwoFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callTwoFloatMethod) },
+     {   "nCallFourFloatMethod", "(Ljava/lang/Object;JFFFF)V",
+-            (void*)android_animation_PropertyValuesHolder_callFourFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callFourFloatMethod) },
+     {   "nCallMultipleFloatMethod", "(Ljava/lang/Object;J[F)V",
+-            (void*)android_animation_PropertyValuesHolder_callMultipleFloatMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callMultipleFloatMethod) },
+     {   "nCallTwoIntMethod", "(Ljava/lang/Object;JII)V",
+-            (void*)android_animation_PropertyValuesHolder_callTwoIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callTwoIntMethod) },
+     {   "nCallFourIntMethod", "(Ljava/lang/Object;JIIII)V",
+-            (void*)android_animation_PropertyValuesHolder_callFourIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callFourIntMethod) },
+     {   "nCallMultipleIntMethod", "(Ljava/lang/Object;J[I)V",
+-            (void*)android_animation_PropertyValuesHolder_callMultipleIntMethod },
++            GESHER_JNI(android_animation_PropertyValuesHolder_callMultipleIntMethod) },
+ };
+ 
+ int register_android_animation_PropertyValuesHolder(JNIEnv* env)
 diff --git a/core/jni/android_database_CursorWindow.cpp b/core/jni/android_database_CursorWindow.cpp
 --- a/core/jni/android_database_CursorWindow.cpp
 +++ b/core/jni/android_database_CursorWindow.cpp

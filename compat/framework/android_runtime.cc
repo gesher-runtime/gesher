@@ -66,6 +66,7 @@ int register_android_text_AndroidCharacter(JNIEnv* env);
 int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
+int register_android_animation_PropertyValuesHolder(JNIEnv* env);
 int register_android_database_CursorWindow(JNIEnv* env);
 int register_android_database_SQLiteConnection(JNIEnv* env);
 int register_android_database_SQLiteDebug(JNIEnv* env);
@@ -376,7 +377,10 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
-    // android.database over SQLite (cmake/aosp/sqlite.cmake, docs/e2e.md).
+    // What real apps need (cmake/aosp/framework_e2e.cmake, docs/e2e.md): ObjectAnimator's
+    // property setters, android.database over SQLite.
+    {"android_animation_PropertyValuesHolder", "android/animation/PropertyValuesHolder",
+     register_android_animation_PropertyValuesHolder},
     {"android_database_CursorWindow", "android/database/CursorWindow",
      register_android_database_CursorWindow},
     {"android_database_SQLiteConnection", "android/database/sqlite/SQLiteConnection",
