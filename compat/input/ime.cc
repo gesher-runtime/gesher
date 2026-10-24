@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <imm.h>
 
+#include <stdio.h>
+
 #include <algorithm>
 #include <deque>
 #include <mutex>
@@ -57,6 +59,24 @@ std::u16string ReadString(HIMC imc, DWORD index) {
 }
 
 bool IsText(uint32_t ch) { return ch >= 0x20 && ch != 0x7f; }
+
+// Reports (stderr) window-thread work that took long: an IME that keeps the
+// window's thread waiting shows up in the app's log.
+const char kNewline[] = {10, 0};
+
+struct SlowWatch {
+  const char* what;
+  int detail;
+  ULONGLONG start = GetTickCount64();
+  ~SlowWatch() {
+    ULONGLONG ms = GetTickCount64() - start;
+    if (ms >= 500) {
+      fprintf(stderr, "gesher-ime: %s (%d) took %llu ms on the window's thread%s", what, detail,
+              static_cast<unsigned long long>(ms), kNewline);
+      fflush(stderr);
+    }
+  }
+};
 
 }  // namespace
 
@@ -130,6 +150,7 @@ struct ImeWindow::Impl {
   }
 
   LRESULT KeyDown(UINT msg, WPARAM vk, LPARAM lparam) {
+    SlowWatch watch{"WM_KEYDOWN", static_cast<int>(vk)};
     if (vk == VK_PROCESSKEY && associated) {
       // An IME took the key; its key-up may come as either code.
       UINT real = ImmGetVirtualKey(hwnd);
@@ -202,6 +223,7 @@ struct ImeWindow::Impl {
   }
 
   void Composition(LPARAM flags) {
+    SlowWatch watch{"WM_IME_COMPOSITION", static_cast<int>(flags)};
     HIMC imc = ImmGetContext(hwnd);
     if (imc == nullptr) return;
     bool any = false;
@@ -269,6 +291,7 @@ struct ImeWindow::Impl {
   }
 
   void Apply(int op) {
+    SlowWatch watch{"applying the input method's state", op};
     const TextInputState s = State();
     switch (op) {
       case kOpState: {
