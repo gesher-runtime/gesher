@@ -128,6 +128,8 @@ target_sources(hwui PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/pipeline_select.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/graphics_debug_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/hwui_gl_standins.cc)
+# gesher-app's text natives (rtl track): Windows' fonts folder, the user's locales.
+target_sources(hwui PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwui/text/text_natives.cc)
 target_include_directories(hwui BEFORE PRIVATE
   ${CMAKE_BINARY_DIR}/gen/hwui-gl
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/include

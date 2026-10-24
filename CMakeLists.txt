@@ -61,6 +61,8 @@ include(cmake/aosp/framework.cmake)
 include(cmake/aosp/framework_e2e.cmake)
 # gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
 include(cmake/aosp/shell.cmake)
+# gesher: the device-state services' Windows side: alarms, clipboard, toasts, power (devsvc track).
+include(cmake/aosp/devsvc.cmake)
 # gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
@@ -70,6 +72,8 @@ include(cmake/aosp/graphics.cmake)
 include(cmake/aosp/input.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
+# android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
+include(cmake/webview.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
@@ -79,6 +83,11 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 # gesher-base's socket layer and fd overrides, run in CI on Windows.
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
+
+# gesher-base's mmap layer: placeholder mappings, executable file views
+# (stack track, docs/decisions/0036); run in CI on Windows.
+add_executable(mman_probe probes/posix/mman_probe.cc)
+target_compile_options(mman_probe PRIVATE -Wall -Wextra -Werror)
 
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)

@@ -66,6 +66,58 @@ foreach ($case in @(
   }
 }
 
+# The oat files' code is mapped, not copied (gesher-base's executable file
+# views, ADR 0036): with GESHER_TRACE_MMAP, each oat file's executable segment
+# shows as an executable view of the file.
+$psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+foreach ($a in @($image, "-Xbootclasspath:$bcpWithApp", '-Xusejit:false', '-cp', (NoDrive "$Dir/hello.dex"), 'gesher.Hello')) { $psi.ArgumentList.Add($a) }
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.Environment['GESHER_TRACE_MMAP'] = '1'
+$p = [Diagnostics.Process]::Start($psi)
+$errTask = $p.StandardError.ReadToEndAsync()
+$outText = $p.StandardOutput.ReadToEnd()
+$p.WaitForExit()
+$trace = $errTask.Result
+$execViews = @($trace -split "`n" | Where-Object { $_ -match ': an executable view of 0x([0-9a-f]+) bytes' })
+$execBytes = 0
+foreach ($l in $execViews) { if ($l -match 'view of 0x([0-9a-f]+) bytes') { $execBytes += [Convert]::ToInt64($Matches[1], 16) } }
+$copiedExec = @($trace -split "`n" | Where-Object { $_ -match 'prot=[57], .*\) = ' -and $_ -notmatch 'fd=-1' }).Count - $execViews.Count
+if ($p.ExitCode -eq 0 -and $outText.Contains('Hello from ART on Windows') -and $execViews.Count -ge 3 -and $copiedExec -le 0) {
+  Write-Host ("PASS  boot image: oat code mapped as executable views of the files ({0} views, {1:N1} MB; none copied)" -f $execViews.Count, ($execBytes / 1MB))
+} else {
+  Write-Host ("FAIL  boot image: oat code not mapped as executable views (exit 0x{0:X8}; {1} executable views, {2} executable file maps otherwise)" -f $p.ExitCode, $execViews.Count, $copiedExec)
+  ($trace -split "`n" | Where-Object { $_ -match 'prot=[57]|view of|failed' } | Select-Object -Last 30) | Out-Host
+  $script:failed++
+}
+
+# AOT code in the extensions too (boot-image.yml: -ExtensionFilter speed):
+# with framework.jar and gesher-app.jar on the boot class path, far more
+# methods have compiled code than with the primary image alone.
+function CompiledCount([string] $Bcp) {
+  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+  foreach ($a in @($image, "-Xbootclasspath:$Bcp", '-Xusejit:false', '-cp', (NoDrive "$Dir/hello.dex"), 'gesher.Hello')) { $psi.ArgumentList.Add($a) }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.Environment['GESHER_LOG_EXECUTION'] = '1'
+  $p = [Diagnostics.Process]::Start($psi)
+  $e = $p.StandardError.ReadToEndAsync()
+  $null = $p.StandardOutput.ReadToEnd()
+  $p.WaitForExit()
+  if ($e.Result -match 'boot image: (\d+) methods with compiled code \((\d+) native') { return @([int]$Matches[1], [int]$Matches[2]) }
+  return @(0, 0)
+}
+$primary = CompiledCount $bcp
+$all = CompiledCount $bcpWithApp
+if ($primary[0] -gt 0 -and $all[0] -gt $primary[0] + 10000) {
+  Write-Host ("PASS  boot image: AOT code in the extensions too: {0} methods with compiled code with framework.jar and gesher-app.jar, {1} with the primary image alone ({2} / {3} JNI stubs)" -f $all[0], $primary[0], $all[1], $primary[1])
+} else {
+  Write-Host ("FAIL  boot image: the extensions carry no AOT code ({0} methods with compiled code with them, {1} without)" -f $all[0], $primary[0])
+  $script:failed++
+}
+
 # Startup times, imageless and with the image, alternating, median of 3: Hello
 # to its line, and lifecycle.apk (gesher-app's single-process driver) to
 # LifecycleActivity.onCreate, both from the process start.
