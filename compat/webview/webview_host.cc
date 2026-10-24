@@ -4,6 +4,7 @@
 #include "webview_host.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -436,7 +437,8 @@ std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers) {
 // chrome.webview.hostObjects.sync.gesherBridge.call(interface, method, argsJson).
 class Bridge final : public IDispatch {
  public:
-  explicit Bridge(std::weak_ptr<Impl> impl) : impl_(std::move(impl)) {}
+  explicit Bridge(std::weak_ptr<Impl> impl, bool callable = false)
+      : impl_(std::move(impl)), callable_(callable) {}
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
     if (out == nullptr) return E_POINTER;
@@ -478,9 +480,28 @@ class Bridge final : public IDispatch {
   }
   HRESULT STDMETHODCALLTYPE Invoke(DISPID id, REFIID, LCID, WORD flags, DISPPARAMS* params,
                                    VARIANT* result, EXCEPINFO*, UINT*) override {
-    if (id != kCall) return DISP_E_MEMBERNOTFOUND;
-    if ((flags & DISPATCH_METHOD) == 0) return DISP_E_MEMBERNOTFOUND;
-    if (params == nullptr || params->cArgs != 3) return DISP_E_BADPARAMCOUNT;
+    UINT argc = params != nullptr ? params->cArgs : 0;
+    if (getenv("GESHER_WEBVIEW_DEBUG") != nullptr) {
+      fprintf(stderr, "gesher-webview: bridge Invoke(dispid %ld, flags %u, %u args)%s
+",
+              static_cast<long>(id), static_cast<unsigned>(flags), argc,
+              callable_ ? " on the method" : "");
+      fflush(stderr);
+    }
+    // Without type information WebView2's proxy reads "call" as a property
+    // and then calls what it got: hand out a callable object for it.
+    if (id == kCall && !callable_ && (flags & DISPATCH_PROPERTYGET) != 0 && argc == 0) {
+      if (result != nullptr) {
+        VariantInit(result);
+        V_VT(result) = VT_DISPATCH;
+        V_DISPATCH(result) = new Bridge(impl_, /*callable=*/true);
+      }
+      return S_OK;
+    }
+    bool call = (flags & DISPATCH_METHOD) != 0 &&
+                (id == kCall || (callable_ && id == DISPID_VALUE));
+    if (!call) return DISP_E_MEMBERNOTFOUND;
+    if (argc != 3) return DISP_E_BADPARAMCOUNT;
     // Arguments come last to first.
     std::wstring object = Arg(params->rgvarg[2]);
     std::wstring method = Arg(params->rgvarg[1]);
@@ -518,6 +539,7 @@ class Bridge final : public IDispatch {
   }
   std::atomic<ULONG> refs_{1};
   std::weak_ptr<Impl> impl_;
+  bool callable_;  // the object "call" reads as
 };
 
 // Registers the controller's and the WebView's handlers. The WebView thread.
@@ -981,7 +1003,18 @@ void Host::Configure(const std::wstring& user_data_folder, const std::wstring& b
   std::lock_guard<std::mutex> lock(g_config_mutex);
   if (g_configured) return;
   g_configured = true;
-  g_user_data = user_data_folder;
+  // Java's paths are drive-less (ADR 0010: /a/b is \a\b on the current
+  // drive); WebView2 wants a full Windows path.
+  std::wstring path = user_data_folder;
+  for (wchar_t& ch : path) {
+    if (ch == L'/') ch = L'\\';
+  }
+  if (!path.empty()) {
+    wchar_t full[MAX_PATH * 2];
+    DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, full, nullptr);
+    if (n > 0 && n < MAX_PATH * 2) path.assign(full, n);
+  }
+  g_user_data = path;
   g_browser_args = browser_args;
 }
 

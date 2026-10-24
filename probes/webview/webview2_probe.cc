@@ -235,6 +235,7 @@ bool IsColor(long px, long want) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  _putenv("GESHER_WEBVIEW_DEBUG=1");  // the bridge reports how it is called
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   int failures = 0;
   Log(std::wstring(L"loader: ") + std::wstring(gesher::webview::LoaderKind(),
