@@ -75,7 +75,9 @@ public class PopupActivity extends Activity {
                                 + center(findViewById(R.id.dialog_activity))
                                 + ", second at " + center(findViewById(R.id.second))
                                 + ", red " + at[0] + "," + at[1] + "," + (at[0] + red.getWidth())
-                                + "," + (at[1] + red.getHeight()));
+                                + "," + (at[1] + red.getHeight()) + ", action bar "
+                                + (getActionBar() != null && getActionBar().isShowing()
+                                        ? getActionBar().getHeight() : -1));
                     }
                 });
         ((Button) findViewById(R.id.dialog)).setOnClickListener(v -> showDialog());
@@ -189,6 +191,15 @@ public class PopupActivity extends Activity {
     public boolean onOptionsItemSelected(MenuItem item) {
         say("PopupActivity menu: " + item.getTitle());
         return true;
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+        if (e.getActionMasked() != android.view.MotionEvent.ACTION_MOVE) {
+            say("PopupActivity touch " + android.view.MotionEvent.actionToString(e.getAction())
+                    + " at " + (int) e.getX() + "," + (int) e.getY());
+        }
+        return super.dispatchTouchEvent(e);
     }
 
     @Override
