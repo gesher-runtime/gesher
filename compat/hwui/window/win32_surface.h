@@ -77,6 +77,9 @@ class Win32Surface : public android::Surface {
   int user_width_ = 0, user_height_ = 0;
   bool locked_ = false;
   uint64_t frames_ = 0;
+  // Debugging (GESHER_WINDOW_DEBUG): frames left to report after a size change.
+  int report_frames_ = 0;
+  int last_queued_width_ = 0, last_queued_height_ = 0;
 };
 
 }  // namespace gesher
