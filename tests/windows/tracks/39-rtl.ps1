@@ -282,7 +282,9 @@ function RtlPress([IntPtr] $Hwnd, [int] $Vk, [switch] $Shift) {
 
 # The cursor in the RTL EditText (focused, at offset 0: its right end) moved by
 # arrow keys as it looks: left goes forward in the Hebrew text, right back,
-# shift+left selects, End goes to the logical end.
+# shift+left selects; End and Home go to the right and left edges, as Android's
+# ArrowKeyMovementMethod moves them (Selection.moveToRightEdge/LeftEdge): the
+# logical start and end of RTL text.
 function RtlAppCursor([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
   $out = @()
   if ("$(& $ReadLog)" -notmatch 'RtlActivity edit: paragraph rtl, cursor x at 0: ([\d.]+), at 4: ([\d.]+), focused true') {
@@ -292,7 +294,7 @@ function RtlAppCursor([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
   }
   $steps = @(@(0x25, $false, 'RtlActivity selection 1-1'), @(0x25, $false, 'RtlActivity selection 2-2'),
              @(0x27, $false, 'RtlActivity selection 1-1'), @(0x25, $true, 'RtlActivity selection 1-2'),
-             @(0x23, $false, 'RtlActivity selection 4-4'))
+             @(0x23, $false, 'RtlActivity selection 0-0'), @(0x24, $false, 'RtlActivity selection 4-4'))
   $seen = 0
   foreach ($s in $steps) {
     $before = ([regex]::Matches("$(& $ReadLog)", [regex]::Escape($s[2]))).Count
@@ -300,7 +302,7 @@ function RtlAppCursor([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline -and ([regex]::Matches("$(& $ReadLog)", [regex]::Escape($s[2]))).Count -le $before) { Start-Sleep -Milliseconds 200 }
     if (([regex]::Matches("$(& $ReadLog)", [regex]::Escape($s[2]))).Count -le $before) {
-      $key = @{ 0x25 = 'Left'; 0x27 = 'Right'; 0x23 = 'End' }[$s[0]]
+      $key = @{ 0x25 = 'Left'; 0x27 = 'Right'; 0x23 = 'End'; 0x24 = 'Home' }[$s[0]]
       $out += "after $(if ($s[1]) { 'shift+' })$key no '$($s[2])'"
       break
     }
