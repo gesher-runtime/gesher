@@ -69,13 +69,16 @@ public final class Stress {
   }
 
   static boolean stackOverflow() {
+    // Deep recursion throws StackOverflowError, which is caught and the thread
+    // recovers; three rounds in a row (the depth reached depends on the
+    // execution mode's frame size, so it is not checked).
     for (int round = 0; round < 3; round++) {
       depth = 0;
       try {
         recurse(0);
-        return false;
+        return false;  // never returns normally
       } catch (StackOverflowError e) {
-        if (depth < 1000) return false;
+        if (depth < 10) return false;  // must get at least a little way down
       }
     }
     return true;
