@@ -168,9 +168,17 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset);
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset);
 ssize_t pread64(int fd, void* buf, size_t count, off_t offset);
 ssize_t pwrite64(int fd, const void* buf, size_t count, off_t offset);
+// Symbolic links are NTFS symbolic links; creating one needs developer mode
+// or the symbolic-link privilege (EPERM otherwise). Paths: ADR 0045.
 ssize_t readlink(const char* path, char* buf, size_t size);
+ssize_t readlinkat(int dirfd, const char* path, char* buf, size_t size);
 int symlink(const char* target, const char* linkpath);
+int symlinkat(const char* target, int newdirfd, const char* linkpath);
 int link(const char* oldpath, const char* newpath);
+int linkat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, int flags);
+int unlinkat(int dirfd, const char* path, int flags);
+int faccessat(int dirfd, const char* path, int mode, int flags);
+int fchdir(int fd);
 int nice(int inc);
 
 // gethostname under another name: <winsock2.h>, which some AOSP headers

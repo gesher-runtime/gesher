@@ -29,6 +29,11 @@ extern "C" {
 #endif
 
 char* realpath(const char* path, char* resolved_path);
+char* mkdtemp(char* name);
+int mkstemp(char* name);
+int mkostemp(char* name, int flags);
+int mkstemps(char* name, int suffix);
+int mkostemps(char* name, int suffix, int flags);
 int posix_memalign(void** memptr, size_t alignment, size_t size);
 int setenv(const char* name, const char* value, int overwrite);
 // BSD's random()/srandom(), over the same generator as rand() (0..2^31-1).

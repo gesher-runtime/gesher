@@ -322,8 +322,12 @@ int main(int, char** argv) {
   struct stat st;
   CHECK(stat("/dev/null", &st) == 0 && S_ISCHR(st.st_mode));
   CHECK(open("/dev/no-such-device", O_RDONLY) == -1 && errno == ENOENT);
-  CHECK(stat("/proc/self/maps", &st) == -1 && errno == ENOENT);
-  CHECK(opendir("/proc/self/task") == nullptr && errno == ENOENT);
+  // /proc/self (procfs.cc, ADR 0045; posix_probe tests its files).
+  CHECK(stat("/proc/self/maps", &st) == 0 && S_ISREG(st.st_mode));
+  CHECK(stat("/proc/self/no-such-file", &st) == -1 && errno == ENOENT);
+  DIR* task = opendir("/proc/self/task");
+  CHECK(task != nullptr);
+  if (task != nullptr) closedir(task);
   int zero = open("/dev/zero", O_RDONLY);
   memset(buf, 1, sizeof(buf));
   CHECK(zero >= 0 && read(zero, buf, 16) == 16 && buf[0] == 0 && buf[15] == 0);

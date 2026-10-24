@@ -44,6 +44,8 @@ $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
 # ICU's data, where the i18n module keeps it on Android.
 Copy-Item "$Dir/icudt*l.dat" (Join-Path $root 'i18n/etc/icu')
+# Time zone data, where the tzdata module keeps it (docs/posix.md).
+if (Test-Path "$Dir/tzdata") { Copy-Item -Recurse -Force "$Dir/tzdata/*" (Join-Path $root 'tzdata') }
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
