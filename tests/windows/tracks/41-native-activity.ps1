@@ -39,6 +39,25 @@ public static class GesherNativeActivityWin32 {
   [DllImport("gdi32.dll")] static extern bool GdiFlush();
   [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi,
       uint usage, out IntPtr bits, IntPtr section, uint offset);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y,
+      int cx, int cy, uint flags);
+  // Onto the desktop at (0, 0), shown, not activated (SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW).
+  public static bool MoveOnScreen(IntPtr hwnd) {
+    return SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0010 | 0x0040);
+  }
+  // The most frequent colors, as "rrggbb x count, ...".
+  public static string Top(int[] px, int n) {
+    var counts = new System.Collections.Generic.Dictionary<int, int>();
+    for (int i = 2; i < px.Length; i++) { int c; counts.TryGetValue(px[i], out c); counts[px[i]] = c + 1; }
+    var list = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<int, int>>(counts);
+    list.Sort((a, b) => b.Value.CompareTo(a.Value));
+    var sb = new System.Text.StringBuilder();
+    for (int i = 0; i < list.Count && i < n; i++) {
+      if (i > 0) sb.Append(", ");
+      sb.Append(list[i].Key.ToString("x6")).Append(" x ").Append(list[i].Value);
+    }
+    return sb.ToString();
+  }
   // As GesherWin32.Capture, with PW_CLIENTONLY | PW_RENDERFULLCONTENT: what DWM
   // composed, so a swap chain's frame too.
   public static int[] Capture(IntPtr hwnd) {
@@ -84,7 +103,7 @@ function NativeActivityGlPixels($px) {
   $cx = [int]($w / 2); $cy = [int]($h / 2)
   $center = [GesherWin32]::Count($px, $cx - 10, $cy - 10, $cx + 10, $cy + 10, 0x00ff00, 40)
   $corners = [GesherWin32]::Count($px, 0, 0, 20, 20, 0x0000ff, 40) + [GesherWin32]::Count($px, $w - 20, $h - 20, $w, $h, 0x0000ff, 40)
-  Write-Host "INFO  NativeActivity GL frame read back: $($w)x$($h), $green green, $blue blue, center $center/400 green, corners $corners/800 blue"
+  Write-Host "INFO  NativeActivity GL frame read back: $($w)x$($h), $green green, $blue blue, center $center/400 green, corners $corners/800 blue (most: $([GesherNativeActivityWin32]::Top($px, 3)))"
   $want = $w * $h / 8
   if ($green -lt $want * 0.9 -or $green -gt $want * 1.1) { $out += "GL frame: $green green pixels, not about $want" }
   if ($center -lt 400 -or $corners -lt 800) { $out += 'GL frame: no green triangle in the middle of a blue window' }
@@ -147,7 +166,18 @@ function NativeActivityCheck([string] $Name, [string[]] $Arguments, [string] $Fi
     if ($null -eq (NativeActivityWait $log 'choreographer: 30 frames' $p 60)) { $problems += 'no choreographer frames' }
     Start-Sleep -Milliseconds 500
     $px = [GesherNativeActivityWin32]::Capture($hwnd)
-    if ($null -eq $px) { $problems += 'PrintWindow failed (GL frame)' } else { $problems += NativeActivityGlPixels $px }
+    $gl = if ($null -eq $px) { @('PrintWindow failed (GL frame)') } else { @(NativeActivityGlPixels $px) }
+    if ($gl -and $Arguments -contains '--hidden-window') {
+      # A hidden window is shown off the desktop (ADR 0029); what the swap chain
+      # presents there may not reach PrintWindow. The same frames on the desktop
+      # (the .so renders every frame until the click):
+      Write-Host "INFO  the GL frame of the window off the desktop: $($gl -join '; '); again with the window on the desktop (not activated)"
+      [void][GesherNativeActivityWin32]::MoveOnScreen($hwnd)
+      Start-Sleep -Seconds 2
+      $px = [GesherNativeActivityWin32]::Capture($hwnd)
+      $gl = if ($null -eq $px) { @('PrintWindow failed (GL frame)') } else { @(NativeActivityGlPixels $px) }
+    }
+    $problems += $gl
     Write-Host "INFO  nativeactivity.apk's window: title '$([GesherWin32]::Title($hwnd))', process $([GesherWin32]::ProcessId($hwnd)), visible: $([GesherWin32]::IsWindowVisible($hwnd))"
     # A click at (100, 150): WM_LBUTTONDOWN (MK_LBUTTON) and WM_LBUTTONUP, client coordinates.
     $lp = [IntPtr]((150 -shl 16) -bor 100)
