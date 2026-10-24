@@ -1,3 +1,32 @@
+diff --git a/dex2oat/dex2oat.cc b/dex2oat/dex2oat.cc
+index d279e93..dd2a114 100644
+--- a/dex2oat/dex2oat.cc
++++ b/dex2oat/dex2oat.cc
+@@ -1574,8 +1574,23 @@ class Dex2Oat final {
+       }
+       size_t bcp_df_pos = 0u;
+       size_t bcp_df_end = bcp_dex_files.size();
++#if defined(GESHER)
++      // Gesher: boot images are compiled with bare file names as locations, and
++      // the dex files of the images an extension depends on get their actual
++      // paths when the images load (OatFileBase::Setup): those match by name.
++      auto same_location = [](const std::string& location, const std::string& bcp_location) {
++        return location == bcp_location ||
++               (bcp_location.find('/') == std::string::npos &&
++                location.ends_with("/" + bcp_location));
++      };
++#else
++      auto same_location = [](const std::string& location, const std::string& bcp_location) {
++        return location == bcp_location;
++      };
++#endif
+       for (const std::string& bcp_location : runtime_->GetBootClassPathLocations()) {
+-        if (bcp_df_pos == bcp_df_end || bcp_dex_files[bcp_df_pos]->GetLocation() != bcp_location) {
++        if (bcp_df_pos == bcp_df_end ||
++            !same_location(bcp_dex_files[bcp_df_pos]->GetLocation(), bcp_location)) {
+           LOG(ERROR) << "Missing dex file for boot class component " << bcp_location;
+           return dex2oat::ReturnCode::kOther;
+         }
 diff --git a/dex2oat/driver/compiler_driver.cc b/dex2oat/driver/compiler_driver.cc
 index 58ef563..02649ee 100644
 --- a/dex2oat/driver/compiler_driver.cc
