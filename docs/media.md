@@ -48,6 +48,33 @@ Windows volume mixer writes back to it (`IAudioSessionEvents`), so
 session volume (index / max), which is what the mixer's slider shows. Gesher
 starts every stream at its maximum, as Windows starts an app's session.
 
+## How a file plays
+
+`MediaPlayer.setDataSource` makes a data source (a file descriptor is
+duplicated, as an asset's or a raw resource's `AssetFileDescriptor` is closed
+right after; an http(s) URL is fetched at prepare, in 256 KB range requests);
+`prepare` (or `prepareAsync`) starts the playback thread: every extractor's
+sniffer is asked, the most confident opens the data, the first audio track
+with a decoder is chosen, and `MEDIA_PREPARED` goes back. `start` creates an
+engine track at the decoder's rate, channels and PCM format (the stream type
+from the attributes) and the thread decodes into it; `pause` pauses the track;
+`seekTo` reads from the new time (the extractor's seek), flushes the decoder
+and the track; at the end the track drains, then `MEDIA_PLAYBACK_COMPLETE`,
+or, looping, the reader starts over without stopping the track. Positions
+come from the track's played frames, mapped to media time per segment (a
+seek or a loop starts one). The states and their rules are libmedia
+MediaPlayer's: a call in the wrong state gives `MEDIA_ERROR (-38, 0)` (start,
+pause, ...) or an exception (setDataSource, prepare), as on a device.
+
+SoundPool decodes a sound whole on its loader thread (`SAMPLE_LOADED` when
+done) and plays each stream as a static engine track; MediaMetadataRetriever
+reads the container's and the tracks' formats (tags, MIME type, duration,
+sample rate, album art). Ringtones are MediaPlayers of the default sound's
+file (`Settings.System.RINGTONE` and the rest point at Gesher's sounds).
+AAudio's and OpenSL ES' streams and players are engine tracks (a data
+callback, or the buffer queue's callback, called from a thread set up for
+the app's ELF code) or players.
+
 ## Running by hand
 
 - `set GESHER_AUDIO_CAPTURE=C:\some\dir\` (or a `.wav` path): the process's
@@ -74,18 +101,103 @@ starts every stream at its maximum, as Windows starts an app's session.
   - `INFO  media: Media Foundation: ... AAC decoders: 1; MP3 decoders: 1; FLAC decoders: 1; Opus decoders: 1; H.264 decoders: 1; HEVC 0; VP9 0; AV1 0; MPEG-4 part 2 decoders: 1`
     (both runners: Media Foundation is there on the CI images).
 
-### Next (stage 1, part 2)
-- AOSP's extractors (MP3, MPEG-4, Ogg, FLAC, WAV, ADTS) and the open codecs
-  (mp3dec, Tremolo, libopus, libFLAC) built for Windows (`aosp.lock`:
-  `frameworks/av-media`, `system/media`, `external/tremolo`, `external/libopus`,
-  `external/flac`; `cmake/aosp/media_codecs.cmake`); AAC through Media
-  Foundation's decoder.
-- A player over them (`compat/media/player`: data sources for file
-  descriptors, paths and http(s), the extractor wrapper, the decoders, the
-  playback thread) and MediaPlayer's, SoundPool's and
-  MediaMetadataRetriever's natives (libmedia_jni and libsoundpool as builtin
-  libraries); Ringtone/RingtoneManager defaults; test media generated in
-  media.yml with ffmpeg; an http check with a local server.
-- Then AAudio and OpenSL ES for NDK code; stage 2 (MediaCodec,
-  MediaExtractor, MediaMuxer, video into SurfaceView/TextureView through
-  Media Foundation's H.264 decoder); stage 3 (capture).
+### Runs in flight
+- None. Last run: **40135129611** (commit 882a1af, "the player ..."): build,
+  framework, media (apk), package green; its `media / codecs` job (the AOSP
+  extractor/codec port, `ninja -k 0 media_codecs_all`) **failed**, so the test
+  jobs were skipped (fixed since: the codecs job is `continue-on-error`). Its
+  log could not be read (GitHub API rate limit); the errors seen in the run
+  before it (40134179211) were all addressed in commit 14bd96f and before:
+  Tremolo's `_G_config.h`, FLAC's dllimport (`FLAC__NO_DLL`) and Linux
+  `config.h` (Gesher's own in `compat/media/aosp/flac`), `vasprintf`/
+  `strcasestr` and missing `<new>`/`<vector>` (force-included
+  `compat/media/aosp/include/gesher_media_aosp.h`), `OSCL_UNUSED_ARG`.
+- Last CI-verified commit: **da91170**, ci run **40129230078** (stage 1, part
+  1, above; both runners green). Commits since (7b87bf0 docs, then the codec
+  port, the player and its tests) are not verified.
+
+### In progress (committed, not yet CI-verified): stage 1, part 2
+Everything below is pushed (tip of `wip/media`), built only by media.yml's
+`codecs` job until it compiles:
+- `cmake/aosp/media_codecs.cmake` + `aosp.lock` (new entries
+  `frameworks/av-media`, `frameworks/native-media`, `system/media`,
+  `external/tremolo`, `external/libopus`, `external/flac`, `external/libwebm`):
+  the extractors and decoders, `EXCLUDE_FROM_ALL`, target `media_codecs_all`.
+- `cmake/aosp/media.cmake`: `gesher_media_player` (OBJECT, `EXCLUDE_FROM_ALL`):
+  `compat/media/player/*`, `jni/media_jni.cc` (builtin `libmedia_jni.so`,
+  `libsoundpool.so`, `libaudioeffect_jni.so`), `media_player_jni.cc`,
+  `media_jni_others.cc` (MediaMetadataRetriever + stand-ins),
+  `media_extractor_jni.cc`, `soundpool_jni.cc`, `ndk/aaudio.cc`,
+  `ndk/opensles.cc`. Locally checked with clang `-fsyntax-only` (the parts
+  that need no AOSP headers).
+- Test side, ready: `tests/apps/mediaapp` (MediaPlayer, retriever, SoundPool,
+  Ringtone, NDK AAudio/OpenSL ES via `jni/media_ndk_test.c`),
+  `gen-media.sh` (ffmpeg; checked locally), `compat/media/sounds/
+  gen-system-sounds.sh` (checked locally), media.yml steps (ffmpeg, NDK
+  cache `ndk-27.2.12479018`, `.so` build), `38-media.ps1` expectations
+  (MediaPlayer, retriever, SoundPool, ringtone, NDK lines and 31 sounds; an
+  http server on 127.0.0.1:8765 serving `assets/tone_http.ogg`). The
+  expected strings are first guesses: adjust them to what the first green
+  run prints when they are right.
+
+### Exactly what is next
+1. Dispatch ci on `wip/media` (`gh workflow run ci -R gesher-runtime/gesher
+   --ref wip/media`; watch with `gh run watch <id> --exit-status
+   --interval 120`). Read `media / codecs` errors
+   (`gh api repos/gesher-runtime/gesher/actions/jobs/<job>/logs`), fix, repeat
+   until `media_codecs_all` builds.
+2. Then link it: in `cmake/aosp/media.cmake` drop `EXCLUDE_FROM_ALL` from
+   `gesher_media_player` and link it into dalvikvm
+   (`target_link_libraries(dalvikvm PRIVATE gesher_media_player)`); in
+   `media_codecs.cmake` drop the `EXCLUDE_FROM_ALL` line; remove the codecs job
+   from media.yml. Link errors to expect: duplicate symbols between
+   extractors (each is a plugin on Android), `off64_t`, libbinder for
+   AMessage's Parcel code.
+3. Run ci; make `38-media.ps1` green on both runners (the mediaapp run is
+   single process, `-Xint`). Then tick the roadmap's MediaPlayer, SoundPool/
+   Ringtone/MediaMetadataRetriever and AAudio/OpenSL ES boxes with the run id,
+   and add the PASS lines here.
+4. F-Droid audio app for `tests/e2e/apps.json`: Signal Generator
+   (`org.billthefarmer.siggen` 1.37, versionCode 137; pure Java, AudioTrack);
+   its SHA-256 is NOT known yet (a `curl` of
+   `https://f-droid.org/repo/org.billthefarmer.siggen_137.apk` returned a
+   427-byte page, not the APK: fetch it properly and hash it).
+5. Stage 2: MediaExtractor is written (`media_extractor_jni.cc`); MediaCodec
+   and MediaCodecList (audio decoding first: ExoPlayer apps use MediaCodec +
+   AudioTrack), MediaMuxer; video needs a Surface to draw into: SurfaceView
+   and TextureView are not supported by Gesher's graphics yet (no
+   compositor; graphics track), H.264 through Media Foundation (present on
+   the CI images). Stage 3: capture (AudioRecord's setup fails cleanly now;
+   AAudio input answers UNAVAILABLE; OpenSL recorder FEATURE_UNSUPPORTED).
+
+### Known pitfalls
+- The Bash tool eats backslashes in inline scripts (`\\a` became a BEL in
+  gesher.iss once; `\\n` became a newline): edit with the Edit tool or Python
+  scripts written to files; check for control characters.
+- Python on Windows writes CRLF unless `newline='\n'`.
+- `workflow_dispatch` only works for workflows on the default branch: run
+  media.yml through ci.
+- GitHub API rate limit is shared by every agent: poll with
+  `--interval 120`, fetch logs once.
+- Static initializers (builtin libraries, bionic shim symbols) need OBJECT
+  libraries, or the linker drops them.
+- Natives are System V (`JNICALL`); the NDK callbacks the shim calls are
+  System V function pointers, on threads that call `EnterLoadedCode()` first.
+- CI runners have no audio endpoint (`0x80070490`); MF is present.
+
+### Edits outside the media domain (all additive)
+- `CMakeLists.txt`: `include(cmake/aosp/media.cmake)`.
+- `compat/framework/android_runtime.cc`: one declaration and one table row
+  (`gesher_media`, `android::register_gesher_media`).
+- `.github/workflows/ci.yml`: the `media` job (`uses: media.yml`, needs
+  framework); `test` needs `media` and downloads its artifact; `package`
+  needs `media` and downloads it (the default sounds).
+- `app/java/com/gesher/server/Services.java`: the `audio` registration now
+  uses `AudioService.java` (the old inner silent `AudioService` class removed).
+- `app/java/com/gesher/server/SettingsProvider.java`: one line,
+  `AudioService.putDefaultSounds(system)`.
+- `tools/package/gesher.iss` (media\audio\*) and `tools/package/gesher-app.ps1`
+  (copies them to `$ANDROID_ROOT/media/audio`): the installer edit.
+- `aosp.lock`: the new projects above (separate checkouts, no change to
+  existing lines).
+- `docs/roadmap.md`: the Phase 8 checklist.
