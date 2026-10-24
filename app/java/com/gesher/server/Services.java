@@ -18,6 +18,8 @@ import android.graphics.Point;
 import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
+import android.hardware.input.IInputManager;
+import android.media.IAudioService;
 import android.os.IBinder;
 import android.os.IServiceManager;
 import android.os.IUserManager;
@@ -31,6 +33,7 @@ import android.view.IWindowManager;
 import com.android.internal.view.IInputMethodManager;
 
 import com.gesher.app.DeviceProfile;
+import com.gesher.app.input.VirtualKeyboard;
 
 import java.lang.reflect.Field;
 import java.util.Collection;
@@ -86,6 +89,13 @@ public final class Services {
                 StandIn.of(IDisplayManager.class, new DisplayManager()).asBinder());
         services.put(Context.USER_SERVICE,
                 StandIn.of(IUserManager.class, new UserManager()).asBinder());
+        // input: InputManagerService with the virtual keyboard (docs/input.md): its device
+        // and key character map (Generic.kcm), for KeyEvent.getUnicodeChar, the text
+        // views' key listeners and VelocityTracker.
+        services.put(Context.INPUT_SERVICE, StandIn.of(IInputManager.class,
+                new VirtualKeyboard.InputManager()).asBinder());
+        services.put(Context.AUDIO_SERVICE,
+                StandIn.of(IAudioService.class, new AudioService()).asBinder());
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManager()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
@@ -213,6 +223,20 @@ public final class Services {
         }
     }
 
+    /**
+     * audio: AudioService, silent. A click on a view plays its sound effect
+     * (View.performClick → AudioManager.playSoundEffect), which needs the service.
+     */
+    public static final class AudioService extends IAudioService.Default {
+        @Override
+        public void playSoundEffect(int effectType, int userId) {
+            // No sound.
+        }
+
+        @Override
+        public void playSoundEffectVolume(int effectType, float volume) {
+        }
+    }
     /**
      * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
      * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.
