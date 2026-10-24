@@ -20,8 +20,30 @@ index c747064..16eb822 100644
      void *lib = dlopen("libandroidio.so", RTLD_NOW);
      if (lib != nullptr) {
          asyncCloseMonitorCreate = (acm_create_func) dlsym(lib, "async_close_monitor_create");
+diff --git a/common/src/jni/main/cpp/conscrypt/jniutil.cc b/common/src/jni/main/cpp/conscrypt/jniutil.cc
+index 27e6b77..7eafc31 100644
+--- a/common/src/jni/main/cpp/conscrypt/jniutil.cc
++++ b/common/src/jni/main/cpp/conscrypt/jniutil.cc
+@@ -96,7 +96,7 @@ void init(JavaVM* vm, JNIEnv* env) {
+             env, TO_STRING(JNI_JARJAR_PREFIX) "org/conscrypt/NativeCrypto$SSLHandshakeCallbacks");
+ 
+     nativeRef_address = getFieldRef(env, nativeRefClass, "address", "J");
+-#if defined(ANDROID) && !defined(CONSCRYPT_OPENJDK)
++#if (defined(ANDROID) || defined(GESHER)) && !defined(CONSCRYPT_OPENJDK)
+     fileDescriptor_fd = getFieldRef(env, fileDescriptorClass, "descriptor", "I");
+ #else /* !ANDROID || CONSCRYPT_OPENJDK */
+     fileDescriptor_fd = getFieldRef(env, fileDescriptorClass, "fd", "I");
+@@ -190,7 +190,7 @@ extern bool isDirectByteBufferInstance(JNIEnv* env, jobject buffer) {
+ }
+ 
+ bool isGetByteArrayElementsLikelyToReturnACopy(size_t size) {
+-#if defined(ANDROID) && !defined(CONSCRYPT_OPENJDK)
++#if (defined(ANDROID) || defined(GESHER)) && !defined(CONSCRYPT_OPENJDK)
+     // ART's GetByteArrayElements creates copies only for arrays smaller than 12 kB.
+     return size <= 12 * 1024;
+ #else
 diff --git a/common/src/jni/main/cpp/conscrypt/native_crypto.cc b/common/src/jni/main/cpp/conscrypt/native_crypto.cc
-index 210c606..b638c52 100644
+index 210c606..318fa13 100644
 --- a/common/src/jni/main/cpp/conscrypt/native_crypto.cc
 +++ b/common/src/jni/main/cpp/conscrypt/native_crypto.cc
 @@ -15,6 +15,9 @@
@@ -94,7 +116,7 @@ index 210c606..b638c52 100644
          if (fd != -1) {
              conscrypt::netutil::setBlocking(fd, true);
          }
-@@ -11340,12 +11350,19 @@ static jlong NativeCrypto_SSL_get1_session(JNIEnv* env, jclass, jlong ssl_addres
+@@ -11340,12 +11350,24 @@ static jlong NativeCrypto_SSL_get1_session(JNIEnv* env, jclass, jlong ssl_addres
  
  // TESTING METHODS END
  
@@ -102,7 +124,12 @@ index 210c606..b638c52 100644
 +// Gesher: ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md);
 +// each native is registered through a System V thunk that calls it.
 +#include <nativehelper/jni_macros.h>
-+#define CONSCRYPT_NATIVE_METHOD(functionName, signature)                  \n    {                                                                     \n        /* NOLINTNEXTLINE */                                              \n        (char*)#functionName, (char*)(signature),                         \n                NATIVEHELPER_SYSV_JNI_ENTRY(NativeCrypto_##functionName)  \n    }
++#define CONSCRYPT_NATIVE_METHOD(functionName, signature)                  \
++    {                                                                     \
++        /* NOLINTNEXTLINE */                                              \
++        (char*)#functionName, (char*)(signature),                         \
++                NATIVEHELPER_SYSV_JNI_ENTRY(NativeCrypto_##functionName)  \
++    }
 +#else
  #define CONSCRYPT_NATIVE_METHOD(functionName, signature)             \
      {                                                                \
@@ -186,7 +213,7 @@ index 9f64f94..ed40876 100644
  #else
          fdsEmergency[0] = -1;
 diff --git a/common/src/jni/main/include/conscrypt/compat.h b/common/src/jni/main/include/conscrypt/compat.h
-index c324e0c..7862144 100644
+index c324e0c..1cd6a5a 100644
 --- a/common/src/jni/main/include/conscrypt/compat.h
 +++ b/common/src/jni/main/include/conscrypt/compat.h
 @@ -41,7 +41,7 @@
@@ -198,6 +225,59 @@ index c324e0c..7862144 100644
  
  #include <stdarg.h>
  #include <stdint.h>
+@@ -107,4 +107,39 @@ inline int gettimeofday(struct timeval *tp, struct timezone *) {
+ }
+ #endif  // _WIN32
+ 
++#if defined(GESHER)
++// Gesher: gesher-base's <stdio.h> declares no asprintf; Conscrypt's error messages use it.
++#include <stdarg.h>
++#include <stdlib.h>
++
++inline int gesher_conscrypt_vasprintf(char** ret, const char* format, va_list args) {
++    va_list copy;
++    va_copy(copy, args);
++    *ret = nullptr;
++    int count = vsnprintf(nullptr, 0, format, args);
++    if (count >= 0) {
++        char* buffer = static_cast<char*>(malloc(static_cast<size_t>(count) + 1));
++        if (buffer == nullptr) {
++            count = -1;
++        } else if ((count = vsnprintf(buffer, static_cast<size_t>(count) + 1, format, copy)) < 0) {
++            free(buffer);
++        } else {
++            *ret = buffer;
++        }
++    }
++    va_end(copy);
++    return count;
++}
++
++inline int gesher_conscrypt_asprintf(char** strp, const char* fmt, ...) {
++    va_list ap;
++    va_start(ap, fmt);
++    int r = gesher_conscrypt_vasprintf(strp, fmt, ap);
++    va_end(ap);
++    return r;
++}
++#define vasprintf gesher_conscrypt_vasprintf
++#define asprintf gesher_conscrypt_asprintf
++#endif  // GESHER
++
+ #endif  // CONSCRYPT_COMPAT_H_
+diff --git a/common/src/jni/main/include/conscrypt/jniutil.h b/common/src/jni/main/include/conscrypt/jniutil.h
+index 9b84801..7888bde 100644
+--- a/common/src/jni/main/include/conscrypt/jniutil.h
++++ b/common/src/jni/main/include/conscrypt/jniutil.h
+@@ -87,7 +87,7 @@ void init(JavaVM* vm, JNIEnv* env);
+ inline JNIEnv* getJNIEnv(JavaVM* gJavaVM) {
+     JNIEnv* env;
+ 
+-#ifdef ANDROID
++#if defined(ANDROID) || defined(GESHER)
+     int ret = gJavaVM->AttachCurrentThread(&env, nullptr);
+ #else
+     int ret = gJavaVM->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
 diff --git a/common/src/jni/main/include/conscrypt/macros.h b/common/src/jni/main/include/conscrypt/macros.h
 index c7330ea..fb4cdc9 100644
 --- a/common/src/jni/main/include/conscrypt/macros.h

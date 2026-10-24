@@ -15,6 +15,14 @@
 
 #include <windows.h>
 #include <wincrypt.h>
+// <wincrypt.h> names some of its constants like OpenSSL's types.
+#undef X509_NAME
+#undef X509_EXTENSIONS
+#undef X509_CERT_PAIR
+#undef PKCS7_ISSUER_AND_SERIAL
+#undef PKCS7_SIGNER_INFO
+#undef OCSP_REQUEST
+#undef OCSP_RESPONSE
 
 #include <stdint.h>
 #include <stdio.h>
