@@ -274,18 +274,20 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 5 checklist
 
-- [ ] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041)
+- [x] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041; limits there)
   - [x] The WebView2 SDK (NuGet, pinned) with llvm-mingw, the static loader
         linked; a controller in a child window, a page's script calling a host
         object synchronously, ExecuteScript, CapturePreview, PrintWindow with
         PW_RENDERFULLCONTENT, requests answered by the host (webview run
         40128694232: the probe on windows-2022 and windows-2025)
-  - [ ] android.webkit.WebView in an app's window: Gesher's
+  - [x] android.webkit.WebView in an app's window: Gesher's
         WebViewFactoryProvider, the WebView2 window kept at the view's bounds,
         WebViewClient/WebChromeClient, evaluateJavascript,
-        @JavascriptInterface, file:///android_asset, cookies (single process
-        and the Gesher device)
-  - [ ] A real app that relies on WebView in the e2e job
+        @JavascriptInterface, file:///android_asset, cookies, views over the
+        WebView cut out of its window (single process and the Gesher device;
+        ci run 40138367211 on windows-2022 and windows-2025)
+  - [x] A real app that relies on WebView in the e2e job (Notes 1.41, ci run
+        40138367211)
 
 ## Phase 6 checklist
 

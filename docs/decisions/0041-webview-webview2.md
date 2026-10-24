@@ -69,9 +69,12 @@ Rejected:
 - Input over a WebView never reaches the app's InputChannel: apps that
   intercept touches above a WebView (e.g. `onInterceptTouchEvent` in a parent)
   do not see them.
-- A WebView draws over every View below and above it in z-order within its
-  visible rectangle (child windows are above their parent's content): Views
-  drawn on top of a WebView are hidden by it.
+- A WebView draws over every View below it within its visible rectangle
+  (child windows are above their parent's content). Views drawn on top of a
+  WebView (later siblings of its branch, or higher Z) have their rectangles
+  cut out of the WebView2 window's region (`SetWindowRgn`), so a floating
+  button over a WebView shows and takes the mouse; only rectangles, and only
+  child views (not what a parent paints in `dispatchDraw`/foreground).
 - Pages see an https origin for local files; `location.protocol` differs from
   Android's.
 - See docs/webview.md for the API mapping and what is not done.
