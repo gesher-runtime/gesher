@@ -111,3 +111,45 @@ if ($bench.Count -ge 2) {
   }
   Write-Host ("INFO  codegen:   {0,-14} {1}" -f 'process', (($bench.Keys | ForEach-Object { $bench[$_].Ms }) -join ' / '))
 }
+
+# ART's own run-tests (tests/build-art-run-tests.sh): each runs under the
+# switch interpreter first; one that passes there must pass under every
+# other mode too. (One that fails there fails for reasons of its own, not
+# compiled code's; it is reported, not counted.)
+$runTestArgs = @{ '080-oom-throw' = @('-Xmx16m') }
+foreach ($dex in Get-ChildItem "$Dir/art-*.dex" -ErrorAction SilentlyContinue | Sort-Object Name) {
+  $test = $dex.BaseName.Substring(4)
+  $expected = (Get-Content -Raw "$Dir/art-$test.expected-stdout.txt") -replace "`r", ''
+  $extra = if ($runTestArgs.ContainsKey($test)) { $runTestArgs[$test] } else { @() }
+  $results = [ordered]@{}
+  foreach ($name in @($modes.Keys)) {
+    if ($name -eq 'interpret-only') { continue }
+    $m = $modes[$name]
+    $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+    foreach ($a in @("-Xbootclasspath:$bcp", $image) + $m.Args + $extra + @('-cp', (NoDrive $dex.FullName), 'Main')) {
+      $psi.ArgumentList.Add($a)
+    }
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    foreach ($k in $m.Env.Keys) { $psi.Environment[$k] = $m.Env[$k] }
+    $p = [Diagnostics.Process]::Start($psi)
+    $err = $p.StandardError.ReadToEndAsync()
+    $stdout = $p.StandardOutput.ReadToEnd()
+    if (-not $p.WaitForExit(600000)) { $p.Kill(); $stdout += "`n(timed out)" }
+    $actual = $stdout -replace "`r", ''
+    $results[$name] = @{ Ok = ($p.ExitCode -eq 0 -and $actual.TrimEnd() -eq $expected.TrimEnd()); Exit = $p.ExitCode; Out = $actual; Err = $err.Result }
+  }
+  if (-not $results['switch'].Ok) {
+    Write-Host ('INFO  codegen: art run-test {0} does not pass under the switch interpreter either (exit 0x{1:X8}); not counted' -f $test, $results['switch'].Exit)
+    continue
+  }
+  $bad = @($results.Keys | Where-Object { -not $results[$_].Ok })
+  if (-not $bad) {
+    Write-Host "PASS  codegen: art run-test $test under $($results.Keys -join ', ')"
+  } else {
+    foreach ($b in $bad) {
+      ReportFailure "art run-test $test under $b" ([pscustomobject]@{ Exit = $results[$b].Exit; Out = "--- stdout`n$($results[$b].Out)`n--- stderr`n$($results[$b].Err)" })
+    }
+  }
+}
