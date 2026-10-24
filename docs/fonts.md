@@ -2,9 +2,13 @@
 
 Goal: Android's system fonts on Windows — `Typeface.DEFAULT`, the font
 families and fallback chain of `fonts.xml`, Hebrew through Noto — so text
-drawn through minikin and hwui looks and measures as on a device. Work
-happens on branch `wip/fonts`. The decision record is
-[ADR 0022](decisions/0022-fonts-system-font-map.md).
+drawn through minikin and hwui looks and measures as on a device; and text
+in views right for every script a Windows user may read, right to left
+included, in the user's Windows language. Work happened on branches
+`wip/fonts` and `wip/rtl` (the rtl track: further scripts, right to left in
+views, the locale; see "Right to left, further scripts, the locale" below).
+The decision records are [ADR 0022](decisions/0022-fonts-system-font-map.md)
+and [ADR 0044](decisions/0044-rtl-scripts-and-locale.md).
 
 ## What Gesher ships
 
@@ -17,13 +21,22 @@ From AOSP android-16.0.0_r4, the versions the BP4A release selects:
 | `DroidSansMono.ttf` (108 KB) | `monospace` | frameworks/base `data/fonts` (`RELEASE_USE_ROBOTO_MONO_FONT` is false) | Apache 2.0 |
 | `NotoSansHebrew-{Regular,Bold}.ttf` (35 KB) | fallback `und-Hebr` | external/noto-fonts `notosanshebrew/font/1.040` (`RELEASE_PACKAGE_HEBREW_FONT_VERSION`'s default) | OFL 1.1 |
 
-About 3.4 MB in all (8 files). `config/fonts/fonts.xml` is AOSP's `fonts.xml`
+Added by the rtl track (ADR 0044), at the versions BP4A's release flags select:
+
+| File | Family | Source | License |
+|---|---|---|---|
+| `NotoNaskhArabic-{Regular,Bold}.ttf`, `NotoNaskhArabicUI-{Regular,Bold}.ttf` (472 KB) | fallback `und-Arab`, elegant and compact | external/noto-fonts `notonaskharabic/font/1.070`, `notonaskharabicui` | OFL 1.1 |
+| `NotoSansThai-{Regular,Bold}.ttf`, `NotoSansThaiUI-{Regular,Bold}.ttf` (81 KB) | fallback `und-Thai` | `notosansthai`, `notosansthaiui` | OFL 1.1 |
+| `NotoSansDevanagari-VF.ttf`, `NotoSansDevanagariUI-VF.ttf` (524 KB) | fallback `und-Deva` (variable `wght`) | `notosansdevanagari/font/2.006`, `notosansdevanagariui` | OFL 1.1 |
+
+About 4.5 MB in all (18 files); before the rtl track 3.4 MB (8 files). `config/fonts/fonts.xml` is AOSP's `fonts.xml`
 (Apache 2.0) cut down to these families, unchanged otherwise: sans-serif
 with its 18 variable instances and aliases (`sans-serif-thin`, `-light`,
 `-medium`, `-black`, `arial`, `helvetica`, `tahoma`, `verdana`),
 sans-serif-condensed, serif and its aliases (`serif-bold`, `times`,
 `georgia`, …), monospace (`sans-serif-monospace`, `monaco`), then the
-Hebrew fallback family. Left out: every other script's fallback, emoji,
+Hebrew fallback family (and, since the rtl track, Arabic, Thai and
+Devanagari). Left out: every other script's fallback, emoji,
 serif-monospace (Cutive Mono), casual, cursive, smallcaps, Source Sans Pro,
 Roboto Flex. Adding a script is a font in `collect-fonts.sh`, its family in
 `fonts.xml` (copied from AOSP's) and, if the font is not fetched yet, its

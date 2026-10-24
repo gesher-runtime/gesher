@@ -163,7 +163,11 @@ public final class ScriptsTest {
       int[] drawn = pixels(draw(def, s.substring(0, 1)));
       int ink = darkPixels(drawn);
       boolean notTofu = !java.util.Arrays.equals(drawn, tofu) && ink > tofuInk + 40;
-      check(def.hasGlyph(s) && !def.hasGlyph(TOFU) && notTofu,
+      boolean glyphs = true;
+      for (int k = 0; k < s.length(); k++) {
+        glyphs &= def.hasGlyph(s.substring(k, k + 1));  // one grapheme at a time
+      }
+      check(glyphs && !def.hasGlyph(TOFU) && notTofu,
           names[i] + " " + s + " has glyphs, not tofu (" + ink + " dark pixels, the .notdef of "
               + "U+0378 " + tofuInk + ")");
     }
