@@ -133,6 +133,10 @@ jint JNICALL NativeWindow_pollEvent(JNIEnv* env, jclass, jlong ptr, jdoubleArray
   return e.type;
 }
 
+void JNICALL NativeWindow_showOffscreen(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->window()->ShowOffscreen();
+}
+
 void JNICALL NativeWindow_show(JNIEnv*, jclass, jlong ptr) {
   Get(ptr)->window()->Show();
 }
@@ -189,6 +193,7 @@ const JNINativeMethod kMethods[] = {
     {"nCreate", "(Ljava/lang/String;II)J", reinterpret_cast<void*>(&NativeWindow_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&NativeWindow_destroy)},
     {"nShow", "(J)V", reinterpret_cast<void*>(&NativeWindow_show)},
+    {"nShowOffscreen", "(J)V", reinterpret_cast<void*>(&NativeWindow_showOffscreen)},
     {"nGetSurface", "(J)Landroid/view/Surface;", reinterpret_cast<void*>(&NativeWindow_getSurface)},
     {"nGetWidth", "(J)I", reinterpret_cast<void*>(&NativeWindow_getWidth)},
     {"nGetHeight", "(J)I", reinterpret_cast<void*>(&NativeWindow_getHeight)},

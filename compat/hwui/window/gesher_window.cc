@@ -267,6 +267,21 @@ void Window::Hide() {
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_HIDE);
 }
 
+void Window::ShowOffscreen() {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  // A tool window (no taskbar button) left of the virtual screen, shown
+  // without activation: off the desktop, but drawn and composed like any
+  // shown window (PrintWindow reads nothing back from a hidden one).
+  SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+  RECT r;
+  GetWindowRect(hwnd, &r);
+  int x = GetSystemMetrics(SM_XVIRTUALSCREEN) - (r.right - r.left) - 64;
+  int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  SetWindowPos(hwnd, HWND_BOTTOM, x, y, 0, 0,
+               SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+}
+
 void Window::SetResizable(bool resizable) {
   HWND hwnd = static_cast<HWND>(hwnd_);
   LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
