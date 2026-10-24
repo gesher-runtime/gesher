@@ -30,7 +30,9 @@ function WindowAppCheck([string] $Name, [string] $Apk, [string[]] $Arguments, [s
     return
   }
   $log = Join-Path $env:RUNNER_TEMP "window-app-$([IO.Path]::GetFileNameWithoutExtension($Apk))-$(Get-Random).log"
-  $quoted = (@($dvmWindows) + $Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
+  # Quoted only where needed: the launcher finds its runtime options in its command line
+  # (com.gesher.server.Zygote.vmCommandLine), as ProcessStartInfo.ArgumentList writes it.
+  $quoted = (@($dvmWindows) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.UseShellExecute = $false

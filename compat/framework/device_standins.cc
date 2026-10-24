@@ -1,6 +1,7 @@
 // Gesher: stand-ins for device-only natives (SurfaceFlinger's SurfaceControl
-// and SurfaceSession, BufferQueue's BLASTBufferQueue, InputDispatcher's
-// InputChannel and InputEventReceiver, libgui's OverlayProperties).
+// and SurfaceSession, BufferQueue's BLASTBufferQueue, libgui's
+// OverlayProperties, Perfetto's; InputChannel and InputEventReceiver are
+// attach_standins.cc's).
 //
 // The tables are generated from the framework's JNI sources
 // (gen_device_standins.py): every native answers zero, false, null or 0.0,
