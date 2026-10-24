@@ -67,7 +67,52 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 ## Cameras
 
-In progress (see Status).
+- `media.camera` (`CameraService`, cameraserver's ICameraService) runs in the
+  app's own process: `Services.installInProcess` (single process) and
+  `GesherAppProcess` (each app process of the Gesher device) put it into the
+  process's ServiceManager cache, where CameraManager looks first. A request's
+  Surfaces are that process's objects, which no binder transaction could carry.
+- Devices: Media Foundation's video capture devices (`MFEnumDeviceSources`,
+  read with an `IMFSourceReader`, NV12 out with video processing), ids "0",
+  "1"... in Windows' order; with `GESHER_CAMERA_TEST=1` a test camera comes last
+  (640x480 and 320x240; Y = x + y with a moving bright square in rows 0-31, gray
+  chroma, 30 frames a second).
+- Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
+  focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
+  device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
+  result, the available request/result/characteristics keys.
+- `CameraDeviceUser` (CameraDeviceClient): streams from OutputConfigurations,
+  `submitRequestList` (bursts get their frame numbers at submission; the
+  repeating request one per frame), `cancelRequest`, `flush`, `waitUntilIdle`,
+  default request templates (preview, still, record, video snapshot), and a
+  capture thread: one frame per request, opened at the largest configured
+  size, then for each target: an ImageReader gets YUV_420_888 (I420 planes),
+  RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
+  reader's size; another surface with a native window gets RGBA through
+  `ANativeWindow_lock`. Then `onCaptureStarted` and the result
+  (`CameraMetadataInfo.metadata`, SENSOR_TIMESTAMP and the 3A states).
+  `onDeviceIdle` when nothing is left. A second client of the same camera
+  evicts the first (onError DISCONNECTED), as cameraserver does.
+- Permission: `connectDevice` needs `android.permission.CAMERA` in the app's
+  manifest (`IPackageManager.getPackageInfo`), else `ERROR_PERMISSION_DENIED`
+  (a SecurityException in the app).
+- Natives: `CameraMetadataNative` over system/media's libcamera_metadata
+  (`camera_metadata_jni.cc`; no vendor tags; a Parcel carries the packed
+  buffer, in-process only); `CameraDeviceImpl`'s result queue natives answer
+  "none"; `ImageReader`/`SurfaceImage` (`camera_frames.cc`): images in process
+  memory, the reader's Surface a plain Java Surface only these natives know;
+  `SurfaceUtils` (size, format, usage of readers and native windows). An empty
+  `libmedia_jni.so` builtin is registered when nothing else provides one
+  (ImageReader's static initializer loads it).
+- Legacy `android.hardware.Camera`: no cameras (`getNumberOfCameras()` 0,
+  `open()` null, `open(id)` throws as without a camera service).
+- `MediaStore.ACTION_IMAGE_CAPTURE`: no activity resolves it (Gesher has no
+  system camera app); apps see "no camera app", as on a device without one.
+- Not there: reprocessing, offline sessions, extensions, torch, high-speed
+  sessions, multi-resolution readers, ImageReader surfaces used by other
+  producers than the camera (MediaCodec...), preview into SurfaceView or
+  TextureView (they get no native window on Gesher today; frames go to any
+  surface that has one).
 
 ## Status and next steps
 

@@ -149,6 +149,13 @@ $code = $LASTEXITCODE
 SensorsTestCheck 'single process' $out $code
 CameraTestCheck 'single process' $out $code
 Remove-Item Env:GESHER_DEVICES_STEPS
+# An app that asks for neither permission (tests/apps/nodevices): refused, as on Android.
+$out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/nodevices.apk")) 400
+$nd = 'nodevices: '
+DevCheck 'devices: permissions (single process): without ACCESS_*_LOCATION LocationManager throws SecurityException; without CAMERA openCamera throws SecurityException' $out @(
+  ,@("${nd}location: getLastKnownLocation throws SecurityException",
+    "${nd}location: requestLocationUpdates throws SecurityException", "${nd}camera: 1 cameras",
+    "${nd}camera: openCamera throws SecurityException", "${nd}done")) $LASTEXITCODE 'nodevices'
 
 # The Gesher device: the location service in the system server, the app in a process
 # of its own, across binder (listeners, the PendingIntent's broadcast, parcelled Locations).
