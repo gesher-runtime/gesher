@@ -23,6 +23,21 @@ class GlobalRef {
   jobject obj_;
 };
 
+// A weak global reference, deleted with the last owner.
+class WeakRef {
+ public:
+  WeakRef(JNIEnv* env, jobject obj) : obj_(env->NewWeakGlobalRef(obj)) {}
+  ~WeakRef() {
+    if (JNIEnv* env = AttachedEnv("gesher-media")) env->DeleteWeakGlobalRef(obj_);
+  }
+  WeakRef(const WeakRef&) = delete;
+  WeakRef& operator=(const WeakRef&) = delete;
+  jweak get() const { return obj_; }
+
+ private:
+  jweak obj_;
+};
+
 // Throws a new `className`(message).
 void jniThrow(JNIEnv* env, const char* className, const char* message);
 
@@ -39,6 +54,11 @@ int LegacyStreamType(JNIEnv* env, jobject attributes);
 // Registrations (stand-ins first, then the natives Gesher implements).
 int RegisterAudioTrack(JNIEnv* env);
 int RegisterAudioSystem(JNIEnv* env);
+int RegisterMediaPlayer(JNIEnv* env);
+int RegisterSoundPool(JNIEnv* env);
+// libmedia_jni's other classes: MediaMetadataRetriever, MediaExtractor,
+// MediaCodec, ... (media_jni_others.cc).
+int RegisterMediaJniOthers(JNIEnv* env);
 
 }  // namespace gesher::media
 

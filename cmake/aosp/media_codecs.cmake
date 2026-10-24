@@ -51,7 +51,8 @@ set(_media_aosp_flags -Wno-unused-parameter -Wno-unused-variable -Wno-unused-fun
   -Wno-unused-but-set-variable -Wno-implicit-fallthrough -Wno-sign-compare
   -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-multichar
   -Wno-deprecated-copy -Wno-inconsistent-missing-override -Wno-unused-private-field
-  -Wno-format -Wno-c99-designator -Wno-vla-cxx-extension)
+  -Wno-format -Wno-c99-designator -Wno-vla-cxx-extension
+  "SHELL:-include ${_media_aosp}/include/gesher_media_aosp.h")
 
 # --- libstagefright_foundation_without_imemory and its companions ------------------------
 set(_fnd "${_mod}/foundation")
@@ -110,7 +111,8 @@ add_library(vorbisidec STATIC
   ${_t}/bitwise.c ${_t}/codebook.c ${_t}/dsp.c ${_t}/floor0.c ${_t}/floor1.c
   ${_t}/floor_lookup.c ${_t}/framing.c ${_t}/mapping0.c ${_t}/mdct.c ${_t}/misc.c
   ${_t}/res012.c ${_t}/treminfo.c ${_t}/vorbisfile.c)
-target_include_directories(vorbisidec PUBLIC ${_trem} PRIVATE ${_t})
+# _G_config.h: Tremolo takes llvm-mingw for Cygwin.
+target_include_directories(vorbisidec PUBLIC ${_trem} PRIVATE ${_t} ${_media_aosp}/include)
 target_compile_definitions(vorbisidec PRIVATE ONLY_C _GNU_SOURCE)
 target_compile_options(vorbisidec PRIVATE -funsigned-char -Wno-unused-variable
   -Wno-unused-but-set-variable)
@@ -123,9 +125,10 @@ add_library(FLAC STATIC
   ${_fl}/bitmath.c ${_fl}/bitreader.c ${_fl}/bitwriter.c ${_fl}/cpu.c ${_fl}/crc.c
   ${_fl}/fixed.c ${_fl}/float.c ${_fl}/format.c ${_fl}/lpc.c ${_fl}/memory.c ${_fl}/md5.c
   ${_fl}/stream_decoder.c ${_fl}/stream_encoder.c ${_fl}/stream_encoder_framing.c ${_fl}/window.c)
-target_include_directories(FLAC PUBLIC ${_flac}/include PRIVATE ${_fl}/include ${_flac})
-target_compile_definitions(FLAC PRIVATE HAVE_CONFIG_H FLAC__NO_MD5 FLAC__INTEGER_ONLY_LIBRARY
-  _REENTRANT PIC U_COMMON_IMPLEMENTATION)
+# compat/media/aosp/flac/config.h in place of external/flac's Linux one.
+target_include_directories(FLAC PUBLIC ${_flac}/include PRIVATE ${_media_aosp}/flac ${_fl}/include)
+target_compile_definitions(FLAC PUBLIC FLAC__NO_DLL PRIVATE HAVE_CONFIG_H FLAC__NO_MD5
+  FLAC__INTEGER_ONLY_LIBRARY _REENTRANT PIC U_COMMON_IMPLEMENTATION)
 target_compile_options(FLAC PRIVATE -Wno-unused-parameter -Wno-unreachable-code-loop-increment)
 target_link_libraries(extractor_flac PRIVATE FLAC)
 
@@ -302,6 +305,7 @@ add_library(stagefright_mp3dec STATIC
   ${_mp3}/src/pvmp3_dct_9.cpp
   ${_mp3}/src/pvmp3_dct_16.cpp)
 target_include_directories(stagefright_mp3dec PUBLIC ${_mp3}/include ${_mp3}/src)
+target_compile_definitions(stagefright_mp3dec PRIVATE "OSCL_UNUSED_ARG(x)=(void)(x)")
 target_compile_options(stagefright_mp3dec PRIVATE -Wno-unused-parameter)
 
 # Everything the player (cmake/aosp/media.cmake) links.

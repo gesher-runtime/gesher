@@ -30,6 +30,26 @@ target_compile_options(gesher_media PRIVATE -Wall -Wextra -Werror -Wno-unused-pa
 
 target_link_libraries(dalvikvm PRIVATE gesher_media)
 
+# The player under MediaPlayer, SoundPool and MediaMetadataRetriever
+# (compat/media/player) and their natives: built by media.yml's codecs job
+# until it links (then into dalvikvm with the rest).
+add_library(gesher_media_player STATIC EXCLUDE_FROM_ALL
+  ${_media}/player/data_source.cc
+  ${_media}/player/http_source.cc
+  ${_media}/player/extractor.cc
+  ${_media}/player/decoder.cc
+  ${_media}/player/decode_file.cc
+  ${_media}/player/mf_decoder.cc
+  ${_media}/player/player.cc
+  ${_media}/jni/media_jni.cc
+  ${_media}/jni/media_player_jni.cc
+  ${_media}/jni/media_jni_others.cc
+  ${_media}/jni/soundpool_jni.cc)
+target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_codecs winhttp ole32)
+target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+set_target_properties(gesher_media_player PROPERTIES CXX_STANDARD 23)
+add_dependencies(media_codecs_all gesher_media_player)
+
 # The engine's probe (compat/media/probe), run in CI on Windows
 # (tests/windows/tracks/38-media.ps1): logs to stderr, no runtime.
 add_executable(media_probe ${_media}/probe/media_probe.cc ${GESHER_MEDIA_AUDIO_SOURCES})
