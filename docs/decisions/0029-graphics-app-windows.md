@@ -82,11 +82,16 @@ in; the question is which process serves it.
   WindowManagerService without changing the drawing path.
 - Every window is a top-level Win32 window: dialogs and popups too (not yet
   owned by their parent window, not positioned relative to it).
-- Input (the input track): the hook is `WindowSession.attachInput`, called
-  when the Win32 window is created; it attaches the window's end of the input
-  channel pair to the HWND (`com.gesher.app.input.WindowInput.attach`), which
-  then reads the window's event queue (close, resize and focus through its
-  listener).
+- Input (ADR 0027): `WindowSession.attachInput`, called when the Win32
+  window is created, attaches the window's end of the input channel pair to
+  the HWND (`com.gesher.app.input.WindowInput.attach`, initial focus), which
+  then reads the window's event queue; close, resize, focus and characters
+  come through its listener (docs/graphics.md, "Input in an app's window").
+- Resizing by the user changes the window's bounds in the session: the
+  frames and the merged configuration's override (`windowConfiguration`
+  bounds and app bounds, as a freeform task's) go to `IWindow.resized`,
+  because ViewRootImpl computes its frames from those bounds; the screen
+  size in dp stays the display's, so the Activity is not relaunched.
 - A process started by the system server for something else (a service, a
   broadcast) gets the device's default window mode; an Activity it shows gets
   a window.
