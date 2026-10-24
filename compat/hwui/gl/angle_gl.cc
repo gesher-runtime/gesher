@@ -76,6 +76,15 @@ bool AngleHas(const char* name) {
   return gesher_egl_proc(name) != nullptr;
 }
 
+// Whether ANGLE's display reports the extension (ANGLE exports some entry
+// points whose extension a backend lacks; calling them fails).
+bool AngleExtension(EGLDisplay dpy, const char* extension) {
+  const char* list = ANGLE(eglQueryString)(dpy, EGL_EXTENSIONS);
+  if (list == nullptr) return false;
+  std::string padded = std::string(" ") + list + " ";
+  return padded.find(std::string(" ") + extension + " ") != std::string::npos;
+}
+
 }  // namespace
 
 extern "C" {
@@ -113,7 +122,7 @@ const char* EGLAPIENTRY eglQueryString(EGLDisplay dpy, EGLint name) {
   std::string& s = (*extended)[dpy];
   if (s.empty()) {
     s = value;
-    if ((" " + s + " ").find(" EGL_KHR_swap_buffers_with_damage ") == std::string::npos) {
+    if (!AngleExtension(dpy, "EGL_KHR_swap_buffers_with_damage")) {
       s += " EGL_KHR_swap_buffers_with_damage";
     }
   }
@@ -188,9 +197,6 @@ EGLBoolean EGLAPIENTRY eglSwapInterval(EGLDisplay dpy, EGLint interval) {
   return ANGLE(eglSwapInterval)(dpy, interval);
 }
 
-// Android-only: marks the start of a frame for systrace.
-EGLAPI void EGLAPIENTRY eglBeginFrame(EGLDisplay, EGLSurface) {}
-
 EGLBoolean EGLAPIENTRY eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects,
                                              EGLint n_rects) {
   return ANGLE(eglSetDamageRegionKHR)(dpy, surface, rects, n_rects);
@@ -198,7 +204,7 @@ EGLBoolean EGLAPIENTRY eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface,
 
 EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface surface,
                                                    const EGLint* rects, EGLint n_rects) {
-  static const bool has_damage = AngleHas("eglSwapBuffersWithDamageKHR");
+  static const bool has_damage = AngleExtension(dpy, "EGL_KHR_swap_buffers_with_damage");
   gesher_hwui_gl_before_swap(dpy, surface);
   if (has_damage) return ANGLE(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
   return ANGLE(eglSwapBuffers)(dpy, surface);
@@ -297,6 +303,10 @@ void GL_APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, G
 
 }  // extern "C"
 
+// Android-only: marks the start of a frame for systrace. EglManager.cpp
+// declares it itself, outside extern "C".
+void EGLAPIENTRY eglBeginFrame(EGLDisplay, EGLSurface) {}
+
 // --- can SkiaGL run? -------------------------------------------------------------------------------
 
 bool gesher_hwui_gl_usable(std::string* detail) {
@@ -341,9 +351,9 @@ bool gesher_hwui_gl_usable(std::string* detail) {
   if (ok) {
     const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    sk_sp<const GrGLInterface> interface = GrGLMakeNativeInterface();
-    ok = renderer != nullptr && version != nullptr && interface != nullptr &&
-         interface->validate();
+    sk_sp<const GrGLInterface> gl_interface = GrGLMakeNativeInterface();
+    ok = renderer != nullptr && version != nullptr && gl_interface != nullptr &&
+         gl_interface->validate();
     *detail = ok ? std::string(renderer) + ", " + version + ", EGL " + std::to_string(major) +
                        "." + std::to_string(minor)
                  : "no OpenGL ES interface for Skia over ANGLE";
