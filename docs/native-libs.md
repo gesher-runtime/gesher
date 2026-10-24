@@ -12,7 +12,9 @@ This is the native-libraries track; its decisions are
 [0017](decisions/0017-native-libs-jni-bridge.md) (JNI),
 [0020](decisions/0020-native-libs-libandroid.md) (libandroid, the rest of
 libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
-(ANativeWindow, EGL/GLES over ANGLE). It builds in steps, each verified in CI
+(ANativeWindow, EGL/GLES over ANGLE) and
+[0032](decisions/0032-native-libs-native-activity.md) (NativeActivity,
+AInputQueue, AChoreographer). It builds in steps, each verified in CI
 (`tracks/40-native-libs.ps1`, `.github/workflows/native-libs.yml`).
 
 ## Pieces
@@ -169,7 +171,8 @@ libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
   - `ANativeWindow_fromSurface`/`toSurface` over libandroid_runtime's, with
     the runtime's `JNIEnv`; the other `ANativeWindow_*` are in
     `libandroid_window.cc` ("Graphics" below);
-  - `ANativeActivity_*`: stand-ins (no NativeActivity natives yet; below).
+  - `ANativeActivity_*`, `AInputQueue_*`/`AInputEvent_*`/`AKeyEvent_*`/
+    `AMotionEvent_*` and `AChoreographer_*`: "NativeActivity" below.
 - **Graphics** ([0023](decisions/0023-native-libs-ndk-graphics.md),
   `compat/bionic/ndk_graphics.cmake`: the OBJECT library
   `gesher_ndk_graphics`, linked into dalvikvm and `gl_window_test`):
@@ -203,6 +206,40 @@ libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
     `egl_gles.cc` subclasses the HWND so `WM_PAINT` only validates (the
     swap chain presents), and restores it with the last surface. Nothing in
     `compat/hwui/window` changed.
+
+- **NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md),
+  `compat/bionic/native_activity.cmake`: the OBJECT library
+  `gesher_native_activity` in dalvikvm, registered by one row of
+  libandroid_runtime's table):
+  - `native_activity.cc`, after core/jni's `android_app_NativeActivity.cpp`:
+    `android.app.NativeActivity`'s natives. `loadNativeCode` dlopen()s the
+    app's library (the ELF hook) and calls `ANativeActivity_onCreate` (or the
+    manifest's `android.app.func_name`) through a System V pointer with an
+    `ANativeActivity` whose `vm`/`env` are the JNI bridge's proxies
+    (`ProxyJavaVm`/`ProxyJniEnv`), `clazz` a global reference, the data/OBB
+    paths, `sdkVersion` and the Java AssetManager's `assetManager`. The
+    callbacks the library fills in are called as System V functions
+    (`CallSysv`, with `EnterLoadedCode()` first) for onStart/onResume/onPause/
+    onStop/onDestroy/onWindowFocusChanged/onConfigurationChanged/onLowMemory/
+    onSaveInstanceState (its buffer freed with the shim's `free`),
+    onNativeWindowCreated/Resized/RedrawNeeded/Destroyed (the Activity's
+    Surface, taken with `Window.takeSurface`, as an `ANativeWindow`: the
+    window's `Win32Surface`), onInputQueueCreated/Destroyed and
+    onContentRectChanged. `ANativeActivity_finish`/`setWindowFormat`/
+    `setWindowFlags`/`showSoftInput`/`hideSoftInput` write to a pipe the main
+    Looper reads, which calls the Activity's methods.
+  - The same file, after `android_view_InputQueue.cpp` and libandroid's
+    `input.cpp`: `android.view.InputQueue`'s natives and `AInputQueue_*`
+    (events from ViewRootImpl's native input stages wait in a queue whose fd
+    the library's Looper watches; `attachLooper`'s System V callback is wrapped
+    in a `LooperCallback`; finished events go back to Java on the main thread),
+    `AInputEvent_*`, `AKeyEvent_*`, `AMotionEvent_*` (all getters, the
+    historical ones, `fromJava`/`toJava`), `AInputQueue_fromJava`.
+  - `choreographer.cc`: `AChoreographer_getInstance` (per thread, on its
+    Looper), `postFrameCallback`/`64`/`Delayed`/`Delayed64`,
+    `postVsyncCallback` and `AChoreographerFrameCallbackData_*`, the refresh
+    rate callbacks; a 60 Hz vsync clock, callbacks run from the thread's
+    Looper when it is polled.
 
 - **Unresolved data imports** no longer fail a load: the loader binds each to
   its own slot in a reserved, inaccessible region and prints "data '...' is
@@ -256,8 +293,12 @@ libc, signals) and [0023](decisions/0023-native-libs-ndk-graphics.md)
 7. libandroid's graphics half and EGL/GLES: an NDK library draws into a
    Gesher window with `ANativeWindow_lock` and with GLES 3/2 on an EGL window
    surface through ANGLE, read back in CI (`tests/apps/glapp`,
-   `tests/native/gl_window_test.cc`). **Done** (`ANativeActivity` is not:
-   see below).
+   `tests/native/gl_window_test.cc`). **Done.**
+8. `android.app.NativeActivity`: an app with no Java code on
+   `android_native_app_glue` runs in its Activity's own window, draws with
+   GLES 2 and `ANativeWindow_lock`, gets AChoreographer frames and its input
+   through AInputQueue, single process and on the device
+   (`tests/apps/nativeactivity`, `tracks/41-native-activity.ps1`). **Done.**
 
 ## Building the test libraries
 
@@ -272,11 +313,10 @@ gesher-app.
 
 ## Status and next steps
 
-_Last updated 2026-10-23 by the native-libraries track; branch
-`wip/native-libs` (on the integration branch with the graphics track's
-window and ANGLE). Steps 1-7 are done and CI-verified (latest: ci
-`40013029994`, green on windows-2022 and windows-2025); `ANativeActivity`
-waits for Activity windows; see "After that" for what is left._
+_Last updated 2026-10-24 by the native-libraries track; branch
+`wip/native-libs`. Steps 1-8 are done and CI-verified (latest: ci
+`40056663098`, commit 8752003, green on windows-2022 and windows-2025);
+see "After that" for what is left._
 
 ### Done and CI-verified
 
@@ -460,14 +500,54 @@ waits for Activity windows; see "After that" for what is left._
   on windows-2022 a shown window's read-back can precede its repaint (the
   test retries for up to 2 s); copying the screen under the window never
   sees it on the runners.
+- **Step 8 — NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md)).
+  `native_activity.cc`, `choreographer.cc` (`native_activity.cmake`), one row
+  in libandroid_runtime's table, `ProxyJniEnv`/`ProxyJavaVm`/`EnterLoadedCode`
+  in the JNI bridge, a `mount` stand-in with no storage volumes (NativeActivity
+  asks for `getObbDir`/`getExternalFilesDir`, which threw without one).
+  `tests/apps/nativeactivity`: `android:hasCode="false"`, its Activity
+  `android.app.NativeActivity`, `lib/x86_64/libnativeactivity.so` (C, API 33,
+  the NDK's `android_native_app_glue` built in, entry point named by
+  `android.app.func_name`). **ci `40056663098` (commit 8752003), green on
+  windows-2022 and windows-2025**:
+  `PASS  native libs: gesher-app runs nativeactivity.apk (NativeActivity, no Java code): ANativeActivity_onCreate, GLES 2 on the Activity's window (glReadPixels, PrintWindow), AChoreographer, a click and a key through AInputQueue, an ANativeWindow_lock frame; WM_CLOSE finishes it (single process)`,
+  `PASS  native libs: the Gesher device: nativeactivity.apk's process (started by the system server) runs the NativeActivity in its own window: GLES 2, AChoreographer, a click and a key reach the .so; Escape calls ANativeActivity_finish, the process ends`
+  (and every earlier line). Each requires, in the order of the run: the
+  func_name entry called with `sdk 36`, the data path, an asset manager,
+  callbacks and `getPackageName()` through `activity->env` on
+  `activity->clazz`; on the glue's thread an asset read and
+  `getPackageName()` after `AttachCurrentThread`; the lifecycle START, RESUME,
+  INPUT_CHANGED (the AInputQueue), INIT_WINDOW (a 400x800 window, format 1),
+  GAINED_FOCUS, and on the main thread onContentRectChanged (0, 0, 400, 800)
+  and onNativeWindowRedrawNeeded; EGL 1.5 on ANGLE, a 400x800 window surface,
+  glReadPixels 40,000 green / 280,000 blue / 0 other, `eglSwapBuffers`; the
+  refresh rate callback (16,666,667 ns), a vsync callback with one frame
+  timeline, 30 `postFrameCallback64` frames with increasing times; the window
+  read back with `PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)` (40,000
+  green, 280,000 blue, the triangle centred); a posted WM_LBUTTONDOWN/UP at
+  (100, 150) reaches the library as AMotionEvent DOWN/UP at (100, 150)
+  (`SOURCE_MOUSE`), which destroys its EGL surface and draws an
+  `ANativeWindow_lock` frame (400x800, stride 400, RGBA_8888) read back as
+  1,600 white pixels at the click and 318,400 red; a posted WM_KEYDOWN/UP of
+  A arrives as AKEYCODE_A (scan code 30) down and up; then WM_CLOSE (single
+  process) or Escape, on which the library calls `ANativeActivity_finish`
+  (device), ends it: PAUSE, TERM_WINDOW, STOP, INPUT_CHANGED, DESTROY,
+  `android_main` returns, the window goes and the process exits 0 (on the
+  device the system server ends it). On windows-2022 the GL frame of a window
+  shown off the desktop (ADR 0029's hidden mode) reads back all white; the
+  check then moves the window onto the desktop (not activated) and reads it
+  again, which gives the frame (INFO lines say which); windows-2025 reads it
+  where it is. The first full run (ci `40055843083`) passed everything but
+  that read-back; its EGL config was ANGLE's first, a 10-bit one (visual id
+  43); the app now takes the first 8-bit one, as the NDK's samples do.
 - Roadmap: the "ELF loader" box (ci `39955700023`), the
   "`System.loadLibrary` of an app's NDK library from its APK's `lib/x86_64`,
   with JNI calls both ways" box (ci `39981957010`) and the bionic box
   (libc, libm, libdl, liblog and libandroid's non-graphics APIs, ci
   `39987881014`; `libc_test.so` covers libm, libdl and liblog, the app covers
-  libc and libandroid) are ticked, and the NDK graphics box (`ANativeWindow`
-  and EGL/GLES from an app's `.so`, ci `40013029994`). `ANativeActivity`,
-  `AChoreographer` and `AInputQueue` are not done.
+  libc and libandroid) are ticked, the NDK graphics box (`ANativeWindow`
+  and EGL/GLES from an app's `.so`, ci `40013029994`), and the NativeActivity
+  box (ci `40056663098`).
 
 ### Not done / stand-ins in what exists
 
@@ -504,26 +584,22 @@ waits for Activity windows; see "After that" for what is left._
   recorded; `kill` of other processes is `ESRCH`. A `SIG_DFL` that would
   terminate does (`abort()` for the core-dumping signals).
 - **libandroid stand-ins**: sensors (none), tracing (off), OBB mounting
-  (unsupported; scanning works). Not provided at all (they bind to the
-  aborting stubs): `AChoreographer_*`, `AInputQueue_*`/`AInputEvent_*`,
+  (unsupported; scanning works), AChoreographer's vsync (a 60 Hz clock, not
+  the display's). Not provided at all (they bind to the aborting stubs):
   `ASurfaceControl_*`/`ASurfaceTexture_*`, `AHardwareBuffer_*`,
   `AThermal_*`, `APerformanceHint_*`, `ASharedMemory_dupFromJava`,
   `android_getaddrinfofornetwork` & co.
-- **ANativeActivity** (`android.app.NativeActivity`): `ANativeActivity_finish`/
-  `setWindowFormat`/`setWindowFlags`/`showSoftInput`/`hideSoftInput` are
-  dropped (one message says so), and nothing calls an app's
-  `ANativeActivity_onCreate`: NativeActivity's natives
-  (`android_app_NativeActivity.cpp`) are not built, and an Activity has no
-  window of its own under gesher-app yet (the graphics track's
-  IWindowSession/ViewRootImpl work). The next step, once Activity windows
-  exist: build those natives; `loadNativeCode` dlopens the app's library
-  (through the ELF dlopen hook) and calls `ANativeActivity_onCreate` through a
-  System V stub like the JNI bridge's, with `vm`/`env` the bridge's proxies;
-  the `callbacks` the `.so` fills are System V and must be called as such,
-  with `SetupThreadTls` on the thread; `onNativeWindowCreated` gets the
-  Activity's Surface as an `ANativeWindow` (a `Win32Surface`, so
-  `ANativeWindow_lock` and `eglCreateWindowSurface` work on it as tested
-  here), plus `AInputQueue` for input.
+- **NativeActivity** (0032): `onConfigurationChanged`, `onLowMemory` and
+  `onSaveInstanceState` are dispatched but nothing in CI triggers them;
+  `showSoftInput`/`hideSoftInput` reach InputMethodManager, which shows no
+  soft keyboard on Windows; `setWindowFormat`/`setWindowFlags` reach the
+  Window, but the window session ignores formats (a `Win32Surface` is 8-bit
+  RGBA: NativeActivity's default RGB_565 is not honoured, so a library that
+  locks the window without `ANativeWindow_setBuffersGeometry` gets RGBA_8888)
+  and most flags. A GL window shown off the desktop (hidden mode) may not be
+  readable with PrintWindow on windows-2022 (above). The test app's switch
+  from EGL to `ANativeWindow_lock` on the same window is valid on Android too
+  (the EGL surface is destroyed first).
 - **Graphics limits**: EGL window surfaces need a Gesher window (a
   `Win32Surface`, found by `gesher_window_hwnd`); other `ANativeWindow`s give
   `EGL_BAD_NATIVE_WINDOW`; pixmap surfaces are passed through to ANGLE and
@@ -557,13 +633,14 @@ waits for Activity windows; see "After that" for what is left._
 
 ### After that (not started)
 
-- `ANativeActivity` once Activities have windows (above), and the remaining
-  shim gaps as real apps need them.
+- The remaining shim gaps as real apps need them; `ASurfaceControl`,
+  `AHardwareBuffer`, `ASurfaceTexture`; RGB_565 windows.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery
   to a running thread (suspend, redirect to a handler trampoline, resume).
 - Real-world APKs through gesher-app: the NDK samples (hello-jni,
-  hello-libs), and C++ code registering natives from tables.
+  hello-libs, native-activity: `AChoreographer_postFrameCallback` and an
+  RGBX_8888 `ANativeWindow_lock`), and C++ code registering natives from tables.
 - A correction to this file's earlier plan: JNI was not "System V on both
   sides already". ART's `JNIEnv`/`JavaVM` tables are Microsoft ABI
   (`GESHER_JNI` only wraps natives the framework registers); the bridge's
