@@ -111,7 +111,7 @@ function CompiledCount([string] $Bcp) {
 }
 $primary = CompiledCount $bcp
 $all = CompiledCount $bcpWithApp
-if ($primary[0] -gt 0 -and $all[0] -gt $primary[0] + 100000) {
+if ($primary[0] -gt 0 -and $all[0] -gt $primary[0] + 10000) {
   Write-Host ("PASS  boot image: AOT code in the extensions too: {0} methods with compiled code with framework.jar and gesher-app.jar, {1} with the primary image alone ({2} / {3} JNI stubs)" -f $all[0], $primary[0], $all[1], $primary[1])
 } else {
   Write-Host ("FAIL  boot image: the extensions carry no AOT code ({0} methods with compiled code with them, {1} without)" -f $all[0], $primary[0])

@@ -95,17 +95,24 @@ nterp is about 5x the switch interpreter on this benchmark's total, the JIT
 about 9x (the full process wall time, which includes startup, 4791 -> 1233 ->
 864 ms). The checksum is identical in all three modes.
 
-## Not done yet
-- **Deep-recursion `StackOverflowError` under nterp and the JIT.** The stack
-  overflow probe faults correctly, but ART's handler runs on the faulting
-  thread's own near-exhausted stack (Windows vectored exception handlers have
-  no equivalent of `sigaltstack`), so throwing the error overflows the stack
-  for real (`STATUS_STACK_OVERFLOW`). The switch interpreter and
-  interpret-only mode recover (bounded by the managed stack check); the
-  `gesher.Stress` "so" check runs only there. An alternate signal stack is the
-  fix.
-- **Compiled JNI stubs.** Native methods use the generic JNI trampoline under
-  AOT and the JIT; the JNI macro assembler still reaches `Thread*` through
-  `%gs` (ADR 0033).
-- **AOT for the extensions** (framework.jar, gesher-app.jar) and an app image.
-- **Dual-mapped JIT code cache** (W^X); the single RWX mapping is used.
+## Status and next steps (stack track, ADR 0036)
+Verified in CI on windows-2022 and windows-2025 plus package and e2e (ci run
+40134720336, 23bd046):
+- [x] Deep recursion: `StackOverflowError` caught and recovered from under
+      switch, interpret-only, nterp and the JIT (app, boot AOT and native-call
+      recursion, 4 rounds, main thread, new threads, two at once).
+- [x] Compiled JNI stubs: 844 AOT JNI stubs in the boot image; the JIT
+      compiles app natives' stubs (`gesher.JniStubs`).
+- [x] Placeholder mappings and executable oat views (`mman_probe`, 26
+      checks; 60-boot-image: oat code mapped as views, none copied).
+- [x] Dual-mapped (W^X) JIT code cache.
+- [x] Math entrypoints against StrictMath in the stress test, every mode.
+
+In progress (not CI-verified yet):
+- AOT for the extensions (framework.jar, gesher-app.jar; boot-image.yml
+  `-ExtensionFilter speed`), checked by 60-boot-image.
+- Without placeholder mappings, the JIT falls back to its single mapping
+  (patch 0017's `memfd_create` returns ENOSYS), checked by 70-codegen.
+
+Next: an app image for the app's own classes; startup numbers with the
+compiled extensions in docs/boot-image.md.
