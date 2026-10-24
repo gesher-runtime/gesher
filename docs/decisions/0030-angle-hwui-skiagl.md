@@ -110,5 +110,10 @@ Option 2.
 - Not available on GL: TextureView layers (DeferredLayerUpdater), hardware
   bitmaps, HardwareBufferRenderer, WebView functors, the persistent shader
   cache and the device's GPU memory budget. Vulkan is not built.
-- What CI verifies runs on WARP (the runners have no GPU); a real adapter is
-  ANGLE's default and untested.
+- What CI verifies runs on WARP (the runners have no GPU; their "hardware"
+  adapter is the Microsoft Basic Render Driver); a real adapter is ANGLE's
+  default and untested. ci run 40047748570 (both runners): the SkiaGL frame
+  of a RenderNode tree with a child node, text and a bitmap equals the CPU
+  pipeline's (glReadPixels and PrintWindow with PW_RENDERFULLCONTENT), chosen
+  by the environment variable and by the system property; without ANGLE the
+  CPU pipeline renders.
