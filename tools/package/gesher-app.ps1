@@ -180,11 +180,25 @@ $started = @()
 try {
   $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
     -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
+  # A process that opens /dev/binder before binderd's pipe exists gets no driver at all
+  # (libbinder's ProcessState): wait for the pipe (up to 15 s).
+  $pipe = "\\.\pipe\gesher-binder-$env:GESHER_BINDER"
+  for ($i = 0; $i -lt 150 -and -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains $pipe); $i++) {
+    Start-Sleep -Milliseconds 100
+  }
   $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
     -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
   $started += Start-Process $dalvikvm -PassThru -NoNewWindow `
     -ArgumentList ($dvm + 'com.gesher.server.SystemServer', (NoDrive $apkFull)) `
     -RedirectStandardOutput "$logs/run-system_server.out" -RedirectStandardError "$logs/run-system_server.log"
+  # The app process gets no service manager if it starts before servicemanager is the
+  # context manager: wait until the system server has registered its services (90 s).
+  $server = $started[-1]
+  for ($i = 0; $i -lt 900 -and -not $server.HasExited; $i++) {
+    $text = "$(Get-Content -Raw "$logs/run-system_server.log" -ErrorAction SilentlyContinue)$(Get-Content -Raw "$logs/run-system_server.out" -ErrorAction SilentlyContinue)"
+    if ($text.Contains('with servicemanager')) { break }
+    Start-Sleep -Milliseconds 100
+  }
   & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (NoDrive $apkFull)
   $code = $LASTEXITCODE
   if ($code -ne 0) { Write-Host "gesher-app: the system server's logs are in $logs" }
