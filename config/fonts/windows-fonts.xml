@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Gesher: fallback families made of the fonts Windows has, installed as
+    $ANDROID_ROOT/etc/windows-fonts.xml (docs/fonts.md,
+    docs/decisions/0044-rtl-scripts-and-locale.md).
+
+    The files are read in place from the Windows fonts folder (%WINDIR%\Fonts,
+    or $GESHER_WINDOWS_FONTS), never copied or shipped. com.gesher.app.fonts.
+    SystemFontMap parses this file with FontListParser, as fonts.xml, with that
+    folder as the font directory, and appends its families to fonts.xml's
+    fallback list: they serve what the bundled fonts do not cover. A file that
+    is missing (an older Windows, an optional font feature not installed) is
+    left out, and a family left with no font is dropped, as on a device.
+
+    Same format as fonts.xml. A family holds one font per weight and style, so
+    alternatives (Nirmala.ttc or Nirmala.ttf, Yu Gothic or Meiryo) are families
+    of their own; the first one present wins.
+-->
+<familyset version="23">
+    <!-- CJK, in fonts.xml's order: Simplified Chinese, Traditional Chinese, Japanese, Korean. -->
+    <family lang="zh-Hans">
+        <font weight="400" style="normal" index="0" postScriptName="MicrosoftYaHei">msyh.ttc</font>
+        <font weight="700" style="normal" index="0" postScriptName="MicrosoftYaHei-Bold">msyhbd.ttc</font>
+    </family>
+    <family lang="zh-Hant,zh-Bopo">
+        <font weight="400" style="normal" index="0" postScriptName="MicrosoftJhengHeiRegular">msjh.ttc</font>
+        <font weight="700" style="normal" index="0" postScriptName="MicrosoftJhengHeiBold">msjhbd.ttc</font>
+    </family>
+    <family lang="ja">
+        <font weight="400" style="normal" index="0" postScriptName="YuGothic-Regular">YuGothR.ttc</font>
+        <font weight="700" style="normal" index="0" postScriptName="YuGothic-Bold">YuGothB.ttc</font>
+    </family>
+    <family lang="ja">
+        <font weight="400" style="normal" index="0" postScriptName="Meiryo">meiryo.ttc</font>
+        <font weight="700" style="normal" index="0" postScriptName="Meiryo-Bold">meiryob.ttc</font>
+    </family>
+    <family lang="ja">
+        <font weight="400" style="normal" index="0" postScriptName="MS-Gothic">msgothic.ttc</font>
+    </family>
+    <family lang="ko">
+        <font weight="400" style="normal" postScriptName="MalgunGothic">malgun.ttf</font>
+        <font weight="700" style="normal" postScriptName="MalgunGothicBold">malgunbd.ttf</font>
+    </family>
+    <!-- CJK extension B and later planes. -->
+    <family lang="zh-Hans">
+        <font weight="400" style="normal" postScriptName="SimSun-ExtB">simsunb.ttf</font>
+    </family>
+    <family lang="zh-Hans">
+        <font weight="400" style="normal" postScriptName="SimSun-ExtG">SimsunExtG.ttf</font>
+    </family>
+
+    <!-- Color emoji (COLR/CPAL), then symbols. -->
+    <family lang="und-Zsye">
+        <font weight="400" style="normal" postScriptName="SegoeUIEmoji">seguiemj.ttf</font>
+    </family>
+    <family lang="und-Zsym">
+        <font weight="400" style="normal" postScriptName="SegoeUISymbol">seguisym.ttf</font>
+    </family>
+
+    <!-- Scripts the bundled fonts leave out. -->
+    <family lang="und-Beng,und-Guru,und-Gujr,und-Orya,und-Taml,und-Telu,und-Knda,und-Mlym,und-Sinh,und-Olck,und-Sora,und-Deva">
+        <font weight="400" style="normal" index="0" postScriptName="NirmalaUI">Nirmala.ttc</font>
+        <font weight="700" style="normal" index="1" postScriptName="NirmalaUI-Bold">Nirmala.ttc</font>
+    </family>
+    <family lang="und-Beng,und-Guru,und-Gujr,und-Orya,und-Taml,und-Telu,und-Knda,und-Mlym,und-Sinh,und-Olck,und-Sora,und-Deva">
+        <font weight="400" style="normal" postScriptName="NirmalaUI">Nirmala.ttf</font>
+        <font weight="700" style="normal" postScriptName="NirmalaUI-Bold">NirmalaB.ttf</font>
+    </family>
+    <family lang="und-Laoo,und-Khmr,und-Bugi,und-Thai">
+        <font weight="400" style="normal" postScriptName="LeelawadeeUI">LeelawUI.ttf</font>
+        <font weight="700" style="normal" postScriptName="LeelawadeeUI-Bold">LeelaUIb.ttf</font>
+    </family>
+    <family lang="und-Ethi,und-Nkoo,und-Tfng,und-Vaii,und-Osma,und-Adlm">
+        <font weight="400" style="normal" postScriptName="Ebrima">ebrima.ttf</font>
+        <font weight="700" style="normal" postScriptName="Ebrima-Bold">ebrimabd.ttf</font>
+    </family>
+    <family lang="und-Cher,und-Cans,und-Osge">
+        <font weight="400" style="normal" postScriptName="Gadugi">gadugi.ttf</font>
+        <font weight="700" style="normal" postScriptName="Gadugi-Bold">gadugib.ttf</font>
+    </family>
+    <family lang="und-Mymr">
+        <font weight="400" style="normal" postScriptName="MyanmarText">mmrtext.ttf</font>
+        <font weight="700" style="normal" postScriptName="MyanmarText-Bold">mmrtextb.ttf</font>
+    </family>
+    <family lang="und-Tibt">
+        <font weight="400" style="normal" postScriptName="MicrosoftHimalaya">himalaya.ttf</font>
+    </family>
+    <family lang="und-Mong">
+        <font weight="400" style="normal" postScriptName="MongolianBaiti">monbaiti.ttf</font>
+    </family>
+    <family lang="und-Yiii">
+        <font weight="400" style="normal" postScriptName="MicrosoftYiBaiti">msyi.ttf</font>
+    </family>
+    <family lang="und-Java">
+        <font weight="400" style="normal" postScriptName="JavaneseText">javatext.ttf</font>
+    </family>
+    <family lang="und-Talu">
+        <font weight="400" style="normal" postScriptName="MicrosoftNewTaiLue">ntailu.ttf</font>
+        <font weight="700" style="normal" postScriptName="MicrosoftNewTaiLue-Bold">ntailub.ttf</font>
+    </family>
+    <family lang="und-Tale">
+        <font weight="400" style="normal" postScriptName="MicrosoftTaiLe">taile.ttf</font>
+        <font weight="700" style="normal" postScriptName="MicrosoftTaiLe-Bold">taileb.ttf</font>
+    </family>
+    <family lang="und-Phag">
+        <font weight="400" style="normal" postScriptName="MicrosoftPhagsPa">phagspa.ttf</font>
+        <font weight="700" style="normal" postScriptName="MicrosoftPhagsPa-Bold">phagspab.ttf</font>
+    </family>
+    <family lang="und-Thaa">
+        <font weight="400" style="normal" postScriptName="MVBoli">mvboli.ttf</font>
+    </family>
+    <family lang="und-Armn,und-Geor">
+        <font weight="400" style="normal" postScriptName="Sylfaen">sylfaen.ttf</font>
+    </family>
+
+    <!-- What is left: Segoe UI (Latin, Greek, Cyrillic, Armenian, Georgian, Arabic,
+         Hebrew, Lisu, N'Ko...), its historic scripts. -->
+    <family>
+        <font weight="400" style="normal" postScriptName="SegoeUI">segoeui.ttf</font>
+        <font weight="700" style="normal" postScriptName="SegoeUI-Bold">segoeuib.ttf</font>
+    </family>
+    <family lang="und-Brah,und-Copt,und-Egyp,und-Goth,und-Runr,und-Xsux,und-Phnx">
+        <font weight="400" style="normal" postScriptName="SegoeUIHistoric">seguihis.ttf</font>
+    </family>
+</familyset>

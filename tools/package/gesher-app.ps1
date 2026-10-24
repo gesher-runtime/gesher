@@ -140,6 +140,10 @@ Install (Join-Path $here 'build.prop') (Join-Path $root 'system/build.prop')
 if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
   foreach ($d in 'system/fonts', 'system/etc') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
   Install (Join-Path $here 'fonts/fonts.xml') (Join-Path $root 'system/etc/fonts.xml')
+  # Windows' own fonts as fallback families, used in place (ADR 0044).
+  if (Test-Path (Join-Path $here 'fonts/windows-fonts.xml')) {
+    Install (Join-Path $here 'fonts/windows-fonts.xml') (Join-Path $root 'system/etc/windows-fonts.xml')
+  }
   foreach ($f in Get-ChildItem (Join-Path $here 'fonts') -Filter *.ttf) {
     Install $f.FullName (Join-Path $root "system/fonts/$($f.Name)")
   }
