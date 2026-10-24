@@ -217,10 +217,13 @@ function WebAppCheck([string] $Name, [string[]] $Arguments, [string[]] $Expect, 
         $red = [GesherWebViewWin32]::Count($px, 0, $top, 0xff0000)
         $green = [GesherWebViewWin32]::Count($px, $top + 2, $top + $height - 2, 0x00ff00)
         $greenAbove = [GesherWebViewWin32]::Count($px, 0, $top, 0x00ff00)
-        Write-Host "INFO  webapp.apk read back ($($px[0])x$($px[1]), PW_RENDERFULLCONTENT): header red $($red[0]) of $($red[1]), asset WebView green $($green[0]) of $($green[1]), green above it $($greenAbove[0])"
+        # The blue 40x40 view over the asset WebView (rows 220-260 at the right edge).
+        $blue = [GesherWebViewWin32]::Count($px, 224, 256, 0x0000ff)
+        Write-Host "INFO  webapp.apk read back ($($px[0])x$($px[1]), PW_RENDERFULLCONTENT): header red $($red[0]) of $($red[1]), asset WebView green $($green[0]) of $($green[1]), green above it $($greenAbove[0]), blue view over it $($blue[0]) pixels"
         if ($red[0] -lt 0.95 * $red[1]) { $problems += 'the header is not red' }
         if ($green[0] -lt 0.9 * $green[1]) { $problems += 'the asset WebView is not green in the window' }
         if ($greenAbove[0] -gt 0) { $problems += 'green above the asset WebView' }
+        if ($blue[0] -lt 0.9 * 40 * 32) { $problems += "the view over the asset WebView does not show ($($blue[0]) blue pixels)" }
       }
     }
     if ($Extra) { $problems += & $Extra $hwnd (& $read) }
@@ -264,8 +267,9 @@ $webAppExpect = @(
   'gesher-webview: preview of file:///android_asset/index.html: 400x300, center #00ff00',
   'WebActivity setCookie: true',
   'WebActivity cookie: gesher=1',
+  'view(s) over the WebView cut out of its window, the first ',
   'WebActivity onDestroy')
-$webAppName = 'webapp.apk''s WebViews on WebView2 (child windows of its Win32 window at the views'' bounds, moved and hidden with them): an asset page whose script calls a @JavascriptInterface method, console, alert through WebChromeClient, shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript returns values, onPageFinished; a remote https page; cookies; the window read back with PW_RENDERFULLCONTENT'
+$webAppName = 'webapp.apk''s WebViews on WebView2 (child windows of its Win32 window at the views'' bounds, moved and hidden with them, a view over one cut out of it): an asset page whose script calls a @JavascriptInterface method, console, alert through WebChromeClient, shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript returns values, onPageFinished; a remote https page; cookies; the window read back with PW_RENDERFULLCONTENT'
 
 WebAppCheck "$webAppName (single process)" `
   @('com.gesher.app.Main', '--window', '--display', '400x800@160', (NoDrive "$Dir/webapp.apk")) `
