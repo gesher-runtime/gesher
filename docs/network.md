@@ -187,8 +187,8 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (handoff checkpoint, 2026-10-25)
 
-**Branch** `wip/net` (worktree C:/work/gesher-net), tip cfb2d2e (f8bdfc8 + a merge
-of origin/phase4/integration at 5561615). **No commit is CI-verified green yet.**
+**Branch** `wip/net` (worktree C:/work/gesher-net), f8bdfc8 + merges of
+origin/phase4/integration (5561615, then fe79e18 in 57e7385). **No commit is CI-verified green yet.**
 
 Done (all written, compiled in CI, run-time untested on Windows): BoringSSL,
 NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle (in core-libart),
@@ -209,15 +209,16 @@ tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
   and a static IPv4 address turns the adapter's DHCP off, cutting the runner
   off. Fixed in f8bdfc8: the test adds 2001:db8::77 (IPv6, SkipAsSource,
   ActiveStore) and turns DHCPv4 back on should it find it off.
-- ci **40138810234** (cfb2d2e, already merged with origin/phase4/integration
-  5561615): still in progress at the handoff (2026-10-24 ~22:45Z); nobody is
-  watching it. Re-attach with `gh run watch 40138810234 -R gesher-runtime/gesher
-  --exit-status --interval 120` (in the background). The 56-net.ps1 time limits
+- ci 40138810234 (cfb2d2e): cancelled while still building, superseded by the
+  run below at a tip that also carries the exec track.
+- 57e7385 merges origin/phase4/integration at fe79e18 (exec track); its ci run
+  is the one to read (id in the commit after it, or `gh run list -R
+  gesher-runtime/gesher -b wip/net -w ci -L 1`). The 56-net.ps1 time limits
   add up to ~48 min if every dalvikvm run times out, so a long test job is not
   by itself a hang; check the job's steps before cancelling it.
 
 **Next, exactly**
-1. Read run 40138810234's test logs (`gh run view 40138810234 -R
+1. Read that run's test logs (`gh run view <id> -R
    gesher-runtime/gesher --log-failed`): the `PASS|FAIL|INFO  net:` lines of
    tracks/56-net.ps1 and any other track's FAIL (core-libart now carries
    Conscrypt/OkHttp/BC; Digests.install defers to Conscrypt; `connectivity` is
