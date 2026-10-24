@@ -67,7 +67,8 @@ final class BroadcastController {
 
     Intent registerReceiver(IApplicationThread caller, String callerPackage,
             IIntentReceiver receiver, IntentFilter filter, int callingPid) {
-        if (receiver == null) return null;  // a query for sticky broadcasts: there are none
+        // A query for sticky broadcasts (devsvc: the system's, StickyBroadcasts).
+        if (receiver == null) return StickyBroadcasts.match(filter);
         ActivityTaskManagerService.ProcessRecord app = mAtm.callerProcess(callingPid);
         if (app == null) {
             SystemServer.log("registerReceiver from pid " + callingPid
@@ -88,7 +89,19 @@ final class BroadcastController {
             actions.append(filter.getAction(i));
         }
         SystemServer.log("registerReceiver from " + callerPackage + ": " + actions);
-        return null;  // no sticky broadcast matches
+        // A sticky broadcast the filter matches is returned and delivered (devsvc).
+        Intent sticky = StickyBroadcasts.match(filter);
+        if (sticky != null) {
+            try {
+                app.thread.scheduleRegisteredReceiver(receiver, sticky,
+                        android.app.Activity.RESULT_OK, null, null, false /* ordered */,
+                        true /* sticky */, true /* assumeDelivered */, 0,
+                        ActivityManager.PROCESS_STATE_TOP, Process.myUid(), "android");
+            } catch (RemoteException e) {
+                SystemServer.log("scheduleRegisteredReceiver (sticky): " + e);
+            }
+        }
+        return sticky;
     }
 
     void unregisterReceiver(IIntentReceiver receiver) {

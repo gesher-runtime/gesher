@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The device services' test app (devsvc track, tests/windows/tracks/57-devsvc.ps1): each
+     activity runs one service's checks and finishes, launched with gesher-app's
+     activity option: alarms (a manifest receiver and a service reached with the app's
+     process stopped, a listener, a repeating alarm, an alarm clock, a cancelled alarm), jobs
+     (a one-off and a periodic JobService), the clipboard with Windows', notifications
+     (toasts, a notification listener), wake locks and the battery, clock changes. No
+     action bar: no text to lay out while app processes have no system fonts. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.devsvc"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".AlarmActivity" android:exported="true" />
+        <activity android:name=".JobActivity" android:exported="true" />
+        <activity android:name=".ClipActivity" android:exported="true" />
+        <activity android:name=".NotifyActivity" android:exported="true" />
+        <activity android:name=".PowerActivity" android:exported="true" />
+        <activity android:name=".TimeActivity" android:exported="true" />
+        <receiver android:name=".AlarmReceiver" android:exported="false" />
+        <receiver android:name=".TimeReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".AlarmService" android:exported="false" />
+        <service
+            android:name=".TestJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+        <service
+            android:name=".TestListener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
