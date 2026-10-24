@@ -209,7 +209,12 @@ tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
   and a static IPv4 address turns the adapter's DHCP off, cutting the runner
   off. Fixed in f8bdfc8: the test adds 2001:db8::77 (IPv6, SkipAsSource,
   ActiveStore) and turns DHCPv4 back on should it find it off.
-- ci **40138810234** (cfb2d2e): running.
+- ci **40138810234** (cfb2d2e, already merged with origin/phase4/integration
+  5561615): still in progress at the handoff (2026-10-24 ~22:45Z); nobody is
+  watching it. Re-attach with `gh run watch 40138810234 -R gesher-runtime/gesher
+  --exit-status --interval 120` (in the background). The 56-net.ps1 time limits
+  add up to ~48 min if every dalvikvm run times out, so a long test job is not
+  by itself a hang; check the job's steps before cancelling it.
 
 **Next, exactly**
 1. Read run 40138810234's test logs (`gh run view 40138810234 -R
