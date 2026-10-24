@@ -220,8 +220,10 @@ needs: [framework-build.md](framework-build.md).
 
 - [x] Binder across processes: `/dev/binder` over Windows IPC, with
       `servicemanager`
-- [ ] The framework's own system services (PackageManager parses the APK,
-      ActivityManager starts the Activity) in place of gesher-app's stand-ins
+- [x] System services across processes in place of gesher-app's in-process
+      stand-ins: Gesher's own system server behind the framework's AIDL
+      interfaces and client side, with the framework's PackageParser2 (by
+      design not services.jar; ADRs 0019, 0046; the sub-boxes' ci runs)
   - [x] The APK parsed by the framework's PackageParser2 (ci run 39984218373)
   - [x] A system server process registering package, activity,
         activity_task, window, display and user with servicemanager;
