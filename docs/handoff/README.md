@@ -30,6 +30,10 @@ Merged so far:
   rerun: watch for it). ADR 0038.
 - webview: merged (verified at 9c610d6, ci 40139785905; Notes passes e2e).
   ADR 0041.
+- stack: merged (verified at 29c5255, ci 40141531509, which already
+  contained every merge above, so the integration tree after this merge is
+  the CI-verified one: 296 PASS lines per runner, up from 263 at 40135350639;
+  the "408" in older briefs counted differently). ADR 0036.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
