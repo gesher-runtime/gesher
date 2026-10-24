@@ -76,6 +76,11 @@ if ($code -eq 0 -and ($out -match 'wasapi: WASAPI shared mode on .+' -and $out -
   $failed++
 }
 
+# Media Foundation's decoders on this machine (Windows Server has Media
+# Foundation only as a feature): informational.
+$out = & "$Dir/media_probe.exe" mf 2>&1 | Out-String
+Write-Host "INFO  media: Media Foundation: $((($out -split "`n") | Where-Object { $_ -match '^mf: ' } | ForEach-Object { $_.Substring(4).Trim() }) -join '; ')"
+
 # --- The framework: mediaapp.apk (tests/apps/mediaapp) ---------------------------------
 if (Test-Path "$Dir/mediaapp.apk") {
   $bcpMedia = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'

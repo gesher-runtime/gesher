@@ -42,5 +42,5 @@ int RegisterAudioSystem(JNIEnv* env);
 
 }  // namespace gesher::media
 
-// libandroid_runtime's row (compat/framework/android_runtime.cc) calls this.
-int register_gesher_media(JNIEnv* env);
+// libandroid_runtime's row (compat/framework/android_runtime.cc) calls
+// android::register_gesher_media (audio_system_jni.cc).

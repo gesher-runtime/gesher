@@ -365,7 +365,12 @@ int RegisterAudioSystem(JNIEnv* env) {
 
 }  // namespace gesher::media
 
-int register_gesher_media(JNIEnv* env) {
+// In namespace android, as libandroid_runtime's table declares it.
+namespace android {
+int register_gesher_media(JNIEnv* env);
+}
+
+int android::register_gesher_media(JNIEnv* env) {
   gesher::media::SetVm(env);
   gesher::media::RegisterAudioSystem(env);
   gesher::media::RegisterAudioTrack(env);
