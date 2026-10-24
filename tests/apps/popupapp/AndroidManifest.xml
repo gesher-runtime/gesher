@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The popups test app (docs/graphics.md, "Dialogs, menus and other popups"): an
+     Activity with an action bar whose buttons open an AlertDialog, a Toast, the options
+     menu's overflow, a Spinner's dropdown, an Activity with a dialog theme and an Activity
+     on top of it in its task. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.popupapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/PopupTheme">
+        <activity
+            android:name=".PopupActivity"
+            android:label="@string/activity_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".DialogActivity"
+            android:label="@string/dialog_activity_label"
+            android:theme="@android:style/Theme.Material.Light.Dialog"
+            android:exported="false" />
+        <activity
+            android:name=".SecondActivity"
+            android:label="@string/second_activity_label"
+            android:exported="false" />
+    </application>
+</manifest>
