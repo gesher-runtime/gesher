@@ -28,19 +28,27 @@
 // DT_RELR's entry type; this elf.h predates it.
 using Elf64_Relr = uint64_t;
 
-// AArch64 e_machine and relocations (this elf.h may lack the aarch64 set).
+// AArch64 e_machine and relocations (this elf.h defines most, but guard each
+// in case the toolchain's headers differ).
 #ifndef EM_AARCH64
 #define EM_AARCH64 183
 #endif
 #ifndef R_AARCH64_ABS64
 #define R_AARCH64_ABS64 257
+#endif
+#ifndef R_AARCH64_GLOB_DAT
 #define R_AARCH64_GLOB_DAT 1025
+#endif
+#ifndef R_AARCH64_JUMP_SLOT
 #define R_AARCH64_JUMP_SLOT 1026
+#endif
+#ifndef R_AARCH64_RELATIVE
 #define R_AARCH64_RELATIVE 1027
-#define R_AARCH64_TLS_DTPMOD64 1028
-#define R_AARCH64_TLS_DTPREL64 1029
+#endif
+#ifndef R_AARCH64_TLS_TPREL64
 #define R_AARCH64_TLS_TPREL64 1030
-#define R_AARCH64_TLSDESC 1031
+#endif
+#ifndef R_AARCH64_IRELATIVE
 #define R_AARCH64_IRELATIVE 1032
 #endif
 
