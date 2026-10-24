@@ -32,7 +32,8 @@ public final class StandInWindowSession extends IWindowSession.Default {
         result.frames.frame.set(display);
         result.frames.displayFrame.set(display);
         result.frames.parentFrame.set(display);
-        result.mergedConfiguration.setConfiguration(DeviceProfile.configuration(),
+        // The caller's package's configuration (its app locales: locale track).
+        result.mergedConfiguration.setConfiguration(LocaleManagerService.configurationForCaller(),
                 new android.content.res.Configuration());
         result.insetsState.setDisplayFrame(display);
     }

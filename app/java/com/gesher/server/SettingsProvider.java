@@ -41,7 +41,24 @@ final class SettingsProvider extends ContentProvider {
     private final Map<String, Map<String, String>> mTables = new HashMap<>();
     private final ProviderInfo mInfo = new ProviderInfo();
 
+    /** The provider of this process (the system server's), for {@link #putSystem}. */
+    private static volatile SettingsProvider sInstance;
+
+    /**
+     * Sets a Settings.System value from the system server (locale track: TIME_12_24 when
+     * Windows' time format changes; ADR 0049).
+     */
+    static void putSystem(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        synchronized (p) {
+            p.mTables.get(SYSTEM).put(name, value);
+        }
+        SystemServer.log("settings: system " + name + " = " + value);
+    }
+
     SettingsProvider() {
+        sInstance = this;
         for (String table : new String[] {SYSTEM, SECURE, GLOBAL}) {
             mTables.put(table, new HashMap<>());
         }
