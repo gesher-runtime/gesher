@@ -64,6 +64,20 @@ public final class ActivityClientController extends IActivityClientController.De
         if (r != null) mAtm.activityDestroyed(r);
     }
 
+    /** After an ActivityRelaunchItem (locale track): the new instance reports its states. */
+    @Override
+    public void activityRelaunched(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) SystemServer.log("activityRelaunched: " + r.name());
+    }
+
+    /** Activity.recreate(): the app relaunches it by itself (a local transaction). */
+    @Override
+    public void activityLocalRelaunch(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) SystemServer.log("activityLocalRelaunch: " + r.name());
+    }
+
     @Override
     public void reportSizeConfigurations(IBinder token,
             SizeConfigurationBuckets sizeConfigurations) {
