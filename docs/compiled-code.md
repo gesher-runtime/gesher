@@ -97,7 +97,7 @@ about 9x (the full process wall time, which includes startup, 4791 -> 1233 ->
 
 ## Status and next steps (stack track, ADR 0036)
 Verified in CI on windows-2022 and windows-2025 plus package and e2e (ci run
-40134720336, 23bd046):
+40134720336, 23bd046; again in 40138006773):
 - [x] Deep recursion: `StackOverflowError` caught and recovered from under
       switch, interpret-only, nterp and the JIT (app, boot AOT and native-call
       recursion, 4 rounds, main thread, new threads, two at once).
@@ -108,11 +108,25 @@ Verified in CI on windows-2022 and windows-2025 plus package and e2e (ci run
 - [x] Dual-mapped (W^X) JIT code cache.
 - [x] Math entrypoints against StrictMath in the stress test, every mode.
 
-In progress (not CI-verified yet):
-- AOT for the extensions (framework.jar, gesher-app.jar; boot-image.yml
-  `-ExtensionFilter speed`), checked by 60-boot-image.
-- Without placeholder mappings, the JIT falls back to its single mapping
-  (patch 0017's `memfd_create` returns ENOSYS), checked by 70-codegen.
+Verified in ci run 40138006773 (1c158b4, both runners, package, e2e):
+- [x] AOT for the extensions (boot-image.yml `-ExtensionFilter speed`):
+      298,365 methods with compiled code with framework.jar and gesher-app.jar
+      on the boot class path (2,581 JNI stubs), 54,771 with the primary image
+      alone; the oat code is 5 executable views, 74.9 MB, none copied.
+      dex2oat: primary 2.7 s, framework.jar 8.8 s, gesher-app.jar 0.7 s;
+      boot-framework.oat is 75.7 MB.
+- [x] Without placeholder mappings (`GESHER_MMAP_NO_PLACEHOLDERS=1`) the JIT
+      takes its single mapping (patch 0017's `memfd_create` fails with
+      ENOSYS) and the stress test passes.
+- Startup with the compiled extensions (60-boot-image, median of 3):
+  lifecycle.apk to `Activity.onCreate` 312 / 340 ms with the image, 744 /
+  745 ms imageless (windows-2022 / 2025); before, with verify-only
+  extensions (run 40134720336, windows-2022), 254 ms vs 541 ms imageless.
+  Those runners were faster overall (benchmark totals 871 vs 1350 ms under
+  the switch interpreter), so the ratio to imageless is the fairer
+  comparison: 0.47 before, 0.42 / 0.46 now - no measurable startup cost from
+  the larger oat files, which are mapped, not read.
 
-Next: an app image for the app's own classes; startup numbers with the
-compiled extensions in docs/boot-image.md.
+Next (not part of this track's goal): an app image for the app's own
+classes; a JIT profile / `speed-profile` for framework.jar to shrink its
+75 MB oat file.
