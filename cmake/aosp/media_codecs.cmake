@@ -124,7 +124,8 @@ set(_fl "${_flac}/src/libFLAC")
 add_library(FLAC STATIC
   ${_fl}/bitmath.c ${_fl}/bitreader.c ${_fl}/bitwriter.c ${_fl}/cpu.c ${_fl}/crc.c
   ${_fl}/fixed.c ${_fl}/float.c ${_fl}/format.c ${_fl}/lpc.c ${_fl}/memory.c ${_fl}/md5.c
-  ${_fl}/stream_decoder.c ${_fl}/stream_encoder.c ${_fl}/stream_encoder_framing.c ${_fl}/window.c)
+  ${_fl}/stream_decoder.c ${_fl}/stream_encoder.c ${_fl}/stream_encoder_framing.c ${_fl}/window.c
+  ${_media_aosp}/flac/fopen_utf8.c)
 # compat/media/aosp/flac/config.h in place of external/flac's Linux one.
 target_include_directories(FLAC PUBLIC ${_flac}/include PRIVATE ${_media_aosp}/flac ${_fl}/include)
 target_compile_definitions(FLAC PUBLIC FLAC__NO_DLL PRIVATE HAVE_CONFIG_H FLAC__NO_MD5
