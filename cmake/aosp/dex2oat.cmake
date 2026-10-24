@@ -2,8 +2,8 @@
 # of: libart-compiler (art/compiler/Android.bp, the x86 and x86-64 code generators)
 # and libart-dex2oat. Built for Windows like dalvikvm, on the same libart, so
 # Gesher's boot image comes from the runtime that loads it (docs/boot-image.md,
-# ADR 0031). dalvikvm itself does not link the compiler: it runs with the JIT
-# off and keeps compat/art/compiler_standins.cc in its place.
+# ADR 0031). dalvikvm links libart-compiler too, for the JIT
+# (docs/compiled-code.md, ADR 0033).
 
 set(_cc "${_art}/compiler")
 set(_d2o "${_art}/dex2oat")
@@ -67,6 +67,11 @@ target_include_directories(art_compiler PUBLIC ${_cc} ${_art}/disassembler)
 target_compile_definitions(art_compiler PUBLIC ART_ENABLE_CODEGEN_x86 ART_ENABLE_CODEGEN_x86_64)
 target_link_libraries(art_compiler PUBLIC art_runtime)
 add_dependencies(art_compiler art_asm_support_headers)
+
+# The JIT: the runtime's jit_create() is libart-compiler's (jit/jit_compiler.cc).
+target_link_libraries(dalvikvm PRIVATE art_compiler)
+# libart-compiler's graph visualizer asks for a disassembler (dex2oat's stand-in).
+target_sources(dalvikvm PRIVATE ${CMAKE_SOURCE_DIR}/compat/art/disassembler_standin.cc)
 
 # --- libart-dex2oat ---------------------------------------------------------
 art_operator_srcs(dex2oat_ops art/dex2oat linker/image_writer.h)

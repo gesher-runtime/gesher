@@ -9,13 +9,16 @@
 // emits for C and C++; ART's assembly stubs have none, so a trace stops at
 // the first stub frame.
 //
-// GESHER_TRACE_FAULTS=1 also reports every access violation when it is
-// raised, before any handler sees it: for faults that something handles by
+// GESHER_TRACE_FAULTS=1 also reports every access violation that
+// fault_signals.cc does not handle (stack growth, faults ART takes) when it is
+// raised, before other handlers see it: for faults that something handles by
 // ending the process, which would otherwise leave no report.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
+
+extern "C" void gesher_install_fault_signals(void);
 
 namespace {
 
@@ -93,6 +96,9 @@ struct Installer {
   Installer() {
     SetUnhandledExceptionFilter(ReportCrash);
     if (getenv("GESHER_TRACE_FAULTS") != nullptr) AddVectoredExceptionHandler(1, TraceFault);
+    // Ahead of TraceFault: stack growth and faults ART handles (implicit null
+    // and stack overflow checks) are not reported (fault_signals.cc).
+    gesher_install_fault_signals();
   }
 } installer;
 

@@ -373,6 +373,13 @@ int mprotect(void* addr, size_t length, int prot) {
   }
   DWORD old;
   if (!VirtualProtect(addr, length, protection, &old)) {
+    // Reserved, not committed: a thread stack's pages below its committed
+    // part (mmap always commits). ART protects the bottom of each stack for
+    // its implicit stack overflow checks (fault_signals.cc).
+    if (VirtualQuery(addr, &info, sizeof(info)) != 0 && info.State == MEM_RESERVE &&
+        info.RegionSize >= length && VirtualAlloc(addr, length, MEM_COMMIT, protection) != nullptr) {
+      return 0;
+    }
     errno = EACCES;
     return -1;
   }
