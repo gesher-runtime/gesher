@@ -84,7 +84,8 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
   android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager \
   android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
-  com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService
+  com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
+  android.app.ISearchManager
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the

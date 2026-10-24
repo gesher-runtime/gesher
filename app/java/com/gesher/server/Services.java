@@ -128,6 +128,8 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
+                new DeviceServices.SearchService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new DeviceServices.ClipboardService()).asBinder());
         return services;
