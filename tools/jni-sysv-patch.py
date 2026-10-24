@@ -58,6 +58,9 @@ CASTS = [
 ]
 
 
+OVERLOAD = re.compile(r'\(\s*void\s*\*\s*\)\s*(static_cast\s*<[^<>]*>\s*\(\s*[A-Za-z_]\w*\s*\))')
+
+
 def table_end(text, start):
     """The index just past the brace that closes the one opened at text[start - 1]."""
     depth = 1
@@ -92,6 +95,8 @@ def rewrite(path, text):
                 return 'GESHER_JNI_SYSV(' + f.group(1) + ')'
             return 'GESHER_JNI(' + f.group(1) + ')'
 
+        # An overload picked by a cast: `(void*)static_cast<sig>(fn)`.
+        body = OVERLOAD.sub(lambda m: 'GESHER_JNI(' + m.group(1) + ')', body)
         for cast in CASTS:
             body = cast.sub(entry, body)
         if re.search(r'void\s*\*\s*>?\s*\)', body):
