@@ -159,15 +159,15 @@ if ($bench.Count -ge 2) {
 $runTestArgs = @{ '080-oom-throw' = @('-Xmx16m') }
 foreach ($dex in Get-ChildItem "$Dir/art-*.dex" -ErrorAction SilentlyContinue | Sort-Object Name) {
   $test = $dex.BaseName.Substring(4)
-  $expected = (Get-Content -Raw "$Dir/art-$test.expected-stdout.txt") -replace "`r", ''
+  $expected = (([string](Get-Content -Raw "$Dir/art-$test.expected-stdout.txt")) -replace "`r", '').TrimEnd()
   $extra = if ($runTestArgs.ContainsKey($test)) { $runTestArgs[$test] } else { @() }
   $results = [ordered]@{}
   foreach ($name in @($modes.Keys)) {
     if ($name -eq 'interpret-only') { continue }
     $m = $modes[$name]
     $rr = RunDalvikvm (@("-Xbootclasspath:$bcp", $image) + $m.Args + $extra + @('-cp', (NoDrive $dex.FullName), 'Main')) $m.Env
-    $actual = $rr.Stdout -replace "`r", ''
-    $results[$name] = @{ Ok = ($rr.Exit -eq 0 -and $actual.TrimEnd() -eq $expected.TrimEnd()); Exit = $rr.Exit; Out = $actual; Err = $rr.Err }
+    $actual = ([string]$rr.Stdout) -replace "`r", ''
+    $results[$name] = @{ Ok = ($rr.Exit -eq 0 -and $actual.TrimEnd() -eq $expected); Exit = $rr.Exit; Out = $actual; Err = $rr.Err }
   }
   if (-not $results['switch'].Ok) {
     Write-Host ('INFO  codegen: art run-test {0} does not pass under the switch interpreter either (exit 0x{1:X8}); not counted' -f $test, $results['switch'].Exit)
