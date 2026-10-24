@@ -26,7 +26,6 @@ constexpr wchar_t kParkingClass[] = L"GesherWebViewParking";
 std::once_flag g_thread_once;
 HWND g_task_window = nullptr;  // a message-only window: posted tasks
 HWND g_parking = nullptr;      // a hidden top-level window: parked containers
-DWORD g_thread_id = 0;
 
 void ReportGlobal(int32_t type, int64_t id, int32_t arg, const std::wstring& a);
 
@@ -78,7 +77,6 @@ DWORD WINAPI ThreadMain(void* ready) {
   g_parking = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kParkingClass,
                               L"Gesher WebView (parked)", WS_POPUP | WS_CLIPCHILDREN, -32000,
                               -32000, 64, 64, nullptr, nullptr, instance, nullptr);
-  g_thread_id = GetCurrentThreadId();
   // The app windows' moves (for NotifyParentWindowPositionChanged): out of
   // context, so they come through this thread's message loop.
   SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr,

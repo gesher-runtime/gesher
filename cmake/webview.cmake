@@ -15,7 +15,8 @@ set(_wv ${CMAKE_SOURCE_DIR}/compat/webview)
 # initializer, which an archive member nothing refers to would lose.
 add_library(gesher_webview OBJECT ${_wv}/webview_host.cc ${_wv}/webview2_loader.cc
   ${_wv}/webview_jni.cc)
-target_include_directories(gesher_webview PRIVATE ${_wv} ${WEBVIEW2_INCLUDE_DIRS})
+target_include_directories(gesher_webview PRIVATE ${_wv})
+target_include_directories(gesher_webview SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
 target_link_libraries(gesher_webview PRIVATE nativehelper gesher_posix)
 target_compile_options(gesher_webview PRIVATE -Wall -Werror -Wno-unused-parameter)
 set(_wv_libs ole32 oleaut32 uuid shlwapi user32 gdi32 advapi32)

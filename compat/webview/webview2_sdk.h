@@ -17,7 +17,11 @@
 #include <ole2.h>
 #include <shlwapi.h>
 
+// MIDL's output: #pragma warning and the like.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-pragmas"
 #include "WebView2.h"
+#pragma clang diagnostic pop
 
 namespace gesher::webview {
 
