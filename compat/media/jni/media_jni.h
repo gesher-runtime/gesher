@@ -59,6 +59,7 @@ int RegisterSoundPool(JNIEnv* env);
 // libmedia_jni's other classes: MediaMetadataRetriever, MediaExtractor,
 // MediaCodec, ... (media_jni_others.cc).
 int RegisterMediaJniOthers(JNIEnv* env);
+int RegisterMediaExtractor(JNIEnv* env);
 
 }  // namespace gesher::media
 

@@ -5,6 +5,7 @@
 package com.gesher.mediaapp;
 
 import android.app.Activity;
+import android.content.res.AssetFileDescriptor;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
@@ -12,17 +13,29 @@ import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTimestamp;
 import android.media.AudioTrack;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
+import android.net.Uri;
+import android.media.SoundPool;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -46,6 +59,23 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <li>AudioManager: STREAM_MUSIC at volume 7 of 15: 700 Hz, 0.3 s, at 7/15 of the level
  * <li>(none: a notification tone while the ringer is silent)
  * <li>AudioManager: STREAM_NOTIFICATION, the ringer back to normal: 1300 Hz, 0.3 s
+ * <li>MediaPlayer.create, a raw MP3: 523 Hz, 0.8 s
+ * <li>MediaPlayer, an M4A (AAC) asset: 587 Hz, 0.8 s
+ * <li>MediaPlayer, a raw Ogg Vorbis: 659 Hz, 0.8 s
+ * <li>MediaPlayer, an Opus asset: 698 Hz, 0.8 s
+ * <li>MediaPlayer, a FLAC asset: 784 Hz, 0.8 s
+ * <li>MediaPlayer, a WAV by path: 880 Hz, 0.8 s
+ * <li>MediaPlayer, an ADTS AAC asset: 988 Hz, 0.8 s
+ * <li>MediaPlayer, a G.711 mu-law WAV asset: 1047 Hz, 0.8 s
+ * <li>MediaPlayer, 24-bit WAV: 330 Hz, 0.3 s; paused; then from 1.5 s of 2 s: 330 Hz, 0.5 s
+ * <li>MediaPlayer, looping the WAV twice: 880 Hz, 1.6 s
+ * <li>MediaPlayer, http: 1175 Hz, 0.8 s
+ * <li>SoundPool, the WAV: 880 Hz, 0.8 s; the Vorbis tone at rate 2: 1318 Hz, 0.4 s
+ * <li>Ringtone, the default notification sound (Gesher's): 1319 Hz, dying away over 0.6 s
+ * <li>AAudio, a data callback stream (float stereo): 1397 Hz, 0.5 s
+ * <li>AAudio, a blocking-write stream (16-bit mono 22050 Hz): 1480 Hz, 0.4 s
+ * <li>OpenSL ES, a buffer queue player at -6 dB: 1568 Hz, 0.6 s, half the level
+ * <li>OpenSL ES, a player of the raw Ogg Vorbis by file descriptor: 659 Hz, 0.8 s
  * </ol>
  */
 public class MediaActivity extends Activity {
@@ -63,6 +93,9 @@ public class MediaActivity extends Activity {
         try {
             audioTrack(new Handler(events.getLooper()));
             audioManager(new Handler(events.getLooper()));
+            mediaPlayer(new Handler(events.getLooper()));
+            ringtones();
+            ndkAudio();
             say("done");
         } catch (Throwable t) {
             say("failed: " + t);
@@ -409,5 +442,306 @@ public class MediaActivity extends Activity {
         Thread.sleep(500);
         say("audiomanager music active: before " + before + ", playing " + during + ", after "
                 + am.isMusicActive());
+    }
+
+    // --- MediaPlayer, MediaMetadataRetriever, SoundPool --------------------------------------
+
+    /** Runs `c` on the thread of `h` (MediaPlayer and SoundPool post events to its looper). */
+    static <T> T on(Handler h, Callable<T> c) throws Exception {
+        FutureTask<T> f = new FutureTask<>(c);
+        h.post(f);
+        return f.get(10, TimeUnit.SECONDS);
+    }
+
+    /** A player's events, counted. */
+    static final class Events {
+        final CountDownLatch prepared = new CountDownLatch(1);
+        final CountDownLatch completed = new CountDownLatch(1);
+        final CountDownLatch seeked = new CountDownLatch(1);
+        final List<String> errors = Collections.synchronizedList(new ArrayList<>());
+
+        void attach(MediaPlayer mp) {
+            mp.setOnPreparedListener(p -> prepared.countDown());
+            mp.setOnCompletionListener(p -> completed.countDown());
+            mp.setOnSeekCompleteListener(p -> seeked.countDown());
+            mp.setOnErrorListener((p, what, extra) -> {
+                errors.add(what + "/" + extra);
+                return true;
+            });
+        }
+    }
+
+    /** Plays a prepared player to its end; its duration and its position at the end. */
+    static String playToEnd(MediaPlayer mp, Events ev) throws InterruptedException {
+        int duration = mp.getDuration();
+        mp.start();
+        boolean playing = mp.isPlaying();
+        boolean done = ev.completed.await(6, TimeUnit.SECONDS);
+        String r = "duration " + (Math.abs(duration - 800) <= 60 ? "ok" : "bad " + duration)
+                + ", playing " + playing + ", completed " + done + ", at end "
+                + (Math.abs(mp.getCurrentPosition() - duration) <= 60 ? "ok" : "bad "
+                        + mp.getCurrentPosition())
+                + (ev.errors.isEmpty() ? "" : ", errors " + ev.errors);
+        mp.release();
+        return r;
+    }
+
+    void mediaPlayer(Handler handler) throws Exception {
+        // 9. MediaPlayer.create (a raw resource, prepared): MP3.
+        {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, () -> MediaPlayer.create(this, R.raw.tone_mp3));
+            if (mp == null) {
+                say("mediaplayer mp3 (create, raw): create failed");
+            } else {
+                ev.attach(mp);
+                say("mediaplayer mp3 (create, raw): " + playToEnd(mp, ev));
+            }
+        }
+        Thread.sleep(GAP_MS);
+        // 10-13, 15-16. From assets and raw resources, prepareAsync.
+        String[][] files = {
+            {"aac (m4a, asset)", "tone_aac.m4a"},
+            {"vorbis (ogg, raw)", "raw:" + R.raw.tone_vorbis},
+            {"opus (asset)", "tone_opus.opus"},
+            {"flac (asset)", "tone_flac.flac"},
+            {"wav (file path)", "file:tone_wav"},
+            {"aac (adts, asset)", "tone_adts.aac"},
+            {"g711 mu-law (wav, asset)", "tone_ulaw.wav"},
+        };
+        for (String[] f : files) {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, MediaPlayer::new);
+            ev.attach(mp);
+            try {
+                if (f[1].startsWith("raw:")) {
+                    try (AssetFileDescriptor afd = getResources().openRawResourceFd(
+                            Integer.parseInt(f[1].substring(4)))) {
+                        mp.setDataSource(afd);
+                    }
+                } else if (f[1].startsWith("file:")) {
+                    File out = new File(getFilesDir(), "tone_wav.wav");
+                    try (InputStream in = getResources().openRawResource(R.raw.tone_wav);
+                         FileOutputStream os = new FileOutputStream(out)) {
+                        in.transferTo(os);
+                    }
+                    mp.setDataSource(out.getPath());
+                } else {
+                    try (AssetFileDescriptor afd = getAssets().openFd(f[1])) {
+                        mp.setDataSource(afd);
+                    }
+                }
+                mp.prepareAsync();
+                boolean prepared = ev.prepared.await(5, TimeUnit.SECONDS);
+                say("mediaplayer " + f[0] + ": prepared " + prepared + ", " + playToEnd(mp, ev));
+            } catch (Exception e) {
+                say("mediaplayer " + f[0] + ": " + e);
+                mp.release();
+            }
+            Thread.sleep(GAP_MS);
+        }
+
+        // 17. Pause, resume and seek: 330 Hz, 2 s; 0.3 s, a pause, then from 1.5 s to the end.
+        {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, MediaPlayer::new);
+            ev.attach(mp);
+            try (AssetFileDescriptor afd = getAssets().openFd("long_wav24.wav")) {
+                mp.setDataSource(afd);
+            }
+            mp.prepare();
+            int duration = mp.getDuration();
+            mp.start();
+            Thread.sleep(300);
+            mp.pause();
+            int paused = mp.getCurrentPosition();
+            Thread.sleep(400);
+            int stillPaused = mp.getCurrentPosition();
+            boolean playingWhilePaused = mp.isPlaying();
+            mp.seekTo(1500);
+            boolean seeked = ev.seeked.await(3, TimeUnit.SECONDS);
+            int afterSeek = mp.getCurrentPosition();
+            mp.start();
+            boolean done = ev.completed.await(5, TimeUnit.SECONDS);
+            say("mediaplayer seek (24-bit wav): duration " + duration + ", paused at "
+                    + (paused >= 200 && paused <= 450 ? "ok" : "bad " + paused) + ", stays "
+                    + (Math.abs(stillPaused - paused) <= 20) + ", playing " + playingWhilePaused
+                    + ", seek complete " + seeked + " at " + afterSeek + ", completed " + done
+                    + (ev.errors.isEmpty() ? "" : ", errors " + ev.errors));
+            mp.release();
+        }
+        Thread.sleep(GAP_MS);
+
+        // 18. Looping: the WAV around twice, then to its end (880 Hz, 1.6 s in one piece).
+        {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, MediaPlayer::new);
+            ev.attach(mp);
+            try (AssetFileDescriptor afd = getResources().openRawResourceFd(R.raw.tone_wav)) {
+                mp.setDataSource(afd);
+            }
+            mp.prepare();
+            mp.setLooping(true);
+            mp.start();
+            Thread.sleep(1200);
+            boolean looping = mp.isLooping();
+            boolean stillPlaying = mp.isPlaying();
+            mp.setLooping(false);
+            boolean done = ev.completed.await(3, TimeUnit.SECONDS);
+            say("mediaplayer looping: looping " + looping + ", playing after 1.2 s " + stillPlaying
+                    + ", completed after setLooping(false) " + done);
+            mp.release();
+        }
+        Thread.sleep(GAP_MS);
+
+        // 19. http: Ogg Vorbis from the test's server (127.0.0.1:8765), 1175 Hz.
+        {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, MediaPlayer::new);
+            ev.attach(mp);
+            try {
+                mp.setDataSource("http://127.0.0.1:8765/tone_http.ogg");
+                mp.prepareAsync();
+                boolean prepared = ev.prepared.await(10, TimeUnit.SECONDS);
+                say("mediaplayer http (ogg): prepared " + prepared + ", " + playToEnd(mp, ev));
+            } catch (Exception e) {
+                say("mediaplayer http (ogg): " + e);
+                mp.release();
+            }
+        }
+        Thread.sleep(GAP_MS);
+
+        // Errors: start() before a data source; a file that is no media.
+        {
+            Events ev = new Events();
+            MediaPlayer mp = on(handler, MediaPlayer::new);
+            ev.attach(mp);
+            mp.start();
+            Thread.sleep(200);
+            String early = ev.errors.toString();
+            mp.reset();
+            File junk = new File(getFilesDir(), "junk.mp3");
+            try (FileOutputStream os = new FileOutputStream(junk)) {
+                os.write("this is not audio".getBytes());
+            }
+            String prepare;
+            try {
+                mp.setDataSource(junk.getPath());
+                mp.prepare();
+                prepare = "prepared";
+            } catch (IOException e) {
+                prepare = "IOException";
+            }
+            mp.release();
+            say("mediaplayer errors: start before setDataSource " + early + ", junk file "
+                    + prepare);
+        }
+
+        // MediaMetadataRetriever: the MP3's and the M4A's tags and durations.
+        for (String[] f : new String[][] {{"mp3", "raw"}, {"m4a", "tone_aac.m4a"},
+                {"flac", "tone_flac.flac"}}) {
+            MediaMetadataRetriever r = new MediaMetadataRetriever();
+            try (AssetFileDescriptor afd = f[1].equals("raw")
+                    ? getResources().openRawResourceFd(R.raw.tone_mp3) : getAssets().openFd(f[1])) {
+                r.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                String d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                say("retriever " + f[0] + ": title " + r.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_TITLE)
+                        + ", artist " + r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                        + ", album " + r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                        + ", mime " + r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                        + ", audio " + r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO)
+                        + ", duration " + (d != null && Math.abs(Integer.parseInt(d) - 800) <= 60
+                                ? "ok" : "bad " + d));
+            } catch (Exception e) {
+                say("retriever " + f[0] + ": " + e);
+            } finally {
+                r.release();
+            }
+        }
+
+        // 20-21. SoundPool: the WAV, then the Vorbis tone at twice its rate.
+        {
+            SoundPool pool = new SoundPool.Builder().setMaxStreams(2)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_GAME).build()).build();
+            CountDownLatch loaded = new CountDownLatch(2);
+            List<String> statuses = Collections.synchronizedList(new ArrayList<>());
+            on(handler, () -> {
+                pool.setOnLoadCompleteListener((p, id, status) -> {
+                    statuses.add(id + ":" + status);
+                    loaded.countDown();
+                });
+                return null;
+            });
+            int wav = pool.load(this, R.raw.tone_wav, 1);
+            int vorbis = pool.load(this, R.raw.tone_vorbis, 1);
+            boolean all = loaded.await(5, TimeUnit.SECONDS);
+            int s1 = pool.play(wav, 1f, 1f, 1, 0, 1f);
+            Thread.sleep(800 + GAP_MS);
+            int s2 = pool.play(vorbis, 1f, 1f, 1, 0, 2f);
+            Thread.sleep(400 + GAP_MS);
+            Collections.sort(statuses);
+            say("soundpool: loaded " + all + " " + statuses + ", streams " + (s1 > 0) + " "
+                    + (s2 > 0 && s2 != s1));
+            pool.release();
+        }
+    }
+
+    // --- Ringtone and RingtoneManager ---------------------------------------------------------
+
+    static String tail(Uri uri) {
+        return uri == null ? "null" : uri.getScheme() + ":.../" + uri.getLastPathSegment();
+    }
+
+    void ringtones() throws Exception {
+        say("ringtone defaults: ringtone " + tail(RingtoneManager.getActualDefaultRingtoneUri(
+                this, RingtoneManager.TYPE_RINGTONE)) + ", notification " + tail(
+                RingtoneManager.getActualDefaultRingtoneUri(this,
+                        RingtoneManager.TYPE_NOTIFICATION)) + ", alarm " + tail(
+                RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_ALARM)));
+        Ringtone r = RingtoneManager.getRingtone(this,
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
+        if (r == null) {
+            say("ringtone notification: none");
+            return;
+        }
+        r.play();
+        Thread.sleep(150);
+        boolean playing = r.isPlaying();
+        long end = System.currentTimeMillis() + 3000;
+        while (r.isPlaying() && System.currentTimeMillis() < end) Thread.sleep(20);
+        say("ringtone notification: playing " + playing + ", ended " + !r.isPlaying());
+        r.stop();
+        Thread.sleep(GAP_MS);
+    }
+
+    // --- AAudio and OpenSL ES (lib/x86_64/libmedia_ndk_test.so) ------------------------------
+
+    static native String aaudioCallbackTone(int hz, int ms);
+    static native String aaudioWriteTone(int hz, int ms);
+    static native String aaudioInput();
+    static native String openslQueueTone(int hz, int ms);
+    static native String openslFdPlay(int fd, long offset, long length);
+
+    void ndkAudio() throws Exception {
+        try {
+            System.loadLibrary("media_ndk_test");
+        } catch (UnsatisfiedLinkError e) {
+            say("ndk: no libmedia_ndk_test.so: " + e.getMessage());
+            return;
+        }
+        say("ndk aaudio callback: " + aaudioCallbackTone(1397, 500));
+        Thread.sleep(GAP_MS);
+        say("ndk aaudio write: " + aaudioWriteTone(1480, 400));
+        Thread.sleep(GAP_MS);
+        say("ndk aaudio input: " + aaudioInput());
+        say("ndk opensl queue: " + openslQueueTone(1568, 600));
+        Thread.sleep(GAP_MS);
+        try (AssetFileDescriptor afd = getResources().openRawResourceFd(R.raw.tone_vorbis)) {
+            say("ndk opensl fd: " + openslFdPlay(afd.getParcelFileDescriptor().getFd(),
+                    afd.getStartOffset(), afd.getLength()));
+        }
+        Thread.sleep(GAP_MS);
     }
 }

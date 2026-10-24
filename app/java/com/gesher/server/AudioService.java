@@ -66,6 +66,28 @@ public final class AudioService extends IAudioService.Default {
     private int mMode = AudioManager.MODE_NORMAL;
     private int mNextPiid = 1;
 
+    /**
+     * The default sounds, as settings (RINGTONE, NOTIFICATION_SOUND, ALARM_ALERT): Gesher's
+     * own in $ANDROID_ROOT/media/audio (compat/media/sounds), as file URIs. RingtoneManager
+     * and MediaPlayer.setDataSource(Context, Uri) resolve the default URIs to them; where a
+     * file is missing the setting stays unset and Ringtone falls back to framework-res's
+     * fallbackring. SettingsProvider fills its system table with these.
+     */
+    static void putDefaultSounds(java.util.Map<String, String> system) {
+        java.io.File audio = new java.io.File(android.os.Environment.getRootDirectory(),
+                "media/audio");
+        String[][] sounds = {
+            {android.provider.Settings.System.RINGTONE, "ringtones/Gesher_Ring.ogg"},
+            {android.provider.Settings.System.NOTIFICATION_SOUND,
+                    "notifications/Gesher_Notification.ogg"},
+            {android.provider.Settings.System.ALARM_ALERT, "alarms/Gesher_Alarm.ogg"},
+        };
+        for (String[] s : sounds) {
+            java.io.File f = new java.io.File(audio, s[1]);
+            if (f.isFile()) system.put(s[0], android.net.Uri.fromFile(f).toString());
+        }
+    }
+
     public AudioService() {
         for (int s = 0; s < ALIAS.length; s++) {
             AudioSystem.initStreamVolume(s, MIN[s], MAX[s]);

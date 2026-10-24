@@ -84,13 +84,42 @@ Write-Host "INFO  media: Media Foundation: $((($out -split "`n") | Where-Object 
 # --- The framework: mediaapp.apk (tests/apps/mediaapp) ---------------------------------
 if (Test-Path "$Dir/mediaapp.apk") {
   $bcpMedia = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+  # Gesher's default sounds, where $ANDROID_ROOT keeps them (the installer's
+  # gesher-app.ps1 does the same): the settings point the default ringtones at them.
+  if (Test-Path "$Dir/media/audio") {
+    New-Item -ItemType Directory -Force (Join-Path $root 'system/media') | Out-Null
+    Copy-Item -Recurse -Force "$Dir/media/audio" (Join-Path $root 'system/media')
+  }
   $appCapture = Join-Path $mediaTmp 'app'
   New-Item -ItemType Directory -Force $appCapture | Out-Null
+  # mediaapp's http check: tone_http.ogg from its APK, served on 127.0.0.1:8765
+  # by a listener in another process for the run.
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path "$Dir/mediaapp.apk"))
+  $httpFile = Join-Path $mediaTmp 'tone_http.ogg'
+  $entry = $zip.GetEntry('assets/tone_http.ogg')
+  if ($null -ne $entry) { [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $httpFile, $true) }
+  $zip.Dispose()
+  $httpServer = Start-Job -ArgumentList $httpFile -ScriptBlock {
+    param($file)
+    $bytes = [IO.File]::ReadAllBytes($file)
+    $l = [Net.HttpListener]::new()
+    $l.Prefixes.Add('http://127.0.0.1:8765/')
+    $l.Start()
+    while ($true) {
+      $c = $l.GetContext()
+      $c.Response.ContentType = 'audio/ogg'
+      $c.Response.ContentLength64 = $bytes.Length
+      $c.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      $c.Response.Close()
+    }
+  }
   $env:GESHER_AUDIO_CAPTURE = $appCapture
   $mediaOut = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpMedia" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/mediaapp.apk") 2>&1 | Out-String
   $mediaExit = $LASTEXITCODE
   Remove-Item Env:GESHER_AUDIO_CAPTURE
+  Stop-Job $httpServer; Remove-Job $httpServer -Force
   $appWav = Get-ChildItem $appCapture -Filter 'audio-*.wav' | Sort-Object LastWriteTime | Select-Object -Last 1
   Check 'media: AudioTrack in mediaapp.apk: streaming (short, byte, direct ByteBuffer writes) and static tracks, 8-bit/16-bit/float, mono and stereo, a marker, periodic notifications, loop points, setPlaybackRate, getTimestamp' {
     $global:LASTEXITCODE = $mediaExit
@@ -113,15 +142,60 @@ if (Test-Path "$Dir/mediaapp.apk") {
       'MediaTest audiomanager devices: 1 output(s) [type 2, sink true, name Gesher audio capture, 48000 Hz true, stereo true], 0 input(s)',
       'MediaTest audiomanager focus: granted 111, changes [A-2, A1, A-1]',
       'MediaTest audiomanager music active: before false, playing true, after false')
+  Check 'media: MediaPlayer in mediaapp.apk: MP3, AAC (M4A and ADTS), Ogg Vorbis, Opus, FLAC, WAV (16 and 24-bit, mu-law) from raw resources, assets, a path and http; prepare and prepareAsync, completion, pause, seekTo, looping, errors' {
+    $global:LASTEXITCODE = $mediaExit
+    $mediaOut
+  } @('MediaTest mediaplayer mp3 (create, raw): duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer aac (m4a, asset): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer vorbis (ogg, raw): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer opus (asset): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer flac (asset): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer wav (file path): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer aac (adts, asset): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer g711 mu-law (wav, asset): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer seek (24-bit wav): duration 2000, paused at ok, stays true, playing false, seek complete true at 1500, completed true',
+      'MediaTest mediaplayer looping: looping true, playing after 1.2 s true, completed after setLooping(false) true',
+      'MediaTest mediaplayer http (ogg): prepared true, duration ok, playing true, completed true, at end ok',
+      'MediaTest mediaplayer errors: start before setDataSource [-38/0], junk file IOException')
+  Check 'media: MediaMetadataRetriever and SoundPool in mediaapp.apk: tags, MIME types and durations of an MP3, an M4A and a FLAC; two sounds loaded and played, one at twice its rate' {
+    $global:LASTEXITCODE = $mediaExit
+    $mediaOut
+  } @('MediaTest retriever mp3: title Gesher Tone, artist Gesher, album Media Tests, mime audio/mpeg, audio yes, duration ok',
+      'MediaTest retriever m4a: title Gesher Tone, artist Gesher, album Media Tests, mime audio/mp4, audio yes, duration ok',
+      'MediaTest retriever flac: title Gesher Tone, artist Gesher, album Media Tests, mime audio/flac, audio yes, duration ok',
+      'MediaTest soundpool: loaded true [1:0, 2:0], streams true true')
+  Check 'media: Ringtone and RingtoneManager in mediaapp.apk: the default ringtone, notification and alarm sounds are Gesher''s; the default notification plays' {
+    $global:LASTEXITCODE = $mediaExit
+    $mediaOut
+  } @('MediaTest ringtone defaults: ringtone file:.../Gesher_Ring.ogg, notification file:.../Gesher_Notification.ogg, alarm file:.../Gesher_Alarm.ogg',
+      'MediaTest ringtone notification: playing true, ended true')
+  Check 'media: AAudio and OpenSL ES from an app''s NDK library (mediaapp.apk''s libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; no input streams yet' {
+    $global:LASTEXITCODE = $mediaExit
+    $mediaOut
+  } @('MediaTest ndk aaudio callback: rate 48000, channels 2, float 1, state AAUDIO_STREAM_STATE_STOPPED, burst ok, frames ok',
+      'MediaTest ndk aaudio write: rate 22050, written 8820, read all',
+      'MediaTest ndk aaudio input: AAUDIO_ERROR_UNAVAILABLE',
+      'MediaTest ndk opensl queue: playing 1, buffers left 0, taken 12, callbacks all',
+      'MediaTest ndk opensl fd: realize 0, duration ok, at end 1')
   if ($null -eq $appWav) {
     Write-Host "FAIL  media: mediaapp.apk's audio output was not captured"
     $failed++
   } else {
-    CheckSounds 'media: mediaapp.apk''s AudioTracks reach the output: each tone at its frequency, duration and level, at its stream''s volume (none while the ringer is silent)' $appWav.FullName @(
+    CheckSounds 'media: mediaapp.apk''s sounds reach the output (AudioTrack, AudioManager volumes, MediaPlayer, SoundPool): each tone at its frequency, duration and level, at its stream''s volume (none while the ringer is silent)' $appWav.FullName @(
       @(440, 0.5, 0.354), @(500, 0.4, 0.354), @(660, 0.4, 0.354), @(880, 0.4, 0.177),
       @(1000, 0.6, 0.354), @(1200, 0.3, 0.354),
       # AudioManager: music at 7/15; the silent ringer's notification is not heard.
-      @(700, 0.3, 0.165), @(1300, 0.3, 0.354))
+      @(700, 0.3, 0.165), @(1300, 0.3, 0.354),
+      # MediaPlayer: MP3, M4A, Vorbis, Opus, FLAC, WAV, ADTS, mu-law; the seek; the loop; http.
+      @(523, 0.8, 0.354), @(587, 0.8, 0.354), @(659, 0.8, 0.354), @(698, 0.8, 0.354),
+      @(784, 0.8, 0.354), @(880, 0.8, 0.354), @(988, 0.8, 0.354), @(1047, 0.8, 0.354),
+      @(330, 0.3, 0.354), @(330, 0.5, 0.354), @(880, 1.6, 0.354), @(1175, 0.8, 0.354),
+      # SoundPool: the WAV, then the Vorbis tone at rate 2.
+      @(880, 0.8, 0.354), @(1318, 0.4, 0.354),
+      # Ringtone: the default notification sound.
+      @(1319, 0.6),
+      # AAudio (callback, write), OpenSL ES (buffer queue at -6 dB, file descriptor).
+      @(1397, 0.5, 0.354), @(1480, 0.4, 0.354), @(1568, 0.6, 0.177), @(659, 0.8, 0.354))
   }
 } else {
   Write-Host 'INFO  media: mediaapp.apk not in the build output; its checks skipped'
