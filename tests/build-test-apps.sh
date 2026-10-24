@@ -38,7 +38,8 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
 cp "$work/dex-libcore/classes.dex" "$out/libcore-tests.dex"
 
 # Compiled code and nterp (tests/dex-codegen): the benchmark and the stress test.
-javac --release 11 -d "$work/classes-codegen" "$root"/tests/dex-codegen/*.java
+# JniStubs calls the natives of tests/native's gesher.JniTest (jni_test.so).
+javac --release 11 -sourcepath "$root/tests/native/java" -d "$work/classes-codegen" "$root"/tests/dex-codegen/*.java
 mkdir -p "$work/dex-codegen"
 java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-codegen" $(find "$work/classes-codegen" -name '*.class')
