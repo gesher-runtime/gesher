@@ -54,7 +54,7 @@ public static class GesherWebViewWin32 {
   [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi,
       uint usage, out IntPtr bits, IntPtr section, uint offset);
   // The direct children of class GesherWebView: "x,y wxh visible|hidden" in the
-  // parent's client coordinates, in creation order.
+  // parent's client coordinates, in z-order (topmost first).
   public static string[] WebViewWindows(IntPtr parent) {
     var found = new List<string>();
     EnumChildWindows(parent, (h, l) => {
@@ -68,7 +68,6 @@ public static class GesherWebViewWin32 {
           + (IsWindowVisible(h) ? "visible" : "hidden"));
       return true;
     }, IntPtr.Zero);
-    found.Reverse();  // EnumChildWindows goes top of the z-order first
     return found.ToArray();
   }
   // The client area with what DirectComposition shows (PW_RENDERFULLCONTENT):
@@ -191,7 +190,7 @@ function WebAppCheck([string] $Name, [string[]] $Arguments, [string[]] $Expect, 
       $asset = WebViewPlace $m.Groups[1].Value 'asset'
       $remote = WebViewPlace $m.Groups[1].Value 'remote'
       if ($windows.Count -ne 2) { $problems += "$($windows.Count) WebView2 windows" }
-      elseif ($windows[0] -ne "$asset visible" -or $windows[1] -ne "$remote visible") {
+      elseif ($windows -notcontains "$asset visible" -or $windows -notcontains "$remote visible") {
         $problems += "phase 1: windows '$($windows -join '; ')', views asset $asset remote $remote"
       }
     }
@@ -204,7 +203,9 @@ function WebAppCheck([string] $Name, [string[]] $Arguments, [string[]] $Expect, 
       $windows = [GesherWebViewWin32]::WebViewWindows($hwnd)
       Write-Host "INFO  webapp.apk phase 3: views $($m.Groups[1].Value); WebView2 windows: $($windows -join '; ')"
       $asset = WebViewPlace $m.Groups[1].Value 'asset'
-      if ($windows.Count -ne 2 -or $windows[0] -ne "$asset visible" -or -not $windows[1].EndsWith('hidden')) {
+      # (In z-order: a window moved with SetWindowPos(HWND_TOP) comes first.)
+      $hidden = @($windows | Where-Object { $_.EndsWith(' hidden') })
+      if ($windows.Count -ne 2 -or $windows -notcontains "$asset visible" -or $hidden.Count -ne 1) {
         $problems += "phase 3: windows '$($windows -join '; ')', asset view $asset"
       }
       $am = [regex]::Match($asset, '^(\d+),(\d+) (\d+)x(\d+)$')

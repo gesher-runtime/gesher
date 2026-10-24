@@ -86,6 +86,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private static final String TAG = GesherWebView.TAG;
     /** WebView.setWebContentsDebuggingEnabled. */
     static volatile boolean sDevTools;
+    /** The process's first page load is logged (tests/e2e: expectLog). */
+    private static boolean sFirstPage;
     private static final ExecutorService sRequests = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "WebView requests");
         t.setDaemon(true);
@@ -1291,6 +1293,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                     });
                 }
                 setProgress(100);
+                if (!sFirstPage) {
+                    sFirstPage = true;
+                    GesherWebView.log("first page loaded: " + mUrl);
+                }
                 mClient.onPageFinished(mView, mUrl);
                 measureContent();
                 if (GesherWebView.DEBUG) capturePreviewForLog(mUrl);

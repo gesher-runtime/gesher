@@ -308,6 +308,11 @@ foreach ($a in $manifestData.apps) {
   $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
   $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
+  # "expectLog": lines the launch's or the app's log must contain (e.g. that its WebView
+  # got a WebView2, docs/webview.md).
+  foreach ($want in @($a.expectLog | Where-Object { $_ })) {
+    if (-not ($log + (ReadText $appLog)).Contains($want)) { $problems += "the log lacks '$want'" }
+  }
   $standIns = [regex]::Matches($log + (ReadText $appLog), 'stand-in (\S+) not implemented') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
   if ($standIns) { Report "INFO  e2e: ${pkg}: stand-in methods called but not implemented: $($standIns -join ', ')" }
   if (-not $problems) {
