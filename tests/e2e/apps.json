@@ -44,8 +44,7 @@
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/spacecowboy/NotePad",
       "why": "Notes and to-do lists: SQLite through its own ContentProvider (SQLiteOpenHelper, Cursors), AndroidX AppCompat and Material, preferences.",
-      "trace": true,
-      "actions": [ { "click": [200, 400] } ]
+      "actions": [ { "click": [34, 120] } ]
     },
     {
       "package": "com.physphil.android.unitconverterultimate",
