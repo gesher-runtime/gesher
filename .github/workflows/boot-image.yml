@@ -37,7 +37,10 @@ jobs:
         shell: pwsh
         # BOOT_IMAGE_VERBOSE: compiler logs dex2oat's phases; a dex2oat that
         # hangs is stopped after the timeout, with its threads' stacks.
-        run: pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image -TimeoutMinutes 12
+        # -Filter speed: the primary image (core-oj, core-libart, core-icu4j)
+        # gets AOT-compiled code (docs/compiled-code.md, ADR 0033); the
+        # extensions stay verify-only for now.
+        run: pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image -Filter speed -ExtensionFilter verify -TimeoutMinutes 15
 
       # A first look before the test jobs: Hello runs on the image.
       - name: Hello on the boot image

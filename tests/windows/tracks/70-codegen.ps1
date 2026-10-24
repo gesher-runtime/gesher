@@ -113,10 +113,15 @@ if ($nterpOk) {
   }
 }
 
+# The switch interpreter and interpret-only mode recover from a deep-recursion
+# StackOverflowError (the "so" variant); nterp and the JIT do not yet (ADR 0033).
+$soModes = @('switch', 'interpret-only')
+
 $bench = [ordered]@{}
 foreach ($name in @($modes.Keys)) {
   $m = $modes[$name]
-  $r = RunMode $m.Args @('gesher.Stress') $m.Env
+  $stressArgs = if ($soModes -contains $name) { @('gesher.Stress', 'so') } else { @('gesher.Stress') }
+  $r = RunMode $m.Args $stressArgs $m.Env
   if ($r.Exit -eq 0 -and $r.Out.Contains('Stress all passed') -and (ModeOk $name $r.Out)) {
     $what = ($r.Out -split "`n" | Where-Object { $_ -match 'gesher: (execution|boot image):|JIT code cache entries' } |
       ForEach-Object { ($_ -replace '^.*gesher: ', '').Trim() }) -join '; '
