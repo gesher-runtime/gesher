@@ -148,7 +148,8 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 # framework.jar lacks must not shadow real ones.
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
-$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")", '-Xint', '-Xusejit:false')
+# The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.
+$dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xint', '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
 
 # The device's commands, and launching through it (com.gesher.app.Launcher).

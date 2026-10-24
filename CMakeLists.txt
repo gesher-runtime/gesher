@@ -50,6 +50,8 @@ include(cmake/aosp/third_party.cmake)
 include(cmake/aosp/system.cmake)
 include(cmake/aosp/art.cmake)
 include(cmake/aosp/art_runtime.cmake)
+# dex2oat, for Gesher's boot image (docs/boot-image.md).
+include(cmake/aosp/dex2oat.cmake)
 include(cmake/aosp/icu.cmake)
 include(cmake/aosp/libcore_native.cmake)
 include(cmake/aosp/binder.cmake)

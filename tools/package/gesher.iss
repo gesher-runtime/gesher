@@ -53,6 +53,9 @@ Source: "{#BuildDir}\gesher-app.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
+; The boot image (docs/boot-image.md): the boot class path's classes, verified
+; and linked by dex2oat, which dalvikvm maps instead of loading them one by one.
+Source: "{#BuildDir}\framework\x86_64\*"; DestDir: "{app}\framework\x86_64"; Flags: ignoreversion
 ; ANGLE (docs/angle.md): OpenGL ES and EGL over Direct3D 11, BSD-licensed;
 ; its license and those of the code linked into it are in ANGLE-NOTICES.txt.
 Source: "{#BuildDir}\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
