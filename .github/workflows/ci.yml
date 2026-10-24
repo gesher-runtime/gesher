@@ -94,6 +94,12 @@ jobs:
     needs: [build, framework]
     uses: ./.github/workflows/boot-image.yml
 
+  # Media (docs/media.md): the media track's test apps, built against this
+  # run's framework classes: .github/workflows/media.yml.
+  media:
+    needs: [framework]
+    uses: ./.github/workflows/media.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -472,7 +478,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, media]
     strategy:
       fail-fast: false
       matrix:
@@ -518,6 +524,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: media
           path: dist
 
       - name: Run tests
