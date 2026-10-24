@@ -92,3 +92,5 @@ add_executable(dex2oat ${_d2o}/dex2oat.cc ${_d2o}/dex2oat_options.cc
   ${CMAKE_SOURCE_DIR}/compat/art/sha1_bcrypt.cc
   ${CMAKE_SOURCE_DIR}/compat/art/disassembler_standin.cc)
 target_link_libraries(dex2oat PRIVATE art_dex2oat bcrypt)
+# A linker map, for tools/symbolize.py (the executable is stripped).
+target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map)

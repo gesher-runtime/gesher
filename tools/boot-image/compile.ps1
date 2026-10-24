@@ -11,9 +11,12 @@
 # with the interpreter, and the image holds the boot class path's classes,
 # verified, linked and, where dex2oat could, initialized, with their strings.
 # Dex locations are bare file names, so the image loads wherever the jars are.
+#
+# BOOT_IMAGE_VERBOSE=compiler (or other -verbose: tags) logs dex2oat's phases.
 param(
   [Parameter(Mandatory)] [string] $Dist,
-  [Parameter(Mandatory)] [string] $Out
+  [Parameter(Mandatory)] [string] $Out,
+  [int] $TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
 
@@ -41,7 +44,7 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $common = @(
-  '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx2g',
+  '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx1g',
   "--android-root=$(NoDrive "$root/system")",
   '--instruction-set=x86_64', '--compiler-filter=verify', '--image-format=lz4',
   '--no-generate-mini-debug-info', '--no-watch-dog', '--avoid-storing-invocation', '-j4')
@@ -57,12 +60,46 @@ function Compile([int] $first, [int] $count, [string] $boot) {
     $a += "--dex-file=$(NoDrive "$dist/$jar.jar")", "--dex-location=$jar.jar"
   }
   if ($boot) { $a += "--boot-image=$boot" } else { $a += '--base=0x60000000' }
+  if ($env:BOOT_IMAGE_VERBOSE) { $a += '--runtime-arg', "-verbose:$env:BOOT_IMAGE_VERBOSE", '--dump-timings' }
   $what = ($jars[$first..($first + $count - 1)] -join ', ')
   Write-Host "dex2oat: $what"
+  $log = Join-Path $root "dex2oat-$first.log"
   $watch = [Diagnostics.Stopwatch]::StartNew()
-  & (Join-Path $dist 'dex2oat.exe') @a 2>&1 | Out-Host
-  if ($LASTEXITCODE -ne 0) { throw ('dex2oat failed for {0} (exit 0x{1:X8})' -f $what, $LASTEXITCODE) }
+  $p = Start-Process (Join-Path $dist 'dex2oat.exe') -ArgumentList $a -NoNewWindow -PassThru `
+    -RedirectStandardOutput "$log.out" -RedirectStandardError $log
+  $null = $p.Handle  # keeps the exit code (Start-Process drops it otherwise)
+  $done = $p.WaitForExit($TimeoutMinutes * 60 * 1000)
+  if (-not $done) {
+    Write-Host "dex2oat: $what still runs after $TimeoutMinutes minutes; its threads:"
+    Stacks $p.Id
+    Stop-Process -Id $p.Id -Force
+  }
+  $p.WaitForExit()
+  $code = $p.ExitCode
+  $out = @(Get-Content "$log.out", $log -ErrorAction SilentlyContinue)
+  # The phases (-verbose:compiler), then the end of what it printed.
+  $out | Select-String -Pattern 'dex2oat.cc|compiler_driver.cc.*(Before precompile|LoadImageClasses:|Resolve:|Verify:|InitializeClasses:|UpdateImageClasses:)|image_writer|Error|error|FATAL|Abort' |
+    Select-Object -First 80 | Out-Host
+  Write-Host "... ($($out.Count) lines; the last 60:)"
+  $out | Select-Object -Last 60 | Out-Host
+  if (-not $done -or $code -ne 0) { throw ('dex2oat failed for {0} (exit 0x{1:X8})' -f $what, $code) }
   Write-Host ("dex2oat: {0} in {1:N1} s" -f $what, $watch.Elapsed.TotalSeconds)
+}
+
+# Every thread's stack of a process that hangs, with cdb if the machine has it,
+# symbolized with dex2oat.map.
+function Stacks([int] $id) {
+  $cdb = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $cdb) { Write-Host '(no cdb.exe on this machine)'; return }
+  $text = & $cdb.FullName -p $id -c '.symopt+0x40; ~*k 30; qd' 2>&1 | Out-String
+  $text = $text -replace 'dex2oat\+0x', 'dex2oat.exe+0x'
+  $map = Join-Path $dist 'dex2oat.map'
+  if ((Test-Path $map) -and (Get-Command python -ErrorAction SilentlyContinue)) {
+    $text | python (Join-Path $PSScriptRoot '../symbolize.py') $map | Out-Host
+  } else {
+    Write-Host $text
+  }
 }
 
 Compile 0 3 ''

@@ -50,7 +50,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp out/*.exe out/dalvikvm.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
