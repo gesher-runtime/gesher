@@ -29,3 +29,7 @@ target_link_libraries(dalvikvm PRIVATE gesher_libandroid)
 # gesher: libandroid's ANativeWindow functions and EGL/GLES (ANGLE) for the
 # app's .so files, and their Windows test (compat/bionic/ndk_graphics.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/ndk_graphics.cmake)
+
+# gesher: NativeActivity, InputQueue, AInputQueue/AInputEvent and AChoreographer
+# for the app's .so files (compat/bionic/native_activity.cmake).
+include(${CMAKE_CURRENT_LIST_DIR}/native_activity.cmake)
