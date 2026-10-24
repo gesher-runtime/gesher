@@ -1,0 +1,153 @@
+diff --git a/libartbase/base/membarrier.cc b/libartbase/base/membarrier.cc
+index 07b132e..de9962b 100644
+--- a/libartbase/base/membarrier.cc
++++ b/libartbase/base/membarrier.cc
+@@ -65,6 +65,37 @@ int membarrier(MembarrierCommand command) {
+   return syscall(__NR_membarrier, static_cast<int>(command), 0);
+ }
+ 
++#elif defined(GESHER)
++
++}  // namespace art
++
++// Windows' process-wide memory barrier: every thread of the process runs a
++// full barrier (an inter-processor interrupt), as MEMBARRIER_CMD_PRIVATE_EXPEDITED
++// does. Code written by the JIT needs no instruction cache flush on x86-64.
++extern "C" __declspec(dllimport) void __stdcall FlushProcessWriteBuffers(void);
++
++namespace art {
++
++int membarrier(MembarrierCommand command) {
++  switch (command) {
++    case MembarrierCommand::kQuery:
++      return static_cast<int>(MembarrierCommand::kPrivateExpedited) |
++             static_cast<int>(MembarrierCommand::kRegisterPrivateExpedited) |
++             static_cast<int>(MembarrierCommand::kPrivateExpeditedSyncCore) |
++             static_cast<int>(MembarrierCommand::kRegisterPrivateExpeditedSyncCore);
++    case MembarrierCommand::kRegisterPrivateExpedited:
++    case MembarrierCommand::kRegisterPrivateExpeditedSyncCore:
++      return 0;
++    case MembarrierCommand::kPrivateExpedited:
++    case MembarrierCommand::kPrivateExpeditedSyncCore:
++      FlushProcessWriteBuffers();
++      return 0;
++    default:
++      errno = ENOSYS;
++      return -1;
++  }
++}
++
+ #else  // __linux__
+ 
+ int membarrier([[maybe_unused]] MembarrierCommand command) {
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+index 8c70708..65ab5e6 100644
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -197,6 +197,17 @@ namespace apex = com::android::apex;
+ 
+ namespace art HIDDEN {
+ 
++#if defined(GESHER)
++// GESHER_ART_INTERPRET_ONLY=1: run as before compiled code (ADR 0033).
++static bool GesherInterpretOnly() {
++  static const bool value = [] {
++    const char* v = getenv("GESHER_ART_INTERPRET_ONLY");
++    return v != nullptr && v[0] != 0 && v[0] != '0';
++  }();
++  return value;
++}
++#endif  // GESHER
++
+ // If a signal isn't handled properly, enable a handler that attempts to dump the Java stack.
+ static constexpr bool kEnableJavaStackTraceHandler = false;
+ // Tuned by compiling GmsCore under perf and measuring time spent in DescriptorEquals for class
+@@ -1777,6 +1788,13 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+   if (runtime_options.GetOrDefault(Opt::Interpret)) {
+     GetInstrumentation()->ForceInterpretOnly();
+   }
++#if defined(GESHER)
++  // GESHER_ART_INTERPRET_ONLY=1: the switch interpreter only, no nterp, no
++  // compiled code, no JIT, explicit checks: for diagnosis (ADR 0033).
++  if (GesherInterpretOnly() && !IsAotCompiler()) {
++    GetInstrumentation()->ForceInterpretOnly();
++  }
++#endif  // GESHER
+ 
+   zygote_max_failed_boots_ = runtime_options.GetOrDefault(Opt::ZygoteMaxFailedBoots);
+   experimental_flags_ = runtime_options.GetOrDefault(Opt::Experimental);
+@@ -1903,6 +1921,12 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+   callbacks_->AddThreadLifecycleCallback(Dbg::GetThreadLifecycleCallback());
+ 
+   jit_options_.reset(jit::JitOptions::CreateFromRuntimeArguments(runtime_options));
++#if defined(GESHER)
++  if (GesherInterpretOnly()) {
++    jit_options_->SetUseJitCompilation(false);
++    jit_options_->SetSaveProfilingInfo(false);
++  }
++#endif  // GESHER
+   if (IsAotCompiler()) {
+     // If we are already the compiler at this point, we must be dex2oat. Don't create the jit in
+     // this case.
+@@ -1966,13 +1990,16 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+ #endif  // ART_USE_RESTRICTED_MODE
+ 
+ #if defined(GESHER)
+-  // Implicit checks turn faults into SIGSEGV for ART's fault handlers.
+-  // gesher-base does not deliver signals from Windows exceptions yet, and the
+-  // stack protection collides with Windows' own stack guard pages; use
+-  // explicit checks until it does.
++  // Implicit null and stack overflow checks: gesher-base delivers Windows
++  // access violations as SIGSEGV to ART's fault handlers and grows stacks for
++  // stack probes (fault_signals.cc, ADR 0033); nterp and compiled code need
++  // both. Suspend checks stay explicit, as on x86-64 Linux.
++  // GESHER_ART_INTERPRET_ONLY=1 keeps every check explicit.
+   implicit_suspend_checks_ = false;
+-  implicit_null_checks_ = false;
+-  implicit_so_checks_ = false;
++  if (GesherInterpretOnly()) {
++    implicit_null_checks_ = false;
++    implicit_so_checks_ = false;
++  }
+ #endif  // GESHER
+ 
+   fault_manager.Init(!no_sig_chain_);
+@@ -2002,6 +2029,14 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+                                  JavaStackTraceHandler::IsGeneratedCodeHandler());
+       }
+ 
++#if defined(GESHER)
++      if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
++        LOG(INFO) << "gesher: execution: "
++                  << (interpreter::CanRuntimeUseNterp() ? "nterp" : "switch interpreter")
++                  << ", implicit null checks " << (implicit_null_checks_ ? "on" : "off")
++                  << ", implicit stack overflow checks " << (implicit_so_checks_ ? "on" : "off");
++      }
++#endif  // GESHER
+       if (interpreter::CanRuntimeUseNterp()) {
+         // Nterp code can use signal handling just like the compiled managed code.
+         OatQuickMethodHeader* nterp_header = OatQuickMethodHeader::NterpMethodHeader;
+diff --git a/runtime/thread.cc b/runtime/thread.cc
+index 9ad0fc7..6b0fea2 100644
+--- a/runtime/thread.cc
++++ b/runtime/thread.cc
+@@ -799,11 +799,19 @@ void Thread::InstallImplicitProtection() {
+         static_cast<void*>(pregion) << " to " <<
+         static_cast<void*>(pregion + GetStackOverflowProtectedSize() - 1);
+   if (ProtectStack<stack_type>(/* fatal_on_error= */ false)) {
++#if defined(GESHER)
++    // Gesher: the pages between the protected region and the stack's top are
++    // committed on demand (gesher-base's fault_signals.cc); a madvise over
++    // them would recommit the whole range with the protected pages'
++    // protection.
++    UNUSED(stack_top);
++#else
+     // Tell the kernel that we won't be needing these pages any more.
+     // NB. madvise will probably write zeroes into the memory (on linux it does).
+     size_t unwanted_size =
+         reinterpret_cast<uintptr_t>(stack_top) - reinterpret_cast<uintptr_t>(pregion) - gPageSize;
+     madvise(pregion, unwanted_size, MADV_DONTNEED);
++#endif  // GESHER
+     return;
+   }
+ 
