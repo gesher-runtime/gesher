@@ -306,6 +306,19 @@ void Window::SetScreenPosition(int x, int y) {
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+void Window::PresentPixels(const uint32_t* argb, int width, int height) {
+  int w = 0, h = 0, stride = 0;
+  // BGRA bytes are 0xAARRGGBB little-endian words: the rows copy as they are.
+  auto* dst = reinterpret_cast<uint32_t*>(Lock(&w, &h, &stride));
+  for (int y = 0; y < h; y++) {
+    uint32_t* row = dst + static_cast<size_t>(y) * stride;
+    const int n = y < height ? std::min(w, width) : 0;
+    if (n > 0) std::memcpy(row, argb + static_cast<size_t>(y) * width, static_cast<size_t>(n) * 4);
+    if (n < w) std::memset(row + n, 0, static_cast<size_t>(w - n) * 4);
+  }
+  UnlockAndPost();
+}
+
 void Window::PresentLayered() {
   HWND hwnd = static_cast<HWND>(hwnd_);
   if (!translucent_) {

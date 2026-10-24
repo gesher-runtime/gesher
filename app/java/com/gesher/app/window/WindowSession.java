@@ -129,6 +129,13 @@ public final class WindowSession extends IWindowSession.Stub {
 
         /** The user activated the window (shown windows): its task comes to the front. */
         void onTaskActivated(IBinder token, int taskId);
+
+        /**
+         * The user resized the window: its task is {@code bounds} (pixels, from 0,0) in size
+         * now ({@link TaskConfiguration}). The window's own configuration already followed.
+         */
+        default void onTaskResized(IBinder token, int taskId, Rect bounds) {
+        }
     }
 
     private static WindowSession sInstance;
@@ -296,6 +303,19 @@ public final class WindowSession extends IWindowSession.Stub {
                     log("task " + taskId + " to the front: " + e);
                 }
             }
+
+            @Override
+            public void onTaskResized(IBinder token, int taskId, Rect bounds) {
+                if (taskId < 0) return;
+                try {
+                    android.app.ActivityTaskManager.getService().resizeTask(taskId, bounds,
+                            android.app.ActivityTaskManager.RESIZE_MODE_USER);
+                } catch (RemoteException e) {
+                    log("task " + taskId + " resized: " + e);
+                } catch (RuntimeException e) {
+                    log("task " + taskId + " resized: " + e);
+                }
+            }
         };
     }
 
@@ -381,12 +401,13 @@ public final class WindowSession extends IWindowSession.Stub {
         Configuration global = processConfiguration();
         Configuration override = new Configuration();
         if (!root.bounds.isEmpty()) {
-            // Resized by the user: the window's bounds, as a freeform task's on a device.
-            // ViewRootImpl computes its frames from them (relayoutWindow's local layout), so
-            // the frames alone would not move it. The rest of the configuration (screen size
-            // in dp) stays the display's: no Activity is relaunched.
-            override.windowConfiguration.setBounds(bounds);
-            override.windowConfiguration.setAppBounds(bounds);
+            // Resized by the user: the configuration of a freeform task of the window's size
+            // (TaskConfiguration, docs/lifecycle.md): its bounds (ViewRootImpl computes its
+            // frames from them, relayoutWindow's local layout), its screen size in dp, smallest
+            // width, orientation and screen layout. An Activity that handles those changes gets
+            // onConfigurationChanged (ViewRootImpl's activity config callback); the system
+            // server relaunches one that does not (resizeTask).
+            override = TaskConfiguration.override(bounds);
         }
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
@@ -638,8 +659,9 @@ public final class WindowSession extends IWindowSession.Stub {
      * The user resized the Win32 window (WM_SIZE): the window's bounds become its client
      * area, and ViewRootImpl gets the frames for them (IWindow.resized, as
      * WindowStateResizeItem gives them on a device), lays out, relayouts (whose frames now
-     * match the Win32 window) and draws at the new size. The configuration stays the
-     * process's (no Activity relaunch).
+     * match the Win32 window) and draws at the new size. The configuration is a task's of
+     * that size (TaskConfiguration); the system server is told (resizeTask) and relaunches
+     * the task's Activities that do not handle the change (docs/lifecycle.md).
      */
     private void applyResize(IBinder key) {
         AppWindow w;
@@ -672,6 +694,9 @@ public final class WindowSession extends IWindowSession.Stub {
             log("window \"" + w.title() + "\": resized: " + e);
         }
         resizePopups(w);
+        if (w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            mLifecycleHandler.onTaskResized(w.attrs.token, w.taskId, new Rect(w.bounds));
+        }
         if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
             // Debugging: where ViewRootImpl is a second later.
             for (int delay : new int[] {1500, 5000}) {
@@ -1073,8 +1098,8 @@ public final class WindowSession extends IWindowSession.Stub {
     /**
      * A popup's Win32 window: owned by its parent's (Windows keeps it above it, hides and
      * minimizes it with it; no taskbar button), translucent when its format has alpha (a
-     * layered window: a dialog's rounded corners and shadow show what is behind; not with
-     * SkiaGL, whose swap chain presents), never activated when it is not focusable, clicked
+     * layered window: a dialog's rounded corners and shadow show what is behind; with
+     * SkiaGL its frames are read back into it), never activated when it is not focusable, clicked
      * through when it is not touchable.
      */
     private void createPopup(AppWindow w, int width, int height) {
@@ -1089,15 +1114,17 @@ public final class WindowSession extends IWindowSession.Stub {
         w.resizable = false;
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         w.handler = new Handler(looper);
-        boolean translucent = android.graphics.PixelFormat.formatHasAlpha(w.attrs.format)
-                && !glRenderer();
+        // With SkiaGL too: hwui draws a translucent popup into a pbuffer read back into the
+        // layered window (compat/hwui/gl/angle_gl.cc, ADR 0048).
+        boolean translucent = android.graphics.PixelFormat.formatHasAlpha(w.attrs.format);
         nw.setTranslucent(translucent);
         nw.setNoActivate(!w.focusable(), !w.touchable());
         attachInput(w);
         log("window \"" + w.title() + "\": Win32 popup 0x" + Long.toHexString(nw.getHwnd())
                 + " owned by " + (owner != null ? "\"" + w.parent.title() + "\" 0x"
                         + Long.toHexString(owner.getHwnd()) : "no window")
-                + ", type " + w.attrs.type + (translucent ? ", translucent" : ", opaque")
+                + ", type " + w.attrs.type + (translucent ? ", translucent"
+                        + (glRenderer() ? " (SkiaGL frames read back)" : "") : ", opaque")
                 + (w.focusable() ? ", focusable" : "") + (w.touchable() ? "" : ", not touchable")
                 + ", input " + (w.input != null ? "attached" : "none"));
         if (w.input == null) listenForEvents(w);

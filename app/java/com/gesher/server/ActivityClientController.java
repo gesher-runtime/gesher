@@ -67,7 +67,9 @@ public final class ActivityClientController extends IActivityClientController.De
     @Override
     public void reportSizeConfigurations(IBinder token,
             SizeConfigurationBuckets sizeConfigurations) {
-        // Nothing resizes.
+        // Which size changes count when its task is resized (resizeTask).
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) mAtm.reportSizeConfigurations(r, sizeConfigurations);
     }
 
     @Override

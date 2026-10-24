@@ -170,6 +170,12 @@ class Window {
   // Moves the window so its client area's origin is at (x, y) on the screen.
   void SetScreenPosition(int x, int y);
   bool is_popup() const { return popup_; }
+  // SetTranslucent(true) was asked: what is presented is composed with alpha.
+  bool translucent() const { return translucent_; }
+  // Lifecycle track (docs/lifecycle.md): presents a frame drawn elsewhere (SkiaGL's
+  // read-back of a translucent popup): `argb` premultiplied 0xAARRGGBB, rows
+  // top-down, width x height (cropped or padded to the client area).
+  void PresentPixels(const uint32_t* argb, int width, int height);
 
  private:
   Window() = default;

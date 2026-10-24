@@ -23,6 +23,33 @@ if (-not ('GesherLifeWin32' -as [type])) {
 using System;
 using System.Runtime.InteropServices;
 public static class GesherLifeWin32 {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr dc, int x, int y);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+  // What the desktop shows at screen point (x, y), composed by DWM: 0xRRGGBB (or 0xFFFFFFFF).
+  public static uint ScreenPixel(int x, int y) {
+    IntPtr dc = GetDC(IntPtr.Zero);
+    uint c = GetPixel(dc, x, y);
+    ReleaseDC(IntPtr.Zero, dc);
+    if (c == 0xFFFFFFFF) return c;
+    return ((c & 0xff) << 16) | (c & 0xff00) | ((c >> 16) & 0xff);  // COLORREF is 0xBBGGRR
+  }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out RECT r);
+  // The client area on the screen: {left, top, right, bottom}.
+  public static int[] ClientOnScreen(IntPtr hwnd) {
+    POINT p = new POINT();
+    ClientToScreen(hwnd, ref p);
+    RECT r;
+    GetClientRect(hwnd, out r);
+    return new int[] { p.X, p.Y, p.X + r.Right - r.Left, p.Y + r.Bottom - r.Top };
+  }
+  public static int[] Rect(IntPtr hwnd) { RECT r; GetWindowRect(hwnd, out r); return new int[] { r.Left, r.Top, r.Right, r.Bottom }; }
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
@@ -196,6 +223,18 @@ function LifeAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device
     }
   }
 
+  # 4. Resized to landscape and back: LifeActivity handles size changes
+  #    (onConfigurationChanged, not relaunched), its resources follow (-land, -w600dp).
+  $mark = LogMark $ReadLog
+  [GesherWin32]::SetClientSize($app, 640, 400)
+  if (-not (WaitAfter $ReadLog $mark 'LifeActivity onConfigurationChanged: 640x400 dp, smallest 400 dp, landscape')) { $out += 'no onConfigurationChanged for a 640x400 window' }
+  elseif (-not (WaitAfter $ReadLog $mark 'resources land w600dp' 10)) { $out += 'the resources did not resolve -land and -w600dp in a 640x400 window' }
+  $mark = LogMark $ReadLog
+  [GesherWin32]::SetClientSize($app, 400, 800)
+  if (-not (WaitAfter $ReadLog $mark 'LifeActivity onConfigurationChanged: 400x800 dp, smallest 400 dp, portrait')) { $out += 'no onConfigurationChanged back to 400x800' }
+  elseif (-not (WaitAfter $ReadLog $mark 'resources port narrow' 10)) { $out += 'the resources did not go back to port and narrow' }
+  if ((LogAfter $ReadLog $mark).Contains('LifeActivity onDestroy')) { $out += 'LifeActivity was relaunched although it handles size changes' }
+
   if ($Device) {
     $text = "$(& $ReadLog)"
     # 4, 5. Translucent and floating Activities leave LifeActivity paused, visible.
@@ -212,6 +251,20 @@ function LifeAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device
       if (-not (LifeWaitGone $app 30)) { $out += 'LifeActivity''s window stayed shown under an opaque Activity' }
       $opaque = LifeWindow $ReadLog $mark 'Gesher opaque activity'
       if ($opaque -eq [IntPtr]::Zero) { $out += 'no window for OpaqueActivity' } else {
+        # OpaqueActivity does not handle size changes: resizing its window relaunches it
+        # with its saved state, in the same window.
+        Start-Sleep 2
+        $mark = LogMark $ReadLog
+        [GesherWin32]::SetClientSize($opaque, 640, 400)
+        if (-not (WaitAfter $ReadLog $mark 'OpaqueActivity onCreate with saved state')) { $out += 'resizing OpaqueActivity''s window did not relaunch it' } else {
+          [void](WaitAfter $ReadLog $mark 'OpaqueActivity onResume' 30)
+          $out += @(OrderProblems $ReadLog $mark @('OpaqueActivity onPause', 'OpaqueActivity onDestroy (changing configurations)', 'OpaqueActivity onCreate with saved state', 'landscape', 'resources land w600dp', 'OpaqueActivity onResume') 'OpaqueActivity relaunched')
+          if (-not [GesherWin32]::IsWindow($opaque) -or -not [GesherWin32]::IsWindowVisible($opaque)) { $out += 'OpaqueActivity''s window did not stay through the relaunch' }
+        }
+        $mark = LogMark $ReadLog
+        [GesherWin32]::SetClientSize($opaque, 400, 800)
+        if (-not (WaitAfter $ReadLog $mark 'OpaqueActivity onResume')) { $out += 'OpaqueActivity was not relaunched back at 400x800' }
+        Start-Sleep 2
         $mark = LogMark $ReadLog
         [void][GesherWin32]::PostMessageW($opaque, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
         if (-not (WaitAfter $ReadLog $mark 'LifeActivity onResume')) { $out += 'LifeActivity was not resumed after OpaqueActivity finished' } else {
@@ -226,9 +279,52 @@ function LifeAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device
   return $out
 }
 
+# A shown window (on the desktop) and an AlertDialog over it: what the desktop
+# shows (DWM's composition, read from the screen) is the dialog's card over the
+# app window dimmed behind it, and, at the corners of the dialog's popup window
+# (its shadow and the transparent room around the card), the dimmed app window
+# through it: the popup is composed with per-pixel alpha (a layered window).
+function ComposeScenario([IntPtr] $app, [scriptblock] $ReadLog) {
+  $out = @()
+  if (-not (WaitForLog $ReadLog 'LifeActivity laid out')) { return @('no layout report') }
+  [void][GesherLifeWin32]::SetWindowPos($app, [IntPtr]::Zero, 16, 16, 0, 0, 0x0001 -bor 0x0004)  # NOSIZE, NOZORDER
+  Start-Sleep 3
+  $text = "$(& $ReadLog)"
+  $at = LifePoint $text 'dialog at (\d+),(\d+)'
+  $a = [GesherLifeWin32]::ClientOnScreen($app)
+  Write-Host "INFO  screen $([GesherLifeWin32]::GetSystemMetrics(0))x$([GesherLifeWin32]::GetSystemMetrics(1)); the app window's client area at $($a -join ',')"
+  $before = [GesherLifeWin32]::ScreenPixel($a[0] + 8, $a[3] - 8)
+  $mark = LogMark $ReadLog
+  [GesherWin32]::Click($app, $at[0], $at[1])
+  if (-not (WaitAfter $ReadLog $mark 'LifeActivity dialog shown: dim')) { return @('no dialog') }
+  $m = [regex]::Match((LogAfter $ReadLog $mark), 'shown as a popup of "[^"]*" at \S+, hwnd 0x([0-9a-f]+)')
+  if (-not $m.Success) { return @('no popup window for the dialog') }
+  $dialog = [IntPtr][Convert]::ToInt64($m.Groups[1].Value, 16)
+  $dim = [double]([regex]::Match((LogAfter $ReadLog $mark), 'dialog shown: dim ([0-9.]+)').Groups[1].Value)
+  Start-Sleep 3
+  $r = [GesherLifeWin32]::Rect($dialog)
+  $behind = [GesherLifeWin32]::ScreenPixel($a[0] + 8, $a[3] - 8)
+  $corner = [GesherLifeWin32]::ScreenPixel($r[0] + 2, $r[1] + 2)
+  $center = [GesherLifeWin32]::ScreenPixel([int](($r[0] + $r[2]) / 2), [int]($r[1] + ($r[3] - $r[1]) / 3))
+  Write-Host ("INFO  dim {0}: the app window at its bottom left 0x{1:x6} before the dialog, 0x{2:x6} with it; the dialog's popup at {3}: its corner 0x{4:x6}, its card 0x{5:x6}" -f $dim, $before, $behind, ($r -join ','), $corner, $center)
+  function Channels([uint32] $c) { return @((($c -shr 16) -band 255), (($c -shr 8) -band 255), ($c -band 255)) }
+  $b = Channels $before; $d = Channels $behind; $k = Channels $corner; $c = Channels $center
+  if ($b[0] -lt 200 -or $b[1] -lt 200 -or $b[2] -lt 200) { return @(("the desktop does not show the app window (0x{0:x6} where its white background is): no screen to read the composition from" -f $before)) }
+  $want = 255 * (1 - $dim)
+  if ([Math]::Abs($d[0] - $want) -gt 40) { $out += ("the app window behind the dialog is 0x{0:x6}, not dimmed by {1}" -f $behind, $dim) }
+  if ($c[0] -lt 200 -or $c[1] -lt 200 -or $c[2] -lt 200) { $out += ("the dialog's card shows 0x{0:x6}, not white" -f $center) }
+  # Behind the transparent corner: the dimmed app window (darkened a little by the shadow), not black.
+  if ($k[0] -lt 0.5 * $want -or $k[0] -gt $want + 30 -or [Math]::Abs($k[0] - $k[1]) -gt 30 -or [Math]::Abs($k[1] - $k[2]) -gt 30) {
+    $out += ("the dialog's transparent corner shows 0x{0:x6}, not the dimmed app window behind it (~{1:n0} gray): the popup is not composed with alpha" -f $corner, $want)
+  }
+  [void][GesherWin32]::PostMessageW($dialog, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE: Back
+  [void](WaitAfter $ReadLog $mark 'LifeActivity dialog dismissed' 30)
+  return $out
+}
+
 # Runs lifeapp.apk until its window's first frame, runs the scenario, closes it
 # with WM_CLOSE; expects exit code 0 and every line of $Expect.
-function LifeAppCheck([string] $Name, [string[]] $Arguments, [switch] $Device, [string[]] $Expect, [int] $Seconds = 400) {
+function LifeAppCheck([string] $Name, [string[]] $Arguments, [switch] $Device, [switch] $Compose, [hashtable] $Environment = @{}, [string[]] $Expect, [int] $Seconds = 400) {
   if (-not (Test-Path "$Dir/lifeapp.apk")) {
     Write-Host "FAIL  gesher-app: $Name (lifeapp.apk is missing)"
     $script:failed++
@@ -238,6 +334,7 @@ function LifeAppCheck([string] $Name, [string[]] $Arguments, [switch] $Device, [
   $quoted = (@($dvmLife) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
+  foreach ($k in $Environment.Keys) { $psi.Environment[$k] = $Environment[$k] }
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $problems = @()
@@ -251,7 +348,10 @@ function LifeAppCheck([string] $Name, [string[]] $Arguments, [switch] $Device, [
   }
   if ($hwnd -eq [IntPtr]::Zero) { $problems += 'no first frame' } else {
     Start-Sleep -Seconds 3
-    try { $problems += @(LifeAppScenario $hwnd $readLog -Device:$Device) }
+    try {
+      if ($Compose) { $problems += @(ComposeScenario $hwnd $readLog) }
+      else { $problems += @(LifeAppScenario $hwnd $readLog -Device:$Device) }
+    }
     catch { $problems += "the scenario threw: $_" }
     [void][GesherWin32]::PostMessageW($hwnd, 0x0010 <# WM_CLOSE #>, [IntPtr]::Zero, [IntPtr]::Zero)
   }
@@ -282,6 +382,17 @@ $lifeExpect = @('LifeActivity onResume', 'LifeActivity popup: ACTION_OUTSIDE at'
 LifeAppCheck "$lifeName (single process)" `
   @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/lifeapp.apk")) `
   -Expect (@($lifeExpect) + 'paused, stopped (its window was minimized)' + 'gesher-app: done')
+
+# 1b. Shown on the desktop: a dialog is composed with alpha over the dimmed
+#     app window, with the CPU pipeline and with SkiaGL (on ANGLE).
+$composeName = 'translucent popups on the desktop: an AlertDialog''s popup window is composed with per-pixel alpha (its transparent corner shows the app window, dimmed behind it, read from the screen)'
+LifeAppCheck "$composeName, CPU pipeline (single process, shown window)" `
+  @('com.gesher.app.Main', '--window', '--display', '360x560@160', (NoDrive "$Dir/lifeapp.apk")) -Compose `
+  -Expect @('LifeActivity dialog shown: dim', ', translucent', 'gesher-app: done')
+LifeAppCheck "$composeName, SkiaGL (single process, shown window)" `
+  @('com.gesher.app.Main', '--window', '--display', '360x560@160', (NoDrive "$Dir/lifeapp.apk")) -Compose `
+  -Environment @{ GESHER_HWUI_RENDERER = 'skiagl' } `
+  -Expect @('LifeActivity dialog shown: dim', 'translucent (SkiaGL frames read back)', 'gesher-app: done')
 
 if ($env:GESHER_LIFECYCLE_SINGLE_ONLY) { return }  # a local run of the single process only
 

@@ -12,6 +12,7 @@ import android.app.IApplicationThread;
 import android.app.ProfilerInfo;
 import android.app.ResultInfo;
 import android.app.WaitResult;
+import android.app.servertransaction.ActivityRelaunchItem;
 import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.DestroyActivityItem;
@@ -42,6 +43,7 @@ import android.window.WindowContainerToken;
 
 import com.android.internal.content.ReferrerIntent;
 import com.gesher.app.DeviceProfile;
+import com.gesher.app.window.TaskConfiguration;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -148,6 +150,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean translucent;
         /** Resumed once the activity in front ({@link #waitingFor}) is paused. */
         boolean resumeAfterPause;
+        /** The configuration it was launched or last told of (process and task). */
+        Configuration lastConfig;
+        /** The size buckets its resources care about (reportSizeConfigurations), or null. */
+        android.window.SizeConfigurationBuckets sizeBuckets;
+        /** Configuration changes it does not handle, not yet relaunched for (0: none). */
+        int relaunchChanges;
 
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
@@ -191,6 +199,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int mNextTaskId = 1;
     /** Tasks moved to the back (their window minimized): none of their activities is visible. */
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
+    /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
+    private final android.util.SparseArray<Rect> mTaskBounds = new android.util.SparseArray<>();
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -928,13 +938,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** ActivityTaskSupervisor.realStartActivityLocked: launch and resume. */
     private void realStartActivity(ActivityRecord r) {
         Configuration config = DeviceProfile.configuration();
-        Rect bounds = new Rect(0, 0, DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        ActivityWindowInfo windowInfo = new ActivityWindowInfo();
-        windowInfo.set(false /* isEmbedded */, bounds, bounds);
+        Rect task;
+        synchronized (this) {
+            task = mTaskBounds.get(r.taskId);
+            r.lastConfig = TaskConfiguration.merged(task);
+        }
+        // A task the user resized: the task's configuration overrides the display's.
+        Configuration override = task != null ? TaskConfiguration.override(task)
+                : new Configuration();
+        ActivityWindowInfo windowInfo = windowInfo(task);
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
         t.addTransactionItem(new LaunchActivityItem(r.token, r.intent,
-                System.identityHashCode(r), r.info, config, new Configuration(),
+                System.identityHashCode(r), r.info, config, override,
                 Context.DEVICE_ID_DEFAULT, r.launchedFromPackage, null /* voiceInteractor */,
                 ActivityManager.PROCESS_STATE_TOP, null /* state */, null /* persistentState */,
                 results /* pendingResults */, null /* pendingNewIntents */,
@@ -947,6 +963,114 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 false /* shouldSendCompatFakeFocus */));
         setState(r, State.LAUNCHING);
         schedule(r, t, "LaunchActivityItem, ResumeActivityItem");
+    }
+
+    /** The ActivityWindowInfo of an activity in a task of {@code task} bounds (null: display). */
+    private static ActivityWindowInfo windowInfo(Rect task) {
+        Rect bounds = task != null ? new Rect(task)
+                : new Rect(0, 0, DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
+        ActivityWindowInfo info = new ActivityWindowInfo();
+        info.set(false /* isEmbedded */, bounds, bounds);
+        return info;
+    }
+
+    /**
+     * IActivityTaskManager.resizeTask (the user resized the task's window: its window
+     * session tells): the task's configuration is that of its size (TaskConfiguration). Each
+     * of its activities whose configuration changes in a way it does not handle
+     * ({@code android:configChanges}, ActivityInfo.getRealConfigChanged; size changes within
+     * the buckets its resources care about do not count, SizeConfigurationBuckets.filterDiff)
+     * is relaunched, as ActivityRecord.ensureActivityConfiguration does: now if it is resumed
+     * or paused, else when it next comes back. The changes it handles reach it through its
+     * window (ViewRootImpl's activity config callback: onConfigurationChanged).
+     */
+    @Override
+    public void resizeTask(int taskId, Rect bounds, int resizeMode) {
+        Rect task = bounds == null || bounds.isEmpty()
+                || (bounds.width() == DeviceProfile.WIDTH && bounds.height() == DeviceProfile.HEIGHT)
+                ? null : new Rect(0, 0, bounds.width(), bounds.height());
+        List<ActivityRecord> relaunch = new ArrayList<>();
+        Configuration merged = TaskConfiguration.merged(task);
+        synchronized (this) {
+            Rect old = mTaskBounds.get(taskId);
+            if (old == null ? task == null : old.equals(task)) return;
+            if (task != null) {
+                mTaskBounds.put(taskId, task);
+            } else {
+                mTaskBounds.remove(taskId);
+            }
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId != taskId || a.finishing || a.app == null || a.lastConfig == null) {
+                    continue;
+                }
+                int diff = android.window.SizeConfigurationBuckets.filterDiff(
+                        a.lastConfig.diff(merged), a.lastConfig, merged, a.sizeBuckets);
+                a.lastConfig = new Configuration(merged);
+                int unhandled = diff & ~(a.info.getRealConfigChanged()
+                        | ActivityInfo.CONFIG_WINDOW_CONFIGURATION
+                        | ActivityInfo.CONFIG_ASSETS_PATHS);
+                if (unhandled == 0) continue;
+                a.relaunchChanges |= unhandled;
+                if (a.state == State.RESUMED || a.state == State.PAUSED) relaunch.add(a);
+            }
+        }
+        SystemServer.log("task " + taskId + " resized to "
+                + (task != null ? task.width() + "x" + task.height() : "the display") + ": "
+                + merged.screenWidthDp + "x" + merged.screenHeightDp + " dp"
+                + (relaunch.isEmpty() ? "" : ", relaunching " + relaunch.size()));
+        for (ActivityRecord a : relaunch) relaunch(a);
+    }
+
+    /**
+     * The relaunch item for configuration changes the activity does not handle, if it has
+     * some pending (else null), with {@code results} for it. Clears them.
+     */
+    private ActivityRelaunchItem takeRelaunch(ActivityRecord r, List<ResultInfo> results) {
+        int changes;
+        Rect task;
+        synchronized (this) {
+            changes = r.relaunchChanges;
+            r.relaunchChanges = 0;
+            task = mTaskBounds.get(r.taskId);
+        }
+        if (changes == 0) return null;
+        Configuration override = task != null ? TaskConfiguration.override(task)
+                : new Configuration();
+        SystemServer.log("relaunching " + r.name() + " for configuration changes 0x"
+                + Integer.toHexString(changes) + " it does not handle");
+        return new ActivityRelaunchItem(r.token, results, null /* pendingNewIntents */, changes,
+                new android.util.MergedConfiguration(DeviceProfile.configuration(), override),
+                true /* preserveWindow */, windowInfo(task), Display.DEFAULT_DISPLAY);
+    }
+
+    /** ActivityRecord.relaunchActivityLocked for a resumed or paused activity. */
+    private void relaunch(ActivityRecord r) {
+        State state;
+        synchronized (this) {
+            state = r.state;
+        }
+        ActivityRelaunchItem item = takeRelaunch(r, null);
+        if (item == null) return;
+        ClientTransaction t = new ClientTransaction(r.app.thread);
+        t.addTransactionItem(item);
+        if (state == State.RESUMED) {
+            t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
+                    false /* shouldSendCompatFakeFocus */));
+            setState(r, State.RESUMING);
+        } else {
+            t.addTransactionItem(new PauseActivityItem(r.token));
+            setState(r, State.PAUSING);
+        }
+        schedule(r, t, "ActivityRelaunchItem, "
+                + (state == State.RESUMED ? "ResumeActivityItem" : "PauseActivityItem"));
+    }
+
+    /** reportSizeConfigurations: the size buckets the activity's resources care about. */
+    void reportSizeConfigurations(ActivityRecord r,
+            android.window.SizeConfigurationBuckets buckets) {
+        synchronized (this) {
+            r.sizeBuckets = buckets;
+        }
     }
 
     private List<ResultInfo> takeResults(ActivityRecord r) {
@@ -965,7 +1089,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void resume(ActivityRecord r) {
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
-        if (results != null) t.addTransactionItem(new ActivityResultItem(r.token, results));
+        // Configuration changes it does not handle came while it was not visible: it is
+        // relaunched first (with the results), as Android does when it is made visible.
+        ActivityRelaunchItem relaunch = takeRelaunch(r, results);
+        if (relaunch != null) {
+            t.addTransactionItem(relaunch);
+        } else if (results != null) {
+            t.addTransactionItem(new ActivityResultItem(r.token, results));
+        }
         t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
                 false /* shouldSendCompatFakeFocus */));
         synchronized (this) {
@@ -973,7 +1104,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             r.idle = false;
         }
         setState(r, State.RESUMING);
-        schedule(r, t, (results != null ? "ActivityResultItem, " : "") + "ResumeActivityItem");
+        schedule(r, t, (relaunch != null ? "ActivityRelaunchItem, "
+                : results != null ? "ActivityResultItem, " : "") + "ResumeActivityItem");
     }
 
     /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a pause if resumed. */
@@ -1172,6 +1304,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         SystemServer.log("activityResumed: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
         for (ActivityRecord a : toStart) makeVisible(a);
+        boolean relaunch;
+        synchronized (this) {
+            // Its task was resized while it was on its way to the front.
+            relaunch = r.relaunchChanges != 0 && r.state == State.RESUMED && !r.finishing;
+        }
+        if (relaunch) relaunch(r);
     }
 
     void activityIdle(ActivityRecord r) {
@@ -1257,8 +1395,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             notifyAll();
         }
         ClientTransaction t = new ClientTransaction(r.app.thread);
+        ActivityRelaunchItem relaunch = takeRelaunch(r, null);
+        if (relaunch != null) t.addTransactionItem(relaunch);
         t.addTransactionItem(new StartActivityItem(r.token, null /* sceneTransitionInfo */));
-        schedule(r, t, "StartActivityItem (visible, not resumed)");
+        schedule(r, t, (relaunch != null ? "ActivityRelaunchItem, " : "")
+                + "StartActivityItem (visible, not resumed)");
     }
 
     /**
