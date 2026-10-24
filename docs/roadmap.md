@@ -57,9 +57,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] `sysv_abi` (`ART_SYSV_ABI`) on every C++ function the assembly calls
       and on the assembly C++ calls; C library calls go through System V
       wrappers. `tools/abi-check.py` verifies all 203 boundaries in CI
-- [ ] Math entrypoints (`sin`, `fmod`, ...) called by compiled code need
+- [x] Math entrypoints (`sin`, `fmod`, ...) called by compiled code need
       System V wrappers too (the Microsoft ABI's 32-byte shadow space);
-      only matters once the JIT/AOT compiler runs
+      checked against StrictMath under nterp, AOT and the JIT (ci 40138006773)
 - [x] Natives entered with the System V ABI: `JNICALL` is `sysv_abi`, and
       `jni_macros.h` registers System V thunks; the `JNIEnv`/`JavaVM` tables
       stay on the Microsoft ABI ([0011](decisions/0011-libcore-natives.md))
@@ -97,10 +97,13 @@ Each phase ends with something demonstrable, built and tested in CI.
       CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
 - [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
       ART's signal catcher takes them
-- [ ] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
-      `CONTEXT` ↔ `ucontext_t`), then implicit checks back on
-- [ ] `MAP_FIXED` over existing reservations (placeholder mappings)
-- [ ] Executable file mappings (`.oat` code)
+- [x] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
+      `CONTEXT` ↔ `ucontext_t`), then implicit checks back on: implicit null
+      and stack overflow checks, `StackOverflowError` in every mode (ADR 0033,
+      0036; ci 40138006773)
+- [x] `MAP_FIXED` over existing reservations (placeholder mappings; ADR 0036,
+      `mman_probe`; ci 40138006773)
+- [x] Executable file mappings (`.oat` code mapped as views; ci 40138006773)
 - [ ] ART's own gtests for libartbase/libdexfile running on Windows
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
 - [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
@@ -116,9 +119,10 @@ Each phase ends with something demonstrable, built and tested in CI.
       signals. Stress (exceptions, GC, threads, JNI through compiled frames) and
       a subset of ART's run-tests pass under the switch interpreter, nterp, AOT
       and the JIT; a CPU-bound benchmark runs about 2.5x (nterp) and 5-6x (JIT)
-      the switch interpreter. Remaining: deep-recursion `StackOverflowError`
-      under nterp/JIT (needs an alternate signal stack), compiled JNI stubs,
-      AOT for the extensions, dual-mapped JIT cache.
+      the switch interpreter. `StackOverflowError` under every mode, compiled
+      JNI stubs, AOT for the extensions and a dual-mapped (W^X) JIT cache
+      ([0036](decisions/0036-stack-overflow-jni-stubs-mappings.md), ci
+      40138006773). Remaining: an app image.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
