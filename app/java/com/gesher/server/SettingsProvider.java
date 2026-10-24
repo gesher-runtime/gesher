@@ -47,7 +47,8 @@ final class SettingsProvider extends ContentProvider {
         }
         Map<String, String> system = mTables.get(SYSTEM);
         system.put(Settings.System.FONT_SCALE, "1.0");
-        system.put(Settings.System.TIME_12_24, "24");
+        system.put(Settings.System.TIME_12_24,  // Windows' time format (rtl track)
+                com.gesher.app.locale.SystemLocale.is24Hour() ? "24" : "12");
         system.put(Settings.System.SCREEN_OFF_TIMEOUT, "60000");
         system.put(Settings.System.SCREEN_BRIGHTNESS, "128");
         system.put(Settings.System.HAPTIC_FEEDBACK_ENABLED, "0");
