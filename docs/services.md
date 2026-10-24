@@ -4,7 +4,8 @@ Design: [0015](decisions/0015-services-binder-ipc.md),
 [0019](decisions/0019-services-system-server.md),
 [0024](decisions/0024-services-app-process.md),
 [0025](decisions/0025-services-app-components.md),
-[0026](decisions/0026-services-persistent-device.md). Tests:
+[0026](decisions/0026-services-persistent-device.md), device services
+[0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
 `tests/windows/tracks/50-services.ps1` (dot-sourced by `run-tests.ps1`).
 
 ## Pieces
@@ -45,6 +46,71 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 `GESHER_APP_METHOD_TRACE=<dir>` (a drive-less path) makes each app process the
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
+
+## Device services (devsvc track)
+
+Design: [0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
+`tests/windows/tracks/57-devsvc.ps1` with `tests/apps/devsvc` (`devsvc.apk`,
+built in framework.yml).
+
+| Service | Class (`app/java/com/gesher/server`) | Windows |
+|---|---|---|
+| `alarm` | `AlarmManagerService` | a waitable timer at the next alarm's wall-clock time (resume flag for `_WAKEUP`); WM_TIMECHANGE, time zone (`GetDynamicTimeZoneInformation`), resume |
+| `jobscheduler` | `JobSchedulerService` | constraints: `INetworkListManager`/`INetworkCostManager`, `GetSystemPowerStatus`, `GetLastInputInfo` |
+| `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
+| `notification` | `NotificationManagerService`, `NotificationIcons` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` |
+| `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver |
+| `batteryproperties`, `batterystats`, sticky ACTION_BATTERY_CHANGED | `BatteryService`, `StickyBroadcasts` | `GetSystemPowerStatus` |
+| natives | `WindowsHost` | `compat/devsvc` (`devsvc_win32.cc`, `devsvc_toast.c`, `devsvc_natives.cc`), `cmake/aosp/devsvc.cmake`, a row in `android_runtime.cc` |
+| scheduled work keeps the device | `DeviceWork` | the idle check in `SystemServer` |
+
+Behaviour, in short (details in the classes' comments and ADR 0038):
+- Alarms: all four types, exact/window/inexact (delivered at the window's
+  start), repeating (missed periods once, `EXTRA_ALARM_COUNT`), alarm clocks,
+  OnAlarmListener; replace on the same PendingIntent or listener; cancel. A
+  PendingIntent alarm starts the package's process when none runs. TIME_SET
+  (WM_TIMECHANGE or a clock jump), TIMEZONE_CHANGED (Windows zone, as an Olson
+  id), DATE_CHANGED (local midnight), NEXT_ALARM_CLOCK_CHANGED.
+- With no Gesher device running nothing fires; scheduled work due within the
+  idle timeout keeps the device running; persisted jobs come back at the next
+  start.
+- Jobs: latency, deadline, periodic windows (interval, flex), backoff,
+  network/charging/battery-not-low/idle constraints, enqueued work, stop after
+  10 min, at most 4 at once; `GESHER_JOBS_TIME_SCALE=N` (tests) divides
+  periods, flex and backoff.
+- Clipboard: both ways with Windows, text and HTML.
+- Notifications: toasts (title, text or big text, sub text, app icon or a
+  bitmap large icon, progress, action buttons; importance none/min/low/
+  default/high; ONLY_ALERT_ONCE updates are quiet), cancel and cancelAll
+  remove them, a click sends the content (or action) intent while the device
+  runs; NotificationListenerServices of installed packages are bound while
+  notifications are posted (onListenerConnected, onNotificationPosted,
+  onNotificationRemoved, getActiveNotifications).
+- Wake locks: one power request of the system server naming the holders
+  (`powercfg /requests`); released with the lock or its process.
+- Battery: present/level/plugged/status; a PC without a battery is on AC,
+  full, battery not present.
+- Vibrator: no `vibrator_manager` service (a PC has no vibrator); not
+  checked what apps get from `getSystemService(VIBRATOR_SERVICE)`.
+
+### Status and next steps (devsvc)
+- State: implemented, first CI run pending (this section is updated with
+  each push).
+- Verified locally only: the Win32 side (`compat/devsvc` with a test driver
+  built with mingw-w64 g++ on Windows 11: toasts shown, found in the history
+  and removed, the clipboard's text and HTML, events, a power request, the
+  alarm timer); the Java side compiles with ecj against CI's framework
+  classes.
+- CI probe (run 40113160416, `devsvc-probe` workflow, removed since): both
+  runners run an interactive console session where toasts of an
+  AppUserModelID registered only under `HKCU\...\AppUserModelId` show up in
+  `ToastNotificationManager.History`, `Set-Clipboard`/`Get-Clipboard` work,
+  and power status is AC online with no battery.
+- Next: CI green on both runners; then roadmap boxes.
+- Open: toast clicks after the device stopped (needs a protocol or COM
+  activator from the installer), content-URI job triggers, Windows sleep and
+  resume and real time-zone changes are not exercised in CI (WM_TIMECHANGE is
+  sent by the test without changing the clock).
 
 ## Status and next steps
 
