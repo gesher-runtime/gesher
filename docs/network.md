@@ -211,9 +211,17 @@ tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
   ActiveStore) and turns DHCPv4 back on should it find it off.
 - ci 40138810234 (cfb2d2e): cancelled while still building, superseded by the
   run below at a tip that also carries the exec track.
-- 57e7385 merges origin/phase4/integration at fe79e18 (exec track); its ci run
-  is the one to read (id in the commit after it, or `gh run list -R
-  gesher-runtime/gesher -b wip/net -w ci -L 1`). The 56-net.ps1 time limits
+- ci 40139254526 (430d285, merged with origin/phase4/integration fe79e18):
+  everything green but the two test jobs. 56-net.ps1 ran fully on both runners
+  (no runner loss): DNS, TCP, NIO, HTTP, NativeBN, JCA, TLS, the Windows trust
+  store (add, remove, GESHER_WINDOWS_CERTS=0), internet HTTPS and badssl.com,
+  nonetapp, netapp in an app process with the IPv6 connectivity change: PASS.
+  FAILs: UDP (`setsockopt failed: ENOPROTOOPT`: PlainDatagramSocketImpl sets
+  IP_MULTICAST_ALL=0), netapp single-process cleartext allowed (no
+  NetworkSecurityConfigProvider outside handleBindApplication), nativeapp's
+  tcp/getaddrinfo (EACCES: its manifest lacked INTERNET), 50-services' list
+  of stand-in services (now has `connectivity`). All four fixed in 66d71de.
+- ci **40141520320** (66d71de): running. The 56-net.ps1 time limits
   add up to ~48 min if every dalvikvm run times out, so a long test job is not
   by itself a hang; check the job's steps before cancelling it.
 
@@ -271,3 +279,8 @@ tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
   without INTERNET (3 lines).
 - compat/posix/src/socket.cc, netdb.cc, include/gesher/inet.h: the INTERNET gate.
 - Own new workflow .github/workflows/net.yml (push to wip/net only).
+- compat/posix/src/socket.cc: IP_MULTICAST_ALL accepted (set and get).
+- app/java/android/app/GesherAppDriver.java: NetworkSecurityConfigProvider.install
+  before the Application (single-process mode, as handleBindApplication).
+- tests/apps/nativeapp/AndroidManifest.xml: requests INTERNET.
+- tests/windows/tracks/50-services.ps1: `connectivity` in the expected list.
