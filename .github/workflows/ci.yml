@@ -434,6 +434,39 @@ jobs:
           name: gesher-setup
           path: installer/*.exe
 
+  # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
+  # clean runner runs real, unmodified open-source apps from F-Droid
+  # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
+  # read back, given input and closed: tests/e2e/run-e2e.ps1.
+  e2e:
+    needs: [package]
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/e2e
+            tests/windows/graphics
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gesher-setup
+          path: installer
+
+      - name: Run real apps
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
+          exit $LASTEXITCODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results
+          path: e2e-results/
+
   test:
     needs: [build, framework, native-libs, libs, graphics, angle, boot-image]
     strategy:

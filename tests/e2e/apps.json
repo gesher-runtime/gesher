@@ -1,0 +1,72 @@
+{
+  "comment": "Real, unmodified open-source apps from F-Droid's official repository (https://f-droid.org/repo), pinned by version and SHA-256, for tests/e2e/run-e2e.ps1 (docs/e2e.md). APKs are downloaded in CI only. knownFailure: why the app does not pass yet (docs/e2e.md); its FAIL line does not fail the job.",
+  "repo": "https://f-droid.org/repo",
+  "apps": [
+    {
+      "package": "com.ath0.rpn",
+      "label": "RPN calculator",
+      "versionName": "2.0.4",
+      "versionCode": 18,
+      "sha256": "",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/lpar/RPN",
+      "why": "A calculator: one Activity of plain framework widgets (Buttons in a layout), pure Java, no AndroidX; asks for the vibrator.",
+      "actions": [ { "keys": "12" } ]
+    },
+    {
+      "package": "org.billthefarmer.editor",
+      "label": "Editor",
+      "versionName": "1.98",
+      "versionCode": 198,
+      "sha256": "",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/billthefarmer/editor",
+      "why": "A text editor: a full-window EditText, menus, SharedPreferences, files; pure Java, no AndroidX.",
+      "actions": [ { "click": [200, 400] }, { "keys": "Gesher" } ]
+    },
+    {
+      "package": "org.billthefarmer.currency",
+      "label": "Currency",
+      "versionName": "1.58",
+      "versionCode": 158,
+      "sha256": "",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/billthefarmer/currency",
+      "why": "A converter: ListView with an adapter, SharedPreferences, an EditText, a network fetch of rates that must fail gracefully; pure Java.",
+      "actions": [ { "click": [200, 120] }, { "keys": "5" } ]
+    },
+    {
+      "package": "com.nononsenseapps.notepad",
+      "label": "NoNonsense Notes",
+      "versionName": "7.2.7",
+      "versionCode": 72700,
+      "sha256": "",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/spacecowboy/NotePad",
+      "why": "Notes and to-do lists: SQLite through its own ContentProvider (SQLiteOpenHelper, Cursors), AndroidX AppCompat and Material, preferences.",
+      "actions": [ { "click": [200, 400] } ]
+    },
+    {
+      "package": "com.physphil.android.unitconverterultimate",
+      "label": "Unit Converter Ultimate",
+      "versionName": "5.7.3",
+      "versionCode": 50703,
+      "sha256": "",
+      "license": "Apache-2.0",
+      "source": "https://github.com/physphil/UnitConverterUltimate",
+      "why": "A unit converter: AndroidX AppCompat, Material components (navigation drawer, toolbar), RecyclerView, fragments, Java and Kotlin.",
+      "actions": [ { "click": [200, 300] }, { "keys": "3" } ]
+    },
+    {
+      "package": "name.boyle.chris.sgtpuzzles",
+      "label": "Simon Tatham's Puzzles",
+      "versionName": "2025-09-12-1919-23762278-fdroid",
+      "versionCode": 149,
+      "sha256": "",
+      "license": "MIT",
+      "source": "https://github.com/chrisboyle/sgtpuzzles",
+      "why": "NDK: the puzzles are C code (lib/x86_64/libpuzzles.so) driven over JNI, drawing on a Canvas through Java callbacks; AndroidX AppCompat.",
+      "actions": [ { "click": [100, 200] } ]
+    }
+  ]
+}
