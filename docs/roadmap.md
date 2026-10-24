@@ -255,6 +255,14 @@ needs: [framework-build.md](framework-build.md).
       app's processes set too; removed by `gesher-app uninstall` and with
       Gesher; Gesher's own icon for Setup, its entries and `.apk` files
       (ci run 40024847287; docs/installer.md, ADR 0028)
+- [ ] The activity and window lifecycle apps observe (lifecycle track;
+      docs/lifecycle.md, ADR 0048): an Activity under a translucent or
+      floating one paused, not stopped, its window shown; minimizing the
+      window stops the Activity, restoring it resumes it; losing the focus is
+      onWindowFocusChanged(false) only; resizing the window changes the
+      configuration (onConfigurationChanged, or a relaunch per configChanges;
+      size and orientation qualifiers); ACTION_OUTSIDE; translucent popups
+      composed with alpha with the CPU pipeline and SkiaGL
 
 - [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
