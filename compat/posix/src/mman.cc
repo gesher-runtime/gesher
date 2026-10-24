@@ -9,9 +9,16 @@
 //
 // mremap moves anonymous mappings by copying (see mremap below).
 //
+// A private (MAP_PRIVATE) file mapping with MAP_FIXED inside one of this
+// layer's anonymous regions, as ART's ELF loader makes for an oat file's
+// segments in the reservation it took, cannot be a file view: Windows places
+// views only in free address space. Those pages get the file's contents
+// copied in instead, which is what a private mapping reads as, executable
+// ones included.
+//
 // Not supported yet (fails with EINVAL):
-//   - MAP_FIXED over memory this layer does not own, or over a file view
-//     (needs placeholder mappings: VirtualAlloc2 / MapViewOfFile3);
+//   - MAP_FIXED over memory this layer does not own, over a file view, or
+//     shared (needs placeholder mappings: VirtualAlloc2 / MapViewOfFile3);
 //   - executable file views (needs a handle opened with GENERIC_EXECUTE).
 
 #include <sys/mman.h>
@@ -154,7 +161,59 @@ void* MapAnonymous(State& s, void* start, size_t len, int prot, int flags) {
   return result;
 }
 
+// MAP_PRIVATE | MAP_FIXED file pages over an anonymous region of ours: fresh
+// pages with the file's contents (zeros past its end), then `prot`.
+void* CopyFileInto(State& s, void* start, size_t len, int prot, int fd, off_t offset) {
+  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  LARGE_INTEGER file_length;
+  if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &file_length)) {
+    errno = EBADF;
+    return MAP_FAILED;
+  }
+  if (MapAnonymous(s, start, len, PROT_READ | PROT_WRITE, MAP_FIXED) == MAP_FAILED) {
+    return MAP_FAILED;
+  }
+  uint64_t file_size = static_cast<uint64_t>(file_length.QuadPart);
+  uint64_t begin = static_cast<uint64_t>(offset);
+  size_t available = begin >= file_size ? 0 : static_cast<size_t>(std::min<uint64_t>(len, file_size - begin));
+  if (available != 0) {
+    // Through a temporary view, which leaves the descriptor's file position alone.
+    size_t padding = static_cast<size_t>(begin % s.granularity);
+    uint64_t view_offset = begin - padding;
+    HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    void* view = mapping == nullptr ? nullptr
+        : MapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(view_offset >> 32),
+                        static_cast<DWORD>(view_offset & 0xffffffffu), available + padding);
+    if (view == nullptr) {
+      if (mapping != nullptr) CloseHandle(mapping);
+      errno = EACCES;
+      return MAP_FAILED;
+    }
+    memcpy(start, static_cast<uint8_t*>(view) + padding, available);
+    UnmapViewOfFile(view);
+    CloseHandle(mapping);
+  }
+  DWORD old;
+  if ((prot & (PROT_READ | PROT_WRITE | PROT_EXEC)) != (PROT_READ | PROT_WRITE) &&
+      !VirtualProtect(start, len, PageProtection(prot), &old)) {
+    errno = EACCES;
+    return MAP_FAILED;
+  }
+  if ((prot & PROT_EXEC) != 0) {
+    FlushInstructionCache(GetCurrentProcess(), start, len);
+  }
+  return start;
+}
+
 void* MapFile(State& s, void* start, size_t len, int prot, int flags, int fd, off_t offset) {
+  if ((flags & MAP_FIXED) != 0 && (flags & MAP_SHARED) == 0) {
+    uintptr_t addr = reinterpret_cast<uintptr_t>(start);
+    auto it = FindRegion(s, addr);
+    if (it != s.regions.end() && it->second.anonymous &&
+        addr + len <= it->first + it->second.size) {
+      return CopyFileInto(s, start, len, prot, fd, offset);
+    }
+  }
   if ((prot & PROT_EXEC) != 0) {
     errno = EINVAL;
     return MAP_FAILED;
