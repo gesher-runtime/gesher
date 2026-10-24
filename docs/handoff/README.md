@@ -25,6 +25,9 @@ Merged so far:
 - Integration ci run 40135350639 on 6cea4ca (popups + rtl): all green.
 - exec: merged (verified at 059b267, ci 40137662101; Puzzles passes e2e).
   ADR 0035.
+- devsvc: merged (verified at a02e84a, ci 40137762701 attempt 2; attempt 1's
+  windows-2022 failure was a one-off rtlapp-under-ar-EG flake, passed on
+  rerun: watch for it). ADR 0038.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
@@ -94,6 +97,8 @@ posix), `compat/posix/src/signal.cc` (stack and posix), `tools/package/*`,
 - **Parallel tracks** in disjoint file domains, each one subagent in its own
   worktree. One agent per whole task (not tiny milestones, not huge). A
   stopped agent's successor starts from its brief plus its status section.
+- **Every agent runs on Opus**: pass the model explicitly when starting one;
+  never let it inherit another model.
 - **Keep going without asking** until the goal: a complete, ready installer
   with every gap closed.
 - **Honest reports**: tick roadmap boxes only for what CI verified.
