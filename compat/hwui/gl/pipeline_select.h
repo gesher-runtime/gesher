@@ -11,6 +11,6 @@ android::uirenderer::RenderPipelineType gesher_hwui_choose_pipeline();
 // "skiagl" or "skiacpu", after gesher_hwui_choose_pipeline.
 const char* gesher_hwui_renderer_name();
 
-// What was found: GL_RENDERER and versions for skiagl, why not for a
-// fallback to skiacpu.
+// What asked for the pipeline and what was found ("debug.hwui.renderer=skiagl:
+// <GL_RENDERER>, <GL_VERSION>, EGL 1.5"; for a fallback to skiacpu, why).
 const char* gesher_hwui_renderer_detail();

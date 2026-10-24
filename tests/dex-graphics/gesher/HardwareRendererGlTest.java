@@ -59,17 +59,17 @@ public final class HardwareRendererGlTest {
     String fontPath = args[0];
     File frameFile = new File(args[1]);
     String mode = args[2];
+    // What must have asked for SkiaGL: GESHER_HWUI_RENDERER or debug.hwui.renderer.
+    String askedBy = args.length > 3 ? args[3] : null;
     System.loadLibrary("android_runtime");
     String renderer = GraphicsDebug.renderer();
-    System.out.println("INFO  pipeline " + renderer + ": " + GraphicsDebug.rendererDetail());
+    String detail = GraphicsDebug.rendererDetail();
     boolean gl = renderer.equals("skiagl");
-    check(gl == mode.equals("gl"),
+    check(gl == mode.equals("gl") && (askedBy == null || detail.startsWith(askedBy + "=skiagl")),
         "hwui renders with the " + (mode.equals("gl") ? "SkiaGL" : "CPU") + " pipeline ("
-            + renderer + ")");
+            + renderer + "; " + detail + ")");
     if (mode.equals("fallback")) {
-      String detail = GraphicsDebug.rendererDetail();
-      check(!gl && detail.contains("no EGL display"),
-          "skiagl without ANGLE: the CPU pipeline renders (" + detail + ")");
+      check(!gl && detail.contains("no EGL display"), "skiagl without ANGLE: the CPU pipeline renders");
     }
     if (gl) {
       GraphicsDebug.setGlReadback(true);
@@ -223,7 +223,8 @@ public final class HardwareRendererGlTest {
     System.out.println("INFO  " + what + " vs the CPU frame: " + differ
         + " pixels differ by more than 2 outside the text (worst " + worst + "); text " + dark
         + " dark pixels, CPU " + darkCpu);
-    check(differ <= W * H / 200, what + ": the same frame as the CPU pipeline outside the text");
+    check(differ <= W * H / 200, what + ": the same frame as the CPU pipeline outside the text ("
+        + differ + " pixels differ by more than 2, worst " + worst + ")");
     check(Math.abs(dark - darkCpu) <= darkCpu / 10 + 5,
         what + ": the same text as the CPU pipeline (" + dark + " / " + darkCpu + ")");
   }
