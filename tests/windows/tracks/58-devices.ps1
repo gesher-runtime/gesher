@@ -133,6 +133,21 @@ function CameraTestCheck([string] $Mode, [string] $Out, [int] $Code) {
       "${cm}preview frames keep coming: true, results true",
       "${cm}still capture: capture completed, sensor timestamp>0 true, JPEG quality 90; still JPEG 320x240, starts FFD8 true, decodes to 320x240",
       "${cm}close closed 0", "${cm}done")) $Code $Mode
+  # The frames came through Media Foundation: its source reader over the test camera's
+  # IMFMediaSource (YUY2, converted to NV12 by the reader's video processing).
+  $opens = [regex]::Matches($Out, 'camera: opened gesher-test at (\d+x\d+) through ([^\r\n]*)')
+  $viaMf = @($opens | Where-Object { $_.Groups[2].Value -like 'Media Foundation (IMFSourceReader over the test media source*' })
+  if ($Out -match '(test camera \(GESHER_CAMERA_TEST\)[^;\r\n]*)') { $tc = $Matches[1] } else { $tc = '(not logged)' }
+  if ($Code -eq 0 -and $viaMf.Count -gt 0 -and $viaMf.Count -eq $opens.Count) {
+    Write-Host "PASS  devices: camera ($Mode): the test camera's frames through Media Foundation: $tc; opened at $(($opens | ForEach-Object { $_.Groups[1].Value }) -join ', ') through $($viaMf[0].Groups[2].Value)"
+  } elseif ($Mode -ne 'single process' -and $opens.Count -eq 0) {
+    # The Gesher device's app process logs to its own log, not always here.
+    Write-Host "SKIP  devices: camera ($Mode): the app process' open log is not in this output"
+  } else {
+    Write-Host "FAIL  devices: camera ($Mode): the test camera's frames through Media Foundation ($tc; $($opens.Count) opens, $($viaMf.Count) through Media Foundation; exit $Code)"
+    $script:failed++
+    ($Out -split "`n" | Where-Object { $_ -match 'camera' } | Select-Object -First 60) | Out-Host
+  }
 }
 
 # Single process: the services in the app's own process (gesher-app --single-process).
@@ -167,6 +182,7 @@ $out = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devic
 $code = $LASTEXITCODE
 $serverLog = Join-Path $root 'logs/system_server.log'
 $out += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
+$out += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.devices.log') -Raw -ErrorAction SilentlyContinue)
 LocationChecks 'Gesher device' $out $code $true
 SensorsTestCheck 'Gesher device' $out $code
 CameraTestCheck 'Gesher device' $out $code

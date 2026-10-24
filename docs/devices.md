@@ -74,9 +74,27 @@ Windows without them (no location service, no Media Foundation) gets clean
   Surfaces are that process's objects, which no binder transaction could carry.
 - Devices: Media Foundation's video capture devices (`MFEnumDeviceSources`,
   read with an `IMFSourceReader`, NV12 out with video processing), ids "0",
-  "1"... in Windows' order; with `GESHER_CAMERA_TEST=1` a test camera comes last
-  (640x480 and 320x240; Y = x + y with a moving bright square in rows 0-31, gray
-  chroma, 30 frames a second).
+  "1"... in Windows' order. The reader has advanced video processing on
+  (`MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING`), so cameras that only
+  offer YUY2 (or MJPG, decoded by Windows) still give NV12.
+- The test camera (`GESHER_CAMERA_TEST=1`) comes last. It is a Media Foundation
+  media source of Gesher's own (`TestSource` in camera_mf.cc: a live
+  IMFMediaSource with one stream offering YUY2 at 640x480 and 320x240, 30
+  frames a second; Y = x + y with a moving bright square in rows 0-31, gray
+  chroma), read through the same path as a PC's camera: the same
+  `IMFSourceReader` with video processing (YUY2 converted to NV12 by Windows),
+  `ReadSample`, the same sample copying, the same Camera2 service above. Only
+  where Media Foundation's DLLs are missing does it fall back to frames made
+  directly as NV12 (logged as "without Media Foundation"; the checks then fail,
+  since they ask for the Media Foundation path).
+- What a real camera adds that CI does not exercise: `MFEnumDeviceSources`
+  finding a device and `IMFActivate::ActivateObject` (the runners have no
+  capture device, so the enumeration answers 0), the Frame Server and the
+  driver below a real camera's source, MJPG decoding, the camera privacy
+  setting (a denied app gets E_ACCESSDENIED from ActivateObject or ReadSample,
+  reported to Camera2 as an open or capture error), and real exposure and
+  timing. A virtual camera (`MFCreateVirtualCamera`, Windows 11) needs the
+  source as a registered COM server and the Frame Server service; not done.
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
   focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
   device's sizes, LENS_FACING_EXTERNAL (the test camera: BACK), one partial
