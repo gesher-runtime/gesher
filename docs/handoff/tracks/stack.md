@@ -1,0 +1,16 @@
+# Track brief: stack
+
+stack overflow + codegen. The original brief given to the first agent of this track (2026-10-24), kept verbatim. A successor reads it together with the "Status and next steps" section in the track's doc on its branch.
+
+You are the "stack" track agent of the gesher project. Your worktree is C:\work\gesher-stack on branch wip/stack (already created from main 86aa4c7 and pushed). Work only there.
+
+FIRST read C:\work\gesher-stack\docs\handoff\track-rules.md and follow it exactly: it is binding (CI-first, never build AOSP locally, commit trailer, honesty, final report format, stay in your domain). Main now contains everything up to "Phase 3+", including compiled code on Windows: nterp, JIT, AOT in the boot image's primary image, Thread* at %gs:0x1678 (TLS slot 63, compat/posix/src/thread_register.cc), faults delivered as signals (VEH -> sigaction). Read docs/compiled-code.md, ADR 0033, docs/boot-image.md, ADR 0031, docs/roadmap.md Phase 1, compat/posix and compat/art.
+
+GOAL: close the compiled-code gaps:
+1. Deep recursion throws a catchable StackOverflowError under nterp, the JIT and AOT code (today only the switch interpreter handles it; Windows has no sigaltstack, so the fault handler needs somewhere to run: e.g. SetThreadStackGuarantee, ART's implicit stack checks against Windows guard pages, handling EXCEPTION_STACK_OVERFLOW and re-arming the guard page). Test: recurse to SOE, catch, repeat several times, on the main thread and on new threads, under every execution mode (GESHER_ART_INTERPRET_ONLY, nterp, JIT, AOT), in tests/windows/tracks/70-codegen.ps1.
+2. The other "Remaining" items in docs/compiled-code.md: compiled JNI stubs, AOT for the boot image extensions (framework.jar, gesher-app.jar), the dual-mapped JIT code cache.
+3. Phase 1 roadmap boxes in this area: System V wrappers for math entrypoints called by compiled code; signal delivery from Windows exceptions; MAP_FIXED over existing reservations (placeholder mappings); executable file mappings (.oat code). Check which ones the codegen work already did and tick them with CI evidence; do the rest.
+Measure startup/benchmarks before and after where relevant (docs).
+Your file domain: compat/art, compat/posix (signals, mmap, threads; careful: the ELF loader in compat/elf also uses VEH handlers and TLS; keep its handlers working: if the codegen handler is ever first, it must pass on the ELF loader's int3 trap sites and placeholder region), patches/art*, boot image tooling (tools/boot-image, boot-image.yml), tests 60-boot-image.ps1 and 70-codegen.ps1, docs/compiled-code.md, docs/boot-image.md, ADR docs/decisions/0036-stack-*.md.
+
+Coordinator notes: seven other tracks run in parallel on the shared CI (exec, net, devsvc, ime, popups, webview, media): trigger CI only when code is ready, cancel your superseded runs, rerun only failed jobs on transient errors. The whole test suite plus the e2e job must stay green (408+ PASS lines on main). Keep a "Status and next steps" section in your doc updated with every meaningful push (CI ids, verified, next) so a successor agent could continue from it alone. Do not stop at a partial result: finish to CI-verified green on both runners. Final message = the report track-rules.md asks for.
