@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Under the action bar: five buttons and a Spinner in a row each, then red to the bottom
+     (what the dim behind a dialog is read back on). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFFFF">
+    <Button
+        android:id="@+id/dialog"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Dialog" />
+    <Button
+        android:id="@+id/toast"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Toast" />
+    <Button
+        android:id="@+id/menu"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Menu" />
+    <Spinner
+        android:id="@+id/spinner"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:spinnerMode="dropdown" />
+    <Button
+        android:id="@+id/dialog_activity"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Dialog activity" />
+    <Button
+        android:id="@+id/second"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="Second activity" />
+    <View
+        android:id="@+id/red"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#FFFF0000" />
+</LinearLayout>
