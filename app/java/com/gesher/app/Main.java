@@ -308,6 +308,10 @@ public final class Main {
             throw new IllegalStateException("framework-res.apk not found: " + frameworkRes);
         }
         AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
+
+        // 5. android.webkit.WebView on WebView2 (docs/webview.md): Gesher's
+        //    WebViewFactoryProvider, set before any app code runs.
+        com.gesher.app.webview.GesherWebView.install();
     }
 
     /** The system server's package manager, waited for through servicemanager. */

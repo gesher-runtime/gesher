@@ -208,6 +208,24 @@ public final class WindowSession extends IWindowSession.Stub {
         return out;
     }
 
+    /**
+     * The Win32 window (HWND) of the app window whose IWindow binder is {@code windowToken}
+     * (View.getWindowToken() of a view attached to it), or 0: where a WebView's WebView2
+     * child window goes (webview track, docs/webview.md).
+     */
+    public long hwndOf(IBinder windowToken) {
+        if (windowToken == null) return 0;
+        synchronized (mWindows) {
+            AppWindow w = mWindows.get(windowToken);
+            NativeWindow nw = w != null ? w.nativeWindow : null;
+            try {
+                return nw != null ? nw.getHwnd() : 0;
+            } catch (IllegalStateException closed) {
+                return 0;
+            }
+        }
+    }
+
     private static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();

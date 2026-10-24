@@ -272,6 +272,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   // NavigationStarting is not the page's, so the Listener is not asked.
   bool api_navigation = false;
   std::wstring main_document;  // the URL of the main frame's navigation
+  std::set<UINT64> cancelled;  // navigations the Listener took
 
   std::wstring document_script_id;
   uint64_t document_script_generation = 0;
@@ -573,6 +574,11 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                             impl->listener->OnNavigationStarting(url, user != FALSE,
                                                                  redirect != FALSE)) {
                           args->put_Cancel(TRUE);
+                          // Its NavigationCompleted (OPERATION_CANCELED) is not the
+                          // app's: no onPageFinished for a navigation it took.
+                          UINT64 nav = 0;
+                          args->get_NavigationId(&nav);
+                          impl->cancelled.insert(nav);
                           return S_OK;
                         }
                         impl->main_document = url;
@@ -592,6 +598,9 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                           -> HRESULT {
                         auto impl = weak.lock();
                         if (!impl || impl->destroyed) return S_OK;
+                        UINT64 nav = 0;
+                        args->get_NavigationId(&nav);
+                        if (impl->cancelled.erase(nav) > 0) return S_OK;
                         BOOL ok = FALSE;
                         args->get_IsSuccess(&ok);
                         COREWEBVIEW2_WEB_ERROR_STATUS status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
