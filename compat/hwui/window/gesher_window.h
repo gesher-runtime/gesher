@@ -61,6 +61,7 @@ struct WindowEvent {
 // The window's private messages (WM_APP is its own destruction).
 constexpr unsigned kMsgPresentLayered = 0x8000 + 0x40;  // WM_APP + 0x40: UpdateLayeredWindow
 constexpr unsigned kMsgActivate = 0x8000 + 0x41;        // bring the window to the front
+constexpr unsigned kMsgApplyStyle = 0x8000 + 0x42;      // set the popup's extended style
 
 class Window {
  public:
@@ -181,6 +182,9 @@ class Window {
   void Unregister();
   // gesher_popup.cc: puts anchored popups where they belong (the anchor moved).
   void MoveAnchoredPopups();
+  // gesher_popup.cc: the extended style for no_activate_, passthrough_ and
+  // layered_ (the window's thread).
+  void ApplyExStyle();
   // gesher_popup.cc: UpdateLayeredWindow from the back buffer (the window's thread).
   void PresentLayered();
   // gesher_popup.cc: GDI pixels of the buffer, dimmed (with buffer_mutex_ held).
@@ -239,6 +243,7 @@ class Window {
   int gesture_touches_ = 0;
   std::atomic<bool> translucent_{false};
   std::atomic<bool> layered_{false};  // WS_EX_LAYERED set (the window's thread)
+  std::atomic<bool> no_activate_{false}, passthrough_{false};
   std::atomic<int> dim_{0};           // 0..255
   std::vector<uint8_t> dimmed_;       // buffer_mutex_
 };
