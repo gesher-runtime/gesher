@@ -72,8 +72,27 @@ in a single process and on the Gesher device.
 
 ## Status and next steps
 
-- Done (not yet CI-verified): server visibility rules, minimize/restore,
-  focus, ACTION_OUTSIDE; the test app and track script.
-- Next: configuration changes on window resize (onConfigurationChanged vs a
-  relaunch per `configChanges`, size and orientation qualifiers from the
-  window's size); translucent popups under SkiaGL; ADR 0048.
+- ci run 40141213634 (both runners): the single-process lifecycle check
+  passed (focus, ACTION_OUTSIDE, minimize/restore, resize with
+  onConfigurationChanged and -land/-w600dp); on the device everything but
+  the red read-back under the dialog-themed Activity (dimmed: test fixed)
+  passed, including the opaque Activity's relaunch on resize with its saved
+  state. The composition check showed the CPU popup composed with alpha (the
+  sampled corner was the desktop, outside the app window: test now samples
+  above the card) and no dim under SkiaGL (now a dim layer window). uiapp's
+  device check broke because a resize now relaunches it, as on Android: it
+  declares the size changes it handles.
+- Next: the re-run (dim layer, test fixes), then merge
+  origin/phase4/integration and the final run.
+
+## Remaining gaps
+
+- One resumed activity at a time (no multi-resume): another task's activity
+  is paused, visible, until its window is activated (shown windows) or
+  restored.
+- An app's own `Activity.moveTaskToBack` hides its task's windows instead of
+  minimizing them.
+- The single process does not relaunch its Activity for configuration changes
+  it does not handle (it says so on stdout).
+- Under SkiaGL a translucent popup costs a read-back per frame; the dim layer
+  dims the whole app window below all its popups.
