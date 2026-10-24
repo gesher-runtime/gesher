@@ -77,6 +77,15 @@ Double-clicking an .apk file runs it with gesher-app too, unless another
 program already opens .apk files; then use "Open with" (the Gesher entry
 runs gesher-app.cmd).
 
+Web pages in apps (WebView)
+---------------------------
+An app's WebView shows its pages with Microsoft Edge WebView2, the browser
+engine Windows 11 (and current Windows 10) includes. If Setup did not find
+it, it offered to install the "Microsoft Edge WebView2 Runtime"; you can also
+get it from https://go.microsoft.com/fwlink/p/?LinkId=2124703. Without it,
+WebViews stay empty. Each app keeps its web data (cookies, cache, storage) in
+its own data folder (app_webview).
+
 What works, and what doesn't yet
 --------------------------------
 - Windows show what the app draws, but take no input yet (clicks and
