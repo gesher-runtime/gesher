@@ -132,6 +132,41 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   configuration (screen size in dp, density) stays the display's, so the
   Activity is not relaunched. relayout does not resize a window the user
   resizes.
+- **Dialogs, menus and other popups** (popups track, ADR 0040): a window that
+  belongs to another one is a `WS_POPUP` Win32 window owned by that one's
+  (`NativeWindow.createPopup`, `compat/hwui/window/gesher_popup.cc`): no
+  taskbar button, kept above its owner, hidden and minimized with it. A
+  dialog belongs to its Activity's window, a PopupWindow (menus, a Spinner's
+  dropdown, an AutoCompleteTextView's, tooltips) to the window its token
+  names, a toast to the app's active window, an Activity with a dialog or
+  translucent theme to the window of the Activity below it. It lays out in
+  the app window's bounds (sub-windows in their parent's frame, the attached
+  frame) and its Win32 window is its surface (the frame and its surface
+  insets, room for the shadow; input is offset back), placed in the app
+  window's client area and moving with it (`SetPopupBounds`,
+  `WM_WINDOWPOSCHANGED`); resizing the app window lays its popups out again.
+  A popup whose format has alpha is a layered window (`UpdateLayeredWindow`
+  from the CPU pipeline's premultiplied buffer: the dialog's card and shadow
+  over the app; opaque with SkiaGL). The session keeps each app window's
+  group (`WindowSession.updateGroup`): the app window dimmed by the topmost
+  `FLAG_DIM_BEHIND` popup's `dimAmount` (`Window::SetDim`, in its paint), the
+  popups raised by Android layer, and input routes (`Window::SetInputRoute`:
+  a window's events go to another one's queue, translated through the
+  screen): a modal popup gets the pointer events of the windows below it (a
+  click outside a dialog cancels it and never reaches the Activity), a gesture
+  stays where it started, the topmost focusable window gets the keys,
+  `FLAG_WATCH_OUTSIDE_TOUCH` popups a press where one starts outside them.
+  Not focusable: `WS_EX_NOACTIVATE`, unfocused; not touchable:
+  `WS_EX_TRANSPARENT`. Hidden windows are never activated, so the session
+  gives the Android focus (to the topmost focusable window); shown windows
+  get it from Windows' activation. Closing a popup (Alt+F4, WM_CLOSE) is Back
+  in it; a dialog-themed Activity's window finishes the Activity. Toasts are
+  drawn in the app's process (`ToastHost`, the process's `Toast.sService`: a
+  text toast as SystemUI's ToastUI shows it, a custom toast's TN, one at a
+  time for 2 s or 3.5 s). An Activity started on top of another in its task
+  takes the task window's place and size; the window below is hidden when its
+  Activity stops and comes back where the task's window is; the title is the
+  TaskDescription label when the Activity set one.
 - **ANativeWindow for libandroid** (native-libs track): dalvikvm defines, as
   Microsoft-ABI C functions, hostgraphics' `ANativeWindow_acquire/release/
   getWidth/getHeight/getFormat/dequeueBuffer/cancelBuffer/setDequeueTimeout/
@@ -416,11 +451,54 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    (`GESHER_HWUI_RENDERER=skiagl` or `debug.hwui.renderer=skiagl`; ADR 0030),
    verified with HardwareRenderer into a window. Next: an Activity's window
    with SkiaGL, then making it the default where ANGLE has a GPU.
-3. **Window polish**: owned windows for dialogs and popups, a user resize
+3. **Window polish**: (owned windows for dialogs and popups: done by the
+   popups track, below), a user resize
    that also changes the app's screen size in dp (onConfigurationChanged or
    a relaunch, as the server decides on a device), density from the
    monitor's DPI,
    vsync from DWM (`DwmFlush`) for Choreographer.
+
+### Popups (popups track): status and next steps
+
+Branch `wip/popups`, ADR 0040, tests `tests/windows/tracks/36-popups.ps1`
+with `tests/apps/popupapp` (built by framework.yml next to uiapp).
+
+- Done (ci run 40129561197 at 6ce1d20, windows-2022 and windows-2025; e2e green): an AlertDialog is a `WS_POPUP` owned by
+  the app window (GW_OWNER, no `WS_EX_APPWINDOW`), placed over the activity
+  in its client area, translucent (layered), the app window dimmed by its
+  `dimAmount` behind it (read back: the red View is 0x660000 at 0.6); its OK
+  button reaches the listener; Esc cancels it; a click outside it (on the app
+  window) cancels it and does not reach the activity; a Toast (hosted in the
+  app process, `ToastHost`) is an owned popup with `WS_EX_NOACTIVATE` and
+  `WS_EX_TRANSPARENT`, shown for 2 s and removed; the options menu (a panel,
+  `TYPE_APPLICATION_ATTACHED_DIALOG`) and a Spinner's dropdown
+  (`TYPE_APPLICATION_SUB_PANEL`, a PopupWindow) are owned popups whose items
+  reach `onOptionsItemSelected` and `onItemSelected`; all in a single process
+  and on the Gesher device. On the device also: an Activity with
+  `Theme.Material.Light.Dialog` is an owned popup of the window below it,
+  which stays shown (its Activity is stopped by the server, see below);
+  WM_CLOSE finishes it; a second Activity in the task opens at the task
+  window's place and size, the first window is hidden while it is on top and
+  comes back when it finishes.
+- Local runs: `36-popups.ps1` runs outside CI with a `dist` from a CI run's
+  `windows-x64`, `framework` and `graphics` artifacts and a root set up as
+  run-tests.ps1 does (fonts, framework-res.apk, build.prop).
+- Found on the way: an app targeting SDK 36 lays out edge to edge, so its
+  content starts under the action bar unless it fits the insets
+  (`android:fitsSystemWindows`); popupapp does, as apps have to on Android 16.
+- Not done / stand-ins: popups are opaque with SkiaGL; the system server
+  stops the Activity below a translucent one (the session keeps its window
+  shown, frozen; a server-side `occludesParent` would keep it paused only);
+  `ACTION_OUTSIDE` is delivered as a press and release outside the watcher;
+  media sub-windows stack above their parent; a popup is not moved back onto
+  the monitor when its app window is partly off it; minimizing the app window
+  hides its popups (Windows) but does not stop the Activity; tooltips,
+  AutoCompleteTextView, DatePicker/TimePicker dialogs, ProgressDialog and
+  context menus use the same paths (sub-windows and application windows) but
+  have no test of their own yet.
+- Next: tests for a context menu (long press) and an AutoCompleteTextView
+  dropdown; `ACTION_OUTSIDE` from the input translator; a shown-window
+  (desktop) check of activation and z-order.
 
 ### Open problems and dead ends
 

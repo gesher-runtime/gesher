@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher popups</string>
+    <string name="activity_label">Gesher popups test</string>
+    <string name="dialog_activity_label">Gesher dialog activity</string>
+    <string name="second_activity_label">Gesher second activity</string>
+    <string-array name="choices">
+        <item>One</item>
+        <item>Two</item>
+        <item>Three</item>
+    </string-array>
+</resources>
