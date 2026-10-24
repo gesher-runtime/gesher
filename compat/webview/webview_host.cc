@@ -485,6 +485,12 @@ class Bridge final : public IDispatch {
       fprintf(stderr, "gesher-webview: bridge Invoke(dispid %ld, flags %u, %u args)%s\n",
               static_cast<long>(id), static_cast<unsigned>(flags), argc,
               callable_ ? " on the method" : "");
+      for (UINT i = 0; i < argc; ++i) {
+        VARIANT& v = params->rgvarg[argc - 1 - i];
+        std::wstring text = Arg(v);
+        fprintf(stderr, "gesher-webview:   arg %u: vt %u '%ls'\n", i,
+                static_cast<unsigned>(V_VT(&v)), text.c_str());
+      }
       fflush(stderr);
     }
     // Without type information WebView2's proxy reads "call" as a property
