@@ -152,6 +152,9 @@ public class RtlActivity extends Activity {
                 + ", tofu " + paint.hasGlyph(TOFU.substring(0, 1))
                 + ", arabic " + paint.hasGlyph(SEEN));
         EditText edit = findViewById(R.id.edit);
+        // The cursor at offset 0, the RTL text's right end (taking focus moved it to the
+        // end), for the arrow keys the test posts.
+        edit.setSelection(0);
         Layout l = edit.getLayout();
         if (l != null) {
             say("RtlActivity edit: paragraph " + (l.getParagraphDirection(0) < 0 ? "rtl" : "ltr")
