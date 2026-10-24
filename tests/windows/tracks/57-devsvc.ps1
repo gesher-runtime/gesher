@@ -111,7 +111,8 @@ $log = DevsvcSince $mark
 $server = (DevsvcText $serverLog)
 if ($server.Length -gt $serverMark) { $server = $server.Substring($serverMark) } else { $server = '' }
 $activityPid = if ($log -match 'alarms: listener alarm set \(pid (\d+)\)') { $Matches[1] } else { '' }
-$receiverPid = if ($log -match 'AlarmReceiver onReceive com\.gesher\.devsvc\.ALARM \(alarm count 1\) \(pid (\d+)\)') { $Matches[1] } else { '' }
+# (EXTRA_ALARM_COUNT is not filled into an immutable PendingIntent, as on Android.)
+$receiverPid = if ($log -match 'AlarmReceiver onReceive com\.gesher\.devsvc\.ALARM \(alarm count \d+\) \(pid (\d+)\)') { $Matches[1] } else { '' }
 $problems = @()
 if ($code -ne 0) { $problems += "launch exit $code" }
 if (-not $log.Contains('devsvc: alarms: OnAlarmListener onAlarm after ')) { $problems += 'the listener alarm did not fire' }
@@ -234,13 +235,16 @@ if ($log -notmatch 'power: BatteryManager capacity=\d+ charging=(true|false)') {
 DevsvcCheck "devsvc: battery: the sticky ACTION_BATTERY_CHANGED and BatteryManager from GetSystemPowerStatus (this PC: $(if ($hasBattery) { 'a battery' } else { 'no battery, AC' }))" $problems $log
 
 # --- clock changes -----------------------------------------------------------------
-# WM_TIMECHANGE (what Windows broadcasts when the time is set; sent here
-# without changing the clock) becomes TIME_SET for registered and manifest
-# receivers.
+# WM_TIMECHANGE (what Windows broadcasts when the time is set; sent here to the
+# device's event window, without changing the clock: Windows does not pass an
+# application's broadcast of it on) becomes TIME_SET for registered and
+# manifest receivers.
 if (-not ('Devsvc.Broadcast' -as [type])) {
   Add-Type -Namespace Devsvc -Name Broadcast -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern System.IntPtr SendMessageTimeoutW(System.IntPtr hWnd, uint msg, System.IntPtr wParam, System.IntPtr lParam, uint flags, uint timeout, out System.IntPtr result);
+[System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr FindWindowW(string className, string windowName);
 '@
 }
 $mark = (DevsvcText $devsvcLog).Length
@@ -248,17 +252,21 @@ $t = DevsvcLaunch 'TimeActivity'
 $registered = DevsvcWait $mark @('devsvc: time: receiver registered') 300
 Start-Sleep 1
 $r = [IntPtr]::Zero
-$null = [Devsvc.Broadcast]::SendMessageTimeoutW([IntPtr]0xffff, 0x001E, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref] $r)
+$eventWindow = [Devsvc.Broadcast]::FindWindowW('GesherDeviceServices', $null)
+if ($eventWindow -ne [IntPtr]::Zero) {
+  $null = [Devsvc.Broadcast]::SendMessageTimeoutW($eventWindow, 0x001E, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref] $r)
+}
 $out = WaitTimed $t 200
 $code = $LASTEXITCODE
 $got = DevsvcWait $mark @('devsvc: time: manifest receiver got android.intent.action.TIME_SET') 60
 $log = DevsvcSince $mark
 $problems = @()
 if (-not $registered) { $problems += 'the receiver was not registered' }
+if ($eventWindow -eq [IntPtr]::Zero) { $problems += 'the device''s event window (GesherDeviceServices) was not found' }
 if (-not $log.Contains('devsvc: time: registered receiver got android.intent.action.TIME_SET')) { $problems += 'the registered receiver got no TIME_SET' }
 if (-not $got) { $problems += 'the manifest receiver got no TIME_SET' }
 if ($code -ne 0) { $problems += "launch exit $code" }
-DevsvcCheck 'devsvc: clock: WM_TIMECHANGE becomes TIME_SET for registered and manifest receivers' $problems ($out + "`n--- package log`n" + $log)
+DevsvcCheck 'devsvc: clock: WM_TIMECHANGE becomes TIME_SET for registered and manifest receivers' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'alarm:|devsvc:|TIME_SET' | Out-String))
 
 # The device stops; the app's toast registration goes.
 $null = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
