@@ -47,6 +47,21 @@ abruptly; check `git log origin/main..` on their branch).
 | devices (location, sensors, Camera2; ADR 0043) | 9c684f2 (last commit is WIP) | ci 40134370867: location and sensors on both runners | `docs/devices.md` | Camera2 over Media Foundation in progress (Java side: WindowsCamera, CameraFrames) |
 | posix (paths, /proc, tzdata, inotify, process model, ART gtests; ADR 0045) | 2152bcb | none; runs 40135642983 (ci) and 40135639733 (posix.yml) at 65cccdc unread | `docs/posix.md` | read those runs first |
 
+Coordinator session 2 (2026-10-25) read those runs: integration 40135350639
+had both test jobs green (e2e still running at the time); net 40133972018:
+test jobs still in progress (possibly hung); devsvc 40135237081: both test
+jobs failed; media 40135129611: all green except `media / codecs`; posix
+40135642983/40135639733: compile failure in `build`. A successor agent was
+started for each of the nine tracks above with those findings.
+
+New tracks of wave 2 (cut from phase4/integration, briefs in
+[tracks/](tracks/)): `arm64` (Phase 7, ADR 0047, tests 47-arm64.ps1),
+`lifecycle` (popups leftovers, ADR 0048, 48-lifecycle.ps1), `locale` (rtl
+leftovers, ADR 0049, 49-locale.ps1). Media stage 2 (video) goes to the media
+track after its stage 1 is merged; ime on windows-2022 is the ime
+successor's job. The roadmap box "the framework's own system services" is
+closed by decision in ADR 0046 (Gesher's own server, ADR 0019).
+
 Leftovers reported by finished tracks (for a later wave):
 - popups: the system server stops (Android would only pause) the Activity
   under a translucent or dialog-themed one; popups are opaque under SkiaGL;
