@@ -38,13 +38,23 @@ for name in Main Nested Lookup GetMethodSignature MultiDex; do
   mkdir -p "$work/$name/classes" "$work/$name/dex"
   javac -encoding UTF-8 --release 8 -nowarn -proc:none -d "$work/$name/classes" \
     $(find "$tests/$name" -name '*.java')
-  d8_flags=(--release --min-api 26)
-  # dxflags of art-gtest-jars-MultiDex: Main in classes.dex, the rest in classes2.dex.
   if [[ $name == MultiDex ]]; then
-    d8_flags=(--release --min-api 19 --main-dex-list "$tests/MultiDex/main.list")
+    # dxflags of art-gtest-jars-MultiDex: the classes main.list names in
+    # classes.dex, the rest in classes2.dex. (D8 takes a main-dex list only for
+    # dex inputs, so each half is dexed on its own.)
+    main=() rest=()
+    for c in $(cd "$work/$name/classes" && find . -name '*.class' | sed 's|^\./||'); do
+      if grep -qx "$c" "$tests/MultiDex/main.list"; then main+=("$work/$name/classes/$c")
+      else rest+=("$work/$name/classes/$c"); fi
+    done
+    mkdir -p "$work/$name/dex2"
+    java -cp "$r8" com.android.tools.r8.D8 --release --min-api 19 --output "$work/$name/dex" "${main[@]}"
+    java -cp "$r8" com.android.tools.r8.D8 --release --min-api 19 --output "$work/$name/dex2" "${rest[@]}"
+    mv "$work/$name/dex2/classes.dex" "$work/$name/dex/classes2.dex"
+  else
+    java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 --output "$work/$name/dex" \
+      $(find "$work/$name/classes" -name '*.class')
   fi
-  java -cp "$r8" com.android.tools.r8.D8 "${d8_flags[@]}" --output "$work/$name/dex" \
-    $(find "$work/$name/classes" -name '*.class')
   zip_dex "$work/$name/dex" "$out/art-gtest-jars-$name.jar"
 done
 
