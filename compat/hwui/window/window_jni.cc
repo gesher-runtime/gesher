@@ -95,6 +95,11 @@ void JNICALL NativeWindow_setClientSize(JNIEnv*, jclass, jlong ptr, jint width, 
   Get(ptr)->window()->SetClientSize(width, height);
 }
 
+void JNICALL NativeWindow_setMinClientSize(JNIEnv*, jclass, jlong ptr, jint width,
+                                           jint height) {
+  Get(ptr)->window()->SetMinClientSize(width, height);
+}
+
 // The window's icon from an .ico file (title bar, taskbar); false when it
 // cannot be read.
 jboolean JNICALL NativeWindow_setIcon(JNIEnv* env, jclass, jlong ptr, jstring path) {
@@ -205,6 +210,7 @@ const JNINativeMethod kMethods[] = {
     {"nSetTitle", "(JLjava/lang/String;)V", reinterpret_cast<void*>(&NativeWindow_setTitle)},
     {"nSetResizable", "(JZ)V", reinterpret_cast<void*>(&NativeWindow_setResizable)},
     {"nSetClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setClientSize)},
+    {"nSetMinClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setMinClientSize)},
     {"nTagSurfaceControl", "(JJ)V", reinterpret_cast<void*>(&NativeWindow_tagSurfaceControl)},
     {"nGetEventFd", "(J)I", reinterpret_cast<void*>(&NativeWindow_getEventFd)},
     {"nPollEvent", "(J[D)I", reinterpret_cast<void*>(&NativeWindow_pollEvent)},

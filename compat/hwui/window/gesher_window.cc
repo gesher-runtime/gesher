@@ -33,13 +33,14 @@ std::wstring Widen(const std::string& s) {
   return w;
 }
 
-int Modifiers() {
-  int m = 0;
-  if (GetKeyState(VK_SHIFT) & 0x8000) m |= 1;
-  if (GetKeyState(VK_CONTROL) & 0x8000) m |= 2;
-  if (GetKeyState(VK_MENU) & 0x8000) m |= 4;
-  if (GetKeyState(VK_CAPITAL) & 1) m |= 8;
-  return m;
+// The modifier bit (WindowEvent::modifiers) of a virtual key, or 0.
+int ModifierOfKey(uintptr_t vk) {
+  switch (vk) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: return 1;
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: return 2;
+    case VK_MENU: case VK_LMENU: case VK_RMENU: return 4;
+    default: return 0;
+  }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -151,6 +152,15 @@ struct StartArgs {
 };
 
 }  // namespace
+
+int Window::Modifiers() const {
+  int m = held_modifiers_;
+  if (GetKeyState(VK_SHIFT) & 0x8000) m |= 1;
+  if (GetKeyState(VK_CONTROL) & 0x8000) m |= 2;
+  if (GetKeyState(VK_MENU) & 0x8000) m |= 4;
+  if (GetKeyState(VK_CAPITAL) & 1) m |= 8;
+  return m;
+}
 
 Window* Window::Create(const std::string& title_utf8, int width, int height) {
   RegisterClassOnce();
@@ -301,6 +311,11 @@ void Window::SetClientSize(int width, int height) {
   // handles WM_SIZE (the new client size) before it returns.
   SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void Window::SetMinClientSize(int width, int height) {
+  min_client_width_ = width > 0 ? width : 0;
+  min_client_height_ = height > 0 ? height : 0;
 }
 
 void Window::SetTitle(const std::string& title_utf8) {
@@ -477,6 +492,16 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
       info->ptMaxTrackSize.x = 16384;
       info->ptMaxTrackSize.y = 16384;
+      // The app's minimum (SetMinClientSize), as a window size.
+      const int min_w = min_client_width_, min_h = min_client_height_;
+      if (min_w > 0 || min_h > 0) {
+        RECT r = {0, 0, min_w, min_h};
+        AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
+                                 FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
+                                 GetDpiForWindow(hwnd));
+        if (min_w > 0) info->ptMinTrackSize.x = r.right - r.left;
+        if (min_h > 0) info->ptMinTrackSize.y = r.bottom - r.top;
+      }
       return 0;
     }
     case WM_SIZE: {
@@ -499,6 +524,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     }
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
+      if (msg == WM_KILLFOCUS) held_modifiers_ = 0;  // their key-up messages go elsewhere
       e.type = WindowEvent::kFocus;
       e.button = msg == WM_SETFOCUS;
       Queue(e);
@@ -601,6 +627,9 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     case WM_KEYUP:
     case WM_SYSKEYUP: {
       bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+      if (int bit = ModifierOfKey(wparam)) {
+        held_modifiers_ = down ? (held_modifiers_ | bit) : (held_modifiers_ & ~bit);
+      }
       e.type = down ? WindowEvent::kKeyDown : WindowEvent::kKeyUp;
       e.key = static_cast<int32_t>(wparam);
       e.scan = static_cast<int32_t>((lparam >> 16) & 0x1ff);
