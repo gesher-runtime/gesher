@@ -13,7 +13,7 @@ import android.view.DisplayInfo;
 import android.view.Surface;
 
 /**
- * The device the app sees: one display, a phone-sized portrait screen, en-US.
+ * The device the app sees: one display, a phone-sized portrait screen, Windows' locales.
  * The display stand-in reports it, and the process configuration is derived from it, as
  * system_server derives it from DisplayManagerService and the window manager.
  *
@@ -126,7 +126,9 @@ public final class DeviceProfile {
     public static Configuration configuration() {
         Configuration c = new Configuration();
         c.setToDefaults();
-        c.setLocales(LocaleList.forLanguageTags("en-US"));
+        // Windows' languages (or $GESHER_LOCALES): com.gesher.app.locale.SystemLocale.
+        LocaleList locales = com.gesher.app.locale.SystemLocale.locales();
+        c.setLocales(locales);
         c.densityDpi = DENSITY_DPI;
         c.screenWidthDp = widthDp();
         c.screenHeightDp = heightDp();
@@ -136,6 +138,7 @@ public final class DeviceProfile {
                 | Configuration.SCREENLAYOUT_LONG_YES
                 | Configuration.SCREENLAYOUT_LAYOUTDIR_LTR
                 | Configuration.SCREENLAYOUT_ROUND_NO;
+        c.setLayoutDirection(locales.get(0));  // right to left for Hebrew, Arabic...
         c.uiMode = Configuration.UI_MODE_TYPE_NORMAL | Configuration.UI_MODE_NIGHT_NO;
         c.touchscreen = Configuration.TOUCHSCREEN_FINGER;
         c.keyboard = Configuration.KEYBOARD_NOKEYS;

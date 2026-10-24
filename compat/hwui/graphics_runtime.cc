@@ -79,6 +79,9 @@ extern int register_android_view_Surface(JNIEnv* env);
 extern int register_com_gesher_app_window_NativeWindow(JNIEnv* env);
 // compat/hwui/gl/graphics_debug_jni.cc: which pipeline renders, GL read-back.
 extern int register_com_gesher_app_graphics_GraphicsDebug(JNIEnv* env);
+// compat/hwui/text/text_natives.cc (rtl track).
+extern int register_com_gesher_app_fonts_WindowsFonts(JNIEnv* env);
+extern int register_com_gesher_app_locale_SystemLocale(JNIEnv* env);
 
 namespace {
 
@@ -148,6 +151,8 @@ const Registration kRegistrations[] = {
     {"android/view/Surface", register_android_view_Surface},
     {"com/gesher/app/window/NativeWindow", register_com_gesher_app_window_NativeWindow},
     {"com/gesher/app/graphics/GraphicsDebug", register_com_gesher_app_graphics_GraphicsDebug},
+    {"com/gesher/app/fonts/WindowsFonts", register_com_gesher_app_fonts_WindowsFonts},
+    {"com/gesher/app/locale/SystemLocale", register_com_gesher_app_locale_SystemLocale},
 };
 
 bool HasClass(JNIEnv* env, const char* name) {
