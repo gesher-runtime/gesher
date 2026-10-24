@@ -35,8 +35,8 @@ jobs:
 
       - name: Compile the boot image
         shell: pwsh
-        env:
-          BOOT_IMAGE_VERBOSE: compiler
+        # BOOT_IMAGE_VERBOSE: compiler logs dex2oat's phases; a dex2oat that
+        # hangs is stopped after the timeout, with its threads' stacks.
         run: pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image -TimeoutMinutes 12
 
       # A first look before the test jobs: Hello runs on the image.
