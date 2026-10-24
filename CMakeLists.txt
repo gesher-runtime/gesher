@@ -68,6 +68,8 @@ include(cmake/aosp/core_libs_tests.cmake)
 include(cmake/aosp/graphics.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Media (docs/media.md): the audio engine and the framework's media natives.
+include(cmake/aosp/media.cmake)
 
 # Phase 0 probe: Windows primitives ART relies on.
 add_executable(platform_probe probes/platform/platform_probe.c)
