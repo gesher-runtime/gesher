@@ -71,7 +71,7 @@ They may not be redistributed.
   junction to the folder with `$GESHER_WINDOWS_FONTS`. When neither works,
   the map is built without Windows' fonts and the log says why.
 - **Color emoji** are Segoe UI Emoji's COLR/CPAL layers, drawn by Skia's
-  FreeType backend (Fontations is not built, ADR 0029); minikin prefers the
+  FreeType backend (Fontations is not built, docs/graphics.md); minikin prefers the
   `und-Zsye` family for emoji presentation.
 
 Rejected: bundling Noto CJK and Noto Color Emoji (+30–43 MB, for glyphs every

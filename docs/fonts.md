@@ -150,6 +150,112 @@ font map through SharedMemory, 26717 bytes)`).
   could point them at `$ANDROID_ROOT`.
 - A dex program not started by gesher-app has no font map until it calls
   `SystemFontMap.load()`.
-- No emoji, CJK or other scripts' fonts yet; no updatable fonts
-  (`/data/fonts`), no OEM customization (`/product/etc/fonts_customization.xml`).
+- No updatable fonts (`/data/fonts`), no OEM customization
+  (`/product/etc/fonts_customization.xml`). (Further scripts, CJK and emoji:
+  see below.)
 - ashmem's protection mask (`SharedMemory.setProtect`) is not enforced.
+
+## Right to left, further scripts, the locale (rtl track)
+
+ADR [0044](decisions/0044-rtl-scripts-and-locale.md). Branch `wip/rtl`.
+
+### Further scripts: the fallback chain
+
+- **Bundled** (above): Arabic, Thai and Devanagari Noto fonts in
+  `fonts.xml`, elegant and compact (UI) variants; Roboto covers Latin, Greek
+  and Cyrillic; Noto Sans Hebrew stays.
+- **Windows' fonts in place**: `config/fonts/windows-fonts.xml` (in the build
+  output's `fonts/`, the installer's `{app}onts`, copied to
+  `$ANDROID_ROOT/etc/windows-fonts.xml` by the launcher and the tests) lists
+  fallback families whose files are in the Windows fonts folder: CJK
+  (Microsoft YaHei zh-Hans, JhengHei zh-Hant, Yu Gothic / Meiryo / MS Gothic
+  ja, Malgun Gothic ko, SimSun-ExtB/ExtG), Segoe UI Emoji (`und-Zsye`, color
+  COLR), Segoe UI Symbol, Nirmala UI (Indic), Leelawadee UI, Ebrima, Gadugi,
+  Myanmar Text, Himalaya, Mongolian Baiti, Yi Baiti, Javanese Text, Tai Le,
+  New Tai Lue, Phags-pa, MV Boli, Sylfaen, Segoe UI and Segoe UI Historic.
+  `SystemFontMap.load()` parses it with the Windows folder as font directory
+  and appends its families to `fonts.xml`'s fallback list; files a Windows
+  lacks are dropped. Its log line says so: `… (4 named families, 33 fallback
+  families; 25 fallback families (38 fonts) of Windows' from …; font map
+  through SharedMemory, 153773 bytes)` (windows-2022).
+- **The folder**: `com.gesher.app.fonts.WindowsFonts.directory()`:
+  `$GESHER_WINDOWS_FONTS` (`none` turns it off), else `%WINDIR%\Fonts` from
+  the native (`GetSystemWindowsDirectoryW`; `compat/hwui/text/text_natives.cc`)
+  in Gesher's path form. It must be on the current drive (drive-less path,
+  ADR 0010), as an installed Gesher is; the tests, whose root is on `D:`,
+  make a junction `$root/windows-fonts` → `C:\Windows\Fonts` and name it with
+  `$GESHER_WINDOWS_FONTS` (`32-fonts.ps1`).
+
+### The locale from Windows
+
+`com.gesher.app.locale.SystemLocale` (natives in `text_natives.cc`):
+Windows' preferred UI languages (`GetUserPreferredUILanguages`) are the
+locale list; the first takes the regional format's region when it is the
+same language; first day of the week, hour cycle and digits that differ
+from that locale's become `-u-fw-`, `-u-hc-`, `-u-nu-` extensions (Android
+14+ regional preferences). `$GESHER_LOCALES` (e.g. `he-IL,en-US`) replaces
+the list. Used by `DeviceProfile.configuration()` (locales and layout
+direction of every Configuration, the system server's included, so app
+processes on the device get it in `bindApplication`), `Main.bootstrap`
+(`LocaleList.setDefault`) and the settings stand-in's `TIME_12_24`.
+`ApkPackage` now sets `FLAG_SUPPORTS_RTL` from `android:supportsRtl` (the
+parse never derived ApplicationInfo's flags), without which views ignore an
+RTL layout direction.
+
+### Tests
+
+- `tests/dex-graphics/gesher/ScriptsTest.java` (32-fonts.ps1): Arabic from
+  Noto Naskh Arabic UI, shaped (four joined seens are initial, medial and
+  final glyphs; with ZWNJ the isolated one), drawn as one connected shape
+  (four apart), right to left; Devanagari (ka-virama-ssa one conjunct glyph),
+  Thai, Cyrillic, Greek with the bundled fonts' widths; Chinese, Japanese,
+  Korean with glyphs, not the `.notdef` of U+0378; zh-CN text identical to
+  msyh.ttc alone; 直 differs between ja (Yu Gothic) and zh-CN (YaHei); the
+  emoji drawn in color, as wide as seguiemj.ttf alone; a symbol.
+- `tests/dex-graphics/gesher/LocaleTest.java` (39-rtl.ps1): the locale list,
+  default Locale/LocaleList, first day of week (java.util and ICU), 24-hour
+  time and its pattern, number format against Windows' own settings, read by
+  the script in a new process: the runner's (en-US), with the regional format
+  set to en-GB (→ en-GB) and to de-DE (→ en-US-u-fw-mon-hc-h23), restored
+  after; and `$GESHER_LOCALES`.
+- `tests/apps/rtlapp` (rtlapp.apk, `android:supportsRtl`, `values-iw`,
+  `values-ar`) and `tests/windows/tracks/39-rtl.ps1`: its window read back
+  with PrintWindow; the view rectangles come from the app's log. Colored runs
+  (Hebrew, Arabic: red then blue logically; mixed: Hebrew, "ABC", "123",
+  Hebrew) must be ordered right to left with the LTR run inside; RTL
+  paragraphs with gravity start at the right edge; Arabic joined (fewer
+  connected shapes, narrower than with ZWNJ); textDirection rtl right,
+  textAlignment viewStart with the layout, gravity end of an RTL paragraph
+  left; CJK ink against the tofu line; emoji colored pixels; a row of
+  red|blue mirrored with the layout, a row with `layoutDirection="ltr"` not.
+  Three runs: en-US single process; `he-IL,en-US` single process, with
+  arrow keys (posted WM_KEYDOWN/UP) moving the cursor of the RTL EditText
+  visually (Left from offset 0 → 1 → 2, Right → 1, Shift+Left selects 1-2;
+  End → 0 and Home → 4: Android moves them to the right and left edges,
+  `Selection.moveToRightEdge`/`LeftEdge`, which in RTL text are the logical
+  start and end); `ar-EG` on the Gesher device (app process started by the
+  system server).
+
+### Status and next steps
+
+(Kept current with each push; a successor can continue from here.)
+
+- Done, on wip/rtl: everything above. CI: run 40114899592 (build failed:
+  a comment in fonts.xml named `…-VF.ttf`, which collect-fonts.sh took for a
+  file); run 40128190431 (build, package green; tests: ScriptsTest's CJK
+  check used `hasGlyph` on a multi-character string; rtlapp ran with
+  `supportsRtl false`, so nothing mirrored; the EditText's cursor had moved
+  to the end on focus; everything else passed, the locale checks included);
+  run 40129151328: everything passed on both runners (scripts, locale,
+  mirrored layouts, bidi, single process and device) except the last cursor
+  step: End went to offset 0, which is Android's behavior (the right edge),
+  not the test's expected 4; the test now expects End → 0, Home → 4.
+  Next run: pending.
+- Next: CI green on both runners; then the roadmap box.
+- Not done / gaps: per-app locales (`LocaleManager.setApplicationLocales`) are
+  not served; Windows settings changed while an app runs are not sent as a
+  configuration change; custom decimal/grouping symbols and date patterns
+  from Windows are not taken over (only what a locale and its -u- extensions
+  express); fonts on another drive than the current one need
+  `$GESHER_WINDOWS_FONTS`; the emoji and CJK look is Windows' (Segoe UI
+  Emoji, YaHei...), not Noto's.
