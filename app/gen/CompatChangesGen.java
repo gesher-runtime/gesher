@@ -22,12 +22,14 @@ import java.util.zip.ZipFile;
  * (e.g. DISABLE_OPT_OUT_EDGE_TO_EDGE, which ignores an app's
  * windowOptOutEdgeToEdgeEnforcement).
  *
- * <p>Reads the class files of framework.jar's classes (a directory or a jar): each
- * {@code static final long} field annotated {@code @ChangeId} (CLASS retention, so
- * RuntimeInvisibleAnnotations), with {@code @Disabled}, {@code @EnabledSince} or
- * {@code @EnabledAfter(targetSdkVersion = N)}, {@code @LoggingOnly}.
+ * <p>{@code @ChangeId} and its companions have SOURCE retention, so the changes are read
+ * from the framework's Java sources (SOURCE_DIRs): each {@code static final long} field
+ * annotated {@code @ChangeId}, with {@code @Disabled}, {@code @EnabledSince} or
+ * {@code @EnabledAfter(targetSdkVersion = N)}, {@code @LoggingOnly}; a target SDK named
+ * {@code Build.VERSION_CODES.X} is resolved from framework.jar's classes (CLASSES, a
+ * directory or a jar), which are also searched for the annotations in class files.
  *
- * <pre>java CompatChangesGen.java CLASSES OUT_DIR PACKAGE</pre>
+ * <pre>java CompatChangesGen.java CLASSES OUT_DIR PACKAGE [SOURCE_DIR...]</pre>
  */
 public final class CompatChangesGen {
     private static final String ANNOTATIONS = "Landroid/compat/annotation/";
@@ -37,8 +39,8 @@ public final class CompatChangesGen {
     }
 
     public static void main(String[] args) throws IOException {
-        if (args.length != 3) {
-            System.err.println("usage: CompatChangesGen CLASSES OUT_DIR PACKAGE");
+        if (args.length < 3) {
+            System.err.println("usage: CompatChangesGen CLASSES OUT_DIR PACKAGE [SOURCE_DIR...]");
             System.exit(2);
         }
         TreeMap<Long, Change> changes = new TreeMap<>();
@@ -58,6 +60,16 @@ public final class CompatChangesGen {
                     try (InputStream in = zip.getInputStream(e)) {
                         scan(in.readAllBytes(), changes);
                     }
+                }
+            }
+        }
+        for (int i = 3; i < args.length; i++) {
+            Path root = Path.of(args[i]);
+            if (!Files.isDirectory(root)) continue;
+            try (Stream<Path> files = Files.walk(root)) {
+                for (Path p : (Iterable<Path>) files.filter(f -> f.toString().endsWith(".java"))::iterator) {
+                    String text = Files.readString(p, StandardCharsets.ISO_8859_1);
+                    if (text.contains("@ChangeId")) scanSource(root.relativize(p).toString().replace(java.io.File.separatorChar, (char) 47), text, changes);
                 }
             }
         }
@@ -83,7 +95,9 @@ public final class CompatChangesGen {
                 + " disabled, " + counts[2] + " enabled since an SDK, " + counts[3]
                 + " enabled after an SDK, " + counts[4] + " logging only) in " + sClasses
                 + " classes; " + sChangeIds + " @ChangeId, " + sCompatAnnotations
-                + " compat annotations" + (sSample != null ? " (" + sSample + ")" : ""));
+                + " compat annotations" + (sSample != null ? " (" + sSample + ")" : "")
+                + "; " + sSourceChangeIds + " in sources (" + sUnresolved + " unresolved), "
+                + VERSION_CODES.size() + " version codes");
         if (changes.isEmpty()) {
             System.err.println("CompatChangesGen: no @ChangeId field found in " + classes);
             System.exit(1);
@@ -91,6 +105,50 @@ public final class CompatChangesGen {
     }
 
     /** The changes a class file declares. */
+    static final java.util.Map<String, Integer> VERSION_CODES = new java.util.HashMap<>();
+    static int sSourceChangeIds, sUnresolved;
+
+    private static final java.util.regex.Pattern FIELD = java.util.regex.Pattern.compile(
+            "static\\s+final\\s+long\\s+(\\w+)\\s*=\\s*(-?[0-9][0-9_]*)[lL]?\\s*;");
+    private static final java.util.regex.Pattern SDK = java.util.regex.Pattern.compile(
+            "@(EnabledSince|EnabledAfter)\\s*\\(\\s*targetSdkVersion\\s*=\\s*([\\w.]+)\\s*\\)");
+
+    /** The @ChangeId fields of a Java source. */
+    static void scanSource(String file, String text, TreeMap<Long, Change> out) {
+        String clean = text.replaceAll("(?s)/\\*.*?\\*/", " ").replaceAll("//[^\\n]*", " ");
+        int at = 0;
+        while ((at = clean.indexOf("@ChangeId", at)) >= 0) {
+            int start = Math.max(clean.lastIndexOf(';', at), Math.max(clean.lastIndexOf('}', at),
+                    clean.lastIndexOf('{', at))) + 1;
+            int end = clean.indexOf(';', at);
+            at += 9;
+            if (end < 0) break;
+            String decl = clean.substring(start, end + 1);
+            java.util.regex.Matcher f = FIELD.matcher(decl);
+            if (!f.find()) continue;
+            sSourceChangeIds++;
+            long id = Long.parseLong(f.group(2).replace("_", ""));
+            int kind = 0, sdk = 0;
+            if (decl.contains("@Disabled")) kind = 1;
+            else if (decl.contains("@LoggingOnly")) kind = 4;
+            java.util.regex.Matcher m = SDK.matcher(decl);
+            if (kind == 0 && m.find()) {
+                String v = m.group(2);
+                Integer level = v.matches("\\d+") ? Integer.valueOf(v)
+                        : VERSION_CODES.get(v.substring(v.lastIndexOf('.') + 1));
+                if (level == null) {
+                    sUnresolved++;
+                    System.err.println("CompatChangesGen: " + file + ": " + f.group(1)
+                            + ": unknown target SDK " + v);
+                    continue;
+                }
+                kind = m.group(1).equals("EnabledSince") ? 2 : 3;
+                sdk = level;
+            }
+            out.putIfAbsent(id, new Change(id, kind, sdk, file + " " + f.group(1)));
+        }
+    }
+
     static int sClasses, sChangeIds, sCompatAnnotations;
     static String sSample;
 
@@ -129,6 +187,7 @@ public final class CompatChangesGen {
             String desc = (String) pool[in.readUnsignedShort()];
             int attrs = in.readUnsignedShort();
             Long value = null;
+            Integer intValue = null;
             boolean changeId = false;
             int kind = 0, sdk = 0;
             for (int a = 0; a < attrs; a++) {
@@ -137,6 +196,9 @@ public final class CompatChangesGen {
                 if (attr.equals("ConstantValue") && desc.equals("J")) {
                     int idx = ((body[0] & 0xff) << 8) | (body[1] & 0xff);
                     if (pool[idx] instanceof Long l) value = l;
+                } else if (attr.equals("ConstantValue") && desc.equals("I")) {
+                    int idx = ((body[0] & 0xff) << 8) | (body[1] & 0xff);
+                    if (pool[idx] instanceof Integer iv) intValue = iv;
                 } else if (attr.equals("RuntimeInvisibleAnnotations")
                         || attr.equals("RuntimeVisibleAnnotations")) {
                     DataInputStream an = new DataInputStream(new java.io.ByteArrayInputStream(body));
@@ -163,6 +225,9 @@ public final class CompatChangesGen {
                         }
                     }
                 }
+            }
+            if (className.equals("android/os/Build$VERSION_CODES") && intValue != null) {
+                VERSION_CODES.put(name, intValue);
             }
             if (changeId && value != null) {
                 out.putIfAbsent(value, new Change(value, kind, sdk,
