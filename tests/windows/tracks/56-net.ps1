@@ -243,7 +243,9 @@ NetExpect 'nonetapp.apk without INTERNET and ACCESS_NETWORK_STATE: name lookups 
 # Across processes: a system server (with the connectivity service) and netapp.apk in an
 # app process attached to it. The app waits in a default network callback while this
 # script adds an address to the adapter of Windows' default route and removes it again:
-# Windows' change reaches the app as onLinkPropertiesChanged both times.
+# Windows' change reaches the app as onLinkPropertiesChanged both times. The address is
+# IPv6 (2001:db8::/32, documentation), never IPv4: a static IPv4 address on a DHCP
+# adapter turns its DHCP off, which cut the runners off GitHub (ci 40133972018).
 $device = "net-$PID"
 $netLogs = Join-Path $root 'net-logs'
 New-Item -ItemType Directory -Force $netLogs | Out-Null
@@ -270,24 +272,33 @@ $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikv
 $psi.UseShellExecute = $false
 $app = [Diagnostics.Process]::Start($psi)
 $added = $false
+$dhcp4 = $null
 $appCode = -1
 try {
   $deadline = (Get-Date).AddSeconds(400)
   while ((Get-Date) -lt $deadline -and -not $app.HasExited -and
          -not "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)".Contains('watching: add')) { Start-Sleep -Milliseconds 250 }
   if ($route -and -not $app.HasExited) {
-    $null = New-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -PrefixLength 32 -SkipAsSource $true -ErrorAction Stop
+    $dhcp4 = (Get-NetIPInterface -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).Dhcp
+    $null = New-NetIPAddress -InterfaceIndex $route.ifIndex -AddressFamily IPv6 -IPAddress 2001:db8::77 -PrefixLength 128 `
+      -SkipAsSource $true -PolicyStore ActiveStore -ErrorAction Stop
     $added = $true
     $deadline = (Get-Date).AddSeconds(100)
     while ((Get-Date) -lt $deadline -and -not $app.HasExited -and
            -not "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)".Contains('watch: added seen')) { Start-Sleep -Milliseconds 250 }
-    Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 2001:db8::77 -Confirm:$false -ErrorAction SilentlyContinue
     $added = $false
   }
   if (-not $app.WaitForExit(200000)) { $app.Kill($true) }
   if ($app.HasExited) { $appCode = $app.ExitCode }
 } finally {
-  if ($added) { Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -Confirm:$false -ErrorAction SilentlyContinue }
+  if ($added) { Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 2001:db8::77 -Confirm:$false -ErrorAction SilentlyContinue }
+  # The runner's IPv4 must be as it was (DHCP), whatever happened above.
+  if ($route -and $dhcp4 -eq 'Enabled' -and
+      (Get-NetIPInterface -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).Dhcp -ne 'Enabled') {
+    Write-Host "INFO  net: DHCPv4 was turned off on interface $($route.ifIndex); turning it on again"
+    Set-NetIPInterface -InterfaceIndex $route.ifIndex -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
+  }
   foreach ($p in $started) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
   Remove-Item Env:GESHER_BINDER
 }
