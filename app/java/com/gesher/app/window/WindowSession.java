@@ -84,9 +84,25 @@ import java.util.List;
  * resizable tasks, 220dp), focus, and characters the key map cannot type (WM_CHAR, other
  * keyboard layouts), which reach the focused view as {@code ACTION_MULTIPLE} KeyEvents.
  *
+ * <p>Popups (docs/graphics.md, "Dialogs, menus and other popups"; ADR 0040): a window
+ * that belongs to another one (a dialog to its Activity's window, a PopupWindow, menu,
+ * dropdown or tooltip to the window it was attached to, a toast to the app's active window,
+ * an Activity with a dialog or translucent theme to the window of the Activity below it)
+ * is a popup Win32 window owned by that window: no taskbar button, laid out in the app
+ * window's bounds (its display) by its gravity, x and y, placed there and moving with it,
+ * stacked by its Android layer, with its own input channel. The session keeps each app
+ * window's group of popups ({@link #updateGroup}): the dim behind a dialog, the order, where
+ * input goes (a modal popup gets the touches outside it, the focused window the keys) and,
+ * with hidden windows (never activated), which window has focus.
+ *
+ * <p>An Activity started on top of another in the same task takes the window's place:
+ * its window opens where the task's window is, at its size, and the window below is hidden
+ * when its Activity stops, so the task looks like one window (ADR 0040).
+ *
  * <p>Closing a Win32 window (its close button, Alt+F4, WM_CLOSE) goes to the close
  * handler ({@link #setCloseHandler}); by default an Activity's window finishes its
- * Activity. The session runs in the app's process, where the windows are drawn; it is an
+ * Activity. Closing a popup that is not an Activity's window presses Back in it. The
+ * session runs in the app's process, where the windows are drawn; it is an
  * {@code IWindowSession.Stub}, so WindowManagerService's session factory can hand it out.
  */
 public final class WindowSession extends IWindowSession.Stub {
@@ -104,6 +120,12 @@ public final class WindowSession extends IWindowSession.Stub {
     private final WindowLayout mLayout = new WindowLayout();
     private final ArrayMap<IBinder, AppWindow> mWindows = new ArrayMap<>();
     private volatile CloseHandler mCloseHandler = WindowSession::finishActivity;
+    /** Windows added so far (AppWindow.seq). Guarded by mWindows. */
+    private long mNextSeq;
+    /** The top-level window shown or focused last: a toast's owner. Guarded by mWindows. */
+    private AppWindow mActiveRoot;
+    /** Where each task's window was last (client area on the screen). Guarded by mWindows. */
+    private final android.util.SparseArray<Rect> mTaskScreen = new android.util.SparseArray<>();
 
     /** One app window: a ViewRootImpl's, keyed by its IWindow's binder. */
     private static final class AppWindow {
@@ -134,8 +156,43 @@ public final class WindowSession extends IWindowSession.Stub {
         boolean drawn;
         boolean shown;
 
+        // Popups (ADR 0040).
+        /** The window this one belongs to (shown as its popup), or null: a top-level window. */
+        AppWindow parent;
+        /** Shown as a popup Win32 window (owned by its parent's, if it has one). */
+        boolean popup;
+        /** When it was added: windows of a layer stack in this order. */
+        long seq;
+        /** Its last frame, in its display's (the app window's client area) coordinates. */
+        final Rect frame = new Rect();
+        /** Where its popup Win32 window was put (frame and anchor), to skip repeats. */
+        final Rect placed = new Rect();
+        /** Its Activity's task, or -1. */
+        int taskId = -1;
+        /** The app hid it, but it stays shown under an Activity's translucent popup. */
+        boolean appHidden;
+        /** The focus last given to ViewRootImpl by the session (hidden windows). */
+        Boolean sessionFocus;
+        /** The size ViewRootImpl last asked for (relayout), for laying it out again. */
+        int requestedWidth = WindowLayout.UNSPECIFIED_LENGTH;
+        int requestedHeight = WindowLayout.UNSPECIFIED_LENGTH;
+        /** What updateGroup last logged of the group of this top-level window. */
+        String groupState;
+
         AppWindow(IWindow client) {
             this.client = client;
+        }
+
+        boolean flag(int f) {
+            return (attrs.flags & f) != 0;
+        }
+
+        boolean focusable() {
+            return !flag(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+        }
+
+        boolean touchable() {
+            return !flag(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
         }
 
         String title() {
@@ -235,19 +292,26 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Fills {@code out} (frames, configuration, insets) for the requested size. */
     private void layout(AppWindow w, int requestedWidth, int requestedHeight,
             WindowRelayoutResult out) {
-        Rect bounds = w.bounds.isEmpty() ? displayBounds() : new Rect(w.bounds);
+        // A popup lays out in its app window's bounds (its display), as a dialog does in its
+        // task's on a device.
+        AppWindow root = root(w);
+        Rect bounds = root.bounds.isEmpty() ? displayBounds() : new Rect(root.bounds);
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
         Rect cutoutSafe = new Rect();
         state.getDisplayCutoutSafe(cutoutSafe);
         ClientWindowFrames frames = out.frames;
+        // A sub-window (a PopupWindow, a panel) lays out in its parent's frame, unless it
+        // asks for the screen (FLAG_LAYOUT_IN_SCREEN): WindowState's attached frame.
+        frames.attachedFrame = isSubWindow(w.attrs.type) && w.parent != null
+                ? new Rect(w.parent.frame) : null;
         mLayout.computeFrames(w.attrs, state, cutoutSafe, bounds,
                 WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
         Configuration override = new Configuration();
-        if (!w.bounds.isEmpty()) {
+        if (!root.bounds.isEmpty()) {
             // Resized by the user: the window's bounds, as a freeform task's on a device.
             // ViewRootImpl computes its frames from them (relayoutWindow's local layout), so
             // the frames alone would not move it. The rest of the configuration (screen size
@@ -266,13 +330,17 @@ public final class WindowSession extends IWindowSession.Stub {
         if (w.nativeWindow != null) {
             // A window the user resizes keeps the user's size: a relayout computed for an
             // earlier size is followed by the resize still queued (applyResize).
-            if (!w.resizable && (w.nativeWindow.getWidth() != width
+            if (!w.resizable && !w.popup && (w.nativeWindow.getWidth() != width
                     || w.nativeWindow.getHeight() != height)) {
                 w.nativeWindow.setClientSize(width, height);
             }
             return false;
         }
-        NativeWindow nw = NativeWindow.create(w.title(), width, height);
+        if (w.popup) {
+            createPopup(w, width, height);
+            return true;
+        }
+        NativeWindow nw = NativeWindow.create(title(w), width, height);
         // An Activity's full-size window follows the user's resizing (the window's bounds,
         // applyResize); other windows' sizes follow the app's layout (relayout).
         w.resizable = isUserResizable(w.attrs);
@@ -290,7 +358,8 @@ public final class WindowSession extends IWindowSession.Stub {
                 + " in process " + android.os.Process.myPid() + ", AppUserModelID "
                 + (id != null ? id : "none") + ", icon " + (iconSet ? icon : "none")
                 + ", input " + (w.input != null ? "attached" : "none")
-                + (min != null ? ", resizable, at least " + min[0] + "x" + min[1] : ""));
+                + (min != null ? ", resizable, at least " + min[0] + "x" + min[1] : "")
+                + (w.taskId >= 0 ? ", task " + w.taskId : ""));
         if (w.input == null) {
             // No input channel (the stand-in natives): the session reads the window's
             // events itself, for closing.
@@ -356,8 +425,16 @@ public final class WindowSession extends IWindowSession.Stub {
     private void attachInput(AppWindow w) {
         if (w.inputChannel == null) return;
         WindowInput.Options o = new WindowInput.Options();
-        // The Win32 window is the size of the frame: client pixels are window pixels.
-        o.initialFocus = true;
+        // The Win32 window is the size of the frame (a popup's: of its surface, around the
+        // frame by the surface insets): client pixels are window pixels.
+        if (w.popup) {
+            o.offsetX = -w.attrs.surfaceInsets.left;
+            o.offsetY = -w.attrs.surfaceInsets.top;
+        }
+        // Focusable windows start focused (a window shown off the desktop is never
+        // activated); a toast, a tooltip or a PopupWindow that is not focusable never is.
+        o.initialFocus = w.focusable();
+        if (o.initialFocus) w.sessionFocus = Boolean.TRUE;
         final IBinder key = w.client.asBinder();
         o.listener = (type, a, b) -> onWindowEvent(key, type, a, b);
         try {
@@ -403,6 +480,7 @@ public final class WindowSession extends IWindowSession.Stub {
                         w.focused = a != 0;
                         log("window \"" + w.title() + "\" " + (a != 0 ? "focused" : "unfocused"));
                     }
+                    if (a != 0) onActivated(w);
                 });
                 break;
             case WindowInput.EVENT_CHAR:
@@ -420,6 +498,14 @@ public final class WindowSession extends IWindowSession.Stub {
             w = mWindows.get(key);
         }
         if (w == null || w.nativeWindow == null) return;
+        if (w.popup && w.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                && w.input != null) {
+            // A dialog, a menu: closing it is Back, as on a phone (Dialog cancels,
+            // PopupWindow dismisses).
+            log("window \"" + w.title() + "\" closed by the user: Back");
+            pressBack(w);
+            return;
+        }
         log("window \"" + w.title() + "\" closed by the user");
         mCloseHandler.onClose(this, key, w.attrs);
     }
@@ -498,6 +584,7 @@ public final class WindowSession extends IWindowSession.Stub {
         } catch (RemoteException e) {
             log("window \"" + w.title() + "\": resized: " + e);
         }
+        resizePopups(w);
         if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
             // Debugging: where ViewRootImpl is a second later.
             for (int delay : new int[] {1500, 5000}) {
@@ -674,6 +761,521 @@ public final class WindowSession extends IWindowSession.Stub {
         w.shown = false;
     }
 
+    // ---- popups and tasks (ADR 0040) ----
+
+    /** The top-level window {@code w} belongs to ({@code w} itself when it is one). */
+    private static AppWindow root(AppWindow w) {
+        AppWindow r = w;
+        for (int i = 0; r.parent != null && i < 32; i++) r = r.parent;
+        return r;
+    }
+
+    private static boolean isSubWindow(int type) {
+        return type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW
+                && type <= WindowManager.LayoutParams.LAST_SUB_WINDOW;
+    }
+
+    private static boolean isApplicationWindow(int type) {
+        return type >= WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW
+                && type <= WindowManager.LayoutParams.LAST_APPLICATION_WINDOW;
+    }
+
+    /**
+     * The window {@code w} belongs to, or null for a top-level window (guarded by mWindows):
+     * a sub-window's is the window its token names (a PopupWindow's, a panel's: the IWindow
+     * of the window it is attached to); an application window's (a dialog's) is its
+     * Activity's window; an Activity's window with a translucent or floating theme belongs
+     * to the window of the Activity below it; a system window's (a toast's) is the app's
+     * active window.
+     */
+    private AppWindow findParent(AppWindow w, boolean overActivity) {
+        int type = w.attrs.type;
+        if (isSubWindow(type)) {
+            return w.attrs.token != null ? mWindows.get(w.attrs.token) : null;
+        }
+        if (type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            if (!overActivity) return null;
+            AppWindow below = null;
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v != w && v.shown && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                        && (w.taskId < 0 || v.taskId == w.taskId)
+                        && (below == null || v.seq > below.seq)) {
+                    below = v;
+                }
+            }
+            return below != null ? below : activeRoot();
+        }
+        if (isApplicationWindow(type)) {
+            AppWindow activity = null;
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v != w && v.attrs.token == w.attrs.token && w.attrs.token != null
+                        && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                        && (activity == null || v.seq > activity.seq)) {
+                    activity = v;
+                }
+            }
+            return activity != null ? activity : activeRoot();
+        }
+        return activeRoot();
+    }
+
+    /** The top-level window shown or focused last, or null (guarded by mWindows). */
+    private AppWindow activeRoot() {
+        if (mActiveRoot != null && mActiveRoot.shown && mActiveRoot.nativeWindow != null
+                && mWindows.containsKey(mActiveRoot.client.asBinder())) {
+            return mActiveRoot;
+        }
+        AppWindow best = null;
+        for (int i = 0; i < mWindows.size(); i++) {
+            AppWindow v = mWindows.valueAt(i);
+            if (!v.popup && v.shown && v.nativeWindow != null && (best == null || v.seq > best.seq)) {
+                best = v;
+            }
+        }
+        return best;
+    }
+
+    /** The Activity whose token is {@code token} in this process, or null. */
+    private static android.app.Activity activity(IBinder token) {
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        return thread != null && token != null ? thread.getActivity(token) : null;
+    }
+
+    /** The task of the Activity whose token is {@code token}, or -1. */
+    private static int taskOf(IBinder token) {
+        try {
+            android.app.Activity a = activity(token);
+            return a != null ? a.getTaskId() : -1;
+        } catch (RuntimeException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Whether the Activity's theme is translucent or floating (windowIsTranslucent,
+     * windowIsFloating, windowSwipeToDismiss: ActivityInfo.isTranslucentOrFloating, what
+     * ActivityRecord.occludesParent asks): the Activity below it stays visible.
+     */
+    private static boolean isTranslucentOrFloating(IBinder token) {
+        try {
+            android.app.Activity a = activity(token);
+            if (a == null || a.getWindow() == null) return false;
+            return android.content.pm.ActivityInfo.isTranslucentOrFloating(
+                    a.getWindow().getWindowStyle());
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static Field sTaskDescription;
+
+    /**
+     * The title of a top-level window: its Activity's TaskDescription label (what Recents and
+     * a desktop's caption show for the task) when it set one, else the window's title (its
+     * Activity's label).
+     */
+    private static String title(AppWindow w) {
+        if (!w.popup) {
+            try {
+                android.app.Activity a = activity(w.attrs.token);
+                if (a != null) {
+                    if (sTaskDescription == null) {
+                        Field f = android.app.Activity.class.getDeclaredField("mTaskDescription");
+                        f.setAccessible(true);
+                        sTaskDescription = f;
+                    }
+                    android.app.ActivityManager.TaskDescription td =
+                            (android.app.ActivityManager.TaskDescription) sTaskDescription.get(a);
+                    String label = td != null ? td.getLabel() : null;
+                    if (label != null && !label.isEmpty()) return label;
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                // The window's title.
+            }
+        }
+        return w.title();
+    }
+
+    /**
+     * The bounds an Activity's window opening in {@code w}'s task takes (guarded by
+     * mWindows): those of the task's window shown now, else where it was last; null for the
+     * display's.
+     */
+    private Rect taskBounds(AppWindow w) {
+        if (w.taskId < 0) return null;
+        for (int i = 0; i < mWindows.size(); i++) {
+            AppWindow v = mWindows.valueAt(i);
+            if (v != w && !v.popup && v.taskId == w.taskId && v.shown && v.resizable) {
+                return v.bounds.isEmpty() ? null : new Rect(v.bounds);
+            }
+        }
+        Rect last = mTaskScreen.get(w.taskId);
+        if (last == null) return null;
+        Rect display = displayBounds();
+        return last.width() == display.width() && last.height() == display.height() ? null
+                : new Rect(0, 0, last.width(), last.height());
+    }
+
+    /** Remembers where a top-level window of a task is, as it goes or is hidden. */
+    private void rememberTaskScreen(AppWindow w) {
+        if (w.taskId < 0 || w.nativeWindow == null) return;
+        int[] b = w.nativeWindow.getScreenBounds();
+        if (b == null) return;
+        synchronized (mWindows) {
+            mTaskScreen.put(w.taskId, new Rect(b[0], b[1], b[2], b[3]));
+        }
+    }
+
+    /**
+     * A top-level window being shown takes its task's place (ADR 0040): where the task's
+     * window is now (an Activity started on top of another) or was last (the Activity below
+     * shown again), and its size if the user resized it.
+     */
+    private void placeInTask(AppWindow w) {
+        if (w.taskId < 0) return;
+        Rect at = null;
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v != w && !v.popup && v.taskId == w.taskId && v.shown
+                        && v.nativeWindow != null) {
+                    int[] b = v.nativeWindow.getScreenBounds();
+                    if (b != null) at = new Rect(b[0], b[1], b[2], b[3]);
+                    break;
+                }
+            }
+            if (at == null && mTaskScreen.get(w.taskId) != null) {
+                at = new Rect(mTaskScreen.get(w.taskId));
+            }
+        }
+        if (at == null) return;
+        if (w.resizable && (at.width() != w.nativeWindow.getWidth()
+                || at.height() != w.nativeWindow.getHeight())) {
+            // WM_SIZE: the window lays out at the task's size (applyResize).
+            w.nativeWindow.setClientSize(at.width(), at.height());
+        }
+        if (mShow) w.nativeWindow.setScreenPosition(at.left, at.top);
+        log("window \"" + w.title() + "\" takes task " + w.taskId + "'s place "
+                + at.toShortString());
+    }
+
+    /** Whether an Activity's window floats over {@code w} as its popup (translucent theme). */
+    private boolean hasActivityPopup(AppWindow w) {
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v.parent == w && v.shown
+                        && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Whether hwui renders with SkiaGL (ANGLE's swap chain presents, not the CPU path). */
+    private static boolean glRenderer() {
+        try {
+            return "skiagl".equals(com.gesher.app.graphics.GraphicsDebug.renderer());
+        } catch (RuntimeException | LinkageError e) {
+            return false;
+        }
+    }
+
+    /**
+     * A popup's Win32 window: owned by its parent's (Windows keeps it above it, hides and
+     * minimizes it with it; no taskbar button), translucent when its format has alpha (a
+     * layered window: a dialog's rounded corners and shadow show what is behind; not with
+     * SkiaGL, whose swap chain presents), never activated when it is not focusable, clicked
+     * through when it is not touchable.
+     */
+    private void createPopup(AppWindow w, int width, int height) {
+        AppWindow root = root(w);
+        NativeWindow owner = w.parent != null
+                ? (w.parent.nativeWindow != null ? w.parent.nativeWindow : root.nativeWindow)
+                : null;
+        Rect in = w.attrs.surfaceInsets;
+        NativeWindow nw = NativeWindow.createPopup(title(w), width + in.left + in.right,
+                height + in.top + in.bottom, owner);
+        w.nativeWindow = nw;
+        w.resizable = false;
+        Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
+        w.handler = new Handler(looper);
+        boolean translucent = android.graphics.PixelFormat.formatHasAlpha(w.attrs.format)
+                && !glRenderer();
+        nw.setTranslucent(translucent);
+        nw.setNoActivate(!w.focusable(), !w.touchable());
+        attachInput(w);
+        log("window \"" + w.title() + "\": Win32 popup 0x" + Long.toHexString(nw.getHwnd())
+                + " owned by " + (owner != null ? "\"" + w.parent.title() + "\" 0x"
+                        + Long.toHexString(owner.getHwnd()) : "no window")
+                + ", type " + w.attrs.type + (translucent ? ", translucent" : ", opaque")
+                + (w.focusable() ? ", focusable" : "") + (w.touchable() ? "" : ", not touchable")
+                + ", input " + (w.input != null ? "attached" : "none"));
+        if (w.input == null) listenForEvents(w);
+    }
+
+    /**
+     * Where a popup's surface is: its frame and the surface insets around it (room for the
+     * shadow of a window with elevation, as a dialog's or a menu's: ViewRootImpl sets them
+     * from its Z, the renderer draws the window that far into the surface). The popup Win32
+     * window is the surface; its input is offset back to the frame (attachInput).
+     */
+    private static Rect surfaceRect(AppWindow w) {
+        Rect r = new Rect(w.frame);
+        Rect in = w.attrs.surfaceInsets;
+        r.set(r.left - in.left, r.top - in.top, r.right + in.right, r.bottom + in.bottom);
+        return r;
+    }
+
+    /** Puts a popup's Win32 window at its surface in its app window's client area. */
+    private void place(AppWindow w) {
+        if (w.nativeWindow == null || w.frame.isEmpty()) return;
+        AppWindow root = root(w);
+        NativeWindow anchor = root != w ? root.nativeWindow : null;
+        Rect r = surfaceRect(w);
+        if (w.placed.equals(r)) return;
+        w.nativeWindow.setPopupBounds(anchor, r.left, r.top, r.width(), r.height());
+        w.placed.set(r);
+    }
+
+    /** Shows a window once drawn (finishDrawing, or relayout making it visible again). */
+    private void showWindow(AppWindow w) {
+        NativeWindow nw = w.nativeWindow;
+        if (w.popup) {
+            AppWindow root = root(w);
+            if (root != w && root.nativeWindow != null || mShow) {
+                // In its app window (off the desktop when that is); never activated when
+                // windows are hidden.
+                nw.showPopup(mShow && w.focusable());
+            } else {
+                nw.showOffscreen();
+            }
+            w.shown = true;
+            log("window \"" + w.title() + "\" shown as a popup of \"" + root.title() + "\" at "
+                    + w.frame.toShortString() + ", hwnd 0x" + Long.toHexString(nw.getHwnd()));
+            updateGroup(root);
+            return;
+        }
+        placeInTask(w);
+        if (mShow) {
+            nw.show();
+        } else {
+            nw.showOffscreen();
+        }
+        w.shown = true;
+        synchronized (mWindows) {
+            mActiveRoot = w;
+        }
+        updateGroup(w);
+    }
+
+    private void hideWindow(AppWindow w) {
+        if (!w.popup) rememberTaskScreen(w);
+        w.nativeWindow.hide();
+        w.nativeWindow.setInputRoute(null, null, null);
+        w.shown = false;
+        w.appHidden = false;
+        updateGroup(root(w));
+    }
+
+    /** Android's layer of a window type (WindowManagerPolicy.getWindowLayerFromTypeLw). */
+    private static int baseLayer(int type) {
+        if (isApplicationWindow(type)) return 2;
+        switch (type) {
+            case WindowManager.LayoutParams.TYPE_TOAST:
+                return 8;
+            case WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY:
+                return 13;
+            default:
+                return 10;
+        }
+    }
+
+    /** A sub-window's layer relative to its parent (WindowManagerPolicy.getSubWindowLayerFromTypeLw). */
+    private static int subLayer(int type) {
+        switch (type) {
+            case WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA:
+                return -2;
+            case WindowManager.LayoutParams.TYPE_APPLICATION_MEDIA_OVERLAY:
+                return -1;
+            case WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL:
+                return 2;
+            case WindowManager.LayoutParams.TYPE_APPLICATION_ABOVE_SUB_PANEL:
+                return 3;
+            default:
+                return 1;  // PANEL, ATTACHED_DIALOG
+        }
+    }
+
+    /** Where a window stacks: compared element by element, a parent before its children. */
+    private static long[] stackKey(AppWindow w) {
+        if (isSubWindow(w.attrs.type) && w.parent != null) {
+            long[] p = stackKey(w.parent);
+            long[] k = java.util.Arrays.copyOf(p, p.length + 2);
+            k[p.length] = subLayer(w.attrs.type);
+            k[p.length + 1] = w.seq;
+            return k;
+        }
+        return new long[] {baseLayer(w.attrs.type), w.seq};
+    }
+
+    private static int compareStack(AppWindow a, AppWindow b) {
+        long[] x = stackKey(a);
+        long[] y = stackKey(b);
+        for (int i = 0; i < Math.min(x.length, y.length); i++) {
+            if (x[i] != y[i]) return Long.compare(x[i], y[i]);
+        }
+        return Integer.compare(x.length, y.length);
+    }
+
+    private final Object mGroupLock = new Object();
+
+    /**
+     * An app window and its shown popups, bottom to top (ADR 0040): the dim behind the
+     * topmost dialog asking for it (FLAG_DIM_BEHIND, dimAmount) on the app window; the
+     * popups stacked by layer; input routes, as InputDispatcher sends input: a modal popup
+     * (focusable, touchable, without FLAG_NOT_TOUCH_MODAL) gets the touches on the windows
+     * below it, the topmost focusable window the keys, popups watching outside touches
+     * (FLAG_WATCH_OUTSIDE_TOUCH) a press where one starts outside them; with hidden windows
+     * (never activated), the focus to that focusable window only.
+     */
+    private void updateGroup(AppWindow root) {
+        if (root == null) return;
+        synchronized (mGroupLock) {
+            List<AppWindow> group = new ArrayList<>();
+            synchronized (mWindows) {
+                for (int i = 0; i < mWindows.size(); i++) {
+                    AppWindow v = mWindows.valueAt(i);
+                    if (v.nativeWindow != null && v.shown && root(v) == root) group.add(v);
+                }
+            }
+            group.sort(WindowSession::compareStack);
+            float dim = 0f;
+            AppWindow modal = null;
+            AppWindow keys = null;
+            List<AppWindow> watchers = new ArrayList<>();
+            for (AppWindow v : group) {
+                if (v != root && v.flag(WindowManager.LayoutParams.FLAG_DIM_BEHIND)) {
+                    dim = Math.max(dim, v.attrs.dimAmount);
+                }
+                if (v != root && v.focusable() && v.touchable()
+                        && !v.flag(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)) {
+                    modal = v;
+                }
+                if (v.focusable()) keys = v;
+                if (v != root && v.flag(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)) {
+                    watchers.add(v);
+                }
+            }
+            if (root.nativeWindow != null) root.nativeWindow.setDim(dim);
+            for (AppWindow v : group) {
+                if (v != root) v.nativeWindow.raise();
+            }
+            int modalAt = group.indexOf(modal);
+            StringBuilder desc = new StringBuilder();
+            for (int i = 0; i < group.size(); i++) {
+                AppWindow v = group.get(i);
+                AppWindow pointer = modal != null && modalAt > i ? modal : null;
+                int targetAt = pointer != null ? modalAt : i;
+                List<NativeWindow> outside = new ArrayList<>();
+                for (AppWindow p : watchers) {
+                    if (group.indexOf(p) > targetAt) outside.add(p.nativeWindow);
+                }
+                v.nativeWindow.setInputRoute(pointer != null ? pointer.nativeWindow : null,
+                        keys != null && keys != v ? keys.nativeWindow : null,
+                        outside.toArray(new NativeWindow[0]));
+                desc.append(i == 0 ? "" : ", ").append('"').append(v.title()).append('"');
+            }
+            if (!mShow) {
+                // Hidden windows are never activated: the session gives the focus.
+                for (AppWindow v : group) {
+                    boolean f = v == keys;
+                    if (v.input != null && v.focusable()
+                            && (v.sessionFocus == null || v.sessionFocus != f)) {
+                        v.sessionFocus = f;
+                        v.input.inject(WindowInput.EVENT_FOCUS, 0, 0, f ? 1 : 0, 0, 0, 0, 0, 0,
+                                0, 0, 0);
+                    }
+                }
+            }
+            String state = "windows of \"" + root.title() + "\", bottom to top: " + desc
+                    + (dim > 0 ? "; dim " + dim : "")
+                    + (modal != null ? "; modal \"" + modal.title() + "\"" : "")
+                    + (keys != null ? "; keys to \"" + keys.title() + "\"" : "");
+            if (group.size() > 1 || root.groupState != null) {
+                if (!state.equals(root.groupState)) log(state);
+                root.groupState = group.size() > 1 ? state : null;
+            }
+        }
+    }
+
+    /**
+     * A window was activated (its Win32 window got the focus, shown windows): if a popup of
+     * its group takes the keys (a modal dialog over it), that one is brought to the front,
+     * as clicking an app window behind its dialog does on Windows.
+     */
+    private void onActivated(AppWindow w) {
+        if (!mShow) return;
+        AppWindow root = root(w);
+        AppWindow keys = null;
+        synchronized (mWindows) {
+            List<AppWindow> group = new ArrayList<>();
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v.nativeWindow != null && v.shown && root(v) == root) group.add(v);
+            }
+            group.sort(WindowSession::compareStack);
+            for (AppWindow v : group) {
+                if (v.focusable()) keys = v;
+            }
+            if (!w.popup) mActiveRoot = w;
+        }
+        if (keys != null && keys != w && keys.nativeWindow != null) keys.nativeWindow.activate();
+    }
+
+    /** Back (KEYCODE_BACK: VK_BROWSER_BACK) in a window, pressed and released. */
+    private static void pressBack(AppWindow w) {
+        final int vk = 0xA6;  // VK_BROWSER_BACK
+        final int scan = 0x16A;  // E0 6A
+        w.input.inject(WindowInput.EVENT_KEY_DOWN, 0, 0, 0, vk, scan, 0, 0, 0, 0, 0, 0);
+        w.input.inject(WindowInput.EVENT_KEY_UP, 0, 0, 0, vk, scan, 0, 0, 0, 0, 0, 0);
+    }
+
+    /**
+     * The app window was resized by the user: its popups lay out again in its new bounds
+     * (IWindow.resized with the frames for their last requested sizes), as a dialog does
+     * when its task's bounds change.
+     */
+    private void resizePopups(AppWindow root) {
+        List<AppWindow> popups = new ArrayList<>();
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v != root && v.popup && v.nativeWindow != null && root(v) == root) {
+                    popups.add(v);
+                }
+            }
+        }
+        popups.sort(WindowSession::compareStack);  // parents first: children use their frames
+        for (AppWindow v : popups) {
+            WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
+                    new android.util.MergedConfiguration(), new InsetsState(),
+                    new android.view.InsetsSourceControl.Array());
+            layout(v, v.requestedWidth, v.requestedHeight, result);
+            v.frame.set(result.frames.frame);
+            try {
+                v.client.resized(result, false /* reportDraw */, true /* forceLayout */,
+                        Display.DEFAULT_DISPLAY, false /* syncWithBuffers */,
+                        false /* dragResizing */);
+            } catch (RemoteException e) {
+                log("window \"" + v.title() + "\": resized: " + e);
+            }
+        }
+    }
+
     // ---- IWindowSession ----
 
     @Override
@@ -691,9 +1293,24 @@ public final class WindowSession extends IWindowSession.Stub {
         AppWindow w = new AppWindow(window);
         w.attrs.copyFrom(attrs);
         w.requestedVisibleTypes = requestedVisibleTypes;
+        // The Activity's task, and whether the window floats over the Activity below it
+        // (a dialog or translucent theme): before mWindows is locked (binder calls).
+        boolean overActivity = false;
+        if (attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            w.taskId = taskOf(attrs.token);
+            overActivity = isTranslucentOrFloating(attrs.token);
+        }
         synchronized (mWindows) {
             if (mWindows.containsKey(window.asBinder())) {
                 return WindowManagerGlobal.ADD_DUPLICATE_ADD;
+            }
+            w.seq = mNextSeq++;
+            w.parent = findParent(w, overActivity);
+            w.popup = w.parent != null || attrs.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW;
+            if (!w.popup && isUserResizable(w.attrs)) {
+                // An Activity on top of another in its task takes the task window's size.
+                Rect task = taskBounds(w);
+                if (task != null) w.bounds.set(task);
             }
             mWindows.put(window.asBinder(), w);
         }
@@ -706,7 +1323,10 @@ public final class WindowSession extends IWindowSession.Stub {
             layout(w, WindowLayout.UNSPECIFIED_LENGTH, WindowLayout.UNSPECIFIED_LENGTH, result);
         }
         log("window \"" + w.title() + "\" added (type " + attrs.type + ", display "
-                + DeviceProfile.describe() + ")");
+                + DeviceProfile.describe() + ")"
+                + (w.parent != null ? ", a popup of \"" + w.parent.title() + "\""
+                        : w.popup ? ", a popup" : "")
+                + (overActivity ? ", over the Activity below (translucent or floating)" : ""));
         return WindowManagerGlobal.ADD_OKAY | WindowManagerGlobal.ADD_FLAG_APP_VISIBLE
                 | WindowManagerGlobal.ADD_FLAG_IN_TOUCH_MODE;
     }
@@ -725,8 +1345,16 @@ public final class WindowSession extends IWindowSession.Stub {
             w = mWindows.remove(clientToken);
         }
         if (w != null) {
+            boolean wasShown = w.shown;
+            if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
             closeNativeWindow(w);
             log("window \"" + w.title() + "\" removed");
+            if (w.popup && wasShown) updateGroup(root(w));
+            AppWindow below = w.parent;
+            if (below != null && below.appHidden && below.nativeWindow != null
+                    && !hasActivityPopup(below)) {
+                hideWindow(below);  // its Activity stayed stopped
+            }
         }
     }
 
@@ -736,10 +1364,13 @@ public final class WindowSession extends IWindowSession.Stub {
             WindowRelayoutResult outRelayoutResult, SurfaceControl outSurface) {
         AppWindow w = window(window);
         if (w == null) return 0;
+        int oldFlags = w.attrs.flags;
         if (attrs != null) {
             w.attrs.copyFrom(attrs);
-            if (w.nativeWindow != null) w.nativeWindow.setTitle(w.title());
+            if (w.nativeWindow != null) w.nativeWindow.setTitle(title(w));
         }
+        w.requestedWidth = requestedWidth;
+        w.requestedHeight = requestedHeight;
         WindowRelayoutResult result = outRelayoutResult != null ? outRelayoutResult
                 : new WindowRelayoutResult(new ClientWindowFrames(),
                         new android.util.MergedConfiguration(), new InsetsState(),
@@ -756,9 +1387,12 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         int res = 0;
         if (viewVisibility == View.VISIBLE && width > 0 && height > 0) {
+            w.frame.set(frame);
+            w.appHidden = false;
             if (ensureNativeWindow(w, width, height)) {
                 res |= WindowManagerGlobal.RELAYOUT_RES_FIRST_TIME;
             }
+            if (w.popup) place(w);
             if (w.surfaceControl == null) {
                 w.surfaceControl = new SurfaceControl.Builder()
                         .setName(w.title())
@@ -773,18 +1407,24 @@ public final class WindowSession extends IWindowSession.Stub {
                 outSurface.copyFrom(w.surfaceControl, "WindowSession.relayout");
             }
             if (w.drawn && !w.shown) {
-                if (mShow) {
-                    w.nativeWindow.show();
-                } else {
-                    w.nativeWindow.showOffscreen();
-                }
-                w.shown = true;
+                showWindow(w);
+            } else if (w.shown && w.popup && oldFlags != w.attrs.flags) {
+                updateGroup(root(w));  // focusable, touchable, dim: the group changes
             }
         } else {
             if (outSurface != null) outSurface.release();
             if (w.nativeWindow != null && w.shown) {
-                w.nativeWindow.hide();
-                w.shown = false;
+                if (hasActivityPopup(w)) {
+                    // Its Activity stopped under an Activity with a translucent or floating
+                    // theme: it stays on the screen (its last frame) as the one below it does
+                    // on a device, until that one goes.
+                    if (!w.appHidden) {
+                        log("window \"" + w.title() + "\" stays shown under an Activity's popup");
+                    }
+                    w.appHidden = true;
+                } else {
+                    hideWindow(w);
+                }
             }
         }
         return res;
@@ -795,10 +1435,30 @@ public final class WindowSession extends IWindowSession.Stub {
             int requestedWidth, int requestedHeight, int viewVisibility, int flags, int seq,
             int lastSyncSeqId) {
         AppWindow w = window(window);
-        if (w != null && attrs != null) {
+        if (w == null) return;
+        int oldFlags = w.attrs.flags;
+        if (attrs != null) {
             w.attrs.copyFrom(attrs);
-            if (w.nativeWindow != null) w.nativeWindow.setTitle(w.title());
+            if (w.nativeWindow != null) w.nativeWindow.setTitle(title(w));
         }
+        // ViewRootImpl laid the window out itself (only its size or only its position
+        // changed): the Win32 window follows.
+        w.requestedWidth = requestedWidth;
+        w.requestedHeight = requestedHeight;
+        if (w.nativeWindow == null || viewVisibility != View.VISIBLE) return;
+        WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
+                new android.util.MergedConfiguration(), new InsetsState(),
+                new android.view.InsetsSourceControl.Array());
+        layout(w, requestedWidth, requestedHeight, result);
+        Rect frame = result.frames.frame;
+        if (frame.width() <= 0 || frame.height() <= 0) return;
+        w.frame.set(frame);
+        if (w.popup) {
+            place(w);
+        } else {
+            ensureNativeWindow(w, frame.width(), frame.height());
+        }
+        if (w.shown && w.popup && oldFlags != w.attrs.flags) updateGroup(root(w));
     }
 
     @Override
@@ -842,12 +1502,7 @@ public final class WindowSession extends IWindowSession.Stub {
         if (!w.shown) {
             // Hidden windows are shown off the desktop: PrintWindow reads nothing back from
             // a window that is not shown.
-            if (mShow) {
-                w.nativeWindow.show();
-            } else {
-                w.nativeWindow.showOffscreen();
-            }
-            w.shown = true;
+            showWindow(w);
         }
     }
 

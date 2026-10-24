@@ -85,7 +85,10 @@ public final class WindowMode {
         // ViewRootImpl gets InputMethodManager's instance, which needs input_method: the
         // process's windows get Windows' text input (input track, ADR 0039).
         com.gesher.app.input.WindowsInputMethod.install();
-        return WindowSession.install(show);
+        WindowSession session = WindowSession.install(show);
+        // Toasts are this process's popups too (no SystemUI draws them).
+        ToastHost.install();
+        return session;
     }
 
     /**
