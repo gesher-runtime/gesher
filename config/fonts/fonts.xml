@@ -8,11 +8,12 @@
       sans-serif (+ condensed)  Roboto-Regular.ttf, Roboto 3.011 variable (wght, wdth, ital)
       serif                     NotoSerif-{Regular,Bold,Italic,BoldItalic}.ttf
       monospace                 DroidSansMono.ttf
-      fallback und-Arab         NotoNaskhArabic{,-Bold}.ttf (1.070, elegant),
-                                NotoNaskhArabicUI-{Regular,Bold}.ttf (compact)
+      fallback und-Arab         Noto Naskh Arabic 1.070 (elegant) and Noto Naskh
+                                Arabic UI (compact), regular and bold
       fallback und-Hebr         NotoSansHebrew-{Regular,Bold}.ttf (1.040)
-      fallback und-Thai         NotoSansThai{,UI}-{Regular,Bold}.ttf (elegant, compact)
-      fallback und-Deva         NotoSansDevanagari{,UI}-VF.ttf (2.006, elegant, compact)
+      fallback und-Thai         Noto Sans Thai and Noto Sans Thai UI, regular and bold
+      fallback und-Deva         Noto Sans Devanagari 2.006 and Noto Sans Devanagari
+                                UI, variable (wght)
     Serif fallbacks (fallbackFor="serif") are left out of these families.
     Left out: the other families and the other scripts' fallbacks,
     serif-monospace, casual, cursive, smallcaps, source-sans-pro, roboto-flex.

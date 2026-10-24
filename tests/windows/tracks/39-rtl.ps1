@@ -193,6 +193,11 @@ function RtlViews([string] $Text) {
   return $views
 }
 
+# Text ink ({first, last} column) against a view's rectangle: at its right or left
+# edge (glyphs' side bearings leave a few pixels).
+function AlignedRight($ink, $rect) { return $ink[0] -ge 0 -and $ink[1] -ge $rect[2] - 12 -and $ink[0] -gt 40 }
+function AlignedLeft($ink, $rect) { return $ink[0] -ge 0 -and $ink[0] -le 12 -and $ink[1] -lt $rect[2] - 40 }
+
 # Problems with rtlapp's window ($px) given its log; $Rtl: the layout is mirrored.
 function RtlAppPixels($px, [string] $Text, [bool] $Rtl, [string] $Resources) {
   $out = @()
@@ -228,7 +233,7 @@ function RtlAppPixels($px, [string] $Text, [bool] $Rtl, [string] $Resources) {
       elseif ($i -gt 0 -and $x[$order[$i]] -le $x[$order[$i - 1]]) { $out += "${n}: $($order[$i]) not right of $($order[$i - 1])" }
     }
     $ink = [GesherRtl]::InkColumns($px, $r[0], $r[1], $r[2], $r[3])
-    if ($ink[0] -lt 200) { $out += "${n}: an RTL paragraph with gravity start is not aligned right (ink from x $($ink[0]))" }
+    if (-not (AlignedRight $ink $r)) { $out += "${n}: an RTL paragraph with gravity start is not aligned right (ink $($ink -join '..') of $($r[2]))" }
   }
   # Arabic letters joined (one connected shape) against the same letters kept apart
   # by ZWNJ.
@@ -240,12 +245,13 @@ function RtlAppPixels($px, [string] $Text, [bool] $Rtl, [string] $Resources) {
   # Alignment: textDirection rtl (right), textAlignment viewStart (with the layout),
   # gravity end of an RTL paragraph (left).
   $a = $v['latin_rtl']; $ink = [GesherRtl]::InkColumns($px, $a[0], $a[1], $a[2], $a[3])
-  if ($ink[0] -lt 200) { $out += "textDirection rtl: Latin not aligned right (ink $($ink -join '..'))" }
+  if (-not (AlignedRight $ink $a)) { $out += "textDirection rtl: Latin not aligned right (ink $($ink -join '..'))" }
   $a = $v['view_start']; $ink = [GesherRtl]::InkColumns($px, $a[0], $a[1], $a[2], $a[3])
-  if ($Rtl -and $ink[0] -lt 200) { $out += "textAlignment viewStart in an RTL layout: not right (ink $($ink -join '..'))" }
-  if (-not $Rtl -and ($ink[1] -ge 200 -or $ink[0] -lt 0)) { $out += "textAlignment viewStart in an LTR layout: not left (ink $($ink -join '..'))" }
+  if ($Rtl -and -not (AlignedRight $ink $a)) { $out += "textAlignment viewStart in an RTL layout: not right (ink $($ink -join '..'))" }
+  if (-not $Rtl -and -not (AlignedLeft $ink $a)) { $out += "textAlignment viewStart in an LTR layout: not left (ink $($ink -join '..'))" }
   $a = $v['gravity_end']; $ink = [GesherRtl]::InkColumns($px, $a[0], $a[1], $a[2], $a[3])
-  if ($ink[1] -ge 200 -or $ink[0] -lt 0) { $out += "gravity end of an RTL paragraph: not left (ink $($ink -join '..'))" }
+  if (-not (AlignedLeft $ink $a)) { $out += "gravity end of an RTL paragraph: not left (ink $($ink -join '..'))" }
+  Write-Host "INFO  alignment (ink columns): textDirection rtl $((& { $a = $v['latin_rtl']; [GesherRtl]::InkColumns($px, $a[0], $a[1], $a[2], $a[3]) }) -join '..'), viewStart $((& { $a = $v['view_start']; [GesherRtl]::InkColumns($px, $a[0], $a[1], $a[2], $a[3]) }) -join '..'), gravity end $($ink -join '..') of 400"
   # CJK glyphs, not the .notdef of a code point no font has; emoji in color.
   $c = $v['cjk']; $t = $v['tofu']; $e = $v['emoji']
   $cjkDark = [GesherRtl]::DarkCount($px, $c[0], $c[1], $c[2], $c[3])
