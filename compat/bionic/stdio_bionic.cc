@@ -645,9 +645,24 @@ char PriorityLetter(int prio) {
   return prio >= 0 && prio <= 8 ? kLetters[prio] : '?';
 }
 
+// One WriteFile per line: stderr is unbuffered, and the CRT would write a
+// formatted line in pieces that other threads' output (Java's System.out on
+// the same file) can land between.
 int LogWrite(int prio, const char* tag, const char* text) {
-  std::fprintf(stderr, "%c/%s: %s\n", PriorityLetter(prio), tag ? tag : "", text ? text : "");
+  std::string line(1, PriorityLetter(prio));
+  line += '/';
+  line += tag ? tag : "";
+  line += ": ";
+  line += text ? text : "";
+  line += '\n';
   std::fflush(stderr);
+  HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+  DWORD written = 0;
+  if (h == nullptr || h == INVALID_HANDLE_VALUE ||
+      !WriteFile(h, line.data(), static_cast<DWORD>(line.size()), &written, nullptr)) {
+    std::fputs(line.c_str(), stderr);
+    std::fflush(stderr);
+  }
   return 1;
 }
 
