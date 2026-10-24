@@ -161,6 +161,7 @@ bool RegisterStandins(JNIEnv* env, const char* className) {
   }
   env->DeleteLocalRef(methods);
   env->DeleteLocalRef(cls);
+  (void)registered;  // every native of the class now answers something
   return true;
 }
 

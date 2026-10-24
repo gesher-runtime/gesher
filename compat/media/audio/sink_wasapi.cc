@@ -9,6 +9,8 @@
 // mix format (float, the endpoint's rate and channels); a group with nothing
 // playing for a second is stopped.
 
+// mmreg.h needs what NOGDI (the build's default) leaves out.
+#undef NOGDI
 #include <windows.h>
 #include <audioclient.h>
 #include <audiopolicy.h>
@@ -373,7 +375,7 @@ class WasapiSink : public Sink {
     if (SUCCEEDED(props->GetValue(kKeyFriendlyName, &v)) && v.vt == VT_LPWSTR) {
       int n = WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, nullptr, 0, nullptr, nullptr);
       if (n > 1) {
-        device_name_.assign(n - 1, ' ');
+        device_name_.assign(n - 1, '\0');
         WideCharToMultiByte(CP_UTF8, 0, v.pwszVal, -1, device_name_.data(), n, nullptr, nullptr);
       }
     }

@@ -98,13 +98,25 @@ if (Test-Path "$Dir/mediaapp.apk") {
       'MediaTest audiotrack 5 legacy static loop: stream 3, wrote 12800, setLoopPoints 0',
       'MediaTest audiotrack 6 playback rate: set 0, rate 48000, wrote 14400, position 14400/14400',
       'MediaTest done', 'gesher-app: done')
+  Check 'media: AudioManager in mediaapp.apk: stream volumes (aliases, set, adjust, mute), the ringer mode, getDevices, audio focus (a transient loss, the gain back, a loss), isMusicActive' {
+    $global:LASTEXITCODE = $mediaExit
+    $mediaOut
+  } @('MediaTest audiomanager volumes: music 15/15 min 0, ring 7/7, system follows ring true',
+      'MediaTest audiomanager set music 7: 7, raise 8, mute true 0, unmute 8, back to 15',
+      'MediaTest audiomanager ringer silent: mode 0, ring volume 0, notification muted true',
+      'MediaTest audiomanager ringer normal: mode 2, notification volume 7/7',
+      'MediaTest audiomanager devices: 1 output(s) [type 2, sink true, name Gesher audio capture, 48000 Hz true, stereo true], 0 input(s)',
+      'MediaTest audiomanager focus: granted 111, changes [A-2, A1, A-1]',
+      'MediaTest audiomanager music active: before false, playing true, after false')
   if ($null -eq $appWav) {
     Write-Host "FAIL  media: mediaapp.apk's audio output was not captured"
     $failed++
   } else {
-    CheckSounds 'media: mediaapp.apk''s AudioTracks reach the output: each tone at its frequency, duration and level' $appWav.FullName @(
+    CheckSounds 'media: mediaapp.apk''s AudioTracks reach the output: each tone at its frequency, duration and level, at its stream''s volume (none while the ringer is silent)' $appWav.FullName @(
       @(440, 0.5, 0.354), @(500, 0.4, 0.354), @(660, 0.4, 0.354), @(880, 0.4, 0.177),
-      @(1000, 0.6, 0.354), @(1200, 0.3, 0.354))
+      @(1000, 0.6, 0.354), @(1200, 0.3, 0.354),
+      # AudioManager: music at 7/15; the silent ringer's notification is not heard.
+      @(700, 0.3, 0.165), @(1300, 0.3, 0.354))
   }
 } else {
   Write-Host 'INFO  media: mediaapp.apk not in the build output; its checks skipped'
