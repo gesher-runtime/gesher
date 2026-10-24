@@ -206,16 +206,6 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     KillTree $p
     return $res
   }
-  # "waitLog" (apps.json): a line the app's log must show before the window is
-  # checked, e.g. that a background step it starts at launch finished.
-  if ($a.waitLog -and $tag -eq 'launch') {
-    $appLogFile = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
-    $deadline = (Get-Date).AddSeconds(120)
-    while ((Get-Date) -lt $deadline -and (ReadText $appLogFile) -notmatch $a.waitLog) { Start-Sleep 1 }
-    $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
-    if ($m.Success) { $res.Info += "the app's log shows '$($m.Value.Trim())'" }
-    else { $res.Problems += "the app's log never showed /$($a.waitLog)/ within 120 s" }
-  }
   Start-Sleep 3
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
@@ -241,6 +231,20 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       $res.Info += "$what changed $changed pixels"
       if ($changed -lt 30) { $res.Problems += "$what did not change the window ($changed pixels)" }
       $before = $after
+    }
+  }
+  # "waitLog" (apps.json): a line the app's log must show after the actions, e.g. that
+  # a background step they started finished; the window is saved again then.
+  if ($a.waitLog -and $tag -eq 'launch') {
+    $appLogFile = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+    $deadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $deadline -and (ReadText $appLogFile) -notmatch $a.waitLog) { Start-Sleep 1 }
+    $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
+    if ($m.Success) {
+      $res.Info += "the app's log shows '$($m.Value.Trim())'"
+      SavePng (CaptureSettled $hwnd 20) (Join-Path $OutDir "$pkg.$tag.after-log.png")
+    } else {
+      $res.Problems += "the app's log never showed /$($a.waitLog)/ within 120 s of the actions"
     }
   }
   $res.Problems += @(CloseAndWait $hwnd $p $log $pkg)
