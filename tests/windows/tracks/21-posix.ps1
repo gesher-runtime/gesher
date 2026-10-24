@@ -37,7 +37,9 @@ function Invoke-ArtGtest([string] $Name, [string[]] $Exclude = @(), [int] $Timeo
   $timedOut = -not $p.WaitForExit($TimeoutSec * 1000)
   if ($timedOut) { $p | Stop-Process -Force -ErrorAction SilentlyContinue }
   $p.WaitForExit()
-  $text = (Get-Content -Raw $out) + (Get-Content -Raw $err)
+  $stdout = "$(Get-Content -Raw $out)"
+  $stderr = "$(Get-Content -Raw $err)"
+  $text = $stdout + $stderr
   Remove-Item $out, $err -ErrorAction SilentlyContinue
   $passed = if ($text -match '\[  PASSED  \] (\d+) test') { [int] $Matches[1] } else { 0 }
   $failedTests = @($text -split "`r?`n" | Where-Object { $_ -match '^\[  FAILED  \] [^ ]+\.[^ ]+' } |
@@ -47,14 +49,20 @@ function Invoke-ArtGtest([string] $Name, [string[]] $Exclude = @(), [int] $Timeo
     Write-Host "PASS  $Name`: $passed tests passed$excluded"
     return $true
   }
+  # The test a timeout or crash stopped in: the last one started and not ended.
+  $last = @($stdout -split "`r?`n" | Where-Object { $_ -match '^\[ RUN      \] ' }) | Select-Object -Last 1
+  $ended = $last -and $stdout -match ('\[       OK \] ' + [regex]::Escape(($last -replace '^\[ RUN      \] ', '')) + '|\[  FAILED  \] ' + [regex]::Escape(($last -replace '^\[ RUN      \] ', '')))
   $why = if ($timedOut) { "timed out after $TimeoutSec s" } else { 'exit 0x{0:X8}' -f $p.ExitCode }
+  if ($last -and -not $ended) { $why += " in $($last -replace '^\[ RUN      \] ', '')" }
   Write-Host "FAIL  $Name`: $why, $passed passed, $($failedTests.Count) failed$excluded"
   foreach ($t in $failedTests) { Write-Host "        $t" }
   $lines = $text -split "`r?`n"
   $lines | Select-String -Pattern 'Failure|error:|Expected|Which is|Value of|Actual|Check failed' -Context 2, 4 |
     Select-Object -First 80 | Out-Host
-  Write-Host '        ...'
-  $lines | Select-Object -Last 40 | Out-Host
+  Write-Host '        ... (the end of its standard output)'
+  $stdout -split "`r?`n" | Select-Object -Last 25 | Out-Host
+  Write-Host '        ... (the end of its standard error)'
+  $stderr -split "`r?`n" | Select-Object -Last 25 | Out-Host
   return $false
 }
 
@@ -71,10 +79,12 @@ if (Test-Path $artGtests) {
   $env:ANDROID_ROOT = NoDriveP $artHostOut
   $env:TMPDIR = NoDriveP $artTmp
   try {
-    if (-not (Invoke-ArtGtest 'art_libartbase_tests')) { $failed++ }
+    if (-not (Invoke-ArtGtest 'art_libartbase_tests' -TimeoutSec 600)) { $failed++ }
     if (-not (Invoke-ArtGtest 'art_libdexfile_tests' -Exclude @(
         # VerifierDeps is smali, which the build does not assemble.
-        'ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile'))) { $failed++ }
+        'ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile',
+        # DexFileLoader does not resolve symbolic links on Windows (no realpath).
+        'ArtDexFileLoaderTest.GetDexCanonicalLocation'))) { $failed++ }
   } finally {
     foreach ($v in $saved.Keys) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) }
     Remove-Item -Recurse -Force $artTop -ErrorAction SilentlyContinue
@@ -132,7 +142,7 @@ function ZoneInstants([TimeZoneInfo] $tz) {
         $mid = [long](($lo + $hi) / 2); $mid -= $mid % 1000
         if ((& $offset $mid) -eq $prev) { $lo = $mid } else { $hi = $mid }
       }
-      $instants += @($hi - 1000, $hi, $hi + 1000)
+      $instants += @(($hi - 1000), $hi, ($hi + 1000))  # (',' binds tighter than '-')
       $prev = $now
     }
   }

@@ -294,6 +294,7 @@ int fdatasync(int fd) { return gesher::CrtResult(_commit(fd)); }
 ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (offset < 0) return errno = EINVAL, -1;
   OVERLAPPED ov = {};
   ov.Offset = static_cast<DWORD>(static_cast<unsigned long long>(offset));
   ov.OffsetHigh = static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);
@@ -309,6 +310,7 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (offset < 0) return errno = EINVAL, -1;
   OVERLAPPED ov = {};
   ov.Offset = static_cast<DWORD>(static_cast<unsigned long long>(offset));
   ov.OffsetHigh = static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);

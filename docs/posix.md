@@ -61,6 +61,14 @@ compile off Linux: `testing.cc` assigns `std::filesystem::path` to a
 `std::string` (a `wstring` path on Windows: `.string()` added), and
 `fd_file_test.cc`'s `Rename` test calls `CreateSparseSourceFile`, declared only
 `#ifdef __linux__` (the guard also takes `GESHER`).
+`patches/art/0451-posix-fd-file-and-thread-stat.patch` changes libartbase
+itself: `fd_file.cc` uses gesher-base's `pread`/`pwrite`/`fsync` (EOF reads 0,
+a negative offset is `EINVAL`) and `fcntl(F_GETFD)` (`IsOpenFd`) instead of
+ART's own `_WIN32` versions (which report EOF as `EIO` and every fd as open),
+and `GetOsThreadStat` reads `/proc/<pid>/task/<tid>/stat` (gesher-base's
+procfs) as on Linux. `art_gtest_common` also builds
+`runtime/common_runtime_test.cc` (libart-runtime-gtest), the fixture of
+`flags_test.cc`.
 
 Not built: `base/aconfig_flags_test.cc`, which `static_assert`s the release
 configuration's test flag values (`test`, `v_apis` true); Gesher's aconfig
@@ -71,6 +79,10 @@ Excluded by name (gtest filter in `21-posix.ps1`):
 - `ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile`: reads
   `art-gtest-jars-VerifierDeps.dex`, which is assembled from smali; the build
   has no smali assembler.
+- `ArtDexFileLoaderTest.GetDexCanonicalLocation`: expects the location of a
+  symbolic link to resolve to its target; ART's `DexFileLoader` skips
+  `realpath` under `_WIN32` (`dex_file_loader.cc`), and Gesher keeps that, as
+  changing dex locations would touch oat and boot image matching.
 
 ## Known gaps
 
@@ -83,8 +95,10 @@ Excluded by name (gtest filter in `21-posix.ps1`):
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no
   `[anon:...]` names and its inode/device fields are 0.
-- `access(X_OK)` fails for every regular file, as `stat` reports no execute
-  bit (`.exe` included).
+- `stat` reports no execute bit for regular files, yet `access(X_OK)` (so
+  `File.canExecute()`) holds for every existing file: Windows has no execute
+  permission, and apps check `canExecute()` before they start their ELF
+  executables through gesher-exec (docs/exec.md; Puzzles does).
 - A change of Windows' zone while a process runs is not seen: libcore caches
   the default zone (Android resets it on `ACTION_TIMEZONE_CHANGED`).
 - `app/build.prop` sets `persist.sys.timezone=UTC`; nothing reads it now (no
