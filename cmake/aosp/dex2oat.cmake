@@ -70,6 +70,8 @@ add_dependencies(art_compiler art_asm_support_headers)
 
 # The JIT: the runtime's jit_create() is libart-compiler's (jit/jit_compiler.cc).
 target_link_libraries(dalvikvm PRIVATE art_compiler)
+# libart-compiler's graph visualizer asks for a disassembler (dex2oat's stand-in).
+target_sources(dalvikvm PRIVATE ${CMAKE_SOURCE_DIR}/compat/art/disassembler_standin.cc)
 
 # --- libart-dex2oat ---------------------------------------------------------
 art_operator_srcs(dex2oat_ops art/dex2oat linker/image_writer.h)
