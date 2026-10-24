@@ -28,6 +28,80 @@ public final class NativeWindow implements AutoCloseable {
     nShow(ptr());
   }
 
+  public void hide() {
+    nHide(ptr());
+  }
+
+  /**
+   * Shows the window off the desktop (no taskbar button, not activated): drawn like a shown
+   * window, so PrintWindow reads it back, which it does not for a hidden one.
+   */
+  public void showOffscreen() {
+    nShowOffscreen(ptr());
+  }
+
+  public void setTitle(String title) {
+    nSetTitle(ptr(), title);
+  }
+
+  /** Whether the user may resize (and maximize) the window. */
+  public void setResizable(boolean resizable) {
+    nSetResizable(ptr(), resizable);
+  }
+
+  /** Resizes the window so its client area is width x height pixels. */
+  public void setClientSize(int width, int height) {
+    nSetClientSize(ptr(), width, height);
+  }
+
+  /** The window's icon (title bar, taskbar) from an .ico file; false if it cannot be read. */
+  public boolean setIcon(String icoPath) {
+    return nSetIcon(ptr(), icoPath);
+  }
+
+  /**
+   * The System.AppUserModel.ID the window was given when it was created (the process's,
+   * which app processes set from $GESHER_APP_USER_MODEL_ID), or null.
+   */
+  public String getAppUserModelId() {
+    return nGetAppUserModelId(ptr());
+  }
+
+  /**
+   * Makes a stand-in SurfaceControl handle ({@code SurfaceControl.mNativeObject}) stand for
+   * this window: its copies, and the BLASTBufferQueue ViewRootImpl updates with it, hand
+   * out this window's Surface (BLASTBufferQueue.nativeGetSurface).
+   */
+  public void tagSurfaceControl(long surfaceControlHandle) {
+    nTagSurfaceControl(ptr(), surfaceControlHandle);
+  }
+
+  /** An eventfd (gesher-base) that is readable while events are queued. */
+  public int getEventFd() {
+    return nGetEventFd(ptr());
+  }
+
+  /** Event types ({@code gesher::WindowEvent}). */
+  public static final int EVENT_MOUSE_DOWN = 1;
+  public static final int EVENT_MOUSE_UP = 2;
+  public static final int EVENT_MOUSE_MOVE = 3;
+  public static final int EVENT_WHEEL = 4;
+  public static final int EVENT_KEY_DOWN = 5;
+  public static final int EVENT_KEY_UP = 6;
+  public static final int EVENT_CHAR = 7;
+  public static final int EVENT_RESIZE = 8;
+  public static final int EVENT_FOCUS = 9;
+  public static final int EVENT_CLOSE = 10;
+
+  /**
+   * Takes the next queued event into {@code out} (13 values: type, x, y, button, key,
+   * scan, repeat, modifiers, delta, ch, width, height, time in ms); returns its type, or 0
+   * when none is queued.
+   */
+  public int pollEvent(double[] out) {
+    return nPollEvent(ptr(), out);
+  }
+
   /** A new Surface over the window (Win32Surface); release it when done. */
   public Surface getSurface() {
     return nGetSurface(ptr());
@@ -100,4 +174,14 @@ public final class NativeWindow implements AutoCloseable {
   private static native long nGetHwnd(long ptr);
   private static native void nPresent(long ptr);
   private static native int[] nCapture(long ptr, boolean print);
+  private static native void nHide(long ptr);
+  private static native void nShowOffscreen(long ptr);
+  private static native void nSetTitle(long ptr, String title);
+  private static native void nSetResizable(long ptr, boolean resizable);
+  private static native void nSetClientSize(long ptr, int width, int height);
+  private static native void nTagSurfaceControl(long ptr, long surfaceControl);
+  private static native int nGetEventFd(long ptr);
+  private static native int nPollEvent(long ptr, double[] out);
+  private static native boolean nSetIcon(long ptr, String icoPath);
+  private static native String nGetAppUserModelId(long ptr);
 }

@@ -196,13 +196,20 @@ public final class SystemServer {
         atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
-            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
-                    packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), List.of("GESHER_BINDER=" + binder,
+            List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
-                            + com.gesher.app.shell.AppShell.appUserModelId(packageName)),
-                    logFile.getPath(), false);
+                            + com.gesher.app.shell.AppShell.appUserModelId(packageName),
+                    // The display the server describes, which the app's windows are on.
+                    "GESHER_DISPLAY=" + com.gesher.app.DeviceProfile.describe()));
+            // Its windows (graphics track, ADR 0029): what the launcher asked for.
+            String windowMode = WindowManagerService.windowMode(packageName);
+            if (windowMode != null) {
+                env.add(com.gesher.app.window.WindowMode.ENV + "=" + windowMode);
+            }
+            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+                    packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
+                    String.valueOf(targetSdk))), env, logFile.getPath(), false);
         });
     }
 

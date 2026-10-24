@@ -26,6 +26,8 @@ public final class GesherService extends Binder {
     static final int STATUS = IBinder.FIRST_CALL_TRANSACTION + 2;
     static final int SHUTDOWN = IBinder.FIRST_CALL_TRANSACTION + 3;
     static final int LAST_EXIT = IBinder.FIRST_CALL_TRANSACTION + 4;
+    /** The window mode of a package's next process (WindowManagerService.setWindowMode). */
+    static final int WINDOW_MODE = IBinder.FIRST_CALL_TRANSACTION + 5;
 
     /** What the service does; the system server implements it. */
     interface Device {
@@ -49,7 +51,9 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > LAST_EXIT) return super.onTransact(code, data, reply, flags);
+        if (code < INSTALL || code > WINDOW_MODE) {
+            return super.onTransact(code, data, reply, flags);
+        }
         data.enforceInterface(DESCRIPTOR);
         mDevice.touch();
         try {
@@ -79,6 +83,12 @@ public final class GesherService extends Binder {
                     reply.writeNoException();
                     reply.writeInt(exit);
                     return true;
+                case WINDOW_MODE: {
+                    String pkg = data.readString();
+                    WindowManagerService.setWindowMode(pkg, data.readString());
+                    reply.writeNoException();
+                    return true;
+                }
                 default:
                     return false;
             }
@@ -152,6 +162,25 @@ public final class GesherService extends Binder {
 
         public void shutdown(String reason) throws RemoteException {
             call(SHUTDOWN, reason).recycle();
+        }
+
+        /**
+         * The window mode ({@code window}, {@code hidden}, {@code headless}) of the
+         * package's processes the system server starts from now on.
+         */
+        public void setWindowMode(String packageName, String mode) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(packageName);
+                data.writeString(mode);
+                mBinder.transact(WINDOW_MODE, data, reply, 0);
+                reply.readException();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
         }
 
         public int lastExitCode(String packageName) throws RemoteException {

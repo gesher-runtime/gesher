@@ -24,7 +24,10 @@ starts app processes itself, is `com.gesher.app.Launcher`'s, further below),
 `--ez KEY true|false` (a boolean extra in the launch
 intent, as `am start --ez`; with `--system-server`), `--keep-task` (with
 `--system-server`: the launcher does not remove the task once the activity is
-idle; the run ends when the app's last activity finishes).
+idle; the run ends when the app's last activity finishes), `--window` /
+`--hidden-window` (the Activity's UI in a Win32 window, drawn by hwui, until
+the window is closed; hidden: off the desktop, for tests; `--display WxH[@DPI]`,
+default 400x800@160; docs/graphics.md, ADR 0029).
 On Windows, `tools/package/gesher-app.cmd` sets up the directories and the
 boot class path and runs it.
 
@@ -236,7 +239,8 @@ is what `gesher-app` runs by default:
 
 ```
 dalvikvm -Xbootclasspath:...:framework.jar:gesher-app.jar ... com.gesher.app.Launcher COMMAND
-  launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]... [--keep-task]
+  launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
+         [--window | --hidden-window | --headless [--keep-task]]
   install APK | uninstall PACKAGE | list | status | start | shutdown
 ```
 
@@ -262,9 +266,13 @@ in a job that ends them with it.
   `android.app.GesherAppProcess --package P --start-seq N --target-sdk S`
   (`com.gesher.server.Zygote`), whose output goes to `logs/<package>.log`; it attaches
   with its start sequence number and is driven as above. The launcher copies the log
-  to the console, removes the task once the activity is idle (unless `--keep-task`),
-  waits until the package's process is gone and exits with its exit code
-  (`gesher-app: done` when it is 0).
+  to the console and waits until the package's process is gone, then exits with its
+  exit code (`gesher-app: done` when it is 0). By default the app's windows are Win32
+  windows its own process creates and draws (`--window`; `--hidden-window`: off the
+  desktop; [0029](../docs/decisions/0029-graphics-app-windows.md)): the app runs until
+  they are closed, which finishes the activity. `--headless` (or
+  `GESHER_APP_WINDOW=headless`): no windows, and the launcher removes the task once the
+  activity is idle (unless `--keep-task`).
 - The system server starts a package's process whenever something needs it: an
   activity (also from another app, through an implicit intent), a service, a manifest
   receiver, a content provider (`getContentProvider` waits until the new process

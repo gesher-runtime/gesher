@@ -151,10 +151,14 @@ needs: [framework-build.md](framework-build.md).
         RenderNode tree with text and a bitmap into a Win32 window through an
         EGL window surface, the same frame as the CPU pipeline (ci run
         40047748570, both runners, WARP; ADR 0030)
-- [ ] A Win32 window as the Activity's surface (`ANativeWindow`), opened
-      through a window manager stand-in
-- [ ] A simple Activity drawn in a Win32 window, tested in CI by reading
-      back its pixels (WARP)
+- [x] A Win32 window as the Activity's surface (`ANativeWindow`), opened
+      through a window manager stand-in (ci run 40048707298: the window
+      session in the drawing process, ADR 0029; single process and an app
+      process of the Gesher device)
+- [x] A simple Activity drawn in a Win32 window, tested in CI by reading
+      back its pixels (ci run 40048707298: uiapp.apk's layout and text drawn
+      by hwui's CPU pipeline, read back with PrintWindow, both runners and
+      the installer; not through ANGLE/WARP yet)
 - [ ] Input: Win32 mouse and keyboard messages delivered as `MotionEvent`
       and `KeyEvent`; a click reaches `onClick`, tested in CI
   - [x] libinput's transport and the framework's input natives (InputChannel,

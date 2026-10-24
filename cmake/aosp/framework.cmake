@@ -60,13 +60,20 @@ target_compile_options(androidfw PRIVATE -Wall -Werror -Wunreachable-code
   -Wno-deprecated-anon-enum-enum-conversion -Wno-unused-label)
 
 # Stand-ins for device-only natives (compat/framework/device_standins.cc:
-# SurfaceControl, SurfaceSession, BLASTBufferQueue), their tables generated
-# from the framework's JNI sources. hwui's natives are real
-# (cmake/aosp/hwui.cmake, docs/graphics.md).
+# SurfaceControl, SurfaceSession, BLASTBufferQueue, OverlayProperties,
+# Perfetto's), their tables generated from the framework's JNI sources.
+# hwui's natives are real (cmake/aosp/hwui.cmake, docs/graphics.md).
+# InputChannel and InputEventReceiver are attach_standins.cc's (its
+# nativeGetFrameMetricsObserver gives hwui a real observer: 0 crashes the
+# render thread in CanvasContext::addFrameMetricsObserver).
 set(_device_standin_sources
   android/view/SurfaceControl=${_fwjni}/android_view_SurfaceControl.cpp:sSurfaceControlMethods
   android/view/SurfaceSession=${_fwjni}/android_view_SurfaceSession.cpp
-  android/graphics/BLASTBufferQueue=${_fwjni}/android_graphics_BLASTBufferQueue.cpp)
+  android/graphics/BLASTBufferQueue=${_fwjni}/android_graphics_BLASTBufferQueue.cpp
+  android/hardware/OverlayProperties=${_fwjni}/android_hardware_OverlayProperties.cpp
+  android/tracing/perfetto/Producer=${_fwjni}/android_tracing_PerfettoProducer.cpp
+  android/tracing/perfetto/DataSource=${_fwjni}/android_tracing_PerfettoDataSource.cpp
+  android/tracing/perfetto/TracingContext=${_fwjni}/android_tracing_PerfettoDataSource.cpp:gMethodsTracingContext)
 set(_device_standin_inputs)
 foreach(_s ${_device_standin_sources})
   string(REGEX REPLACE "^[^=]*=" "" _f "${_s}")

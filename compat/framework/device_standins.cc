@@ -1,5 +1,7 @@
 // Gesher: stand-ins for device-only natives (SurfaceFlinger's SurfaceControl
-// and SurfaceSession, BufferQueue's BLASTBufferQueue).
+// and SurfaceSession, BufferQueue's BLASTBufferQueue, libgui's
+// OverlayProperties, Perfetto's; InputChannel and InputEventReceiver are
+// attach_standins.cc's).
 //
 // The tables are generated from the framework's JNI sources
 // (gen_device_standins.py): every native answers zero, false, null or 0.0,
@@ -41,10 +43,25 @@ static void FreeBlock(void* ptr) {
 
 static std::atomic<GesherBlastSurfaceProvider> gBlastSurfaceProvider{nullptr};
 
+// A handle's block: its first word is its tag (gesher_device_standins.h).
+constexpr size_t kBlockSize = 64;
+
+static int64_t* Block(jlong handle) {
+  return reinterpret_cast<int64_t*>(static_cast<intptr_t>(handle));
+}
+
 }  // namespace gesher_device
 
 void gesher_set_blast_surface_provider(GesherBlastSurfaceProvider provider) {
   gesher_device::gBlastSurfaceProvider.store(provider);
+}
+
+int64_t gesher_standin_tag(int64_t handle) {
+  return handle != 0 ? gesher_device::Block(handle)[0] : 0;
+}
+
+void gesher_standin_set_tag(int64_t handle, int64_t tag) {
+  if (handle != 0) gesher_device::Block(handle)[0] = tag;
 }
 
 extern "C" {
@@ -60,7 +77,35 @@ SYSV jdouble gesher_device_Standin_zeroFloat() {
 // SurfaceControl.nativeCreate, Transaction's, BLASTBufferQueue's: a handle with
 // no state behind it (there is no compositor).
 SYSV jlong gesher_device_Standin_create() {
-  return reinterpret_cast<jlong>(calloc(1, 64));
+  return reinterpret_cast<jlong>(calloc(1, gesher_device::kBlockSize));
+}
+
+// SurfaceControl.nativeGetHandle(long): the tag stands for the layer's handle,
+// so copies of one SurfaceControl are the same surface (isSameSurface).
+SYSV jlong gesher_device_Standin_tag(JNIEnv*, jclass, jlong handle) {
+  return gesher_standin_tag(handle);
+}
+
+// SurfaceControl.nativeCopyFromSurfaceControl(long): a new handle with the
+// same tag (relayout's outSurfaceControl.copyFrom).
+SYSV jlong gesher_device_SurfaceControl_copy(JNIEnv*, jclass, jlong from) {
+  jlong copy = gesher_device_Standin_create();
+  gesher_standin_set_tag(copy, gesher_standin_tag(from));
+  return copy;
+}
+
+// BLASTBufferQueue.nativeUpdate(long ptr, long surfaceControl, long width,
+// long height, int format): the adapter now draws into that SurfaceControl.
+SYSV void gesher_device_Blast_update(JNIEnv*, jobject, jlong ptr, jlong surface_control, jlong,
+                                     jlong, jint) {
+  gesher_standin_set_tag(ptr, gesher_standin_tag(surface_control));
+}
+
+// BLASTBufferQueue.nativeIsSameSurfaceControl(long ptr, long surfaceControl).
+SYSV jboolean gesher_device_Blast_isSameSurfaceControl(JNIEnv*, jobject, jlong ptr,
+                                                      jlong surface_control) {
+  int64_t tag = gesher_standin_tag(ptr);
+  return tag != 0 && tag == gesher_standin_tag(surface_control) ? JNI_TRUE : JNI_FALSE;
 }
 
 SYSV jlong gesher_device_Standin_getFreeFunction() {
