@@ -25,6 +25,7 @@ extern const char* __progname;
 const char* exec_helper_hello(void);
 
 static int g_ctor_argc = -1;
+static int g_report_dtor;  // only "exit" reports its destructor
 static __thread int t_value = 7;  // emulated TLS (API 26)
 
 __attribute__((constructor)) static void exec_ctor(int argc, char** argv, char** envp) {
@@ -34,7 +35,7 @@ __attribute__((constructor)) static void exec_ctor(int argc, char** argv, char**
 
 __attribute__((destructor)) static void exec_dtor(void) {
   static const char m[] = "destructor ran\n";
-  write(1, m, sizeof(m) - 1);
+  if (g_report_dtor) write(1, m, sizeof(m) - 1);
 }
 
 static void on_exit_handler(void) { printf("atexit ran\n"); }
@@ -104,6 +105,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (strcmp(mode, "exit") == 0 && argc > 2) {
+    g_report_dtor = 1;
     atexit(on_exit_handler);
     printf("exiting with %s\n", argv[2]);
     exit(atoi(argv[2]));
