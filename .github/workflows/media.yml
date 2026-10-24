@@ -6,12 +6,11 @@ name: media
 # natives themselves (compat/media) are in dalvikvm, built by the build job;
 # the Windows test job runs tests/windows/tracks/38-media.ps1 on both.
 #
-# On its own (gh workflow run media --ref <branch>) it builds the AOSP
-# extractors and codecs (cmake/aosp/media_codecs.cmake) with ninja -k 0, to
-# see every error of a port at once.
+# While the AOSP extractors and codecs (cmake/aosp/media_codecs.cmake) are
+# ported, the codecs job builds them with ninja -k 0, beside the build job, to
+# see every error at once; nothing waits for it.
 on:
   workflow_call:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,7 +21,6 @@ env:
 
 jobs:
   codecs:
-    if: github.event_name == 'workflow_dispatch' && github.workflow == 'media'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +33,6 @@ jobs:
         run: ninja -C out -k 0 media_codecs_all
 
   media:
-    if: github.workflow != 'media'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
