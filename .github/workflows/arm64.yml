@@ -103,13 +103,16 @@ jobs:
           mv "boost_${BOOST_VERSION//./_}" boost
           rm boost.tar.bz2
 
+      - name: Install Ninja
+        run: sudo apt-get install -y --no-install-recommends ninja-build
+
       - name: Build gesher_arm64.dll and the smoke test
         run: |
           set -euo pipefail
           llvm="$HOME/toolchain/$LLVM_MINGW_NAME"
           "$llvm/bin/x86_64-w64-mingw32-clang" --version | head -1
           cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
             -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
             -DBoost_INCLUDE_DIR="$PWD/deps/boost"
