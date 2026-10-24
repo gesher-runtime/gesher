@@ -137,8 +137,9 @@ add_library(art_odrstatslog STATIC ${_art}/odrefresh/odr_statslog_host.cc)
 target_include_directories(art_odrstatslog PUBLIC ${_art}/odrefresh/include)
 target_link_libraries(art_odrstatslog PUBLIC art_defaults)
 
-# Gesher stand-ins for modules not built (yet): libunwindstack, parts of
-# libart-compiler, the aconfig rw-flag accessor (see compat/art/).
+# Gesher stand-ins for modules not built (yet): libunwindstack, the aconfig
+# rw-flag accessor (see compat/art/; dalvikvm's stand-ins for libart-compiler
+# are art_compiler_standins below).
 add_library(art_runtime_glue STATIC
   ${CMAKE_SOURCE_DIR}/compat/art/runtime_glue.cc
   ${CMAKE_SOURCE_DIR}/compat/art/unwindstack_stub.cc)
@@ -155,5 +156,9 @@ add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
 target_include_directories(dalvikvm PRIVATE ${AOSP_DIR}/libnativehelper/include_platform
   ${AOSP_DIR}/libnativehelper/include)
 target_link_libraries(dalvikvm PRIVATE art_runtime)
+# What dalvikvm takes from libart-compiler instead (dex2oat links the real one).
+add_library(art_compiler_standins STATIC ${CMAKE_SOURCE_DIR}/compat/art/compiler_standins.cc)
+target_link_libraries(art_compiler_standins PUBLIC art_runtime_headers)
+target_link_libraries(dalvikvm PRIVATE art_compiler_standins)
 # A linker map, for tools/symbolize.py (the executable is stripped).
 target_link_options(dalvikvm PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dalvikvm.map)
