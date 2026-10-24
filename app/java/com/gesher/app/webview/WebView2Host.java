@@ -151,12 +151,16 @@ public final class WebView2Host {
         if (h != 0) nRun(h, command);
     }
 
+    /**
+     * {@code holes}: left, top, right, bottom of each of the app's views drawn over the
+     * WebView, in the window's coordinates (cut out of the WebView2 window), or null.
+     */
     public void setBounds(long parentHwnd, int x, int y, int width, int height, int clipX,
-            int clipY, int clipWidth, int clipHeight, boolean visible) {
+            int clipY, int clipWidth, int clipHeight, boolean visible, int[] holes) {
         long h = mHandle;
         if (h != 0) {
             nSetBounds(h, parentHwnd, x, y, width, height, clipX, clipY, clipWidth, clipHeight,
-                    visible);
+                    visible, holes);
         }
     }
 
@@ -295,7 +299,8 @@ public final class WebView2Host {
     private static native void nNavigateToString(long h, String html);
     private static native void nRun(long h, int command);
     private static native void nSetBounds(long h, long parent, int x, int y, int width,
-            int height, int clipX, int clipY, int clipWidth, int clipHeight, boolean visible);
+            int height, int clipX, int clipY, int clipWidth, int clipHeight, boolean visible,
+            int[] holes);
     private static native void nPark(long h, long id);
     private static native void nSetSettings(long h, boolean javascript, boolean zoomControls,
             boolean pinchZoom, boolean devtools, boolean interceptAll, String userAgent);

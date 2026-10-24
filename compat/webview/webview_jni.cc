@@ -194,11 +194,20 @@ void JNICALL WebView2Host_run(JNIEnv*, jclass, jlong h, jint command) {
   Get(h)->Run(static_cast<Host::Command>(command));
 }
 
-void JNICALL WebView2Host_setBounds(JNIEnv*, jclass, jlong h, jlong parent, jint x, jint y,
+void JNICALL WebView2Host_setBounds(JNIEnv* env, jclass, jlong h, jlong parent, jint x, jint y,
                                     jint width, jint height, jint clip_x, jint clip_y,
-                                    jint clip_width, jint clip_height, jboolean visible) {
+                                    jint clip_width, jint clip_height, jboolean visible,
+                                    jintArray holes) {
+  // holes: left, top, right, bottom per rectangle.
+  std::vector<RECT> rects;
+  jsize n = holes != nullptr ? env->GetArrayLength(holes) : 0;
+  if (n >= 4) {
+    std::vector<jint> v(n);
+    env->GetIntArrayRegion(holes, 0, n, v.data());
+    for (jsize i = 0; i + 3 < n; i += 4) rects.push_back({v[i], v[i + 1], v[i + 2], v[i + 3]});
+  }
   Get(h)->SetBounds(Hwnd(parent), x, y, width, height, clip_x, clip_y, clip_width, clip_height,
-                    visible == JNI_TRUE);
+                    visible == JNI_TRUE, rects);
 }
 
 void JNICALL WebView2Host_park(JNIEnv*, jclass, jlong h, jlong id) { Get(h)->Park(id); }
@@ -294,7 +303,7 @@ const JNINativeMethod kMethods[] = {
     {"nNavigateToString", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_navigateToString)},
     {"nRun", "(JI)V", reinterpret_cast<void*>(&WebView2Host_run)},
-    {"nSetBounds", "(JJIIIIIIIIZ)V", reinterpret_cast<void*>(&WebView2Host_setBounds)},
+    {"nSetBounds", "(JJIIIIIIIIZ[I)V", reinterpret_cast<void*>(&WebView2Host_setBounds)},
     {"nPark", "(JJ)V", reinterpret_cast<void*>(&WebView2Host_park)},
     {"nSetSettings", "(JZZZZZLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_setSettings)},

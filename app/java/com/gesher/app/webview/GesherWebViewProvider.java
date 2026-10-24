@@ -135,6 +135,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private boolean mPlacedOnce;
     private final int[] mLocation = new int[2];
     private final Rect mClip = new Rect();
+    private final Rect mHoleRect = new Rect();
+    private int[] mHoles = new int[0];
+    private int mHoleCount;
+    private int[] mPlacedHoles = new int[0];
     private volatile CountDownLatch mParked;
 
     private final ViewTreeObserver.OnPreDrawListener mPreDraw = () -> {
@@ -838,16 +842,69 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         if (!visible) mClip.setEmpty();
         long[] now = {hwnd, mLocation[0], mLocation[1], w, h, mClip.left, mClip.top,
                 mClip.width(), mClip.height(), visible ? 1 : 0};
-        if (mPlacedOnce && Arrays.equals(now, mPlaced)) return;
+        int[] holes = visible ? findHoles() : new int[0];
+        if (mPlacedOnce && Arrays.equals(now, mPlaced) && Arrays.equals(holes, mPlacedHoles)) {
+            return;
+        }
         System.arraycopy(now, 0, mPlaced, 0, now.length);
+        if (holes.length != mPlacedHoles.length) {
+            GesherWebView.log((holes.length / 4) + " view(s) over the WebView cut out of its"
+                    + " window" + (holes.length > 0 ? ", the first " + holes[0] + ","
+                    + holes[1] + "-" + holes[2] + "," + holes[3] : ""));
+        }
+        mPlacedHoles = holes;
         mPlacedOnce = true;
         mHost.setBounds(hwnd, mLocation[0], mLocation[1], w, h, mClip.left, mClip.top,
-                mClip.width(), mClip.height(), visible);
+                mClip.width(), mClip.height(), visible, holes.length > 0 ? holes : null);
         if (GesherWebView.DEBUG) {
             GesherWebView.log("bounds: hwnd 0x" + Long.toHexString(hwnd) + " view "
                     + mLocation[0] + "," + mLocation[1] + " " + w + "x" + h + ", visible "
                     + (visible ? mClip.toShortString() : "no"));
         }
+    }
+
+    /**
+     * The views drawn over the WebView (a floating action button, a snackbar): the WebView2
+     * window is a child window above the app's surface, so these places are cut out of it
+     * and the app's pixels show there. Siblings after the WebView's branch (or with a higher
+     * Z) in each ancestor, down to views with a background or without children.
+     */
+    private int[] findHoles() {
+        mHoleCount = 0;
+        View child = mView;
+        android.view.ViewParent parent = mView.getParent();
+        while (parent instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) parent;
+            int index = g.indexOfChild(child);
+            float z = child.getZ();
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View v = g.getChildAt(i);
+                if (v == child) continue;
+                float vz = v.getZ();
+                if (vz > z || (i > index && vz >= z)) addHoles(v, 0);
+            }
+            child = g;
+            parent = g.getParent();
+        }
+        return Arrays.copyOf(mHoles, mHoleCount * 4);
+    }
+
+    private void addHoles(View v, int depth) {
+        if (v.getVisibility() != View.VISIBLE || v.getAlpha() <= 0f || mHoleCount >= 32) return;
+        if (!v.getGlobalVisibleRect(mHoleRect) || !Rect.intersects(mHoleRect, mClip)) return;
+        if (v instanceof ViewGroup && v.getBackground() == null && depth < 16
+                && ((ViewGroup) v).getChildCount() > 0) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) addHoles(g.getChildAt(i), depth + 1);
+            return;
+        }
+        if (mHoles.length < (mHoleCount + 1) * 4) mHoles = Arrays.copyOf(mHoles, mHoles.length + 16);
+        mHoleRect.intersect(mClip);
+        mHoles[mHoleCount * 4] = mHoleRect.left;
+        mHoles[mHoleCount * 4 + 1] = mHoleRect.top;
+        mHoles[mHoleCount * 4 + 2] = mHoleRect.right;
+        mHoles[mHoleCount * 4 + 3] = mHoleRect.bottom;
+        mHoleCount++;
     }
 
     // ---- ViewDelegate ----

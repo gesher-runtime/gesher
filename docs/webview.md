@@ -49,6 +49,18 @@ Work happens on branch `wip/webview`; the decision record is
   `<select>` popups and the like open in the right place. No code of the
   window track changes: the container is a child window of another thread
   (Windows attaches the two threads' input).
+- **Views over the WebView.** The container is a child window, so it covers
+  whatever the app draws over the WebView in its own surface (Notes' floating
+  edit button stayed hidden under a blank WebView2, e2e run 40135241966).
+  Each placement also collects the views drawn above the WebView's branch:
+  in every ancestor, the siblings after it (or with a higher Z), descended to
+  views with a background or without children, visible and overlapping the
+  visible rectangle. Their rectangles are cut out of the container's window
+  region (`SetWindowRgn`), so the app's pixels show and the app's window gets
+  the mouse there. Rectangles, not shapes: a round button's corners show the
+  app's surface behind them, not the page. The log says
+  `gesher-webview: N view(s) over the WebView cut out of its window` when the
+  count changes.
 - **Input and focus.** Mouse, touch, pen and keys over the WebView go to
   WebView2's own window; the app's window and its InputChannel never see
   them. WebView2 getting focus (a click) makes the WebView the focused view
@@ -215,10 +227,26 @@ drawing in a window that is covered or off the desktop;
   `PASS  webview2: PrintWindow(PW_RENDERFULLCONTENT): 0x00ff00 in the
   WebView's bounds, 0xff0000 above them`,
   `PASS  webview2: a page served by WebResourceRequested (deferred), blue`.
+- webapp.apk in gesher-app on both runners, single process and the Gesher
+  device (ci run 40135241966, tip 93a384e): `PASS  gesher-app: webapp.apk's
+  WebViews on WebView2 (child windows of its Win32 window at the views'
+  bounds, moved and hidden with them): an asset page whose script calls a
+  @JavascriptInterface method, console, alert through WebChromeClient,
+  shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript
+  returns values, onPageFinished; a remote https page; cookies; the window
+  read back with PW_RENDERFULLCONTENT (single process)` and the same
+  `(webapp.apk's app process)`; package green.
 
 ### In progress
 
-- The first ci run with dalvikvm linking compat/webview and webapp.apk.
+- e2e: org.billthefarmer.notes 1.41 failed in run 40135241966 (`the log
+  lacks 'gesher-webview: first page loaded: file:///android_asset/'`): a
+  fresh install has no note, so nothing is loaded until one is edited, and
+  the edit button was hidden under the WebView2 window. Fixed by the holes
+  above and the e2e actions (edit button at 344,744, keys, accept); the
+  expected base URL is the note's folder (`file:///`), not the assets. Its
+  SHA-256 (ae8aa96794fc55d58916d8fe3a217912fbcc9edd5ec9fb72c547f90d97d3c0ea,
+  printed by that run) is now pinned.
 
 ### Not done / limits
 

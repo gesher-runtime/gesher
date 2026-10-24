@@ -268,6 +268,11 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   RECT bounds = {0, 0, 0, 0};
   bool visible = false;
   bool has_bounds = false;
+  // The container's place (parent client coordinates) and the holes cut out
+  // of its window region (SetBounds).
+  RECT clip = {0, 0, 0, 0};
+  std::vector<RECT> holes;
+  bool has_region = false;
 
   // An API navigation (Navigate, reload, history) is on its way: its
   // NavigationStarting is not the page's, so the Listener is not asked.
@@ -369,6 +374,27 @@ void ApplyBounds(Impl* impl) {
   }
   impl->controller->put_Bounds(impl->bounds);
   impl->controller->put_IsVisible(TRUE);
+}
+
+// The container's window region: its client area less the holes (none: no region).
+void ApplyRegion(Impl* impl) {
+  if (impl->container == nullptr) return;
+  int w = impl->clip.right - impl->clip.left;
+  int h = impl->clip.bottom - impl->clip.top;
+  HRGN region = nullptr;
+  for (const RECT& hole : impl->holes) {
+    RECT r = {hole.left - impl->clip.left, hole.top - impl->clip.top,
+              hole.right - impl->clip.left, hole.bottom - impl->clip.top};
+    if (r.right <= 0 || r.bottom <= 0 || r.left >= w || r.top >= h) continue;
+    if (region == nullptr) region = CreateRectRgn(0, 0, w, h);
+    HRGN cut = CreateRectRgn(r.left, r.top, r.right, r.bottom);
+    CombineRgn(region, region, cut, RGN_DIFF);
+    DeleteObject(cut);
+  }
+  if (region == nullptr && !impl->has_region) return;
+  // The system owns `region` from here on.
+  SetWindowRgn(impl->container, region, TRUE);
+  impl->has_region = region != nullptr;
 }
 
 void ApplySettings(Impl* impl) {
@@ -1179,10 +1205,11 @@ void Host::Run(Command command) {
 }
 
 void Host::SetBounds(HWND parent, int x, int y, int width, int height, int clip_x, int clip_y,
-                     int clip_width, int clip_height, bool visible) {
+                     int clip_width, int clip_height, bool visible,
+                     const std::vector<RECT>& holes) {
   std::shared_ptr<Impl> shared = impl_;
   PostToWebViewThread([shared, parent, x, y, width, height, clip_x, clip_y, clip_width,
-                       clip_height, visible] {
+                       clip_height, visible, holes] {
     Impl* impl = shared.get();
     if (impl->destroyed || impl->container == nullptr) return;
     Reparent(impl, parent);
@@ -1193,6 +1220,9 @@ void Host::SetBounds(HWND parent, int x, int y, int width, int height, int clip_
     } else {
       ShowWindow(impl->container, SW_HIDE);
     }
+    impl->clip = {clip_x, clip_y, clip_x + clip_width, clip_y + clip_height};
+    impl->holes = holes;
+    ApplyRegion(impl);
     impl->bounds = {x - clip_x, y - clip_y, x - clip_x + width, y - clip_y + height};
     impl->visible = shown;
     impl->has_bounds = true;
