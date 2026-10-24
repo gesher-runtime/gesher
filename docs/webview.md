@@ -61,6 +61,10 @@ Work happens on branch `wip/webview`; the decision record is
   (`RasterizationScale` = density / 160), so a CSS pixel is a dp, as in
   Android's WebView.
 
+Controllers are created one at a time: a second
+`CreateCoreWebView2Controller` while one is pending fails with
+`ERROR_INVALID_STATE` (0x8007139f), so creations queue on the WebView thread.
+
 ## Threads
 
 WebView2 objects belong to the WebView thread. Every `Host` call posts a task
