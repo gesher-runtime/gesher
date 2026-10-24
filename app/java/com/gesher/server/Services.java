@@ -10,7 +10,9 @@ import android.app.INotificationManager;
 import android.app.IUiModeManager;
 import android.app.IUiModeManagerCallback;
 import android.app.UiModeManager;
+import android.content.ContentResolver;
 import android.content.Context;
+import android.content.IContentService;
 import android.content.pm.IPackageManager;
 import android.content.pm.UserInfo;
 import android.content.res.Configuration;
@@ -98,6 +100,8 @@ public final class Services {
         // which framework.jar does not have (a Proxy resolves every method's types).
         services.put(Context.AUDIO_SERVICE,
                 new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
+        services.put(ContentResolver.CONTENT_SERVICE_NAME,
+                StandIn.of(IContentService.class, new ContentService()).asBinder());
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManager()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
@@ -225,6 +229,28 @@ public final class Services {
         }
     }
 
+    /**
+     * content: ContentService, without observers' notifications. A text view's key listener
+     * observes the text settings (TextKeyListener.initPrefs: registerContentObserver).
+     */
+    public static final class ContentService extends IContentService.Default {
+        @Override
+        public void registerContentObserver(android.net.Uri uri, boolean notifyForDescendants,
+                android.database.IContentObserver observer, int userHandle,
+                int targetSdkVersion) {
+            // Nothing changes the observed content behind the app's back; never notified.
+        }
+
+        @Override
+        public void unregisterContentObserver(android.database.IContentObserver observer) {
+        }
+
+        @Override
+        public void notifyChange(android.net.Uri[] uris, android.database.IContentObserver observer,
+                boolean observerWantsSelfNotifications, int flags, int userHandle,
+                int targetSdkVersion, String callingPackage) {
+        }
+    }
     /**
      * audio: AudioService, silent. A click on a view plays its sound effect
      * (View.performClick → AudioManager.playSoundEffect), which needs the service.
