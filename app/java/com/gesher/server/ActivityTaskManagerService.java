@@ -1023,6 +1023,53 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
+    /**
+     * ActivityRecord.navigateUpTo, lite (NavUtils.navigateUpFromSameTask): the activities
+     * of the caller's task above the up destination finish. When the destination is not in
+     * the task (startActivities records only the top activity), it is started in the task
+     * first, as if it had been below, and the caller finishes (exec track, docs/exec.md:
+     * Simon Tatham's Puzzles goes up to its chooser on a first launch).
+     */
+    boolean navigateUpTo(ActivityRecord r, Intent destIntent, String resolvedType,
+            int resultCode, Intent resultData) {
+        ComponentName dest = destIntent.getComponent();
+        if (dest == null) {
+            ActivityInfo info = resolve(destIntent, resolvedType, true);
+            if (info == null) return false;
+            dest = new ComponentName(info.packageName, info.name);
+        }
+        List<ActivityRecord> above = new ArrayList<>();
+        ActivityRecord parent = null;
+        synchronized (this) {
+            for (int i = mActivities.indexOf(r); i >= 0; i--) {
+                ActivityRecord a = mActivities.get(i);
+                if (a.taskId != r.taskId || a.finishing || a.state == State.DESTROYED) continue;
+                if (a != r && a.component().equals(dest)) {
+                    parent = a;
+                    break;
+                }
+                above.add(a);
+            }
+        }
+        SystemServer.log("navigateUpTo " + dest.flattenToShortString() + " from " + r.name()
+                + (parent != null ? ": back to it in task " + r.taskId
+                        : ": not in task " + r.taskId + ", starting it there"));
+        if (parent == null) {
+            Intent up = new Intent(destIntent);
+            up.setComponent(dest);
+            up.removeFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ActivityRecord[] started = new ActivityRecord[1];
+            int result = start(r.app != null ? r.app.thread : null, up, resolvedType,
+                    r.info.packageName, r.token, null, -1, started);
+            if (result != ActivityManager.START_SUCCESS) return false;
+        }
+        for (ActivityRecord a : above) {
+            finish(a, "navigateUpTo", a == r ? resultCode : 0 /* RESULT_CANCELED */,
+                    a == r ? resultData : null);
+        }
+        return true;
+    }
+
     private void stop(ActivityRecord r) {
         setState(r, State.STOPPING);
         ClientTransaction t = new ClientTransaction(r.app.thread);

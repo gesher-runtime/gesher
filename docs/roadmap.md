@@ -194,7 +194,14 @@ needs: [framework-build.md](framework-build.md).
         resizes the window (at least its minimum) and it redraws at the new
         size (ci run 40056527378, both runners and the installer;
         docs/graphics.md)
-- [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
+- [x] Dialogs, menus, dropdowns and toasts as owned popup windows of the app
+      window (ADR 0040; popups track): an AlertDialog over its activity with
+      the dim behind it, its button, Esc and a click outside; a Toast; an
+      options menu item; a Spinner selection; a dialog-themed Activity; a
+      second Activity taking the task window's place (ci run 40129561197,
+      both runners, single process and the Gesher device; the e2e apps stay
+      green)
+- [x] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
   - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
         Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
         through SharedMemory: `Typeface.DEFAULT`, families and aliases,
@@ -202,14 +209,25 @@ needs: [framework-build.md](framework-build.md).
         `StaticLayout` paragraph, bold/italic; shipped by the installer and
         loaded by the installed gesher-app (ci run 40011630189, both runners;
         docs/fonts.md)
-  - [ ] RTL text in a View (TextView in a window) and further scripts
+  - [x] RTL text in a View (TextView in a window) and further scripts:
+        Hebrew and Arabic TextViews drawn right to left (bidi runs with Latin
+        and digits in order, Arabic joined), alignment by gravity,
+        textDirection and textAlignment, layouts mirrored under an RTL locale
+        (`android:supportsRtl`), arrow keys moving an RTL EditText's cursor
+        visually; Arabic, Thai, Devanagari bundled (Noto), CJK, color emoji,
+        symbols and further scripts from Windows' fonts in place; the locale
+        list, layout direction and regional preferences from Windows (or
+        `$GESHER_LOCALES`); single process and the Gesher device (ci run
+        40133992911, both runners and the installer; docs/fonts.md, ADR 0044)
 
 ## Phase 4 checklist
 
 - [x] Binder across processes: `/dev/binder` over Windows IPC, with
       `servicemanager`
-- [ ] The framework's own system services (PackageManager parses the APK,
-      ActivityManager starts the Activity) in place of gesher-app's stand-ins
+- [x] System services across processes in place of gesher-app's in-process
+      stand-ins: Gesher's own system server behind the framework's AIDL
+      interfaces and client side, with the framework's PackageParser2 (by
+      design not services.jar; ADRs 0019, 0046; the sub-boxes' ci runs)
   - [x] The APK parsed by the framework's PackageParser2 (ci run 39984218373)
   - [x] A system server process registering package, activity,
         activity_task, window, display and user with servicemanager;
@@ -232,6 +250,18 @@ needs: [framework-build.md](framework-build.md).
         starts on demand and ends; another package's activity and provider
         in its own process; `gesher-app my.apk` and the `.apk` association
         use it (ci run 40019524773)
+- [x] Device-state services backed by Windows (devsvc track, ADR 0038,
+      docs/services.md "Device services"; ci run 40137762701
+      at a02e84a, both runners)
+  - [x] Alarms that fire (a waitable timer; the app's process started for a
+        PendingIntent), TIME_SET from WM_TIMECHANGE
+  - [x] JobScheduler: JobServices in the app's process, periodic jobs,
+        constraints from Windows
+  - [x] The clipboard linked with Windows' both ways (text, HTML)
+  - [x] Notifications as toasts of the app's AppUserModelID (cancel removes
+        them), a notification listener
+  - [x] Wake locks as Windows power requests; the battery from
+        GetSystemPowerStatus
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
@@ -255,7 +285,7 @@ needs: [framework-build.md](framework-build.md).
         app-compat changes by target SDK, system features, startActivities,
         PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
         libphonenumber placeholder
-  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+  - [x] Simon Tatham's Puzzles (its generator is an ELF executable run as a
         process)
 
 ## Phase 6 checklist

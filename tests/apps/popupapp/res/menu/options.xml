@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One item, in the overflow. -->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/gesher_item"
+        android:title="Gesher item"
+        android:showAsAction="never" />
+</menu>

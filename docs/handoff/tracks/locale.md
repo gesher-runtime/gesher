@@ -1,0 +1,16 @@
+# Track brief: locale
+
+Locale leftovers from the rtl track. The original brief given to the first agent of this track (2026-10-25), kept verbatim. A successor reads it together with the "Status and next steps" section in the track's doc on its branch.
+
+You are the "locale" track agent of the gesher project. Your worktree is C:\work\gesher-locale on branch wip/locale (cut from phase4/integration and pushed). Work only there.
+
+FIRST read docs/handoff/track-rules.md and follow it exactly: it is binding. Then read docs/fonts.md (the rtl section: locale list, layout direction, regional preferences from Windows or $GESHER_LOCALES), ADR 0044, docs/services.md, ADR 0046.
+
+GOAL: Android's locale behavior on Windows, complete. The rtl track reported:
+- No per-app locales: LocaleManager (`locale` service) with setApplicationLocales/getApplicationLocales, AppCompatDelegate.setApplicationLocales on API 33+, persisted per package on the Gesher device, the app's configuration recreated as Android does, `android:localeConfig` read from the manifest.
+- Windows setting changes don't reach running apps: listen for WM_SETTINGCHANGE("intl") / the user's language list change and deliver a configuration change (ACTION_LOCALE_CHANGED broadcast, onConfigurationChanged or recreate per configChanges) to every running app.
+- Decimal/grouping symbols and date/time patterns are not carried over: Windows' regional format overrides (GetLocaleInfoEx: LOCALE_SDECIMAL, LOCALE_STHOUSAND, short/long date, time format, first day of week, 24-hour clock, measurement system, temperature unit) mapped to what Android exposes: Unicode locale extensions in the locale list (-u-fw-, -u-mu-, -u-hc-), DateFormat.is24HourFormat (Settings.System.TIME_12_24), and documented limits where Android has no equivalent (custom separators: decide and record it).
+- Tests in tests/windows/tracks/49-locale.ps1 (a test APK printing the effective locale, formatted numbers/dates, per-app locale round trip across an app restart, a simulated setting change delivered to a running app), both runners, single process and on the Gesher device. CI runners can set the user's locale/format with PowerShell (Set-WinUserLanguageList, Set-Culture) in the test job: restore them afterwards.
+Your file domain: the locale code from the rtl track (fonts/locale bridging), a LocaleManager stand-in in com.gesher.server (Services.java: one additive registration line), settings bits for TIME_12_24, tests/windows/tracks/49-locale.ps1 and its test app (framework.yml: one line per test app), docs/fonts.md (locale section) or a new docs/locale.md, ADR docs/decisions/0049-locale-per-app-and-formats.md, the roadmap boxes.
+
+Coordinator notes: other tracks run in parallel on the shared CI: trigger CI only when code is ready, cancel superseded runs. Watch with `gh run watch <id> -R gesher-runtime/gesher --exit-status --interval 120`; on HTTP 403 back off ~10 minutes. Keep a "Status and next steps" section updated with every meaningful push. Before your final CI run, merge origin/phase4/integration into your branch. Final message = the report track-rules.md asks for (run ids, PASS lines, remaining gaps, edits outside your domain, the verified SHA).

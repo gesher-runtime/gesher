@@ -6,7 +6,7 @@
 # ANativeWindow_toSurface, which build with hwui (core/jni's Surface natives).
 set(_win ${CMAKE_SOURCE_DIR}/compat/hwui/window)
 
-add_library(gesher_window STATIC ${_win}/gesher_window.cc)
+add_library(gesher_window STATIC ${_win}/gesher_window.cc ${_win}/gesher_popup.cc)
 target_include_directories(gesher_window PUBLIC ${_win})
 target_compile_options(gesher_window PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher_window PUBLIC user32 gdi32 ole32)
