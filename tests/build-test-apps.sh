@@ -45,6 +45,8 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
 cp "$work/dex-codegen/classes.dex" "$out/codegen-tests.dex"
 # Some of ART's own run-tests (art/test), for the same checks.
 "$root/tests/build-art-run-tests.sh" "$out" "$r8"
+# Networking (tests/dex-net, docs/network.md).
+"$root/tests/dex-net/build.sh" "$out" "$r8"
 
 # framework.jar on the boot class path (tests/dex-framework).
 javac --release 11 -d "$work/classes-framework" "$root"/tests/dex-framework/*.java
