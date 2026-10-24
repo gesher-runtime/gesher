@@ -91,45 +91,54 @@ Excluded by name (gtest filter in `21-posix.ps1`):
   `RuntimeInit`), but if the framework's time zone supplier is ever installed,
   that line would override Windows' zone.
 
-## Status and next steps (2026-10-25, handoff checkpoint)
+## Status and next steps (2026-10-25, second handoff checkpoint)
 
-**CI-verified: nothing yet.** No run of this branch has been checked (GitHub's
-API was rate-limited for all agents).
-
-**Runs in flight (not watched, results unknown):** on commit 65cccdc (the first
-push): ci run 40135642983 (full ci, workflow_dispatch) and posix run
-40135639733 (posix.yml, push-triggered: the ART gtests on both runners). Both
-predate the WIP commit after it, which adds LinuxWatchService, FileObserver,
-their Java tests, a patch, this doc and ADR 0045 and fixes an argument-order
-bug in inotify_init1 (`std::move(in)` next to `in->ready`).
+**CI-verified: nothing green yet.** What CI showed so far:
+- 65cccdc (ci 40135642983, posix 40135639733) and 2152bcb (posix 40136578167):
+  every build job failed on one clang `-Werror` error, the unused
+  `kRenameExchange` in compat/posix/src/fsops.cc. Fixed in 2686c82.
+- 2686c82: posix run 40137598478 failed in "Build the tests": gesher-base now
+  compiles; three ART gtest sources did not (testing.cc path-to-string,
+  fd_file_test.cc `CreateSparseSourceFile` under `__linux__` only,
+  aconfig_flags_test.cc static_assert). Fixed in f92261a by
+  `patches/art/0450-posix-gtests-on-windows.patch` (applies cleanly to the
+  pinned art, checked locally) and by not building aconfig_flags_test.cc.
+  Adding the patch changes the AOSP cache key (one refetch).
+- 2686c82: ci run 40137606776 (workflow_dispatch) was still running at
+  handoff: graphics/libs/native-libs/angle builds succeeded; posix/build
+  failed (the gtests above); framework/framework failed on a transient
+  `curl: (92) HTTP/2 stream ... INTERNAL_ERROR` in the test-app build step (not
+  a code error); the main `build` job was still in progress (its result says
+  whether LinuxWatchService.c, android_util_FileObserver.cpp + patch
+  frameworks/base 0450 compile). Cancel it if still running.
+- f92261a: posix run 40138717476 (push-triggered) was in flight, not watched
+  to the end.
+- `git merge-tree HEAD origin/phase4/integration` at 2686c82: no conflicts.
+- Patch frameworks/base 0450 applies cleanly to the pinned frameworks/base
+  (checked locally in a sparse clone).
 
 **Verified locally only** (WinLibs gcc 16 UCRT on Windows 11, not the CI
-toolchain; script outside the repo): gesher-base compiles with -Wall -Wextra
-without warnings; `posix_probe` ("all passed", 3 runs), `socket_probe` and
-`epoll_probe` pass; `posix_probe --timezone` printed Asia/Jerusalem for an
-Israel-zone machine. The `/mnt/<drive>` branch of the probe was not exercised
-locally (one drive). Nothing ART/libcore/Java was built locally.
+toolchain): gesher-base compiles with -Wall -Wextra; `posix_probe` ("all
+passed", 3 runs), `socket_probe` and `epoll_probe` pass; `posix_probe
+--timezone` printed Asia/Jerusalem. Nothing ART/libcore/Java built locally.
 
-**Next, in order:**
-1. Read the two runs' logs (`gh run view <id> -R gesher-runtime/gesher
-   --log-failed`, sparingly; `gh run watch <id> --exit-status --interval 120`).
-   Expect clang `-Werror` fixes in compat/posix (gcc was used locally) and
-   first-run problems in `cmake/aosp/art_gtests.cmake` (link set: it links
-   art_runtime + art_compiler + disassembler stand-in like dalvikvm;
-   common_art_test.cc may need more gesher-base calls).
-2. Push the fixes; trigger `gh workflow run ci --ref wip/posix` once the
-   posix.yml run builds; iterate until both runners pass every 21-posix.ps1
-   line and every existing line. Add gtest exclusions to 21-posix.ps1 and the
-   list above only with a reason.
-3. Things to watch in the test job: the time zone loop (`Set-TimeZone`, needs
+**Exact next step:** read posix run 40138717476 (`gh run view 40138717476 -R
+gesher-runtime/gesher --log-failed | grep -E "error:|FAILED"`); if its build
+passed, read its test job (gtest failures: fix or exclude by name in
+21-posix.ps1 with the reason in the list above). Read the main `build` job of
+ci 40137606776 for compile errors. Then, once posix.yml is green:
+1. Merge origin/phase4/integration, push, `gh workflow run ci -R
+   gesher-runtime/gesher --ref wip/posix`; iterate until both runners pass
+   every 21-posix.ps1 line and every existing line, plus package and e2e.
+2. Things to watch in the test job: the time zone loop (`Set-TimeZone`, needs
    admin; restores the zone in `finally`); TimeZoneTest needs the tzdata copied
    by run-tests.ps1 into `$root/tzdata`; FileObserverTest needs patch 0450 and
    the `android_util_FileObserver.cpp` source in framework.cmake;
    WatchServiceTest needs LinuxWatchService.c (removed from
    GESHER_OPENJDK_UNPORTED) and its symbols in compat/libcore/builtins.cc.
-4. The package job checks `tzdata\etc\tz\versioned\9\tzdata`, `...\icu\zoneinfo64.res`
+3. The package job checks `tzdata\etc\tz\versioned\9\tzdata`, `...\icu\zoneinfo64.res`
    and `licenses\TZDATA-NOTICES.txt` in the installed Gesher.
-5. Then tick the Phase 1 roadmap boxes (time zone data; inotify part of
+4. Then tick the Phase 1 roadmap boxes (time zone data; inotify part of
    "BoringSSL, epoll and inotify, a process model"; "Paths on another drive
    ... the rest of the CRT's path functions"; "ART's own gtests for
    libartbase/libdexfile") quoting the run id, and update this section.
@@ -163,6 +172,7 @@ locally (one drive). Nothing ART/libcore/Java was built locally.
 - `cmake/aosp/framework.cmake` + `compat/framework/android_runtime.cc`:
   `android_util_FileObserver.cpp` and its registration;
   `patches/frameworks/base/0450-posix-fileobserver-inotify.patch` (new).
+- `patches/art/0450-posix-gtests-on-windows.patch` (new; test sources only).
 - `cmake/aosp/libcore_native.cmake`: LinuxWatchService.c no longer unported
   (the exec track edits the same block for UNIXProcess_md.c).
 - `compat/posix/src/signal.cc` (stack track's file): `kill` of another pid
