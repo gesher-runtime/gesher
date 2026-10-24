@@ -132,6 +132,7 @@ public final class Services {
                 new DeviceServices.SearchService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new DeviceServices.ClipboardService()).asBinder());
+        services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         return services;
     }
 

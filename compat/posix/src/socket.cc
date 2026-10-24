@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 
+#include <gesher/inet.h>
+
+#include <atomic>
+#include <stdlib.h>
+
 #include "internal.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
@@ -72,13 +77,33 @@ bool MapUnixPath(ws::Address* address, bool binding) {
 
 }  // namespace
 
+// Android's INTERNET permission (<gesher/inet.h>): -1 until first asked, then 0 or 1.
+static std::atomic<int> g_inet_allowed{-1};
+
 extern "C" {
+
+void gesher_set_inet_allowed(int allowed) { g_inet_allowed = allowed ? 1 : 0; }
+
+int gesher_inet_allowed(void) {
+  int allowed = g_inet_allowed;
+  if (allowed < 0) {
+    const char* env = getenv("GESHER_INET");
+    allowed = env != nullptr && strcmp(env, "0") == 0 ? 0 : 1;
+    int expected = -1;
+    g_inet_allowed.compare_exchange_strong(expected, allowed);
+    allowed = g_inet_allowed;
+  }
+  return allowed;
+}
 
 int socket(int domain, int type, int protocol) {
   if (!ws::Startup()) return -1;
   ws::Family family = ToFamily(domain);
   if (family == ws::Family::kOther || family == ws::Family::kUnspec) {
     return errno = EAFNOSUPPORT, -1;
+  }
+  if ((family == ws::Family::kInet || family == ws::Family::kInet6) && !gesher_inet_allowed()) {
+    return errno = EACCES, -1;  // no INTERNET permission: no inet group
   }
   ws::Type ws_type = ToType(type & ~kTypeFlags);
   if (ws_type == ws::Type::kOther) return errno = EINVAL, -1;
