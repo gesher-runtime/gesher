@@ -101,10 +101,23 @@ int uname(struct utsname* buf) {
 
 // --- statvfs -----------------------------------------------------------------
 
+// Android's own directories (`/data`: SQLiteGlobal's default page size is
+// StatFs("/data")'s block size; `/system`) are not on the disk (ADR 0010): an
+// absolute path that does not exist answers for the volume it would be on, its
+// nearest existing ancestor's.
 int statvfs(const char* path, struct statvfs* buf) {
   ULARGE_INTEGER avail, total, free;
-  if (!GetDiskFreeSpaceExW(gesher::Widen(path).c_str(), &avail, &total, &free)) {
-    return gesher::FailWithLastError();
+  std::wstring w = gesher::Widen(path);
+  while (!GetDiskFreeSpaceExW(w.c_str(), &avail, &total, &free)) {
+    DWORD error = GetLastError();
+    size_t slash = w.find_last_of(L"/\\");
+    bool missing = error == ERROR_PATH_NOT_FOUND || error == ERROR_FILE_NOT_FOUND;
+    if (!missing || (path[0] != '/' && path[0] != '\\') || slash == std::wstring::npos ||
+        w.size() <= 1) {
+      SetLastError(error);
+      return gesher::FailWithLastError();
+    }
+    w.resize(slash == 0 ? 1 : slash);
   }
   FillStatvfs(avail, total, free, buf);
   return 0;

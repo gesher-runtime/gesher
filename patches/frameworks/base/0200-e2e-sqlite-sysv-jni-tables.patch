@@ -1,0 +1,232 @@
+diff --git a/core/jni/android_database_CursorWindow.cpp b/core/jni/android_database_CursorWindow.cpp
+--- a/core/jni/android_database_CursorWindow.cpp
++++ b/core/jni/android_database_CursorWindow.cpp
+@@ -523,34 +523,34 @@
+ 
+ static const JNINativeMethod sMethods[] = {
+         /* name, signature, funcPtr */
+-        {"nativeCreate", "(Ljava/lang/String;I)J", (void*)nativeCreate},
+-        {"nativeDispose", "(J)V", (void*)nativeDispose},
++        {"nativeCreate", "(Ljava/lang/String;I)J", GESHER_JNI(nativeCreate)},
++        {"nativeDispose", "(J)V", GESHER_JNI(nativeDispose)},
+ #ifdef __linux__
+-        {"nativeCreateFromParcel", "(Landroid/os/Parcel;)J", (void*)nativeCreateFromParcel},
+-        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", (void*)nativeWriteToParcel},
++        {"nativeCreateFromParcel", "(Landroid/os/Parcel;)J", GESHER_JNI(nativeCreateFromParcel)},
++        {"nativeWriteToParcel", "(JLandroid/os/Parcel;)V", GESHER_JNI(nativeWriteToParcel)},
+ #endif
+-        {"nativeGetName", "(J)Ljava/lang/String;", (void*)nativeGetName},
+-        {"nativeGetBlob", "(JII)[B", (void*)nativeGetBlob},
+-        {"nativeGetString", "(JII)Ljava/lang/String;", (void*)nativeGetString},
++        {"nativeGetName", "(J)Ljava/lang/String;", GESHER_JNI(nativeGetName)},
++        {"nativeGetBlob", "(JII)[B", GESHER_JNI(nativeGetBlob)},
++        {"nativeGetString", "(JII)Ljava/lang/String;", GESHER_JNI(nativeGetString)},
+         {"nativeCopyStringToBuffer", "(JIILandroid/database/CharArrayBuffer;)V",
+-         (void*)nativeCopyStringToBuffer},
+-        {"nativePutBlob", "(J[BII)Z", (void*)nativePutBlob},
+-        {"nativePutString", "(JLjava/lang/String;II)Z", (void*)nativePutString},
++         GESHER_JNI(nativeCopyStringToBuffer)},
++        {"nativePutBlob", "(J[BII)Z", GESHER_JNI(nativePutBlob)},
++        {"nativePutString", "(JLjava/lang/String;II)Z", GESHER_JNI(nativePutString)},
+ 
+         // ------- @FastNative below here ----------------------
+-        {"nativeAllocRow", "(J)Z", (void*)nativeAllocRow},
+-        {"nativeGetLong", "(JII)J", (void*)nativeGetLong},
+-        {"nativeGetDouble", "(JII)D", (void*)nativeGetDouble},
++        {"nativeAllocRow", "(J)Z", GESHER_JNI(nativeAllocRow)},
++        {"nativeGetLong", "(JII)J", GESHER_JNI(nativeGetLong)},
++        {"nativeGetDouble", "(JII)D", GESHER_JNI(nativeGetDouble)},
+ 
+         // ------- @CriticalNative below here ------------------
+-        {"nativeClear", "(J)V", (void*)nativeClear},
+-        {"nativeGetNumRows", "(J)I", (void*)nativeGetNumRows},
+-        {"nativeFreeLastRow", "(J)V", (void*)nativeFreeLastRow},
+-        {"nativeGetType", "(JII)I", (void*)nativeGetType},
+-        {"nativeSetNumColumns", "(JI)Z", (void*)nativeSetNumColumns},
+-        {"nativePutLong", "(JJII)Z", (void*)nativePutLong},
+-        {"nativePutDouble", "(JDII)Z", (void*)nativePutDouble},
+-        {"nativePutNull", "(JII)Z", (void*)nativePutNull},
++        {"nativeClear", "(J)V", GESHER_JNI(nativeClear)},
++        {"nativeGetNumRows", "(J)I", GESHER_JNI(nativeGetNumRows)},
++        {"nativeFreeLastRow", "(J)V", GESHER_JNI(nativeFreeLastRow)},
++        {"nativeGetType", "(JII)I", GESHER_JNI(nativeGetType)},
++        {"nativeSetNumColumns", "(JI)Z", GESHER_JNI(nativeSetNumColumns)},
++        {"nativePutLong", "(JJII)Z", GESHER_JNI(nativePutLong)},
++        {"nativePutDouble", "(JDII)Z", GESHER_JNI(nativePutDouble)},
++        {"nativePutNull", "(JII)Z", GESHER_JNI(nativePutNull)},
+ };
+ 
+ int register_android_database_CursorWindow(JNIEnv* env)
+diff --git a/core/jni/android_database_SQLiteConnection.cpp b/core/jni/android_database_SQLiteConnection.cpp
+--- a/core/jni/android_database_SQLiteConnection.cpp
++++ b/core/jni/android_database_SQLiteConnection.cpp
+@@ -994,47 +994,47 @@
+ 
+ static const JNINativeMethod sMethods[] = {
+         /* name, signature, funcPtr */
+-        {"nativeOpen", "(Ljava/lang/String;ILjava/lang/String;ZZII)J", (void*)nativeOpen},
++        {"nativeOpen", "(Ljava/lang/String;ILjava/lang/String;ZZII)J", GESHER_JNI(nativeOpen)},
+         {"nativeClose", "(JZ)V",
+-         (void*)static_cast<void (*)(JNIEnv*, jclass, jlong, jboolean)>(nativeClose)},
++         GESHER_JNI(static_cast)<void (*)(JNIEnv*, jclass, jlong, jboolean)>(nativeClose)},
+         {"nativeRegisterCustomScalarFunction",
+          "(JLjava/lang/String;Ljava/util/function/UnaryOperator;)V",
+-         (void*)nativeRegisterCustomScalarFunction},
++         GESHER_JNI(nativeRegisterCustomScalarFunction)},
+         {"nativeRegisterCustomAggregateFunction",
+          "(JLjava/lang/String;Ljava/util/function/BinaryOperator;)V",
+-         (void*)nativeRegisterCustomAggregateFunction},
++         GESHER_JNI(nativeRegisterCustomAggregateFunction)},
+         {"nativeRegisterLocalizedCollators", "(JLjava/lang/String;)V",
+-         (void*)nativeRegisterLocalizedCollators},
+-        {"nativePrepareStatement", "(JLjava/lang/String;)J", (void*)nativePrepareStatement},
+-        {"nativeFinalizeStatement", "(JJ)V", (void*)nativeFinalizeStatement},
+-        {"nativeGetParameterCount", "(JJ)I", (void*)nativeGetParameterCount},
+-        {"nativeIsReadOnly", "(JJ)Z", (void*)nativeIsReadOnly},
+-        {"nativeUpdatesTempOnly", "(JJ)Z", (void*)nativeUpdatesTempOnly},
+-        {"nativeGetColumnCount", "(JJ)I", (void*)nativeGetColumnCount},
+-        {"nativeGetColumnName", "(JJI)Ljava/lang/String;", (void*)nativeGetColumnName},
+-        {"nativeBindNull", "(JJI)V", (void*)nativeBindNull},
+-        {"nativeBindLong", "(JJIJ)V", (void*)nativeBindLong},
+-        {"nativeBindDouble", "(JJID)V", (void*)nativeBindDouble},
+-        {"nativeBindString", "(JJILjava/lang/String;)V", (void*)nativeBindString},
+-        {"nativeBindBlob", "(JJI[B)V", (void*)nativeBindBlob},
++         GESHER_JNI(nativeRegisterLocalizedCollators)},
++        {"nativePrepareStatement", "(JLjava/lang/String;)J", GESHER_JNI(nativePrepareStatement)},
++        {"nativeFinalizeStatement", "(JJ)V", GESHER_JNI(nativeFinalizeStatement)},
++        {"nativeGetParameterCount", "(JJ)I", GESHER_JNI(nativeGetParameterCount)},
++        {"nativeIsReadOnly", "(JJ)Z", GESHER_JNI(nativeIsReadOnly)},
++        {"nativeUpdatesTempOnly", "(JJ)Z", GESHER_JNI(nativeUpdatesTempOnly)},
++        {"nativeGetColumnCount", "(JJ)I", GESHER_JNI(nativeGetColumnCount)},
++        {"nativeGetColumnName", "(JJI)Ljava/lang/String;", GESHER_JNI(nativeGetColumnName)},
++        {"nativeBindNull", "(JJI)V", GESHER_JNI(nativeBindNull)},
++        {"nativeBindLong", "(JJIJ)V", GESHER_JNI(nativeBindLong)},
++        {"nativeBindDouble", "(JJID)V", GESHER_JNI(nativeBindDouble)},
++        {"nativeBindString", "(JJILjava/lang/String;)V", GESHER_JNI(nativeBindString)},
++        {"nativeBindBlob", "(JJI[B)V", GESHER_JNI(nativeBindBlob)},
+         {"nativeResetStatementAndClearBindings", "(JJ)V",
+-         (void*)nativeResetStatementAndClearBindings},
+-        {"nativeExecute", "(JJZ)V", (void*)nativeExecute},
+-        {"nativeExecuteForLong", "(JJ)J", (void*)nativeExecuteForLong},
+-        {"nativeExecuteForString", "(JJ)Ljava/lang/String;", (void*)nativeExecuteForString},
+-        {"nativeExecuteForBlobFileDescriptor", "(JJ)I", (void*)nativeExecuteForBlobFileDescriptor},
+-        {"nativeExecuteForChangedRowCount", "(JJ)I", (void*)nativeExecuteForChangedRowCount},
+-        {"nativeExecuteForLastInsertedRowId", "(JJ)J", (void*)nativeExecuteForLastInsertedRowId},
+-        {"nativeExecuteForCursorWindow", "(JJJIIZ)J", (void*)nativeExecuteForCursorWindow},
+-        {"nativeGetDbLookaside", "(J)I", (void*)nativeGetDbLookaside},
+-        {"nativeCancel", "(J)V", (void*)nativeCancel},
+-        {"nativeResetCancel", "(JZ)V", (void*)nativeResetCancel},
+-
+-        {"nativeLastInsertRowId", "(J)I", (void*)nativeLastInsertRowId},
+-        {"nativeChanges", "(J)J", (void*)nativeChanges},
+-        {"nativeTotalChanges", "(J)J", (void*)nativeTotalChanges},
+-
+-        {"nativeGetDbConfig", "(J)[Ljava/lang/String;", (void*)nativeGetDbConfig},
++         GESHER_JNI(nativeResetStatementAndClearBindings)},
++        {"nativeExecute", "(JJZ)V", GESHER_JNI(nativeExecute)},
++        {"nativeExecuteForLong", "(JJ)J", GESHER_JNI(nativeExecuteForLong)},
++        {"nativeExecuteForString", "(JJ)Ljava/lang/String;", GESHER_JNI(nativeExecuteForString)},
++        {"nativeExecuteForBlobFileDescriptor", "(JJ)I", GESHER_JNI(nativeExecuteForBlobFileDescriptor)},
++        {"nativeExecuteForChangedRowCount", "(JJ)I", GESHER_JNI(nativeExecuteForChangedRowCount)},
++        {"nativeExecuteForLastInsertedRowId", "(JJ)J", GESHER_JNI(nativeExecuteForLastInsertedRowId)},
++        {"nativeExecuteForCursorWindow", "(JJJIIZ)J", GESHER_JNI(nativeExecuteForCursorWindow)},
++        {"nativeGetDbLookaside", "(J)I", GESHER_JNI(nativeGetDbLookaside)},
++        {"nativeCancel", "(J)V", GESHER_JNI(nativeCancel)},
++        {"nativeResetCancel", "(JZ)V", GESHER_JNI(nativeResetCancel)},
++
++        {"nativeLastInsertRowId", "(J)I", GESHER_JNI(nativeLastInsertRowId)},
++        {"nativeChanges", "(J)J", GESHER_JNI(nativeChanges)},
++        {"nativeTotalChanges", "(J)J", GESHER_JNI(nativeTotalChanges)},
++
++        {"nativeGetDbConfig", "(J)[Ljava/lang/String;", GESHER_JNI(nativeGetDbConfig)},
+ };
+ 
+ int register_android_database_SQLiteConnection(JNIEnv *env)
+diff --git a/core/jni/android_database_SQLiteDebug.cpp b/core/jni/android_database_SQLiteDebug.cpp
+--- a/core/jni/android_database_SQLiteDebug.cpp
++++ b/core/jni/android_database_SQLiteDebug.cpp
+@@ -61,7 +61,7 @@
+ static const JNINativeMethod gMethods[] =
+ {
+     { "nativeGetPagerStats", "(Landroid/database/sqlite/SQLiteDebug$PagerStats;)V",
+-            (void*) nativeGetPagerStats },
++            GESHER_JNI(nativeGetPagerStats) },
+ };
+ 
+ int register_android_database_SQLiteDebug(JNIEnv *env)
+diff --git a/core/jni/android_database_SQLiteGlobal.cpp b/core/jni/android_database_SQLiteGlobal.cpp
+--- a/core/jni/android_database_SQLiteGlobal.cpp
++++ b/core/jni/android_database_SQLiteGlobal.cpp
+@@ -78,7 +78,7 @@
+ static const JNINativeMethod sMethods[] =
+ {
+     /* name, signature, funcPtr */
+-    { "nativeReleaseMemory", "()I", (void*)nativeReleaseMemory },
++    { "nativeReleaseMemory", "()I", GESHER_JNI(nativeReleaseMemory) },
+ };
+ 
+ int register_android_database_SQLiteGlobal(JNIEnv *env)
+diff --git a/core/jni/android_database_SQLiteRawStatement.cpp b/core/jni/android_database_SQLiteRawStatement.cpp
+--- a/core/jni/android_database_SQLiteRawStatement.cpp
++++ b/core/jni/android_database_SQLiteRawStatement.cpp
+@@ -361,36 +361,36 @@
+ static const JNINativeMethod sStatementMethods[] =
+ {
+     // Metadata
+-    { "nativeBindParameterCount", "(J)I", (void*) bindParameterCount },
+-    { "nativeBindParameterIndex", "(JLjava/lang/String;)I", (void*) bindParameterIndex },
+-    { "nativeBindParameterName", "(JI)Ljava/lang/String;", (void*) bindParameterName },
++    { "nativeBindParameterCount", "(J)I", GESHER_JNI(bindParameterCount) },
++    { "nativeBindParameterIndex", "(JLjava/lang/String;)I", GESHER_JNI(bindParameterIndex) },
++    { "nativeBindParameterName", "(JI)Ljava/lang/String;", GESHER_JNI(bindParameterName) },
+ 
+     // Operations on a statement
+-    { "nativeStep", "(JZ)I", (void*) step },
+-    { "nativeReset", "(JZ)V", (void*) reset },
+-    { "nativeClearBindings", "(J)V", (void*) clearBindings },
++    { "nativeStep", "(JZ)I", GESHER_JNI(step) },
++    { "nativeReset", "(JZ)V", GESHER_JNI(reset) },
++    { "nativeClearBindings", "(J)V", GESHER_JNI(clearBindings) },
+ 
+     // Methods that bind values to parameters
+-    { "nativeBindBlob", "(JI[BII)V", (void*) bindBlob },
+-    { "nativeBindDouble", "(JID)V", (void*) bindDouble },
+-    { "nativeBindInt", "(JII)V", (void*) bindInt },
+-    { "nativeBindLong", "(JIJ)V", (void*) bindLong },
+-    { "nativeBindNull", "(JI)V", (void*) bindNull },
+-    { "nativeBindText", "(JILjava/lang/String;)V", (void*) bindText },
++    { "nativeBindBlob", "(JI[BII)V", GESHER_JNI(bindBlob) },
++    { "nativeBindDouble", "(JID)V", GESHER_JNI(bindDouble) },
++    { "nativeBindInt", "(JII)V", GESHER_JNI(bindInt) },
++    { "nativeBindLong", "(JIJ)V", GESHER_JNI(bindLong) },
++    { "nativeBindNull", "(JI)V", GESHER_JNI(bindNull) },
++    { "nativeBindText", "(JILjava/lang/String;)V", GESHER_JNI(bindText) },
+ 
+     // Methods that return information about columns in a result row.
+-    { "nativeColumnCount", "(J)I", (void*) columnCount },
+-    { "nativeColumnType", "(JI)I", (void*) columnType },
+-    { "nativeColumnName", "(JI)Ljava/lang/String;", (void*) columnName },
+-
+-    { "nativeColumnBytes", "(JI)I", (void*) columnBytes },
+-
+-    { "nativeColumnBlob", "(JI)[B", (void*) columnBlob },
+-    { "nativeColumnBuffer", "(JI[BIII)I", (void*) columnBuffer },
+-    { "nativeColumnDouble", "(JI)D", (void*) columnDouble },
+-    { "nativeColumnInt", "(JI)I", (void*) columnInt },
+-    { "nativeColumnLong", "(JI)J", (void*) columnLong },
+-    { "nativeColumnText", "(JI)Ljava/lang/String;", (void*) columnText },
++    { "nativeColumnCount", "(J)I", GESHER_JNI(columnCount) },
++    { "nativeColumnType", "(JI)I", GESHER_JNI(columnType) },
++    { "nativeColumnName", "(JI)Ljava/lang/String;", GESHER_JNI(columnName) },
++
++    { "nativeColumnBytes", "(JI)I", GESHER_JNI(columnBytes) },
++
++    { "nativeColumnBlob", "(JI)[B", GESHER_JNI(columnBlob) },
++    { "nativeColumnBuffer", "(JI[BIII)I", GESHER_JNI(columnBuffer) },
++    { "nativeColumnDouble", "(JI)D", GESHER_JNI(columnDouble) },
++    { "nativeColumnInt", "(JI)I", GESHER_JNI(columnInt) },
++    { "nativeColumnLong", "(JI)J", GESHER_JNI(columnLong) },
++    { "nativeColumnText", "(JI)Ljava/lang/String;", GESHER_JNI(columnText) },
+ };
+ 
+ int register_android_database_SQLiteRawStatement(JNIEnv *env)
