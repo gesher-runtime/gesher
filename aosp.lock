@@ -45,7 +45,7 @@ external/harfbuzz_ng /Android.bp /src/
 external/vulkan-headers /include/
 frameworks/minikin /Android.bp /include/ /libs/minikin/
 external/roboto-fonts /Android.bp /font/ /NOTICE
-external/noto-fonts /notosanshebrew/ /notoserif/
+external/noto-fonts /notosanshebrew/ /notoserif/ /notonaskharabic/ /notonaskharabicui/ /notosansthai/ /notosansthaiui/ /notosansdevanagari/ /notosansdevanagariui/
 
 # The framework build (tools/framework/build.py) and its host tools
 # (tools/host). Projects with only *.bp give the planner their Soong module
