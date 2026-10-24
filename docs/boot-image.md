@@ -22,6 +22,10 @@ ships it with the installer. The decision and its reasons are in
   | `boot-framework.*` | framework.jar | extension |
   | `boot-gesher-app.*` | gesher-app.jar | extension |
 
+- dex2oat's own runtime gets `-Xmx512m` and `-XX:LargeObjectSpace=map`: a
+  free-list large object space is one reservation of the whole heap, which
+  ART's low-4 GiB allocator searches for page by page (`msync`), and that took
+  for ever on Windows with a larger heap.
 - `--compiler-filter=verify`: no compiled code (the code generator does not
   follow Gesher's thread register yet, ADR 0006); classes are verified and
   linked, and initialized where dex2oat can do it at compile time.
@@ -47,10 +51,32 @@ ships it with the installer. The decision and its reasons are in
   makes the runtime log `gesher: boot image loaded: N spaces (...)`.
 
 ## Status
-- [ ] Built in CI, loaded by every test run and by the installed Gesher
-- [ ] Startup measured in CI, imageless and with the image
+Verified in CI (ci run 40055199839, windows-2022 and windows-2025):
+- [x] dex2oat.exe builds with the runtime and compiles the image on
+      windows-2022 in about 22 s (primary 5 s, framework.jar 15 s,
+      gesher-app.jar 1 s); Hello runs on it in the boot-image job.
+- [x] Every dalvikvm run of the test jobs loads it: run-tests.ps1 sets
+      `GESHER_REQUIRE_BOOT_IMAGE`, so a run that fell back to imageless running
+      would fail. `tracks/60-boot-image.ps1` checks what each boot class path
+      loads (Hello 3 spaces, framework.jar 4, lifecycle.apk 5).
+- [x] The installer ships it and the installed `gesher` and `gesher-app`
+      (device, system server, app processes) load it (package job).
+- [x] Startup, from the process start, median of 3 (`tracks/60-boot-image.ps1`):
+
+  | | imageless | with the image |
+  |---|---|---|
+  | Hello, to its output (windows-2022 / 2025) | 105 / 111 ms | 55 / 54 ms |
+  | lifecycle.apk, to `LifecycleActivity.onCreate` | 783 / 755 ms | 483 / 419 ms |
+  | lifecycle.apk, to exit | 854 / 818 ms | 530 / 461 ms |
+
+Sizes: 65 MB in all, of which 50 MB are the `.vdex` files (they carry a copy
+of the dex code, which the runtime reads instead of the jars' compressed entries),
+the `.art` files 14 MB (LZ4) and the `.oat` files 0.4 MB.
 
 Not done yet:
+- Tools around it: the image is not rebuilt on the user's machine (a
+  `dex2oat.exe` in the installer could do that for other jars), and there is no
+  oatdump.
 - Compiled code in the image (AOT), the JIT and nterp: they need the code
   generator to reach Thread* the way Gesher's assembly does (ADR 0006).
 - Sharing image and oat pages between processes (placeholder mappings);

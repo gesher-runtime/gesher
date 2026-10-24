@@ -66,8 +66,9 @@ patch 0002) and its platform layer (gesher-base's `mmap`).
   `-Xbootclasspath-locations`); ART already gives an oat file's dex files the
   actual path when the compiled location is a bare name that matches it
   (`OatFileBase::Setup`), and patch 0012 makes the image's recorded boot class
-  path match the runtime's locations by file name. The dex checksums are still
-  checked, so a stale image is refused (and the runtime falls back).
+  path match the runtime's locations by file name; patch 0013 does the same in
+  dex2oat for the images an extension is compiled against. The dex checksums
+  are still checked, so a stale image is refused (and the runtime falls back).
 - **gesher-base maps oat files by copying.** ART's ELF loader maps an oat
   file's segments with `MAP_FIXED` into a reservation it made; Windows can put
   a file view only into free address space (placeholders would be needed). A
@@ -87,8 +88,12 @@ patch 0002) and its platform layer (gesher-base's `mmap`).
   boot class path loads and times startup without and with the image.
 
 ## Consequences
-- Startup no longer defines the boot classes at run time (measured in CI; see
-  [boot-image.md](../boot-image.md)).
+- Startup no longer defines and verifies the boot classes at run time. In CI
+  (run 40055199839), from the process start: Hello 105 -> 55 ms, lifecycle.apk
+  to `Activity.onCreate` 783 -> 483 ms on windows-2022 (111 -> 54 and
+  755 -> 419 ms on windows-2025); details in [boot-image.md](../boot-image.md).
+- The image is about 65 MB (50 MB of it the `.vdex` files' copy of the dex
+  code), installed next to the jars.
 - The image must be rebuilt with any change to the runtime or the boot jars;
   CI does so on every run. A mismatched image is refused by its checksums.
 - Oat and image pages are private copies per process (no sharing between the
