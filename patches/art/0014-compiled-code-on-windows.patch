@@ -41,7 +41,7 @@ index 07b132e..de9962b 100644
  
  int membarrier([[maybe_unused]] MembarrierCommand command) {
 diff --git a/runtime/runtime.cc b/runtime/runtime.cc
-index 8c70708..65ab5e6 100644
+index 8c70708..725f925 100644
 --- a/runtime/runtime.cc
 +++ b/runtime/runtime.cc
 @@ -197,6 +197,17 @@ namespace apex = com::android::apex;
@@ -112,21 +112,21 @@ index 8c70708..65ab5e6 100644
  #endif  // GESHER
  
    fault_manager.Init(!no_sig_chain_);
-@@ -2002,6 +2029,14 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
-                                  JavaStackTraceHandler::IsGeneratedCodeHandler());
-       }
+@@ -2010,6 +2037,14 @@ bool Runtime::Init(RuntimeArgumentMap&& runtime_options_in) {
+     }
+   }
  
 +#if defined(GESHER)
-+      if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
-+        LOG(INFO) << "gesher: execution: "
-+                  << (interpreter::CanRuntimeUseNterp() ? "nterp" : "switch interpreter")
-+                  << ", implicit null checks " << (implicit_null_checks_ ? "on" : "off")
-+                  << ", implicit stack overflow checks " << (implicit_so_checks_ ? "on" : "off");
-+      }
++  if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
++    LOG(INFO) << "gesher: execution: "
++              << (interpreter::CanRuntimeUseNterp() ? "nterp" : "switch interpreter")
++              << ", implicit null checks " << (implicit_null_checks_ ? "on" : "off")
++              << ", implicit stack overflow checks " << (implicit_so_checks_ ? "on" : "off");
++  }
 +#endif  // GESHER
-       if (interpreter::CanRuntimeUseNterp()) {
-         // Nterp code can use signal handling just like the compiled managed code.
-         OatQuickMethodHeader* nterp_header = OatQuickMethodHeader::NterpMethodHeader;
+   verifier_logging_threshold_ms_ = runtime_options.GetOrDefault(Opt::VerifierLoggingThreshold);
+ 
+   std::string error_msg;
 diff --git a/runtime/thread.cc b/runtime/thread.cc
 index 9ad0fc7..6b0fea2 100644
 --- a/runtime/thread.cc

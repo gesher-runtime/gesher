@@ -580,7 +580,7 @@ index 9c8ad32..a0e9926 100644
      if (klass == GetClassRoot<mirror::MethodHandle>() ||
          klass == GetClassRoot<mirror::VarHandle>()) {
 diff --git a/runtime/runtime.cc b/runtime/runtime.cc
-index 65ab5e6..1ef05d2 100644
+index 725f925..7f112de 100644
 --- a/runtime/runtime.cc
 +++ b/runtime/runtime.cc
 @@ -195,14 +195,26 @@ namespace apex = com::android::apex;

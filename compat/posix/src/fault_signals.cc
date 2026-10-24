@@ -47,6 +47,10 @@
 namespace {
 
 constexpr uintptr_t kPage = 4096;
+// The bottom of the stack left for ART's implicit stack overflow checks: its
+// protected region (a page) plus the 32 KiB probe gap (ART_STACK_OVERFLOW_GAP_
+// x86_64) plus a page of margin (ADR 0033).
+constexpr uintptr_t kGrowthFloor = 64 * 1024;
 
 thread_local bool t_unhandled = false;
 thread_local int t_depth = 0;
@@ -88,6 +92,14 @@ bool GrowStack(uintptr_t addr) {
   GetCurrentThreadStackLimits(&low, &high);
   const uintptr_t limit = reinterpret_cast<uintptr_t>(tib->StackLimit);
   if (addr < low || addr >= limit) return false;
+  // Leave the lowest part of the stack ungrown: ART installs its own protected
+  // region there and relies on a fault for implicit stack overflow checks (its
+  // compiled code and nterp probe the stack GAP bytes ahead, ADR 0033). Growing
+  // it would defeat the check and let the stack run to the hard Windows limit
+  // (STATUS_STACK_OVERFLOW). The margin covers ART's protected region and its
+  // reserved gap; a genuine access there faults and ART throws
+  // StackOverflowError.
+  if (addr - low < kGrowthFloor) return false;
   const uintptr_t page = addr & ~(kPage - 1);
   MEMORY_BASIC_INFORMATION mbi;
   if (VirtualQuery(reinterpret_cast<void*>(page), &mbi, sizeof(mbi)) == 0 ||
