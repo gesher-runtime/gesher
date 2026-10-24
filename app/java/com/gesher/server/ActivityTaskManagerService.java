@@ -331,6 +331,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return true;
     }
 
+    /**
+     * No AppTask binders (devices track: CameraManager's getRotationOverride walks
+     * ActivityManager.getAppTasks(), which needs a list, not null).
+     */
+    @Override
+    public List<IBinder> getAppTasks(String callingPackage) {
+        return new ArrayList<>();
+    }
+
     @Override
     public List<ActivityManager.RunningTaskInfo> getTasks(int maxNum,
             boolean filterOnlyVisibleRecents, boolean keepIntentExtra, int displayId) {
