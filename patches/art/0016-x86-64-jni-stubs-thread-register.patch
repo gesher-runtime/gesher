@@ -1,0 +1,301 @@
+diff --git a/compiler/driver/compiler_options.h b/compiler/driver/compiler_options.h
+index 68bdcb7..431a0b6 100644
+--- a/compiler/driver/compiler_options.h
++++ b/compiler/driver/compiler_options.h
+@@ -109,10 +109,7 @@ class CompilerOptions final {
+   }
+ 
+   bool IsJniCompilationEnabled() const {
+-#if defined(ART_USE_RESTRICTED_MODE) || defined(GESHER)
+-    // Gesher: no compiled JNI stubs yet (the JNI macro assembler still reaches
+-    // Thread* through %gs, ADR 0033); native methods use the generic JNI
+-    // trampoline.
++#if defined(ART_USE_RESTRICTED_MODE)
+     // TODO(Simulator): Support JNICompiler.
+     // Without the JNI compiler, GenericJNITrampoline will be used for JNI calls.
+     return false;
+diff --git a/compiler/optimizing/optimizing_compiler.cc b/compiler/optimizing/optimizing_compiler.cc
+index 871abb4..03747b0 100644
+--- a/compiler/optimizing/optimizing_compiler.cc
++++ b/compiler/optimizing/optimizing_compiler.cc
+@@ -1358,10 +1358,6 @@ bool OptimizingCompiler::JitCompile(Thread* self,
+   };
+ 
+   if (UNLIKELY(method->IsNative())) {
+-#if defined(GESHER)
+-    // Gesher: no compiled JNI stubs yet (see JniCompile).
+-    return false;
+-#endif
+     // Use GenericJniTrampoline for critical native methods in debuggable runtimes. We don't
+     // support calling method entry / exit hooks for critical native methods yet.
+     // TODO(mythria): Add support for calling method entry / exit hooks in JITed stubs for critical
+diff --git a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
+index cb64eb0..8c62d63 100644
+--- a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
++++ b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
+@@ -44,6 +44,23 @@ static inline CpuRegister GetScratchRegister() {
+ 
+ #define __ asm_.
+ 
++#if defined(GESHER)
++// Gesher (docs/decisions/0036-stack-overflow-and-jni-stubs.md): on Windows %gs
++// is the TEB, and Thread* is in a TLS slot of it at a constant offset (ADR
++// 0033). Each Thread field access loads Thread* into R10 first: R10 is no
++// argument, return value or callee-save register of a JNI stub, of the
++// managed or the native calling convention, and nothing else here uses it.
++static inline CpuRegister GesherThreadRegister() {
++  return CpuRegister(R10);
++}
++#define THREAD_ASM asm_
++#define THREAD_ADDRESS(offset) \
++  asm_.GesherThreadAddress(GesherThreadRegister(), static_cast<int32_t>(offset))
++#else
++#define THREAD_ASM (*asm_.gs())
++#define THREAD_ADDRESS(offset) Address::Absolute((offset), /*no_rip=*/ true)
++#endif
++
+ void X86_64JNIMacroAssembler::BuildFrame(size_t frame_size,
+                                          ManagedRegister method_reg,
+                                          ArrayRef<const ManagedRegister> spill_regs) {
+@@ -206,9 +223,9 @@ void X86_64JNIMacroAssembler::StoreStackPointerToThread(ThreadOffset64 thr_offs,
+     CpuRegister reg = GetScratchRegister();
+     __ movq(reg, CpuRegister(RSP));
+     __ orq(reg, Immediate(0x2));
+-    __ gs()->movq(Address::Absolute(thr_offs, true), reg);
++    THREAD_ASM.movq(THREAD_ADDRESS(thr_offs.Int32Value()), reg);
+   } else {
+-    __ gs()->movq(Address::Absolute(thr_offs, true), CpuRegister(RSP));
++    THREAD_ASM.movq(THREAD_ADDRESS(thr_offs.Int32Value()), CpuRegister(RSP));
+   }
+ }
+ 
+@@ -251,7 +268,7 @@ void X86_64JNIMacroAssembler::Load(ManagedRegister mdest,
+ void X86_64JNIMacroAssembler::LoadRawPtrFromThread(ManagedRegister mdest, ThreadOffset64 offs) {
+   X86_64ManagedRegister dest = mdest.AsX86_64();
+   CHECK(dest.IsCpuRegister());
+-  __ gs()->movq(dest.AsCpuRegister(), Address::Absolute(offs, true));
++  THREAD_ASM.movq(dest.AsCpuRegister(), THREAD_ADDRESS(offs.Int32Value()));
+ }
+ 
+ void X86_64JNIMacroAssembler::SignExtend(ManagedRegister mreg, size_t size) {
+@@ -500,17 +517,25 @@ void X86_64JNIMacroAssembler::Call(ManagedRegister mbase, Offset offset) {
+ }
+ 
+ void X86_64JNIMacroAssembler::CallFromThread(ThreadOffset64 offset) {
+-  __ gs()->call(Address::Absolute(offset, true));
++  THREAD_ASM.call(THREAD_ADDRESS(offset.Int32Value()));
+ }
+ 
+ void X86_64JNIMacroAssembler::GetCurrentThread(ManagedRegister dest) {
++#if defined(GESHER)
++  __ GesherLoadThreadSelf(dest.AsX86_64().AsCpuRegister());
++#else
+   __ gs()->movq(dest.AsX86_64().AsCpuRegister(),
+                 Address::Absolute(Thread::SelfOffset<kX86_64PointerSize>(), true));
++#endif
+ }
+ 
+ void X86_64JNIMacroAssembler::GetCurrentThread(FrameOffset offset) {
+   CpuRegister scratch = GetScratchRegister();
++#if defined(GESHER)
++  __ GesherLoadThreadSelf(scratch);
++#else
+   __ gs()->movq(scratch, Address::Absolute(Thread::SelfOffset<kX86_64PointerSize>(), true));
++#endif
+   __ movq(Address(CpuRegister(RSP), offset), scratch);
+ }
+ 
+@@ -529,16 +554,14 @@ void X86_64JNIMacroAssembler::TryToTransitionFromRunnableToNative(
+   static_assert(kRunnableStateValue == 0u);
+   __ xorl(rax, rax);
+   __ movl(scratch, Immediate(kNativeStateValue));
+-  __ gs()->LockCmpxchgl(Address::Absolute(thread_flags_offset.Uint32Value(), /*no_rip=*/ true),
+-                        scratch);
++  THREAD_ASM.LockCmpxchgl(THREAD_ADDRESS(thread_flags_offset.Uint32Value()), scratch);
+   // LOCK CMPXCHG has full barrier semantics, so we don't need barriers here.
+   // If any flags are set, go to the slow path.
+   __ j(kNotZero, X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ 
+   // Clear `self->tlsPtr_.held_mutexes[kMutatorLock]`.
+-  __ gs()->movq(
+-      Address::Absolute(thread_held_mutex_mutator_lock_offset.Uint32Value(), /*no_rip=*/ true),
+-      Immediate(0));
++  THREAD_ASM.movq(THREAD_ADDRESS(thread_held_mutex_mutator_lock_offset.Uint32Value()),
++                  Immediate(0));
+ }
+ 
+ void X86_64JNIMacroAssembler::TryToTransitionFromNativeToRunnable(
+@@ -568,8 +591,7 @@ void X86_64JNIMacroAssembler::TryToTransitionFromNativeToRunnable(
+   __ movl(rax, Immediate(kNativeStateValue));
+   static_assert(kRunnableStateValue == 0u);
+   __ xorl(scratch, scratch);
+-  __ gs()->LockCmpxchgl(Address::Absolute(thread_flags_offset.Uint32Value(), /*no_rip=*/ true),
+-                        scratch);
++  THREAD_ASM.LockCmpxchgl(THREAD_ADDRESS(thread_flags_offset.Uint32Value()), scratch);
+   // LOCK CMPXCHG has full barrier semantics, so we don't need barriers here.
+   if (preserve_rax) {
+     __ movq(rax, saved_rax);  // Restore RAX; MOV does not change flags.
+@@ -580,31 +602,28 @@ void X86_64JNIMacroAssembler::TryToTransitionFromNativeToRunnable(
+   __ j(kNotZero, X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ 
+   // Set `self->tlsPtr_.held_mutexes[kMutatorLock]` to the mutator lock.
+-  __ gs()->movq(scratch,
+-                Address::Absolute(thread_mutator_lock_offset.Uint32Value(), /*no_rip=*/ true));
+-  __ gs()->movq(
+-      Address::Absolute(thread_held_mutex_mutator_lock_offset.Uint32Value(), /*no_rip=*/ true),
+-      scratch);
++  THREAD_ASM.movq(scratch, THREAD_ADDRESS(thread_mutator_lock_offset.Uint32Value()));
++  THREAD_ASM.movq(THREAD_ADDRESS(thread_held_mutex_mutator_lock_offset.Uint32Value()), scratch);
+ }
+ 
+ void X86_64JNIMacroAssembler::SuspendCheck(JNIMacroLabel* label) {
+-  __ gs()->testl(Address::Absolute(Thread::ThreadFlagsOffset<kX86_64PointerSize>(), true),
+-                 Immediate(Thread::SuspendOrCheckpointRequestFlags()));
++  THREAD_ASM.testl(THREAD_ADDRESS(Thread::ThreadFlagsOffset<kX86_64PointerSize>().Int32Value()),
++                   Immediate(Thread::SuspendOrCheckpointRequestFlags()));
+   __ j(kNotZero, X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ }
+ 
+ void X86_64JNIMacroAssembler::ExceptionPoll(JNIMacroLabel* label) {
+-  __ gs()->cmpl(Address::Absolute(Thread::ExceptionOffset<kX86_64PointerSize>(), true),
+-                Immediate(0));
++  THREAD_ASM.cmpl(THREAD_ADDRESS(Thread::ExceptionOffset<kX86_64PointerSize>().Int32Value()),
++                  Immediate(0));
+   __ j(kNotEqual, X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ }
+ 
+ void X86_64JNIMacroAssembler::DeliverPendingException() {
+   // Pass exception as argument in RDI
+-  __ gs()->movq(CpuRegister(RDI),
+-                Address::Absolute(Thread::ExceptionOffset<kX86_64PointerSize>(), true));
+-  __ gs()->call(
+-      Address::Absolute(QUICK_ENTRYPOINT_OFFSET(kX86_64PointerSize, pDeliverException), true));
++  THREAD_ASM.movq(CpuRegister(RDI),
++                  THREAD_ADDRESS(Thread::ExceptionOffset<kX86_64PointerSize>().Int32Value()));
++  THREAD_ASM.call(
++      THREAD_ADDRESS(QUICK_ENTRYPOINT_OFFSET(kX86_64PointerSize, pDeliverException).Int32Value()));
+   // this call should never return
+   __ int3();
+ }
+@@ -633,8 +652,8 @@ void X86_64JNIMacroAssembler::TestGcMarking(JNIMacroLabel* label, JNIMacroUnaryC
+   // CMP self->tls32_.is_gc_marking, 0
+   // Jcc <Offset>
+   DCHECK_EQ(Thread::IsGcMarkingSize(), 4u);
+-  __ gs()->cmpl(Address::Absolute(Thread::IsGcMarkingOffset<kX86_64PointerSize>(), true),
+-                Immediate(0));
++  THREAD_ASM.cmpl(THREAD_ADDRESS(Thread::IsGcMarkingOffset<kX86_64PointerSize>().Int32Value()),
++                  Immediate(0));
+   __ j(UnaryConditionToX86_64Condition(cond), X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ }
+ 
+@@ -661,6 +680,8 @@ void X86_64JNIMacroAssembler::Bind(JNIMacroLabel* label) {
+   __ Bind(X86_64JNIMacroLabel::Cast(label)->AsX86_64());
+ }
+ 
++#undef THREAD_ADDRESS
++#undef THREAD_ASM
+ #undef __
+ 
+ }  // namespace x86_64
+diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
+index c518929..beef83e 100644
+--- a/runtime/class_linker.cc
++++ b/runtime/class_linker.cc
+@@ -1487,6 +1487,7 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+     const PointerSize pointer_size = image_pointer_size_;
+     size_t remapped = 0u;
+     size_t compiled = 0u;
++    size_t compiled_jni = 0u;
+     const void* const nterp_with_clinit = interpreter::GetNterpWithClinitEntryPoint();
+     for (gc::space::ImageSpace* space : spaces) {
+       space->GetImageHeader().VisitPackedArtMethods(
+@@ -1500,6 +1501,9 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+                        std::find(std::begin(runtime_stubs), std::end(runtime_stubs), code) ==
+                            std::end(runtime_stubs)) {
+               ++compiled;  // the image's own code for this method (AOT)
++              if (method.IsNative()) {
++                ++compiled_jni;  // a compiled JNI stub (ADR 0036)
++              }
+             }
+             // Native methods and the resolution method keep a JNI entrypoint
+             // (a dlsym lookup stub) in `data_`; IMT conflict methods keep their
+@@ -1518,7 +1522,8 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+     }
+     VLOG(image) << "Gesher: " << remapped << " boot image entrypoints point at libart's stubs";
+     if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
+-      LOG(INFO) << "gesher: boot image: " << compiled << " methods with compiled code";
++      LOG(INFO) << "gesher: boot image: " << compiled << " methods with compiled code ("
++                << compiled_jni << " native methods with compiled JNI stubs)";
+     }
+   }
+ #endif  // GESHER
+diff --git a/runtime/entrypoints/quick/quick_default_init_entrypoints.h b/runtime/entrypoints/quick/quick_default_init_entrypoints.h
+index d4cf5b1..b7846cb 100644
+--- a/runtime/entrypoints/quick/quick_default_init_entrypoints.h
++++ b/runtime/entrypoints/quick/quick_default_init_entrypoints.h
+@@ -77,7 +77,13 @@ static void DefaultInitEntryPoints(JniEntryPoints* jpoints,
+   qpoints->SetJniMethodStart(art_jni_method_start);
+   qpoints->SetJniMethodEnd(art_jni_method_end);
+   qpoints->SetQuickGenericJniTrampoline(art_quick_generic_jni_trampoline);
++#if defined(GESHER)
++  // The table's pointer type does not carry the ABI.
++  qpoints->SetJniDecodeReferenceResult(
++      reinterpret_cast<mirror::Object* (*)(jobject, Thread*)>(GesherSysvJniDecodeReferenceResult));
++#else
+   qpoints->SetJniDecodeReferenceResult(JniDecodeReferenceResult);
++#endif
+   qpoints->SetJniReadBarrier(art_jni_read_barrier);
+   qpoints->SetJniMethodEntryHook(art_jni_method_entry_hook);
+ 
+diff --git a/runtime/entrypoints/quick/quick_entrypoints.h b/runtime/entrypoints/quick/quick_entrypoints.h
+index cd6debe..28916d3 100644
+--- a/runtime/entrypoints/quick/quick_entrypoints.h
++++ b/runtime/entrypoints/quick/quick_entrypoints.h
+@@ -54,6 +54,11 @@ struct QuickEntryPoints {
+ };
+ 
+ // JNI entrypoints.
++#if defined(GESHER)
++extern "C" ART_SYSV_ABI mirror::Object* GesherSysvJniDecodeReferenceResult(jobject result,
++                                                                          Thread* self)
++    REQUIRES_SHARED(Locks::mutator_lock_) HOT_ATTR;
++#endif  // GESHER
+ extern mirror::Object* JniDecodeReferenceResult(jobject result, Thread* self)
+     REQUIRES_SHARED(Locks::mutator_lock_) HOT_ATTR;
+ 
+diff --git a/runtime/entrypoints/quick/quick_jni_entrypoints.cc b/runtime/entrypoints/quick/quick_jni_entrypoints.cc
+index 8d02464..2548622 100644
+--- a/runtime/entrypoints/quick/quick_jni_entrypoints.cc
++++ b/runtime/entrypoints/quick/quick_jni_entrypoints.cc
+@@ -142,6 +142,16 @@ extern mirror::Object* JniDecodeReferenceResult(jobject result, Thread* self)
+   return o.Ptr();
+ }
+ 
++#if defined(GESHER)
++// Compiled JNI stubs call pJniDecodeReferenceResult with the System V ABI; the
++// C++ function is Microsoft ABI on Windows (ADR 0006, 0036).
++extern "C" ART_SYSV_ABI mirror::Object* GesherSysvJniDecodeReferenceResult(jobject result,
++                                                                          Thread* self)
++    REQUIRES_SHARED(Locks::mutator_lock_) {
++  return JniDecodeReferenceResult(result, self);
++}
++#endif  // GESHER
++
+ extern uint64_t GenericJniMethodEnd(Thread* self,
+                                     uint32_t saved_local_ref_cookie,
+                                     jvalue result,
+diff --git a/runtime/jit/jit.cc b/runtime/jit/jit.cc
+index a0e9926..9c8ad32 100644
+--- a/runtime/jit/jit.cc
++++ b/runtime/jit/jit.cc
+@@ -1389,10 +1389,6 @@ bool Jit::IgnoreSamplesForMethod(ArtMethod* method) REQUIRES_SHARED(Locks::mutat
+     return true;
+   }
+   if (method->IsNative()) {
+-#if defined(GESHER)
+-    // Gesher: no JIT-compiled JNI stubs yet (compiler/optimizing JniCompile).
+-    return true;
+-#endif
+     ObjPtr<mirror::Class> klass = method->GetDeclaringClass();
+     if (klass == GetClassRoot<mirror::MethodHandle>() ||
+         klass == GetClassRoot<mirror::VarHandle>()) {

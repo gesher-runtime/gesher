@@ -171,6 +171,35 @@ foreach ($name in @($modes.Keys)) {
   }
 }
 
+# JNI stubs (tests/dex-codegen/JniStubs.java, ADR 0036): jni_test.so's natives
+# (tests/native) called 40,000 times a round from two threads. Under jit the
+# JIT compiles their JNI stubs (-verbose:jit: "JIT added ... gesher.JniTest.add");
+# under nterp and jit, the boot library's natives have the boot image's AOT
+# JNI stubs (the count is in the "boot image:" line).
+$jniLib = Join-Path $Dir 'jni_test.so'
+if (Test-Path $jniLib) {
+  foreach ($name in @($modes.Keys)) {
+    if ($name -eq 'interpret-only') { continue }
+    $m = $modes[$name]
+    $jniArgs = $m.Args
+    if ($name -eq 'jit') { $jniArgs = $jniArgs + @('-verbose:jit') }
+    $r = RunMode $jniArgs @('gesher.JniStubs', (NoDrive (Resolve-Path $jniLib).Path)) $m.Env
+    $stubs = @($r.Out -split "`n" | Where-Object { $_ -match 'JIT added .*gesher\.JniTest\.' } |
+      ForEach-Object { if ($_ -match '\) (\S+ gesher\.JniTest\.\w+)') { $Matches[1] } } | Sort-Object -Unique)
+    $jitOk = $name -ne 'jit' -or ($stubs -match 'JniTest\.add').Count -gt 0
+    $bootJni = if ($r.Out -match 'boot image: \d+ methods with compiled code \((\d+) native') { $Matches[1] } else { '?' }
+    if ($r.Exit -eq 0 -and $r.Out.Contains('JniStubs all passed') -and (ModeOk $name $r.Out) -and $jitOk) {
+      $what = if ($name -eq 'jit') { "JIT-compiled JNI stubs: $($stubs -join ', ')" } else { 'generic JNI for app natives' }
+      Write-Host "PASS  codegen: JNI calls under $name ($what; boot image JNI stubs: $bootJni)"
+    } else {
+      ReportFailure "JNI calls under $name$(if (-not $jitOk) { ' (no JIT-compiled JNI stub for JniTest.add)' })" $r
+    }
+  }
+} else {
+  Write-Host "FAIL  codegen: no jni_test.so in $Dir (the native-libs artifact)"
+  $script:failed++
+}
+
 # ART's own run-tests (tests/build-art-run-tests.sh): each runs under the
 # switch interpreter first; one that passes there must pass under every
 # other mode too. (One that fails there fails for reasons of its own, not
