@@ -271,6 +271,7 @@ public final class Stress {
     check("stack overflow (again)", stackOverflow());
     check("exceptions through 100 frames (again)", deepExceptions());
     System.out.println(failures == 0 ? "Stress all passed" : "Stress " + failures + " failed");
-    System.exit(failures == 0 ? 0 : 1);
+    // Returning from main shuts the runtime down (and the JIT reports).
+    if (failures != 0) System.exit(1);
   }
 }

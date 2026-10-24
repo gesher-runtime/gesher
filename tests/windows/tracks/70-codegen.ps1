@@ -4,9 +4,13 @@
 # Each execution mode runs the stress test (tests/dex-codegen/Stress.java:
 # implicit null checks, stack overflow, exceptions through compiled frames,
 # GC with frames on the stack, threads and monitors, JNI, proxies) and the
-# CPU-bound benchmark (Bench.java), whose checksum must be the same in all.
-#   switch:  -Xint, the switch interpreter (GESHER_ART_INTERPRET_ONLY=1 too)
-#   nterp:   no -Xint, no JIT: nterp for every method
+# CPU-bound benchmark (Bench.java), whose checksum must be the same in all:
+#   switch:  -Xint, the switch interpreter
+#   nterp:   GESHER_ART_NO_AOT=1, no JIT: nterp for every method
+#   aot:     no JIT: the boot image's compiled code, nterp for the rest
+#   jit:     the JIT on, over the boot image's compiled code
+# and the stress test once more under GESHER_ART_INTERPRET_ONLY=1 (the
+# diagnosis switch: everything as before compiled code).
 
 $image = "-Ximage:$(NoDrive "$root/system")/framework/boot.art"
 $codegenDex = NoDrive "$Dir/codegen-tests.dex"
@@ -21,11 +25,12 @@ function RunMode([string[]] $ModeArgs, [string[]] $Program, [hashtable] $Env = @
   $psi.RedirectStandardError = $true
   $psi.Environment['GESHER_LOG_EXECUTION'] = '1'
   foreach ($k in $Env.Keys) { $psi.Environment[$k] = $Env[$k] }
+  $watch = [Diagnostics.Stopwatch]::StartNew()
   $p = [Diagnostics.Process]::Start($psi)
   $stderr = $p.StandardError.ReadToEndAsync()
   $stdout = $p.StandardOutput.ReadToEnd()
   if (-not $p.WaitForExit(600000)) { $p.Kill(); $stdout += "`n(timed out)" }
-  [pscustomobject]@{ Exit = $p.ExitCode; Out = $stdout + "`n" + $stderr.Result }
+  [pscustomobject]@{ Exit = $p.ExitCode; Out = $stdout + "`n" + $stderr.Result; Ms = [int]$watch.Elapsed.TotalMilliseconds }
 }
 
 function ReportFailure([string] $Name, $r) {
@@ -38,31 +43,54 @@ function ReportFailure([string] $Name, $r) {
   $script:failed++
 }
 
+# What a mode's output must show, besides the program's own result.
+function ModeOk([string] $Name, [string] $Out) {
+  switch ($Name) {
+    'switch' { return $Out.Contains('gesher: execution: switch interpreter') }
+    'interpret-only' { return $Out.Contains('gesher: execution: switch interpreter, implicit null checks off, implicit stack overflow checks off') }
+    'nterp' { return $Out.Contains('gesher: execution: nterp, implicit null checks on, implicit stack overflow checks on') }
+    'aot' { return $Out.Contains('gesher: execution: nterp') -and $Out -match 'gesher: boot image: [1-9]\d* methods with compiled code' }
+    'jit' { return $Out -match 'Current number of JIT code cache entries: [1-9]' }
+  }
+  return $false
+}
+
+$jitArgs = @('-Xusejit:true', '-XX:DumpJITInfoOnShutdown')
 $modes = [ordered]@{
-  'switch' = @{ Args = @('-Xint', '-Xusejit:false'); Env = @{}; Expect = 'gesher: execution: switch interpreter' }
-  'interpret-only switch' = @{ Args = @('-Xusejit:false'); Env = @{ GESHER_ART_INTERPRET_ONLY = '1' };
-                               Expect = 'gesher: execution: switch interpreter, implicit null checks off' }
-  'nterp' = @{ Args = @('-Xusejit:false'); Env = @{}; Expect = 'gesher: execution: nterp, implicit null checks on, implicit stack overflow checks on' }
+  'switch' = @{ Args = @('-Xint', '-Xusejit:false'); Env = @{} }
+  'interpret-only' = @{ Args = @('-Xusejit:false'); Env = @{ GESHER_ART_INTERPRET_ONLY = '1' }; NoBench = $true }
+  'nterp' = @{ Args = @('-Xusejit:false'); Env = @{ GESHER_ART_NO_AOT = '1' } }
+  'aot' = @{ Args = @('-Xusejit:false'); Env = @{} }
+  'jit' = @{ Args = $jitArgs; Env = @{} }
+}
+
+# A boot image without compiled code (--compiler-filter=verify) has no AOT mode.
+$probe = RunMode @('-Xusejit:false') @('gesher.Bench', '0') @{}
+if ($probe.Out -match 'gesher: boot image: 0 methods with compiled code') {
+  Write-Host 'INFO  codegen: the boot image has no compiled code; no aot mode'
+  $modes.Remove('aot')
 }
 
 $bench = [ordered]@{}
-foreach ($name in $modes.Keys) {
+foreach ($name in @($modes.Keys)) {
   $m = $modes[$name]
   $r = RunMode $m.Args @('gesher.Stress') $m.Env
-  if ($r.Exit -eq 0 -and $r.Out.Contains('Stress all passed') -and $r.Out.Contains($m.Expect)) {
-    Write-Host "PASS  codegen: stress test under $name ($($m.Expect))"
+  if ($r.Exit -eq 0 -and $r.Out.Contains('Stress all passed') -and (ModeOk $name $r.Out)) {
+    $what = ($r.Out -split "`n" | Where-Object { $_ -match 'gesher: (execution|boot image):|JIT code cache entries' } |
+      ForEach-Object { ($_ -replace '^.*gesher: ', '').Trim() }) -join '; '
+    Write-Host "PASS  codegen: stress test under $name ($what)"
   } else {
-    ReportFailure "stress test under $name (expected: $($m.Expect))" $r
+    ReportFailure "stress test under $name" $r
   }
-  if ($name -eq 'interpret-only switch') { continue }
+  if ($m.NoBench) { continue }
   $r = RunMode $m.Args @('gesher.Bench', '3') $m.Env
-  if ($r.Exit -eq 0 -and $r.Out -match 'Bench done checksum=(-?\d+)') {
+  if ($r.Exit -eq 0 -and $r.Out -match 'Bench done checksum=(-?\d+)' -and (ModeOk $name $r.Out)) {
     $sum = $Matches[1]
     $kernels = [ordered]@{}
     foreach ($line in $r.Out -split "`n") {
       if ($line -match '^bench (\S+) (\d+)') { $kernels[$Matches[1]] = [int]$Matches[2] }
     }
-    $bench[$name] = @{ Sum = $sum; Kernels = $kernels }
+    $bench[$name] = @{ Sum = $sum; Kernels = $kernels; Ms = $r.Ms }
   } else {
     ReportFailure "benchmark under $name" $r
   }
@@ -76,9 +104,10 @@ if ($bench.Count -ge 2) {
     Write-Host "FAIL  codegen: benchmark checksums differ: $(($bench.Keys | ForEach-Object { "$_=$($bench[$_].Sum)" }) -join ' ')"
     $script:failed++
   }
-  $kernelNames = @($bench[0].Kernels.Keys)
-  Write-Host ("INFO  codegen: benchmark, best of 3 rounds, ms: " + (($bench.Keys | ForEach-Object { $_ }) -join ' / '))
-  foreach ($k in $kernelNames) {
+  $first = @($bench.Values)[0]
+  Write-Host ("INFO  codegen: benchmark (best of 3 rounds, ms): " + ($bench.Keys -join ' / '))
+  foreach ($k in @($first.Kernels.Keys)) {
     Write-Host ("INFO  codegen:   {0,-14} {1}" -f $k, (($bench.Keys | ForEach-Object { $bench[$_].Kernels[$k] }) -join ' / '))
   }
+  Write-Host ("INFO  codegen:   {0,-14} {1}" -f 'process', (($bench.Keys | ForEach-Object { $bench[$_].Ms }) -join ' / '))
 }
