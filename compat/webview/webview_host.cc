@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <set>
 #include <utility>
@@ -932,6 +933,23 @@ void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
   for (auto& w : waiting) w(impl->webview.get());
 }
 
+// Controller creations waiting for the one in progress (the WebView thread).
+std::deque<std::function<void()>> g_controller_queue;
+bool g_controller_busy = false;
+
+void NextController() {
+  if (g_controller_busy || g_controller_queue.empty()) return;
+  std::function<void()> next = std::move(g_controller_queue.front());
+  g_controller_queue.pop_front();
+  g_controller_busy = true;
+  next();
+}
+
+void ControllerDone() {
+  g_controller_busy = false;
+  NextController();
+}
+
 // The WebView thread.
 void Start(const std::shared_ptr<Impl>& impl) {
   HWND parent = impl->options.parent;
@@ -952,15 +970,29 @@ void Start(const std::shared_ptr<Impl>& impl) {
       return;
     }
     impl->env = Com<ICoreWebView2Environment>(env);
-    HRESULT created = env->CreateCoreWebView2Controller(
-        impl->container,
-        GESHER_CALLBACK(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
-                        [impl](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                          OnController(impl, result, controller);
-                          return S_OK;
-                        })
-            .get());
-    if (FAILED(created)) Fail(impl.get(), created, L"CreateCoreWebView2Controller");
+    // One controller at a time: a second CreateCoreWebView2Controller while
+    // one is pending fails with ERROR_INVALID_STATE (0x8007139f; ci run
+    // 40129082164, an Activity with two WebViews).
+    g_controller_queue.push_back([impl] {
+      if (impl->destroyed || !impl->env) {
+        ControllerDone();
+        return;
+      }
+      HRESULT created = impl->env->CreateCoreWebView2Controller(
+          impl->container,
+          GESHER_CALLBACK(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
+                          [impl](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            OnController(impl, result, controller);
+                            ControllerDone();
+                            return S_OK;
+                          })
+              .get());
+      if (FAILED(created)) {
+        Fail(impl.get(), created, L"CreateCoreWebView2Controller");
+        ControllerDone();
+      }
+    });
+    NextController();
   });
 }
 
