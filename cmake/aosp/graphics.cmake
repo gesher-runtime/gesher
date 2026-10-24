@@ -10,4 +10,4 @@ target_link_libraries(dalvikvm PRIVATE gesher_graphics)
 
 # What .github/workflows/graphics.yml builds: every graphics library, and the
 # probes it runs on Windows.
-add_custom_target(graphics_all DEPENDS ${GESHER_GRAPHICS_TARGETS} skia_probe window_probe)
+add_custom_target(graphics_all DEPENDS ${GESHER_GRAPHICS_TARGETS} skia_probe skia_gl_probe window_probe)
