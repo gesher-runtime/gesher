@@ -444,8 +444,12 @@ public final class WindowSession extends IWindowSession.Stub {
             if (outSurface != null) {
                 outSurface.copyFrom(w.surfaceControl, "WindowSession.relayout");
             }
-            if (w.drawn && mShow && !w.shown) {
-                w.nativeWindow.show();
+            if (w.drawn && !w.shown) {
+                if (mShow) {
+                    w.nativeWindow.show();
+                } else {
+                    w.nativeWindow.showOffscreen();
+                }
                 w.shown = true;
             }
         } else {
@@ -507,8 +511,14 @@ public final class WindowSession extends IWindowSession.Stub {
                 }, 1000);
             }
         }
-        if (mShow && !w.shown) {
-            w.nativeWindow.show();
+        if (!w.shown) {
+            // Hidden windows are shown off the desktop: PrintWindow reads nothing back from
+            // a window that is not shown.
+            if (mShow) {
+                w.nativeWindow.show();
+            } else {
+                w.nativeWindow.showOffscreen();
+            }
             w.shown = true;
         }
     }

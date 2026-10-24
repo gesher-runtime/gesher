@@ -58,6 +58,9 @@ class Window {
 
   void Show();
   void Hide();
+  // Shows the window off the desktop (left of the virtual screen, no taskbar
+  // button, not activated), for tests that read it back with PrintWindow.
+  void ShowOffscreen();
   void SetTitle(const std::string& title_utf8);
   // Lets the user resize (and maximize) the window, or not.
   void SetResizable(bool resizable);
