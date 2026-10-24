@@ -168,11 +168,21 @@ public final class GesherAppDriver {
                         : DeviceProfile.configuration());
 
         context.setOuterContext(activity);
+        // The configuration its window gets (a resized window: docs/lifecycle.md) reaches the
+        // Activity as ActivityThread's activity config callback takes it there.
+        android.view.ViewRootImpl.ActivityConfigCallback configCallback =
+                new android.view.ViewRootImpl.ActivityConfigCallback() {
+                    @Override
+                    public void onConfigurationChanged(Configuration overrideConfig,
+                            int displayId) {
+                        configurationChanged(activity, token, info, overrideConfig, displayId);
+                    }
+                };
         activity.attach(context, thread, instrumentation, token, 0 /* ident */, app, intent,
                 info, title, null /* parent */, null /* embeddedID */,
                 null /* lastNonConfigurationInstances */, config, null /* referrer */,
                 null /* voiceInteractor */, null /* window */,
-                null /* activityConfigCallback */, null /* assistToken */,
+                configCallback, null /* assistToken */,
                 null /* shareableActivityToken */, null /* initialCallerInfoAccessToken */);
         log(info.name + " attach");
         activity.mStartedActivity = false;
@@ -205,6 +215,41 @@ public final class GesherAppDriver {
         activity.performResume(false /* followedByPause */, "gesher-app");
         log(info.name + " onResume");
         return activity;
+    }
+
+    /**
+     * ActivityThread.handleActivityConfigurationChanged, scaled down: the Activity's
+     * resources take its window's override configuration (ResourcesManager), it gets
+     * onConfigurationChanged for the changes it handles (android:configChanges); the
+     * ones it does not handle would relaunch it, which the single process does not do (it is
+     * told on stdout); then its window updates (ViewRootImpl.updateConfiguration).
+     */
+    private static void configurationChanged(Activity activity, Binder token, ActivityInfo info,
+            Configuration overrideConfig, int displayId) {
+        Configuration old = new Configuration(activity.getResources().getConfiguration());
+        ResourcesManager.getInstance().updateResourcesForActivity(token, overrideConfig,
+                Display.DEFAULT_DISPLAY);
+        Configuration now = new Configuration(activity.getResources().getConfiguration());
+        int diff = old.diff(now) & ~(ActivityInfo.CONFIG_WINDOW_CONFIGURATION
+                | ActivityInfo.CONFIG_ASSETS_PATHS);
+        if (diff != 0) {
+            int unhandled = diff & ~info.getRealConfigChanged();
+            activity.mCurrentConfig = new Configuration(now);
+            if (unhandled == 0) {
+                activity.mCalled = false;
+                activity.onConfigurationChanged(new Configuration(now));
+                if (!activity.mCalled) {
+                    throw new SuperNotCalledException("Activity " + info.name
+                            + " did not call through to super.onConfigurationChanged()");
+                }
+            } else {
+                log(info.name + ": configuration changes 0x" + Integer.toHexString(unhandled)
+                        + " it does not handle; not relaunched (single process)");
+            }
+        }
+        android.view.View decor = activity.mDecor;
+        android.view.ViewRootImpl root = decor != null ? decor.getViewRootImpl() : null;
+        if (root != null) root.updateConfiguration(displayId);
     }
 
     /** Sets a private field: the ones ActivityThread.attach() and LoadedApk set. */
