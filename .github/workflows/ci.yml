@@ -358,7 +358,9 @@ jobs:
           # app process the system server starts draws its UI into a Win32
           # window of its own (read back with PrintWindow), with the
           # Activity's label, the package's AppUserModelID and its shortcut's
-          # icon; WM_CLOSE finishes the Activity and the process ends.
+          # icon; input reaches its views (a click, keys, a WM_CHAR, the wheel,
+          # resizing: WindowChecks.ps1's UiAppInput); WM_CLOSE finishes the
+          # Activity and the process ends.
           . tests\windows\graphics\WindowChecks.ps1
           $uiapp = Join-Path $env:TEMP 'uiapp.apk'  # on Gesher's drive
           Copy-Item dist\uiapp.apk $uiapp
@@ -387,6 +389,8 @@ jobs:
             if ($title -ne 'Gesher UI test') { $problems += "title '$title'" }
             if ($id -ne 'Gesher.App.com.gesher.uiapp') { $problems += "AppUserModelID '$id'" }
             if (-not [GesherWin32]::HasIcon($hwnd)) { $problems += 'no window icon' }
+            $inputProblems = @(UiAppInput $hwnd { Get-Content -Raw $uiLog -ErrorAction SilentlyContinue })
+            $problems += $inputProblems
             [void][GesherWin32]::PostMessageW($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE
           }
           if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += 'did not end after WM_CLOSE' }
@@ -401,6 +405,7 @@ jobs:
             throw "uiapp.apk's window on the Gesher device: $($problems -join '; ')"
           }
           'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
           Set-Content $sentinel 'not Gesher''s'

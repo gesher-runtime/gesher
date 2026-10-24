@@ -11,18 +11,25 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.MessageQueue;
 import android.os.RemoteCallback;
+import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.ArrayMap;
 import android.view.IWindow;
 import android.view.IWindowId;
 import android.view.IWindowSession;
+import android.view.Display;
 import android.view.InputChannel;
 import android.view.InsetsState;
+import android.view.KeyCharacterMap;
+import android.view.KeyEvent;
 import android.view.SurfaceControl;
 import android.view.View;
+import android.view.ViewRootImpl;
 import android.view.WindowInsets;
 import android.view.WindowLayout;
 import android.view.WindowManager;
@@ -34,9 +41,12 @@ import android.window.InputTransferToken;
 import android.window.OnBackInvokedCallbackInfo;
 
 import com.gesher.app.DeviceProfile;
+import com.gesher.app.input.VirtualKeyboard;
+import com.gesher.app.input.WindowInput;
 import com.gesher.server.WindowManagerService;
 
 import java.io.FileDescriptor;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +70,18 @@ import java.util.List;
  *       the window is shown, unless windows are hidden ({@link #install}).
  *   <li>{@code remove}: the window closes.
  * </ul>
+ *
+ * <p>Input (docs/input.md, ADR 0027): {@code addToDisplay} opens the window's input
+ * channel pair; once the Win32 window exists, {@link WindowInput} publishes its mouse,
+ * wheel, key, touch and pen messages on the session's end as MotionEvents and KeyEvents
+ * for ViewRootImpl's WindowInputEventReceiver, with the window focused from the start.
+ * The rest of the window's events come through WindowInput's listener: closing (below),
+ * resizing by the user (an Activity's full-size window is resizable: the window's bounds
+ * become the new client area and ViewRootImpl gets the new frames through
+ * {@code IWindow.resized}, so it lays out and draws at the new size; the smallest size is
+ * the Activity's {@code <layout android:minWidth/minHeight>}, else Android's default for
+ * resizable tasks, 220dp), focus, and characters the key map cannot type (WM_CHAR, other
+ * keyboard layouts), which reach the focused view as {@code ACTION_MULTIPLE} KeyEvents.
  *
  * <p>Closing a Win32 window (its close button, Alt+F4, WM_CLOSE) goes to the close
  * handler ({@link #setCloseHandler}); by default an Activity's window finishes its
@@ -91,6 +113,21 @@ public final class WindowSession extends IWindowSession.Stub {
         SurfaceControl surfaceControl;
         /** The window's end of its input channel pair (the client has the other), or null. */
         InputChannel inputChannel;
+        /** Publishes the Win32 window's input on {@link #inputChannel}; null until attached. */
+        WindowInput input;
+        /** The Looper of the thread that created the window (ViewRootImpl's). */
+        Handler handler;
+        /** Where the window lays out: the display, or the size the user resized it to. */
+        final Rect bounds = new Rect();
+        /** The user may resize the Win32 window (a full-size application window). */
+        boolean resizable;
+        /** The last size WM_SIZE reported, not yet applied (guarded by this). */
+        int pendingWidth;
+        int pendingHeight;
+        boolean resizePending;
+        boolean focused;
+        /** A WM_CHAR high surrogate waiting for its low half. */
+        char highSurrogate;
         MessageQueue queue;
         FileDescriptor eventFd;
         boolean drawn;
@@ -197,7 +234,7 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Fills {@code out} (frames, configuration, insets) for the requested size. */
     private void layout(AppWindow w, int requestedWidth, int requestedHeight,
             WindowRelayoutResult out) {
-        Rect bounds = displayBounds();
+        Rect bounds = w.bounds.isEmpty() ? displayBounds() : new Rect(w.bounds);
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
@@ -208,7 +245,16 @@ public final class WindowSession extends IWindowSession.Stub {
                 WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
-        out.mergedConfiguration.setConfiguration(global, new Configuration());
+        Configuration override = new Configuration();
+        if (!w.bounds.isEmpty()) {
+            // Resized by the user: the window's bounds, as a freeform task's on a device.
+            // ViewRootImpl computes its frames from them (relayoutWindow's local layout), so
+            // the frames alone would not move it. The rest of the configuration (screen size
+            // in dp) stays the display's: no Activity is relaunched.
+            override.windowConfiguration.setBounds(bounds);
+            override.windowConfiguration.setAppBounds(bounds);
+        }
+        out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
     }
 
@@ -217,23 +263,38 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Creates or resizes the window's Win32 window; true when it was created. */
     private boolean ensureNativeWindow(AppWindow w, int width, int height) {
         if (w.nativeWindow != null) {
-            if (w.nativeWindow.getWidth() != width || w.nativeWindow.getHeight() != height) {
+            // A window the user resizes keeps the user's size: a relayout computed for an
+            // earlier size is followed by the resize still queued (applyResize).
+            if (!w.resizable && (w.nativeWindow.getWidth() != width
+                    || w.nativeWindow.getHeight() != height)) {
                 w.nativeWindow.setClientSize(width, height);
             }
             return false;
         }
         NativeWindow nw = NativeWindow.create(w.title(), width, height);
-        // Sizes follow the app's layout (relayout), not the user's dragging.
-        nw.setResizable(false);
+        // An Activity's full-size window follows the user's resizing (the window's bounds,
+        // applyResize); other windows' sizes follow the app's layout (relayout).
+        w.resizable = isUserResizable(w.attrs);
+        nw.setResizable(w.resizable);
+        int[] min = w.resizable ? minimumSize(w.attrs) : null;
+        if (min != null) nw.setMinClientSize(min[0], min[1]);
         w.nativeWindow = nw;
+        Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
+        w.handler = new Handler(looper);
         String icon = appIcon(w.attrs.packageName);
         boolean iconSet = icon != null && nw.setIcon(icon);
         attachInput(w);
         String id = nw.getAppUserModelId();
         log("window \"" + w.title() + "\": Win32 window 0x" + Long.toHexString(nw.getHwnd())
                 + " in process " + android.os.Process.myPid() + ", AppUserModelID "
-                + (id != null ? id : "none") + ", icon " + (iconSet ? icon : "none"));
-        listenForEvents(w);
+                + (id != null ? id : "none") + ", icon " + (iconSet ? icon : "none")
+                + ", input " + (w.input != null ? "attached" : "none")
+                + (min != null ? ", resizable, at least " + min[0] + "x" + min[1] : ""));
+        if (w.input == null) {
+            // No input channel (the stand-in natives): the session reads the window's
+            // events itself, for closing.
+            listenForEvents(w);
+        }
         return true;
     }
 
@@ -277,15 +338,241 @@ public final class WindowSession extends IWindowSession.Stub {
     }
 
     /**
-     * INPUT HOOK (docs/graphics.md, "Input", for the input track): once the window has its
-     * Win32 window, its input goes into {@link AppWindow#inputChannel}:
-     * {@code com.gesher.app.input.WindowInput.attach(w.nativeWindow.getHwnd(),
-     * w.inputChannel, options)} (closed in {@link #closeNativeWindow}). Once attached it is
-     * the only reader of the window's event queue: {@link #listenForEvents} must then not
-     * be started, and close/resize/focus come through the options' listener (close →
-     * {@code mCloseHandler.onClose}). Until then nothing writes to the channel.
+     * The window's input (docs/input.md): {@link WindowInput} publishes the Win32 window's
+     * mouse, wheel, key, touch and pen messages on {@link AppWindow#inputChannel} for
+     * ViewRootImpl's WindowInputEventReceiver, and is from then on the only reader of the
+     * window's event queue: closing, resizing, focus and characters come through its
+     * listener ({@link #onWindowEvent}, on the connection's thread). The window is focused
+     * from the start (a window shown off the desktop is never activated), so ViewRootImpl
+     * dispatches keys to the focused view. Closed in {@link #closeNativeWindow}. Without an
+     * input channel (the stand-in InputChannel natives) nothing is attached.
+     *
+     * <p>A NativeActivity's window (native-libs track) attaches the same way:
+     * {@code WindowInput.attach(hwnd, serverChannel, options)} with the server end of an
+     * {@code InputChannel.openInputChannelPair}, its client end read by an
+     * {@code InputEventReceiver} (or an InputQueue) on the app's Looper.
      */
     private void attachInput(AppWindow w) {
+        if (w.inputChannel == null) return;
+        WindowInput.Options o = new WindowInput.Options();
+        // The Win32 window is the size of the frame: client pixels are window pixels.
+        o.initialFocus = true;
+        final IBinder key = w.client.asBinder();
+        o.listener = (type, a, b) -> onWindowEvent(key, type, a, b);
+        try {
+            w.input = WindowInput.attach(w.nativeWindow.getHwnd(), w.inputChannel, o);
+        } catch (RuntimeException | LinkageError e) {
+            log("window \"" + w.title() + "\": no input (" + e + ")");
+            w.input = null;
+        }
+    }
+
+    /**
+     * A window event that is not input (WindowInput's listener, on the connection's thread):
+     * handled on the window's Looper.
+     */
+    private void onWindowEvent(IBinder key, int type, int a, int b) {
+        final AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.handler == null) return;
+        switch (type) {
+            case WindowInput.EVENT_CLOSE:
+                w.handler.post(() -> close(key));
+                break;
+            case WindowInput.EVENT_RESIZE:
+                synchronized (w) {
+                    // While the user drags, only the latest size matters.
+                    w.pendingWidth = a;
+                    w.pendingHeight = b;
+                    if (w.resizePending) return;
+                    w.resizePending = true;
+                }
+                w.handler.post(() -> applyResize(key));
+                break;
+            case WindowInput.EVENT_FOCUS:
+                w.handler.post(() -> {
+                    if (w.focused != (a != 0)) {
+                        w.focused = a != 0;
+                        log("window \"" + w.title() + "\" " + (a != 0 ? "focused" : "unfocused"));
+                    }
+                });
+                break;
+            case WindowInput.EVENT_CHAR:
+                w.handler.post(() -> deliverChar(key, (char) a));
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** The user closed the Win32 window: the close handler (by default, finish its Activity). */
+    private void close(IBinder key) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.nativeWindow == null) return;
+        log("window \"" + w.title() + "\" closed by the user");
+        mCloseHandler.onClose(this, key, w.attrs);
+    }
+
+    /** An application window that fills its bounds: the user may resize it. */
+    private static boolean isUserResizable(WindowManager.LayoutParams attrs) {
+        return attrs.type >= WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW
+                && attrs.type <= WindowManager.LayoutParams.LAST_APPLICATION_WINDOW
+                && attrs.width == WindowManager.LayoutParams.MATCH_PARENT
+                && attrs.height == WindowManager.LayoutParams.MATCH_PARENT;
+    }
+
+    /**
+     * The smallest client area of a resizable window, in pixels: its Activity's
+     * {@code <layout android:minWidth android:minHeight>} (ActivityInfo.windowLayout), else
+     * Android's default minimal size of a resizable task
+     * (config_defaultMinimalSizeResizableTask, 220dp).
+     */
+    private static int[] minimumSize(WindowManager.LayoutParams attrs) {
+        int fallback = Math.round(220f * DeviceProfile.DENSITY_DPI / 160f);
+        int[] min = {fallback, fallback};
+        try {
+            ActivityThread thread = ActivityThread.currentActivityThread();
+            android.app.Activity a = thread != null && attrs.token != null
+                    ? thread.getActivity(attrs.token) : null;
+            if (a == null) return min;
+            Field f = android.app.Activity.class.getDeclaredField("mActivityInfo");
+            f.setAccessible(true);
+            android.content.pm.ActivityInfo info = (android.content.pm.ActivityInfo) f.get(a);
+            android.content.pm.ActivityInfo.WindowLayout layout =
+                    info != null ? info.windowLayout : null;
+            if (layout != null) {
+                if (layout.minWidth > 0) min[0] = layout.minWidth;
+                if (layout.minHeight > 0) min[1] = layout.minHeight;
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            // The default.
+        }
+        return min;
+    }
+
+    /**
+     * The user resized the Win32 window (WM_SIZE): the window's bounds become its client
+     * area, and ViewRootImpl gets the frames for them (IWindow.resized, as
+     * WindowStateResizeItem gives them on a device), lays out, relayouts (whose frames now
+     * match the Win32 window) and draws at the new size. The configuration stays the
+     * process's (no Activity relaunch).
+     */
+    private void applyResize(IBinder key) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.nativeWindow == null) return;
+        int width;
+        int height;
+        synchronized (w) {
+            w.resizePending = false;
+            width = w.pendingWidth;
+            height = w.pendingHeight;
+        }
+        if (!w.resizable || width <= 0 || height <= 0) return;
+        Rect current = w.bounds.isEmpty() ? displayBounds() : w.bounds;
+        if (current.width() == width && current.height() == height) return;
+        w.bounds.set(0, 0, width, height);
+        WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
+                new android.util.MergedConfiguration(), new InsetsState(),
+                new android.view.InsetsSourceControl.Array());
+        layout(w, WindowLayout.UNSPECIFIED_LENGTH, WindowLayout.UNSPECIFIED_LENGTH, result);
+        log("window \"" + w.title() + "\" resized by the user to " + width + "x" + height
+                + " (frame " + result.frames.frame.toShortString() + ")");
+        try {
+            w.client.resized(result, false /* reportDraw */, true /* forceLayout */,
+                    Display.DEFAULT_DISPLAY, false /* syncWithBuffers */,
+                    false /* dragResizing */);
+        } catch (RemoteException e) {
+            log("window \"" + w.title() + "\": resized: " + e);
+        }
+        if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
+            // Debugging: where ViewRootImpl is a second later.
+            w.handler.postDelayed(() -> log("window debug: after the resize "
+                    + viewRootState(viewRoot(w))), 1500);
+        }
+    }
+
+    /** Debugging: a few fields of a ViewRootImpl's layout state. */
+    private static String viewRootState(ViewRootImpl root) {
+        if (root == null) return "no ViewRootImpl";
+        StringBuilder s = new StringBuilder();
+        for (String name : new String[] {"mWinFrame", "mWidth", "mHeight", "mLayoutRequested",
+                "mTraversalScheduled", "mIsInTraversal", "mNumPausedForSync", "mStopped",
+                "mAppVisible", "mForceNextWindowRelayout", "mLastPerformTraversalsSkipDrawReason"}) {
+            try {
+                Field f = ViewRootImpl.class.getDeclaredField(name);
+                f.setAccessible(true);
+                s.append(name).append('=').append(f.get(root)).append(' ');
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                s.append(name).append("=? ");
+            }
+        }
+        View v = root.getView();
+        if (v != null) s.append("view ").append(v.getWidth()).append('x').append(v.getHeight());
+        return s.toString();
+    }
+
+    private KeyCharacterMap mKeyMap;
+
+    /**
+     * A character the window got (WM_CHAR). Those the key map (Generic.kcm, a US layout)
+     * types came as key events already; others (another keyboard layout, dead keys, an
+     * IME's or a program's WM_CHAR) go to the window's focused view as an
+     * {@code ACTION_MULTIPLE} KeyEvent with the text, which TextView inserts
+     * (KeyListener.onKeyOther), as Android delivers text that has no key.
+     */
+    private void deliverChar(IBinder key, char c) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null) return;
+        String text;
+        if (Character.isHighSurrogate(c)) {
+            w.highSurrogate = c;
+            return;
+        } else if (Character.isLowSurrogate(c) && w.highSurrogate != 0) {
+            text = new String(new char[] {w.highSurrogate, c});
+        } else {
+            text = String.valueOf(c);
+        }
+        w.highSurrogate = 0;
+        if (c < 0x20 || c == 0x7f) return;  // control characters: their keys were key events
+        if (text.length() == 1) {
+            try {
+                if (mKeyMap == null) {
+                    mKeyMap = VirtualKeyboard.loadKeyCharacterMap(
+                            KeyCharacterMap.VIRTUAL_KEYBOARD);
+                }
+                if (mKeyMap.getEvents(new char[] {c}) != null) return;
+            } catch (RuntimeException | LinkageError e) {
+                return;
+            }
+        }
+        ViewRootImpl root = viewRoot(w);
+        if (root == null) return;
+        root.dispatchInputEvent(new KeyEvent(SystemClock.uptimeMillis(), text,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0));
+    }
+
+    /** The window's ViewRootImpl (its IWindow is ViewRootImpl.W, in this process), or null. */
+    private static ViewRootImpl viewRoot(AppWindow w) {
+        try {
+            Field f = w.client.getClass().getDeclaredField("mViewAncestor");
+            f.setAccessible(true);
+            Object ref = f.get(w.client);
+            return ref instanceof WeakReference
+                    ? (ViewRootImpl) ((WeakReference<?>) ref).get() : null;
+        } catch (ReflectiveOperationException | ClassCastException e) {
+            return null;
+        }
     }
 
     private void listenForEvents(AppWindow w) {
@@ -311,7 +598,7 @@ public final class WindowSession extends IWindowSession.Stub {
 
     private final double[] mEvent = new double[13];
 
-    /** The window's queued events: closing for now (input dispatch is the next step). */
+    /** The window's queued events, without WindowInput: only closing is handled. */
     private void dispatchEvents(IBinder key) {
         AppWindow w;
         synchronized (mWindows) {
@@ -323,13 +610,15 @@ public final class WindowSession extends IWindowSession.Stub {
         while ((type = w.nativeWindow.pollEvent(mEvent)) != 0) {
             if (type == NativeWindow.EVENT_CLOSE) close = true;
         }
-        if (close) {
-            log("window \"" + w.title() + "\" closed by the user");
-            mCloseHandler.onClose(this, key, w.attrs);
-        }
+        if (close) close(key);
     }
 
     private void closeNativeWindow(AppWindow w) {
+        if (w.input != null) {
+            // Before the window and the channel go (joins the connection's thread).
+            w.input.close();
+            w.input = null;
+        }
         if (w.queue != null && w.eventFd != null) {
             w.queue.removeOnFileDescriptorEventListener(w.eventFd);
         }
@@ -426,6 +715,12 @@ public final class WindowSession extends IWindowSession.Stub {
         Rect frame = result.frames.frame;
         int width = frame.width();
         int height = frame.height();
+        if (System.getenv("GESHER_WINDOW_DEBUG") != null && w.nativeWindow != null
+                && (w.nativeWindow.getWidth() != width || w.nativeWindow.getHeight() != height
+                        || !w.bounds.isEmpty())) {
+            log("window debug: relayout " + requestedWidth + "x" + requestedHeight + " in "
+                    + w.bounds.toShortString() + ": frame " + frame.toShortString());
+        }
         int res = 0;
         if (viewVisibility == View.VISIBLE && width > 0 && height > 0) {
             if (ensureNativeWindow(w, width, height)) {

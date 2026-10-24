@@ -98,6 +98,40 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   headless processes keep the system server's `StandInWindowSession` and no
   renderer. `GESHER_WINDOW_DEBUG=1` logs the first frames' pixels, the back
   buffer and an in-process PrintWindow.
+- **Input in an app's window** (docs/input.md): `addToDisplay` opens the
+  window's channel pair; once its Win32 window exists, `attachInput`
+  attaches `com.gesher.app.input.WindowInput` to the session's end (initial
+  focus: a window shown off the desktop is never activated), so the
+  window's mouse, wheel, key, touch and pen messages reach ViewRootImpl's
+  `WindowInputEventReceiver`; `closeNativeWindow` closes it before the
+  window and the channel go. WindowInput is then the only reader of the
+  window's event queue; the rest comes through its listener (on the
+  connection's thread, handled on the window's Looper): close (the close
+  handler), resize, focus, and WM_CHARs Generic.kcm cannot type (another
+  keyboard layout, an IME's text), which reach the focused view as an
+  `ACTION_MULTIPLE` KeyEvent (`ViewRootImpl.dispatchInputEvent`; TextView
+  inserts it, `KeyListener.onKeyOther`). The window tracks modifier keys
+  from its own key messages too (posted messages do not change the thread's
+  key state). Services for it: `input` (`VirtualKeyboard.InputManager`:
+  the virtual keyboard and Generic.kcm), `content` (TextKeyListener
+  observes the text settings; observers are never notified) and a silent
+  `audio` (a click plays its sound effect; served by the generated
+  `IAudioServiceStub` without StandIn's Proxy, since IAudioService names
+  `android.bluetooth.BluetoothDevice`, which framework.jar lacks), in the
+  app's process and in the system server.
+- **Resizing by the user**: an application window that fills its bounds
+  (MATCH_PARENT both ways) is resizable (`WS_THICKFRAME`); its smallest
+  client area is the Activity's `<layout android:minWidth/minHeight>`,
+  else 220dp (Android's default minimal size of a resizable task),
+  enforced in `WM_GETMINMAXINFO`. WM_SIZE becomes the window's bounds:
+  `IWindow.resized` gets frames for them and a merged configuration whose
+  override has them as `windowConfiguration` bounds and app bounds, as a
+  freeform task's (ViewRootImpl lays out from those bounds itself,
+  `relayoutWindow`'s local layout, so new frames alone are ignored); the
+  views lay out and hwui draws at the new size. The rest of the
+  configuration (screen size in dp, density) stays the display's, so the
+  Activity is not relaunched. relayout does not resize a window the user
+  resizes.
 - **ANativeWindow for libandroid** (native-libs track): dalvikvm defines, as
   Microsoft-ABI C functions, hostgraphics' `ANativeWindow_acquire/release/
   getWidth/getHeight/getFormat/dequeueBuffer/cancelBuffer/setDequeueTimeout/
@@ -216,14 +250,45 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
     lifecycle runs headless (`GESHER_APP_WINDOW=headless` in 50-services.ps1
     and the package job).
 
+- **Input reaches an app's views; the user resizes its window** (ci run
+  40056527378, commit 826398b, both runners and the installer;
+  tests/windows/tracks/34-windows.ps1 and the package job through
+  WindowChecks.ps1's `UiAppInput`; tests/apps/uiapp): Win32 messages posted
+  to uiapp.apk's off-desktop window: WM_LBUTTONDOWN/UP on its Button runs
+  `onClick` (`UiActivity onClick: button`) and PrintWindow reads the red
+  View turned cyan (`cyan after the click: 80000 of 80000 pixels`);
+  WM_KEYDOWN/UP typing "Gesher" (shift for the G) into the focused
+  EditText and a WM_CHAR U+05D0 no key types are echoed by a TextWatcher
+  (`UiActivity echo: Gesher\u05d0`) and drawn (`typed text: 750 dark pixels
+  in the EditText, 781 in its echo`); WM_MOUSEWHEEL over the ScrollView
+  scrolls it (`UiActivity scrolled to 192`, `0 magenta, 48000 orange and
+  purple pixels`); SetWindowPos to 100x100 stops at the 220x220 minimum and
+  to 600x700 lays the views out and draws them at the new size
+  (`UiActivity content 600x700`, `cyan at 600x700: 120000 of 120000
+  pixels`, green and blue halves of 300 px):
+  - `PASS  gesher-app: input reaches uiapp.apk's views in its Win32 window:
+    a click (WM_LBUTTONDOWN/UP) runs the Button's onClick and the window
+    shows its new color, keys (WM_KEYDOWN/UP) and a WM_CHAR type into the
+    focused EditText and its echo is drawn, the wheel scrolls a ScrollView;
+    the user resizing the window (at least its minimum) lays it out and
+    redraws it at the new size (single process)`
+  - `PASS  gesher-app: the Gesher device: input reaches uiapp.apk's views
+    in its Win32 window: ... (uiapp.apk's app process)` (the same, in the
+    app process the system server started)
+  - `PASS  installer: input reaches uiapp.apk's views on the Gesher device
+    (a click runs the Button's onClick, keys and a WM_CHAR type into its
+    EditText, the wheel scrolls, the resized window redraws at 600x700)`
+  - Every earlier check still passes (the services lists include the new
+    `input`, `audio` and `content` services).
+
 ### Stand-ins and gaps (what is not real yet)
 
 - **Device-only natives** answer zero/null or fresh handles
   (`device_standins.cc`): SurfaceControl (+ Transaction), SurfaceSession,
   BLASTBufferQueue, OverlayProperties, Perfetto's. Handles carry a tag:
   `BLASTBufferQueue.nativeGetSurface` returns the Surface of the window its
-  SurfaceControl was tagged with. InputChannel and InputEventReceiver are
-  attach_standins.cc's (services track): no input reaches the views yet.
+  SurfaceControl was tagged with. InputChannel, InputEventReceiver and the
+  other input natives are the input track's real ones (docs/input.md).
 - **The system server does not know the app's windows** (ADR 0029): no
   server-side window list, focus or z-order; dialogs and popups are
   top-level windows of their own, not owned by or placed relative to their
@@ -243,9 +308,16 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 - **hwui logs "Using Fontation backend"** (its host default); the calls go
   to FreeType (`fontations_fallback.cc`).
 - **Window details**: one buffer per surface; a resize reaches the next
-  lock/dequeue. Windows are not resizable by the user (sizes follow the
-  app's layout). Per-monitor DPI aware, sizes in pixels, density 160 by
-  default whatever the monitor's scaling; CI runs at 96 DPI.
+  lock/dequeue. A user resize changes the window's bounds only, not
+  `screenWidthDp`/`screenHeightDp` (no configuration change for the app's
+  resources, no relaunch); windows that are not full-size application
+  windows (dialogs, popups) follow the app's layout and are not resizable.
+  Per-monitor DPI aware, sizes in pixels, density 160 by default whatever
+  the monitor's scaling; CI runs at 96 DPI.
+- **Input gaps** (docs/input.md): Generic.kcm is a US layout, so with
+  another keyboard layout a key types both its US character (the KeyEvent)
+  and the layout's (the WM_CHAR); no IME (InputConnection) path; the
+  content service never notifies observers.
 
 ### CI runs
 
@@ -283,12 +355,27 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
 - ci 40048707298 (440822d): green on both runners and the installer, the
   window checks included (hidden windows shown off the desktop).
 
-### Next concrete steps (the next agent: input)
+- ci 40050875884 (20110d5): Services.create threw NoClassDefFoundError
+  (StandIn's Proxy over IAudioService resolves BluetoothDevice, which
+  framework.jar lacks).
+- ci 40051875567 (218e181): the click reached onClick (cyan read back);
+  typing crashed the app (TextKeyListener: no `content` service).
+- ci 40053339176 (59d2406): click, keys, WM_CHAR and the wheel reached the
+  views; the test expected U+05D0 itself instead of the app's escape; the
+  resized window did not lay out.
+- ci 40054598009 (c0c7863, resize debugging): ViewRootImpl kept its
+  400x800 frame: it computes frames from its window configuration's bounds
+  (relayoutWindow's local layout) and ignored the resized frames.
+- ci 40055720091 (b6e4c4d): the bounds in the merged configuration: both
+  test runners green with every input check; the package job read the
+  600x700 frame 3 s after the layout, partly drawn.
+- ci 40056527378 (826398b): green on both runners and the
+  installer, with WaitRegions reading the window until the frame lands.
 
-1. **Input** (the input track built the natives and the Win32 → Android
-   translation on wip/input, merged into phase3/integration; its C API
-   attaches an InputChannel to a window). The hook is in
-   `app/java/com/gesher/app/window/WindowSession.java`:
+### Next concrete steps
+
+1. **Input**: done (above; ci run 40056527378). What the hook was, for
+   reference: `app/java/com/gesher/app/window/WindowSession.java`:
    - `addToDisplayAsUser` opens the window's channel pair
      (`openInputChannel`: `InputChannel.openInputChannelPair(title)`,
      `pair[1].copyTo(outInputChannel)` for ViewRootImpl's
@@ -313,8 +400,10 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
    (`GESHER_HWUI_RENDERER=skiagl` or `debug.hwui.renderer=skiagl`; ADR 0030),
    verified with HardwareRenderer into a window. Next: an Activity's window
    with SkiaGL, then making it the default where ANGLE has a GPU.
-3. **Window polish**: owned windows for dialogs and popups, resizing by the
-   user (relayout with the new size), density from the monitor's DPI,
+3. **Window polish**: owned windows for dialogs and popups, a user resize
+   that also changes the app's screen size in dp (onConfigurationChanged or
+   a relaunch, as the server decides on a device), density from the
+   monitor's DPI,
    vsync from DWM (`DwmFlush`) for Choreographer.
 
 ### Open problems and dead ends

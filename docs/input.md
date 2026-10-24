@@ -183,6 +183,32 @@ ci run 40038368343 (commit 40d5053), windows-2022 and windows-2025, from
   nothing writes to (`gen_jni_sources.py` EDITS) and the services checks pass
   again (they failed in ci run 40035577063 without it).
 
+- **In an app's window** (ci run 40056527378, both runners and the
+  installer; tests/windows/tracks/34-windows.ps1 and the package job,
+  WindowChecks.ps1's `UiAppInput`): messages posted to uiapp.apk's window
+  reach its views through ViewRootImpl: a click runs the Button's
+  `onClick`, WM_KEYDOWN/UP (shift for capitals) type "Gesher" into the
+  focused EditText and a WM_CHAR U+05D0 is inserted, WM_MOUSEWHEEL scrolls
+  a ScrollView (`UiActivity scrolled to 192`): `PASS  gesher-app: input
+  reaches uiapp.apk's views in its Win32 window: ...` (single process and
+  the Gesher device's app process) and `PASS  installer: input reaches
+  uiapp.apk's views on the Gesher device (...)`; docs/graphics.md has the
+  details. The `input` service (`VirtualKeyboard.InputManager`) is
+  registered in-process (`Services.create`) and by the system server
+  (generated `IInputManagerStub`), with `content` and `audio` stand-ins
+  that typing and clicking need.
+
+### For NativeActivity (native-libs track)
+
+A NativeActivity's window attaches the same way as an app window: open a
+pair (`InputChannel.openInputChannelPair`), `WindowInput.attach(hwnd,
+pair[0], options)` with `initialFocus` and a listener (resize, close,
+characters, focus; on the connection's thread), and read `pair[1]` with an
+`InputEventReceiver` on the app's Looper (or hand it to an `InputQueue` for
+`AInputQueue`); `close()` before the window goes. In C++ the same is
+`gesher_input_attach(hwnd, fd, name, &options)` (gesher_input.h). WindowInput
+holds no state of the window session's, so it is usable from there as is.
+
 ### Stand-ins and gaps
 
 - WM_POINTER* touch is exercised only as an INFO line: Windows does not
@@ -192,12 +218,16 @@ ci run 40038368343 (commit 40d5053), windows-2022 and windows-2025, from
   which needs an interactive desktop. On both runners (ci run 40040115231):
   `INFO  WM_POINTER touch through InjectSyntheticPointerInput: DOWN at (50, 60),
   MOVE, UP on SOURCE_TOUCHSCREEN`. Pen (PT_PEN) is untested.
-- No app window uses it yet: the window session (wip/graphics) must open
-  the pair and attach it (above); until then ViewRootImpl gets a channel
-  that never delivers.
+- App windows use it (wip/graphics, docs/graphics.md "Input in an app's
+  window"): `WindowSession` opens the pair in `addToDisplay` and attaches
+  WindowInput when the Win32 window is created; verified with uiapp.apk in
+  a single process, in an app process of the Gesher device and with the
+  installed gesher-app (ci run 40056527378, below).
 
-- Text input: characters a key map cannot produce (other layouts, IMEs)
-  need an InputConnection path; WM_CHAR only reaches the callback.
+- Text input: WM_CHARs Generic.kcm cannot type reach the focused view as
+  `ACTION_MULTIPLE` KeyEvents (the window session, above); with a non-US
+  keyboard layout a key then types both its US character (its KeyEvent)
+  and the layout's (its WM_CHAR). No InputConnection (IME) path.
 - One process: an InputChannel's fd cannot cross processes yet (gesher-base
   does not duplicate sockets into another process).
 - SOCK_SEQPACKET as UDP: no hangup on close; a full buffer drops (bounded by

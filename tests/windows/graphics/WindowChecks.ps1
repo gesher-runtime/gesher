@@ -32,6 +32,12 @@ public static class GesherWin32 {
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hwnd, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
+  [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint code, uint type);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hwnd, StringBuilder s, int n);
@@ -44,6 +50,59 @@ public static class GesherWin32 {
   [DllImport("gdi32.dll")] static extern bool GdiFlush();
   [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BITMAPINFOHEADER bmi,
       uint usage, out IntPtr bits, IntPtr section, uint offset);
+  // The client area's size: {width, height}.
+  public static int[] ClientSize(IntPtr hwnd) {
+    RECT r;
+    GetClientRect(hwnd, out r);
+    return new int[] { r.Right - r.Left, r.Bottom - r.Top };
+  }
+  // Resizes the window so its client area is w x h, as the user dragging its frame does
+  // (WM_SIZE; the window's minimum applies), keeping a window that is off the desktop off it.
+  public static void SetClientSize(IntPtr hwnd, int w, int h) {
+    RECT wr, cr;
+    GetWindowRect(hwnd, out wr);
+    GetClientRect(hwnd, out cr);
+    int ow = w + (wr.Right - wr.Left) - (cr.Right - cr.Left);
+    int oh = h + (wr.Bottom - wr.Top) - (cr.Bottom - cr.Top);
+    int left = GetSystemMetrics(76 /* SM_XVIRTUALSCREEN */);
+    int x = wr.Right <= left ? left - ow - 64 : wr.Left;
+    SetWindowPos(hwnd, IntPtr.Zero, x, wr.Top, ow, oh, 0x0004 | 0x0010 /* NOZORDER, NOACTIVATE */);
+  }
+  // A left click at client (x, y): WM_LBUTTONDOWN, WM_LBUTTONUP.
+  public static void Click(IntPtr hwnd, int x, int y) {
+    IntPtr at = (IntPtr) ((y << 16) | (x & 0xffff));
+    PostMessageW(hwnd, 0x0201, (IntPtr) 1 /* MK_LBUTTON */, at);
+    PostMessageW(hwnd, 0x0202, IntPtr.Zero, at);
+  }
+  // The mouse wheel at client (x, y), `delta` in WHEEL_DELTA units (negative: toward the
+  // user, scrolling down). WM_MOUSEWHEEL carries screen coordinates.
+  public static void Wheel(IntPtr hwnd, int x, int y, int delta) {
+    POINT p = new POINT { X = x, Y = y };
+    ClientToScreen(hwnd, ref p);
+    IntPtr at = (IntPtr) (((p.Y & 0xffff) << 16) | (p.X & 0xffff));
+    PostMessageW(hwnd, 0x020A, (IntPtr) ((delta & 0xffff) << 16), at);
+  }
+  static void Key(IntPtr hwnd, uint vk, bool down) {
+    long scan = MapVirtualKeyW(vk, 0 /* MAPVK_VK_TO_VSC */);
+    long l = 1 | (scan << 16) | (down ? 0 : (3L << 30));
+    PostMessageW(hwnd, down ? 0x0100u : 0x0101u, (IntPtr) vk, (IntPtr) l);
+  }
+  // Types letters and digits with WM_KEYDOWN/WM_KEYUP (shift for capitals), as a keyboard
+  // does; TranslateMessage adds the WM_CHARs.
+  public static void TypeKeys(IntPtr hwnd, string text) {
+    foreach (char c in text) {
+      bool upper = char.IsUpper(c);
+      uint vk = (uint) char.ToUpperInvariant(c);
+      if (upper) Key(hwnd, 0x10 /* VK_SHIFT */, true);
+      Key(hwnd, vk, true);
+      Key(hwnd, vk, false);
+      if (upper) Key(hwnd, 0x10, false);
+    }
+  }
+  // WM_CHAR for a character no key types (another keyboard layout, an IME).
+  public static void Char(IntPtr hwnd, char c) {
+    PostMessageW(hwnd, 0x0102, (IntPtr) c, (IntPtr) 1);
+  }
   public static string Title(IntPtr hwnd) {
     var s = new StringBuilder(512);
     GetWindowTextW(hwnd, s, s.Capacity);
@@ -122,19 +181,17 @@ public static class GesherWin32 {
 '@
 }
 
-# uiapp's layout at 400x800 and 160 dpi (1 dp = 1 px): red 0-200, green and
-# blue halves 200-400, a yellow TextView 400-520 with black text, white below.
+# uiapp's layout at 400x800 and 160 dpi (1 dp = 1 px): red 0-200, a green
+# Button and a blue View 200-400, a yellow TextView 400-520 with black text, a
+# white EditText 520-600, a gray TextView 600-680 (its echo), a ScrollView
+# showing magenta 680-800.
 function UiAppPixels($px) {
   $w = $px[0]; $h = $px[1]
   $out = @()
   if ($w -ne 400 -or $h -ne 800) { $out += "client area $($w)x$($h), not 400x800" }
-  foreach ($r in @(@('red', 0, 0, 400, 200, 0xff0000), @('green', 0, 200, 200, 400, 0x00ff00),
-                   @('blue', 200, 200, 400, 400, 0x0000ff), @('white', 0, 520, 400, 800, 0xffffff))) {
-    $area = ($r[3] - $r[1]) * ($r[4] - $r[2])
-    $n = [GesherWin32]::Count($px, $r[1], $r[2], $r[3], $r[4], $r[5], 40)
-    Write-Host "INFO  $($r[0]): $n of $area pixels"
-    if ($n -lt $area * 0.98) { $out += "$($r[0]): $n of $area pixels" }
-  }
+  $out += @(Regions $px @(@('red', 0, 0, 400, 200, 0xff0000), @('green', 0, 200, 200, 400, 0x00ff00),
+                           @('blue', 200, 200, 400, 400, 0x0000ff), @('EditText', 0, 520, 400, 600, 0xffffff, 0.95),
+                           @('echo', 0, 600, 400, 680, 0xc0c0c0), @('magenta', 0, 680, 400, 800, 0xff00ff)))
   $yellow = [GesherWin32]::Count($px, 0, 400, 400, 520, 0xffff00, 40)
   $dark = [GesherWin32]::Count($px, 0, 400, 400, 520, 0x000000, 100)
   Write-Host "INFO  TextView: $yellow yellow and $dark dark (text) pixels of 48000"
@@ -143,3 +200,104 @@ function UiAppPixels($px) {
   return $out
 }
 
+# Problems with regions of $px: each @(name, x0, y0, x1, y1, 0xRRGGBB[, share])
+# must be at least `share` (0.98) that color.
+function Regions($px, $regions, [switch] $Quiet) {
+  $out = @()
+  foreach ($r in $regions) {
+    $share = if ($r.Count -gt 6) { $r[6] } else { 0.98 }
+    $area = ($r[3] - $r[1]) * ($r[4] - $r[2])
+    $n = [GesherWin32]::Count($px, $r[1], $r[2], $r[3], $r[4], $r[5], 40)
+    if (-not $Quiet) { Write-Host "INFO  $($r[0]): $n of $area pixels" }
+    if ($n -lt $area * $share) { $out += "$($r[0]): $n of $area pixels" }
+  }
+  return $out
+}
+
+# Reads the window back until $regions hold (Regions) or $Seconds pass: a
+# frame may still be on its way. Returns the problems of the last read; on
+# failure also shows a coarse grid of the window's colors.
+function WaitRegions([IntPtr] $hwnd, $regions, [int] $Seconds = 20) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  do {
+    $px = [GesherWin32]::Capture($hwnd)
+    if ($null -ne $px -and -not @(Regions $px $regions -Quiet)) { break }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+  if ($null -eq $px) { return @('PrintWindow failed') }
+  $out = @(Regions $px $regions)
+  if ($out) {
+    $w = $px[0]; $h = $px[1]
+    for ($y = $h / 16; $y -lt $h; $y += $h / 8) {
+      $row = for ($x = $w / 16; $x -lt $w; $x += $w / 8) { '{0:x6}' -f $px[2 + [int]$y * $w + [int]$x] }
+      Write-Host "INFO    y $([int]$y): $($row -join ' ')"
+    }
+  }
+  return $out
+}
+
+# Waits up to $Seconds for $Want in what $ReadLog returns.
+function WaitForLog([scriptblock] $ReadLog, [string] $Want, [int] $Seconds = 90) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  do {
+    if ("$(& $ReadLog)".Contains($Want)) { return $true }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+# Input reaches uiapp's views (docs/input.md, docs/graphics.md): Win32 messages
+# posted to its (off-desktop) window, the app's log ($ReadLog) and the window
+# read back with PrintWindow. A click on the Button (its onClick turns the red
+# View cyan); keys typing "Gesher" into the focused EditText, then a WM_CHAR
+# no key types (U+05D0), echoed into the gray TextView; the mouse wheel over
+# the ScrollView; the user resizing the window (below its minimum, then to
+# 600x700), which lays the views out and draws them at the new size.
+# Returns the problems.
+function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
+  $out = @()
+  [GesherWin32]::Click($hwnd, 100, 300)
+  if (-not (WaitForLog $ReadLog 'UiActivity onClick: button')) { $out += 'no onClick' } else {
+    $out += @(WaitRegions $hwnd @(, @('cyan after the click', 0, 0, 400, 200, 0x00ffff)))
+  }
+  [GesherWin32]::TypeKeys($hwnd, 'Gesher')
+  if (-not (WaitForLog $ReadLog 'UiActivity echo: Gesher')) {
+    $m = [regex]::Matches("$(& $ReadLog)", 'UiActivity echo: [^\r\n]*')
+    $out += "no 'UiActivity echo: Gesher' (last: '$(if ($m.Count) { $m[$m.Count - 1].Value })')"
+  } else {
+    [GesherWin32]::Char($hwnd, [char]0x05D0)
+    if (-not (WaitForLog $ReadLog 'UiActivity echo: Gesher\u05d0' 30)) { $out += 'WM_CHAR U+05D0 not echoed' }
+    Start-Sleep 2
+    $px = [GesherWin32]::Capture($hwnd)
+    $dark = [GesherWin32]::Count($px, 0, 600, 400, 680, 0x000000, 100)
+    $edit = [GesherWin32]::Count($px, 0, 520, 400, 600, 0x000000, 100)
+    Write-Host "INFO  typed text: $edit dark pixels in the EditText, $dark in its echo"
+    if ($dark -lt 100) { $out += "echo: $dark dark pixels" }
+    if ($edit -lt 100) { $out += "EditText: $edit dark pixels" }
+  }
+  [GesherWin32]::Wheel($hwnd, 200, 740, -360)
+  if (-not (WaitForLog $ReadLog 'UiActivity scrolled to ' 60)) { $out += 'the wheel did not scroll' } else {
+    Start-Sleep 2
+    $px = [GesherWin32]::Capture($hwnd)
+    $magenta = [GesherWin32]::Count($px, 0, 680, 400, 800, 0xff00ff, 40)
+    $other = [GesherWin32]::Count($px, 0, 680, 400, 800, 0xff8000, 40) + [GesherWin32]::Count($px, 0, 680, 400, 800, 0x800080, 40)
+    Write-Host "INFO  scrolled: $magenta magenta, $other orange and purple pixels of 48000"
+    if ($magenta -gt 24000 -or $other -lt 24000) { $out += "scrolled: $magenta magenta, $other orange and purple pixels" }
+  }
+  # Smaller than the window's minimum (220dp: 220 px at 160 dpi): kept at it.
+  [GesherWin32]::SetClientSize($hwnd, 100, 100)
+  $min = [GesherWin32]::ClientSize($hwnd)
+  Write-Host "INFO  resized to 100x100: the client area is $($min[0])x$($min[1])"
+  if ($min[0] -lt 220 -or $min[1] -lt 220) { $out += "resized below the minimum: $($min[0])x$($min[1])" }
+  elseif (-not (WaitForLog $ReadLog "UiActivity content $($min[0])x$($min[1])" 60)) { $out += "no layout at $($min[0])x$($min[1])" }
+  [GesherWin32]::SetClientSize($hwnd, 600, 700)
+  if (-not (WaitForLog $ReadLog 'UiActivity content 600x700' 60)) { $out += 'no layout at 600x700' } else {
+    $size = [GesherWin32]::ClientSize($hwnd)
+    if ($size[0] -ne 600 -or $size[1] -ne 700) { $out += "client area $($size[0])x$($size[1]) after resizing to 600x700" }
+    else {
+      $out += @(WaitRegions $hwnd @(@('cyan at 600x700', 0, 0, 600, 200, 0x00ffff), @('green at 600x700', 0, 200, 300, 400, 0x00ff00),
+                                    @('blue at 600x700', 300, 200, 600, 400, 0x0000ff)))
+    }
+  }
+  return $out
+}
