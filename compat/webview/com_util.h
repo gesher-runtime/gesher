@@ -130,6 +130,6 @@ Com<I> Callback(REFIID iid, F&& fn) {
   return Com<I>(new H(iid, std::forward<F>(fn)), /*add_ref=*/false);
 }
 
-#define GESHER_CALLBACK(I, fn) ::gesher::webview::Callback<I>(IID_##I, fn)
+#define GESHER_CALLBACK(I, ...) ::gesher::webview::Callback<I>(IID_##I, __VA_ARGS__)
 
 }  // namespace gesher::webview
