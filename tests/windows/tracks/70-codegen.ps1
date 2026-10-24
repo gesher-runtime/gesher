@@ -193,6 +193,19 @@ foreach ($name in @($modes.Keys)) {
   }
 }
 
+# Without placeholder mappings (GESHER_MMAP_NO_PLACEHOLDERS=1, as on Windows
+# before 1803) gesher-base's memfd_create fails for ART (patch 0017), and the
+# JIT takes its single mapping: the stress test still passes under the JIT.
+if ($modes.Contains('jit')) {
+  $r = RunMode ($jitArgs + @('-verbose:jit')) @('gesher.Stress', 'so') @{ GESHER_MMAP_NO_PLACEHOLDERS = '1' }
+  $region = ($r.Out -split "`n" | Where-Object { $_ -match 'Created JitMemoryRegion' } | Select-Object -First 1)
+  if ($r.Exit -eq 0 -and $r.Out.Contains('Stress all passed') -and (ModeOk 'jit' $r.Out) -and $region -notmatch 'non_exec_pages=0x[0-9a-f]*[1-9a-f]') {
+    Write-Host "PASS  codegen: stress test under jit without placeholder mappings (single-mapped JIT code cache)"
+  } else {
+    ReportFailure 'stress test under jit without placeholder mappings' $r
+  }
+}
+
 # JNI stubs (tests/dex-codegen/JniStubs.java, ADR 0036): jni_test.so's natives
 # (tests/native) called 40,000 times a round from two threads. Natives whose
 # shorty a boot image JNI stub has use that AOT stub; under jit the JIT
