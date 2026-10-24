@@ -85,12 +85,16 @@ set_source_files_properties("${_lc}/luni/src/main/native/Register.cpp" PROPERTIE
 
 # --- libopenjdk -------------------------------------------------------------
 libcore_bp_files(_openjdk_srcs libopenjdk_native_srcs)
-# inotify has no Windows equivalent yet; UNIXProcess starts processes with
-# vfork. (epoll is gesher-base's, over its file descriptors.)
+# inotify has no Windows equivalent yet. (epoll is gesher-base's, over its
+# file descriptors.)
 set(GESHER_OPENJDK_UNPORTED
   ojluni/src/main/native/LinuxWatchService.c
-  ojluni/src/main/native/UNIXProcess_md.c
   CACHE STRING "libopenjdk native sources not built yet")
+# UNIXProcess starts processes with vfork and exec: compat/libcore/process.cc
+# replaces it with CreateProcessW (docs/exec.md). (Also out of a list cached
+# by an older configure.)
+list(REMOVE_ITEM GESHER_OPENJDK_UNPORTED ojluni/src/main/native/UNIXProcess_md.c)
+list(REMOVE_ITEM _openjdk_srcs "${_lc}/ojluni/src/main/native/UNIXProcess_md.c")
 foreach(f ${GESHER_OPENJDK_UNPORTED})
   list(REMOVE_ITEM _openjdk_srcs "${_lc}/${f}")
 endforeach()
@@ -117,12 +121,15 @@ set_source_files_properties("${_lc}/ojluni/src/main/native/OnLoad.cpp" PROPERTIE
 # compat/libcore/builtins.cc registers the libraries with gesher-base's
 # dlopen; unported.cc stands in for the registration functions of the
 # sources listed above as not ported.
+# process.cc: UNIXProcess's natives over CreateProcessW and gesher-exec
+# (compat/elf/exec, docs/exec.md).
 add_library(libcore_builtins OBJECT
-  ${CMAKE_SOURCE_DIR}/compat/libcore/builtins.cc ${CMAKE_SOURCE_DIR}/compat/libcore/unported.cc)
-target_link_libraries(libcore_builtins PRIVATE nativehelper)
+  ${CMAKE_SOURCE_DIR}/compat/libcore/builtins.cc ${CMAKE_SOURCE_DIR}/compat/libcore/unported.cc
+  ${CMAKE_SOURCE_DIR}/compat/libcore/process.cc)
+target_link_libraries(libcore_builtins PRIVATE nativehelper gesher_exec_spawn)
 foreach(f ${GESHER_LIBCORE_UNPORTED} ${GESHER_OPENJDK_UNPORTED})
   get_filename_component(_name "${f}" NAME_WE)
   target_compile_definitions(libcore_builtins PRIVATE GESHER_UNPORTED_${_name})
 endforeach()
 target_link_libraries(dalvikvm PRIVATE libcore_builtins libcore_javacore libcore_openjdk
-  art_openjdkjvm icu_jni)
+  art_openjdkjvm icu_jni gesher_exec_spawn)
