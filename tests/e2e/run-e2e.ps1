@@ -338,6 +338,10 @@ if ($null -ne $first) {
 
 $logs = "$env:LOCALAPPDATA\Gesher\logs"
 if (Test-Path $logs) { Copy-Item "$logs\system_server*.log" $OutDir -ErrorAction SilentlyContinue }
+# What the apps asked the system server's stand-ins for that they do not answer yet.
+$serverMisses = [regex]::Matches((ReadText "$logs\system_server.log"), 'stand-in (\S+) not implemented') |
+  ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+Report "INFO  e2e: system_server stand-in methods called but not implemented: $(if ($serverMisses) { $serverMisses -join ', ' } else { 'none' })"
 & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
 Report "INFO  e2e: $($script:failed) unexpected failures"
 exit $(if ($script:failed) { 1 } else { 0 })
