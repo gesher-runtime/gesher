@@ -1,6 +1,7 @@
 // Gesher: a watch on a window's thread. See thread_watch.h.
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -82,6 +83,78 @@ std::string Describe(DWORD64 pc) {
   return line;
 }
 
+
+// Unwinds `thread` (suspended meanwhile) into `pcs`; the frame count.
+int Unwind(HANDLE thread, DWORD64* pcs, int max) {
+  int n = 0;
+  if (SuspendThread(thread) == static_cast<DWORD>(-1)) return 0;
+  CONTEXT context;
+  memset(&context, 0, sizeof(context));
+  context.ContextFlags = CONTEXT_FULL;
+  if (GetThreadContext(thread, &context)) {
+    while (n < max && context.Rip != 0) {
+      pcs[n++] = context.Rip;
+      DWORD64 image_base = 0;
+      PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
+      if (function == nullptr) {
+        // A leaf (or code without unwind data): the return address is on top.
+        if (context.Rsp == 0) break;
+        context.Rip = *reinterpret_cast<const DWORD64*>(static_cast<uintptr_t>(context.Rsp));
+        context.Rsp += 8;
+      } else {
+        void* handler_data = nullptr;
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
+                         &handler_data, &establisher, nullptr);
+      }
+    }
+  }
+  ResumeThread(thread);
+  return n;
+}
+
+// The process's other threads that are in the IME or the text services
+// (what the window's thread may be waiting for).
+void DumpImeThreads(DWORD skip) {
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return;
+  THREADENTRY32 entry;
+  entry.dwSize = sizeof(entry);
+  const DWORD pid = GetCurrentProcessId();
+  const DWORD self = GetCurrentThreadId();
+  for (BOOL ok = Thread32First(snapshot, &entry); ok; ok = Thread32Next(snapshot, &entry)) {
+    if (entry.th32OwnerProcessID != pid || entry.th32ThreadID == self ||
+        entry.th32ThreadID == skip) {
+      continue;
+    }
+    HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                   THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
+    if (thread == nullptr) continue;
+    DWORD64 pcs[48];
+    const int n = Unwind(thread, pcs, 48);
+    CloseHandle(thread);
+    std::string frames[48];
+    bool ime = false;
+    for (int i = 0; i < n; i++) {
+      frames[i] = Describe(pcs[i]);
+      const std::string& f = frames[i];
+      if (f.find("imj") != std::string::npos || f.find("MSCTF") != std::string::npos ||
+          f.find("msctf") != std::string::npos || f.find("imetip") != std::string::npos ||
+          f.find("mscand") != std::string::npos || f.find("IMM32") != std::string::npos) {
+        ime = true;
+      }
+    }
+    if (!ime) continue;
+    fprintf(stderr, "gesher-ime:  thread %lu:%s", static_cast<unsigned long>(entry.th32ThreadID),
+            kNewline);
+    for (int i = 0; i < n; i++) {
+      fprintf(stderr, "gesher-ime:   #%02d %s%s", i, frames[i].c_str(), kNewline);
+    }
+  }
+  CloseHandle(snapshot);
+  fflush(stderr);
+}
+
 }  // namespace
 
 class ThreadWatch {
@@ -127,7 +200,7 @@ class ThreadWatch {
         } else {
           const ULONGLONG waited = now - posted_at;
           if (dumps < 4 && waited >= 5000 + static_cast<ULONGLONG>(dumps) * 60000) {
-            Dump(waited);
+            Dump(waited, dumps == 0);
             dumps++;
           }
         }
@@ -144,34 +217,10 @@ class ThreadWatch {
 
   // The window thread's stack: suspended while its frames are unwound
   // (nothing that takes a lock the thread may hold), described after.
-  void Dump(ULONGLONG waited) {
+  void Dump(ULONGLONG waited, bool first) {
     DWORD64 pcs[64];
-    int n = 0;
     const uint32_t msg = current_msg.load();
-    if (SuspendThread(thread_handle_) != static_cast<DWORD>(-1)) {
-      CONTEXT context;
-      memset(&context, 0, sizeof(context));
-      context.ContextFlags = CONTEXT_FULL;
-      if (GetThreadContext(thread_handle_, &context)) {
-        while (n < 64 && context.Rip != 0) {
-          pcs[n++] = context.Rip;
-          DWORD64 image_base = 0;
-          PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
-          if (function == nullptr) {
-            // A leaf (or code without unwind data): the return address is on top.
-            if (context.Rsp == 0) break;
-            context.Rip = *reinterpret_cast<const DWORD64*>(static_cast<uintptr_t>(context.Rsp));
-            context.Rsp += 8;
-          } else {
-            void* handler_data = nullptr;
-            DWORD64 establisher = 0;
-            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context,
-                             &handler_data, &establisher, nullptr);
-          }
-        }
-      }
-      ResumeThread(thread_handle_);
-    }
+    const int n = Unwind(thread_handle_, pcs, 64);
     fprintf(stderr,
             "gesher-ime: the thread of window \"%s\" has not answered for %llu ms "
             "(in message 0x%x of its procedure; 0: outside it); its stack:%s",
@@ -180,6 +229,7 @@ class ThreadWatch {
       fprintf(stderr, "gesher-ime:   #%02d %s%s", i, Describe(pcs[i]).c_str(), kNewline);
     }
     fflush(stderr);
+    if (first) DumpImeThreads(GetThreadId(thread_handle_));
   }
 
   HWND hwnd_;
