@@ -283,7 +283,24 @@ foreach ($a in $manifestData.apps) {
   }
   # --- Launch with an off-desktop window, check it, use it, close it.
   if (-not $problems) {
-    $r = RunWindow $a "`"$app\gesher-app.cmd`" `"$apk`" --hidden-window" 'launch'
+    # "trace": true: the app's process streams ART's method trace into the results
+    # (GESHER_APP_METHOD_TRACE, docs/services.md), on a device started for it alone.
+    $traceDir = $null
+    if ($a.trace) {
+      & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
+      $traceDir = Join-Path $env:TEMP "gesher-e2e-trace-$pkg"
+      New-Item -ItemType Directory -Force $traceDir | Out-Null
+      $env:GESHER_APP_METHOD_TRACE = ($traceDir -replace '^[A-Za-z]:', '') -replace '\\', '/'
+    }
+    try {
+      $r = RunWindow $a "`"$app\gesher-app.cmd`" `"$apk`" --hidden-window" 'launch'
+    } finally {
+      if ($traceDir) {
+        & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
+        Remove-Item Env:GESHER_APP_METHOD_TRACE -ErrorAction SilentlyContinue
+        Get-ChildItem $traceDir -Filter *.trace -ErrorAction SilentlyContinue | Copy-Item -Destination $OutDir
+      }
+    }
     $problems += $r.Problems
     $info += $r.Info
   }
