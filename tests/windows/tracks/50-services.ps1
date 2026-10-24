@@ -89,7 +89,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'gesher-app: stand-in services in this process: activity, activity_task, display, input_method, notification, package, uimode, user, window',
+  'gesher-app: stand-in services in this process: activity, activity_task, audio, content, display, input, input_method, notification, package, uimode, user, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -297,7 +297,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $missing = @(
   'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'system_server: registered package, activity, activity_task, window, display, user, input_method, notification, uimode',
+  'system_server: registered package, activity, activity_task, window, display, user, input, audio, content, input_method, notification, uimode',
   'system_server: finishing com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity (app-request)'
 ) | Where-Object { -not $serverOut.Contains($_) }
 if (-not $missing) {
