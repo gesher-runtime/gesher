@@ -116,5 +116,27 @@ public class DbActivity extends Activity {
         System.out.println("DbActivity in-memory: " + product);
         System.out.println("DbActivity prefs: committed " + committed + ", name "
                 + again.getString("name", null) + ", launches " + again.getInt("launches", 0));
+
+        // Number and date formats, as list items format their dates (NoNonsense Notes'
+        // DateView: SimpleDateFormat, ICU's NumberFormat service): each step on its own.
+        icu("java.text.NumberFormat", () -> java.text.NumberFormat.getIntegerInstance().format(42));
+        icu("icu NumberFormat", () -> android.icu.text.NumberFormat.getInstance(
+                android.icu.util.ULocale.getDefault(), android.icu.text.NumberFormat.NUMBERSTYLE)
+                .format(1234.5));
+        icu("SimpleDateFormat", () -> new java.text.SimpleDateFormat("yyyy-MM-dd",
+                java.util.Locale.US).format(new java.util.Date(0)));
+        icu("DateFormat.getDateFormat", () -> android.text.format.DateFormat.getDateFormat(this)
+                .format(new java.util.Date(0)));
+        icu("icu DateFormat", () -> android.icu.text.DateFormat.getDateInstance(
+                android.icu.text.DateFormat.MEDIUM).format(new java.util.Date(0)));
+    }
+
+    private static void icu(String step, java.util.concurrent.Callable<String> run) {
+        try {
+            System.out.println("DbActivity format " + step + ": ok " + ascii(run.call()));
+        } catch (Throwable t) {
+            System.out.println("DbActivity format " + step + ": failed " + t);
+            t.printStackTrace(System.out);
+        }
     }
 }
