@@ -95,7 +95,10 @@ public final class WindowMode {
             ServiceManager.addService(Context.INPUT_METHOD_SERVICE,
                     StandIn.of(IInputMethodManager.class, new NoInputMethod()).asBinder());
         }
-        return WindowSession.install(show);
+        WindowSession session = WindowSession.install(show);
+        // Toasts are this process's popups too (no SystemUI draws them).
+        ToastHost.install();
+        return session;
     }
 
     /** input_method with no input method: clients are accepted, nothing is shown. */
