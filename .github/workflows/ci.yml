@@ -124,7 +124,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image]
+    needs: [build, framework, graphics, angle, boot-image, arm64]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -152,6 +152,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: angle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
           path: dist
 
       - uses: actions/download-artifact@v4

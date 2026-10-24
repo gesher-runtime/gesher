@@ -21,15 +21,52 @@ import java.util.zip.ZipFile;
  * loader (docs/native-libs.md).
  */
 public final class NativeLibs {
-    /** The ABI Gesher runs: x86-64 Android code. */
+    /** The ABI Gesher runs natively: x86-64 Android code. */
     public static final String ABI = "x86_64";
+
+    /**
+     * The ABIs Gesher supports, in preference order: x86_64 natively, then
+     * arm64-v8a through the translator (docs/arm64.md, ADR 0047). This is the
+     * order of {@code Build.SUPPORTED_ABIS} / {@code ro.product.cpu.abilist}.
+     */
+    public static final String[] SUPPORTED = {"x86_64", "arm64-v8a"};
 
     private NativeLibs() {
     }
 
-    /** Copies the APK's {@code lib/<ABI>/*.so} into {@code dir}; returns how many. */
+    /**
+     * The best-matching ABI the APK actually ships native code for: the first of
+     * {@link #SUPPORTED} that has a {@code lib/<abi>/*.so} entry, or {@code null}
+     * if the APK has no native code for any of them.
+     */
+    public static String abiFor(String apk) throws IOException {
+        try (ZipFile zip = new ZipFile(apk)) {
+            for (String abi : SUPPORTED) {
+                String prefix = "lib/" + abi + "/";
+                for (Enumeration<? extends ZipEntry> e = zip.entries(); e.hasMoreElements(); ) {
+                    String name = e.nextElement().getName();
+                    if (name.startsWith(prefix) && name.endsWith(".so")
+                            && name.indexOf('/', prefix.length()) < 0) {
+                        return abi;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Copies the APK's native libraries into {@code dir}; returns how many. The
+     * ABI is the APK's best match ({@link #abiFor}); an arm64-v8a-only APK's
+     * libraries are extracted and loaded through the translator, exactly as
+     * x86_64 ones are.
+     */
     public static int extract(String apk, String dir) throws IOException {
-        String prefix = "lib/" + ABI + "/";
+        String abi = abiFor(apk);
+        if (abi == null) {
+            return 0;
+        }
+        String prefix = "lib/" + abi + "/";
         int count = 0;
         byte[] buffer = new byte[64 * 1024];
         try (ZipFile zip = new ZipFile(apk)) {
