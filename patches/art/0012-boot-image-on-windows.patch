@@ -1,0 +1,213 @@
+diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
+index 3adb6b1..bb4ce07 100644
+--- a/runtime/class_linker.cc
++++ b/runtime/class_linker.cc
+@@ -1448,6 +1448,70 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+     }
+   }
+ 
++#if defined(GESHER)
++  // Gesher: the boot image's trampolines (OatWriter's, from the trampoline
++  // compiler) jump through `%gs:offset`, where Thread* is on Linux; on Windows
++  // %gs holds the TEB and Gesher keeps Thread* in a TLS slot (ADR 0006). The
++  // boot image's methods get libart's own stubs instead, which are what the
++  // class linker uses without an image, from here on.
++  {
++    const void* const oat_stubs[] = {
++        quick_resolution_trampoline_, quick_imt_conflict_trampoline_,
++        quick_generic_jni_trampoline_, quick_to_interpreter_bridge_trampoline_,
++        nterp_trampoline_, jni_dlsym_lookup_trampoline_,
++        jni_dlsym_lookup_critical_trampoline_};
++    quick_resolution_trampoline_ = GetQuickResolutionStub();
++    quick_imt_conflict_trampoline_ = GetQuickImtConflictStub();
++    quick_generic_jni_trampoline_ = GetQuickGenericJniStub();
++    quick_to_interpreter_bridge_trampoline_ = GetQuickToInterpreterBridge();
++    nterp_trampoline_ = interpreter::GetNterpEntryPoint();
++    jni_dlsym_lookup_trampoline_ = GetJniDlsymLookupStub();
++    jni_dlsym_lookup_critical_trampoline_ = GetJniDlsymLookupCriticalStub();
++    const void* const runtime_stubs[] = {
++        quick_resolution_trampoline_, quick_imt_conflict_trampoline_,
++        quick_generic_jni_trampoline_, quick_to_interpreter_bridge_trampoline_,
++        nterp_trampoline_, jni_dlsym_lookup_trampoline_,
++        jni_dlsym_lookup_critical_trampoline_};
++    auto runtime_stub = [&](const void* code) {
++      if (code != nullptr) {
++        for (size_t i = 0; i < arraysize(oat_stubs); ++i) {
++          if (code == oat_stubs[i]) {
++            return runtime_stubs[i];
++          }
++        }
++      }
++      return code;
++    };
++    const PointerSize pointer_size = image_pointer_size_;
++    size_t remapped = 0u;
++    for (gc::space::ImageSpace* space : spaces) {
++      space->GetImageHeader().VisitPackedArtMethods(
++          [&](ArtMethod& method) REQUIRES_SHARED(Locks::mutator_lock_) {
++            const void* code = method.GetEntryPointFromQuickCompiledCodePtrSize(pointer_size);
++            const void* stub = runtime_stub(code);
++            if (stub != code) {
++              method.SetEntryPointFromQuickCompiledCodePtrSize(stub, pointer_size);
++              ++remapped;
++            }
++            // Native methods and the resolution method keep a JNI entrypoint
++            // (a dlsym lookup stub) in `data_`; IMT conflict methods keep their
++            // ImtConflictTable there, which matches no stub.
++            if (method.IsNative() || method.IsRuntimeMethod()) {
++              const void* data = method.GetDataPtrSize(pointer_size);
++              const void* data_stub = runtime_stub(data);
++              if (data_stub != data) {
++                method.SetDataPtrSize(data_stub, pointer_size);
++                ++remapped;
++              }
++            }
++          },
++          space->Begin(),
++          pointer_size);
++    }
++    VLOG(image) << "Gesher: " << remapped << " boot image entrypoints point at libart's stubs";
++  }
++#endif  // GESHER
++
+   class_roots_ = GcRoot<mirror::ObjectArray<mirror::Class>>(
+       ObjPtr<mirror::ObjectArray<mirror::Class>>::DownCast(
+           image_header.GetImageRoot(ImageHeader::kClassRoots)));
+diff --git a/runtime/gc/space/image_space.cc b/runtime/gc/space/image_space.cc
+index 042a166..ad5bdb0 100644
+--- a/runtime/gc/space/image_space.cc
++++ b/runtime/gc/space/image_space.cc
+@@ -118,12 +118,37 @@ static int32_t ChooseRelocationOffsetDelta(int32_t min_delta, int32_t max_delta)
+   } else {
+     r = RoundDown(r, kElfSegmentAlignment);
+   }
++#if defined(GESHER)
++  // Gesher: VirtualAlloc reserves address space at 64 KiB boundaries.
++  r = RoundDown(r, 64 * 1024);
++#endif
+   CHECK_LE(min_delta, r);
+   CHECK_GE(max_delta, r);
+   CHECK_ALIGNED(r, kElfSegmentAlignment);
+   return r;
+ }
+ 
++#if defined(GESHER)
++// Gesher: boot images are compiled with bare file names as dex locations
++// (`--dex-location=core-oj.jar`), as where Gesher is installed is not known at
++// compile time, and OatFileBase::Setup gives the dex files their actual paths.
++// An oat file's boot class path of bare names therefore matches the runtime's
++// boot class path locations by file name.
++static std::vector<std::string> GesherBcpLocationsAsCompiled(
++    std::string_view oat_boot_class_path, ArrayRef<const std::string> locations) {
++  std::vector<std::string> result(locations.begin(), locations.end());
++  if (oat_boot_class_path.find('/') == std::string_view::npos) {
++    for (std::string& location : result) {
++      size_t slash_pos = location.rfind('/');
++      if (slash_pos != std::string::npos) {
++        location.erase(0u, slash_pos + 1u);
++      }
++    }
++  }
++  return result;
++}
++#endif  // GESHER
++
+ static int32_t ChooseRelocationOffsetDelta() {
+   return ChooseRelocationOffsetDelta(ART_BASE_ADDRESS_MIN_DELTA, ART_BASE_ADDRESS_MAX_DELTA);
+ }
+@@ -2950,8 +2975,15 @@ class ImageSpace::BootImageLoader {
+           return false;
+         }
+       } else if (dependencies.empty()) {
++#if defined(GESHER)
++        std::vector<std::string> gesher_locations =
++            GesherBcpLocationsAsCompiled(oat_boot_class_path, boot_class_path_locations_);
++        std::string expected_boot_class_path = Join(ArrayRef<const std::string>(
++              gesher_locations).SubArray(0u, component_count), ':');
++#else
+         std::string expected_boot_class_path = Join(ArrayRef<const std::string>(
+               boot_class_path_locations_).SubArray(0u, component_count), ':');
++#endif
+         if (expected_boot_class_path != oat_boot_class_path) {
+           *error_msg = StringPrintf("Failed to match oat boot class path %s to expected "
+                                     "boot class path %s in image %s",
+@@ -3343,13 +3375,34 @@ bool ImageSpace::LoadBootImage(const std::vector<std::string>& boot_class_path,
+     return false;
+   }
+ 
++  Runtime* const runtime = Runtime::Current();
++  const std::vector<std::string>* locations = &image_locations;
++#if defined(GESHER)
++  // Gesher: a lone primary image location also finds the boot image extensions
++  // next to it (boot-framework.art for framework.jar, ...), as if `<dir>/*`
++  // followed it: launchers and tests name only boot.art, whatever their boot
++  // class path (docs/boot-image.md).
++  std::vector<std::string> with_extensions;
++  if (runtime != nullptr && !runtime->IsAotCompiler() && image_locations.size() == 1u &&
++      image_locations[0].find_first_of("*!") == std::string::npos) {
++    size_t slash_pos = image_locations[0].rfind('/');
++    if (slash_pos != std::string::npos) {
++      with_extensions = image_locations;
++      with_extensions.push_back(image_locations[0].substr(0u, slash_pos + 1u) + "*");
++      locations = &with_extensions;
++    }
++  }
++  const bool gesher_require = runtime != nullptr && !runtime->IsAotCompiler() &&
++                              getenv("GESHER_REQUIRE_BOOT_IMAGE") != nullptr;
++#endif  // GESHER
++
+   BootImageLoader loader(boot_class_path,
+                          boot_class_path_locations,
+                          boot_class_path_files,
+                          boot_class_path_image_files,
+                          boot_class_path_vdex_files,
+                          boot_class_path_odex_files,
+-                         image_locations,
++                         *locations,
+                          image_isa,
+                          relocate,
+                          executable,
+@@ -3362,12 +3415,30 @@ bool ImageSpace::LoadBootImage(const std::vector<std::string>& boot_class_path,
+                             boot_image_spaces,
+                             extra_reservation,
+                             &error_msg)) {
++#if defined(GESHER)
++    if (gesher_require) {
++      // GESHER_REQUIRE_BOOT_IMAGE: say what was loaded (tests check it).
++      std::vector<std::string> names;
++      for (const std::unique_ptr<ImageSpace>& space : *boot_image_spaces) {
++        std::string name = space->GetImageFilename();
++        names.push_back(name.substr(name.rfind('/') + 1u));
++      }
++      LOG(INFO) << "gesher: boot image loaded: " << boot_image_spaces->size() << " spaces ("
++                << Join(names, ' ') << ")";
++    }
++#endif  // GESHER
+     return true;
+   }
+   LOG(ERROR) << "Could not create image space with image file '"
+-             << Join(image_locations, kComponentSeparator)
++             << Join(*locations, kComponentSeparator)
+              << "'. Attempting to fall back to imageless running. Error was: "
+              << error_msg;
++#if defined(GESHER)
++  // GESHER_REQUIRE_BOOT_IMAGE: a run that must use the boot image fails instead.
++  if (gesher_require) {
++    LOG(FATAL) << "gesher: GESHER_REQUIRE_BOOT_IMAGE is set and the boot image did not load";
++  }
++#endif  // GESHER
+ 
+   return false;
+ }
+@@ -3599,6 +3670,11 @@ size_t ImageSpace::CheckAndCountBCPComponents(std::string_view oat_boot_class_pa
+                                          ArrayRef<const std::string> boot_class_path,
+                                          /*out*/std::string* error_msg) {
+   // Check that the oat BCP is a prefix of current BCP locations and count components.
++#if defined(GESHER)
++  std::vector<std::string> gesher_locations =
++      GesherBcpLocationsAsCompiled(oat_boot_class_path, boot_class_path);
++  boot_class_path = ArrayRef<const std::string>(gesher_locations);
++#endif
+   size_t component_count = 0u;
+   std::string_view remaining_bcp(oat_boot_class_path);
+   bool bcp_ok = false;
