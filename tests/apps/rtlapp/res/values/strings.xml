@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher RTL</string>
+    <string name="activity_label">Gesher RTL test</string>
+    <string name="direction">ltr</string>
+</resources>
