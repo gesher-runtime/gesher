@@ -406,7 +406,8 @@ struct ImeWindow::Impl {
       default:
         if (msg == UpdateMessage()) {
           if (wparam == kOpShowKeyboard || wparam == kOpHideKeyboard) {
-            return static_cast<LRESULT>(ShowTouchKeyboard(hwnd, wparam == kOpShowKeyboard));
+            const bool show = wparam == kOpShowKeyboard;
+            return static_cast<LRESULT>(input::ShowTouchKeyboard(hwnd, show));
           }
           Apply(static_cast<int>(wparam));
           return 0;
