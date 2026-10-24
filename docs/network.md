@@ -187,8 +187,8 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (handoff checkpoint, 2026-10-25)
 
-**Branch** `wip/net` (worktree C:/work/gesher-net), code tip 44a2e95.
-**No commit is CI-verified green yet.**
+**Branch** `wip/net` (worktree C:/work/gesher-net), tip cfb2d2e (f8bdfc8 + a merge
+of origin/phase4/integration at 5561615). **No commit is CI-verified green yet.**
 
 Done (all written, compiled in CI, run-time untested on Windows): BoringSSL,
 NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle (in core-libart),
@@ -197,22 +197,22 @@ callbacks, the INTERNET / ACCESS_NETWORK_STATE gates, tests (tracks/56-net.ps1,
 tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
 
 **CI so far**
-- net.yml (compile-only, push-triggered on wip/net): run 40128266078 (b3cca77)
-  green: BoringSSL, Conscrypt natives, NativeBN and the boot jars with the
-  networking libraries (1946 classes into core-libart). Run 40129516302
-  (56b94a7) green (objects only, no link).
-- ci 40114623277 (ecf8df9): build failed (Conscrypt compile errors; fixed b3cca77).
-- ci 40129516691 (56b94a7): dalvikvm link failed: duplicate `inet_ntop` /
-  `inet_pton` (ws2_32's, via InetNtopA/InetPtonA in windows_networks.cc);
-  fixed in 44a2e95.
-- ci **40133972018** (44a2e95): build, framework, boot-image, package and e2e
-  jobs passed (installer ships it; the five F-Droid apps still pass). The two
-  test jobs were still running when last seen; `gh run watch --exit-status`
-  then exited 1, so some job failed, most likely a test job. Logs NOT read yet
-  (GitHub API rate limit). No runs in flight from this track besides that one.
+- net.yml (compile-only, push-triggered on wip/net): runs 40128266078 (b3cca77)
+  and 40129516302 (56b94a7) green.
+- ci 40114623277 (ecf8df9): Conscrypt compile errors (fixed b3cca77).
+- ci 40129516691 (56b94a7): duplicate `inet_ntop` / `inet_pton` at the dalvikvm
+  link (fixed 44a2e95).
+- ci 40133972018 (44a2e95): build, framework, boot-image, package and e2e green.
+  Both test jobs ended after ~48 min with "The hosted runner lost communication
+  with the server"; no logs survived. Cause (most likely): the connectivity
+  change step ran `New-NetIPAddress 192.0.2.77` on the runner's DHCP adapter,
+  and a static IPv4 address turns the adapter's DHCP off, cutting the runner
+  off. Fixed in f8bdfc8: the test adds 2001:db8::77 (IPv6, SkipAsSource,
+  ActiveStore) and turns DHCPv4 back on should it find it off.
+- ci **40138810234** (cfb2d2e): running.
 
 **Next, exactly**
-1. Read run 40133972018's test logs (`gh run view 40133972018 -R
+1. Read run 40138810234's test logs (`gh run view 40138810234 -R
    gesher-runtime/gesher --log-failed`): the `PASS|FAIL|INFO  net:` lines of
    tracks/56-net.ps1 and any other track's FAIL (core-libart now carries
    Conscrypt/OkHttp/BC; Digests.install defers to Conscrypt; `connectivity` is
@@ -230,6 +230,8 @@ tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
    so once its log shows it. No new F-Droid pin was added.
 
 **Pitfalls**
+- Never change the runner's IPv4 configuration in a test (no static IPv4
+  address on its adapter): the runner loses GitHub and the job's logs.
 - Win32-side code must not reference ws2_32 functions named like gesher-base's
   (send, recv, connect, inet_ntop, inet_pton...): duplicate symbols at the
   dalvikvm link (ADR 0009). BoringSSL is built with OPENSSL_NO_SOCK for this.
