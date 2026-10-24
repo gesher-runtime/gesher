@@ -218,9 +218,24 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
       fprintf(stderr, "Win32Surface: frame %llu: %zu of %zu pixels drawn (%dx%d, format %d)\n",
               static_cast<unsigned long long>(frames_ + 1), drawn, buffer_->pixels.size(),
               buffer_->width, buffer_->height, buffer_->format);
+      // A few pixels (RGBA words, R in the low byte) across the buffer.
+      for (int i = 1; i <= 7; i++) {
+        int x = buffer_->width / 4, y = buffer_->height * i / 8;
+        fprintf(stderr, "Win32Surface:   (%d,%d) %08x\n", x, y,
+                buffer_->pixels[static_cast<size_t>(y) * buffer_->stride + x]);
+      }
     }
   }
   Present();
+  if (getenv("GESHER_WINDOW_DEBUG") != nullptr && frames_ <= 4) {
+    std::vector<uint32_t> shown;
+    int w = 0, h = 0;
+    window_->ReadBackBuffer(&shown, &w, &h);
+    if (w > 0 && h > 0) {
+      fprintf(stderr, "Win32Surface:   the window's back buffer %dx%d, (%d,%d) %08x (BGRA)\n", w, h,
+              w / 4, h / 8, shown[static_cast<size_t>(h / 8) * w + w / 4]);
+    }
+  }
   return 0;
 }
 
