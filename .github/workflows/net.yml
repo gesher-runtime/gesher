@@ -39,7 +39,7 @@ jobs:
           ccache-key: runtime
 
       - name: Compile the networking natives
-        run: ninja -C out -k 0 boringssl_ssl conscrypt_jni gesher_net_natives libcore_javacore gesher_posix
+        run: ninja -C out -k 0 boringssl_ssl conscrypt_jni gesher_net_natives libcore_javacore gesher_posix dalvikvm
 
       - uses: actions/setup-java@v4
         with:
