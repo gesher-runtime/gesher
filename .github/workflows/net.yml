@@ -1,0 +1,50 @@
+name: net
+
+# The networking pieces on their own (docs/network.md), for quick feedback on the
+# net track's branch: BoringSSL, Conscrypt's natives and libcore's NativeBN compiled
+# for Windows (ninja -k 0, every error at once), and the boot jars with Conscrypt,
+# OkHttp and BouncyCastle (tools/build-boot-jars.sh). ci.yml builds and tests all of
+# it; this workflow only compiles.
+on:
+  push:
+    branches: ['wip/net']
+    paths:
+      - 'cmake/aosp/boringssl.cmake'
+      - 'cmake/aosp/conscrypt.cmake'
+      - 'compat/net/**'
+      - 'patches/external/conscrypt/**'
+      - 'tools/net/**'
+      - '.github/workflows/net.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: net-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+
+      - name: Compile the networking natives
+        run: ninja -C out -k 0 boringssl_ssl conscrypt_jni libcore_javacore
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Boot jars with the networking libraries
+        run: tools/build-boot-jars.sh out/boot-jars
