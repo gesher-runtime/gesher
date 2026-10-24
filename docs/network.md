@@ -185,13 +185,81 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
 - Captive portals are not detected.
 
-## Status and next steps
+## Status and next steps (handoff checkpoint, 2026-10-25)
 
-See the end of this file's history and ADR 0037; updated with each push.
+**Branch** `wip/net` (worktree C:/work/gesher-net), code tip 44a2e95.
+**No commit is CI-verified green yet.**
 
-**2026-10-24.** First pass pushed: BoringSSL, NativeBN, Conscrypt (natives and
-Java), OkHttp, BouncyCastle, the Windows trust store, the connectivity service
-and android.net, the INTERNET gate, tests. net.yml run 40128266078 compiled
-BoringSSL, Conscrypt's natives and the boot jars with the networking
-libraries (1946 classes). Full ci: run 40129516691 (pending at the time of
-writing).
+Done (all written, compiled in CI, run-time untested on Windows): BoringSSL,
+NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle (in core-libart),
+the Windows trust store sync, ConnectivityService + android.net classes +
+callbacks, the INTERNET / ACCESS_NETWORK_STATE gates, tests (tracks/56-net.ps1,
+tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
+
+**CI so far**
+- net.yml (compile-only, push-triggered on wip/net): run 40128266078 (b3cca77)
+  green: BoringSSL, Conscrypt natives, NativeBN and the boot jars with the
+  networking libraries (1946 classes into core-libart). Run 40129516302
+  (56b94a7) green (objects only, no link).
+- ci 40114623277 (ecf8df9): build failed (Conscrypt compile errors; fixed b3cca77).
+- ci 40129516691 (56b94a7): dalvikvm link failed: duplicate `inet_ntop` /
+  `inet_pton` (ws2_32's, via InetNtopA/InetPtonA in windows_networks.cc);
+  fixed in 44a2e95.
+- ci **40133972018** (44a2e95): build, framework, boot-image, package and e2e
+  jobs passed (installer ships it; the five F-Droid apps still pass). The two
+  test jobs were still running when last seen; `gh run watch --exit-status`
+  then exited 1, so some job failed, most likely a test job. Logs NOT read yet
+  (GitHub API rate limit). No runs in flight from this track besides that one.
+
+**Next, exactly**
+1. Read run 40133972018's test logs (`gh run view 40133972018 -R
+   gesher-runtime/gesher --log-failed`): the `PASS|FAIL|INFO  net:` lines of
+   tracks/56-net.ps1 and any other track's FAIL (core-libart now carries
+   Conscrypt/OkHttp/BC; Digests.install defers to Conscrypt; `connectivity` is
+   now registered, so ActivityThread's `cm.getDefaultProxy()` path runs;
+   gesher-base refuses inet sockets when GESHER_INET=0).
+2. Fix, push, rerun ci (`gh workflow run ci -R gesher-runtime/gesher --ref
+   wip/net`; watch with `gh run watch <id> --exit-status --interval 120`, no
+   polling loops: the API rate limit is shared by all agents).
+3. When both test jobs and the package job are green: add a Phase 5
+   networking checklist to docs/roadmap.md (sockets/DNS, BoringSSL+NativeBN,
+   Conscrypt+OkHttp+BC, Windows trust store, ConnectivityManager + callbacks,
+   permissions) quoting the run id and PASS lines; update this section.
+4. Optional: Currency (org.billthefarmer.currency, already in
+   tests/e2e/apps.json) now fetches its rates over HTTPS; docs/e2e.md could say
+   so once its log shows it. No new F-Droid pin was added.
+
+**Pitfalls**
+- Win32-side code must not reference ws2_32 functions named like gesher-base's
+  (send, recv, connect, inet_ntop, inet_pton...): duplicate symbols at the
+  dalvikvm link (ADR 0009). BoringSSL is built with OPENSSL_NO_SOCK for this.
+- `<wincrypt.h>` defines X509_NAME etc.; trust_store.cc #undefs them.
+- Conscrypt natives need System V thunks (patch 0001,
+  NATIVEHELPER_SYSV_JNI_ENTRY) and are compiled with GESHER, not ANDROID.
+- Local checks: app/java compiles against the framework-classes artifact
+  used as a jar (its class dir has case-colliding names on Windows), JDK 21.
+- Untried at run time: the cacerts sync (drive-less $ANDROID_ROOT as a Win32
+  path), NLM COM in the system server, ConnectivityService.caller() (pid to
+  package), IConnectivity over gesher's binder, New-NetIPAddress on the runner,
+  badssl.com reachability.
+
+**Edits outside the domain (all additive)**
+- CMakeLists.txt: includes boringssl.cmake and conscrypt.cmake.
+- cmake/aosp/libcore_native.cmake: NativeBN no longer unported; libcore_javacore
+  links boringssl_crypto.
+- aosp.lock: external/boringssl added; conscrypt, bouncycastle, okhttp sparse
+  sets widened.
+- tools/build-boot-jars.sh: runs tools/net/net-java.sh, compiles the net list,
+  dexes it into core-libart.jar (not into the coremod).
+- tests/build-test-apps.sh: builds tests/dex-net.
+- .github/workflows/ci.yml: build job runs tools/net/collect.sh (cacerts,
+  NET-NOTICES.txt).
+- .github/workflows/framework.yml: builds and collects netapp.apk, nonetapp.apk.
+- tools/package/gesher.iss: ships cacerts/ and licenses/NET-NOTICES.txt.
+- app/java/com/gesher/app/Digests.java: install() steps aside with Conscrypt.
+- app/java/com/gesher/app/Main.java: applies the INTERNET permission (2 calls).
+- app/java/com/gesher/server/Services.java: one line registering ConnectivityService.
+- app/java/com/gesher/server/SystemServer.java: GESHER_INET=0 for packages
+  without INTERNET (3 lines).
+- compat/posix/src/socket.cc, netdb.cc, include/gesher/inet.h: the INTERNET gate.
+- Own new workflow .github/workflows/net.yml (push to wip/net only).
