@@ -5,14 +5,37 @@ name: media
 # framework-classes artifact) with the lifecycle app's build script. The
 # natives themselves (compat/media) are in dalvikvm, built by the build job;
 # the Windows test job runs tests/windows/tracks/38-media.ps1 on both.
+#
+# On its own (gh workflow run media --ref <branch>) it builds the AOSP
+# extractors and codecs (cmake/aosp/media_codecs.cmake) with ninja -k 0, to
+# see every error of a port at once.
 on:
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
 jobs:
+  codecs:
+    if: github.event_name == 'workflow_dispatch' && github.workflow == 'media'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: media-codecs
+
+      - name: Build the extractors and codecs
+        run: ninja -C out -k 0 media_codecs_all
+
   media:
+    if: github.workflow != 'media'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
