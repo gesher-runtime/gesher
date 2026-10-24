@@ -85,6 +85,9 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager \
   android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService
+# The framework's app-compat changes (@ChangeId fields), for bindApplication's
+# disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md).
+java -cp "$gencp" "$(native "$root/app/gen/CompatChangesGen.java")" "$(native "$framework")"   "$(native "$work/gen")" com.gesher.server.gen
 
 mkdir -p "$work/classes"
 find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"

@@ -334,7 +334,7 @@ public final class ActivityManagerService extends IActivityManager.Default {
                 DeviceProfile.configuration(), CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO,
                 null /* services */, coreSettings, "unknown" /* buildSerial */,
                 null /* autofillOptions */, null /* contentCaptureOptions */,
-                new long[0] /* disabledCompatChanges */, new long[0] /* loggableCompatChanges */,
+                CompatChanges.disabledFor(ai.targetSdkVersion), new long[0] /* loggableCompatChanges */,
                 false /* logChangeChecksToStatsD */, null /* serializedSystemFontMap */,
                 sharedMemory, SystemClock.elapsedRealtime(), SystemClock.uptimeMillis());
         if (!(thread.asBinder() instanceof Binder)) {
