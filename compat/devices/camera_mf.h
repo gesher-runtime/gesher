@@ -34,6 +34,7 @@ class Capture {
   // there is one. S_OK, or the failure.
   virtual HRESULT Read(uint8_t* nv12) = 0;
   int width = 0, height = 0;
+  const char* via = "";  // how frames are read, for the logs
 };
 
 // Opens `id` at the offered size nearest to width x height.

@@ -9,6 +9,7 @@
 //   and com.gesher.server.CameraFrames (camera_frames.cc).
 
 #include <jni.h>
+#include <log/log.h>
 #include <nativehelper/JNIHelp.h>
 #include <nativehelper/scoped_local_ref.h>
 #include <nativehelper/scoped_utf_chars.h>
@@ -117,6 +118,13 @@ jlong WindowsCamera_open(JNIEnv* env, jclass, jstring id, jint width, jint heigh
   if (chars.c_str() == nullptr) return 0;
   HRESULT hr = S_OK;
   std::unique_ptr<cam::Capture> capture = cam::Open(chars.c_str(), width, height, &hr);
+  if (capture) {
+    ALOGI("camera: opened %s at %dx%d through %s", chars.c_str(), capture->width,
+          capture->height, capture->via);
+  } else {
+    ALOGI("camera: opening %s failed: HRESULT 0x%08lX", chars.c_str(),
+          static_cast<unsigned long>(hr));
+  }
   jint values[3] = {capture ? capture->width : 0, capture ? capture->height : 0,
                     static_cast<jint>(hr)};
   if (out != nullptr && env->GetArrayLength(out) >= 3) env->SetIntArrayRegion(out, 0, 3, values);
