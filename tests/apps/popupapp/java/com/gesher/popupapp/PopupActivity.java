@@ -24,8 +24,6 @@ import android.widget.ListView;
 import android.widget.Spinner;
 import android.widget.Toast;
 
-import java.util.HashSet;
-import java.util.Set;
 
 /**
  * The popups test app (tests/windows/tracks/36-popups.ps1): buttons that open an
@@ -38,7 +36,7 @@ public class PopupActivity extends Activity {
     private static final String TAG = "PopupActivity";
 
     private final Handler mHandler = new Handler(Looper.getMainLooper());
-    private final Set<Integer> mReportedItems = new HashSet<>();
+    private String mLaidOut;
 
     static void say(String message) {
         System.out.println(message);
@@ -53,33 +51,45 @@ public class PopupActivity extends Activity {
         return (at[0] + v.getWidth() / 2) + "," + (at[1] + v.getHeight() / 2);
     }
 
+    private static String top(View v) {
+        if (v == null) return "none";
+        int[] at = new int[2];
+        v.getLocationOnScreen(at);
+        return at[0] + "," + at[1] + " " + v.getWidth() + "x" + v.getHeight()
+                + (v.getParent() instanceof View ? " in " + v.getParent().getClass().getSimpleName()
+                        + " padding top " + ((View) v.getParent()).getPaddingTop() : "");
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.main);
         final View content = findViewById(android.R.id.content);
-        content.getViewTreeObserver().addOnGlobalLayoutListener(
-                new ViewTreeObserver.OnGlobalLayoutListener() {
-                    @Override
-                    public void onGlobalLayout() {
-                        if (content.getWidth() == 0) return;
-                        content.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-                        View red = findViewById(R.id.red);
-                        int[] at = new int[2];
-                        red.getLocationOnScreen(at);
-                        say("PopupActivity laid out: dialog at " + center(findViewById(R.id.dialog))
-                                + ", toast at " + center(findViewById(R.id.toast))
-                                + ", menu at " + center(findViewById(R.id.menu))
-                                + ", spinner at " + center(findViewById(R.id.spinner))
-                                + ", dialog activity at "
-                                + center(findViewById(R.id.dialog_activity))
-                                + ", second at " + center(findViewById(R.id.second))
-                                + ", red " + at[0] + "," + at[1] + "," + (at[0] + red.getWidth())
-                                + "," + (at[1] + red.getHeight()) + ", action bar "
-                                + (getActionBar() != null && getActionBar().isShowing()
-                                        ? getActionBar().getHeight() : -1));
-                    }
-                });
+        // Where the views are, each time that changes (the action bar's insets come in a
+        // later layout pass than the first).
+        content.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
+            if (content.getWidth() == 0) return;
+            View red = findViewById(R.id.red);
+            int[] at = new int[2];
+            red.getLocationOnScreen(at);
+            String where = "dialog at " + center(findViewById(R.id.dialog))
+                    + ", toast at " + center(findViewById(R.id.toast))
+                    + ", menu at " + center(findViewById(R.id.menu))
+                    + ", spinner at " + center(findViewById(R.id.spinner))
+                    + ", dialog activity at " + center(findViewById(R.id.dialog_activity))
+                    + ", second at " + center(findViewById(R.id.second))
+                    + ", red " + at[0] + "," + at[1] + "," + (at[0] + red.getWidth()) + ","
+                    + (at[1] + red.getHeight()) + ", action bar "
+                    + (getActionBar() != null && getActionBar().isShowing()
+                            ? getActionBar().getHeight() : -1)
+                    + ", content at " + top(content) + ", action bar container at "
+                    + top(getWindow().getDecorView().findViewById(getResources().getIdentifier(
+                            "action_bar_container", "id", "android")));
+            if (!where.equals(mLaidOut)) {
+                mLaidOut = where;
+                say("PopupActivity laid out: " + where);
+            }
+        });
         ((Button) findViewById(R.id.dialog)).setOnClickListener(v -> showDialog());
         findViewById(R.id.toast).setOnClickListener(v -> {
             Toast.makeText(this, "Gesher toast", Toast.LENGTH_SHORT).show();
@@ -88,7 +98,7 @@ public class PopupActivity extends Activity {
         findViewById(R.id.menu).setOnClickListener(v -> {
             openOptionsMenu();
             say("PopupActivity options menu requested");
-            findMenu(50);
+            findList("menu item", 0, 50);
         });
         findViewById(R.id.dialog_activity).setOnClickListener(
                 v -> startActivity(new Intent(this, DialogActivity.class)));
@@ -97,19 +107,7 @@ public class PopupActivity extends Activity {
         Spinner spinner = findViewById(R.id.spinner);
         ArrayAdapter<CharSequence> adapter = new ArrayAdapter<CharSequence>(this,
                 android.R.layout.simple_spinner_item,
-                getResources().getTextArray(R.array.choices)) {
-            @Override
-            public View getDropDownView(int position, View convertView, ViewGroup parent) {
-                final View v = super.getDropDownView(position, convertView, parent);
-                v.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> {
-                    if (r > l && mReportedItems.add(position)) {
-                        view.post(() -> say("PopupActivity dropdown item " + position + " at "
-                                + center(view)));
-                    }
-                });
-                return v;
-            }
-        };
+                getResources().getTextArray(R.array.choices));
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(adapter);
         spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -123,7 +121,9 @@ public class PopupActivity extends Activity {
             }
         });
         spinner.setOnTouchListener((v, e) -> {
-            mReportedItems.clear();
+            if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                mHandler.postDelayed(() -> findList("dropdown item 1", 1, 50), 200);
+            }
             return false;
         });
         say("PopupActivity onCreate");
@@ -156,17 +156,21 @@ public class PopupActivity extends Activity {
         say("PopupActivity dialog requested");
     }
 
-    /** Reports where the overflow menu's first item is, once it is laid out. */
-    private void findMenu(int tries) {
+    /**
+     * Reports where item {@code index} of a list in another window (a menu's, a dropdown's)
+     * is, once it is laid out there.
+     */
+    private void findList(String what, int index, int tries) {
         for (View root : WindowManagerGlobal.getInstance().getWindowViews()) {
-            if (root == getWindow().getDecorView()) continue;
+            if (root == getWindow().getDecorView() || !root.isAttachedToWindow()) continue;
             ListView list = findList(root);
-            if (list != null && list.getChildCount() > 0 && list.getChildAt(0).getWidth() > 0) {
-                say("PopupActivity menu item at " + center(list.getChildAt(0)));
+            if (list != null && list.getChildCount() > index
+                    && list.getChildAt(index).getWidth() > 0) {
+                say("PopupActivity " + what + " at " + center(list.getChildAt(index)));
                 return;
             }
         }
-        if (tries > 0) mHandler.postDelayed(() -> findMenu(tries - 1), 200);
+        if (tries > 0) mHandler.postDelayed(() -> findList(what, index, tries - 1), 200);
     }
 
     private static ListView findList(View v) {

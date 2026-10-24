@@ -244,11 +244,21 @@ void Window::SetTranslucent(bool translucent) {
 }
 
 void Window::SetNoActivate(bool no_activate, bool passthrough) {
+  no_activate_ = no_activate;
+  passthrough_ = passthrough;
+  // The window's thread sets its extended style (PresentLayered sets it too: one writer).
+  PostMessageW(static_cast<HWND>(hwnd_), kMsgApplyStyle, 0, 0);
+}
+
+void Window::ApplyExStyle() {
   HWND hwnd = static_cast<HWND>(hwnd_);
+  const LONG_PTR managed = WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED;
   LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-  ex = no_activate ? (ex | WS_EX_NOACTIVATE) : (ex & ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE));
-  ex = passthrough ? (ex | WS_EX_TRANSPARENT) : (ex & ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT));
-  SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+  LONG_PTR want = ex & ~managed;
+  if (no_activate_) want |= WS_EX_NOACTIVATE;
+  if (passthrough_) want |= WS_EX_TRANSPARENT;
+  if (layered_) want |= WS_EX_LAYERED;
+  if (want != ex) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
 }
 
 void Window::SetDim(float amount) {
@@ -301,16 +311,15 @@ void Window::PresentLayered() {
   HWND hwnd = static_cast<HWND>(hwnd_);
   if (!translucent_) {
     if (layered_) {
-      SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
-                        GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_LAYERED));
       layered_ = false;
+      ApplyExStyle();
       RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
     }
     return;
   }
   if (!layered_) {
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
     layered_ = true;
+    ApplyExStyle();
   }
   std::lock_guard<std::mutex> lock(buffer_mutex_);
   const int w = buffer_width_, h = buffer_height_;
@@ -356,6 +365,10 @@ bool Window::HandlePopupMessage(unsigned msg, uintptr_t wparam, intptr_t lparam,
       *result = 0;
       return true;
     }
+    case kMsgApplyStyle:
+      ApplyExStyle();
+      *result = 0;
+      return true;
     case kMsgActivate: {
       HWND hwnd = static_cast<HWND>(hwnd_);
       SetForegroundWindow(hwnd);

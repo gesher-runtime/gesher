@@ -68,7 +68,7 @@ function LogPoint([string] $Text, [string] $Pattern) {
 
 # The popups shown so far: @{Title; Hwnd; Parent} in order.
 function PopupsShown([string] $Text) {
-  foreach ($m in [regex]::Matches($Text, 'window "([^"]*)" shown as a popup of "([^"]*)" at [^,]*, hwnd 0x([0-9a-f]+)')) {
+  foreach ($m in [regex]::Matches($Text, 'window "([^"]*)" shown as a popup of "([^"]*)" at \S+, hwnd 0x([0-9a-f]+)')) {
     [pscustomobject]@{ Title = $m.Groups[1].Value; Parent = $m.Groups[2].Value; Hwnd = [IntPtr][Convert]::ToInt64($m.Groups[3].Value, 16) }
   }
 }
@@ -156,6 +156,7 @@ function WaitRed([IntPtr] $app, $red, [int] $r, [int] $Seconds = 30) {
 function PopupAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Device) {
   $out = @()
   if (-not (WaitForLog $ReadLog 'PopupActivity laid out')) { return @('no layout report') }
+  Start-Sleep 2  # the last layout report counts (LogPoint takes the last match)
   $text = "$(& $ReadLog)"
   $dialogAt = LogPoint $text 'laid out: dialog at (\d+),(\d+)'
   $toastAt = LogPoint $text 'toast at (\d+),(\d+)'
@@ -163,7 +164,7 @@ function PopupAppScenario([IntPtr] $app, [scriptblock] $ReadLog, [switch] $Devic
   $spinnerAt = LogPoint $text 'spinner at (\d+),(\d+)'
   $dialogActivityAt = LogPoint $text 'dialog activity at (\d+),(\d+)'
   $secondAt = LogPoint $text 'second at (\d+),(\d+)'
-  $m = [regex]::Match($text, 'red (\d+),(\d+),(\d+),(\d+)')
+  $m = [regex]::Matches($text, 'red (\d+),(\d+),(\d+),(\d+)') | Select-Object -Last 1
   $red = @([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, [int]$m.Groups[3].Value, [int]$m.Groups[4].Value)
   # The red View, inset a little (antialiased edges).
   $red = @(($red[0] + 4), ($red[1] + 4), ($red[2] - 4), ($red[3] - 4))
@@ -367,6 +368,8 @@ $popupsExpect = @('PopupActivity onResume', 'Win32 popup 0x', 'PopupActivity dia
 PopupAppCheck "$popupsName (single process)" `
   @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/popupapp.apk")) `
   -Expect (@($popupsExpect) + 'gesher-app: done')
+
+if ($env:GESHER_POPUPS_SINGLE_ONLY) { return }  # a local run of the single process only
 
 # 2. The Gesher device (its own data and logs, like 34-windows.ps1): also an
 #    Activity with a dialog theme and a second Activity in the task.
