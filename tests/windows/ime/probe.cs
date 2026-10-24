@@ -28,6 +28,23 @@ public static class ImeProbe {
   [DllImport("user32.dll")] static extern uint MapVirtualKeyW(uint code, uint type);
   [DllImport("user32.dll")] static extern int GetKeyboardLayoutList(int n, IntPtr[] list);
   [DllImport("user32.dll")] static extern IntPtr GetFocus();
+  [DllImport("user32.dll")] static extern bool CreateCaret(IntPtr h, IntPtr bmp, int w, int hgt);
+  [DllImport("user32.dll")] static extern bool SetCaretPos(int x, int y);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] struct COMPOSITIONFORM { public uint style; public POINT pt; public RECT area; }
+  [StructLayout(LayoutKind.Sequential)] struct CANDIDATEFORM { public uint index, style; public POINT pt; public RECT area; }
+  [StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO { public int cbSize; public uint flags; public IntPtr active, focus, capture, menuOwner, moveSize, caret; public RECT rcCaret; }
+  [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint tid, ref GUITHREADINFO info);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
+  [DllImport("imm32.dll")] static extern bool ImmSetCompositionWindow(IntPtr c, ref COMPOSITIONFORM f);
+  [DllImport("imm32.dll")] static extern bool ImmSetCandidateWindow(IntPtr c, ref CANDIDATEFORM f);
   [DllImport("imm32.dll")] static extern IntPtr ImmGetContext(IntPtr h);
   [DllImport("imm32.dll")] static extern bool ImmReleaseContext(IntPtr h, IntPtr c);
   [DllImport("imm32.dll", CharSet = CharSet.Unicode)] static extern bool ImmSetCompositionStringW(IntPtr c, uint index, string comp, int len, string read, int rlen);
@@ -85,6 +102,15 @@ public static class ImeProbe {
         IntPtr c = ImmGetContext(h);
         L("SetOpenStatus: " + ImmSetOpenStatus(c, true) + " open " + ImmGetOpenStatus(c));
         if (w != IntPtr.Zero) L("SetConversionStatus: " + ImmSetConversionStatus(c, (uint) w.ToInt64(), 0));
+        ImmReleaseContext(h, c);
+        return IntPtr.Zero; }
+      case 0x0400 + 5: {
+        L("CreateCaret " + CreateCaret(h, IntPtr.Zero, 2, 30) + " SetCaretPos " + SetCaretPos(150, 60));
+        IntPtr c = ImmGetContext(h);
+        var cf = new COMPOSITIONFORM { style = 2 /* CFS_POINT */, pt = new POINT { X = 150, Y = 60 } };
+        var cand = new CANDIDATEFORM { index = 0, style = 0x80 /* CFS_EXCLUDE */, pt = new POINT { X = 150, Y = 90 },
+                                       area = new RECT { Left = 150, Top = 60, Right = 152, Bottom = 90 } };
+        L("ImmSetCompositionWindow " + ImmSetCompositionWindow(c, ref cf) + " ImmSetCandidateWindow " + ImmSetCandidateWindow(c, ref cand));
         ImmReleaseContext(h, c);
         return IntPtr.Zero; }
       case 0x0400 + 3: {
@@ -155,6 +181,40 @@ public static class ImeProbe {
       list.Add(Kbd(vk, scan, 0)); list.Add(Kbd(vk, scan, 2));
     }
     return SendInput((uint) list.Count, list.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+  }
+
+  public static string Windows() {
+    uint me = (uint) System.Diagnostics.Process.GetCurrentProcess().Id;
+    var s = new StringBuilder();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      var cls = new StringBuilder(256); GetClassNameW(h, cls, 256);
+      if (IsWindowVisible(h)) {
+        RECT r; GetWindowRect(h, out r);
+        string c = cls.ToString();
+        if (pid == me || c.Contains("IME") || c.Contains("Cand") || c.Contains("IPTip") || c.Contains("Input") || c.Contains("Core"))
+          s.Append("  window " + c + " pid " + pid + (pid == me ? " (this)" : "") + " at " + r.Left + "," + r.Top + " " + (r.Right - r.Left) + "x" + (r.Bottom - r.Top) + "\n");
+      }
+      return true;
+    }, IntPtr.Zero);
+    return s.ToString();
+  }
+
+  public static string Caret() {
+    uint pid; uint tid = GetWindowThreadProcessId(Hwnd, out pid);
+    var g = new GUITHREADINFO { cbSize = Marshal.SizeOf(typeof(GUITHREADINFO)) };
+    bool ok = GetGUIThreadInfo(tid, ref g);
+    var p = new POINT { X = g.rcCaret.Left, Y = g.rcCaret.Top };
+    ClientToScreen(g.caret, ref p);
+    return "caret " + ok + " hwnd " + g.caret + " rc " + g.rcCaret.Left + "," + g.rcCaret.Top + "-" + g.rcCaret.Right + "," + g.rcCaret.Bottom + " screen " + p.X + "," + p.Y;
+  }
+
+  public static int ActivateHere(string tip) {
+    var mgr = (ITfInputProcessorProfileMgr) new TfProfiles();
+    Guid clsid, prof; ushort lang;
+    if (tip == "ja") { clsid = new Guid("03B5835F-F03C-411B-9CE2-AA23E1171E36"); prof = new Guid("A76C93D9-5523-4E90-AAFA-4DB112F9AC76"); lang = 0x411; }
+    else { clsid = new Guid("A028AE76-01B1-46C2-99C4-ACD9858AE02F"); prof = new Guid("B5FE1F02-D5F2-4445-9C03-C568F23C99A1"); lang = 0x412; }
+    return mgr.ActivateProfile(1, lang, ref clsid, ref prof, IntPtr.Zero, 1 | 4);
   }
 
   public static string Layouts() {

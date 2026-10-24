@@ -1,54 +1,68 @@
-# Temporary CI probe (ime track): the runners' IMEs, keyboard layouts and
-# SendInput, outside Gesher.
+# Temporary CI probe (ime track), round 2: a real IME in a window of another
+# thread, chosen from outside (as a test of a Gesher window must), the
+# candidate window's position, the touch keyboard.
 $ErrorActionPreference = 'Continue'
-Write-Host "OS: $((Get-CimInstance Win32_OperatingSystem).Caption) $([Environment]::OSVersion.Version)"
-Write-Host "session: $([Diagnostics.Process]::GetCurrentProcess().SessionId), user $env:USERNAME, interactive $([Environment]::UserInteractive)"
-Get-WinUserLanguageList | ForEach-Object { Write-Host "language $($_.LanguageTag): $($_.InputMethodTips -join ', ')" }
-Get-ChildItem C:\Windows\System32\IME -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "IME dir: $($_.Name)" }
-foreach ($p in 'C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe', 'C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe') {
-  Write-Host "exists $(Test-Path $p): $p"
-}
-Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\CTF\TIP' -ErrorAction SilentlyContinue | ForEach-Object {
-  $d = (Get-ItemProperty "$($_.PSPath)" -ErrorAction SilentlyContinue).'(default)'
-  Write-Host "TIP $($_.PSChildName) $d"
-}
-Get-Command Install-Language -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Install-Language available" }
-
+Write-Host "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+$langs = { powershell.exe -NoProfile -Command 'Get-WinUserLanguageList | ForEach-Object { "language " + $_.LanguageTag + ": " + ($_.InputMethodTips -join ", ") }' }
+& $langs
 Add-Type -Path "$PSScriptRoot/probe.cs"
+# Enable the Japanese IME's profile from this (the test's) thread, then start the window.
+Write-Host ("ActivateHere ja: 0x{0:x8}" -f [ImeProbe]::ActivateHere('ja'))
+& $langs
 [ImeProbe]::Start()
 Start-Sleep 1
 Write-Host "foreground: $([ImeProbe]::Foreground([ImeProbe]::Hwnd))"
 Write-Host "layouts: $([ImeProbe]::Layouts())"
-function Step($name, [scriptblock] $s) { & $s; Start-Sleep -Milliseconds 1500; Write-Host "--- $name"; Write-Host ([ImeProbe]::Log()) }
-Step 'SendInput unicode' { [ImeProbe]::Unicode("A`u{05D0}`u{D83D}`u{DE00}") | Out-Null }
-Step 'Hebrew layout, SendInput keys A B C' {
-  $hkl = [ImeProbe]::LoadKeyboardLayoutW('0000040D', 0)
-  Write-Host ("hebrew hkl {0:x}" -f $hkl.ToInt64())
-  [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x50, [IntPtr]0, $hkl)
-  Start-Sleep -Milliseconds 500
-  [ImeProbe]::Keys(0x41, 0x42, 0x43) | Out-Null
+function Step($name, [scriptblock] $s, [int] $ms = 1500) {
+  & $s
+  Start-Sleep -Milliseconds $ms
+  Write-Host "--- $name"
+  Write-Host (([ImeProbe]::Log() -split "`n" | Where-Object { $_ -notmatch 'WM_IME_NOTIFY' }) -join "`n")
+}
+Step 'ja layout request from outside' {
+  [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x50, [IntPtr]0, [ImeProbe]::LoadKeyboardLayoutW('00000411', 0))
 }
 Step 'state' { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x401, [IntPtr]0, [IntPtr]0) }
-
-foreach ($lang in @(@('ja-JP', '00000411', 'ja', 0x9), @('ko-KR', '00000412', 'ko', 0x1), @('zh-CN', '00000804', 'zh', 0x1))) {
-  try {
-    $list = Get-WinUserLanguageList
-    $list.Add($lang[0])
-    Set-WinUserLanguageList $list -Force -WarningAction SilentlyContinue
-    Get-WinUserLanguageList | Where-Object LanguageTag -eq $lang[0] | ForEach-Object { Write-Host "added $($_.LanguageTag): $($_.InputMethodTips -join ', ')" }
-  } catch { Write-Host "adding $($lang[0]): $_" }
-  Write-Host "layouts: $([ImeProbe]::Layouts())"
-  [ImeProbe]::Foreground([ImeProbe]::Hwnd) | Out-Null
-  Step "$($lang[0]) layout request" {
-    $hkl = [ImeProbe]::LoadKeyboardLayoutW($lang[1], 1)
-    Write-Host ("hkl {0:x}" -f $hkl.ToInt64())
-    [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x50, [IntPtr]0, $hkl)
-  }
-  [ImeProbe]::Tip = $lang[2]
-  Step "$($lang[0]) TSF profile" { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x404, [IntPtr]0, [IntPtr]0) }
-  Step "$($lang[0]) open" { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x402, [IntPtr]$lang[3], [IntPtr]0) }
-  Step "$($lang[0]) state" { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x401, [IntPtr]0, [IntPtr]0) }
-  Step "$($lang[0]) keys n i h o n r k space enter" { [ImeProbe]::Keys(0x4E, 0x49, 0x48, 0x4F, 0x4E, 0x52, 0x4B, 0x20, 0x0D) | Out-Null }
-  Step "$($lang[0]) SETSTR" { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x403, [IntPtr]0, [IntPtr]0) }
+Step 'caret and IME windows' { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x405, [IntPtr]0, [IntPtr]0) }
+Write-Host ([ImeProbe]::Caret())
+Step 'ja keys n i h o n (IME off: as is)' { [ImeProbe]::Keys(0x4E, 0x49, 0x48, 0x4F, 0x4E) | Out-Null }
+Step 'ja Kanji key (VK_KANJI 0x19) turns the IME on' { [ImeProbe]::Keys(0x19) | Out-Null }
+Step 'state' { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x401, [IntPtr]0, [IntPtr]0) }
+Step 'ja keys n i h o n' { [ImeProbe]::Keys(0x4E, 0x49, 0x48, 0x4F, 0x4E) | Out-Null }
+Step 'space (convert)' { [ImeProbe]::Keys(0x20) | Out-Null }
+Step 'space (candidates)' { [ImeProbe]::Keys(0x20) | Out-Null } 2500
+Write-Host ([ImeProbe]::Windows())
+Step 'enter' { [ImeProbe]::Keys(0x0D) | Out-Null }
+Step 'ko layout request from outside' {
+  Write-Host ("ActivateHere ko: 0x{0:x8}" -f [ImeProbe]::ActivateHere('ko'))
+  [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x50, [IntPtr]0, [ImeProbe]::LoadKeyboardLayoutW('00000412', 0))
 }
+Step 'state' { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x401, [IntPtr]0, [IntPtr]0) }
+Step 'ko Hangul key (VK_HANGUL 0x15), r k' { [ImeProbe]::Keys(0x15, 0x52, 0x4B) | Out-Null }
+Step 'state' { [void][ImeProbe]::PostMessageW([ImeProbe]::Hwnd, 0x401, [IntPtr]0, [IntPtr]0) }
+Step 'ko r k s' { [ImeProbe]::Keys(0x52, 0x4B, 0x53) | Out-Null }
+Step 'enter' { [ImeProbe]::Keys(0x0D) | Out-Null }
+
+# The touch keyboard: TabTip's ITipInvocation.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class TouchKbd {
+  [ComImport, Guid("37c994e7-432b-4834-a2f7-dce1f13b834b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface ITipInvocation { void Toggle(IntPtr hwnd); }
+  [ComImport, Guid("4ce576fa-83dc-4F88-951c-9d0782b4e376")] class UIHostNoLaunch {}
+  [DllImport("user32.dll")] static extern IntPtr GetDesktopWindow();
+  public static string Toggle() {
+    try { ((ITipInvocation) new UIHostNoLaunch()).Toggle(GetDesktopWindow()); return "toggled"; }
+    catch (Exception e) { return e.GetType().Name + ": " + e.Message; }
+  }
+}
+'@
+Write-Host "touch keyboard toggle (TabTip not running): $([TouchKbd]::Toggle())"
+Start-Process 'C:\Program Files\Common Files\microsoft shared\ink\TabTip.exe' -ErrorAction SilentlyContinue
+Start-Sleep 3
+Write-Host "processes: $((Get-Process TabTip, TextInputHost -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ' ' + $_.Id }) -join ', ')"
+Write-Host "touch keyboard toggle: $([TouchKbd]::Toggle())"
+Start-Sleep 3
+Write-Host ([ImeProbe]::Windows())
 exit 0
