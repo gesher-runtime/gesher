@@ -163,8 +163,19 @@ int Window::Modifiers() const {
 }
 
 Window* Window::Create(const std::string& title_utf8, int width, int height) {
-  RegisterClassOnce();
+  return Start(new Window(), title_utf8, width, height);
+}
+
+Window* Window::CreatePopup(const std::string& title_utf8, int width, int height,
+                            Window* owner) {
   auto* window = new Window();
+  window->popup_ = true;
+  window->owner_hwnd_ = owner != nullptr ? owner->hwnd_ : nullptr;
+  return Start(window, title_utf8, width, height);
+}
+
+Window* Window::Start(Window* window, const std::string& title_utf8, int width, int height) {
+  RegisterClassOnce();
   window->event_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   {
     std::lock_guard<std::mutex> lock(window->buffer_mutex_);
@@ -203,13 +214,15 @@ Window* Window::Create(const std::string& title_utf8, int width, int height) {
 void Window::Run(std::wstring title, int width, int height) {
   // COM for the window's property store, on the window's own thread.
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-  DWORD style = WS_OVERLAPPEDWINDOW;
+  // A popup (CreatePopup): no frame, owned, so no taskbar button.
+  DWORD style = popup_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
   RECT r = {0, 0, width, height};
   AdjustWindowRectEx(&r, style, FALSE, 0);
-  HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT,
-                              r.right - r.left, r.bottom - r.top, nullptr, nullptr,
+  const int x = popup_ ? 0 : CW_USEDEFAULT, y = popup_ ? 0 : CW_USEDEFAULT;
+  HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, x, y, r.right - r.left,
+                              r.bottom - r.top, static_cast<HWND>(owner_hwnd_), nullptr,
                               GetModuleHandleW(nullptr), this);
-  if (hwnd != nullptr) {
+  if (hwnd != nullptr && !popup_) {
     std::wstring id = ProcessAppUserModelId();
     if (!id.empty() && SUCCEEDED(SetWindowAppUserModelId(hwnd, id))) {
       app_user_model_id_ = Narrow(id);
@@ -232,6 +245,7 @@ void Window::Run(std::wstring title, int width, int height) {
 }
 
 Window::~Window() {
+  Unregister();  // no route or anchor names it any more
   if (hwnd_ != nullptr) {
     // DestroyWindow must run on the window's thread.
     PostMessageW(static_cast<HWND>(hwnd_), WM_APP, 0, 0);
@@ -358,6 +372,11 @@ void Window::Unlock() {
 void Window::UnlockAndPost() {
   frames_++;
   buffer_mutex_.unlock();
+  if (translucent_) {
+    // A layered window shows what UpdateLayeredWindow gives it, on its thread.
+    PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
+    return;
+  }
   InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
 }
 
@@ -381,8 +400,9 @@ void Window::Paint(void* hdc_ptr) {
   bmi.bmiHeader.biPlanes = 1;
   bmi.bmiHeader.biBitCount = 32;
   bmi.bmiHeader.biCompression = BI_RGB;
+  // Dimmed behind a dialog (SetDim), else the buffer as it is.
   SetDIBitsToDevice(hdc, 0, 0, buffer_width_, buffer_height_, 0, 0, 0, buffer_height_,
-                    pixels_.data(), &bmi, DIB_RGB_COLORS);
+                    DimmedPixels(), &bmi, DIB_RGB_COLORS);
 }
 
 bool Window::PrintClient(std::vector<uint32_t>* out, int* width, int* height) {
@@ -428,6 +448,11 @@ void Window::ReadBackBuffer(std::vector<uint32_t>* out, int* width, int* height)
 }
 
 void Window::Queue(const WindowEvent& event) {
+  if (RouteEvent(event)) return;  // another window's input now (SetInputRoute)
+  QueueOwn(event);
+}
+
+void Window::QueueOwn(const WindowEvent& event) {
   {
     std::lock_guard<std::mutex> lock(event_mutex_);
     events_.push_back(event);
@@ -465,6 +490,8 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
   HWND hwnd = static_cast<HWND>(hwnd_);
   WindowEvent e;
   e.time_ms = GetMessageTime();
+  intptr_t popup_result = 0;
+  if (HandlePopupMessage(msg, wparam, lparam, &popup_result)) return popup_result;
   switch (msg) {
     case WM_APP:
       DestroyWindow(hwnd);

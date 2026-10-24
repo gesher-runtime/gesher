@@ -58,6 +58,10 @@ struct WindowEvent {
   int32_t tool = 0;     // kTouch*: 1 finger, 2 pen
 };
 
+// The window's private messages (WM_APP is its own destruction).
+constexpr unsigned kMsgPresentLayered = 0x8000 + 0x40;  // WM_APP + 0x40: UpdateLayeredWindow
+constexpr unsigned kMsgActivate = 0x8000 + 0x41;        // bring the window to the front
+
 class Window {
  public:
   // Creates the window (hidden) with a client area of width x height pixels.
@@ -119,10 +123,68 @@ class Window {
   // For the window procedure.
   intptr_t HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam);
 
+  // ---- Popups (gesher_popup.cc; docs/graphics.md, "Dialogs, menus and other
+  // popups"; ADR 0040) ----
+
+  // Creates a popup window (hidden, no frame, no taskbar button) owned by
+  // `owner` (null: no owner) whose client area is width x height pixels.
+  // Windows keeps an owned window above its owner and hides it with it.
+  static Window* CreatePopup(const std::string& title_utf8, int width, int height,
+                             Window* owner);
+  // Places the popup's client area at (x, y) of `anchor`'s client area
+  // (screen coordinates when anchor is null), width x height pixels. The
+  // popup follows the anchor when it moves.
+  void SetPopupBounds(Window* anchor, int x, int y, int width, int height);
+  // Shows the popup where SetPopupBounds put it, activated or not.
+  void ShowPopup(bool activate);
+  // What the CPU path presents is shown with per-pixel alpha (a layered
+  // window, UpdateLayeredWindow): transparent parts show what is behind.
+  void SetTranslucent(bool translucent);
+  // Never activated by a click (WS_EX_NOACTIVATE); with `passthrough` also
+  // never hit (WS_EX_TRANSPARENT: clicks go to what is below).
+  void SetNoActivate(bool no_activate, bool passthrough);
+  // Raises the window to the top of its owner's popups (not activated).
+  void Raise();
+  // Activates the window (its thread brings it to the foreground).
+  void Activate();
+  // Dims what the window shows by `amount` (0: none, 1: black), as Android's
+  // dim layer behind a dialog (FLAG_DIM_BEHIND) does.
+  void SetDim(float amount);
+  // Where the window's input goes instead of its own queue (null: its own):
+  // pointer events (mouse, wheel, touch; a gesture stays with the window its
+  // first contact went to), keys and characters. `outside`: windows that
+  // watch touches outside them (FLAG_WATCH_OUTSIDE_TOUCH), sent a press and
+  // release where a gesture starts. Coordinates are translated through the
+  // screen. A window that goes away is dropped from every route.
+  void SetInputRoute(Window* pointer, Window* keys, const std::vector<Window*>& outside);
+  // The client area in screen coordinates: {left, top, right, bottom}.
+  void ScreenBounds(int out[4]) const;
+  // Moves the window so its client area's origin is at (x, y) on the screen.
+  void SetScreenPosition(int x, int y);
+  bool is_popup() const { return popup_; }
+
  private:
   Window() = default;
+  // Starts `window`'s thread, which creates its HWND; null (and `window`
+  // deleted) if Windows refuses.
+  static Window* Start(Window* window, const std::string& title_utf8, int width, int height);
   void Run(std::wstring title, int width, int height);
+  // Queues `event` for this window, or where its input route sends it.
   void Queue(const WindowEvent& event);
+  // Queues `event` in this window's own queue.
+  void QueueOwn(const WindowEvent& event);
+  // gesher_popup.cc: whether the route took `event`.
+  bool RouteEvent(const WindowEvent& event);
+  // gesher_popup.cc: popup messages; true when `*result` answers `msg`.
+  bool HandlePopupMessage(unsigned msg, uintptr_t wparam, intptr_t lparam, intptr_t* result);
+  // gesher_popup.cc: the window goes; nothing may route to it or anchor to it.
+  void Unregister();
+  // gesher_popup.cc: puts anchored popups where they belong (the anchor moved).
+  void MoveAnchoredPopups();
+  // gesher_popup.cc: UpdateLayeredWindow from the back buffer (the window's thread).
+  void PresentLayered();
+  // gesher_popup.cc: GDI pixels of the buffer, dimmed (with buffer_mutex_ held).
+  const uint8_t* DimmedPixels();
   void Paint(void* hdc);
   void ResizeBuffer(int width, int height);  // with mutex_ held
   int Modifiers() const;  // the window's thread
@@ -160,6 +222,25 @@ class Window {
   // injected by other programs) do not change the thread's key state.
   int held_modifiers_ = 0;
   std::atomic<int> min_client_width_{0}, min_client_height_{0};
+
+  // Popups (gesher_popup.cc). The anchor, anchored popups and routes are
+  // guarded by the popup registry's mutex.
+  bool popup_ = false;
+  void* owner_hwnd_ = nullptr;  // CreatePopup's owner, for CreateWindowEx
+  Window* anchor_ = nullptr;
+  int anchor_x_ = 0, anchor_y_ = 0;  // the popup's place in the anchor's client area
+  std::vector<Window*> anchored_;
+  Window* route_pointer_ = nullptr;
+  Window* route_keys_ = nullptr;
+  std::vector<Window*> route_outside_;
+  Window* gesture_target_ = nullptr;  // where the pointer gesture under way goes
+  bool gesture_active_ = false;
+  bool gesture_routed_ = false;  // the gesture goes to gesture_target_ (dropped if gone)
+  int gesture_touches_ = 0;
+  std::atomic<bool> translucent_{false};
+  std::atomic<bool> layered_{false};  // WS_EX_LAYERED set (the window's thread)
+  std::atomic<int> dim_{0};           // 0..255
+  std::vector<uint8_t> dimmed_;       // buffer_mutex_
 };
 
 }  // namespace gesher
