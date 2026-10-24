@@ -194,6 +194,86 @@ jintArray JNICALL NativeWindow_capture(JNIEnv* env, jclass, jlong ptr, jboolean 
   return out;
 }
 
+// ---- Popups (gesher_popup.cc; docs/graphics.md, "Dialogs, menus and other
+// popups") ----
+
+gesher::Window* WindowOf(jlong ptr) {
+  return ptr != 0 ? Get(ptr)->window() : nullptr;
+}
+
+jlong JNICALL NativeWindow_createPopup(JNIEnv* env, jclass, jstring title, jint width,
+                                       jint height, jlong owner) {
+  gesher::Window* window =
+      gesher::Window::CreatePopup(Utf8(env, title), width, height, WindowOf(owner));
+  if (window == nullptr) return 0;
+  auto* surface = new Win32Surface(window);
+  surface->incStrong(reinterpret_cast<void*>(&NativeWindow_create));
+  {
+    std::lock_guard<std::mutex> lock(gOpenMutex);
+    gOpen.insert(surface);
+  }
+  return reinterpret_cast<jlong>(surface);
+}
+
+void JNICALL NativeWindow_setPopupBounds(JNIEnv*, jclass, jlong ptr, jlong anchor, jint x,
+                                         jint y, jint width, jint height) {
+  Get(ptr)->window()->SetPopupBounds(WindowOf(anchor), x, y, width, height);
+}
+
+void JNICALL NativeWindow_showPopup(JNIEnv*, jclass, jlong ptr, jboolean activate) {
+  Get(ptr)->window()->ShowPopup(activate);
+}
+
+void JNICALL NativeWindow_setTranslucent(JNIEnv*, jclass, jlong ptr, jboolean translucent) {
+  Get(ptr)->window()->SetTranslucent(translucent);
+}
+
+void JNICALL NativeWindow_setNoActivate(JNIEnv*, jclass, jlong ptr, jboolean no_activate,
+                                        jboolean passthrough) {
+  Get(ptr)->window()->SetNoActivate(no_activate, passthrough);
+}
+
+void JNICALL NativeWindow_raise(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->window()->Raise();
+}
+
+void JNICALL NativeWindow_activate(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->window()->Activate();
+}
+
+void JNICALL NativeWindow_setDim(JNIEnv*, jclass, jlong ptr, jfloat amount) {
+  Get(ptr)->window()->SetDim(amount);
+}
+
+void JNICALL NativeWindow_setInputRoute(JNIEnv* env, jclass, jlong ptr, jlong pointer, jlong keys,
+                                        jlongArray outside) {
+  std::vector<gesher::Window*> watchers;
+  if (outside != nullptr) {
+    jsize n = env->GetArrayLength(outside);
+    std::vector<jlong> ptrs(n);
+    env->GetLongArrayRegion(outside, 0, n, ptrs.data());
+    for (jlong p : ptrs) {
+      if (p != 0) watchers.push_back(WindowOf(p));
+    }
+  }
+  Get(ptr)->window()->SetInputRoute(WindowOf(pointer), WindowOf(keys), watchers);
+}
+
+// The client area in screen coordinates: {left, top, right, bottom}.
+jintArray JNICALL NativeWindow_getScreenBounds(JNIEnv* env, jclass, jlong ptr) {
+  int r[4];
+  Get(ptr)->window()->ScreenBounds(r);
+  jintArray out = env->NewIntArray(4);
+  if (out == nullptr) return nullptr;
+  jint v[4] = {r[0], r[1], r[2], r[3]};
+  env->SetIntArrayRegion(out, 0, 4, v);
+  return out;
+}
+
+void JNICALL NativeWindow_setScreenPosition(JNIEnv*, jclass, jlong ptr, jint x, jint y) {
+  Get(ptr)->window()->SetScreenPosition(x, y);
+}
+
 const JNINativeMethod kMethods[] = {
     {"nCreate", "(Ljava/lang/String;II)J", reinterpret_cast<void*>(&NativeWindow_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&NativeWindow_destroy)},
@@ -217,6 +297,18 @@ const JNINativeMethod kMethods[] = {
     {"nSetIcon", "(JLjava/lang/String;)Z", reinterpret_cast<void*>(&NativeWindow_setIcon)},
     {"nGetAppUserModelId", "(J)Ljava/lang/String;",
      reinterpret_cast<void*>(&NativeWindow_getAppUserModelId)},
+    // Popups.
+    {"nCreatePopup", "(Ljava/lang/String;IIJ)J", reinterpret_cast<void*>(&NativeWindow_createPopup)},
+    {"nSetPopupBounds", "(JJIIII)V", reinterpret_cast<void*>(&NativeWindow_setPopupBounds)},
+    {"nShowPopup", "(JZ)V", reinterpret_cast<void*>(&NativeWindow_showPopup)},
+    {"nSetTranslucent", "(JZ)V", reinterpret_cast<void*>(&NativeWindow_setTranslucent)},
+    {"nSetNoActivate", "(JZZ)V", reinterpret_cast<void*>(&NativeWindow_setNoActivate)},
+    {"nRaise", "(J)V", reinterpret_cast<void*>(&NativeWindow_raise)},
+    {"nActivate", "(J)V", reinterpret_cast<void*>(&NativeWindow_activate)},
+    {"nSetDim", "(JF)V", reinterpret_cast<void*>(&NativeWindow_setDim)},
+    {"nSetInputRoute", "(JJJ[J)V", reinterpret_cast<void*>(&NativeWindow_setInputRoute)},
+    {"nGetScreenBounds", "(J)[I", reinterpret_cast<void*>(&NativeWindow_getScreenBounds)},
+    {"nSetScreenPosition", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setScreenPosition)},
 };
 
 }  // namespace
