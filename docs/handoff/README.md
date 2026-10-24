@@ -34,6 +34,11 @@ Merged so far:
   contained every merge above, so the integration tree after this merge is
   the CI-verified one: 296 PASS lines per runner, up from 263 at 40135350639;
   the "408" in older briefs counted differently). ADR 0036.
+- devices: merged (verified at f62f1aa, ci 40142590418; Camera2 verified
+  against a test Media Foundation source, no real camera on the runners).
+  ADR 0043. Integrated with stack: see the next integration ci run.
+- New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
+  wip/webview2 in the C:\work\gesher-webview worktree.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
