@@ -26,6 +26,10 @@ ships it with the installer. The decision and its reasons are in
   free-list large object space is one reservation of the whole heap, which
   ART's low-4 GiB allocator searches for page by page (`msync`), and that took
   for ever on Windows with a larger heap.
+- dex2oat writes the `.vdex` file through a shared mapping and, on Linux,
+  cuts its page-aligned length back at the end; Windows refuses to shrink a
+  mapped file (`ERROR_USER_MAPPED_FILE`), so on Gesher the file first ends with
+  the dex files and what follows them is written with pwrite (patch 0013).
 - `--compiler-filter=verify`: no compiled code (the code generator does not
   follow Gesher's thread register yet, ADR 0006); classes are verified and
   linked, and initialized where dex2oat can do it at compile time.
