@@ -40,9 +40,11 @@ endfunction()
 
 # --- art_libartbase_tests (art_libartbase_tests_defaults) ---------------------
 set(_abt "${_art}/libartbase")
+# Not built: base/aconfig_flags_test.cc static_asserts the release config's
+# test-flag values (art `test`, libcore `v_apis` true), while Gesher's flags
+# come from config/aconfig/art.values, where every unlisted flag is false.
 art_gtest(art_libartbase_tests SOURCES
   ${_abt}/arch/instruction_set_test.cc
-  ${_abt}/base/aconfig_flags_test.cc
   ${_abt}/base/arena_allocator_test.cc
   ${_abt}/base/bit_field_test.cc
   ${_abt}/base/bit_memory_region_test.cc
