@@ -106,15 +106,12 @@ if (-not $nterpOk) {
   foreach ($k in 'nterp', 'jit') { $modes.Remove($k) }
 }
 
-# The switch interpreter and interpret-only mode recover from a deep-recursion
-# StackOverflowError (the "so" variant); nterp and the JIT do not yet (ADR 0033).
-$soModes = @('switch', 'interpret-only')
-
+# Every mode recovers from a deep-recursion StackOverflowError (the stress
+# test's "so" variant; ADR 0036).
 $bench = [ordered]@{}
 foreach ($name in @($modes.Keys)) {
   $m = $modes[$name]
-  $stressArgs = if ($soModes -contains $name) { @('gesher.Stress', 'so') } else { @('gesher.Stress') }
-  $r = RunMode $m.Args $stressArgs $m.Env
+  $r = RunMode $m.Args @('gesher.Stress', 'so') $m.Env
   if ($r.Exit -eq 0 -and $r.Out.Contains('Stress all passed') -and (ModeOk $name $r.Out)) {
     $what = ($r.Out -split "`n" | Where-Object { $_ -match 'gesher: (execution|boot image):|JIT code cache entries' } |
       ForEach-Object { ($_ -replace '^.*gesher: ', '').Trim() }) -join '; '
@@ -150,6 +147,28 @@ if ($bench.Count -ge 2) {
     Write-Host ("INFO  codegen:   {0,-14} {1}" -f $k, (($bench.Keys | ForEach-Object { $bench[$_].Kernels[$k] }) -join ' / '))
   }
   Write-Host ("INFO  codegen:   {0,-14} {1}" -f 'process', (($bench.Keys | ForEach-Object { $bench[$_].Ms }) -join ' / '))
+}
+
+# Deep recursion (tests/dex-codegen/StackOverflow.java, ADR 0036): app code,
+# the boot library's AOT code (ArrayList.hashCode of a list that contains
+# itself) and app code with a native call in every frame each overflow the
+# stack four times in a row, on the main thread, on new threads (one with a
+# 512 KiB stack) and on two threads at once; every StackOverflowError is
+# caught and the thread goes on. Under jit, -verbose:jit shows the recursion
+# compiled (the later rounds run the JIT's code).
+foreach ($name in @($modes.Keys)) {
+  $m = $modes[$name]
+  $soArgs = $m.Args
+  if ($name -eq 'jit') { $soArgs = $soArgs + @('-verbose:jit') }
+  $r = RunMode $soArgs @('gesher.StackOverflow') $m.Env
+  $jitted = $name -ne 'jit' -or $r.Out -match 'Compiling method .*Recurser\.recurse'
+  if ($r.Exit -eq 0 -and $r.Out.Contains('StackOverflow all passed') -and (ModeOk $name $r.Out) -and $jitted) {
+    $depths = ($r.Out -split "`n" | Where-Object { $_ -match '^ok   stack overflow, (\w+) code, on the main thread \(depths ([\d ]+)\)' } |
+      ForEach-Object { "$($Matches[1]) $($Matches[2])" }) -join '; '
+    Write-Host "PASS  codegen: StackOverflowError caught and recovered from under $name (main thread, new threads, 2 at once; app, boot, native code; 4 rounds each; main thread depths: $depths)"
+  } else {
+    ReportFailure "StackOverflowError under $name$(if (-not $jitted) { ' (the recursion was not JIT-compiled)' })" $r
+  }
 }
 
 # ART's own run-tests (tests/build-art-run-tests.sh): each runs under the

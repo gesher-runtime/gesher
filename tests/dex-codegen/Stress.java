@@ -259,9 +259,8 @@ public final class Stress {
   }
 
   public static void main(String[] args) throws Exception {
-    // "so": the deep-recursion StackOverflowError check runs on its own
-    // (gesher.StackOverflow), since under nterp/JIT it is not yet recoverable
-    // (the fault handler has no alternate stack, ADR 0033).
+    // "so": with the deep-recursion StackOverflowError check (every mode
+    // recovers from it, ADR 0036; gesher.StackOverflow goes further).
     boolean withSo = args.length > 0 && args[0].equals("so");
     check("implicit null checks", nullChecks() == 3000);
     if (withSo) check("stack overflow", stackOverflow());
