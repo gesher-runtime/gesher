@@ -506,21 +506,19 @@ index 1843856..271cabe 100644
    // Math
  #if defined(GESHER)
 diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
-index efef1bf..9fa8a8f 100644
+index efef1bf..c518929 100644
 --- a/runtime/class_linker.cc
 +++ b/runtime/class_linker.cc
-@@ -1486,6 +1486,10 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+@@ -1486,6 +1486,8 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
      };
      const PointerSize pointer_size = image_pointer_size_;
      size_t remapped = 0u;
 +    size_t compiled = 0u;
 +    const void* const nterp_with_clinit = interpreter::GetNterpWithClinitEntryPoint();
-+    // GESHER_ART_NO_AOT: as Instrumentation::CanUseAotCode (instrumentation-inl.h).
-+    const bool gesher_no_aot = getenv("GESHER_ART_NO_AOT") != nullptr;
      for (gc::space::ImageSpace* space : spaces) {
        space->GetImageHeader().VisitPackedArtMethods(
            [&](ArtMethod& method) REQUIRES_SHARED(Locks::mutator_lock_) {
-@@ -1494,6 +1498,14 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+@@ -1494,6 +1496,10 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
              if (stub != code) {
                method.SetEntryPointFromQuickCompiledCodePtrSize(stub, pointer_size);
                ++remapped;
@@ -528,14 +526,10 @@ index efef1bf..9fa8a8f 100644
 +                       std::find(std::begin(runtime_stubs), std::end(runtime_stubs), code) ==
 +                           std::end(runtime_stubs)) {
 +              ++compiled;  // the image's own code for this method (AOT)
-+              if (gesher_no_aot) {
-+                // GESHER_ART_NO_AOT: nterp or the interpreter instead.
-+                runtime->GetInstrumentation()->ReinitializeMethodsCode(&method);
-+              }
              }
              // Native methods and the resolution method keep a JNI entrypoint
              // (a dlsym lookup stub) in `data_`; IMT conflict methods keep their
-@@ -1511,6 +1523,9 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+@@ -1511,6 +1517,9 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
            pointer_size);
      }
      VLOG(image) << "Gesher: " << remapped << " boot image entrypoints point at libart's stubs";
