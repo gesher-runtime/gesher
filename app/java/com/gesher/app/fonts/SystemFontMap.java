@@ -12,6 +12,8 @@ import android.os.SharedMemory;
 import android.text.FontConfig;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -30,6 +32,11 @@ import java.util.Map;
  * other static typefaces and the native default; and once the map comes from a buffer, a
  * later setSystemFontMap(null) (bindApplication without a buffer) leaves it alone. See
  * docs/decisions/0022-fonts-system-font-map.md.
+ *
+ * <p>The fallback families of {@code $ANDROID_ROOT/etc/windows-fonts.xml}, fonts Windows
+ * has (CJK, color emoji, symbols, further scripts), read in place from its fonts folder
+ * ({@link WindowsFonts}), are appended to fonts.xml's fallback list; files Windows lacks
+ * are left out (docs/decisions/0044-rtl-scripts-and-locale.md).
  */
 public final class SystemFontMap {
     private static String sLoaded;
@@ -46,6 +53,11 @@ public final class SystemFontMap {
     /** The font configuration: $ANDROID_ROOT/etc/fonts.xml. */
     public static String fontsXml() {
         return androidRoot() + "/etc/fonts.xml";
+    }
+
+    /** The Windows fonts' fallback families: $ANDROID_ROOT/etc/windows-fonts.xml. */
+    public static String windowsFontsXml() {
+        return androidRoot() + "/etc/windows-fonts.xml";
     }
 
     /** The font files' directory, with a trailing '/': $ANDROID_ROOT/fonts/. */
@@ -69,6 +81,28 @@ public final class SystemFontMap {
         FontConfig config = FontListParser.parse(xml.getPath(), fontDir(),
                 null /* no OEM customization */, null, null /* no updated fonts */,
                 xml.lastModified(), 0 /* configVersion */);
+        String windows = "";
+        File windowsXml = new File(windowsFontsXml());
+        if (windowsXml.isFile()) {
+            String dir = WindowsFonts.directory();
+            if (dir == null) {
+                windows = "; no Windows fonts: " + WindowsFonts.whyNot();
+            } else {
+                FontConfig extra = FontListParser.parse(windowsXml.getPath(), dir, null, null,
+                        null, windowsXml.lastModified(), 0);
+                List<FontConfig.FontFamily> families = new ArrayList<>(config.getFontFamilies());
+                families.addAll(extra.getFontFamilies());
+                config = new FontConfig(families, config.getAliases(),
+                        config.getNamedFamilyLists(), config.getLocaleFallbackCustomizations(),
+                        config.getLastModifiedTimeMillis(), config.getConfigVersion());
+                int fonts = 0;
+                for (FontConfig.FontFamily family : extra.getFontFamilies()) {
+                    fonts += family.getFontList().size();
+                }
+                windows = "; " + extra.getFontFamilies().size() + " fallback families ("
+                        + fonts + " fonts) of Windows' from " + dir;
+            }
+        }
         Map<String, FontFamily[]> fallback = SystemFonts.buildSystemFallback(config);
         Map<String, Typeface> map = SystemFonts.buildSystemTypefaces(config, fallback);
         if (!map.containsKey(Typeface.DEFAULT_FAMILY)) {
@@ -91,7 +125,8 @@ public final class SystemFontMap {
         }
         sLoaded = map.size() + " typefaces from " + xml.getPath() + " ("
                 + config.getNamedFamilyLists().size() + " named families, "
-                + config.getFontFamilies().size() + " fallback families; " + how + ")";
+                + config.getFontFamilies().size() + " fallback families" + windows + "; " + how
+                + ")";
         return sLoaded;
     }
 }
