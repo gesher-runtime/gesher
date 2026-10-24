@@ -1,0 +1,611 @@
+diff --git a/compiler/driver/compiler_options.h b/compiler/driver/compiler_options.h
+index e0736ab..68bdcb7 100644
+--- a/compiler/driver/compiler_options.h
++++ b/compiler/driver/compiler_options.h
+@@ -109,7 +109,10 @@ class CompilerOptions final {
+   }
+ 
+   bool IsJniCompilationEnabled() const {
+-#ifdef ART_USE_RESTRICTED_MODE
++#if defined(ART_USE_RESTRICTED_MODE) || defined(GESHER)
++    // Gesher: no compiled JNI stubs yet (the JNI macro assembler still reaches
++    // Thread* through %gs, ADR 0033); native methods use the generic JNI
++    // trampoline.
+     // TODO(Simulator): Support JNICompiler.
+     // Without the JNI compiler, GenericJNITrampoline will be used for JNI calls.
+     return false;
+diff --git a/compiler/optimizing/code_generator_x86_64.cc b/compiler/optimizing/code_generator_x86_64.cc
+index fea8673..a8305a8 100644
+--- a/compiler/optimizing/code_generator_x86_64.cc
++++ b/compiler/optimizing/code_generator_x86_64.cc
+@@ -1165,7 +1165,12 @@ void CodeGeneratorX86_64::GenerateStaticOrDirectCall(
+       // temp = thread->string_init_entrypoint
+       uint32_t offset =
+           GetThreadOffset<kX86_64PointerSize>(invoke->GetStringInitEntryPoint()).Int32Value();
++#if defined(GESHER)
++      __ movq(temp.AsRegister<CpuRegister>(),
++              __ GesherThreadAddress(temp.AsRegister<CpuRegister>(), offset));
++#else
+       __ gs()->movq(temp.AsRegister<CpuRegister>(), Address::Absolute(offset, /* no_rip= */ true));
++#endif
+       break;
+     }
+     case MethodLoadKind::kRecursive: {
+@@ -1562,7 +1567,24 @@ void CodeGeneratorX86_64::InvokeRuntimeWithoutRecordingPcInfo(int32_t entry_poin
+ }
+ 
+ void CodeGeneratorX86_64::GenerateInvokeRuntime(int32_t entry_point_offset) {
++#if defined(GESHER)
++  const int32_t mark_reg00 = Thread::ReadBarrierMarkEntryPointsOffset<kX86_64PointerSize>(0);
++  const int32_t mark_reg15 = Thread::ReadBarrierMarkEntryPointsOffset<kX86_64PointerSize>(15);
++  if (entry_point_offset >= mark_reg00 && entry_point_offset <= mark_reg15) {
++    // The read barrier mark entrypoints take and return the reference in
++    // any register, TMP included, and preserve all others.
++    __ GesherCallThreadPreservingRegisters(entry_point_offset);
++  } else if (entry_point_offset ==
++             GetThreadOffset<kX86_64PointerSize>(kQuickUpdateInlineCache).Int32Value()) {
++    // TMP holds the inline cache; the entrypoint may clobber RAX.
++    __ call(__ GesherThreadAddress(CpuRegister(RAX), entry_point_offset));
++  } else {
++    // TMP is never an argument of a runtime call.
++    __ call(__ GesherThreadAddress(CpuRegister(TMP), entry_point_offset));
++  }
++#else
+   __ gs()->call(Address::Absolute(entry_point_offset, /* no_rip= */ true));
++#endif
+ }
+ 
+ namespace detail {
+@@ -1708,6 +1730,20 @@ void InstructionCodeGeneratorX86_64::GenerateMethodEntryExitHook(HInstruction* i
+   DCHECK(curr_entry.AsRegister() != RDX);
+   uint64_t trace_buffer_curr_entry_offset =
+       Thread::TraceBufferCurrPtrOffset<kX86_64PointerSize>().SizeValue();
++#if defined(GESHER)
++  __ movq(CpuRegister(curr_entry),
++          __ GesherThreadAddress(CpuRegister(curr_entry), trace_buffer_curr_entry_offset));
++  __ subq(CpuRegister(curr_entry), Immediate(kNumEntriesForWallClock * sizeof(void*)));
++  __ movq(init_entry,
++          __ GesherThreadAddress(
++              init_entry, Thread::TraceBufferPtrOffset<kX86_64PointerSize>().SizeValue()));
++  __ cmpq(curr_entry, init_entry);
++  __ j(kLess, slow_path->GetEntryLabel());
++
++  // Update the index in the `Thread`.
++  __ movq(__ GesherThreadAddress(init_entry, trace_buffer_curr_entry_offset),
++          CpuRegister(curr_entry));
++#else
+   __ gs()->movq(CpuRegister(curr_entry),
+                 Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true));
+   __ subq(CpuRegister(curr_entry), Immediate(kNumEntriesForWallClock * sizeof(void*)));
+@@ -1720,6 +1756,7 @@ void InstructionCodeGeneratorX86_64::GenerateMethodEntryExitHook(HInstruction* i
+   // Update the index in the `Thread`.
+   __ gs()->movq(Address::Absolute(trace_buffer_curr_entry_offset, /* no_rip= */ true),
+                 CpuRegister(curr_entry));
++#endif
+ 
+   // Record method pointer and action.
+   CpuRegister method = init_entry;
+@@ -1859,16 +1896,29 @@ void CodeGeneratorX86_64::GenerateFrameEntry() {
+ 
+     __ movl(CpuRegister(TMP),
+             Address(CpuRegister(TMP), mirror::Class::ClinitThreadIdOffset().Int32Value()));
++#if defined(GESHER)
++    // No frame yet: the arguments are live, TMP holds the tid to compare.
++    __ GesherSaveRax();
++    __ cmpl(CpuRegister(TMP),
++            Address(CpuRegister(RAX), Thread::TidOffset<kX86_64PointerSize>().Int32Value()));
++    __ GesherRestoreRax();
++#else
+     __ gs()->cmpl(
+         CpuRegister(TMP),
+         Address::Absolute(Thread::TidOffset<kX86_64PointerSize>().Int32Value(), /*no_rip=*/ true));
++#endif
+     __ j(kEqual, &frame_entry_label_);
+     __ Bind(&resolution);
+ 
+     // Jump to the resolution stub.
+     ThreadOffset64 entrypoint_offset =
+         GetThreadOffset<kX86_64PointerSize>(kQuickQuickResolutionTrampoline);
++#if defined(GESHER)
++    // The resolution stub takes the arguments; TMP is not one.
++    __ jmp(__ GesherThreadAddress(CpuRegister(TMP), entrypoint_offset.Int32Value()));
++#else
+     __ gs()->jmp(Address::Absolute(entrypoint_offset, /*no_rip=*/ true));
++#endif
+   }
+ 
+   __ Bind(&frame_entry_label_);
+@@ -6269,9 +6319,14 @@ void CodeGeneratorX86_64::MaybeMarkGCCard(CpuRegister temp,
+ 
+ void CodeGeneratorX86_64::MarkGCCard(CpuRegister temp, CpuRegister card, CpuRegister object) {
+   // Load the address of the card table into `card`.
++#if defined(GESHER)
++  __ movq(card,
++          __ GesherThreadAddress(card, Thread::CardTableOffset<kX86_64PointerSize>().Int32Value()));
++#else
+   __ gs()->movq(card,
+                 Address::Absolute(Thread::CardTableOffset<kX86_64PointerSize>().Int32Value(),
+                                   /* no_rip= */ true));
++#endif
+   // Calculate the offset (in the card table) of the card corresponding to `object`.
+   __ movq(temp, object);
+   __ shrq(temp, Immediate(gc::accounting::CardTable::kCardShift));
+@@ -6296,18 +6351,29 @@ void CodeGeneratorX86_64::CheckGCCardIsValid(CpuRegister temp,
+                                              CpuRegister object) {
+   NearLabel done;
+   // Load the address of the card table into `card`.
++#if defined(GESHER)
++  __ movq(card,
++          __ GesherThreadAddress(card, Thread::CardTableOffset<kX86_64PointerSize>().Int32Value()));
++#else
+   __ gs()->movq(card,
+                 Address::Absolute(Thread::CardTableOffset<kX86_64PointerSize>().Int32Value(),
+                                   /* no_rip= */ true));
++#endif
+   // Calculate the offset (in the card table) of the card corresponding to `object`.
+   __ movq(temp, object);
+   __ shrq(temp, Immediate(gc::accounting::CardTable::kCardShift));
+   // assert (!clean || !self->is_gc_marking)
+   __ cmpb(Address(temp, card, TIMES_1, 0), Immediate(gc::accounting::CardTable::kCardClean));
+   __ j(kNotEqual, &done);
++#if defined(GESHER)
++  __ cmpl(__ GesherThreadAddress(
++              temp, Thread::IsGcMarkingOffset<kX86_64PointerSize>().Int32Value()),
++          Immediate(0));
++#else
+   __ gs()->cmpl(
+       Address::Absolute(Thread::IsGcMarkingOffset<kX86_64PointerSize>(), /* no_rip= */ true),
+       Immediate(0));
++#endif
+   __ j(kEqual, &done);
+   __ int3();
+   __ Bind(&done);
+@@ -6368,9 +6434,15 @@ void InstructionCodeGeneratorX86_64::GenerateSuspendCheck(HSuspendCheck* instruc
+     DCHECK_EQ(slow_path->GetSuccessor(), successor);
+   }
+ 
++#if defined(GESHER)
++  __ testl(__ GesherThreadAddress(CpuRegister(TMP),
++                                  Thread::ThreadFlagsOffset<kX86_64PointerSize>().Int32Value()),
++           Immediate(Thread::SuspendOrCheckpointRequestFlags()));
++#else
+   __ gs()->testl(Address::Absolute(Thread::ThreadFlagsOffset<kX86_64PointerSize>().Int32Value(),
+                                    /* no_rip= */ true),
+                  Immediate(Thread::SuspendOrCheckpointRequestFlags()));
++#endif
+   if (successor == nullptr) {
+     __ j(kNotZero, slow_path->GetEntryLabel());
+     __ Bind(slow_path->GetReturnLabel());
+@@ -7038,7 +7110,7 @@ void InstructionCodeGeneratorX86_64::VisitLoadString(HLoadString* load) NO_THREA
+   CheckEntrypointTypes<kQuickResolveString, void*, uint32_t>();
+ }
+ 
+-static Address GetExceptionTlsAddress() {
++[[maybe_unused]] static Address GetExceptionTlsAddress() {
+   return Address::Absolute(Thread::ExceptionOffset<kX86_64PointerSize>().Int32Value(),
+                            /* no_rip= */ true);
+ }
+@@ -7049,7 +7121,13 @@ void LocationsBuilderX86_64::VisitLoadException(HLoadException* load) {
+ }
+ 
+ void InstructionCodeGeneratorX86_64::VisitLoadException(HLoadException* load) {
++#if defined(GESHER)
++  CpuRegister out = load->GetLocations()->Out().AsRegister<CpuRegister>();
++  __ movl(out, __ GesherThreadAddress(
++                   out, Thread::ExceptionOffset<kX86_64PointerSize>().Int32Value()));
++#else
+   __ gs()->movl(load->GetLocations()->Out().AsRegister<CpuRegister>(), GetExceptionTlsAddress());
++#endif
+ }
+ 
+ void LocationsBuilderX86_64::VisitClearException(HClearException* clear) {
+@@ -7057,7 +7135,13 @@ void LocationsBuilderX86_64::VisitClearException(HClearException* clear) {
+ }
+ 
+ void InstructionCodeGeneratorX86_64::VisitClearException([[maybe_unused]] HClearException* clear) {
++#if defined(GESHER)
++  __ movl(__ GesherThreadAddress(CpuRegister(TMP),
++                                 Thread::ExceptionOffset<kX86_64PointerSize>().Int32Value()),
++          Immediate(0));
++#else
+   __ gs()->movl(GetExceptionTlsAddress(), Immediate(0));
++#endif
+ }
+ 
+ void LocationsBuilderX86_64::VisitThrow(HThrow* instruction) {
+@@ -7342,9 +7426,17 @@ void InstructionCodeGeneratorX86_64::VisitInstanceOf(HInstanceOf* instruction) {
+           break;
+         }
+         // For Baker read barrier, take the slow path while marking.
++#if defined(GESHER)
++        __ GesherSaveRax();
++        __ cmpl(Address(CpuRegister(RAX),
++                        Thread::IsGcMarkingOffset<kX86_64PointerSize>().Int32Value()),
++                Immediate(0));
++        __ GesherRestoreRax();
++#else
+         __ gs()->cmpl(
+             Address::Absolute(Thread::IsGcMarkingOffset<kX86_64PointerSize>(), /* no_rip= */ true),
+             Immediate(0));
++#endif
+         __ j(kNotEqual, slow_path->GetEntryLabel());
+       }
+ 
+@@ -7981,7 +8073,13 @@ void InstructionCodeGeneratorX86_64::GenerateGcRootFieldLoad(
+       // Test the `Thread::Current()->pReadBarrierMarkReg ## root.reg()` entrypoint.
+       const int32_t entry_point_offset =
+           Thread::ReadBarrierMarkEntryPointsOffset<kX86_64PointerSize>(root.reg());
++#if defined(GESHER)
++      __ GesherSaveRax();
++      __ cmpl(Address(CpuRegister(RAX), entry_point_offset), Immediate(0));
++      __ GesherRestoreRax();
++#else
+       __ gs()->cmpl(Address::Absolute(entry_point_offset, /* no_rip= */ true), Immediate(0));
++#endif
+       // The entrypoint is null when the GC is not marking.
+       __ j(kNotEqual, slow_path->GetEntryLabel());
+       __ Bind(slow_path->GetExitLabel());
+diff --git a/compiler/optimizing/intrinsics_x86_64.cc b/compiler/optimizing/intrinsics_x86_64.cc
+index 71defe6..9e0dfe7 100644
+--- a/compiler/optimizing/intrinsics_x86_64.cc
++++ b/compiler/optimizing/intrinsics_x86_64.cc
+@@ -1843,9 +1843,16 @@ void IntrinsicLocationsBuilderX86_64::VisitThreadCurrentThread(HInvoke* invoke)
+ 
+ void IntrinsicCodeGeneratorX86_64::VisitThreadCurrentThread(HInvoke* invoke) {
+   CpuRegister out = invoke->GetLocations()->Out().AsRegister<CpuRegister>();
++#if defined(GESHER)
++  GetAssembler()->movl(
++      out,
++      GetAssembler()->GesherThreadAddress(
++          out, Thread::CurrentPeerOffset<kX86_64PointerSize>().Int32Value()));
++#else
+   GetAssembler()->gs()->movl(out,
+                              Address::Absolute(Thread::CurrentPeerOffset<kX86_64PointerSize>(),
+                                                /* no_rip= */ true));
++#endif
+ }
+ 
+ static void GenUnsafeGet(HInvoke* invoke,
+@@ -3452,8 +3459,13 @@ void IntrinsicCodeGeneratorX86_64::VisitReferenceGetReferent(HInvoke* invoke) {
+   if (codegen_->EmitReadBarrier()) {
+     // Check self->GetWeakRefAccessEnabled().
+     ThreadOffset64 offset = Thread::WeakRefAccessEnabledOffset<kX86_64PointerSize>();
++#if defined(GESHER)
++    __ cmpl(__ GesherThreadAddress(CpuRegister(TMP), offset.Int32Value()),
++            Immediate(enum_cast<int32_t>(WeakRefAccessState::kVisiblyEnabled)));
++#else
+     __ gs()->cmpl(Address::Absolute(offset, /* no_rip= */ true),
+                   Immediate(enum_cast<int32_t>(WeakRefAccessState::kVisiblyEnabled)));
++#endif
+     __ j(kNotEqual, slow_path->GetEntryLabel());
+   }
+ 
+@@ -3552,6 +3564,14 @@ void IntrinsicLocationsBuilderX86_64::VisitThreadInterrupted(HInvoke* invoke) {
+ void IntrinsicCodeGeneratorX86_64::VisitThreadInterrupted(HInvoke* invoke) {
+   X86_64Assembler* assembler = GetAssembler();
+   CpuRegister out = invoke->GetLocations()->Out().AsRegister<CpuRegister>();
++#if defined(GESHER)
++  const int32_t interrupted = Thread::InterruptedOffset<kX86_64PointerSize>().Int32Value();
++  NearLabel done;
++  __ movl(out, __ GesherThreadAddress(out, interrupted));
++  __ testl(out, out);
++  __ j(kEqual, &done);
++  __ movl(__ GesherThreadAddress(CpuRegister(TMP), interrupted), Immediate(0));
++#else
+   Address address = Address::Absolute
+       (Thread::InterruptedOffset<kX86_64PointerSize>().Int32Value(), /* no_rip= */ true);
+   NearLabel done;
+@@ -3559,6 +3579,7 @@ void IntrinsicCodeGeneratorX86_64::VisitThreadInterrupted(HInvoke* invoke) {
+   __ testl(out, out);
+   __ j(kEqual, &done);
+   __ gs()->movl(address, Immediate(0));
++#endif
+   codegen_->MemoryFence();
+   __ Bind(&done);
+ }
+diff --git a/compiler/optimizing/optimizing_compiler.cc b/compiler/optimizing/optimizing_compiler.cc
+index 03747b0..871abb4 100644
+--- a/compiler/optimizing/optimizing_compiler.cc
++++ b/compiler/optimizing/optimizing_compiler.cc
+@@ -1358,6 +1358,10 @@ bool OptimizingCompiler::JitCompile(Thread* self,
+   };
+ 
+   if (UNLIKELY(method->IsNative())) {
++#if defined(GESHER)
++    // Gesher: no compiled JNI stubs yet (see JniCompile).
++    return false;
++#endif
+     // Use GenericJniTrampoline for critical native methods in debuggable runtimes. We don't
+     // support calling method entry / exit hooks for critical native methods yet.
+     // TODO(mythria): Add support for calling method entry / exit hooks in JITed stubs for critical
+diff --git a/compiler/trampolines/trampoline_compiler.cc b/compiler/trampolines/trampoline_compiler.cc
+index 3502520..7ae24b7 100644
+--- a/compiler/trampolines/trampoline_compiler.cc
++++ b/compiler/trampolines/trampoline_compiler.cc
+@@ -182,8 +182,14 @@ static std::unique_ptr<const std::vector<uint8_t>> CreateTrampoline(ArenaAllocat
+                                                                     ThreadOffset64 offset) {
+   x86_64::X86_64Assembler assembler(allocator);
+ 
++#if defined(GESHER)
++  // Gesher: Thread* is in a TLS slot of the TEB (ADR 0033). R11 holds no
++  // argument at an entrypoint (the hidden arguments are in RAX).
++  __ jmp(__ GesherThreadAddress(x86_64::CpuRegister(x86_64::R11), offset.Int32Value()));
++#else
+   // All x86 trampolines call via the Thread* held in gs.
+   __ gs()->jmp(x86_64::Address::Absolute(offset, true));
++#endif
+   __ int3();
+ 
+   __ FinalizeCode();
+diff --git a/compiler/utils/x86_64/assembler_x86_64.cc b/compiler/utils/x86_64/assembler_x86_64.cc
+index 46258c9..b5b39d6 100644
+--- a/compiler/utils/x86_64/assembler_x86_64.cc
++++ b/compiler/utils/x86_64/assembler_x86_64.cc
+@@ -4948,6 +4948,42 @@ X86_64Assembler* X86_64Assembler::gs() {
+   return this;
+ }
+ 
++#if defined(GESHER)
++void X86_64Assembler::GesherLoadThreadSelf(CpuRegister reg) {
++  gs()->movq(reg, Address::Absolute(kGesherThreadSelfTebOffset, /* no_rip= */ true));
++}
++
++Address X86_64Assembler::GesherThreadAddress(CpuRegister base, int32_t offset) {
++  GesherLoadThreadSelf(base);
++  return Address(base, offset);
++}
++
++void X86_64Assembler::GesherSaveRax() {
++  // LEA and MOV leave the flags alone; managed code keeps nothing below rsp.
++  leaq(CpuRegister(RSP), Address(CpuRegister(RSP), -16));
++  cfi().AdjustCFAOffset(16);
++  movq(Address(CpuRegister(RSP), 8), CpuRegister(RAX));
++  GesherLoadThreadSelf(CpuRegister(RAX));
++}
++
++void X86_64Assembler::GesherRestoreRax() {
++  movq(CpuRegister(RAX), Address(CpuRegister(RSP), 8));
++  leaq(CpuRegister(RSP), Address(CpuRegister(RSP), 16));
++  cfi().AdjustCFAOffset(-16);
++}
++
++void X86_64Assembler::GesherCallThreadPreservingRegisters(int32_t offset) {
++  // [rsp + 8] = RAX, [rsp] = the entrypoint; 16 bytes keep the alignment.
++  GesherSaveRax();
++  movq(CpuRegister(RAX), Address(CpuRegister(RAX), offset));
++  movq(Address(CpuRegister(RSP), 0), CpuRegister(RAX));
++  movq(CpuRegister(RAX), Address(CpuRegister(RSP), 8));
++  call(Address(CpuRegister(RSP), 0));
++  leaq(CpuRegister(RSP), Address(CpuRegister(RSP), 16));
++  cfi().AdjustCFAOffset(-16);
++}
++#endif  // GESHER
++
+ 
+ void X86_64Assembler::AddImmediate(CpuRegister reg, const Immediate& imm) {
+   int value = imm.value();
+diff --git a/compiler/utils/x86_64/assembler_x86_64.h b/compiler/utils/x86_64/assembler_x86_64.h
+index 3a44d63..8fc4568 100644
+--- a/compiler/utils/x86_64/assembler_x86_64.h
++++ b/compiler/utils/x86_64/assembler_x86_64.h
+@@ -31,6 +31,10 @@
+ #include "offsets.h"
+ #include "utils/assembler.h"
+ 
++#if defined(GESHER)
++#include "gesher/thread_register.h"
++#endif
++
+ namespace art HIDDEN {
+ namespace x86_64 {
+ 
+@@ -1012,6 +1016,26 @@ class X86_64Assembler final : public Assembler {
+ 
+   X86_64Assembler* gs();
+ 
++#if defined(GESHER)
++  // Gesher (docs/decisions/0033): on Windows %gs is the TEB, not Thread*;
++  // Thread* is in a TLS slot of the TEB at a constant offset. These replace
++  // `gs()->op(Address::Absolute(thread_offset, /*no_rip=*/ true), ...)`.
++  static constexpr int32_t kGesherThreadSelfTebOffset = GESHER_THREAD_SELF_TEB_OFFSET;
++  // reg := Thread::Current().
++  void GesherLoadThreadSelf(CpuRegister reg);
++  // Loads Thread* into `base` and returns the address of the Thread field at
++  // `offset` from it.
++  Address GesherThreadAddress(CpuRegister base, int32_t offset);
++  // Saves RAX below the stack pointer, for a Thread field access where no
++  // register is free (RAX then holds Thread*); flags are not changed.
++  void GesherSaveRax();
++  void GesherRestoreRax();
++  // call *Thread::Current()->offset, every register unchanged at the call.
++  // The stack pointer is 16 bytes lower inside the callee, so only for
++  // callees that do not walk the stack (the read barrier mark entrypoints).
++  void GesherCallThreadPreservingRegisters(int32_t offset);
++#endif  // GESHER
++
+   void setcc(Condition condition, CpuRegister dst);
+ 
+   void bswapl(CpuRegister dst);
+diff --git a/runtime/arch/x86_64/entrypoints_init_x86_64.cc b/runtime/arch/x86_64/entrypoints_init_x86_64.cc
+index 1843856..271cabe 100644
+--- a/runtime/arch/x86_64/entrypoints_init_x86_64.cc
++++ b/runtime/arch/x86_64/entrypoints_init_x86_64.cc
+@@ -30,6 +30,39 @@
+ 
+ namespace art HIDDEN {
+ 
++#if defined(GESHER)
++// Compiled code calls the math entrypoints with the System V ABI (ADR 0006):
++// the C library's functions are Microsoft ABI (shadow space, other
++// callee-saved registers), so the table points at System V wrappers.
++#define GESHER_SYSV_MATH1(name) \
++  static ART_SYSV_ABI double gesher_sysv_##name(double a) { return name(a); }
++#define GESHER_SYSV_MATH2(name) \
++  static ART_SYSV_ABI double gesher_sysv_##name(double a, double b) { return name(a, b); }
++GESHER_SYSV_MATH1(cos)
++GESHER_SYSV_MATH1(sin)
++GESHER_SYSV_MATH1(acos)
++GESHER_SYSV_MATH1(asin)
++GESHER_SYSV_MATH1(atan)
++GESHER_SYSV_MATH2(atan2)
++GESHER_SYSV_MATH2(pow)
++GESHER_SYSV_MATH1(cbrt)
++GESHER_SYSV_MATH1(cosh)
++GESHER_SYSV_MATH1(exp)
++GESHER_SYSV_MATH1(expm1)
++GESHER_SYSV_MATH2(hypot)
++GESHER_SYSV_MATH1(log)
++GESHER_SYSV_MATH1(log10)
++GESHER_SYSV_MATH2(nextafter)
++GESHER_SYSV_MATH1(sinh)
++GESHER_SYSV_MATH1(tan)
++GESHER_SYSV_MATH1(tanh)
++#undef GESHER_SYSV_MATH1
++#undef GESHER_SYSV_MATH2
++// The table's pointer types do not carry the ABI.
++#define GESHER_MATH(name) reinterpret_cast<double (*)(double)>(gesher_sysv_##name)
++#define GESHER_MATH_2(name) reinterpret_cast<double (*)(double, double)>(gesher_sysv_##name)
++#endif  // GESHER
++
+ // Cast entrypoints.
+ extern "C" size_t art_quick_instance_of(mirror::Object* obj, mirror::Class* ref_class);
+ 
+@@ -88,6 +121,26 @@ void InitEntryPoints(JniEntryPoints* jpoints,
+   qpoints->SetCheckInstanceOf(art_quick_check_instance_of);
+ 
+   // More math.
++#if defined(GESHER)
++  qpoints->SetCos(GESHER_MATH(cos));
++  qpoints->SetSin(GESHER_MATH(sin));
++  qpoints->SetAcos(GESHER_MATH(acos));
++  qpoints->SetAsin(GESHER_MATH(asin));
++  qpoints->SetAtan(GESHER_MATH(atan));
++  qpoints->SetAtan2(GESHER_MATH_2(atan2));
++  qpoints->SetPow(GESHER_MATH_2(pow));
++  qpoints->SetCbrt(GESHER_MATH(cbrt));
++  qpoints->SetCosh(GESHER_MATH(cosh));
++  qpoints->SetExp(GESHER_MATH(exp));
++  qpoints->SetExpm1(GESHER_MATH(expm1));
++  qpoints->SetHypot(GESHER_MATH_2(hypot));
++  qpoints->SetLog(GESHER_MATH(log));
++  qpoints->SetLog10(GESHER_MATH(log10));
++  qpoints->SetNextAfter(GESHER_MATH_2(nextafter));
++  qpoints->SetSinh(GESHER_MATH(sinh));
++  qpoints->SetTan(GESHER_MATH(tan));
++  qpoints->SetTanh(GESHER_MATH(tanh));
++#else
+   qpoints->SetCos(cos);
+   qpoints->SetSin(sin);
+   qpoints->SetAcos(acos);
+@@ -106,6 +159,7 @@ void InitEntryPoints(JniEntryPoints* jpoints,
+   qpoints->SetSinh(sinh);
+   qpoints->SetTan(tan);
+   qpoints->SetTanh(tanh);
++#endif  // GESHER
+ 
+   // Math
+ #if defined(GESHER)
+diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
+index efef1bf..7469482 100644
+--- a/runtime/class_linker.cc
++++ b/runtime/class_linker.cc
+@@ -1486,6 +1486,8 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+     };
+     const PointerSize pointer_size = image_pointer_size_;
+     size_t remapped = 0u;
++    size_t compiled = 0u;
++    const void* const nterp_with_clinit = interpreter::GetNterpWithClinitEntryPoint();
+     for (gc::space::ImageSpace* space : spaces) {
+       space->GetImageHeader().VisitPackedArtMethods(
+           [&](ArtMethod& method) REQUIRES_SHARED(Locks::mutator_lock_) {
+@@ -1494,6 +1496,14 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+             if (stub != code) {
+               method.SetEntryPointFromQuickCompiledCodePtrSize(stub, pointer_size);
+               ++remapped;
++            } else if (code != nullptr && code != nterp_with_clinit &&
++                       std::find(std::begin(runtime_stubs), std::end(runtime_stubs), code) ==
++                           std::end(runtime_stubs)) {
++              ++compiled;  // the image's own code for this method (AOT)
++              if (!instrumentation::Instrumentation::CanUseAotCode(code)) {
++                // GESHER_ART_NO_AOT: nterp or the interpreter instead.
++                runtime->GetInstrumentation()->ReinitializeMethodsCode(&method);
++              }
+             }
+             // Native methods and the resolution method keep a JNI entrypoint
+             // (a dlsym lookup stub) in `data_`; IMT conflict methods keep their
+@@ -1511,6 +1521,9 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+           pointer_size);
+     }
+     VLOG(image) << "Gesher: " << remapped << " boot image entrypoints point at libart's stubs";
++    if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
++      LOG(INFO) << "gesher: boot image: " << compiled << " methods with compiled code";
++    }
+   }
+ #endif  // GESHER
+ 
+diff --git a/runtime/instrumentation-inl.h b/runtime/instrumentation-inl.h
+index 3b035ea..c54781f 100644
+--- a/runtime/instrumentation-inl.h
++++ b/runtime/instrumentation-inl.h
+@@ -32,6 +32,14 @@ inline bool Instrumentation::CanUseAotCode(const void* quick_code) {
+   if (quick_code == nullptr) {
+     return false;
+   }
++#if defined(GESHER)
++  // GESHER_ART_NO_AOT=1: compiled code from oat files is not used (nterp and
++  // the JIT run instead), to compare execution modes (docs/compiled-code.md).
++  static const bool gesher_no_aot = getenv("GESHER_ART_NO_AOT") != nullptr;
++  if (gesher_no_aot) {
++    return false;
++  }
++#endif
+   Runtime* runtime = Runtime::Current();
+   // For simplicity, we never use AOT code for debuggable.
+   if (runtime->IsJavaDebuggable()) {
+diff --git a/runtime/jit/jit.cc b/runtime/jit/jit.cc
+index 9c8ad32..a0e9926 100644
+--- a/runtime/jit/jit.cc
++++ b/runtime/jit/jit.cc
+@@ -1389,6 +1389,10 @@ bool Jit::IgnoreSamplesForMethod(ArtMethod* method) REQUIRES_SHARED(Locks::mutat
+     return true;
+   }
+   if (method->IsNative()) {
++#if defined(GESHER)
++    // Gesher: no JIT-compiled JNI stubs yet (compiler/optimizing JniCompile).
++    return true;
++#endif
+     ObjPtr<mirror::Class> klass = method->GetDeclaringClass();
+     if (klass == GetClassRoot<mirror::MethodHandle>() ||
+         klass == GetClassRoot<mirror::VarHandle>()) {
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+index 65ab5e6..1ef05d2 100644
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -195,14 +195,26 @@ namespace apex = com::android::apex;
+ #include "asm_defines.def"
+ #undef ASM_DEFINE
+ 
++#if defined(GESHER)
++#include "gesher/thread_register.h"
++#endif
++
+ namespace art HIDDEN {
+ 
+ #if defined(GESHER)
+ // GESHER_ART_INTERPRET_ONLY=1: run as before compiled code (ADR 0033).
++// Also when Thread* is not in the TLS slot compiled code reads it from.
+ static bool GesherInterpretOnly() {
+   static const bool value = [] {
+     const char* v = getenv("GESHER_ART_INTERPRET_ONLY");
+-    return v != nullptr && v[0] != 0 && v[0] != '0';
++    if (v != nullptr && v[0] != 0 && v[0] != '0') {
++      return true;
++    }
++    if (gesher_thread_register_is_fixed() == 0) {
++      LOG(WARNING) << "gesher: TLS slot 63 is taken; compiled code is off, interpreting only";
++      return true;
++    }
++    return false;
+   }();
+   return value;
+ }
