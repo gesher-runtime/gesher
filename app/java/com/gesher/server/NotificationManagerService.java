@@ -152,8 +152,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                     : String.format("no toast (0x%08x)", hr);
         }
         SystemServer.log("notification " + id + (update ? " updated" : " posted") + " for "
-                + pkg + ": channel " + channel.getId() + " (importance " + importance
-                + "), title \"" + title + "\": " + shown);
+                + pkg + ": channel " + channel.getId() + ", title \"" + title
+                + "\" (importance " + importance + ", " + shown + ")");
         notifyListeners(r, true, 0);
     }
 

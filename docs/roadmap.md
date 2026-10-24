@@ -228,6 +228,17 @@ needs: [framework-build.md](framework-build.md).
         starts on demand and ends; another package's activity and provider
         in its own process; `gesher-app my.apk` and the `.apk` association
         use it (ci run 40019524773)
+- [ ] Device-state services backed by Windows (devsvc track, ADR 0038,
+      docs/services.md "Device services")
+  - [ ] Alarms that fire (a waitable timer; the app's process started for a
+        PendingIntent), TIME_SET from WM_TIMECHANGE
+  - [ ] JobScheduler: JobServices in the app's process, periodic jobs,
+        constraints from Windows
+  - [ ] The clipboard linked with Windows' both ways (text, HTML)
+  - [ ] Notifications as toasts of the app's AppUserModelID (cancel removes
+        them), a notification listener
+  - [ ] Wake locks as Windows power requests; the battery from
+        GetSystemPowerStatus
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package

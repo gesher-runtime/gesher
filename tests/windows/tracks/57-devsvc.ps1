@@ -23,8 +23,14 @@ $serverLog = Join-Path $deviceLogs 'system_server.log'
 $env:GESHER_APP_WINDOW = 'headless'
 
 function DevsvcText([string] $Path) {
-  if (Test-Path $Path) { return [IO.File]::ReadAllText($Path) }
-  return ''
+  # The device's processes keep their logs open: read with sharing.
+  if (-not (Test-Path $Path)) { return '' }
+  $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+  try {
+    return [IO.StreamReader]::new($stream).ReadToEnd()
+  } finally {
+    $stream.Dispose()
+  }
 }
 
 # The package log from a mark (its length) on.
