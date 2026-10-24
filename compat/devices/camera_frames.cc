@@ -547,6 +547,95 @@ const JNINativeMethod gCameraFramesMethods[] = {
     {"nativeToNv21", "([BIIII)[B", GESHER_JNI(CameraFrames_toNv21)},
 };
 
+// --- android.media.PublicFormatUtils (frameworks/base's android_media_PublicFormatUtils
+// over libui's PublicFormat.cpp, which Gesher does not build): ImageFormat <-> HAL
+// format and dataspace, as ui/PublicFormat.cpp maps them.
+
+namespace pf {
+constexpr int kJpeg = 0x100, kDepthPointCloud = 0x101, kDepthJpeg = 0x69656963,
+              kHeic = 0x48454946, kJpegR = 0x1005, kDepth16 = 0x44363159, kRawSensor = 0x20,
+              kRawPrivate = 0x24, kRaw10 = 0x25, kRaw12 = 0x26, kRawDepth = 0x1002,
+              kRawDepth10 = 0x1003, kYuv420 = 0x23, kNv21 = 0x11, kYv12 = 0x32315659;
+constexpr int kHalY16 = 0x20363159, kHalRaw16 = 0x20, kHalRaw10 = 0x25;
+constexpr int kDsUnknown = 0, kDsArbitrary = 1, kDsDepth = 0x1000, kDsDynamicDepth = 0x1002,
+              kDsHeif = 0x1004, kDsJpegR = 0x1005, kDsJfif = 0x8C20000;
+}  // namespace pf
+
+jint PublicFormat_getHalFormat(JNIEnv*, jclass, jint format) {
+  switch (format) {
+    case pf::kJpeg:
+    case pf::kDepthPointCloud:
+    case pf::kDepthJpeg:
+    case pf::kHeic:
+    case pf::kJpegR:
+      return kHalBlob;
+    case pf::kDepth16:
+      return pf::kHalY16;
+    case pf::kRawSensor:
+    case pf::kRawDepth:
+      return pf::kHalRaw16;
+    case pf::kRawDepth10:
+      return pf::kHalRaw10;
+    default:
+      return format;  // the other public formats are their HAL formats
+  }
+}
+
+jint PublicFormat_getHalDataspace(JNIEnv*, jclass, jint format) {
+  switch (format) {
+    case pf::kDepthPointCloud:
+    case pf::kDepth16:
+    case pf::kRawDepth:
+    case pf::kRawDepth10:
+      return pf::kDsDepth;
+    case pf::kRawSensor:
+    case pf::kRawPrivate:
+    case pf::kRaw10:
+    case pf::kRaw12:
+      return pf::kDsArbitrary;
+    case pf::kYuv420:
+    case pf::kNv21:
+    case pf::kYv12:
+    case pf::kJpeg:
+      return pf::kDsJfif;
+    case pf::kDepthJpeg:
+      return pf::kDsDynamicDepth;
+    case pf::kHeic:
+      return pf::kDsHeif;
+    case pf::kJpegR:
+      return pf::kDsJpegR;
+    default:
+      return pf::kDsUnknown;
+  }
+}
+
+jint PublicFormat_getPublicFormat(JNIEnv*, jclass, jint halFormat, jint dataspace) {
+  switch (halFormat) {
+    case kHalBlob:
+      switch (dataspace) {
+        case pf::kDsDepth: return pf::kDepthPointCloud;
+        case pf::kDsDynamicDepth: return pf::kDepthJpeg;
+        case pf::kDsHeif: return pf::kHeic;
+        case pf::kDsJpegR: return pf::kJpegR;
+        default: return pf::kJpeg;
+      }
+    case pf::kHalY16:
+      return dataspace == pf::kDsDepth ? pf::kDepth16 : halFormat;
+    case pf::kHalRaw16:
+      return dataspace == pf::kDsDepth ? pf::kRawDepth : pf::kRawSensor;
+    case pf::kHalRaw10:
+      return dataspace == pf::kDsDepth ? pf::kRawDepth10 : pf::kRaw10;
+    default:
+      return halFormat;
+  }
+}
+
+const JNINativeMethod gPublicFormatUtilsMethods[] = {
+    {"nativeGetHalFormat", "(I)I", GESHER_JNI(PublicFormat_getHalFormat)},
+    {"nativeGetHalDataspace", "(I)I", GESHER_JNI(PublicFormat_getHalDataspace)},
+    {"nativeGetPublicFormat", "(II)I", GESHER_JNI(PublicFormat_getPublicFormat)},
+};
+
 // --- android.hardware.Camera (the legacy API): no cameras, cleanly -----------------------
 // Apps on the legacy API see none (Camera2 has them all); opening one fails as
 // with no camera service: RuntimeException("Fail to connect to camera service").
@@ -594,6 +683,8 @@ int register_gesher_camera_frames(JNIEnv* env) {
                         NELEM(gSurfaceUtilsMethods));
   RegisterGesherNatives(env, "com/gesher/server/CameraFrames", gCameraFramesMethods,
                         NELEM(gCameraFramesMethods));
+  RegisterGesherNatives(env, "android/media/PublicFormatUtils", gPublicFormatUtilsMethods,
+                        NELEM(gPublicFormatUtilsMethods));
   RegisterGesherNatives(env, "android/hardware/Camera", gLegacyCameraMethods,
                         NELEM(gLegacyCameraMethods));
   if (dlopen("libmedia_jni.so", RTLD_NOW) == nullptr) {
