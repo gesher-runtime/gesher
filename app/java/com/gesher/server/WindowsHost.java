@@ -70,8 +70,11 @@ public final class WindowsHost {
             if (sStarted) return;
             sStarted = true;
         }
-        boolean window = nativeStartEvents();
-        SystemServer.log("devsvc: Windows events " + (window ? "from a hidden window"
+        long window = nativeStartEvents();
+        // The handle is in the log for the tests: they send the window WM_TIMECHANGE by
+        // handle, since FindWindow from another window station or desktop (CI) misses it.
+        SystemServer.log("devsvc: Windows events " + (window != 0
+                ? "from a hidden window 0x" + Long.toHexString(window)
                 : "not available (no window)"));
         Thread t = new Thread(() -> {
             while (true) {
@@ -220,7 +223,7 @@ public final class WindowsHost {
         return available() ? nativeFullPath(path) : path;
     }
 
-    private static native boolean nativeStartEvents();
+    private static native long nativeStartEvents();
     private static native int nativeWaitEvents(int timeoutMs);
     private static native String[] nativeNextActivation();
     private static native String nativeClipboardText();

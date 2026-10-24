@@ -210,9 +210,9 @@ bool OpenClipboardRetrying() {
 
 // --- events ---------------------------------------------------------------------------
 
-bool StartEvents() {
+unsigned long long StartEvents() {
   InitOnceExecuteOnce(&g_events_once, StartOnce, nullptr, nullptr);
-  return g_window != nullptr;
+  return reinterpret_cast<unsigned long long>(g_window);
 }
 
 unsigned WaitEvents(int timeout_ms) {

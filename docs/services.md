@@ -122,15 +122,15 @@ Branch `wip/devsvc` (worktree `C:\work\gesher-devsvc`), from main 86aa4c7.
     locally: a direct SendMessage to the window works, the broadcast returns 0
     and reaches no one). The test now finds the device's event window
     (`FindWindowW("GesherDeviceServices")`) and sends it there.
-- **Runs in flight / unread:** ci run 40135237081 at 68a913f has completed;
-  its result was not read (GitHub API rate limit). Next step: read it
-  (`gh run view 40135237081 -R gesher-runtime/gesher`, then the test jobs'
-  `--log` and grep `devsvc:`). If both test jobs are green, 68a913f is the
-  verified SHA: tick the devsvc boxes in docs/roadmap.md (Phase 4 checklist,
-  "Device-state services backed by Windows"), put the run id and PASS lines
-  here. If the clock check still fails, look at the system server lines the
-  check prints (`alarm:`): if no "the wall clock was set", the window was not
-  found from the test's process (FindWindow returned 0: the check says so).
+- **ci run 40135237081 at 68a913f:** build, package and e2e green; both test
+  jobs failed on ONE check, the clock one: `FindWindowW("GesherDeviceServices")`
+  returned 0 on both runners (the device's window is on another window station
+  or desktop than the test's process on CI; every other devsvc check, clipboard
+  included, passed, so the window exists). Fix: `nativeStartEvents` now returns
+  the window's HWND as a long, `WindowsHost.addListener` logs it
+  (`devsvc: Windows events from a hidden window 0x<hex>`), and the test sends
+  WM_TIMECHANGE to that handle read from `system_server.log` (FindWindow kept
+  only as a fallback; a failed SendMessageTimeout is now reported too).
 - Done (code): see the table above and ADR 0038. Locally verified with a
   mingw-w64 g++ driver on Windows 11: toasts shown/in history/removed, the
   clipboard's text and HTML, the event window, a power request, the alarm
