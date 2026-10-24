@@ -49,9 +49,14 @@ constexpr DWORD kPipeBuffer = 256 * 1024;
 std::mutex g_mutex;
 std::map<jint, HANDLE> g_children;  // pid -> process handle, until waited for
 
+// The program being started, for the log line of a failure.
+thread_local const char* t_program = "";
+
 void ThrowIOException(JNIEnv* env, int error, const char* what = nullptr) {
   char message[512];
   snprintf(message, sizeof(message), "error=%d, %s", error, what != nullptr ? what : ex::ErrorText(error));
+  fprintf(stderr, "gesher: exec %s failed: %s\n", t_program, message);
+  fflush(stderr);
   jclass c = env->FindClass("java/io/IOException");
   if (c != nullptr) env->ThrowNew(c, message);
 }
@@ -100,6 +105,7 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
                          jboolean redirect_error_stream) {
   std::string program = ByteString(env, prog);
   if (!program.empty() && program.back() == '\0') program.pop_back();
+  t_program = program.c_str();
   std::vector<std::string> argv{program};
   for (std::string& a : Strings(ByteString(env, arg_block), argc)) argv.push_back(std::move(a));
   std::string dir = ByteString(env, dir_bytes);
