@@ -107,18 +107,23 @@ public final class FontsTest {
   private static void available() {
     Set<Font> fonts = SystemFonts.getAvailableFonts();
     String dir = new File(SystemFontMap.fontDir()).getAbsolutePath();
+    // Windows' own fonts (windows-fonts.xml) are used in place, from its fonts folder.
+    String windows = com.gesher.app.fonts.WindowsFonts.directory();
+    String windowsDir = windows == null ? null : new File(windows).getAbsolutePath();
     boolean roboto = false;
     boolean hebrew = false;
     boolean inDir = true;
     for (Font font : fonts) {
       File file = font.getFile();
       if (file == null) continue;
-      inDir &= file.getAbsolutePath().startsWith(dir);
+      String path = file.getAbsolutePath();
+      inDir &= path.startsWith(dir) || (windowsDir != null && path.startsWith(windowsDir));
       roboto |= file.getName().equals("Roboto-Regular.ttf");
       hebrew |= file.getName().equals("NotoSansHebrew-Regular.ttf");
     }
     check(!fonts.isEmpty() && roboto && hebrew && inDir,
         "SystemFonts.getAvailableFonts: " + fonts.size() + " fonts in " + dir
+            + (windowsDir != null ? " and " + windowsDir : "")
             + " (Roboto " + roboto + ", Noto Sans Hebrew " + hebrew + ")");
   }
 
