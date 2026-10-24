@@ -44,7 +44,10 @@ $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
 
 $jars = 'core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app'
 $common = @(
-  '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx1g',
+  # A large object space of its own map per object: the free-list one is one
+  # reservation of the heap's capacity, which ART's low-4 GiB allocator looks
+  # for page by page (msync), slow on Windows for large sizes.
+  '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx512m', '--runtime-arg', '-XX:LargeObjectSpace=map',
   "--android-root=$(NoDrive "$root/system")",
   '--instruction-set=x86_64', '--compiler-filter=verify', '--image-format=lz4',
   '--no-generate-mini-debug-info', '--no-watch-dog', '--avoid-storing-invocation', '-j4')
