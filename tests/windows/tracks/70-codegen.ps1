@@ -13,6 +13,18 @@
 # primary image is AOT-compiled (--compiler-filter=speed), so the nterp and
 # jit modes exercise AOT code (boot image compiled-method count > 0).
 
+# gesher-base's mmap layer first (probes/posix/mman_probe.cc, ADR 0036): the
+# oat files' code and the JIT's dual view are mapped through it.
+$probe = & "$Dir/mman_probe.exe" 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0 -and $probe.Contains('mman probe: all passed')) {
+  $n = @($probe -split "`n" | Where-Object { $_ -match '^ok ' }).Count
+  Write-Host "PASS  codegen: mman probe ($n checks: placeholder mappings, MAP_FIXED over mappings, executable file views, shared dual views)"
+} else {
+  Write-Host "FAIL  codegen: mman probe (exit $LASTEXITCODE)"
+  Write-Host $probe
+  $script:failed++
+}
+
 $image = "-Ximage:$(NoDrive "$root/system")/framework/boot.art"
 $codegenDex = NoDrive "$Dir/codegen-tests.dex"
 
@@ -165,6 +177,16 @@ foreach ($name in @($modes.Keys)) {
   if ($r.Exit -eq 0 -and $r.Out.Contains('StackOverflow all passed') -and (ModeOk $name $r.Out) -and $jitted) {
     $depths = ($r.Out -split "`n" | Where-Object { $_ -match '^ok   stack overflow, (\w+) code, on the main thread \(depths ([\d ]+)\)' } |
       ForEach-Object { "$($Matches[1]) $($Matches[2])" }) -join '; '
+    if ($name -eq 'jit') {
+      # The JIT's code cache: one file, a writable view and an executable one.
+      $region = ($r.Out -split "`n" | Where-Object { $_ -match 'Created JitMemoryRegion' } | Select-Object -First 1)
+      if ($region -match 'non_exec_pages=0x[0-9a-f]*[1-9a-f]' -and $r.Out -notmatch 'Failed to initialize dual view JIT') {
+        Write-Host "PASS  codegen: the JIT code cache is dual-mapped, W^X ($(($region -replace '^.*Created JitMemoryRegion: ', '').Trim()))"
+      } else {
+        Write-Host "FAIL  codegen: the JIT code cache is not dual-mapped ($region)"
+        $script:failed++
+      }
+    }
     Write-Host "PASS  codegen: StackOverflowError caught and recovered from under $name (main thread, new threads, 2 at once; app, boot, native code; 4 rounds each; main thread depths: $depths)"
   } else {
     ReportFailure "StackOverflowError under $name$(if (-not $jitted) { ' (the recursion was not JIT-compiled)' })" $r
@@ -172,10 +194,11 @@ foreach ($name in @($modes.Keys)) {
 }
 
 # JNI stubs (tests/dex-codegen/JniStubs.java, ADR 0036): jni_test.so's natives
-# (tests/native) called 40,000 times a round from two threads. Under jit the
-# JIT compiles their JNI stubs (-verbose:jit: "JIT added ... gesher.JniTest.add");
-# under nterp and jit, the boot library's natives have the boot image's AOT
-# JNI stubs (the count is in the "boot image:" line).
+# (tests/native) called 40,000 times a round from two threads. Natives whose
+# shorty a boot image JNI stub has use that AOT stub; under jit the JIT
+# compiles the others' (-verbose:jit: "JIT added ... gesher.JniTest.mix", 15
+# arguments, some on the stack). The boot library's natives have the boot
+# image's AOT JNI stubs (the count is in the "boot image:" line).
 $jniLib = Join-Path $Dir 'jni_test.so'
 if (Test-Path $jniLib) {
   foreach ($name in @($modes.Keys)) {
@@ -186,13 +209,13 @@ if (Test-Path $jniLib) {
     $r = RunMode $jniArgs @('gesher.JniStubs', (NoDrive (Resolve-Path $jniLib).Path)) $m.Env
     $stubs = @($r.Out -split "`n" | Where-Object { $_ -match 'JIT added .*gesher\.JniTest\.' } |
       ForEach-Object { if ($_ -match '\) (\S+ gesher\.JniTest\.\w+)') { $Matches[1] } } | Sort-Object -Unique)
-    $jitOk = $name -ne 'jit' -or ($stubs -match 'JniTest\.add').Count -gt 0
+    $jitOk = $name -ne 'jit' -or $stubs.Count -gt 0
     $bootJni = if ($r.Out -match 'boot image: \d+ methods with compiled code \((\d+) native') { $Matches[1] } else { '?' }
     if ($r.Exit -eq 0 -and $r.Out.Contains('JniStubs all passed') -and (ModeOk $name $r.Out) -and $jitOk) {
       $what = if ($name -eq 'jit') { "JIT-compiled JNI stubs: $($stubs -join ', ')" } else { 'generic JNI for app natives' }
       Write-Host "PASS  codegen: JNI calls under $name ($what; boot image JNI stubs: $bootJni)"
     } else {
-      ReportFailure "JNI calls under $name$(if (-not $jitOk) { ' (no JIT-compiled JNI stub for JniTest.add)' })" $r
+      ReportFailure "JNI calls under $name$(if (-not $jitOk) { ' (no JIT-compiled JNI stub for a JniTest native)' })" $r
     }
   }
 } else {

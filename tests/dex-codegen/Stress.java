@@ -209,6 +209,31 @@ public final class Stress {
     return ok;
   }
 
+  static boolean close(double a, double b) {
+    return a == b || Math.abs(a - b) <= 1e-12 * Math.max(1.0, Math.abs(b));
+  }
+
+  // Math's functions that compiled code calls through the math entrypoints
+  // (pCos, pPow, ...: System V wrappers of the C library's, ADR 0033),
+  // against StrictMath's (fdlibm, a JNI call), often enough for the JIT.
+  static boolean mathEntrypoints() {
+    boolean ok = true;
+    for (int i = 0; i < 20_000; i++) {
+      double x = (i % 200) * 0.01 - 0.99;  // in [-0.99, 1.0]
+      double y = 0.5 + (i % 7);
+      ok &= close(Math.cos(x), StrictMath.cos(x)) && close(Math.sin(x), StrictMath.sin(x));
+      ok &= close(Math.tan(x), StrictMath.tan(x)) && close(Math.acos(x), StrictMath.acos(x));
+      ok &= close(Math.asin(x), StrictMath.asin(x)) && close(Math.atan(x), StrictMath.atan(x));
+      ok &= close(Math.atan2(x, y), StrictMath.atan2(x, y)) && close(Math.pow(y, x), StrictMath.pow(y, x));
+      ok &= close(Math.cbrt(x), StrictMath.cbrt(x)) && close(Math.cosh(x), StrictMath.cosh(x));
+      ok &= close(Math.exp(x), StrictMath.exp(x)) && close(Math.expm1(x), StrictMath.expm1(x));
+      ok &= close(Math.hypot(x, y), StrictMath.hypot(x, y)) && close(Math.log(y), StrictMath.log(y));
+      ok &= close(Math.log10(y), StrictMath.log10(y)) && close(Math.sinh(x), StrictMath.sinh(x));
+      ok &= close(Math.tanh(x), StrictMath.tanh(x)) && Math.nextAfter(y, 10.0) > y;
+    }
+    return ok;
+  }
+
   interface Greeter {
     String greet(String name);
   }
@@ -269,6 +294,7 @@ public final class Stress {
     check("gc with frames on the stack", gc());
     check("threads, monitors, wait/notify", threads());
     check("jni (libcore natives)", jni());
+    check("math entrypoints", mathEntrypoints());
     check("proxy", proxy());
     check("reflection", reflection());
     check("array bounds, div by zero, class cast", arrayAndArith());

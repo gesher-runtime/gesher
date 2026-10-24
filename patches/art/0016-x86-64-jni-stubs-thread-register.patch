@@ -30,7 +30,7 @@ index 871abb4..03747b0 100644
      // support calling method entry / exit hooks for critical native methods yet.
      // TODO(mythria): Add support for calling method entry / exit hooks in JITed stubs for critical
 diff --git a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
-index cb64eb0..8c62d63 100644
+index cb64eb0..4fc1fb8 100644
 --- a/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
 +++ b/compiler/utils/x86_64/jni_macro_assembler_x86_64.cc
 @@ -44,6 +44,23 @@ static inline CpuRegister GetScratchRegister() {
@@ -38,7 +38,7 @@ index cb64eb0..8c62d63 100644
  #define __ asm_.
  
 +#if defined(GESHER)
-+// Gesher (docs/decisions/0036-stack-overflow-and-jni-stubs.md): on Windows %gs
++// Gesher (docs/decisions/0036-stack-overflow-jni-stubs-mappings.md): on Windows %gs
 +// is the TEB, and Thread* is in a TLS slot of it at a constant offset (ADR
 +// 0033). Each Thread field access loads Thread* into R10 first: R10 is no
 +// argument, return value or callee-save register of a JNI stub, of the
@@ -197,6 +197,88 @@ index cb64eb0..8c62d63 100644
  #undef __
  
  }  // namespace x86_64
+diff --git a/runtime/arch/x86_64/jni_entrypoints_x86_64.S b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+index f91d1dc..6fb3444 100644
+--- a/runtime/arch/x86_64/jni_entrypoints_x86_64.S
++++ b/runtime/arch/x86_64/jni_entrypoints_x86_64.S
+@@ -61,9 +61,15 @@ DEFINE_FUNCTION \name
+     // Save register args RDI, RSI, RDX, RCX, R8, R9, mmx0-mmx7 and align stack.
+     SAVE_MANAGED_ARGS_INCREASE_FRAME
+     // Call `cxx_name()`.
++    // Gesher (ADR 0036): `thread_self` passes Thread::Current(), which is
++    // not at THREAD_SELF_OFFSET from %gs on Windows (the TEB).
++    .ifc \arg1, thread_self
++        LOAD_THREAD_SELF rdi        // Pass Thread::Current().
++    .else
+     .ifnc \arg1, none
+         mov REG_VAR(arg1), %rdi     // Pass arg1.
+     .endif
++    .endif
+     call CALLVAR(cxx_name)          // Call cxx_name(...).
+     // Restore register args RDI, RSI, RDX, RCX, R8, R9, mmx0-mmx7 and return.
+     RESTORE_MANAGED_ARGS_DECREASE_FRAME
+@@ -78,10 +84,18 @@ DEFINE_FUNCTION \name
+     INCREASE_FRAME /*mmx0*/ 8 + /*padding*/ 8
+     movsd %xmm0, 0(%rsp)
+     // Call `cxx_name()`.
+-    mov REG_VAR(arg1), %rdi         // Pass arg1.
++    .ifc \arg1, thread_self
++        LOAD_THREAD_SELF rdi        // Pass Thread::Current() (Gesher, ADR 0036).
++    .else
++        mov REG_VAR(arg1), %rdi     // Pass arg1.
++    .endif
++    .ifc \arg2, thread_self
++        LOAD_THREAD_SELF rsi        // Pass Thread::Current() (Gesher, ADR 0036).
++    .else
+     .ifnc \arg2, none
+         mov REG_VAR(arg2), %rsi     // Pass arg2.
+     .endif
++    .endif
+     call CALLVAR(cxx_name)          // Call cxx_name(...).
+     // Restore return registers and return.
+     movsd 0(%rsp), %xmm0
+@@ -336,30 +350,30 @@ JNI_SAVE_MANAGED_ARGS_TRAMPOLINE art_jni_read_barrier, artJniReadBarrier, none
+     /*
+      * Trampoline to `artJniMethodStart()` that preserves all managed arguments.
+      */
+-JNI_SAVE_MANAGED_ARGS_TRAMPOLINE art_jni_method_start, artJniMethodStart, gs:THREAD_SELF_OFFSET
++JNI_SAVE_MANAGED_ARGS_TRAMPOLINE art_jni_method_start, artJniMethodStart, thread_self
+ 
+     /*
+      * Trampoline to `artJniMethodEntryHook` that preserves all managed arguments.
+      */
+ JNI_SAVE_MANAGED_ARGS_TRAMPOLINE \
+-    art_jni_method_entry_hook, artJniMethodEntryHook, gs:THREAD_SELF_OFFSET
++    art_jni_method_entry_hook, artJniMethodEntryHook, thread_self
+ 
+     /*
+      * Trampoline to `artJniMonitoredMethodStart()` that preserves all managed arguments.
+      */
+ JNI_SAVE_MANAGED_ARGS_TRAMPOLINE \
+-    art_jni_monitored_method_start, artJniMonitoredMethodStart, gs:THREAD_SELF_OFFSET
++    art_jni_monitored_method_start, artJniMonitoredMethodStart, thread_self
+ 
+     /*
+      * Trampoline to `artJniMethodEnd()` that preserves all return registers.
+      */
+-JNI_SAVE_RETURN_VALUE_TRAMPOLINE art_jni_method_end, artJniMethodEnd, gs:THREAD_SELF_OFFSET, none
++JNI_SAVE_RETURN_VALUE_TRAMPOLINE art_jni_method_end, artJniMethodEnd, thread_self, none
+ 
+     /*
+      * Trampoline to `artJniMonitoredMethodEnd()` that preserves all return registers.
+      */
+ JNI_SAVE_RETURN_VALUE_TRAMPOLINE \
+-    art_jni_monitored_method_end, artJniMonitoredMethodEnd, gs:THREAD_SELF_OFFSET, none
++    art_jni_monitored_method_end, artJniMonitoredMethodEnd, thread_self, none
+ 
+     /*
+      * Entry from JNI stub that tries to lock the object in a fast path and
+@@ -437,4 +451,4 @@ END_FUNCTION art_jni_unlock_object
+      */
+     // This is also the slow path for art_jni_unlock_object.
+ JNI_SAVE_RETURN_VALUE_TRAMPOLINE \
+-    art_jni_unlock_object_no_inline, artJniUnlockObject, rbx, gs:THREAD_SELF_OFFSET
++    art_jni_unlock_object_no_inline, artJniUnlockObject, rbx, thread_self
 diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
 index c518929..beef83e 100644
 --- a/runtime/class_linker.cc

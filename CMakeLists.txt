@@ -78,6 +78,11 @@ target_link_libraries(platform_probe PRIVATE synchronization)
 add_executable(socket_probe probes/posix/socket_probe.cc)
 target_compile_options(socket_probe PRIVATE -Wall -Wextra -Werror)
 
+# gesher-base's mmap layer: placeholder mappings, executable file views
+# (stack track, docs/decisions/0036); run in CI on Windows.
+add_executable(mman_probe probes/posix/mman_probe.cc)
+target_compile_options(mman_probe PRIVATE -Wall -Wextra -Werror)
+
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
