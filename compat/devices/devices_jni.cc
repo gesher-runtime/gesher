@@ -2,6 +2,8 @@
 // registered by android_runtime.cc after the stand-ins they replace:
 // - com.gesher.server.WindowsLocation (gesher-app.jar): Windows'
 //   location service for the system server's LocationManagerService.
+// - android.hardware.SystemSensorManager and its BaseEventQueue
+//   (sensors_jni.cc), replacing device_standins.cc's empty ones.
 
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
@@ -73,7 +75,10 @@ const JNINativeMethod gWindowsLocationMethods[] = {
 
 }  // namespace
 
+int register_gesher_sensors(JNIEnv* env);  // sensors_jni.cc
+
 int register_gesher_devices(JNIEnv* env) {
+  register_gesher_sensors(env);
   RegisterGesherNatives(env, "com/gesher/server/WindowsLocation", gWindowsLocationMethods,
                         NELEM(gWindowsLocationMethods));
   return 0;
