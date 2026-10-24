@@ -121,6 +121,9 @@ public final class Services {
                 new DeviceServices.ThermalService()).asBinder());
         services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
                 new DeviceServices.AlarmService()).asBinder());
+        services.put(Context.APP_OPS_SERVICE, StandIn.of(
+                com.android.internal.app.IAppOpsService.class,
+                new DeviceServices.AppOpsService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 new DeviceServices.ClipboardService()).asBinder());
         return services;

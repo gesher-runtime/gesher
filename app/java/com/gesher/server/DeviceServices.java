@@ -5,18 +5,23 @@
 package com.gesher.server;
 
 import android.app.AlarmManager;
+import android.app.AppOpsManager;
 import android.app.IAlarmListener;
 import android.app.IAlarmManager;
 import android.app.PendingIntent;
+import android.app.SyncNotedAppOp;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.IClipboard;
 import android.content.IOnPrimaryClipChangedListener;
+import android.os.IBinder;
 import android.os.IPowerManager;
 import android.os.IThermalService;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.WorkSource;
+
+import com.android.internal.app.IAppOpsService;
 
 /**
  * System services real apps look up as soon as they start (docs/e2e.md), which the
@@ -83,6 +88,85 @@ final class DeviceServices {
         @Override
         public boolean hasScheduleExactAlarm(String packageName, int userId) {
             return true;
+        }
+    }
+
+    /**
+     * {@code appops}: every operation is allowed (Gesher grants an app what it asks for,
+     * as the activity manager's permission checks do); noted and started operations
+     * answer MODE_ALLOWED. Environment.isExternalStorageManager asks it, among others.
+     */
+    static final class AppOpsService extends IAppOpsService.Default {
+        @Override
+        public int checkOperation(int code, int uid, String packageName) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int checkOperationForDevice(int code, int uid, String packageName,
+                String attributionTag, int virtualDeviceId) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int checkOperationRaw(int code, int uid, String packageName,
+                String attributionTag) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int checkOperationRawForDevice(int code, int uid, String packageName,
+                String attributionTag, int virtualDeviceId) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int checkAudioOperation(int code, int usage, int uid, String packageName) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int checkPackage(int uid, String packageName) {
+            return AppOpsManager.MODE_ALLOWED;
+        }
+
+        @Override
+        public int permissionToOpCode(String permission) {
+            return AppOpsManager.OP_NONE;
+        }
+
+        @Override
+        public SyncNotedAppOp noteOperation(int code, int uid, String packageName,
+                String attributionTag, boolean shouldCollectAsyncNotedOp, String message,
+                boolean shouldCollectMessage) {
+            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
+                    packageName);
+        }
+
+        @Override
+        public SyncNotedAppOp noteOperationForDevice(int code, int uid, String packageName,
+                String attributionTag, int virtualDeviceId, boolean shouldCollectAsyncNotedOp,
+                String message, boolean shouldCollectMessage) {
+            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
+                    packageName);
+        }
+
+        @Override
+        public SyncNotedAppOp startOperation(IBinder clientId, int code, int uid,
+                String packageName, String attributionTag, boolean startIfModeDefault,
+                boolean shouldCollectAsyncNotedOp, String message, boolean shouldCollectMessage,
+                int attributionFlags, int attributionChainId) {
+            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
+                    packageName);
+        }
+
+        @Override
+        public SyncNotedAppOp startOperationForDevice(IBinder clientId, int code, int uid,
+                String packageName, String attributionTag, int virtualDeviceId,
+                boolean startIfModeDefault, boolean shouldCollectAsyncNotedOp, String message,
+                boolean shouldCollectMessage, int attributionFlags, int attributionChainId) {
+            return new SyncNotedAppOp(AppOpsManager.MODE_ALLOWED, code, attributionTag,
+                    packageName);
         }
     }
 
