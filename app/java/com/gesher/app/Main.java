@@ -197,6 +197,9 @@ public final class Main {
                 log("--data-dir ignored: the system server's package manager sets the data"
                         + " directory");
             }
+            // Android's INTERNET permission for this app process (docs/network.md).
+            com.gesher.server.ConnectivityService.applyInternetPermission(
+                    pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS, 0));
             Intent intent = launchIntent(packageName, activity);
             for (java.util.Map.Entry<String, Boolean> e : extras.entrySet()) {
                 intent.putExtra(e.getKey(), (boolean) e.getValue());
@@ -219,6 +222,7 @@ public final class Main {
                     | PackageManager.GET_SHARED_LIBRARY_FILES);
             launch = pkg.launcherActivity(activity);
             Services.installInProcess(Services.create(List.of(pkg)));
+            com.gesher.server.ConnectivityService.applyInternetPermission(pkg);  // docs/network.md
             log("stand-in services in this process: "
                     + String.join(", ", ServiceManager.listServices()));
         }

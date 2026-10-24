@@ -28,3 +28,12 @@ target_compile_options(conscrypt_jni PRIVATE -Wall -Wextra -Wno-unused-parameter
 target_link_libraries(conscrypt_jni PUBLIC nativehelper log boringssl_ssl crypt32)
 
 target_link_libraries(dalvikvm PRIVATE conscrypt_jni)
+
+# com.gesher.net.WindowsNetworks's natives (the built-in library libgesher_net.so):
+# Windows' networks for the connectivity service, and the INTERNET permission's
+# switch (<gesher/inet.h>).
+add_library(gesher_net_natives OBJECT ${_net}/windows_networks.cc)
+target_include_directories(gesher_net_natives PRIVATE ${_net}/include)
+target_compile_options(gesher_net_natives PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_link_libraries(gesher_net_natives PUBLIC nativehelper iphlpapi ole32 ws2_32)
+target_link_libraries(dalvikvm PRIVATE gesher_net_natives)

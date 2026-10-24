@@ -190,3 +190,113 @@ try {
 # certificates that must be rejected (expired, another host's, self-signed, an
 # untrusted root).
 $null = NetDex 'DNS and HTTPS on the internet, bad certificates rejected' @('internet') 300
+
+# Apps (tests/apps/netapp, nonetapp) through gesher-app: ConnectivityManager over the
+# connectivity service (com.gesher.server.ConnectivityService), its callbacks, HTTPS with
+# the network security config, and the permissions: INTERNET and ACCESS_NETWORK_STATE.
+$bcpNet = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$dvmNet = @("-Xbootclasspath:$bcpNet", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+
+# Runs dalvikvm with a time limit; returns its output, $LASTEXITCODE its exit code (-1: timed out).
+function NetRun([string[]] $Arguments, [int] $Seconds = 300) {
+  $psi = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+  foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $p = [Diagnostics.Process]::Start($psi)
+  $stdout = $p.StandardOutput.ReadToEndAsync()
+  $stderr = $p.StandardError.ReadToEndAsync()
+  $timedOut = -not $p.WaitForExit($Seconds * 1000)
+  if ($timedOut) { $p.Kill($true); $p.WaitForExit() }
+  $null = $stdout.Wait(10000), $stderr.Wait(10000)
+  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
+  $out = $stdout.Result + "`n" + $stderr.Result
+  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+  return $out
+}
+
+function NetExpect([string] $Name, [string] $Out, [int] $Code, [string[]] $Expect, [string] $Show = '^(NetApp|NoNetApp) ') {
+  $missing = @($Expect | Where-Object { -not $Out.Contains($_) })
+  if ($Code -eq 0 -and -not $missing) {
+    Write-Host "PASS  net: $Name"
+  } else {
+    Write-Host "FAIL  net: $Name (exit $Code; missing: $($missing -join ' | '))"
+    ($Out -split "`n" | Select-Object -Last 80) | Out-Host
+    $script:failed++
+  }
+  ($Out -split "`n" | Select-String -Pattern $Show | ForEach-Object { "INFO  $_".TrimEnd() }) | Out-Host
+}
+
+$out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/netapp.apk")) 400
+NetExpect 'netapp.apk in one process: ConnectivityManager (Windows'' active network, its capabilities, link properties and NetworkInfo), a default and a request callback, HTTPS through HttpsURLConnection, cleartext refused (target SDK 36)' $out $LASTEXITCODE @(
+  'NetApp state: internet true', 'connected true', 'NetApp default callback: available true',
+  'NetApp request callback (INTERNET): available true', 'NetApp https: 200 Example Domain',
+  'NetApp cleartext http: refused', 'NetApp done', 'gesher-app: done')
+
+$out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/nonetapp.apk")) 300
+NetExpect 'nonetapp.apk without INTERNET and ACCESS_NETWORK_STATE: name lookups and sockets refused (EACCES), ConnectivityManager throws SecurityException' $out $LASTEXITCODE @(
+  'NoNetApp dns: SecurityException: Permission denied (missing INTERNET permission?)',
+  'NoNetApp socket: SocketException', 'EACCES',
+  'NoNetApp connectivity: SecurityException', 'NoNetApp done', 'gesher-app: done')
+
+# Across processes: a system server (with the connectivity service) and netapp.apk in an
+# app process attached to it. The app waits in a default network callback while this
+# script adds an address to the adapter of Windows' default route and removes it again:
+# Windows' change reaches the app as onLinkPropertiesChanged both times.
+$device = "net-$PID"
+$netLogs = Join-Path $root 'net-logs'
+New-Item -ItemType Directory -Force $netLogs | Out-Null
+$env:GESHER_BINDER = $device
+$started = @()
+$started += Start-Process "$Dir/binderd.exe" -ArgumentList $device -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$netLogs/binderd.out" -RedirectStandardError "$netLogs/binderd.log"
+$pipe = "\\.\pipe\gesher-binder-$device"
+for ($i = 0; $i -lt 150 -and -not ([IO.Directory]::GetFiles('\\.\pipe\') -contains $pipe); $i++) { Start-Sleep -Milliseconds 100 }
+$started += Start-Process "$Dir/servicemanager.exe" -PassThru -NoNewWindow `
+  -RedirectStandardOutput "$netLogs/servicemanager.out" -RedirectStandardError "$netLogs/servicemanager.log"
+$server = Start-Process "$Dir/dalvikvm.exe" -PassThru -NoNewWindow `
+  -ArgumentList ($dvmNet + '-Dgesher.net.trace=true', 'com.gesher.server.SystemServer', (NoDrive "$Dir/netapp.apk"), (NoDrive "$Dir/nonetapp.apk")) `
+  -RedirectStandardOutput "$netLogs/system_server.out" -RedirectStandardError "$netLogs/system_server.err"
+$started += $server
+for ($i = 0; $i -lt 900 -and -not $server.HasExited; $i++) {
+  if ("$(Get-Content -Raw "$netLogs/system_server.out" -ErrorAction SilentlyContinue)".Contains('with servicemanager')) { break }
+  Start-Sleep -Milliseconds 100
+}
+$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1
+$appLog = Join-Path $netLogs 'netapp.out'
+$appArgs = ($dvmNet + 'com.gesher.app.Main', '--system-server', '--ez', 'watch', 'true', (NoDrive "$Dir/netapp.apk")) -join ' '
+$psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $appArgs > `"$appLog`" 2>&1`"")
+$psi.UseShellExecute = $false
+$app = [Diagnostics.Process]::Start($psi)
+$added = $false
+$appCode = -1
+try {
+  $deadline = (Get-Date).AddSeconds(400)
+  while ((Get-Date) -lt $deadline -and -not $app.HasExited -and
+         -not "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)".Contains('watching: add')) { Start-Sleep -Milliseconds 250 }
+  if ($route -and -not $app.HasExited) {
+    $null = New-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -PrefixLength 32 -SkipAsSource $true -ErrorAction Stop
+    $added = $true
+    $deadline = (Get-Date).AddSeconds(100)
+    while ((Get-Date) -lt $deadline -and -not $app.HasExited -and
+           -not "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)".Contains('watch: added seen')) { Start-Sleep -Milliseconds 250 }
+    Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -Confirm:$false -ErrorAction SilentlyContinue
+    $added = $false
+  }
+  if (-not $app.WaitForExit(200000)) { $app.Kill($true) }
+  if ($app.HasExited) { $appCode = $app.ExitCode }
+} finally {
+  if ($added) { Remove-NetIPAddress -InterfaceIndex $route.ifIndex -IPAddress 192.0.2.77 -Confirm:$false -ErrorAction SilentlyContinue }
+  foreach ($p in $started) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+  Remove-Item Env:GESHER_BINDER
+}
+$out = "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)"
+if (-not $route) { $out += "`n(no default route on this machine)" }
+$failedBefore = $failed
+NetExpect "netapp.apk in an app process of a system server: ConnectivityManager over binder; an address added to and removed from the adapter of Windows' default route (interface $($route.ifIndex)) reaches its default network callback" $out $appCode @(
+  'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 Example Domain',
+  'NetApp watch: added seen true', 'NetApp watch: removed seen true', 'NetApp done', 'gesher-app: done')
+if ($failed -ne $failedBefore) {
+  Get-Content "$netLogs/system_server.out", "$netLogs/system_server.err" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+}
