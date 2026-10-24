@@ -20,6 +20,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.Gravity;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 import java.io.ByteArrayInputStream;
@@ -34,7 +36,8 @@ import java.util.Map;
  * JavaScript interface, logs to the console, shows an alert, fetches a URL the
  * WebViewClient intercepts and navigates to one it overrides; evaluateJavascript reads
  * values back. Once both pages are loaded: phase 2 grows the header to 150 px (the asset
- * WebView moves down) and sets and reads a cookie; phase 3 hides the remote WebView.
+ * WebView moves down) and sets and reads a cookie; phase 3 hides the remote WebView. A blue
+ * 40x40 view lies over the asset WebView at the window's right edge, 220 px down.
  */
 public class WebActivity extends Activity {
     private static final String TAG = "WebActivity";
@@ -178,7 +181,18 @@ public class WebActivity extends Activity {
         });
         root.addView(mRemote, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-        setContentView(root);
+        // A blue 40x40 view over the asset WebView (a floating button): its place is cut
+        // out of the WebView2 window, so it shows.
+        FrameLayout frame = new FrameLayout(this);
+        frame.addView(root, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        View over = new View(this);
+        over.setBackgroundColor(Color.BLUE);
+        FrameLayout.LayoutParams overParams = new FrameLayout.LayoutParams(40, 40,
+                Gravity.TOP | Gravity.END);
+        overParams.topMargin = 220;
+        frame.addView(over, overParams);
+        setContentView(frame);
 
         mAsset.loadUrl("file:///android_asset/index.html");
         Map<String, String> headers = new HashMap<>();
