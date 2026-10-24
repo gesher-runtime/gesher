@@ -191,7 +191,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         }
         List<InputMethodSubtype> subtypes = subtypes();
         for (InputMethodSubtype s : subtypes) {
-            if (s.getSubtypeExtraValue().equals("KeyboardLayout=" + Long.toHexString(hkl))) {
+            if (s.getExtraValue().equals("KeyboardLayout=" + Long.toHexString(hkl))) {
                 return s;
             }
         }
@@ -201,7 +201,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
             mInfo = null;
         }
         for (InputMethodSubtype s : subtypes()) {
-            if (s.getSubtypeExtraValue().equals("KeyboardLayout=" + Long.toHexString(hkl))) {
+            if (s.getExtraValue().equals("KeyboardLayout=" + Long.toHexString(hkl))) {
                 return s;
             }
         }
