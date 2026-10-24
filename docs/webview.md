@@ -239,17 +239,23 @@ drawing in a window that is covered or off the desktop;
   returns values, onPageFinished; a remote https page; cookies; the window
   read back with PW_RENDERFULLCONTENT (single process)` and the same
   `(webapp.apk's app process)`; package green.
+- Views over a WebView cut out of its WebView2 window, on both runners in
+  both modes (ci run 40138367211, b434e2d): `INFO  webapp.apk read back
+  (400x800, PW_RENDERFULLCONTENT): header red 60000 of 60000, asset WebView
+  green 116800 of 118400, green above it 0, blue view over it 1280 pixels`,
+  `gesher-webview: 1 view(s) over the WebView cut out of its window, the
+  first 360,220-400,260`, and the webapp PASS lines (now "..., a view over
+  one cut out of it)").
+- e2e (same run): `PASS  e2e: org.billthefarmer.notes 1.41 (Notes) installs,
+  draws its first frame (not blank), reacts to input, closes and its process
+  ends`: the edit button (344,744) over the WebView, keys, accept; the log has
+  the cut-out and `first page loaded: file:///`. Its SHA-256 is pinned.
 
 ### In progress
 
-- e2e: org.billthefarmer.notes 1.41 failed in run 40135241966 (`the log
-  lacks 'gesher-webview: first page loaded: file:///android_asset/'`): a
-  fresh install has no note, so nothing is loaded until one is edited, and
-  the edit button was hidden under the WebView2 window. Fixed by the holes
-  above and the e2e actions (edit button at 344,744, keys, accept); the
-  expected base URL is the note's folder (`file:///`), not the assets. Its
-  SHA-256 (ae8aa96794fc55d58916d8fe3a217912fbcc9edd5ec9fb72c547f90d97d3c0ea,
-  printed by that run) is now pinned.
+- Nothing. Integrated with phase4/integration (exec merged) at 9c610d6: ci run
+  40139785905 green (build, package, test on windows-2022 and windows-2025,
+  e2e).
 
 ### Not done / limits
 
@@ -259,4 +265,7 @@ drawing in a window that is covered or off the desktop;
   `onCreateWindow`; HTTP auth and client certificates callbacks; Safe
   Browsing; `postUrl` bodies; text zoom is page zoom; `WebBackForwardList` is
   null; accessibility of web content through Android's tree.
-- An F-Droid app that relies on WebView in tests/e2e/apps.json.
+- Cut-outs are rectangles from views' bounds: rounded or partly transparent
+  views over a WebView show the app's surface in their corners; a view
+  drawn over the WebView by a parent's `onDrawForeground`/`dispatchDraw`
+  (not a child view) is not found.
