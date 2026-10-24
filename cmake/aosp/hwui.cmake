@@ -85,7 +85,9 @@ gesher_graphics_lib(hostgraphics)
 # accessors) or Gesher does not build (perfetto's C API, dlopen of
 # libandroid_runtime.so in SharedLib).
 gesher_bp_cc(HWUI frameworks/base/libs/hwui libhwui
-  EXCLUDE "^jni/YuvToJpegEncoder\\.cpp$" "^apex/LayoutlibLoader\\.cpp$")
+  EXCLUDE "^jni/YuvToJpegEncoder\\.cpp$" "^apex/LayoutlibLoader\\.cpp$"
+  # compat/hwui/gl/RenderThread.cpp takes its place (below).
+  "^platform/host/renderthread/RenderThread\\.cpp$")
 # gui/TraceUtils.h, alone of libgui's headers (the rest are hostgraphics').
 configure_file(${_native}/libs/gui/include/gui/TraceUtils.h
   ${CMAKE_BINARY_DIR}/gen/hwui-gui/gui/TraceUtils.h COPYONLY)
@@ -100,6 +102,41 @@ add_library(hwui STATIC ${HWUI_SRCS}
   ${_fw}/core/jni/platform/host/native_window_jni.cpp)
 gesher_bp_flags(hwui HWUI)
 gesher_graphics_cxx(hwui)
+# The SkiaGL pipeline over ANGLE (docs/angle.md, ADR 0030). The host variant
+# has no GPU pipeline: the device's SkiaOpenGLPipeline, SkiaGpuPipeline,
+# EglManager, GLUtils and SkiaProfileRenderer come in, with the device's
+# pipeline headers (platform/android/pipeline/skia, copied ahead of
+# platform/host's), and compat/hwui/gl's RenderThread (the host's plus the
+# device's GL context) replaces platform/host's (excluded above).
+# compat/hwui/gl/include has the Vulkan pipeline's name over the GL one,
+# libgraphicsenv's and libsync's headers, and EGL/eglplatform.h with
+# Android's native types (ANativeWindow*, no <windows.h>). EGL/GLES are
+# declared without dllimport: compat/hwui/gl/angle_gl.cc defines what hwui
+# calls.
+foreach(_h SkiaGpuPipeline.h SkiaOpenGLPipeline.h)
+  configure_file(${_hwui}/platform/android/pipeline/skia/${_h}
+    ${CMAKE_BINARY_DIR}/gen/hwui-gl/pipeline/skia/${_h} COPYONLY)
+endforeach()
+target_sources(hwui PRIVATE
+  ${_hwui}/pipeline/skia/SkiaGpuPipeline.cpp
+  ${_hwui}/pipeline/skia/SkiaOpenGLPipeline.cpp
+  ${_hwui}/pipeline/skia/SkiaProfileRenderer.cpp
+  ${_hwui}/renderthread/EglManager.cpp
+  ${_hwui}/utils/GLUtils.cpp
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/RenderThread.cpp
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/angle_gl.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/pipeline_select.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/graphics_debug_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/hwui_gl_standins.cc)
+target_include_directories(hwui BEFORE PRIVATE
+  ${CMAKE_BINARY_DIR}/gen/hwui-gl
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/include
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl)
+target_include_directories(hwui PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/bionic/include  # gesher/egl_angle.h (egl_gles.cc)
+  ${AOSP_DIR}/external/skia/src/image ${AOSP_DIR}/external/skia/src/gpu
+  ${AOSP_DIR}/external/skia/src/shaders)
+target_compile_definitions(hwui PRIVATE GL_APICALL= GL_API=)
 target_compile_options(hwui PRIVATE
   # What clang for Windows reports that Soong's host build does not see.
   -Wno-error -Wno-unused-function -Wno-unknown-pragmas)

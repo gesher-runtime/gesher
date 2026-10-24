@@ -66,6 +66,20 @@ gesher_graphics_lib(wuffs)
 # - PDF output (needs harfbuzz's subsetter): hwui's PdfDocument is device-only.
 gesher_bp_cc(SKIA external/skia libskia
   EXCLUDE "fontations" "^src/pdf/")
+# Ganesh, Skia's GPU backend, with its OpenGL (ES) half: hwui's SkiaGL
+# pipeline draws with it over ANGLE (docs/angle.md, ADR 0030). Android.bp has
+# it only in libskia's android variant, so its sources are taken from there:
+# src/gpu (Ganesh, its GL backend, tessellation), GPU text and the SkSL code
+# generators, less Vulkan, AHardwareBuffer and Skia's EGL interface factory
+# (compat/hwui/gl/GrGLMakeNativeInterface_angle.cc finds ANGLE's entry points
+# instead).
+gesher_bp_cc(SKIA_GPU external/skia libskia TARGETS android
+  EXCLUDE "fontations" "^src/pdf/" "/vk/" "vulkanmemoryallocator" "AHardwareBuffer"
+          "^src/gpu/android/" "^src/gpu/ganesh/gl/egl/")
+list(FILTER SKIA_GPU_SRCS INCLUDE REGEX "/external/skia/src/(gpu|text/gpu|sksl/codegen)/")
+list(REMOVE_ITEM SKIA_GPU_SRCS ${SKIA_SRCS})
+list(APPEND SKIA_SRCS ${SKIA_GPU_SRCS}
+  ${CMAKE_SOURCE_DIR}/compat/hwui/gl/GrGLMakeNativeInterface_angle.cc)
 gesher_bp_library(skia SKIA QUIET)
 gesher_graphics_lib(skia)
 # SkUserConfig.h: the Windows one gn_to_bp.py wrote, less what is left out.
@@ -79,6 +93,8 @@ endforeach()
 # Bitmap pixels as RGBA bytes (copyPixelsToBuffer). The window converts to
 # GDI's BGRA when it presents (compat/hwui/window/win32_surface.cc).
 string(APPEND _cfg "\n// Gesher: Android's byte order for kN32_SkColorType (RGBA).\n#define SK_R32_SHIFT 0\n")
+# Ganesh and its GL backend, as in Android's SkUserConfig.h (no Vulkan).
+string(APPEND _cfg "\n// Gesher: Ganesh with its OpenGL ES backend (over ANGLE), as on Android.\n#ifndef SK_GANESH\n#define SK_GANESH\n#endif\n#ifndef SK_GL\n#define SK_GL\n#endif\n")
 file(CONFIGURE OUTPUT "${_skcfg}" CONTENT "${_cfg}" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${AOSP_DIR}/external/skia/win/include/config/SkUserConfig.h")
@@ -103,3 +119,11 @@ target_link_libraries(skia_probe PRIVATE skia)
 target_compile_options(skia_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(skia_probe PROPERTIES EXCLUDE_FROM_ALL ON)
 
+
+# Ganesh GL over ANGLE, compared with the CPU raster backend
+# (probes/graphics/skia_gl_probe.cc), run in CI on Windows next to ANGLE's
+# DLLs. EGL's headers come from graphics_native_headers (hwui.cmake).
+add_executable(skia_gl_probe ${CMAKE_SOURCE_DIR}/probes/graphics/skia_gl_probe.cc)
+target_link_libraries(skia_gl_probe PRIVATE skia graphics_native_headers)
+target_compile_options(skia_gl_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+set_target_properties(skia_gl_probe PROPERTIES EXCLUDE_FROM_ALL ON)

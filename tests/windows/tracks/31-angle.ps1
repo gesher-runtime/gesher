@@ -12,3 +12,63 @@ Check 'angle: EGL on D3D11, GLES 3 shaders, draw, glReadPixels' {
 Check 'angle: the same on WARP' {
   & "$Dir/angle_probe.exe" --warp
 } @('all passed (D3D11 WARP)')
+
+# Skia's Ganesh GL backend over ANGLE (probes/graphics/skia_gl_probe.cc, from
+# graphics.yml): a pbuffer on the WARP device, GrGLMakeNativeInterface,
+# shapes, text and a bitmap drawn on the GPU and compared with Skia's CPU
+# raster backend.
+Check 'angle: Skia Ganesh GL over ANGLE (WARP), the same pixels as the CPU raster backend' {
+  & "$Dir/skia_gl_probe.exe" --warp 'C:/Windows/Fonts/arial.ttf'
+} @('all passed (Ganesh GL on ANGLE, D3D11 WARP)')
+
+# hwui's SkiaGL pipeline over ANGLE (docs/angle.md, ADR 0030;
+# tests/dex-graphics/gesher/HardwareRendererGlTest.java). The same RenderNode
+# tree (a child node, text, a bitmap) is rendered by HardwareRenderer into a
+# Win32 window with the CPU pipeline (the default), which saves its frame, and
+# with SkiaGL (GESHER_HWUI_RENDERER=skiagl) on WARP: an EGL window surface on
+# the window's HWND, eglSwapBuffers; its frame, read back with glReadPixels
+# and from what Windows composed (PrintWindow with PW_RENDERFULLCONTENT), must
+# match. GraphicsDex comes from 30-graphics.ps1, which also copied the font.
+$hwuiFont = NoDrive (Join-Path $root 'arial.ttf')
+$hwuiFrame = NoDrive (Join-Path $env:RUNNER_TEMP 'hwui-cpu-frame.bin')
+GraphicsDex 'HardwareRenderer: the CPU pipeline''s frame (child node, text, bitmap) for the SkiaGL comparison' `
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'cpu')
+$env:GESHER_HWUI_RENDERER = 'skiagl'
+$env:GESHER_EGL_DEVICE = 'warp'
+GraphicsDex 'HardwareRenderer: SkiaGL over ANGLE (WARP) into the Win32 window, the same frame as the CPU pipeline' `
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl', 'GESHER_HWUI_RENDERER')
+Remove-Item Env:GESHER_EGL_DEVICE
+Remove-Item Env:GESHER_HWUI_RENDERER
+
+# The same chosen by Android's switch, the system property debug.hwui.renderer
+# (in $ANDROID_ROOT/build.prop, which dalvikvm loads at start; here a copy of
+# the test root's with the line added), on ANGLE's default device.
+$propRoot = Join-Path $env:RUNNER_TEMP 'gesher-root-skiagl'
+New-Item -ItemType Directory -Force $propRoot | Out-Null
+@(Get-Content (Join-Path $root 'system/build.prop')) + 'debug.hwui.renderer=skiagl' |
+  Set-Content (Join-Path $propRoot 'build.prop')
+$androidRoot = $env:ANDROID_ROOT
+$env:ANDROID_ROOT = NoDrive $propRoot
+GraphicsDex 'HardwareRenderer: SkiaGL chosen by debug.hwui.renderer, on ANGLE''s default device, the same frame' `
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'gl', 'debug.hwui.renderer')
+$env:ANDROID_ROOT = $androidRoot
+
+# Without ANGLE (the files of $Dir, hard-linked, less libEGL.dll and
+# libGLESv2.dll), skiagl falls back to the CPU pipeline with a line saying so.
+$env:GESHER_HWUI_RENDERER = 'skiagl'
+$noAngle = Join-Path $env:RUNNER_TEMP 'dist-no-angle'
+New-Item -ItemType Directory -Force $noAngle | Out-Null
+foreach ($file in Get-ChildItem -File $Dir) {
+  if ($file.Name -in @('libEGL.dll', 'libGLESv2.dll')) { continue }
+  $link = Join-Path $noAngle $file.Name
+  if (-not (Test-Path $link)) {
+    try { New-Item -ItemType HardLink -Path $link -Target $file.FullName -ErrorAction Stop | Out-Null }
+    catch { Copy-Item $file.FullName $link }
+  }
+}
+$distDir = $Dir
+$Dir = $noAngle
+GraphicsDex 'HardwareRenderer: skiagl without ANGLE falls back to the CPU pipeline, the same frame' `
+  HardwareRendererGlTest @($hwuiFont, $hwuiFrame, 'fallback', 'GESHER_HWUI_RENDERER')
+$Dir = $distDir
+Remove-Item Env:GESHER_HWUI_RENDERER
