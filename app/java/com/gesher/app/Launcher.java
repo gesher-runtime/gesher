@@ -19,6 +19,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 
 import com.gesher.app.shell.AppShell;
+import com.gesher.app.window.WindowMode;
 import com.gesher.server.Device;
 import com.gesher.server.GesherService;
 import com.gesher.server.SystemServer;
@@ -42,12 +43,15 @@ import java.util.Properties;
  *
  * <pre>
  *   Launcher [--build-prop FILE] [--framework-res FILE] COMMAND
- *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]... [--keep-task]
+ *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
+ *            [--window | --hidden-window | --headless [--keep-task]]
  *                       install or update the APK, start its launcher activity through the
- *                       system server (am start -W), show the app's output, and once the
- *                       activity is idle remove its task (the app is headless; with
- *                       --keep-task it runs until it finishes); ends when the app's process
- *                       ends
+ *                       system server (am start -W) and show the app's output until the
+ *                       app's process ends. Its windows are Win32 windows (--window, the
+ *                       default, or $GESHER_APP_WINDOW): the app runs until they are
+ *                       closed. --hidden-window: the same, never shown (tests read them
+ *                       back). --headless: no windows; once the activity is idle its task
+ *                       is removed (with --keep-task it runs until it finishes)
  *     install APK       install or update the package
  *     uninstall PACKAGE
  *     list              the installed packages (IPackageManager.getInstalledPackages)
@@ -153,8 +157,8 @@ public final class Launcher {
 
     private static int usage() {
         System.err.println("usage: gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
-                + " true|false]... [--keep-task] | install APK | uninstall PACKAGE | list"
-                + " | status | start | shutdown");
+                + " true|false]... [--window | --hidden-window | --headless [--keep-task]]"
+                + " | install APK | uninstall PACKAGE | list | status | start | shutdown");
         return 2;
     }
 
@@ -355,12 +359,16 @@ public final class Launcher {
         String apk = null;
         String activity = null;
         boolean keepTask = false;
+        String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
         Map<String, Boolean> extras = new LinkedHashMap<>();
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
             switch (a) {
                 case "--activity": activity = args.get(++i); break;
                 case "--keep-task": keepTask = true; break;
+                case "--window": windowMode = WindowMode.WINDOW; break;
+                case "--hidden-window": windowMode = WindowMode.HIDDEN; break;
+                case "--headless": windowMode = WindowMode.HEADLESS; break;
                 case "--ez": {
                     String key = args.get(++i);
                     extras.put(key, Boolean.parseBoolean(args.get(++i)));
@@ -402,6 +410,12 @@ public final class Launcher {
         for (Map.Entry<String, Boolean> e : extras.entrySet()) {
             intent.putExtra(e.getKey(), (boolean) e.getValue());
         }
+
+        // Its windows: the system server starts its process with them (ADR 0029). With
+        // windows, the app runs until the user closes them (the task stays).
+        gesher.setWindowMode(pkg, windowMode);
+        if (!WindowMode.HEADLESS.equals(windowMode)) keepTask = true;
+        log("windows of " + pkg + ": " + windowMode);
 
         // The app's output: its process appends to the package's log.
         Tail tail = new Tail(Device.packageLog(pkg));

@@ -324,6 +324,9 @@ Remove-Item Env:GESHER_BINDER
 # app processes the system server starts on demand (android.app.GesherAppProcess,
 # paired by their start sequence number) and ends when nothing keeps them.
 $launcher = $dvmApp + 'com.gesher.app.Launcher'
+# These apps run headless (no Win32 windows; the launcher removes the task once
+# the activity is idle): windows on the device are 30-graphics.ps1's checks.
+$env:GESHER_APP_WINDOW = 'headless'
 $deviceLogs = Join-Path $root 'logs'
 $stateFile = Join-Path $root 'data/system/gesher-device'
 
@@ -600,3 +603,4 @@ if ($state -and -not $left -and $status.Contains('gesher-app: cleaning up the Ge
 }
 if ($state) { foreach ($n in DeviceAlive $state) { Stop-Process -Id ([int]($n -split ' ')[1]) -Force -ErrorAction SilentlyContinue } }
 if ($failed -ne $failedBefore) { DeviceLogs }
+Remove-Item Env:GESHER_APP_WINDOW -ErrorAction SilentlyContinue

@@ -62,6 +62,8 @@ class Win32Surface : public android::Surface {
   void Size(int* width, int* height) const;
   // With mutex_ held: a buffer of the current size and format.
   void EnsureBuffer();
+  // With mutex_ held: the dequeued buffer `buffer`, no longer dequeued, or null.
+  android::sp<Buffer> TakeDequeued(ANativeWindowBuffer* buffer);
 
   static int HookSetSwapInterval(ANativeWindow* window, int interval);
   static int HookQueueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);
@@ -70,6 +72,7 @@ class Win32Surface : public android::Surface {
   Window* window_;
   mutable std::mutex mutex_;
   android::sp<Buffer> buffer_;
+  std::vector<android::sp<Buffer>> dequeued_;  // dequeued, not yet queued or cancelled
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int user_width_ = 0, user_height_ = 0;
   bool locked_ = false;

@@ -69,3 +69,6 @@ GraphicsDex 'android.graphics (Bitmap, Canvas, Paint text, codecs) and a Surface
 # hwui's renderer: HardwareRenderer, its RenderThread and the CPU pipeline
 # drawing a RenderNode tree into the window's Surface.
 GraphicsDex 'HardwareRenderer: a RenderNode tree into the Win32 window (CPU pipeline)' HardwareRendererTest
+
+
+# An app's UI in a Win32 window: 34-windows.ps1 (after the fonts are installed).

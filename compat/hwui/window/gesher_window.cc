@@ -1,10 +1,16 @@
 // Gesher: a top-level Win32 window an Android window is shown in.
 // See gesher_window.h.
 
-// The project defines NOGDI for AOSP code; the window paints with GDI.
+// The project defines NOGDI for AOSP code; the window paints with GDI. The
+// property store (the window's AppUserModelID) needs what
+// WIN32_LEAN_AND_MEAN leaves out.
 #undef NOGDI
+#undef WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
+#include <objbase.h>
+#include <propidl.h>
+#include <propsys.h>
 
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -71,6 +77,73 @@ void RegisterClassOnce() {
       nullptr, nullptr);
 }
 
+// IID_IPropertyStore and PKEY_AppUserModel_ID (propkey.h), spelled out: not
+// every GUID is in llvm-mingw's libuuid.
+const IID kIidPropertyStore = {0x886D8EEB, 0x8CF2, 0x4446,
+                               {0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99}};
+const PROPERTYKEY kAppUserModelId = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+
+// shell32's functions, looked up when first used (dalvikvm does not link
+// shell32).
+void* Shell32(const char* name) {
+  static HMODULE module = LoadLibraryExW(L"shell32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  return module == nullptr ? nullptr : reinterpret_cast<void*>(GetProcAddress(module, name));
+}
+
+// The AppUserModelID the process's windows go under on the taskbar: the
+// process's explicit one (SetCurrentProcessExplicitAppUserModelID, which app
+// processes set from $GESHER_APP_USER_MODEL_ID), else that variable.
+std::wstring ProcessAppUserModelId() {
+  using GetAppIdFn = HRESULT(WINAPI*)(PWSTR*);
+  auto get = reinterpret_cast<GetAppIdFn>(Shell32("GetCurrentProcessExplicitAppUserModelID"));
+  PWSTR id = nullptr;
+  if (get != nullptr && SUCCEEDED(get(&id)) && id != nullptr) {
+    std::wstring out(id);
+    CoTaskMemFree(id);
+    if (!out.empty()) return out;
+  }
+  wchar_t env[256];
+  DWORD n = GetEnvironmentVariableW(L"GESHER_APP_USER_MODEL_ID", env, 256);
+  return n > 0 && n < 256 ? std::wstring(env, n) : std::wstring();
+}
+
+// Sets the window's System.AppUserModel.ID (SHGetPropertyStoreForWindow), so
+// it groups with the app's Start menu shortcut, as the process's ID does.
+HRESULT SetWindowAppUserModelId(HWND hwnd, const std::wstring& id) {
+  using GetStoreFn = HRESULT(WINAPI*)(HWND, REFIID, void**);
+  auto get = reinterpret_cast<GetStoreFn>(Shell32("SHGetPropertyStoreForWindow"));
+  if (get == nullptr) return E_NOTIMPL;
+  IPropertyStore* store = nullptr;
+  HRESULT hr = get(hwnd, kIidPropertyStore, reinterpret_cast<void**>(&store));
+  if (FAILED(hr)) return hr;
+  PROPVARIANT value;
+  std::memset(&value, 0, sizeof(value));
+  size_t bytes = (id.size() + 1) * sizeof(wchar_t);
+  value.pwszVal = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
+  if (value.pwszVal == nullptr) {
+    store->Release();
+    return E_OUTOFMEMORY;
+  }
+  std::memcpy(value.pwszVal, id.c_str(), bytes);
+  value.vt = VT_LPWSTR;
+  hr = store->SetValue(kAppUserModelId, value);
+  if (SUCCEEDED(hr)) hr = store->Commit();
+  PropVariantClear(&value);
+  store->Release();
+  return hr;
+}
+
+std::string Narrow(const std::wstring& w) {
+  if (w.empty()) return std::string();
+  int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0,
+                              nullptr, nullptr);
+  std::string out(n, '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr,
+                      nullptr);
+  return out;
+}
+
 struct StartArgs {
   Window* window;
   std::wstring title;
@@ -118,24 +191,34 @@ Window* Window::Create(const std::string& title_utf8, int width, int height) {
 }
 
 void Window::Run(std::wstring title, int width, int height) {
+  // COM for the window's property store, on the window's own thread.
+  HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   DWORD style = WS_OVERLAPPEDWINDOW;
   RECT r = {0, 0, width, height};
   AdjustWindowRectEx(&r, style, FALSE, 0);
   HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, CW_USEDEFAULT, CW_USEDEFAULT,
                               r.right - r.left, r.bottom - r.top, nullptr, nullptr,
                               GetModuleHandleW(nullptr), this);
+  if (hwnd != nullptr) {
+    std::wstring id = ProcessAppUserModelId();
+    if (!id.empty() && SUCCEEDED(SetWindowAppUserModelId(hwnd, id))) {
+      app_user_model_id_ = Narrow(id);
+    }
+  }
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
     hwnd_ = hwnd;
     created_ = true;
   }
   create_cv_.notify_all();
-  if (hwnd == nullptr) return;
-  MSG msg;
-  while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
+  if (hwnd != nullptr) {
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
   }
+  if (SUCCEEDED(com)) CoUninitialize();
 }
 
 Window::~Window() {
@@ -148,10 +231,76 @@ Window::~Window() {
     CloseHandle(thread_handle_);
   }
   if (event_fd_ >= 0) close(event_fd_);
+  if (icon_big_ != nullptr) DestroyIcon(static_cast<HICON>(icon_big_));
+  if (icon_small_ != nullptr) DestroyIcon(static_cast<HICON>(icon_small_));
+}
+
+bool Window::SetIcon(const std::string& ico_path_utf8) {
+  std::wstring path = Widen(ico_path_utf8);
+  HICON big = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON,
+                                            GetSystemMetrics(SM_CXICON),
+                                            GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE));
+  HICON little = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON,
+                                               GetSystemMetrics(SM_CXSMICON),
+                                               GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE));
+  if (big == nullptr && little == nullptr) return false;
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  // WM_SETICON from another thread is sent to the window's thread. The
+  // window uses the icons until it is destroyed, so they live as long.
+  if (big != nullptr) SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big));
+  if (little != nullptr) {
+    SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(little));
+  }
+  std::lock_guard<std::mutex> lock(create_mutex_);
+  if (icon_big_ != nullptr) DestroyIcon(static_cast<HICON>(icon_big_));
+  if (icon_small_ != nullptr) DestroyIcon(static_cast<HICON>(icon_small_));
+  icon_big_ = big;
+  icon_small_ = little;
+  return true;
 }
 
 void Window::Show() {
   ShowWindowAsync(static_cast<HWND>(hwnd_), SW_SHOWNORMAL);
+}
+
+void Window::Hide() {
+  ShowWindowAsync(static_cast<HWND>(hwnd_), SW_HIDE);
+}
+
+void Window::ShowOffscreen() {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  // A tool window (no taskbar button) left of the virtual screen, shown
+  // without activation: off the desktop, but drawn and composed like any
+  // shown window (PrintWindow reads nothing back from a hidden one).
+  SetWindowLongPtrW(hwnd, GWL_EXSTYLE,
+                    GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+  RECT r;
+  GetWindowRect(hwnd, &r);
+  int x = GetSystemMetrics(SM_XVIRTUALSCREEN) - (r.right - r.left) - 64;
+  int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  SetWindowPos(hwnd, HWND_BOTTOM, x, y, 0, 0,
+               SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+}
+
+void Window::SetResizable(bool resizable) {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  const LONG_PTR frame = WS_THICKFRAME | WS_MAXIMIZEBOX;
+  style = resizable ? (style | frame) : (style & ~frame);
+  SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+  SetClientSize(width(), height());  // the frame changed; keep the client area
+}
+
+void Window::SetClientSize(int width, int height) {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  RECT r = {0, 0, width, height};
+  AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
+                           static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
+                           GetDpiForWindow(hwnd));
+  // SetWindowPos from another thread waits for the window's thread, which
+  // handles WM_SIZE (the new client size) before it returns.
+  SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void Window::SetTitle(const std::string& title_utf8) {

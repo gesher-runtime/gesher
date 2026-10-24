@@ -3,6 +3,8 @@
 
 #include <errno.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <system/window.h>
@@ -171,16 +173,69 @@ int Win32Surface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
   std::lock_guard<std::mutex> lock(mutex_);
   EnsureBuffer();
   *buffer = buffer_.get();
+  // Held until it is queued or cancelled: a resize may replace buffer_ while
+  // the client draws into this one (hwui dequeues when its surface is set and
+  // draws the next frame into that buffer).
+  dequeued_.push_back(buffer_);
   if (fence_fd != nullptr) *fence_fd = -1;
   return 0;
 }
 
-int Win32Surface::cancelBuffer(ANativeWindowBuffer*, int) {
+android::sp<Win32Surface::Buffer> Win32Surface::TakeDequeued(ANativeWindowBuffer* buffer) {
+  for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
+    if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
+      android::sp<Buffer> b = *it;
+      dequeued_.erase(it);
+      return b;
+    }
+  }
+  return nullptr;
+}
+
+int Win32Surface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  TakeDequeued(buffer);
   return 0;
 }
 
-int Win32Surface::queueBuffer(ANativeWindowBuffer*, int) {
+int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    android::sp<Buffer> queued = TakeDequeued(buffer);
+    // The frame is in the buffer that was queued: it becomes the surface's
+    // buffer (the next dequeue resizes it if the size changed meanwhile).
+    if (queued != nullptr && queued != buffer_) {
+      if (getenv("GESHER_WINDOW_DEBUG") != nullptr) {
+        fprintf(stderr, "Win32Surface: frame %llu queued in a buffer of %dx%d, the surface's is %dx%d\n",
+                static_cast<unsigned long long>(frames_ + 1), queued->width, queued->height,
+                buffer_ != nullptr ? buffer_->width : 0, buffer_ != nullptr ? buffer_->height : 0);
+      }
+      buffer_ = queued;
+    }
+    if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr && frames_ < 4) {
+      size_t drawn = 0;
+      for (uint32_t p : buffer_->pixels) drawn += p != 0xff000000u;
+      fprintf(stderr, "Win32Surface: frame %llu: %zu of %zu pixels drawn (%dx%d, format %d)\n",
+              static_cast<unsigned long long>(frames_ + 1), drawn, buffer_->pixels.size(),
+              buffer_->width, buffer_->height, buffer_->format);
+      // A few pixels (RGBA words, R in the low byte) across the buffer.
+      for (int i = 1; i <= 7; i++) {
+        int x = buffer_->width / 4, y = buffer_->height * i / 8;
+        fprintf(stderr, "Win32Surface:   (%d,%d) %08x\n", x, y,
+                buffer_->pixels[static_cast<size_t>(y) * buffer_->stride + x]);
+      }
+    }
+  }
   Present();
+  if (getenv("GESHER_WINDOW_DEBUG") != nullptr && frames_ <= 4) {
+    std::vector<uint32_t> shown;
+    int w = 0, h = 0;
+    window_->ReadBackBuffer(&shown, &w, &h);
+    if (w > 0 && h > 0) {
+      fprintf(stderr, "Win32Surface:   the window's back buffer %dx%d, (%d,%d) %08x (BGRA)\n", w, h,
+              w / 4, h / 8, shown[static_cast<size_t>(h / 8) * w + w / 4]);
+    }
+  }
   return 0;
 }
 

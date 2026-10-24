@@ -42,6 +42,16 @@ import java.util.List;
  * zygote, lite: {@code com.gesher.server.Zygote}): {@code --package P --start-seq N
  * --target-sdk S}. It attaches with the start sequence number, which pairs it with the
  * package, and has no launcher part: the server drives it, and tells it when to exit.
+ *
+ * <p>Windows (docs/graphics.md, ADR 0029): the process draws its own windows. In window
+ * mode ({@code $GESHER_APP_WINDOW}: {@code window}, the default, or {@code hidden}) the
+ * window session is {@link com.gesher.app.window.WindowSession}, in this process:
+ * {@code addToDisplay}/{@code relayout} give each window a Win32 window this process
+ * creates and a SurfaceControl whose Surface draws into it, and the hardware renderer
+ * (hwui's CPU pipeline) draws the views. Closing the Win32 window finishes its Activity
+ * ({@code Activity.finish()}: the system server pauses, stops and destroys it, then ends
+ * the process). {@code headless}: the system server's window session (no surface) and no
+ * renderer.
  */
 public final class GesherAppProcess {
     private static final String TAG = "gesher-app";
@@ -69,7 +79,17 @@ public final class GesherAppProcess {
      */
     public static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle)
             throws Exception {
-        run(launch, targetSdkVersion, removeTaskWhenIdle, 0L);
+        run(launch, targetSdkVersion, removeTaskWhenIdle,
+                com.gesher.app.window.WindowMode.HEADLESS);
+    }
+
+    /**
+     * {@link #run(Intent, int, boolean)} with the process's windows in {@code windowMode}
+     * ({@link com.gesher.app.window.WindowMode#WINDOW}, {@code HIDDEN} or {@code HEADLESS}).
+     */
+    public static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle,
+            String windowMode) throws Exception {
+        run(launch, targetSdkVersion, removeTaskWhenIdle, 0L, windowMode);
     }
 
     /**
@@ -125,7 +145,8 @@ public final class GesherAppProcess {
                     System.exit(3);
                 }, 0);
             }
-            run(null, targetSdk, false, startSeq);
+            run(null, targetSdk, false, startSeq, com.gesher.app.window.WindowMode
+                    .fromEnvironment(com.gesher.app.window.WindowMode.WINDOW));
         } catch (Throwable t) {
             System.out.flush();
             System.err.println(TAG + ": failed: " + t);
@@ -138,7 +159,7 @@ public final class GesherAppProcess {
     }
 
     private static void run(Intent launch, int targetSdkVersion, boolean removeTaskWhenIdle,
-            long startSeq) throws Exception {
+            long startSeq, String windowMode) throws Exception {
         // The zygote sets the runtime's target SDK in the child before it runs the app
         // (ZygoteConnection: VMRuntime.setTargetSdkVersion): ART's rules for apps (such as
         // which static final fields JNI may still overwrite, as Typeface's font map
@@ -154,13 +175,20 @@ public final class GesherAppProcess {
         // debug.choreographer.vsync=false. Without frames, the sync barrier a window's
         // first traversal posts would hold every lifecycle message back.
         android.os.SystemProperties.set("debug.choreographer.vsync", "false");
-        // The system server's window session gives windows no surface (StandInWindowSession):
-        // the windows are laid out but not drawn, so they get no hardware renderer, as
-        // ActivityThread leaves persistent processes on low-end devices without one. With
-        // hwui's real natives and no surface, the render thread faulted in CanvasContext
-        // (integration ci run 40003812869). GESHER_APP_HWUI=1 keeps the renderer, for a
-        // window session that gives a surface.
-        if (!"1".equals(System.getenv("GESHER_APP_HWUI"))) {
+        if (!com.gesher.app.window.WindowMode.HEADLESS.equals(windowMode)) {
+            // The process's windows are Win32 windows it creates and draws itself: the window
+            // session is in this process (WindowManagerGlobal's), and its surfaces take the
+            // hardware renderer's frames (ADR 0029).
+            com.gesher.app.window.WindowMode.install(
+                    com.gesher.app.window.WindowMode.WINDOW.equals(windowMode));
+            log("windows: Win32 windows of this process (" + windowMode + "), display "
+                    + com.gesher.app.DeviceProfile.describe());
+        } else {
+            // Headless: the system server's window session gives windows no surface
+            // (StandInWindowSession), so they are laid out but not drawn and get no hardware
+            // renderer, as ActivityThread leaves persistent processes on low-end devices
+            // without one (with no surface the render thread faulted in CanvasContext,
+            // integration ci run 40003812869).
             android.view.ThreadedRenderer.sRendererEnabled = false;
         }
 
