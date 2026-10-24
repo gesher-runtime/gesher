@@ -82,7 +82,17 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.view.IWindowManager android.view.IWindowSession \
   android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
-  android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager
+  android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager \
+  android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
+  com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
+  android.app.ISearchManager
+# The framework's app-compat changes (@ChangeId fields), for bindApplication's
+# disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
+# have SOURCE retention: they are read from frameworks/base's sources (what the
+# framework build checked out, $AOSP_DIR or third_party/aosp).
+aosp=${AOSP_DIR:-$root/third_party/aosp}
+java -cp "$gencp" "$(native "$root/app/gen/CompatChangesGen.java")" "$(native "$framework")" \
+  "$(native "$work/gen")" com.gesher.server.gen "$(native "$aosp/frameworks/base")"
 
 mkdir -p "$work/classes"
 find "$root/app/java" "$work/gen" -name '*.java' > "$work/sources.txt"

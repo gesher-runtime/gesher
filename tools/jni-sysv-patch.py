@@ -2,6 +2,7 @@
 """Generates the frameworks/base patch that registers System V JNI entries.
 
   jni-sysv-patch.py <frameworks/base checkout> > patches/frameworks/base/0002-sysv-jni-tables.patch
+  jni-sysv-patch.py <frameworks/base checkout> e2e > patches/frameworks/base/0200-e2e-sysv-jni-tables.patch
 
 ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md).
 The framework's JNI tables are written by hand, `{"name", "sig", (void*) fn}`,
@@ -38,6 +39,16 @@ FILES = [
     'core/jni/com_android_internal_util_VirtualRefBasePtr.cpp',
 ]
 
+# Natives real apps need (cmake/aosp/framework_e2e.cmake, docs/e2e.md), in a patch of their own.
+E2E_FILES = [
+    'core/jni/android_animation_PropertyValuesHolder.cpp',
+    'core/jni/android_database_CursorWindow.cpp',
+    'core/jni/android_database_SQLiteConnection.cpp',
+    'core/jni/android_database_SQLiteDebug.cpp',
+    'core/jni/android_database_SQLiteGlobal.cpp',
+    'core/jni/android_database_SQLiteRawStatement.cpp',
+]
+
 # The start of a table: `JNINativeMethod name[] = {`, const or static or not.
 TABLE = re.compile(r'\bJNINativeMethod\s+\w+\s*\[\s*\w*\s*\]\s*=\s*\{')
 # A function name, qualified and with template arguments: ns::fn<jint>.
@@ -46,6 +57,9 @@ CASTS = [
     re.compile(r'\(\s*void\s*\*\s*\)\s*' + NAME),
     re.compile(r'reinterpret_cast\s*<\s*void\s*\*\s*>\s*\(\s*' + NAME + r'\s*\)'),
 ]
+
+
+OVERLOAD = re.compile(r'\(\s*void\s*\*\s*\)\s*(static_cast\s*<[^<>]*>\s*\(\s*[A-Za-z_]\w*\s*\))')
 
 
 def table_end(text, start):
@@ -82,6 +96,8 @@ def rewrite(path, text):
                 return 'GESHER_JNI_SYSV(' + f.group(1) + ')'
             return 'GESHER_JNI(' + f.group(1) + ')'
 
+        # An overload picked by a cast: `(void*)static_cast<sig>(fn)`.
+        body = OVERLOAD.sub(lambda m: 'GESHER_JNI(' + m.group(1) + ')', body)
         for cast in CASTS:
             body = cast.sub(entry, body)
         if re.search(r'void\s*\*\s*>?\s*\)', body):
@@ -99,11 +115,12 @@ def rewrite(path, text):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['e2e']):
         sys.exit(__doc__)
     checkout = sys.argv[1]
+    files = E2E_FILES if sys.argv[2:] == ['e2e'] else FILES
     sys.stdout.reconfigure(newline='\n')  # LF on Windows too
-    for path in FILES:
+    for path in files:
         old = subprocess.run(['git', '-C', checkout, 'show', 'HEAD:' + path], check=True,
                              capture_output=True).stdout.decode('utf-8')
         new = rewrite(path, old)

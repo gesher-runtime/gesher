@@ -66,6 +66,12 @@ int register_android_text_AndroidCharacter(JNIEnv* env);
 int register_android_util_EventLog(JNIEnv* env);
 int register_android_util_Log(JNIEnv* env);
 int register_android_util_jar_StrictJarFile(JNIEnv* env);
+int register_android_animation_PropertyValuesHolder(JNIEnv* env);
+int register_android_database_CursorWindow(JNIEnv* env);
+int register_android_database_SQLiteConnection(JNIEnv* env);
+int register_android_database_SQLiteDebug(JNIEnv* env);
+int register_android_database_SQLiteGlobal(JNIEnv* env);
+int register_android_database_SQLiteRawStatement(JNIEnv* env);
 int register_com_android_internal_util_VirtualRefBasePtr(JNIEnv* env);
 // services_natives.cc: the app process attached to a system server.
 int register_gesher_ApplicationSharedMemory(JNIEnv* env);
@@ -371,6 +377,20 @@ static const struct {
      register_android_content_StringBlock},
     {"android_content_XmlBlock", "android/content/res/XmlBlock",
      register_android_content_XmlBlock},
+    // What real apps need (cmake/aosp/framework_e2e.cmake, docs/e2e.md): ObjectAnimator's
+    // property setters, android.database over SQLite.
+    {"android_animation_PropertyValuesHolder", "android/animation/PropertyValuesHolder",
+     register_android_animation_PropertyValuesHolder},
+    {"android_database_CursorWindow", "android/database/CursorWindow",
+     register_android_database_CursorWindow},
+    {"android_database_SQLiteConnection", "android/database/sqlite/SQLiteConnection",
+     register_android_database_SQLiteConnection},
+    {"android_database_SQLiteGlobal", "android/database/sqlite/SQLiteGlobal",
+     register_android_database_SQLiteGlobal},
+    {"android_database_SQLiteDebug", "android/database/sqlite/SQLiteDebug",
+     register_android_database_SQLiteDebug},
+    {"android_database_SQLiteRawStatement", "android/database/sqlite/SQLiteRawStatement",
+     register_android_database_SQLiteRawStatement},
     // Stand-ins for graphics and view natives on the attached app process's path
     // (attach_standins.cc); before the graphics rows, so real natives replace them.
     {"gesher_attach_standins", "android/graphics/Canvas", ::register_gesher_attach_standins},

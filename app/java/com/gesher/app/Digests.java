@@ -22,7 +22,7 @@ import java.util.List;
 public final class Digests extends Provider {
     public Digests() {
         super("GesherDigests", 1.0,
-                "Gesher's MessageDigests (SHA-1, SHA-256, MD5) and X.509 certificates");
+                "Gesher's MessageDigests (SHA-1, SHA-256, MD5), X.509 certificates and SecureRandom");
         put("MessageDigest.SHA-1", Sha1.class.getName());
         put("Alg.Alias.MessageDigest.SHA1", "SHA-1");
         put("Alg.Alias.MessageDigest.SHA", "SHA-1");
@@ -33,6 +33,45 @@ public final class Digests extends Provider {
         // yet): the network security config reads the system CA store with one.
         put("CertificateFactory.X.509", X509.class.getName());
         put("Alg.Alias.CertificateFactory.X509", "X.509");
+        // SecureRandom from the system's generator (/dev/urandom is BCryptGenRandom in
+        // gesher-base): new SecureRandom() and UUID.randomUUID() need one (docs/e2e.md:
+        // AndroidX Fragment's constructor), Conscrypt's OpenSSLRandom is not there yet.
+        put("SecureRandom.NativePRNG", Urandom.class.getName());
+        put("Alg.Alias.SecureRandom.SHA1PRNG", "NativePRNG");
+    }
+
+    /** SecureRandom over /dev/urandom; seeding adds nothing to the system's generator. */
+    public static final class Urandom extends java.security.SecureRandomSpi {
+        private static java.io.FileInputStream sIn;
+
+        private static synchronized void read(byte[] bytes) {
+            try {
+                if (sIn == null) sIn = new java.io.FileInputStream("/dev/urandom");
+                for (int n = 0; n < bytes.length; ) {
+                    int r = sIn.read(bytes, n, bytes.length - n);
+                    if (r <= 0) throw new java.io.IOException("/dev/urandom: end of file");
+                    n += r;
+                }
+            } catch (java.io.IOException e) {
+                throw new java.security.ProviderException(e);
+            }
+        }
+
+        @Override
+        protected void engineSetSeed(byte[] seed) {
+        }
+
+        @Override
+        protected void engineNextBytes(byte[] bytes) {
+            read(bytes);
+        }
+
+        @Override
+        protected byte[] engineGenerateSeed(int numBytes) {
+            byte[] seed = new byte[numBytes];
+            read(seed);
+            return seed;
+        }
     }
 
     /** Rewrites the configured provider list as described above. */

@@ -218,9 +218,34 @@ public final class PackageManagerService extends IPackageManager.Default {
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
     }
 
+    /**
+     * The device's system features (docs/e2e.md): a phone-sized window with a mouse
+     * (faketouch, both orientations) whose launcher could host app widgets (apps reach
+     * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
+     * Telephony, Wi-Fi, camera, sensors, touchscreen and the rest are absent.
+     */
+    static final android.util.ArrayMap<String, android.content.pm.FeatureInfo> FEATURES =
+            new android.util.ArrayMap<>();
+
+    static {
+        for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
+                PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
+                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
+            android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
+            f.name = name;
+            FEATURES.put(name, f);
+        }
+    }
+
     @Override
     public boolean hasSystemFeature(String name, int version) {
-        return false;
+        android.content.pm.FeatureInfo f = FEATURES.get(name);
+        return f != null && version <= f.version;
+    }
+
+    @Override
+    public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
+        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
     }
 
     @Override

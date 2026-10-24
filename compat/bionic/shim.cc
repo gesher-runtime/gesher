@@ -153,6 +153,9 @@ double BIONIC_SYSV Ldexp(double v, int e) { return std::ldexp(v, e); }
 double BIONIC_SYSV Frexp(double v, int* e) { return std::frexp(v, e); }
 double BIONIC_SYSV Modf(double v, double* i) { return std::modf(v, i); }
 float BIONIC_SYSV Ldexpf(float v, int e) { return std::ldexp(v, e); }
+// GNU sincos (bionic has it; the CRT does not): Simon Tatham's Puzzles' libpuzzles.so.
+void BIONIC_SYSV Sincos(double v, double* s, double* c) { *s = std::sin(v); *c = std::cos(v); }
+void BIONIC_SYSV Sincosf(float v, float* s, float* c) { *s = std::sin(v); *c = std::cos(v); }
 
 char* BIONIC_SYSV Strdup(const char* s) {
   size_t n = std::strlen(s) + 1;
@@ -930,6 +933,8 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("scalbnf", Ldexpf);
   ENTRY("frexp", Frexp);
   ENTRY("modf", Modf);
+  ENTRY("sincos", Sincos);
+  ENTRY("sincosf", Sincosf);
   ENTRY("lround", Lround);
   ENTRY("llround", Lround);
   ENTRY("lroundf", Lroundf);
