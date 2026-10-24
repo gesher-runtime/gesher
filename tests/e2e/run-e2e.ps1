@@ -14,7 +14,7 @@
 param(
   [Parameter(Mandatory)] [string] $Setup,
   [string] $Manifest = (Join-Path $PSScriptRoot 'apps.json'),
-  [string] $Out = 'e2e-results',
+  [Alias('Out')] [string] $OutDir = 'e2e-results',
   [string[]] $Only = @(),
   [switch] $SkipInstall
 )
@@ -23,9 +23,9 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $root 'tests\windows\graphics\WindowChecks.ps1')
 Add-Type -AssemblyName System.Drawing
 
-New-Item -ItemType Directory -Force $Out | Out-Null
-$Out = (Resolve-Path $Out).Path
-$summary = Join-Path $Out 'summary.txt'
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+$OutDir = (Resolve-Path $OutDir).Path
+$summary = Join-Path $OutDir 'summary.txt'
 Set-Content $summary ''
 $script:failed = 0
 $script:lines = @()
@@ -47,11 +47,11 @@ function FirstProblem([string] $text) {
   foreach ($p in $patterns) {
     for ($i = 0; $i -lt $lines.Count; $i++) {
       if ($lines[$i] -match $p -and $lines[$i] -notmatch 'stand-in .* not implemented') {
-        $out = @($lines[$i].Trim())
+        $found = @($lines[$i].Trim())
         for ($j = $i + 1; $j -lt [Math]::Min($lines.Count, $i + 4); $j++) {
-          if ($lines[$j] -match '^\s+at |Caused by') { $out += $lines[$j].Trim() }
+          if ($lines[$j] -match '^\s+at |Caused by') { $found += $lines[$j].Trim() }
         }
-        return ($out -join ' | ')
+        return ($found -join ' | ')
       }
     }
   }
@@ -197,7 +197,7 @@ function CloseAndWait([IntPtr] $hwnd, $p, [string] $log, [string] $pkg) {
 # app's input actions, closes it. Returns @{ Problems; Shot; Info }.
 function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) {
   $pkg = $a.package
-  $log = Join-Path $Out "$pkg.$tag.log"
+  $log = Join-Path $OutDir "$pkg.$tag.log"
   $res = @{ Problems = @(); Info = @() }
   $p = StartLogged $commandLine $log
   $hwnd = WaitFirstFrame $p $log 420
@@ -209,7 +209,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   Start-Sleep 3
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
-  $png = Join-Path $Out "$pkg.$tag.png"
+  $png = Join-Path $OutDir "$pkg.$tag.png"
   SavePng $px $png
   $an = Analyze $px
   $res.Info += "$($an.Width)x$($an.Height), background #$($an.Background), $($an.Other) non-background and $($an.Text) text pixels, $($an.Colors)+ colors"
@@ -227,7 +227,7 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
       Start-Sleep 2
       $after = CaptureSettled $hwnd 20
       $changed = Diff $before $after
-      SavePng $after (Join-Path $Out "$pkg.$tag.after-$i.png")
+      SavePng $after (Join-Path $OutDir "$pkg.$tag.after-$i.png")
       $res.Info += "$what changed $changed pixels"
       if ($changed -lt 30) { $res.Problems += "$what did not change the window ($changed pixels)" }
       $before = $after
@@ -272,12 +272,12 @@ foreach ($a in $manifestData.apps) {
   }
   # --- Install.
   if (-not $problems) {
-    $out = & "$app\gesher-app.cmd" install $apk 2>&1 | Out-String
-    Set-Content (Join-Path $Out "$pkg.install.log") $out
-    if ($LASTEXITCODE -ne 0 -or $out -notmatch "installed $([regex]::Escape($pkg))|$([regex]::Escape($pkg)) is installed") {
-      $problems += "gesher-app install failed (exit $LASTEXITCODE): $(FirstProblem $out)"
+    $installOut = & "$app\gesher-app.cmd" install $apk 2>&1 | Out-String
+    Set-Content (Join-Path $OutDir "$pkg.install.log") $installOut
+    if ($LASTEXITCODE -ne 0 -or $installOut -notmatch "installed $([regex]::Escape($pkg))|$([regex]::Escape($pkg)) is installed") {
+      $problems += "gesher-app install failed (exit $LASTEXITCODE): $(FirstProblem $installOut)"
     } else {
-      $parsed = [regex]::Match($out, 'parsed by PackageParser2[^\r\n]*')
+      $parsed = [regex]::Match($installOut, 'parsed by PackageParser2[^\r\n]*')
       if ($parsed.Success) { $info += $parsed.Value }
     }
   }
@@ -288,9 +288,9 @@ foreach ($a in $manifestData.apps) {
     $info += $r.Info
   }
   foreach ($l in $info) { Report "INFO  e2e: ${pkg}: $l" }
-  $log = ReadText (Join-Path $Out "$pkg.launch.log")
+  $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
   $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
-  if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $Out "$pkg.app.log") -Force }
+  if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
   $standIns = [regex]::Matches($log + (ReadText $appLog), 'stand-in (\S+) not implemented') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
   if ($standIns) { Report "INFO  e2e: ${pkg}: stand-in methods called but not implemented: $($standIns -join ', ')" }
   if (-not $problems) {
@@ -337,7 +337,7 @@ if ($null -ne $first) {
 }
 
 $logs = "$env:LOCALAPPDATA\Gesher\logs"
-if (Test-Path $logs) { Copy-Item "$logs\system_server*.log" $Out -ErrorAction SilentlyContinue }
+if (Test-Path $logs) { Copy-Item "$logs\system_server*.log" $OutDir -ErrorAction SilentlyContinue }
 & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
 Report "INFO  e2e: $($script:failed) unexpected failures"
 exit $(if ($script:failed) { 1 } else { 0 })

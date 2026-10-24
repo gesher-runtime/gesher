@@ -7,7 +7,7 @@
       "label": "RPN calculator",
       "versionName": "2.0.4",
       "versionCode": 18,
-      "sha256": "",
+      "sha256": "52e1f234710ebdf087e6760d0a0e4ff5d969f142b44ab61d1ce05ff526bd2bda",
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/lpar/RPN",
       "why": "A calculator: one Activity of plain framework widgets (Buttons in a layout), pure Java, no AndroidX; asks for the vibrator.",
