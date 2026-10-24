@@ -47,33 +47,44 @@ and the app's logs, `system_server.log`, `summary.txt`) is the run's
 | [RPN calculator](https://github.com/lpar/RPN) `com.ath0.rpn` | 2.0.4 (18) | GPL-3.0 | One Activity of framework widgets, pure Java, no AndroidX; Material buttons (StateListAnimator), an EULA dialog, clipboard menus | **PASS**: clicks on 1 and 2 show 12 |
 | [Editor](https://github.com/billthefarmer/editor) `org.billthefarmer.editor` | 1.98 (198) | GPL-3.0 | Text editor: a full-window monospace EditText in scroll views, action bar menus, SharedPreferences, files, all-files access | **PASS**: typed text appears |
 | [Currency](https://github.com/billthefarmer/currency) `org.billthefarmer.currency` | 1.58 (158) | GPL-3.0 | Converter: ListView and adapter, EditText, SharedPreferences, a rates fetch that checks connectivity first, app widgets | **PASS**: "No connection", a click selects USD as the base |
-| [NoNonsense Notes](https://github.com/spacecowboy/NotePad) `com.nononsenseapps.notepad` | 7.2.7 (72700) | GPL-3.0 | Notes and lists: SQLite through its own ContentProvider, AndroidX AppCompat, Material, fragments, a sync scheduler (alarms, PendingIntents) | see the run below |
+| [NoNonsense Notes](https://github.com/spacecowboy/NotePad) `com.nononsenseapps.notepad` | 7.2.7 (72700) | GPL-3.0 | Notes and lists: SQLite through its own ContentProvider, loaders, AndroidX AppCompat, Material, ViewPager, fragments, a sync scheduler (alarms, PendingIntents), Linkify | **PASS**: its welcome task from its SQLite database; a click ticks it |
 | [Unit Converter Ultimate](https://github.com/physphil/UnitConverterUltimate) `com.physphil.android.unitconverterultimate` | 5.7.3 (50703) | Apache-2.0 | AndroidX AppCompat, Material components (navigation drawer, toolbar, FAB), fragments, RadioGroups, Java and Kotlin | **PASS**: a unit chosen, a digit typed, the result converted |
 | [Simon Tatham's Puzzles](https://github.com/chrisboyle/sgtpuzzles) `name.boyle.chris.sgtpuzzles` | 2025-09-12 (149) | MIT | NDK: `lib/x86_64/libpuzzles.so` over JNI, drawing on a Canvas through Java callbacks; AndroidX | **KNOWN-FAIL**: see below |
 
-All six install; all six draw their first frame on Gesher.
+All six install and draw their first frame on Gesher; five pass every check.
 
 ### Verified in CI
 
-ci run **40070971705** (commit faab777, e2e job on windows-2022):
+ci run **40077182991** (commit badcd8a; the `e2e` job on windows-2022 is
+green, and so is the `package` job):
 
 ```
 PASS  e2e: com.ath0.rpn 2.0.4 (RPN calculator) installs, draws its first frame (not blank), reacts to input, closes and its process ends
 PASS  e2e: org.billthefarmer.editor 1.98 (Editor) installs, draws its first frame (not blank), reacts to input, closes and its process ends
 PASS  e2e: org.billthefarmer.currency 1.58 (Currency) installs, draws its first frame (not blank), reacts to input, closes and its process ends
-FAIL  e2e: com.nononsenseapps.notepad 7.2.7 (NoNonsense Notes): no first frame ... ServiceNotFoundException: No service published for: search
+PASS  e2e: com.nononsenseapps.notepad 7.2.7 (NoNonsense Notes) installs, draws its first frame (not blank), reacts to input, closes and its process ends
 PASS  e2e: com.physphil.android.unitconverterultimate 5.7.3 (Unit Converter Ultimate) installs, draws its first frame (not blank), reacts to input, closes and its process ends
-KNOWN-FAIL  e2e: name.boyle.chris.sgtpuzzles ... (known failure: ... libpuzzlesgen.so run as a separate executable ...)
+KNOWN-FAIL  e2e: name.boyle.chris.sgtpuzzles 2025-09-12-1919-23762278-fdroid (Simon Tatham's Puzzles): click at 100,200 did not change the window (0 pixels). ... (known failure: ... libpuzzlesgen.so run as a separate executable ...)
 PASS  e2e: com.ath0.rpn starts through the .apk association's registered command, draws, closes
 PASS  e2e: com.ath0.rpn starts through its Start menu shortcut 'RPN' ("...\Gesher\gesher-app.cmd" launch com.ath0.rpn), draws, closes
+INFO  e2e: 0 unexpected failures
 ```
+
+and the test job (both runners) `PASS  e2e: SQLite (SQLiteOpenHelper onCreate
+and onUpgrade, a transaction, a Cursor, the UNICODE collator, in-memory) and
+SharedPreferences in dbapp.apk` and `PASS  e2e: number and date formats
+(java.text and ICU NumberFormat, SimpleDateFormat, DateFormat) and Linkify in
+dbapp.apk` (`tests/windows/tracks/70-e2e.ps1`).
 
 Screenshots: the `e2e-results` artifact of that run, e.g.
 `com.ath0.rpn.launch.after-2.png` (the display shows 12),
 `org.billthefarmer.editor.launch.after-2.png` ("Gesher" typed in the
-monospace editor), `org.billthefarmer.currency.launch.png` ("No connection"
-under the action bar), `com.physphil.android.unitconverterultimate.launch.after-2.png`
-(1.03 km² = 1030000 m²), `name.boyle.chris.sgtpuzzles.launch.png`.
+monospace editor), `org.billthefarmer.currency.launch.png` (the header below
+the action bar, "No connection"), `com.nononsenseapps.notepad.launch.png`
+(its "Welcome!" task, read from its SQLite database) and `.after-1.png` (the
+task ticked), `com.physphil.android.unitconverterultimate.launch.after-2.png`
+(1.03 km² = 1030000 m²), `name.boyle.chris.sgtpuzzles.launch.png` (GamePlay,
+no game).
 
 ## Gaps the apps hit, fixed
 
@@ -95,6 +106,7 @@ In the order the apps hit them; each with the run that showed it fixed.
 | No `SecureRandom` (Conscrypt is not on the boot class path): `UUID.randomUUID()` in AndroidX Fragment's constructor | NoNonsense | `SecureRandom` over `/dev/urandom` in Gesher's JCA provider | `app/java/com/gesher/app/Digests.java` |
 | `SystemSensorManager` natives missing | Puzzles | zero-answer device stand-ins: no sensors (ci run 40069998825) | `cmake/aosp/framework.cmake` |
 | `sincos`/`sincosf` missing in the bionic shim | Puzzles' libpuzzles.so | forwarded to the CRT's sin and cos | `compat/bionic/shim.cc` |
+| libphonenumber is not in framework.jar: `Linkify.addLinks(..., ALL)` died on a stackless NoClassDefFoundError on the main thread (found with a method trace, `"trace": true` in apps.json, decoded by hand: Linkify.gatherTelLinks) | NoNonsense (it linkifies every title) | `com.android.i18n.phonenumbers.PhoneNumberUtil`/`PhoneNumberMatch` placeholders that find no numbers; dbapp linkifies a text (ci run 40076131169) | `app/java/com/android/i18n/phonenumbers/` |
 | `gesher-app --system-server` raced binderd and servicemanager | the package job (ci run 40067653118) | the launcher waits for binderd's pipe and the system server's registration | `tools/package/gesher-app.ps1` |
 
 ## Remaining gaps
@@ -104,6 +116,8 @@ In the order the apps hit them; each with the run that showed it fixed.
   generated by `lib/x86_64/libpuzzlesgen.so` run as a separate executable
   (`ProcessBuilder`); Gesher cannot run an Android ELF executable as a
   process, so the game view stays empty (native-libs: ELF executables).
+- **Phone numbers** are never detected (libphonenumber placeholder); the
+  framework build should compile libphonenumber in (framework track).
 - **Alarms** are accepted and never delivered; **PendingIntents** have no
   cancel listeners and `startActivities` keeps only the top activity.
 - **No network state**: ConnectivityManager always says "no network", though

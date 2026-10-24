@@ -234,16 +234,17 @@ needs: [framework-build.md](framework-build.md).
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
       input changes the window, close ends the process; the `.apk`
       association's command and a Start menu shortcut)
-  - [x] RPN calculator, Editor, Currency and Unit Converter Ultimate pass;
-        the `.apk` association and Start menu shortcut start RPN (ci run
-        40070971705)
+  - [x] RPN calculator, Editor, Currency, NoNonsense Notes and Unit
+        Converter Ultimate pass; the `.apk` association and Start menu
+        shortcut start RPN (ci run 40077182991)
   - [x] What they needed: SQLite and android.database's natives,
         PropertyValuesHolder's, power/alarm/clipboard/appops/appwidget/search
         stand-ins, a no-network ConnectivityManager, a shared storage volume,
         app-compat changes by target SDK, system features, startActivities,
-        PendingIntents, SdkExtensions, a SecureRandom, no sensors
-  - [ ] NoNonsense Notes (SQLite provider, AndroidX), Simon Tatham's Puzzles
-        (an ELF executable run as a process)
+        PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
+        libphonenumber placeholder
+  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+        process)
 
 ## Phase 6 checklist
 
