@@ -41,9 +41,15 @@ public static class GesherNativeActivityWin32 {
       uint usage, out IntPtr bits, IntPtr section, uint offset);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y,
       int cx, int cy, uint flags);
-  // Onto the desktop at (0, 0), shown, not activated (SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW).
-  public static bool MoveOnScreen(IntPtr hwnd) {
-    return SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0010 | 0x0040);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+  // To (x, y), shown, not activated (SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW).
+  public static bool MoveTo(IntPtr hwnd, int x, int y) {
+    return SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, 0x0001 | 0x0010 | 0x0040);
+  }
+  // The window's top-left corner in screen coordinates: {x, y}.
+  public static int[] Position(IntPtr hwnd) {
+    RECT r;
+    return GetWindowRect(hwnd, out r) ? new int[] {r.Left, r.Top} : null;
   }
   // The most frequent colors, as "rrggbb x count, ...".
   public static string Top(int[] px, int n) {
@@ -176,10 +182,15 @@ function NativeActivityCheck([string] $Name, [string[]] $Arguments, [string] $Fi
       # presents there may not reach PrintWindow. The same frames on the desktop
       # (the .so renders every frame until the click):
       Write-Host "INFO  the GL frame of the window off the desktop: $($gl -join '; '); again with the window on the desktop (not activated)"
-      [void][GesherNativeActivityWin32]::MoveOnScreen($hwnd)
+      $at = [GesherNativeActivityWin32]::Position($hwnd)
+      [void][GesherNativeActivityWin32]::MoveTo($hwnd, 0, 0)
       Start-Sleep -Seconds 2
       $px = [GesherNativeActivityWin32]::Capture($hwnd)
       $gl = if ($null -eq $px) { @('PrintWindow failed (GL frame)') } else { @(NativeActivityGlPixels $px) }
+      # Back off the desktop: rows below the screen's edge read back white,
+      # whichever way PrintWindow reads (the runners' screens are shorter than
+      # the window); off the desktop the CPU frame reads back whole.
+      if ($null -ne $at) { [void][GesherNativeActivityWin32]::MoveTo($hwnd, $at[0], $at[1]) }
     }
     $problems += $gl
     Write-Host "INFO  nativeactivity.apk's window: title '$([GesherWin32]::Title($hwnd))', process $([GesherWin32]::ProcessId($hwnd)), visible: $([GesherWin32]::IsWindowVisible($hwnd))"
