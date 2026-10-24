@@ -117,11 +117,11 @@ public final class Services {
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
-                new DeviceServices.PowerService()).asBinder());
+                new PowerManagerService()).asBinder());
         services.put(Context.THERMAL_SERVICE, StandIn.of(android.os.IThermalService.class,
                 new DeviceServices.ThermalService()).asBinder());
         services.put(Context.ALARM_SERVICE, StandIn.of(android.app.IAlarmManager.class,
-                new DeviceServices.AlarmService()).asBinder());
+                new AlarmManagerService(am, pm)).asBinder());
         services.put(Context.APP_OPS_SERVICE, StandIn.of(
                 com.android.internal.app.IAppOpsService.class,
                 new DeviceServices.AppOpsService()).asBinder());
@@ -131,7 +131,16 @@ public final class Services {
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new DeviceServices.SearchService()).asBinder());
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
-                new DeviceServices.ClipboardService()).asBinder());
+                new ClipboardService()).asBinder());
+        // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
+        services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
+                new JobSchedulerService(am, atm, pm)).asBinder());
+        services.put("batteryproperties", StandIn.of(android.os.IBatteryPropertiesRegistrar.class,
+                new BatteryService(am).properties()).asBinder());
+        // No StandIn proxy: IBatteryStats names android.bluetooth and android.telephony
+        // classes framework.jar does not have (as IAudioService above).
+        services.put(android.os.BatteryStats.SERVICE_NAME,
+                new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
         services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         return services;
     }

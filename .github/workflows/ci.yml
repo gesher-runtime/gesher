@@ -95,6 +95,15 @@ jobs:
   angle:
     uses: ./.github/workflows/angle.yml
 
+  # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
+  # and webapp.apk (built from the framework job's artifacts):
+  # .github/workflows/webview.yml, which also runs on its own.
+  webview:
+    needs: [framework]
+    uses: ./.github/workflows/webview.yml
+    with:
+      apk: true
+
   # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
   # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
   boot-image:
@@ -479,7 +488,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, exec]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec]
     strategy:
       fail-fast: false
       matrix:
@@ -525,6 +534,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: webview
           path: dist
 
       - uses: actions/download-artifact@v4
