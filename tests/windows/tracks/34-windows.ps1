@@ -35,6 +35,7 @@ function WindowAppCheck([string] $Name, [string] $Apk, [string[]] $Arguments, [s
   $quoted = (@($dvmWindows) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
+  $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'  # Win32Surface reports its first frames
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $problems = @()
@@ -71,7 +72,7 @@ function WindowAppCheck([string] $Name, [string] $Apk, [string[]] $Arguments, [s
   if ($hwnd -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($hwnd)) { $problems += 'the window is still there' }
   if (-not $problems) {
     Write-Host "PASS  gesher-app: $Name"
-    ("$text" -split "`n" | Select-String -Pattern '(gesher-app: window|gesher-app: windows|UiActivity laid out)') | Out-Host
+    ("$text" -split "`n" | Select-String -Pattern '(gesher-app: window|gesher-app: windows|UiActivity laid out|Win32Surface: )') | Out-Host
   } else {
     Write-Host "FAIL  gesher-app: $Name ($($problems -join '; '))"
     if (Test-Path "$Dir/dalvikvm.map") {
