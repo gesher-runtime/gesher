@@ -250,8 +250,18 @@ RTL layout direction.
   mirrored layouts, bidi, single process and device) except the last cursor
   step: End went to offset 0, which is Android's behavior (the right edge),
   not the test's expected 4; the test now expects End → 0, Home → 4.
-  Next run: pending.
-- Next: CI green on both runners; then the roadmap box.
+- **CI-verified: run 40133992911 (commit 1c9b6b2), green on windows-2022 and
+  windows-2025, package and e2e.** PASS lines: `dalvikvm: further scripts:
+  …`, `dalvikvm: locale from Windows: …` (en-US, en-GB, de-DE →
+  en-US-u-fw-mon-hc-h23), `dalvikvm: locale from $GESHER_LOCALES (he-IL,en-US)`,
+  `gesher-app: rtlapp.apk under a left-to-right locale: …`, `gesher-app:
+  rtlapp.apk under he-IL: …` (6 of 6 cursor moves), `gesher-app: the Gesher
+  device under ar-EG: …`; the earlier fonts and windows checks still pass.
+  The installed gesher-app (package job) uses Windows' fonts through the
+  native's drive-less `/Windows/Fonts/` and the SharedMemory map (`… 25
+  fallback families (38 fonts) of Windows' from /Windows/Fonts/; font map
+  through SharedMemory, 154421 bytes`). Installer artifact 84.6 MB (was
+  84.3 MB). The roadmap's Phase 3 fonts box is ticked.
 - Not done / gaps: per-app locales (`LocaleManager.setApplicationLocales`) are
   not served; Windows settings changed while an app runs are not sent as a
   configuration change; custom decimal/grouping symbols and date patterns
