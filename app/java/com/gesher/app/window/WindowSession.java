@@ -491,11 +491,38 @@ public final class WindowSession extends IWindowSession.Stub {
                     + w.nativeWindow.getFramesPresented() + " presented), "
                     + (mShow ? "shown" : "hidden") + ", hwnd 0x"
                     + Long.toHexString(w.nativeWindow.getHwnd()));
+            if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
+                // Debugging: what the window shows (PrintWindow in this process) and its back
+                // buffer, a second later.
+                final NativeWindow nw = w.nativeWindow;
+                new android.os.Handler(Looper.myLooper()).postDelayed(() -> {
+                    try {
+                        int[] printed = nw.capture();
+                        int[] back = nw.readBackBuffer();
+                        log("window debug: PrintWindow " + sample(printed) + ", back buffer "
+                                + sample(back) + ", " + nw.getFramesPresented() + " presented");
+                    } catch (RuntimeException e) {
+                        log("window debug: " + e);
+                    }
+                }, 1000);
+            }
         }
         if (mShow && !w.shown) {
             w.nativeWindow.show();
             w.shown = true;
         }
+    }
+
+    /** {@code [w, h, ARGB...]} as a few ARGB values down the window's first quarter. */
+    private static String sample(int[] px) {
+        if (px == null || px.length < 3) return "none";
+        int w = px[0], h = px[1];
+        StringBuilder s = new StringBuilder(w + "x" + h);
+        for (int i = 1; i <= 7; i++) {
+            int x = w / 4, y = h * i / 8;
+            s.append(String.format(" (%d,%d) %08x", x, y, px[2 + y * w + x]));
+        }
+        return s.toString();
     }
 
     @Override
