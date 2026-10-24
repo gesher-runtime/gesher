@@ -1,0 +1,30 @@
+diff --git a/libartbase/base/memfd.cc b/libartbase/base/memfd.cc
+index f965a08..8dde83a 100644
+--- a/libartbase/base/memfd.cc
++++ b/libartbase/base/memfd.cc
+@@ -74,6 +74,25 @@ bool IsSealFutureWriteSupported() {
+   return is_seal_future_write_supported;
+ }
+ 
++#elif defined(GESHER)
++
++}  // namespace art
++
++extern "C" int memfd_create(const char* name, unsigned int flags);
++
++namespace art {
++
++// Gesher: gesher-base's memfd (a delete-on-close temporary file) backs the
++// JIT code cache's dual view, a writable and an executable view of one file
++// (docs/decisions/0036).
++int memfd_create(const char* name, unsigned int flags) {
++  return ::memfd_create(name, flags);
++}
++
++bool IsSealFutureWriteSupported() {
++  return false;
++}
++
+ #else  // __linux__
+ 
+ int memfd_create([[maybe_unused]] const char* name, [[maybe_unused]] unsigned int flags) {
