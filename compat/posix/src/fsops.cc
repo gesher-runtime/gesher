@@ -95,7 +95,7 @@ std::wstring NtPath(const std::wstring& windows) {
 }
 
 constexpr unsigned kRenameNoReplace = 1;  // RENAME_NOREPLACE
-constexpr unsigned kRenameExchange = 2;   // RENAME_EXCHANGE
+[[maybe_unused]] constexpr unsigned kRenameExchange = 2;  // RENAME_EXCHANGE (rejected below)
 
 // rename with Linux's semantics: the new name is replaced atomically, also
 // while it is open; a directory replaces an empty directory; renaming a name
