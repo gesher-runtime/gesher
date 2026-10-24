@@ -61,6 +61,8 @@ include(cmake/aosp/framework.cmake)
 include(cmake/aosp/framework_e2e.cmake)
 # gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
 include(cmake/aosp/shell.cmake)
+# gesher: the device-state services' Windows side: alarms, clipboard, toasts, power (devsvc track).
+include(cmake/aosp/devsvc.cmake)
 # gesher: System.loadLibrary of an app's ELF .so in dalvikvm (Phase 6).
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
