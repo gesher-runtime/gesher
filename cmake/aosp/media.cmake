@@ -11,6 +11,9 @@
 
 set(_media "${CMAKE_SOURCE_DIR}/compat/media")
 
+# AOSP's extractors and the open codecs (cmake/aosp/media_codecs.cmake).
+include(${CMAKE_CURRENT_LIST_DIR}/media_codecs.cmake)
+
 set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
   ${_media}/audio/shared_state.cc
