@@ -206,6 +206,16 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
     KillTree $p
     return $res
   }
+  # "waitLog" (apps.json): a line the app's log must show before the window is
+  # checked, e.g. that a background step it starts at launch finished.
+  if ($a.waitLog -and $tag -eq 'launch') {
+    $appLogFile = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
+    $deadline = (Get-Date).AddSeconds(120)
+    while ((Get-Date) -lt $deadline -and (ReadText $appLogFile) -notmatch $a.waitLog) { Start-Sleep 1 }
+    $m = [regex]::Match((ReadText $appLogFile), $a.waitLog)
+    if ($m.Success) { $res.Info += "the app's log shows '$($m.Value.Trim())'" }
+    else { $res.Problems += "the app's log never showed /$($a.waitLog)/ within 120 s" }
+  }
   Start-Sleep 3
   $px = CaptureSettled $hwnd
   if ($null -eq $px) { $res.Problems += 'PrintWindow failed'; KillTree $p; return $res }
