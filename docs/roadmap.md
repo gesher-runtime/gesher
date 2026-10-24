@@ -269,7 +269,7 @@ needs: [framework-build.md](framework-build.md).
         app-compat changes by target SDK, system features, startActivities,
         PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
         libphonenumber placeholder
-  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+  - [x] Simon Tatham's Puzzles (its generator is an ELF executable run as a
         process)
 
 ## Phase 5 checklist
