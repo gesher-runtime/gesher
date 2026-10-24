@@ -56,13 +56,20 @@ final class CameraSteps {
         mExecutor = mHandler::post;
     }
 
+    /** Events that came before the one waited for (a still's image comes before its result). */
+    private final List<String> mEarlier = new java.util.ArrayList<>();
+
     private String next(String prefix, long timeoutMs) throws InterruptedException {
+        for (int i = 0; i < mEarlier.size(); i++) {
+            if (mEarlier.get(i).startsWith(prefix)) return mEarlier.remove(i);
+        }
         long deadline = System.currentTimeMillis() + timeoutMs;
         for (;;) {
             long left = deadline - System.currentTimeMillis();
             String e = left > 0 ? mEvents.poll(left, TimeUnit.MILLISECONDS) : null;
             if (e == null) return "(no " + prefix + " within " + timeoutMs + " ms)";
             if (e.startsWith(prefix)) return e;
+            mEarlier.add(e);
         }
     }
 
