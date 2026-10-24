@@ -57,16 +57,21 @@ public static class GesherWin32 {
     return new int[] { r.Right - r.Left, r.Bottom - r.Top };
   }
   // Resizes the window so its client area is w x h, as the user dragging its frame does
-  // (WM_SIZE; the window's minimum applies), keeping a window that is off the desktop off it.
+  // (WM_SIZE; the window's minimum applies). Where it stays is the window's business (a
+  // window shown off the desktop keeps itself off it).
   public static void SetClientSize(IntPtr hwnd, int w, int h) {
     RECT wr, cr;
     GetWindowRect(hwnd, out wr);
     GetClientRect(hwnd, out cr);
     int ow = w + (wr.Right - wr.Left) - (cr.Right - cr.Left);
     int oh = h + (wr.Bottom - wr.Top) - (cr.Bottom - cr.Top);
-    int left = GetSystemMetrics(76 /* SM_XVIRTUALSCREEN */);
-    int x = wr.Right <= left ? left - ow - 64 : wr.Left;
-    SetWindowPos(hwnd, IntPtr.Zero, x, wr.Top, ow, oh, 0x0004 | 0x0010 /* NOZORDER, NOACTIVATE */);
+    SetWindowPos(hwnd, IntPtr.Zero, 0, 0, ow, oh, 0x0002 | 0x0004 | 0x0010 /* NOMOVE, NOZORDER, NOACTIVATE */);
+  }
+  // Whether the window lies entirely left of the virtual screen (off the desktop).
+  public static bool OffDesktop(IntPtr hwnd) {
+    RECT wr;
+    GetWindowRect(hwnd, out wr);
+    return wr.Right <= GetSystemMetrics(76 /* SM_XVIRTUALSCREEN */);
   }
   // A left click at client (x, y): WM_LBUTTONDOWN, WM_LBUTTONUP.
   public static void Click(IntPtr hwnd, int x, int y) {
@@ -291,6 +296,9 @@ function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
   if ($min[0] -lt 220 -or $min[1] -lt 220) { $out += "resized below the minimum: $($min[0])x$($min[1])" }
   elseif (-not (WaitForLog $ReadLog "UiActivity content $($min[0])x$($min[1])" 60)) { $out += "no layout at $($min[0])x$($min[1])" }
   [GesherWin32]::SetClientSize($hwnd, 600, 700)
+  # A window shown off the desktop stays off it as it grows (where it reached
+  # onto the desktop, Windows would paint only that part).
+  if (-not [GesherWin32]::OffDesktop($hwnd)) { $out += 'the off-desktop window reached onto the desktop when resized' }
   if (-not (WaitForLog $ReadLog 'UiActivity content 600x700' 60)) { $out += 'no layout at 600x700' } else {
     $size = [GesherWin32]::ClientSize($hwnd)
     if ($size[0] -ne 600 -or $size[1] -ne 700) { $out += "client area $($size[0])x$($size[1]) after resizing to 600x700" }

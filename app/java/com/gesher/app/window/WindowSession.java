@@ -494,9 +494,34 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
             // Debugging: where ViewRootImpl is a second later.
-            w.handler.postDelayed(() -> log("window debug: after the resize "
-                    + viewRootState(viewRoot(w))), 1500);
+            for (int delay : new int[] {1500, 5000}) {
+                w.handler.postDelayed(() -> {
+                    log("window debug: after the resize " + viewRootState(viewRoot(w)));
+                    if (w.nativeWindow == null) return;
+                    log("window debug: back buffer " + grid(w.nativeWindow.readBackBuffer())
+                            + ", " + w.nativeWindow.getFramesPresented() + " presented");
+                    log("window debug: PrintWindow " + grid(w.nativeWindow.capture()));
+                }, delay);
+            }
         }
+    }
+
+    /** Debugging: {@code [w, h, ARGB...]} as its black pixels and an 8x8 grid of colors. */
+    private static String grid(int[] px) {
+        if (px == null || px.length < 3) return "none";
+        int w = px[0], h = px[1];
+        int black = 0;
+        for (int i = 2; i < px.length; i++) {
+            if ((px[i] & 0xffffff) == 0) black++;
+        }
+        StringBuilder s = new StringBuilder(w + "x" + h + ", " + black + " black:");
+        for (int y = h / 16; h >= 8 && y < h; y += h / 8) {
+            s.append(" |");
+            for (int x = w / 16; w >= 8 && x < w; x += w / 8) {
+                s.append(String.format(" %06x", px[2 + y * w + x] & 0xffffff));
+            }
+        }
+        return s.toString();
     }
 
     /** Debugging: a few fields of a ViewRootImpl's layout state. */

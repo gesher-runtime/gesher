@@ -312,6 +312,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   `screenWidthDp`/`screenHeightDp` (no configuration change for the app's
   resources, no relaunch); windows that are not full-size application
   windows (dialogs, popups) follow the app's layout and are not resizable.
+  A window shown off the desktop (`--hidden-window`) stays off it when
+  resized (`WM_WINDOWPOSCHANGING`).
   Per-monitor DPI aware, sizes in pixels, density 160 by default whatever
   the monitor's scaling; CI runs at 96 DPI.
 - **Input gaps** (docs/input.md): Generic.kcm is a US layout, so with
@@ -371,6 +373,20 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   600x700 frame 3 s after the layout, partly drawn.
 - ci 40056527378 (826398b): green on both runners and the
   installer, with WaitRegions reading the window until the frame lands.
+
+- ci 40069940195 (b867713, after wip/codegen): the resize check failed on
+  windows-2025 in both modes, the 600x700 frame read back black or stale
+  left of client x=172 (also once in the package job of ci 40055720091).
+  172 is where the window reached onto the desktop: the test had placed it
+  for the 100x100 it asked for, the window kept its 220x220 minimum and
+  then grew to the right. Windows paints a window partly on the desktop
+  only where it is on it, so PrintWindow read the rest stale. A window shown
+  off the desktop now keeps itself left of the virtual screen in
+  WM_WINDOWPOSCHANGING, whoever resizes it; the test resizes in place and
+  checks it stayed off. ci 40073022732 (7c79001, debugging: Win32Surface's
+  frames after a size change, the back buffer after a resize) passed.
+- ci 40075304753 (f32669d): green on both runners and the installer except
+  the NativeActivity checks (native-libs track, being fixed there).
 
 ### Next concrete steps
 

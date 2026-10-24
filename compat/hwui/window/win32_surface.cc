@@ -212,6 +212,32 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
       }
       buffer_ = queued;
     }
+    if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr) {
+      // Each frame for a while after the queued size changes: its size, the
+      // window's, and where the buffer was never drawn (still opaque black).
+      if (buffer_->width != last_queued_width_ || buffer_->height != last_queued_height_) {
+        report_frames_ = 6;
+        last_queued_width_ = buffer_->width;
+        last_queued_height_ = buffer_->height;
+      }
+      if (report_frames_ > 0) {
+        report_frames_--;
+        size_t undrawn = 0;
+        for (uint32_t p : buffer_->pixels) undrawn += p == 0xff000000u;
+        fprintf(stderr, "Win32Surface: frame %llu: %dx%d buffer (user %dx%d), window %dx%d, %zu undrawn pixels;",
+                static_cast<unsigned long long>(frames_ + 1), buffer_->width, buffer_->height,
+                user_width_, user_height_, window_->width(), window_->height(), undrawn);
+        for (int y = buffer_->height / 16; buffer_->height >= 8 && buffer_->width >= 8 &&
+                                           y < buffer_->height;
+             y += buffer_->height / 8) {
+          fprintf(stderr, " |");
+          for (int x = buffer_->width / 16; x < buffer_->width; x += buffer_->width / 8) {
+            fprintf(stderr, " %06x", buffer_->pixels[static_cast<size_t>(y) * buffer_->stride + x] & 0xffffffu);
+          }
+        }
+        fprintf(stderr, "\n");
+      }
+    }
     if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr && frames_ < 4) {
       size_t drawn = 0;
       for (uint32_t p : buffer_->pixels) drawn += p != 0xff000000u;
