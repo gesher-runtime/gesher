@@ -254,7 +254,10 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Creates or resizes the window's Win32 window; true when it was created. */
     private boolean ensureNativeWindow(AppWindow w, int width, int height) {
         if (w.nativeWindow != null) {
-            if (w.nativeWindow.getWidth() != width || w.nativeWindow.getHeight() != height) {
+            // A window the user resizes keeps the user's size: a relayout computed for an
+            // earlier size is followed by the resize still queued (applyResize).
+            if (!w.resizable && (w.nativeWindow.getWidth() != width
+                    || w.nativeWindow.getHeight() != height)) {
                 w.nativeWindow.setClientSize(width, height);
             }
             return false;
