@@ -75,6 +75,11 @@ jobs:
   native-libs:
     uses: ./.github/workflows/native-libs.yml
 
+  # Android ELF executables run as processes (docs/exec.md): the NDK test
+  # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
+  exec:
+    uses: ./.github/workflows/exec.yml
+
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
@@ -193,7 +198,7 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.
@@ -474,7 +479,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, exec]
     strategy:
       fail-fast: false
       matrix:
@@ -520,6 +525,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec
           path: dist
 
       - name: Run tests
