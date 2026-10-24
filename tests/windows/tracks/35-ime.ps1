@@ -261,6 +261,8 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
     if (-not $text.Contains($want)) { $problems += "missing '$want'" }
   }
   ImeCheck $Mode 'imeapp.apk runs, its window closes with WM_CLOSE' (-not $problems) ($problems -join '; ')
+  # The window thread's long waits (thread_watch.cc, ime.cc's SlowWatch).
+  ($text -split "`n" | Select-String -Pattern 'gesher-ime: (the thread of window|  #|.* took \d+ ms)') | Select-Object -First 200 | Out-Host
   if ($script:imeFailed) {
     ($text -split "`n" | Select-String -Pattern '(gesher-ime|gesher-app: window|ImeActivity|Exception|FATAL| at )') | Select-Object -Last 150 | Out-Host
   } else {
