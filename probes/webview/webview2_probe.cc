@@ -278,7 +278,7 @@ int wmain(int argc, wchar_t** argv) {
   g_host->SetBounds(hwnd, 0, 100, 400, 300, 0, 100, 400, 300, true);
   g_host->SetDocumentScript(
       L"window.bridgeResult = (function(){ try {"
-      L" return chrome.webview.hostObjects.sync.gesherBridge.call('probe','add','[2,3]');"
+      L" return chrome.webview.hostObjects.sync.gesherBridge.callJava('probe','add','[2,3]');"
       L" } catch (e) { return 'error: ' + e; } })();");
   g_host->NavigateToString(
       L"<!doctype html><html><head><title>probe</title></head>"
