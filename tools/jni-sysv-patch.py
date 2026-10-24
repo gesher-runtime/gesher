@@ -2,6 +2,7 @@
 """Generates the frameworks/base patch that registers System V JNI entries.
 
   jni-sysv-patch.py <frameworks/base checkout> > patches/frameworks/base/0002-sysv-jni-tables.patch
+  jni-sysv-patch.py <frameworks/base checkout> sqlite > patches/frameworks/base/0200-e2e-sqlite-sysv-jni-tables.patch
 
 ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md).
 The framework's JNI tables are written by hand, `{"name", "sig", (void*) fn}`,
@@ -36,6 +37,15 @@ FILES = [
     'core/jni/android_util_StringBlock.cpp',
     'core/jni/android_util_XmlBlock.cpp',
     'core/jni/com_android_internal_util_VirtualRefBasePtr.cpp',
+]
+
+# android.database's natives (cmake/aosp/sqlite.cmake), in a patch of their own.
+SQLITE_FILES = [
+    'core/jni/android_database_CursorWindow.cpp',
+    'core/jni/android_database_SQLiteConnection.cpp',
+    'core/jni/android_database_SQLiteDebug.cpp',
+    'core/jni/android_database_SQLiteGlobal.cpp',
+    'core/jni/android_database_SQLiteRawStatement.cpp',
 ]
 
 # The start of a table: `JNINativeMethod name[] = {`, const or static or not.
@@ -99,11 +109,12 @@ def rewrite(path, text):
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3) or sys.argv[2:] not in ([], ['sqlite']):
         sys.exit(__doc__)
     checkout = sys.argv[1]
+    files = SQLITE_FILES if sys.argv[2:] == ['sqlite'] else FILES
     sys.stdout.reconfigure(newline='\n')  # LF on Windows too
-    for path in FILES:
+    for path in files:
         old = subprocess.run(['git', '-C', checkout, 'show', 'HEAD:' + path], check=True,
                              capture_output=True).stdout.decode('utf-8')
         new = rewrite(path, old)

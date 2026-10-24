@@ -25,6 +25,8 @@ external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_brid
 external/okhttp Android.bp repackaged/
 external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
+# SQLite (cmake/aosp/sqlite.cmake): sqlite-default is sqlite-autoconf-3500400.
+external/sqlite android/ dist/sqlite-autoconf-3500400/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
