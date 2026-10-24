@@ -93,4 +93,22 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
 
 _Updated by the exec track (branch `wip/exec`)._
 
-- First implementation pushed; CI not run yet.
+- ci `40114487210` (39227be): everything built; on both runners
+  `PASS  exec: gesher-exec runs an NDK-built ELF executable as its main program`,
+  `PASS  exec: gesher-exec exit statuses: exit(3) is 3, abort() is 134, a fault is 139`,
+  `PASS  exec: gesher-exec --sh -c runs simple commands with &&, || and exit`;
+  ExecTest failed only where the test program printed its destructor's line in
+  every mode (fixed in the test). The other five e2e apps still pass.
+- ci `40128223507` (305965c): **test jobs green on windows-2022 and
+  windows-2025**, including
+  `PASS  exec: ProcessBuilder runs an ELF executable (stdin/stdout/stderr pipes, environment, working dir, exit status, destroy), sh and Windows programs`.
+  e2e: Puzzles never ran its generator: on a first launch its GamePlay goes up
+  to its chooser with `NavUtils.navigateUpFromSameTask`, and the system
+  server's `navigateUpTo` stand-in answered false, so the app sat on an empty
+  GamePlay (no exec at all in its log).
+- 588c83d: `navigateUpTo` in the system server (finishes the activities above
+  the destination; starts the destination in the task when `startActivities`
+  left it out); the e2e runner's `waitLog` (apps.json) is checked after the
+  actions. Puzzles' click at 100,200 on the chooser should start a game:
+  generation through gesher-exec. CI: ci `40133940460` (running).
+- Next: Puzzles green in the e2e job; roadmap box.
