@@ -245,7 +245,7 @@ function UiAppInput([IntPtr] $hwnd, [scriptblock] $ReadLog) {
     $out += "no 'UiActivity echo: Gesher' (last: '$(if ($m.Count) { $m[$m.Count - 1].Value })')"
   } else {
     [GesherWin32]::Char($hwnd, [char]0x05D0)
-    if (-not (WaitForLog $ReadLog 'UiActivity echo: Gesherא' 30)) { $out += 'WM_CHAR U+05D0 not echoed' }
+    if (-not (WaitForLog $ReadLog 'UiActivity echo: Gesher\u05d0' 30)) { $out += 'WM_CHAR U+05D0 not echoed' }
     Start-Sleep 2
     $px = [GesherWin32]::Capture($hwnd)
     $dark = [GesherWin32]::Count($px, 0, 600, 400, 680, 0x000000, 100)
