@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- At 400x800 and 160 dpi (1 dp = 1 px), from the top: two rows of a red and a
+     blue half (the second forced left to right), Hebrew, Arabic, mixed bidi text
+     with colored runs (set in code), Arabic letters joined and kept apart (ZWNJ),
+     alignment (textDirection, textAlignment, gravity), CJK, a character no font
+     has (tofu), emoji, and an EditText with Hebrew. RtlActivity logs where each
+     view is; tests/windows/tracks/39-rtl.ps1 reads the window back. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFFFF">
+
+    <LinearLayout
+        android:id="@+id/mirror"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:orientation="horizontal">
+        <View android:id="@+id/mirror_first" android:layout_width="0dp"
+            android:layout_height="match_parent" android:layout_weight="1"
+            android:background="#FFFF0000" />
+        <View android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:background="#FF0000FF" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/forced"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layoutDirection="ltr"
+        android:orientation="horizontal">
+        <View android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:background="#FFFF0000" />
+        <View android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:background="#FF0000FF" />
+    </LinearLayout>
+
+    <TextView android:id="@+id/hebrew" style="@style/Line" />
+    <TextView android:id="@+id/arabic" style="@style/Line" />
+    <TextView android:id="@+id/mixed" style="@style/Line" />
+    <TextView android:id="@+id/joined" style="@style/Line" android:textSize="32sp" />
+    <TextView android:id="@+id/isolated" style="@style/Line" android:textSize="32sp" />
+    <TextView android:id="@+id/latin_rtl" style="@style/Line" android:text="Gesher"
+        android:textDirection="rtl" />
+    <TextView android:id="@+id/view_start" style="@style/Line" android:text="Gesher"
+        android:textAlignment="viewStart" />
+    <TextView android:id="@+id/gravity_end" style="@style/Line" android:gravity="end|center_vertical" />
+    <TextView android:id="@+id/cjk" style="@style/Line" />
+    <TextView android:id="@+id/tofu" style="@style/Line" />
+    <TextView android:id="@+id/emoji" style="@style/Line" android:textSize="32sp" />
+
+    <com.gesher.rtlapp.SelectionEditText
+        android:id="@+id/edit"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:textSize="28sp"
+        android:textColor="#FF000000"
+        android:inputType="text"
+        android:background="#FFFFFFFF" />
+</LinearLayout>

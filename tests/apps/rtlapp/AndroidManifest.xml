@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The right-to-left and scripts test app (docs/fonts.md): Hebrew and Arabic
+     TextViews, bidi text, alignment, a mirrored layout, CJK and emoji, an RTL
+     EditText, in a Win32 window (tests/windows/tracks/39-rtl.ps1). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.rtlapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/RtlTheme">
+        <activity
+            android:name=".RtlActivity"
+            android:label="@string/activity_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -8,9 +8,17 @@
       sans-serif (+ condensed)  Roboto-Regular.ttf, Roboto 3.011 variable (wght, wdth, ital)
       serif                     NotoSerif-{Regular,Bold,Italic,BoldItalic}.ttf
       monospace                 DroidSansMono.ttf
+      fallback und-Arab         NotoNaskhArabic{,-Bold}.ttf (1.070, elegant),
+                                NotoNaskhArabicUI-{Regular,Bold}.ttf (compact)
       fallback und-Hebr         NotoSansHebrew-{Regular,Bold}.ttf (1.040)
-    Left out: the other families and every other script's fallback, emoji,
+      fallback und-Thai         NotoSansThai{,UI}-{Regular,Bold}.ttf (elegant, compact)
+      fallback und-Deva         NotoSansDevanagari{,UI}-VF.ttf (2.006, elegant, compact)
+    Serif fallbacks (fallbackFor="serif") are left out of these families.
+    Left out: the other families and the other scripts' fallbacks,
     serif-monospace, casual, cursive, smallcaps, source-sans-pro, roboto-flex.
+    CJK, emoji, symbols and the other scripts come from the fonts Windows
+    has, in place: windows-fonts.xml, appended to this file's fallback list
+    (docs/fonts.md, docs/decisions/0044-rtl-scripts-and-locale.md).
     In this file, all fonts without names are added to the default list.
 -->
 <familyset version="23">
@@ -237,10 +245,69 @@
     <alias name="monaco" to="monospace" />
 
     <!-- fallback fonts -->
+    <family lang="und-Arab" variant="elegant">
+        <font weight="400" style="normal" postScriptName="NotoNaskhArabic">
+            NotoNaskhArabic-Regular.ttf
+        </font>
+        <font weight="700" style="normal">NotoNaskhArabic-Bold.ttf</font>
+    </family>
+    <family lang="und-Arab" variant="compact">
+        <font weight="400" style="normal" postScriptName="NotoNaskhArabicUI">
+            NotoNaskhArabicUI-Regular.ttf
+        </font>
+        <font weight="700" style="normal">NotoNaskhArabicUI-Bold.ttf</font>
+    </family>
     <family lang="und-Hebr">
         <font weight="400" style="normal" postScriptName="NotoSansHebrew">
             NotoSansHebrew-Regular.ttf
         </font>
         <font weight="700" style="normal">NotoSansHebrew-Bold.ttf</font>
+    </family>
+    <family lang="und-Thai" variant="elegant">
+        <font weight="400" style="normal" postScriptName="NotoSansThai">NotoSansThai-Regular.ttf
+        </font>
+        <font weight="700" style="normal">NotoSansThai-Bold.ttf</font>
+    </family>
+    <family lang="und-Thai" variant="compact">
+        <font weight="400" style="normal" postScriptName="NotoSansThaiUI">
+            NotoSansThaiUI-Regular.ttf
+        </font>
+        <font weight="700" style="normal">NotoSansThaiUI-Bold.ttf</font>
+    </family>
+    <family lang="und-Deva" variant="elegant">
+        <font weight="400" style="normal" postScriptName="NotoSansDevanagari-Regular">
+            NotoSansDevanagari-VF.ttf
+            <axis tag="wght" stylevalue="400"/>
+        </font>
+        <font weight="500" style="normal" postScriptName="NotoSansDevanagari-Regular">
+            NotoSansDevanagari-VF.ttf
+            <axis tag="wght" stylevalue="500"/>
+        </font>
+        <font weight="600" style="normal" postScriptName="NotoSansDevanagari-Regular">
+            NotoSansDevanagari-VF.ttf
+            <axis tag="wght" stylevalue="600"/>
+        </font>
+        <font weight="700" style="normal" postScriptName="NotoSansDevanagari-Regular">
+            NotoSansDevanagari-VF.ttf
+            <axis tag="wght" stylevalue="700"/>
+        </font>
+    </family>
+    <family lang="und-Deva" variant="compact">
+        <font weight="400" style="normal" postScriptName="NotoSansDevanagariUI-Regular">
+            NotoSansDevanagariUI-VF.ttf
+            <axis tag="wght" stylevalue="400"/>
+        </font>
+        <font weight="500" style="normal" postScriptName="NotoSansDevanagariUI-Regular">
+            NotoSansDevanagariUI-VF.ttf
+            <axis tag="wght" stylevalue="500"/>
+        </font>
+        <font weight="600" style="normal" postScriptName="NotoSansDevanagariUI-Regular">
+            NotoSansDevanagariUI-VF.ttf
+            <axis tag="wght" stylevalue="600"/>
+        </font>
+        <font weight="700" style="normal" postScriptName="NotoSansDevanagariUI-Regular">
+            NotoSansDevanagariUI-VF.ttf
+            <axis tag="wght" stylevalue="700"/>
+        </font>
     </family>
 </familyset>
