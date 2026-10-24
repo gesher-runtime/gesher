@@ -135,8 +135,12 @@ class Host {
   // Where the WebView is: its rectangle (x, y, width, height) and the part of
   // it that is visible (clip_*), both in the parent's client coordinates.
   // A new parent (or null: park it) moves the container there first.
+  // `holes`: rectangles (parent client coordinates) of the app's views drawn
+  // over the WebView (a floating button): cut out of the container's window
+  // region so the app's own pixels show (and take the mouse) there.
   void SetBounds(HWND parent, int x, int y, int width, int height, int clip_x, int clip_y,
-                 int clip_width, int clip_height, bool visible);
+                 int clip_width, int clip_height, bool visible,
+                 const std::vector<RECT>& holes = {});
   // Parks the container; Listener gets kParked(id) once it is done.
   void Park(int64_t id);
 
