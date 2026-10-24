@@ -78,6 +78,11 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
 - Signals between processes: `destroy()` terminates (status 143) without
   running the program's SIGTERM handler; `kill(pid, sig)` from native code is
   still `ESRCH` for other processes.
+- Exit-status convention: a child that dies of a signal carries a Windows
+  exit code of 128 + signal (the posix layer's `kill` and the launcher's
+  fault mapping both use it), and `waitForProcessExit` passes such codes
+  through unchanged, so Java's `waitFor()` sees the same 128 + N that
+  Linux's `Process` reports.
 - No `fork()`, `exec*()`, `posix_spawn`, `system()` or `popen()` inside native
   code yet (the shim's gaps, docs/native-libs.md); Java's ProcessBuilder is
   the supported path.
@@ -109,6 +114,13 @@ _Updated by the exec track (branch `wip/exec`)._
 - 588c83d: `navigateUpTo` in the system server (finishes the activities above
   the destination; starts the destination in the task when `startActivities`
   left it out); the e2e runner's `waitLog` (apps.json) is checked after the
-  actions. Puzzles' click at 100,200 on the chooser should start a game:
-  generation through gesher-exec. CI: ci `40133940460` (running).
-- Next: Puzzles green in the e2e job; roadmap box.
+  actions. ci `40133940460` failed only in e2e: the runner kept watching the
+  chooser window after GamePlay replaced it (fixed in cd27227, which follows
+  the app's newest full-size window).
+- ci `40135101983` (cd27227): **fully green** — build, package, test on
+  windows-2022 and windows-2025, and e2e with
+  `PASS  e2e: name.boyle.chris.sgtpuzzles 2025-09-12-1919-23762278-fdroid (Simon Tatham's Puzzles) installs, draws its first frame (not blank), reacts to input, closes and its process ends`
+  (`waitLog` matched: `gesher: exec pid 8172 exited with status 0` — the
+  generator ran through gesher-exec), `0 unexpected failures`. Roadmap box
+  ticked.
+- Next: final CI on the branch merged with origin/phase4/integration.
