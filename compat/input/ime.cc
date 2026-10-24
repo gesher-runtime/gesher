@@ -76,7 +76,7 @@ struct ImeWindow::Impl {
 
   // The window's thread only.
   std::unordered_set<WPARAM> consumed;  // keys whose WM_KEYDOWN the input method took
-  std::deque<uint32_t> own_chars;       // the last key's WM_CHAR its KeyEvent types
+  std::deque<uint32_t> own_chars;       // WM_CHARs to come whose keys' KeyEvents type them
   wchar_t high_surrogate = 0;
   bool composing = false;
   bool associated = true;  // the window has the thread's default input context
@@ -130,8 +130,7 @@ struct ImeWindow::Impl {
   }
 
   LRESULT KeyDown(UINT msg, WPARAM vk, LPARAM lparam) {
-    own_chars.clear();
-    if (vk == VK_PROCESSKEY) {
+    if (vk == VK_PROCESSKEY && associated) {
       // An IME took the key; its key-up may come as either code.
       UINT real = ImmGetVirtualKey(hwnd);
       if (real != 0 && real != VK_PROCESSKEY) consumed.insert(real);
@@ -143,16 +142,24 @@ struct ImeWindow::Impl {
       consumed.insert(VK_PACKET);
       return 0;
     }
-    // TranslateMessage has queued what the key types in the thread's layout.
-    MSG next;
+    // What TranslateMessage made of the key in the thread's layout and key
+    // state, asked again without touching that state (flag 4: no dead key is
+    // consumed). Peeking at the queued WM_CHAR would see an earlier key's when
+    // keys come in a burst of posted messages.
+    const int32_t scan = static_cast<int32_t>((lparam >> 16) & 0x1ff);
     uint32_t ch = 0;
     bool dead = false;
-    if (PeekMessageW(&next, hwnd, WM_CHAR, WM_DEADCHAR, PM_NOREMOVE | PM_NOYIELD)) {
-      if (next.message == WM_CHAR) ch = static_cast<uint32_t>(next.wParam);
-      if (next.message == WM_DEADCHAR) dead = true;
+    {
+      BYTE keys[256];
+      wchar_t out[8];
+      if (GetKeyboardState(keys)) {
+        int n = ToUnicodeEx(static_cast<UINT>(vk), static_cast<UINT>(scan & 0xff), keys, out, 8,
+                            4, GetKeyboardLayout(0));
+        if (n < 0) dead = true;
+        if (n >= 1) ch = static_cast<uint32_t>(out[0]);
+      }
     }
     const int32_t modifiers = KeyModifiers();
-    const int32_t scan = static_cast<int32_t>((lparam >> 16) & 0x1ff);
     const TextInputState s = State();
     if (s.active) {
       if (s.enter_action != 0 && vk == VK_RETURN && (modifiers & 7) == 0) {
@@ -174,15 +181,21 @@ struct ImeWindow::Impl {
     consumed.erase(vk);  // a fresh press: its key-up is the window's
     if (IsText(ch) && KeyEventTypes(static_cast<int32_t>(vk), scan, modifiers, ch)) {
       own_chars.push_back(ch);
+      if (own_chars.size() > 32) own_chars.pop_front();
     }
     return CallOriginal(msg, vk, lparam);
   }
 
   LRESULT Char(WPARAM wparam) {
     const uint32_t ch = static_cast<uint32_t>(wparam);
-    if (!own_chars.empty() && own_chars.front() == ch) {
-      own_chars.pop_front();
-      return 0;
+    // The characters of keys whose KeyEvents type them come in the keys'
+    // order; one that never came (a key TranslateMessage did not see) is
+    // passed over.
+    for (size_t i = 0; i < own_chars.size() && i < 8; i++) {
+      if (own_chars[i] == ch) {
+        own_chars.erase(own_chars.begin(), own_chars.begin() + static_cast<long>(i) + 1);
+        return 0;
+      }
     }
     Unit(static_cast<wchar_t>(ch));
     return 0;
@@ -369,16 +382,16 @@ struct ImeWindow::Impl {
         if (wparam && State().active) lparam &= ~static_cast<LPARAM>(ISC_SHOWUICOMPOSITIONWINDOW);
         break;
       case WM_IME_STARTCOMPOSITION:
-        if (State().active) return 0;
+        if (State().active && associated) return 0;
         break;
       case WM_IME_COMPOSITION:
-        if (State().active) {
+        if (State().active && associated) {
           Composition(lparam);
           return 0;
         }
         break;
       case WM_IME_ENDCOMPOSITION:
-        if (State().active) {
+        if (State().active && associated) {
           composing = false;
           TextEvent e;
           e.kind = TextEvent::kComposeEnd;
@@ -387,7 +400,7 @@ struct ImeWindow::Impl {
         }
         break;
       case WM_IME_CHAR:
-        if (State().active) {
+        if (State().active && associated) {
           Unit(static_cast<wchar_t>(wparam));
           return 0;
         }
@@ -451,7 +464,7 @@ ImeWindow::~ImeWindow() {
   DWORD_PTR result = 0;
   if (IsWindow(hwnd) &&
       SendMessageTimeoutW(hwnd, DetachMessage(), 0, reinterpret_cast<LPARAM>(impl_),
-                          SMTO_NORMAL, 5000, &result) != 0 &&
+                          SMTO_NORMAL | SMTO_ABORTIFHUNG, 5000, &result) != 0 &&
       result == 1) {
     delete impl_;
   }

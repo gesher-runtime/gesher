@@ -62,6 +62,21 @@ function WaitCount([scriptblock] $ReadLog, [string] $Pattern, [int] $Count, [int
   return $false
 }
 
+# Switches the keyboard layout of $hwnd's thread (KLID $Klid, language
+# $Lang), asking again until it has it (Windows may take a while, or answer
+# an earlier request late).
+function SwitchTo([IntPtr] $hwnd, [string] $Klid, [int] $Lang) {
+  $deadline = (Get-Date).AddSeconds(30)
+  do {
+    [void][ImeInput]::SwitchLayout($hwnd, $Klid)
+    $until = (Get-Date).AddSeconds(2)
+    while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $until) {
+      Start-Sleep -Milliseconds 200
+    }
+  } while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $deadline)
+  Start-Sleep -Milliseconds 500
+}
+
 # The checks of one run, on imeapp's window $hwnd (process $ProcessId).
 function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptblock] $ReadLog) {
   $fg = [ImeInput]::Foreground($hwnd)
@@ -83,7 +98,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
 
   # Unicode input (VK_PACKET): Hebrew and an emoji (a surrogate pair).
   [void][ImeInput]::Unicode("$([char]0x05E9)$([char]0x05DC)$([char]0x05D5)$([char]0x05DD) $([char]0xD83D)$([char]0xDE00)")
-  $t0 = 'שלום 😀'
+  $t0 = '\u05e9\u05dc\u05d5\u05dd \ud83d\ude00'
   $t = WaitText $ReadLog 'edit' $t0
   ImeCheck $Mode 'SendInput Unicode text (VK_PACKET, as the emoji panel and dictation type) is committed: Hebrew and an emoji' ($t -ceq $t0) $t
 
@@ -104,27 +119,23 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   $t = WaitText $ReadLog 'edit' $t0
   $steps += "Ctrl+V: $t"; $ok = $ok -and $t -ceq $t0
   [void][ImeInput]::Keys(0x08)
-  $t = WaitText $ReadLog 'edit' 'שלום '
-  $steps += "Backspace: $t"; $ok = $ok -and $t -ceq 'שלום '
+  $t = WaitText $ReadLog 'edit' '\u05e9\u05dc\u05d5\u05dd '
+  $steps += "Backspace: $t"; $ok = $ok -and $t -ceq '\u05e9\u05dc\u05d5\u05dd '
   [void][ImeInput]::Chord($ctrl, 0x41); [void][ImeInput]::Keys(0x2E)
   $t = WaitText $ReadLog 'edit' ''
   $steps += "Ctrl+A Delete: '$t'"; $ok = $ok -and $t -ceq ''
   ImeCheck $Mode 'editing keys and clipboard shortcuts in the EditText (Ctrl+A/C/V/Z/X, End, Backspace, Delete)' $ok ($steps -join '; ')
 
   # A Hebrew keyboard layout: the window's thread switched, keys A B C type Hebrew.
-  $hkl = [ImeInput]::SwitchLayout($hwnd, '0000040D')
-  $deadline = (Get-Date).AddSeconds(10)
-  while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne 0x040d) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  SwitchTo $hwnd '0000040D' 0x040d
   $layout = '{0:x}' -f [ImeInput]::ThreadLayout($hwnd)
   [void][ImeInput]::Keys(0x41, 0x42, 0x43)
-  $t = WaitText $ReadLog 'edit' 'שנב'
-  $ok = $t -ceq 'שנב'
+  $t = WaitText $ReadLog 'edit' '\u05e9\u05e0\u05d1'
+  $ok = $t -ceq '\u05e9\u05e0\u05d1'
   [void][ImeInput]::Keys(0x74)  # F5: the app reports InputMethodManager again
   $ok2 = WaitCount $ReadLog 'ImeActivity imm:[^\r\n]*subtype he' 1 20
   ImeCheck $Mode 'a Hebrew keyboard layout (LoadKeyboardLayout 0000040D, the window''s thread switched): keys A, B, C type Hebrew letters, not Latin ones; the current subtype is he' ($ok -and $ok2) "layout $layout, text $t, subtype he: $ok2"
-  [void][ImeInput]::SwitchLayout($hwnd, '00000409')
-  $deadline = (Get-Date).AddSeconds(10)
-  while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne 0x0409) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  SwitchTo $hwnd '00000409' 0x0409
   [void][ImeInput]::Chord($ctrl, 0x41); [void][ImeInput]::Keys(0x2E)
   [void](WaitText $ReadLog 'edit' '')
 
@@ -161,10 +172,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   ImeCheck $Mode 'Enter performs the editor''s IME action through the InputConnection: IME_ACTION_DONE, IME_ACTION_SEARCH, IME_ACTION_NEXT (focus moves to the next field)' ($ok -and $okSearch -and $okNext) ($seen -join ', ')
 
   # Microsoft IME for Japanese in the 'last' editor: compose, convert, commit.
-  $hr = [ImeInput]::EnableJapaneseIme()
-  [void][ImeInput]::SwitchLayout($hwnd, '00000411')
-  $deadline = (Get-Date).AddSeconds(10)
-  while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne 0x0411) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+  SwitchTo $hwnd '00000411' 0x0411
   $jaLayout = '{0:x}' -f [ImeInput]::ThreadLayout($hwnd)
   Start-Sleep -Seconds 2
   [void][ImeInput]::Keys(0x19)  # VK_KANJI: the IME on
@@ -187,7 +195,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
     Start-Sleep -Milliseconds 200
   } while ((Get-Date) -lt $deadline)
   $committed = $t -match '^(\\u[4-9][0-9a-f]{3}){2}$'
-  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon: にほん), converted to kanji, committed by Enter (commitText, no composing region left)' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; committed: $t" -f $hr)
+  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon, as hiragana), converted to kanji, committed by Enter (commitText, no composing region left)' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; committed: $t" -f $script:imeTsf)
   $cand = $windows | Where-Object { $_ -match 'cand' } | Select-Object -First 1
   $inline = -not ($windows | Where-Object { $_ -match 'Composition' })
   if ($cand -and $null -ne $caret) {
@@ -198,7 +206,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
     ImeCheck $Mode 'the IME''s candidate window is placed at the caret (ImmSetCandidateWindow, CFS_EXCLUDE), the composition inline (no composition window)' $false "no candidate window ($($windows -join ' ')), caret $($caret -join ',')"
   }
   [void][ImeInput]::Keys(0x19)  # the IME off
-  [void][ImeInput]::SwitchLayout($hwnd, '00000409')
+  SwitchTo $hwnd '00000409' 0x0409
   Start-Sleep -Seconds 1
 
   # A password field takes keys, and no compositions.
@@ -253,6 +261,12 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
     ($text -split "`n" | Select-String -Pattern 'gesher-ime: (input started|compose|commit|editor action|caret|soft input)') | Select-Object -First 40 | Out-Host
   }
 }
+
+# Microsoft IME for Japanese enabled for the user, the layouts loaded, before
+# the runs (enabling a profile changes the session's input languages).
+$script:imeTsf = [ImeInput]::EnableJapaneseIme()
+foreach ($klid in '0000040D', '00000411', '00000409') { [void][ImeInput]::SwitchLayout([IntPtr]::Zero, $klid) }
+Start-Sleep -Seconds 3
 
 # 1. A single process: gesher-app --window (shown: SendInput and the IME's
 #    windows need the window on the desktop).
