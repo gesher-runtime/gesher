@@ -10,6 +10,4 @@
 void register_libcore_math_NativeBN(JNIEnv*) {}
 #endif
 
-#if defined(GESHER_UNPORTED_UNIXProcess_md)
-extern "C" void register_java_lang_UNIXProcess(JNIEnv*) {}
-#endif
+// UNIXProcess_md.c's natives are compat/libcore/process.cc's (docs/exec.md).
