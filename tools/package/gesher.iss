@@ -75,6 +75,12 @@ Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
 Source: "gesher.ico"; DestDir: "{app}"; Flags: ignoreversion
 
+[Tasks]
+; android.webkit.WebView runs on Microsoft Edge WebView2 (docs/webview.md):
+; Windows 11 has its runtime; elsewhere Setup offers to install it (Microsoft's
+; Evergreen bootstrapper, downloaded; a per-user install without elevation).
+Name: "webview2"; Description: "Install the Microsoft Edge WebView2 Runtime (Android apps' web views need it)"; Check: not WebView2Installed
+
 [Icons]
 Name: "{autoprograms}\Gesher Hello"; Filename: "{app}\gesher.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
 Name: "{autoprograms}\Gesher README"; Filename: "{app}\README.txt"
@@ -123,6 +129,35 @@ begin
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
 end;
 
+// The Microsoft Edge WebView2 Runtime's registration (per machine or per user).
+function WebView2Installed(): Boolean;
+var
+  Key, Version: String;
+begin
+  Key := 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  Result := False;
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
+     RegQueryStringValue(HKEY_LOCAL_MACHINE, Key, 'pv', Version) or
+     RegQueryStringValue(HKEY_CURRENT_USER, Key, 'pv', Version) then
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+end;
+
+// The WebView2 task: Microsoft's bootstrapper installs the Evergreen runtime.
+procedure InstallWebView2();
+var
+  Code: Integer;
+begin
+  try
+    DownloadTemporaryFile('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+      'MicrosoftEdgeWebview2Setup.exe', '', nil);
+    if not Exec(ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe'), '/silent /install', '',
+                SW_HIDE, ewWaitUntilTerminated, Code) then
+      Log('WebView2 bootstrapper did not start');
+  except
+    Log('WebView2 Runtime download failed: ' + GetExceptionMessage);
+  end;
+end;
+
 // An update replaces files a running Gesher device uses: it is stopped first.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
@@ -153,6 +188,8 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    if WizardIsTaskSelected('webview2') then
+      InstallWebView2();
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if not HasEntry(Path, Dir) then
