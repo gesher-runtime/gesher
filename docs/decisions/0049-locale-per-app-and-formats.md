@@ -52,7 +52,7 @@ as `locale` (registered with the other services, a generated stub for binder):
 
 ### Configuration changes, as ATMS sends them
 
-`ActivityTaskManagerService.updateConfiguration(package | all)`:
+`ActivityTaskManagerService.dispatchConfiguration(package | all)`:
 
 1. each running process of the package gets a `ConfigurationChangeItem` when
    its configuration differs from the one it was given (bindApplication or
