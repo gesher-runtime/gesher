@@ -1,6 +1,6 @@
 # 0040. Popups: dialogs, menus and toasts are owned popup windows
 
-Status: accepted (popups track, Phase 3+). The coordinator may renumber.
+Status: accepted (popups track, Phase 3+; verified in ci run 40129561197). The coordinator may renumber.
 
 ## Context
 

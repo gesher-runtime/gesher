@@ -190,6 +190,13 @@ needs: [framework-build.md](framework-build.md).
         resizes the window (at least its minimum) and it redraws at the new
         size (ci run 40056527378, both runners and the installer;
         docs/graphics.md)
+- [x] Dialogs, menus, dropdowns and toasts as owned popup windows of the app
+      window (ADR 0040; popups track): an AlertDialog over its activity with
+      the dim behind it, its button, Esc and a click outside; a Toast; an
+      options menu item; a Spinner selection; a dialog-themed Activity; a
+      second Activity taking the task window's place (ci run 40129561197,
+      both runners, single process and the Gesher device; the e2e apps stay
+      green)
 - [ ] Fonts through minikin (bundled or Windows fonts), Hebrew and RTL text
   - [x] Bundled system fonts (Roboto, Noto Serif, DroidSansMono, Noto Sans
         Hebrew; `fonts.xml` in `$ANDROID_ROOT/etc`) as the system font map
