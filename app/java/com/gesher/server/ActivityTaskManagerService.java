@@ -1286,7 +1286,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * ActivityRecord.ensureActivityConfiguration do. An activity that is not resumed is
      * relaunched or told when it is.
      */
-    void updateConfiguration(String packageName) {
+    void dispatchConfiguration(String packageName) {
         List<ProcessRecord> processes = new ArrayList<>();
         synchronized (this) {
             for (ProcessRecord p : mProcesses) {

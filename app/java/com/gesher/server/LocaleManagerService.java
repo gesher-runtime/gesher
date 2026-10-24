@@ -34,7 +34,7 @@ import java.util.Properties;
  *     them in front of the system's in that package's Configuration, as
  *     LocaleOverlayHelper.combineLocalesIfOverlayExists does, with the layout direction of
  *     the first. A change is a configuration change of the package's running process and
- *     activities ({@link ActivityTaskManagerService#updateConfiguration}: relaunched, or
+ *     activities ({@link ActivityTaskManagerService#dispatchConfiguration}: relaunched, or
  *     onConfigurationChanged when they handle {@code locale}) and an ACTION_LOCALE_CHANGED
  *     broadcast to the package, as on Android 13+.
  * <li><b>Windows' settings changing.</b> The system server's hidden events window
@@ -178,7 +178,7 @@ public final class LocaleManagerService extends ILocaleManager.Default
             applyInProcess(configurationFor(mInProcessPackage), "app locales " + tags);
             return;
         }
-        mAtm.updateConfiguration(packageName);
+        mAtm.dispatchConfiguration(packageName);
         // ACTION_LOCALE_CHANGED to the app whose locales changed (Android 13+: its effective
         // locale changed); ACTION_APPLICATION_LOCALE_CHANGED goes to an installer, of which
         // the device has none.
@@ -246,7 +246,7 @@ public final class LocaleManagerService extends ILocaleManager.Default
             applyInProcess(configurationFor(mInProcessPackage), change);
             return;
         }
-        mAtm.updateConfiguration(null);
+        mAtm.dispatchConfiguration(null);
         Intent locale = new Intent(Intent.ACTION_LOCALE_CHANGED);
         locale.addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
         broadcastToAll(locale);
