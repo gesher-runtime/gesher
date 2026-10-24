@@ -43,40 +43,43 @@ Verified in CI (`tests/windows/tracks/70-codegen.ps1`, run-tests.ps1 sets
       switch interpreter's benchmark checksum.
 - [x] **The JIT** compiles app code (its code cache fills) and matches the
       same checksum.
-- [x] **AOT**: the boot image's primary image is compiled with `speed`; app
-      code on top runs on nterp and the JIT. *(verified from this track's CI
-      run; numbers below.)*
+- [x] **AOT**: the boot image's primary image is compiled with `speed` (53,927
+      methods with compiled code in CI); the nterp and JIT modes run app code on
+      nterp / the JIT while the boot library (String, Math, collections, ...)
+      runs its AOT code.
 - [x] **Stress** (implicit null checks, exceptions through compiled frames,
       GC with compiled frames on the stack, threads and monitors, JNI from
       compiled code, proxies, reflection, array/arithmetic/cast exceptions)
-      passes under the switch interpreter, nterp, AOT and the JIT.
+      passes under the switch interpreter, nterp (over AOT) and the JIT (over
+      AOT), and under the interpret-only diagnosis mode.
 - [x] **ART's own run-tests** (a subset of `art/test` that needs no native
       library): 008-exceptions, 021-string2, 046-reflect, 080-oom-throw,
-      083-compiler-regressions, 123-compiler-regressions-mt,
-      201-built-in-except-detail-messages — the same stdout under the switch
-      interpreter, nterp, AOT and the JIT. (003-omnibus-opcodes and
-      061-out-of-memory do not pass under the switch interpreter on Gesher
-      either, for reasons unrelated to compiled code; they are reported, not
-      counted.)
+      083-compiler-regressions, 114-ParallelGC, 123-compiler-regressions-mt —
+      the same stdout under the switch interpreter, nterp and the JIT.
+      (003-omnibus-opcodes, 061-out-of-memory and
+      201-built-in-except-detail-messages do not pass under the switch
+      interpreter on Gesher either, for reasons unrelated to compiled code;
+      they are reported, not counted.)
 
-### Benchmark (`gesher.Bench`, best of 3 rounds, ms; windows-2025, run 40066064752)
-A CPU-bound dex benchmark, switch interpreter vs nterp vs the JIT:
+### Benchmark (`gesher.Bench`, best of 3 rounds, ms; windows-2025, run 40068699984)
+A CPU-bound dex benchmark; app code under the switch interpreter vs nterp vs
+the JIT (the boot library runs AOT code in the nterp and JIT columns):
 
 | kernel | switch | nterp | JIT |
 |---|---|---|---|
-| fib | 12 | 2 | 2 |
-| int-loops | 87 | 23 | 2 |
-| sieve | 27 | 5 | 0 |
-| sort | 92 | 28 | 5 |
-| virtual-calls | 73 | 22 | 0 |
-| allocation | 459 | 217 | 142 |
-| strings | 91 | 37 | 4 |
-| floats | 43 | 22 | 1 |
-| **total** | **884** | **356** | **156** |
+| fib | 20 | 4 | 0 |
+| int-loops | 149 | 37 | 3 |
+| sieve | 42 | 10 | 1 |
+| sort | 150 | 20 | 7 |
+| virtual-calls | 125 | 33 | 1 |
+| allocation | 730 | 149 | 141 |
+| strings | 163 | 6 | 6 |
+| floats | 95 | 44 | 3 |
+| **total** | **1474** | **303** | **162** |
 
-nterp is about 2.5x the switch interpreter, the JIT about 5-6x, on this
-benchmark. AOT numbers are added once the boot-image-with-code run reports
-them.
+nterp is about 5x the switch interpreter on this benchmark's total, the JIT
+about 9x (the full process wall time, which includes startup, 4791 -> 1233 ->
+864 ms). The checksum is identical in all three modes.
 
 ## Not done yet
 - **Deep-recursion `StackOverflowError` under nterp and the JIT.** The stack
