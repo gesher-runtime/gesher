@@ -109,8 +109,16 @@ Each phase ends with something demonstrable, built and tested in CI.
       extensions, no compiled code); every test run and the installed Gesher
       load it, with no imageless fallback; startup Hello 105 -> 55 ms,
       lifecycle.apk to `Activity.onCreate` 783 -> 483 ms (ci run 40055199839)
-- [ ] AOT-compiled code in the boot image, the JIT and nterp with it (the code
-      generator on ADR 0006's thread register)
+- [x] Compiled code on Windows ([compiled-code.md](compiled-code.md),
+      [0033](decisions/0033-codegen-compiled-code-on-windows.md)): nterp, the
+      JIT and AOT code in the boot image's primary image, the x86-64 code
+      generator reaching `Thread*` through a fixed TLS slot, faults delivered as
+      signals. Stress (exceptions, GC, threads, JNI through compiled frames) and
+      a subset of ART's run-tests pass under the switch interpreter, nterp, AOT
+      and the JIT; a CPU-bound benchmark runs about 2.5x (nterp) and 5-6x (JIT)
+      the switch interpreter. Remaining: deep-recursion `StackOverflowError`
+      under nterp/JIT (needs an alternate signal stack), compiled JNI stubs,
+      AOT for the extensions, dual-mapped JIT cache.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
