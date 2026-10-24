@@ -102,16 +102,29 @@ the app's ELF code) or players.
     (both runners: Media Foundation is there on the CI images).
 
 ### Runs in flight
-- None. Last run: **40135129611** (commit 882a1af, "the player ..."): build,
-  framework, media (apk), package green; its `media / codecs` job (the AOSP
-  extractor/codec port, `ninja -k 0 media_codecs_all`) **failed**, so the test
-  jobs were skipped (fixed since: the codecs job is `continue-on-error`). Its
-  log could not be read (GitHub API rate limit); the errors seen in the run
-  before it (40134179211) were all addressed in commit 14bd96f and before:
-  Tremolo's `_G_config.h`, FLAC's dllimport (`FLAC__NO_DLL`) and Linux
-  `config.h` (Gesher's own in `compat/media/aosp/flac`), `vasprintf`/
-  `strcasestr` and missing `<new>`/`<vector>` (force-included
-  `compat/media/aosp/include/gesher_media_aosp.h`), `OSCL_UNUSED_ARG`.
+- **40138223997** (commit 6a88e72, "link the player into dalvikvm; the codec
+  port's last compile fixes"): dispatched 2026-10-25, in progress when the
+  agent was replaced; result unknown. It is the first run where the codecs
+  and the player are in the default build (no separate codecs job) and
+  dalvikvm links them, so expect link errors in `build` (duplicate symbols
+  between extractors, libbinder/Parcel from AMessage, `off64_t`), then the
+  first real 38-media.ps1 results for MediaPlayer/SoundPool/retriever/NDK and
+  the first e2e run of Signal Generator.
+- Previous: **40135129611** (882a1af): everything green except `media /
+  codecs`. Its log (read via `gh api .../jobs/120996011968/logs`) had exactly
+  five error classes, all fixed in 6a88e72: Tremolo `ogg_uint8_t` (win32 path
+  of os_types.h never typedefs it), `memrchr` (OggExtractor), mp3dec
+  `OSCL_UNUSED_ARG` (CMake drops function-like macros from
+  `target_compile_definitions`: now force-included), `ERROR_UNSUPPORTED`
+  (extractor.cc lacked `MediaErrors.h`), `-Wdeprecated-copy` from libutils'
+  TypeHelpers.h in gesher_media_player. (The `BITMAPINFOHEADER` errors in
+  mf_decoder.cc were already fixed by 14bd96f's `#undef NOGDI`.)
+- Next step exactly: read 40138223997's result (`curl -s
+  https://api.github.com/repos/gesher-runtime/gesher/actions/runs/40138223997/jobs`
+  for job conclusions, then `gh api .../actions/jobs/<id>/logs` for a failed
+  one), fix build/link errors, then adjust 38-media.ps1 expected strings to
+  real output where the behaviour is right; then items 3 and 5 below. Before
+  the final run, merge origin/phase4/integration into wip/media.
 - Last CI-verified commit: **da91170**, ci run **40129230078** (stage 1, part
   1, above; both runners green). Commits since (7b87bf0 docs, then the codec
   port, the player and its tests) are not verified.
@@ -159,8 +172,8 @@ Everything below is pushed (tip of `wip/media`), built only by media.yml's
    added to `tests/e2e/apps.json`, SHA-256
    `e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601` (the APK
    from the official mirror `https://ftp.gwdg.de/pub/android/fdroid/repo/`;
-   f-droid.org itself answers 418 through the local network filter) —
-   verified green in e2e before ticking this off.
+   f-droid.org itself answers 418 through the local network filter);
+   NOT yet verified in e2e (first tried in run 40138223997).
 5. Stage 2: MediaExtractor is written (`media_extractor_jni.cc`); MediaCodec
    and MediaCodecList (audio decoding first: ExoPlayer apps use MediaCodec +
    AudioTrack), MediaMuxer; video needs a Surface to draw into: SurfaceView
