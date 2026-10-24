@@ -22,8 +22,14 @@ verified SHA is fine.
 Merged so far:
 - popups: 9edfef6 (code verified at 6ce1d20, ci 40129561197). ADR 0040.
 - rtl: 3aae3be (verified at 1c9b6b2, ci 40133992911). ADR 0044.
-- Integration ci run 40135350639 on 6cea4ca (popups + rtl): result not yet
-  read (GitHub API rate limit). Read it first.
+- Integration ci run 40135350639 on 6cea4ca (popups + rtl): all green.
+- exec: merged (verified at 059b267, ci 40137662101; Puzzles passes e2e).
+  ADR 0035.
+- devsvc: merged (verified at a02e84a, ci 40137762701 attempt 2; attempt 1's
+  windows-2022 failure was a one-off rtlapp-under-ar-EG flake, passed on
+  rerun: watch for it). ADR 0038.
+- webview: merged (verified at 9c610d6, ci 40139785905; Notes passes e2e).
+  ADR 0041.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
@@ -93,6 +99,8 @@ posix), `compat/posix/src/signal.cc` (stack and posix), `tools/package/*`,
 - **Parallel tracks** in disjoint file domains, each one subagent in its own
   worktree. One agent per whole task (not tiny milestones, not huge). A
   stopped agent's successor starts from its brief plus its status section.
+- **Every agent runs on Opus**: pass the model explicitly when starting one;
+  never let it inherit another model.
 - **Keep going without asking** until the goal: a complete, ready installer
   with every gap closed.
 - **Honest reports**: tick roadmap boxes only for what CI verified.

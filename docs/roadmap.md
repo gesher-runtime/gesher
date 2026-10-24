@@ -246,6 +246,18 @@ needs: [framework-build.md](framework-build.md).
         starts on demand and ends; another package's activity and provider
         in its own process; `gesher-app my.apk` and the `.apk` association
         use it (ci run 40019524773)
+- [x] Device-state services backed by Windows (devsvc track, ADR 0038,
+      docs/services.md "Device services"; ci run 40137762701
+      at a02e84a, both runners)
+  - [x] Alarms that fire (a waitable timer; the app's process started for a
+        PendingIntent), TIME_SET from WM_TIMECHANGE
+  - [x] JobScheduler: JobServices in the app's process, periodic jobs,
+        constraints from Windows
+  - [x] The clipboard linked with Windows' both ways (text, HTML)
+  - [x] Notifications as toasts of the app's AppUserModelID (cancel removes
+        them), a notification listener
+  - [x] Wake locks as Windows power requests; the battery from
+        GetSystemPowerStatus
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
@@ -269,8 +281,25 @@ needs: [framework-build.md](framework-build.md).
         app-compat changes by target SDK, system features, startActivities,
         PendingIntents, SdkExtensions, a SecureRandom, no sensors, a
         libphonenumber placeholder
-  - [ ] Simon Tatham's Puzzles (its generator is an ELF executable run as a
+  - [x] Simon Tatham's Puzzles (its generator is an ELF executable run as a
         process)
+
+## Phase 5 checklist
+
+- [x] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041; limits there)
+  - [x] The WebView2 SDK (NuGet, pinned) with llvm-mingw, the static loader
+        linked; a controller in a child window, a page's script calling a host
+        object synchronously, ExecuteScript, CapturePreview, PrintWindow with
+        PW_RENDERFULLCONTENT, requests answered by the host (webview run
+        40128694232: the probe on windows-2022 and windows-2025)
+  - [x] android.webkit.WebView in an app's window: Gesher's
+        WebViewFactoryProvider, the WebView2 window kept at the view's bounds,
+        WebViewClient/WebChromeClient, evaluateJavascript,
+        @JavascriptInterface, file:///android_asset, cookies, views over the
+        WebView cut out of its window (single process and the Gesher device;
+        ci run 40138367211 on windows-2022 and windows-2025)
+  - [x] A real app that relies on WebView in the e2e job (Notes 1.41, ci run
+        40138367211)
 
 ## Phase 6 checklist
 
