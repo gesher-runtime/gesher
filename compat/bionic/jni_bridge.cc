@@ -676,3 +676,23 @@ JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
   return proxy->functions == g_env_table ? proxy->real : env;
 }
 
+JNIEnv* gesher::bionic::ProxyJniEnv(JNIEnv* real) {
+  Install();
+  EnsureThread();
+  if (real == nullptr) return nullptr;
+  if (reinterpret_cast<ProxyEnv*>(real)->functions == g_env_table) return real;
+  return Wrap(real);
+}
+
+JavaVM* gesher::bionic::ProxyJavaVm(JNIEnv* real) {
+  Install();
+  JNIEnv* r = RealJniEnv(real);
+  JavaVM* vm = nullptr;
+  if (r != nullptr && r->functions->GetJavaVM(r, &vm) == JNI_OK) {
+    g_real_vm.store(vm, std::memory_order_release);
+  }
+  return ProxyVmPtr();
+}
+
+void gesher::bionic::EnterLoadedCode() { EnsureThread(); }
+

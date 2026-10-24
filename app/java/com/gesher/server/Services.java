@@ -28,6 +28,8 @@ import android.os.IUserManager;
 import android.os.Service;
 import android.os.ServiceManager;
 import android.os.ServiceWithMetadata;
+import android.os.storage.IStorageManager;
+import android.os.storage.StorageVolume;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.IWindowManager;
@@ -108,6 +110,9 @@ public final class Services {
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         services.put(Context.UI_MODE_SERVICE,
                 StandIn.of(IUiModeManager.class, new UiModeService()).asBinder());
+        // mount: no storage volumes (native-libs track: NativeActivity asks for its
+        // OBB and external files directories, which are then null).
+        services.put("mount", StandIn.of(IStorageManager.class, new StorageService()).asBinder());
         return services;
     }
 
@@ -265,6 +270,20 @@ public final class Services {
         public void playSoundEffectVolume(int effectType, float volume) {
         }
     }
+
+    /**
+     * mount: StorageManagerService on a device without shared (external) storage: no
+     * volumes, so Context.getExternalFilesDir and getObbDir are null, as with external
+     * storage unmounted (StorageManager.getVolumeList would otherwise get null from its
+     * cache and Environment would fail on it).
+     */
+    public static final class StorageService extends IStorageManager.Default {
+        @Override
+        public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
+            return new StorageVolume[0];
+        }
+    }
+
     /**
      * uimode: UiModeManagerService, a normal (not car, desk or TV) device in day mode,
      * standard contrast, no forced dark. ViewRootImpl's UiModeManager reads it.

@@ -38,6 +38,7 @@ jobs:
             tests/native
             tests/apps/nativeapp
             tests/apps/glapp
+            tests/apps/nativeactivity
 
       - name: Cache the Android NDK
         id: ndk
@@ -162,6 +163,13 @@ jobs:
       - name: Build the graphics test APK
         run: |
           tests/apps/glapp/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"             --r8 "$PWD/r8.jar"
+
+      # android.app.NativeActivity: nativeactivity.apk, no Java code, its
+      # lib/x86_64/libnativeactivity.so on android_native_app_glue
+      # (tests/apps/nativeactivity).
+      - name: Build the NativeActivity test APK
+        run: |
+          tests/apps/nativeactivity/build.sh dist-native --ndk "$PWD/$NDK_DIR"             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools"
 
       - uses: actions/upload-artifact@v4
         with:

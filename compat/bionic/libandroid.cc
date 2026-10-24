@@ -28,8 +28,8 @@
 //  - ANativeWindow_fromSurface/toSurface over libandroid_runtime's (with the
 //    runtime's JNIEnv); the other ANativeWindow_* are in libandroid_window.cc
 //    and EGL/GLES in egl_gles.cc.
-//  - ANativeActivity_*: stand-ins until NativeActivity's natives exist; they
-//    are dropped, saying so once.
+//  - ANativeActivity_*, AInputQueue_*/AInputEvent_* and AChoreographer_* are
+//    in native_activity.cc and choreographer.cc.
 
 #include "jni_bridge.h"
 #include "shim_internal.h"
@@ -432,29 +432,18 @@ size_t BIONIC_SYSV SharedMemoryGetSize(int fd) {
 }
 int BIONIC_SYSV SharedMemorySetProt(int, int) { return 0; }
 
-// --- ANativeWindow_fromSurface/toSurface, ANativeActivity ----------------------------------------
+// --- ANativeWindow_fromSurface/toSurface ------------------------------------------------------
 // The other ANativeWindow_* functions are in libandroid_window.cc. These two
 // take a JNIEnv: the .so's is the bridge's proxy, and libandroid_runtime's
 // functions (Microsoft ABI, in dalvikvm) want the runtime's real one. The
 // Surface's native object is a hostgraphics Surface (a Win32Surface for a
 // Gesher window); fromSurface takes a reference the .so releases.
-// ANativeActivity has no NativeActivity natives yet (docs/native-libs.md):
-// its requests are dropped, saying so once.
-
-std::atomic<bool> g_said_activity{false};
-void SayActivity() {
-  LogOnce(&g_said_activity, "ANativeActivity: requests are not handled yet (no NativeActivity natives)");
-}
-
 ANativeWindow* BIONIC_SYSV WindowFromSurface(JNIEnv* env, jobject surface) {
   return ANativeWindow_fromSurface(RealJniEnv(env), surface);
 }
 jobject BIONIC_SYSV WindowToSurface(JNIEnv* env, ANativeWindow* window) {
   return ANativeWindow_toSurface(RealJniEnv(env), window);
 }
-void BIONIC_SYSV ActivityRequest(void*) { SayActivity(); }
-void BIONIC_SYSV ActivityRequestFlags(void*, uint32_t, uint32_t) { SayActivity(); }
-void BIONIC_SYSV ActivityRequestOne(void*, uint32_t) { SayActivity(); }
 
 // --- the table ---------------------------------------------------------------------------------------
 
@@ -567,12 +556,7 @@ void Register() {
       // Surfaces (the rest of ANativeWindow_*: libandroid_window.cc).
       E("ANativeWindow_fromSurface", WindowFromSurface),
       E("ANativeWindow_toSurface", WindowToSurface),
-      // NativeActivity (stand-ins).
-      E("ANativeActivity_finish", ActivityRequest),
-      E("ANativeActivity_setWindowFormat", ActivityRequestOne),
-      E("ANativeActivity_setWindowFlags", ActivityRequestFlags),
-      E("ANativeActivity_showSoftInput", ActivityRequestOne),
-      E("ANativeActivity_hideSoftInput", ActivityRequestOne),
+      // ANativeActivity_*: native_activity.cc.
   };
 #undef CFG
 #undef E
