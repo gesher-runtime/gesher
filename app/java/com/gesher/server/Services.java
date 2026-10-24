@@ -94,8 +94,10 @@ public final class Services {
         // views' key listeners and VelocityTracker.
         services.put(Context.INPUT_SERVICE, StandIn.of(IInputManager.class,
                 new VirtualKeyboard.InputManager()).asBinder());
+        // No StandIn proxy: IAudioService's methods name android.bluetooth.BluetoothDevice,
+        // which framework.jar does not have (a Proxy resolves every method's types).
         services.put(Context.AUDIO_SERVICE,
-                StandIn.of(IAudioService.class, new AudioService()).asBinder());
+                new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
                 new InputMethodManager()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
