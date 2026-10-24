@@ -19,6 +19,7 @@ import android.os.HandlerThread;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
 import java.net.URL;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -32,11 +33,21 @@ import javax.net.ssl.HttpsURLConnection;
  * a default network callback and a request callback, an HTTPS GET through
  * HttpsURLConnection (the network security config's trust manager, the system CAs),
  * cleartext refused (target SDK 36). With the extra {@code watch}, it waits for the test to
- * add an address to the default network's adapter (192.0.2.77) and to remove it, and
- * reports the callbacks Windows' change brought.
+ * add an address to the default network's adapter (2001:db8::77, IPv6 so the runner's
+ * DHCPv4 setup is left alone) and to remove it, and reports the callbacks Windows' change
+ * brought.
  */
 public class NetActivity extends Activity {
-    static final String WATCHED = "192.0.2.77";
+    static final String WATCHED = "2001:db8::77";
+
+    /** {@link #WATCHED} as an address (a literal: no name lookup). */
+    static InetAddress watched() {
+        try {
+            return InetAddress.getByName(WATCHED);
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 
     static void log(String s) {
         System.out.println("NetApp " + s);
@@ -98,7 +109,7 @@ public class NetActivity extends Activity {
             public void onLinkPropertiesChanged(Network network, LinkProperties props) {
                 boolean has = false;
                 for (LinkAddress a : props.getLinkAddresses()) {
-                    has |= a.getAddress().getHostAddress().equals(WATCHED);
+                    has |= a.getAddress().equals(watched());
                 }
                 log("default callback: onLinkPropertiesChanged " + network + " "
                         + props.getInterfaceName() + ", " + props.getLinkAddresses().size()
