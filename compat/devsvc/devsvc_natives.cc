@@ -32,8 +32,8 @@ jstring JStr(JNIEnv* env, const std::u16string& s) {
   return env->NewString(reinterpret_cast<const jchar*>(s.data()), static_cast<jsize>(s.size()));
 }
 
-jboolean WindowsHost_startEvents(JNIEnv*, jclass) {
-  return dev::StartEvents() ? JNI_TRUE : JNI_FALSE;
+jlong WindowsHost_startEvents(JNIEnv*, jclass) {
+  return static_cast<jlong>(dev::StartEvents());
 }
 
 jint WindowsHost_waitEvents(JNIEnv*, jclass, jint timeoutMs) {
@@ -137,7 +137,7 @@ jstring WindowsHost_fullPath(JNIEnv* env, jclass, jstring path) {
 #define DEVSVC_STRING "Ljava/lang/String;"
 
 const JNINativeMethod gWindowsHostMethods[] = {
-    {"nativeStartEvents", "()Z", GESHER_JNI(WindowsHost_startEvents)},
+    {"nativeStartEvents", "()J", GESHER_JNI(WindowsHost_startEvents)},
     {"nativeWaitEvents", "(I)I", GESHER_JNI(WindowsHost_waitEvents)},
     {"nativeNextActivation", "()[" DEVSVC_STRING, GESHER_JNI(WindowsHost_nextActivation)},
     {"nativeClipboardText", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_clipboardText)},

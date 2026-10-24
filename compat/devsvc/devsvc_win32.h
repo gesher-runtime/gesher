@@ -25,8 +25,10 @@ enum Event : unsigned {
 
 // Starts the event thread: a hidden top-level window (message-only windows get
 // no broadcasts such as WM_TIMECHANGE and WM_POWERBROADCAST) listening to the
-// clipboard. Idempotent; false if the window could not be made.
-bool StartEvents();
+// clipboard. Idempotent; returns the window's HWND as an integer (the tests
+// send it WM_TIMECHANGE by handle: FindWindow from another window station or
+// desktop does not see it), 0 if the window could not be made.
+unsigned long long StartEvents();
 
 // Waits up to `timeout_ms` (negative: forever) for events; returns and clears
 // the set that arrived (0 on a time-out).

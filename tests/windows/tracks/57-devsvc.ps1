@@ -252,9 +252,19 @@ $t = DevsvcLaunch 'TimeActivity'
 $registered = DevsvcWait $mark @('devsvc: time: receiver registered') 300
 Start-Sleep 1
 $r = [IntPtr]::Zero
-$eventWindow = [Devsvc.Broadcast]::FindWindowW('GesherDeviceServices', $null)
+# The system server logs its event window's handle (WindowsHost.addListener); send
+# WM_TIMECHANGE to it by handle. FindWindow is only a fallback: on the CI runners it
+# does not see the window (another window station or desktop).
+$eventWindow = [IntPtr]::Zero
+if ((DevsvcText $serverLog) -match 'devsvc: Windows events from a hidden window 0x([0-9a-fA-F]+)') {
+  $eventWindow = [IntPtr]::new([Convert]::ToInt64($Matches[1], 16))
+}
+if ($eventWindow -eq [IntPtr]::Zero) {
+  $eventWindow = [Devsvc.Broadcast]::FindWindowW('GesherDeviceServices', $null)
+}
+$sent = [IntPtr]::Zero
 if ($eventWindow -ne [IntPtr]::Zero) {
-  $null = [Devsvc.Broadcast]::SendMessageTimeoutW($eventWindow, 0x001E, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref] $r)
+  $sent = [Devsvc.Broadcast]::SendMessageTimeoutW($eventWindow, 0x001E, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref] $r)
 }
 $out = WaitTimed $t 200
 $code = $LASTEXITCODE
@@ -263,6 +273,7 @@ $log = DevsvcSince $mark
 $problems = @()
 if (-not $registered) { $problems += 'the receiver was not registered' }
 if ($eventWindow -eq [IntPtr]::Zero) { $problems += 'the device''s event window (GesherDeviceServices) was not found' }
+elseif ($sent -eq [IntPtr]::Zero) { $problems += "WM_TIMECHANGE was not delivered to $eventWindow (SendMessageTimeout failed or timed out)" }
 if (-not $log.Contains('devsvc: time: registered receiver got android.intent.action.TIME_SET')) { $problems += 'the registered receiver got no TIME_SET' }
 if (-not $got) { $problems += 'the manifest receiver got no TIME_SET' }
 if ($code -ne 0) { $problems += "launch exit $code" }
