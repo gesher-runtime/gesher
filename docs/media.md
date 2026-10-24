@@ -101,86 +101,82 @@ the app's ELF code) or players.
   - `INFO  media: Media Foundation: ... AAC decoders: 1; MP3 decoders: 1; FLAC decoders: 1; Opus decoders: 1; H.264 decoders: 1; HEVC 0; VP9 0; AV1 0; MPEG-4 part 2 decoders: 1`
     (both runners: Media Foundation is there on the CI images).
 
-### Runs in flight
-- **40138223997** (commit 6a88e72, "link the player into dalvikvm; the codec
-  port's last compile fixes"): dispatched 2026-10-25, in progress when the
-  agent was replaced; result unknown. It is the first run where the codecs
-  and the player are in the default build (no separate codecs job) and
-  dalvikvm links them, so expect link errors in `build` (duplicate symbols
-  between extractors, libbinder/Parcel from AMessage, `off64_t`), then the
-  first real 38-media.ps1 results for MediaPlayer/SoundPool/retriever/NDK and
-  the first e2e run of Signal Generator.
-- Previous: **40135129611** (882a1af): everything green except `media /
-  codecs`. Its log (read via `gh api .../jobs/120996011968/logs`) had exactly
-  five error classes, all fixed in 6a88e72: Tremolo `ogg_uint8_t` (win32 path
-  of os_types.h never typedefs it), `memrchr` (OggExtractor), mp3dec
-  `OSCL_UNUSED_ARG` (CMake drops function-like macros from
-  `target_compile_definitions`: now force-included), `ERROR_UNSUPPORTED`
-  (extractor.cc lacked `MediaErrors.h`), `-Wdeprecated-copy` from libutils'
-  TypeHelpers.h in gesher_media_player. (The `BITMAPINFOHEADER` errors in
-  mf_decoder.cc were already fixed by 14bd96f's `#undef NOGDI`.)
-- Next step exactly: read 40138223997's result (`curl -s
-  https://api.github.com/repos/gesher-runtime/gesher/actions/runs/40138223997/jobs`
-  for job conclusions, then `gh api .../actions/jobs/<id>/logs` for a failed
-  one), fix build/link errors, then adjust 38-media.ps1 expected strings to
-  real output where the behaviour is right; then items 3 and 5 below. Before
-  the final run, merge origin/phase4/integration into wip/media.
-- Last CI-verified commit: **da91170**, ci run **40129230078** (stage 1, part
-  1, above; both runners green). Commits since (7b87bf0 docs, then the codec
-  port, the player and its tests) are not verified.
+### Runs
+- **40138223997** (6a88e72): `build` failed at the dalvikvm link, one error:
+  `fopen_utf8` undefined (libFLAC's share/compat.h maps `fopen` to it on
+  _WIN32; its win_utf8_io.c is not built). `media / media` failed: the
+  generators were committed without the executable bit (exit 126).
+- **40139309325** (60c383a: `compat/media/aosp/flac/fopen_utf8.c`, the
+  generators executable): build, media, package green; `test` red on both
+  runners only in 38-media.ps1's mediaapp checks: the app stopped at its
+  first MediaPlayer with `NoClassDefFoundError` (the boot class loader's
+  pre-allocated one, no class name). Found by running the run's artifacts
+  locally (dalvikvm from the CI artifacts, nothing built locally): every
+  `MediaPlayer.setDataSource(FileDescriptor, ...)` goes through
+  `FileUtils.convertToModernFd`, which calls
+  `MediaStore.getOriginalMediaFormatFileDescriptor`; MediaStore is the
+  MediaProvider module's class, not in framework.jar. Fixed in 1aba036 with
+  a placeholder `app/java/android/provider/MediaStore.java` (on the boot
+  class path in gesher-app.jar, as SdkExtensions/ConnectivityManager): with
+  it, the whole mediaapp run printed every expected line locally, and
+  `media_probe analyze` found the 27 sounds of the capture.
+  e2e: Signal Generator FAIL (clicks did not change the window). Two causes,
+  both fixed in 1aba036: (1) its activity is `userLandscape` and its custom
+  views size themselves only when their parent is wider than tall; Gesher has
+  no orientation, so on the 400x800 display they were 0x0. apps.json gives it
+  `"display": "800x400"` (run-e2e.ps1: GESHER_DISPLAY on a device of its own)
+  and clicks on SQU and MUTE (checked locally: the views draw, the clicks
+  change the window). (2) its AudioTrack comes from AudioTrack.Builder with
+  no buffer size (one frame asked for): the track got a one-frame buffer and
+  played a frame per mixer period. Streaming tracks now get at least the
+  minimum buffer (getMinBufferSize's), as AudioFlinger does; mediaapp test 7
+  checks it.
+- Also in 1aba036: `media_probe analyze` counts a zero crossing only after the
+  signal went below -30% of its rms (lossy codecs' low-level noise at a
+  tone's ends had given 540 Hz for the 523 Hz MP3, 720 for the 698 Hz Opus).
+- afbf94c: origin/phase4/integration merged (ci.yml needs/downloads, the
+  CMakeLists include, android_runtime.cc's table, apps.json: both sides kept).
+- Next run: ci at afbf94c+ (dispatched with this status). Last CI-verified
+  commit is still **da91170** (run 40129230078).
 
-### In progress (committed, not yet CI-verified): stage 1, part 2
-Everything below is pushed (tip of `wip/media`), built only by media.yml's
-`codecs` job until it compiles:
-- `cmake/aosp/media_codecs.cmake` + `aosp.lock` (new entries
-  `frameworks/av-media`, `frameworks/native-media`, `system/media`,
-  `external/tremolo`, `external/libopus`, `external/flac`, `external/libwebm`):
-  the extractors and decoders, `EXCLUDE_FROM_ALL`, target `media_codecs_all`.
-- `cmake/aosp/media.cmake`: `gesher_media_player` (OBJECT, `EXCLUDE_FROM_ALL`):
+### Stage 1, part 2 (committed, being verified)
+- `cmake/aosp/media_codecs.cmake` + `aosp.lock` (`frameworks/av-media`,
+  `frameworks/native-media`, `system/media`, `external/tremolo`,
+  `external/libopus`, `external/flac`, `external/libwebm`): the extractors
+  and decoders, linked into dalvikvm.
+- `cmake/aosp/media.cmake`: `gesher_media_player` (OBJECT):
   `compat/media/player/*`, `jni/media_jni.cc` (builtin `libmedia_jni.so`,
   `libsoundpool.so`, `libaudioeffect_jni.so`), `media_player_jni.cc`,
   `media_jni_others.cc` (MediaMetadataRetriever + stand-ins),
   `media_extractor_jni.cc`, `soundpool_jni.cc`, `ndk/aaudio.cc`,
-  `ndk/opensles.cc`. Locally checked with clang `-fsyntax-only` (the parts
-  that need no AOSP headers).
-- Test side, ready: `tests/apps/mediaapp` (MediaPlayer, retriever, SoundPool,
-  Ringtone, NDK AAudio/OpenSL ES via `jni/media_ndk_test.c`),
-  `gen-media.sh` (ffmpeg; checked locally), `compat/media/sounds/
-  gen-system-sounds.sh` (checked locally), media.yml steps (ffmpeg, NDK
-  cache `ndk-27.2.12479018`, `.so` build), `38-media.ps1` expectations
-  (MediaPlayer, retriever, SoundPool, ringtone, NDK lines and 31 sounds; an
-  http server on 127.0.0.1:8765 serving `assets/tone_http.ogg`). The
-  expected strings are first guesses: adjust them to what the first green
-  run prints when they are right.
+  `ndk/opensles.cc`.
+- Tests: `tests/apps/mediaapp` (AudioTrack, AudioManager, MediaPlayer,
+  retriever, SoundPool, Ringtone, NDK AAudio/OpenSL ES via
+  `jni/media_ndk_test.c`), `gen-media.sh`, `compat/media/sounds/
+  gen-system-sounds.sh`, media.yml (ffmpeg, NDK `ndk-27.2.12479018`),
+  `38-media.ps1` (an http server on 127.0.0.1:8765 serves
+  `assets/tone_http.ogg`); Signal Generator in `tests/e2e/apps.json`.
 
 ### Exactly what is next
-1. DONE: run 40135129611's `media / codecs` log read; every compile error of
-   the port fixed: `ogg_uint8_t` typedef'd in `compat/media/aosp/include/
-   _G_config.h` (Tremolo only defines it on the non-win32 path), `memrchr`
-   shimmed in `gesher_media_aosp.h` (OggExtractor), mp3dec takes
-   `OSCL_UNUSED_ARG` from the force-included header (CMake silently drops a
-   function-like macro given to `target_compile_definitions`),
-   `MediaErrors.h` included for `ERROR_UNSUPPORTED` (extractor.cc),
-   `-Wno-deprecated-copy` on gesher_media_player (libutils TypeHelpers.h).
-2. DONE: linked: `gesher_media_player` into dalvikvm, `EXCLUDE_FROM_ALL`
-   dropped everywhere, the codecs job removed from media.yml.
-3. Run ci; make `38-media.ps1` green on both runners (the mediaapp run is
-   single process, `-Xint`). Then tick the roadmap's MediaPlayer, SoundPool/
-   Ringtone/MediaMetadataRetriever and AAudio/OpenSL ES boxes with the run id,
-   and add the PASS lines here.
-4. DONE: Signal Generator (`org.billthefarmer.siggen` 1.37, versionCode 137)
-   added to `tests/e2e/apps.json`, SHA-256
-   `e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601` (the APK
-   from the official mirror `https://ftp.gwdg.de/pub/android/fdroid/repo/`;
-   f-droid.org itself answers 418 through the local network filter);
-   NOT yet verified in e2e (first tried in run 40138223997).
-5. Stage 2: MediaExtractor is written (`media_extractor_jni.cc`); MediaCodec
-   and MediaCodecList (audio decoding first: ExoPlayer apps use MediaCodec +
-   AudioTrack), MediaMuxer; video needs a Surface to draw into: SurfaceView
-   and TextureView are not supported by Gesher's graphics yet (no
-   compositor; graphics track), H.264 through Media Foundation (present on
-   the CI images). Stage 3: capture (AudioRecord's setup fails cleanly now;
-   AAudio input answers UNAVAILABLE; OpenSL recorder FEATURE_UNSUPPORTED).
+1. Read the run at the tip; fix what fails; when both test runners and e2e
+   are green, tick the roadmap's MediaPlayer, SoundPool/Ringtone/
+   MediaMetadataRetriever, AAudio/OpenSL ES and e2e boxes with the run id and
+   quote the PASS lines here.
+2. Then report stage 1 to the coordinator; stage 2 (video: MediaCodec,
+   MediaExtractor is written in `media_extractor_jni.cc`, MediaMuxer, video
+   into a Surface) comes after. Stage 3: capture (AudioRecord's setup fails
+   cleanly now; AAudio input answers UNAVAILABLE; OpenSL recorder
+   FEATURE_UNSUPPORTED).
+
+### Debugging with a run's artifacts (no local build)
+`gh run download <run> -n windows-x64 -n framework -n graphics -n angle -n
+boot-image -n media -n native-libs` into one dist/, set ANDROID_ROOT etc. as
+run-tests.ps1 does (framework-res.apk, build.prop, boot image, fonts), then
+`dalvikvm -Xbootclasspath:... -Ximage:... com.gesher.app.Main <apk>
+[--hidden-window]`, with GESHER_AUDIO_CAPTURE set (else it plays on the
+speakers). A changed class on the boot class path can be tried by appending a
+d8-dexed jar to -Xbootclasspath (the image still loads); a test Activity can
+be swapped into mediaapp.apk's classes.dex (javac against small stubs, d8).
 
 ### Known pitfalls
 - The Bash tool eats backslashes in inline scripts (`\\a` became a BEL in
@@ -213,3 +209,10 @@ Everything below is pushed (tip of `wip/media`), built only by media.yml's
 - `aosp.lock`: the new projects above (separate checkouts, no change to
   existing lines).
 - `docs/roadmap.md`: the Phase 8 checklist.
+- `app/java/android/provider/MediaStore.java` (new): the MediaProvider
+  module's MediaStore as a placeholder on the boot class path (no
+  transcoding, no scanning, the content URIs), as ADR 0034's module
+  placeholders.
+- `tests/e2e/run-e2e.ps1`: an app's optional `"display": "WxH"` runs it on a
+  device of its own with that display (GESHER_DISPLAY); `tests/e2e/apps.json`:
+  Signal Generator and the `display` field in the comment.
