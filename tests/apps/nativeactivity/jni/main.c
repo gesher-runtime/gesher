@@ -13,8 +13,9 @@
 //  - The window (APP_CMD_INIT_WINDOW): EGL on the default display, a GLES 2
 //    context on a window surface, a blue clear and a green triangle checked
 //    with glReadPixels, eglSwapBuffers; then AChoreographer frame callbacks
-//    (postFrameCallback64) redraw it 30 times, with a vsync callback
-//    (postVsyncCallback) and the refresh rate callback.
+//    (postFrameCallback64) redraw it every frame, as a game does (the first 30
+//    frame times are checked), with a vsync callback (postVsyncCallback) and
+//    the refresh rate callback.
 //  - Input (AInputQueue through the glue): pointer down/up and keys are
 //    logged. A click (pointer up) ends the GL rendering (the EGL surface is
 //    destroyed, which on Android releases the window for the CPU) and draws a
@@ -154,11 +155,24 @@ static int gl_init(struct engine* e) {
   const EGLint attribs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE,
                             EGL_OPENGL_ES2_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
                             EGL_BLUE_SIZE, 8, EGL_NONE};
-  EGLConfig config;
+  // As the NDK's samples choose: the first config with exactly 8 bits of red,
+  // green and blue (eglChooseConfig puts deeper ones first).
+  EGLConfig configs[64];
   EGLint n = 0;
-  if (!eglChooseConfig(e->display, attribs, &config, 1, &n) || n < 1) {
+  if (!eglChooseConfig(e->display, attribs, configs, 64, &n) || n < 1) {
     LOG("gl: no EGL config (0x%x)", eglGetError());
     return 0;
+  }
+  EGLConfig config = configs[0];
+  for (EGLint i = 0; i < n; i++) {
+    EGLint r = 0, g = 0, b = 0;
+    eglGetConfigAttrib(e->display, configs[i], EGL_RED_SIZE, &r);
+    eglGetConfigAttrib(e->display, configs[i], EGL_GREEN_SIZE, &g);
+    eglGetConfigAttrib(e->display, configs[i], EGL_BLUE_SIZE, &b);
+    if (r == 8 && g == 8 && b == 8) {
+      config = configs[i];
+      break;
+    }
   }
   EGLint format = 0;
   eglGetConfigAttrib(e->display, config, EGL_NATIVE_VISUAL_ID, &format);
@@ -238,23 +252,25 @@ static void gl_draw(struct engine* e, int check) {
 
 // --- AChoreographer --------------------------------------------------------------------------------
 
+// Frames from the choreographer, as a game renders: until the click ends the GL
+// rendering. The first 30 frame times are checked and reported.
 static void on_frame(int64_t frame_time, void* data) {
   struct engine* e = data;
   if (!e->gl || !e->choreographer_running) return;
-  if (e->frames == 0) e->first_frame_time = frame_time;
-  else if (frame_time <= e->last_frame_time) e->frame_times_increasing = 0;
-  e->last_frame_time = frame_time;
+  if (e->frames < 30) {
+    if (e->frames == 0) e->first_frame_time = frame_time;
+    else if (frame_time <= e->last_frame_time) e->frame_times_increasing = 0;
+    e->last_frame_time = frame_time;
+  }
   e->frames++;
   gl_draw(e, 0);
-  if (e->frames < 30) {
-    AChoreographer_postFrameCallback64(AChoreographer_getInstance(), on_frame, e);
-  } else {
-    e->choreographer_running = 0;
+  if (e->frames == 30) {
     LOG("choreographer: %d frames drawn from postFrameCallback64, frame times %s, %.1f ms apart "
         "on average",
         e->frames, e->frame_times_increasing ? "increasing" : "NOT increasing",
         (double)(e->last_frame_time - e->first_frame_time) / 1e6 / (e->frames - 1));
   }
+  AChoreographer_postFrameCallback64(AChoreographer_getInstance(), on_frame, e);
 }
 
 static void on_vsync(const AChoreographerFrameCallbackData* d, void* data) {
