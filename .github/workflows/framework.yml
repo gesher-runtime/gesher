@@ -369,6 +369,12 @@ jobs:
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/localeapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          # Networking (docs/network.md): an app with INTERNET and ACCESS_NETWORK_STATE, one without.
+          for a in netapp nonetapp; do
+            BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/$a/build.sh out/app \
+              --framework-res out/framework-res/framework-res.apk \
+              --framework-classes out/framework/classes --core-classes out/coremod
+          done
 
       - name: Collect framework artifacts
         run: |
@@ -379,6 +385,7 @@ jobs:
           cp out/app/popupapp.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
           cp out/app/localeapp.apk dist-framework/
+          cp out/app/netapp.apk out/app/nonetapp.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework

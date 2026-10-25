@@ -135,6 +135,15 @@ public final class GesherAppDriver {
         instrumentation.basicInit(thread);
         thread.mInstrumentation = instrumentation;
 
+        // The app's network security config (cleartext policy, trust anchors), installed
+        // before any app code runs, as handleBindApplication does (docs/network.md).
+        try {
+            android.security.net.config.NetworkSecurityConfigProvider.install(
+                    ContextImpl.createAppContext(thread, apk));
+        } catch (Throwable t) {
+            log("NetworkSecurityConfigProvider.install: " + t);
+        }
+
         // The Application, then its onCreate().
         Application app = apk.makeApplicationInner(false /* forceDefaultAppClass */,
                 null /* instrumentation */);
