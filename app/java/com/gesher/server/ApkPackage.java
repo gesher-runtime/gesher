@@ -59,6 +59,7 @@ public final class ApkPackage {
     private long mUpdateTime = mInstallTime;
     private String mDataDir;
     private String mNativeLibraryDir;  // null: <data dir>/lib
+    private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
 
     private ApkPackage(String apkPath, ParsedPackage parsed) {
@@ -145,6 +146,11 @@ public final class ApkPackage {
      */
     public void setNativeLibraryDir(String dir) {
         mNativeLibraryDir = dir;
+    }
+
+    /** The ABI of the package's native code (x86_64, arm64-v8a), or null if it has none. */
+    public void setPrimaryCpuAbi(String abi) {
+        mPrimaryCpuAbi = abi;
     }
 
     public String nativeLibraryDir() {
@@ -422,6 +428,7 @@ public final class ApkPackage {
         ai.credentialProtectedDataDir = mDataDir;
         ai.deviceProtectedDataDir = mDataDir;
         ai.nativeLibraryDir = nativeLibraryDir();
+        ai.primaryCpuAbi = mPrimaryCpuAbi;
     }
 
     private static void component(ComponentInfo c, ApplicationInfo ai) {

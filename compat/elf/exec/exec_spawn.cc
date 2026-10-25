@@ -108,8 +108,9 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
   const auto* h = reinterpret_cast<const unsigned char*>(head.data());
   std::wstring ext = Extension(path);
   if (head.size() >= 20 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
-    // ELF64, little-endian, EM_X86_64: anything else is not runnable here.
-    if (h[4] != 2 || h[5] != 1 || h[18] != 62 || h[19] != 0) return kENOEXEC;
+    // ELF64, little-endian, EM_X86_64 or EM_AARCH64 (run by the arm64
+    // translator, docs/arm64.md): anything else is not runnable here.
+    if (h[4] != 2 || h[5] != 1 || (h[18] != 62 && h[18] != 183) || h[19] != 0) return kENOEXEC;
     launch->kind = "elf";
     launch->application = LauncherPath();
     launch->command_line.clear();
