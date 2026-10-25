@@ -49,7 +49,7 @@ extern "C" void gesher_guest_entry_shim();  // host_entry stubs jump here
 
 namespace {
 
-const gesher_arm64_host* g_host = nullptr;
+[[maybe_unused]] const gesher_arm64_host* g_host = nullptr;
 
 // --- guest code regions -------------------------------------------------------
 struct CodeRegion {
@@ -209,20 +209,29 @@ class Env final : public A64::UserCallbacks {
     guest_stack_.assign(8 << 20, 0);
     stack_top_ = reinterpret_cast<uint64_t>(guest_stack_.data() + guest_stack_.size()) & ~uint64_t{15};
     stack_cur_ = stack_top_;
-
-    A64::UserConfig conf;
-    conf.callbacks = this;
-    conf.tpidr_el0 = &tls_pointer_;
-    conf.tpidrro_el0 = &tls_pointer_;
-    conf.processor_id = next_id_.fetch_add(1) & 63;
-    conf.global_monitor = &Monitor();
-    conf.enable_cycle_counting = false;
-    conf.wall_clock_cntpct = true;
-    conf.code_cache_size = 32 * 1024 * 1024;
-    jit_ = std::make_unique<A64::Jit>(conf);
   }
 
-  A64::Jit* jit() { return jit_.get(); }
+  // One Jit per nesting depth: dynarmic's Run() is not reentrant, so a
+  // guest->host->guest chain (a host callback that is guest code — a qsort
+  // comparator, a pthread start routine) runs the inner guest on a separate
+  // Jit. They share the thread's TLS pointer and guest stack (disjoint
+  // sub-ranges). The Jit for the depth currently executing is CurrentJit().
+  A64::Jit* JitAt(size_t depth) {
+    while (jits_.size() <= depth) {
+      A64::UserConfig conf;
+      conf.callbacks = this;
+      conf.tpidr_el0 = &tls_pointer_;
+      conf.tpidrro_el0 = &tls_pointer_;
+      conf.processor_id = next_id_.fetch_add(1) & 63;
+      conf.global_monitor = &Monitor();
+      conf.enable_cycle_counting = false;
+      conf.wall_clock_cntpct = true;
+      conf.code_cache_size = 16 * 1024 * 1024;
+      jits_.push_back(std::make_unique<A64::Jit>(conf));
+    }
+    return jits_[depth].get();
+  }
+  A64::Jit* CurrentJit() { return jits_[depth_ - 1].get(); }
 
   std::uint8_t MemoryRead8(uint64_t a) override { return *reinterpret_cast<uint8_t*>(a); }
   std::uint16_t MemoryRead16(uint64_t a) override { uint16_t v; std::memcpy(&v, reinterpret_cast<void*>(a), 2); return v; }
@@ -238,86 +247,80 @@ class Env final : public A64::UserCallbacks {
   void InterpreterFallback(uint64_t pc, size_t) override {
     std::fprintf(stderr, "gesher arm64: interpreter fallback at guest pc 0x%llx\n",
                  static_cast<unsigned long long>(pc));
-    jit_->HaltExecution();
+    CurrentJit()->HaltExecution();
   }
 
   void CallSVC(std::uint32_t) override {
-    uint64_t pc = jit_->GetPC();  // points after the SVC
+    A64::Jit* jit = CurrentJit();
+    uint64_t pc = jit->GetPC();  // points after the SVC
     if (pc - 4 == ReturnStub()) {  // the guest returned to the host
-      returned_ = true;
-      jit_->HaltExecution();
+      jit->HaltExecution();
       return;
     }
     const Trampoline* t = FindTrampoline(pc - 4);
     if (t == nullptr) {
       std::fprintf(stderr, "gesher arm64: SVC at guest pc 0x%llx is not a host trampoline\n",
                    static_cast<unsigned long long>(pc - 4));
-      jit_->HaltExecution();
+      jit->HaltExecution();
       return;
     }
-    CallHost(t);
+    CallHost(jit, t);
   }
 
   void ExceptionRaised(uint64_t pc, A64::Exception ex) override {
     std::fprintf(stderr, "gesher arm64: guest exception %d at pc 0x%llx\n", static_cast<int>(ex),
                  static_cast<unsigned long long>(pc));
-    jit_->HaltExecution();
+    CurrentJit()->HaltExecution();
   }
 
   void AddTicks(std::uint64_t) override {}
   std::uint64_t GetTicksRemaining() override { return static_cast<uint64_t>(-1) / 2; }
   std::uint64_t GetCNTPCT() override { return 0; }
 
+  // Runs guest `fn` with up to 8 int / 8 fp arguments on this thread, on the
+  // Jit for the current nesting depth; returns X0 (and records V0). A nested
+  // host->guest call (a guest callback a host function invokes) uses the next
+  // depth's Jit, since dynarmic's Run() is not reentrant.
   uint64_t Enter(const void* fn, const uint64_t gpr[8], const uint64_t xmm[8]) {
-    // Save the whole register file: a host->guest call may happen while a
-    // guest->host->guest chain is unwinding on this thread.
-    std::array<uint64_t, 31> saved_regs = jit_->GetRegisters();
-    uint64_t saved_sp = jit_->GetSP();
-    uint64_t saved_pc = jit_->GetPC();
+    A64::Jit* jit = JitAt(depth_);
     uint64_t saved_stack_cur = stack_cur_;
-
     uint64_t sp = (stack_cur_ - 4096) & ~uint64_t{15};  // leave a red zone
     stack_cur_ = sp - (1 << 20);                        // reserve 1 MiB for this call
+    ++depth_;
     for (int i = 0; i < 8; ++i) {
-      jit_->SetRegister(i, gpr[i]);
-      jit_->SetVector(i, A64::Vector{xmm[i], 0});
+      jit->SetRegister(i, gpr[i]);
+      jit->SetVector(i, A64::Vector{xmm[i], 0});
     }
-    jit_->SetRegister(30, ReturnStub());
-    jit_->SetSP(sp);
-    jit_->SetPC(reinterpret_cast<uint64_t>(fn));
-
-    uint64_t result = RunUntilReturn();
-    uint64_t rfp = jit_->GetVector(0)[0];
-
+    jit->SetRegister(30, ReturnStub());
+    jit->SetSP(sp);
+    jit->SetPC(reinterpret_cast<uint64_t>(fn));
+    uint64_t result = RunUntilReturn(jit);
+    last_fp_result_ = jit->GetVector(0)[0];
+    --depth_;
     stack_cur_ = saved_stack_cur;
-    jit_->SetRegisters(saved_regs);
-    jit_->SetSP(saved_sp);
-    jit_->SetPC(saved_pc);
-    last_fp_result_ = rfp;
     return result;
   }
 
   uint64_t last_fp_result() const { return last_fp_result_; }
 
  private:
-  uint64_t RunUntilReturn() {
-    returned_ = false;
+  uint64_t RunUntilReturn(A64::Jit* jit) {
     for (int guard = 0; guard < 1000000; ++guard) {
-      jit_->ClearHalt(Dynarmic::HaltReason::UserDefined1);
-      jit_->Run();
-      if (returned_) return jit_->GetRegister(0);
-      uint64_t pc = jit_->GetPC();
+      jit->ClearHalt(Dynarmic::HaltReason::UserDefined1);
+      jit->Run();
+      uint64_t pc = jit->GetPC();
+      if (pc == ReturnStub() + 4) return jit->GetRegister(0);  // returned to host
       if (!InGuestCode(pc)) {
         std::fprintf(stderr, "gesher arm64: guest left to host pc 0x%llx (not a trampoline)\n",
                      static_cast<unsigned long long>(pc));
-        return jit_->GetRegister(0);
+        return jit->GetRegister(0);
       }
     }
     std::fprintf(stderr, "gesher arm64: guest did not return\n");
-    return jit_->GetRegister(0);
+    return jit->GetRegister(0);
   }
 
-  void CallHost(const Trampoline* t) {
+  void CallHost(A64::Jit* jit, const Trampoline* t) {
     // AAPCS64 -> System V. X0..X5 are the first six System V integer arguments;
     // X6, X7 are System V arguments 7 and 8, which go on the stack; any further
     // arguments (a variadic call with more than eight) are on the guest stack at
@@ -325,29 +328,29 @@ class Env final : public A64::UserCallbacks {
     // stack words covers them without knowing the real count (the callee reads
     // only what its signature or format string names).
     uint64_t gpr[6], xmm[8];
-    for (int i = 0; i < 6; ++i) gpr[i] = jit_->GetRegister(i);
-    for (int i = 0; i < 8; ++i) xmm[i] = jit_->GetVector(i)[0];
+    for (int i = 0; i < 6; ++i) gpr[i] = jit->GetRegister(i);
+    for (int i = 0; i < 8; ++i) xmm[i] = jit->GetVector(i)[0];
     uint64_t stack[2 + 14];
-    stack[0] = jit_->GetRegister(6);
-    stack[1] = jit_->GetRegister(7);
-    uint64_t gsp = jit_->GetSP();
+    stack[0] = jit->GetRegister(6);
+    stack[1] = jit->GetRegister(7);
+    uint64_t gsp = jit->GetSP();
     for (int i = 0; i < 14; ++i) {
       std::memcpy(&stack[2 + i], reinterpret_cast<void*>(gsp + i * 8), 8);
     }
     HostCall call{t->host_fn, gpr, xmm, stack, 16, 0};
     uint64_t rax = gesher_call_host_sysv(&call);
-    jit_->SetRegister(0, rax);
-    jit_->SetVector(0, A64::Vector{call.out_xmm0, 0});
+    jit->SetRegister(0, rax);
+    jit->SetVector(0, A64::Vector{call.out_xmm0, 0});
   }
 
-  std::unique_ptr<A64::Jit> jit_;
+  std::vector<std::unique_ptr<A64::Jit>> jits_;
+  size_t depth_ = 0;
   std::vector<uint64_t> tls_block_;
   uint64_t tls_pointer_;
   std::vector<uint8_t> guest_stack_;
   uint64_t stack_top_;
   uint64_t stack_cur_;
   uint64_t last_fp_result_ = 0;
-  bool returned_ = false;
   static std::atomic<size_t> next_id_;
 };
 
@@ -361,6 +364,55 @@ Env* ThreadEnv() {
 
 uint64_t EnterGuest(const void* fn, const uint64_t gpr[8], const uint64_t xmm[8]) {
   return ThreadEnv()->Enter(fn, gpr, xmm);
+}
+
+// A host function called a guest function pointer directly (a qsort comparator,
+// a pthread start routine, any callback the guest handed to a host API). The
+// guest's executable pages are non-executable, so the call faults with DEP; this
+// vectored handler sees the execute fault at a guest address, enters the guest
+// with the System V arguments mapped to AAPCS64, and resumes the host at the
+// caller's return address with X0/V0 in RAX/XMM0. Host code in Gesher calls such
+// pointers with the System V ABI (the shim, ART), so the CONTEXT's argument
+// registers are System V. (host_entry stubs make the known call sites explicit
+// and avoid the fault; this covers the rest.)
+LONG CALLBACK GuestCallHandler(EXCEPTION_POINTERS* info) {
+  const EXCEPTION_RECORD* r = info->ExceptionRecord;
+  if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  if (r->ExceptionInformation[0] != 8) return EXCEPTION_CONTINUE_SEARCH;  // not an execute fault
+  auto target = static_cast<uintptr_t>(r->ExceptionInformation[1]);
+  if (!InGuestCode(target)) return EXCEPTION_CONTINUE_SEARCH;
+  CONTEXT* c = info->ContextRecord;
+  uint64_t gpr[8];
+  gpr[0] = c->Rdi;
+  gpr[1] = c->Rsi;
+  gpr[2] = c->Rdx;
+  gpr[3] = c->Rcx;
+  gpr[4] = c->R8;
+  gpr[5] = c->R9;
+  // System V stack arguments 7, 8 are just above the return address at [Rsp].
+  std::memcpy(&gpr[6], reinterpret_cast<void*>(c->Rsp + 8), 8);
+  std::memcpy(&gpr[7], reinterpret_cast<void*>(c->Rsp + 16), 8);
+  uint64_t xmm[8];
+  std::memcpy(&xmm[0], &c->Xmm0, 8);
+  std::memcpy(&xmm[1], &c->Xmm1, 8);
+  std::memcpy(&xmm[2], &c->Xmm2, 8);
+  std::memcpy(&xmm[3], &c->Xmm3, 8);
+  std::memcpy(&xmm[4], &c->Xmm4, 8);
+  std::memcpy(&xmm[5], &c->Xmm5, 8);
+  std::memcpy(&xmm[6], &c->Xmm6, 8);
+  std::memcpy(&xmm[7], &c->Xmm7, 8);
+  uint64_t result = EnterGuest(reinterpret_cast<void*>(target), gpr, xmm);
+  uint64_t fp = ThreadEnv()->last_fp_result();
+  // Pop the host caller's return address and resume there with the result.
+  uint64_t ret_addr;
+  std::memcpy(&ret_addr, reinterpret_cast<void*>(c->Rsp), 8);
+  c->Rsp += 8;
+  c->Rip = ret_addr;
+  c->Rax = result;
+  std::memcpy(&c->Xmm0, &fp, 8);
+  return EXCEPTION_CONTINUE_EXECUTION;
 }
 
 }  // namespace
@@ -462,5 +514,8 @@ extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {
   if (host == nullptr || host->version != GESHER_ARM64_API_VERSION) return nullptr;
   g_host = host;
+  // First in the chain, so an execute fault in guest code (a host call to a
+  // guest callback) is redirected before gesher-base turns it into a signal.
+  AddVectoredExceptionHandler(1, GuestCallHandler);
   return &g_api;
 }
