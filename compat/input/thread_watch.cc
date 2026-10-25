@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 #include <wct.h>
+#include <dbghelp.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -216,6 +217,86 @@ void DumpWaitChain(DWORD tid, std::vector<DWORD>* foreign, const char* prefix) {
 
 // The wait chains of process `pid`'s threads that wait (another process the
 // IME's threads wait for, such as ImeBroker.exe).
+// Thread `tid` of another process `process`: its stack (dbghelp's
+// StackWalk64 over the other process's memory; module!export+off).
+void DumpRemoteStack(HANDLE process, DWORD tid) {
+  static HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll");
+  if (dbghelp == nullptr) return;
+  using InitFn = BOOL(WINAPI*)(HANDLE, PCSTR, BOOL);
+  using CleanupFn = BOOL(WINAPI*)(HANDLE);
+  using WalkFn = BOOL(WINAPI*)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64, PVOID,
+                               PREAD_PROCESS_MEMORY_ROUTINE64, PFUNCTION_TABLE_ACCESS_ROUTINE64,
+                               PGET_MODULE_BASE_ROUTINE64, PTRANSLATE_ADDRESS_ROUTINE64);
+  using FromAddrFn = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+  using ModuleInfoFn = BOOL(WINAPI*)(HANDLE, DWORD64, PIMAGEHLP_MODULE64);
+  auto init = reinterpret_cast<InitFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymInitialize")));
+  auto cleanup = reinterpret_cast<CleanupFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymCleanup")));
+  auto walk = reinterpret_cast<WalkFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "StackWalk64")));
+  auto table = reinterpret_cast<PFUNCTION_TABLE_ACCESS_ROUTINE64>(
+      reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymFunctionTableAccess64")));
+  auto module_base = reinterpret_cast<PGET_MODULE_BASE_ROUTINE64>(
+      reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymGetModuleBase64")));
+  auto from_addr = reinterpret_cast<FromAddrFn>(reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymFromAddr")));
+  auto module_info = reinterpret_cast<ModuleInfoFn>(
+      reinterpret_cast<void*>(GetProcAddress(dbghelp, "SymGetModuleInfo64")));
+  if (init == nullptr || cleanup == nullptr || walk == nullptr || table == nullptr ||
+      module_base == nullptr || from_addr == nullptr || module_info == nullptr) {
+    return;
+  }
+  HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                             FALSE, tid);
+  if (thread == nullptr) {
+    fprintf(stderr, "gesher-ime:    (thread %lu cannot be opened: %lu)%s",
+            static_cast<unsigned long>(tid), static_cast<unsigned long>(GetLastError()), kNewline);
+    return;
+  }
+  if (!init(process, nullptr, TRUE)) {
+    CloseHandle(thread);
+    return;
+  }
+  CONTEXT context;
+  memset(&context, 0, sizeof(context));
+  context.ContextFlags = CONTEXT_FULL;
+  SuspendThread(thread);
+  const bool ok = GetThreadContext(thread, &context) != 0;
+  ResumeThread(thread);  // the walk reads memory that a waiting thread leaves as it is
+  if (ok) {
+    STACKFRAME64 frame;
+    memset(&frame, 0, sizeof(frame));
+    frame.AddrPC.Offset = context.Rip;
+    frame.AddrPC.Mode = AddrModeFlat;
+    frame.AddrStack.Offset = context.Rsp;
+    frame.AddrStack.Mode = AddrModeFlat;
+    frame.AddrFrame.Offset = context.Rbp;
+    frame.AddrFrame.Mode = AddrModeFlat;
+    for (int i = 0; i < 40; i++) {
+      if (!walk(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &context, nullptr, table,
+                module_base, nullptr) ||
+          frame.AddrPC.Offset == 0) {
+        break;
+      }
+      const DWORD64 pc = frame.AddrPC.Offset;
+      IMAGEHLP_MODULE64 module;
+      memset(&module, 0, sizeof(module));
+      module.SizeOfStruct = sizeof(module);
+      const bool has_module = module_info(process, pc, &module) != 0;
+      alignas(SYMBOL_INFO) char buffer[sizeof(SYMBOL_INFO) + 256];
+      auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+      memset(buffer, 0, sizeof(buffer));
+      symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+      symbol->MaxNameLen = 255;
+      DWORD64 displacement = 0;
+      const bool has_symbol = from_addr(process, pc, &displacement, symbol) != 0;
+      fprintf(stderr, "gesher-ime:    #%02d %s!%s+0x%llx (+0x%llx)%s", i,
+              has_module ? module.ModuleName : "?", has_symbol ? symbol->Name : "",
+              static_cast<unsigned long long>(displacement),
+              static_cast<unsigned long long>(has_module ? pc - module.BaseOfImage : pc), kNewline);
+    }
+  }
+  cleanup(process);
+  CloseHandle(thread);
+}
+
 void DumpProcessChains(DWORD pid) {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return;
@@ -223,6 +304,11 @@ void DumpProcessChains(DWORD pid) {
   entry.dwSize = sizeof(entry);
   fprintf(stderr, "gesher-ime:  process %lu (%s), its threads:%s", static_cast<unsigned long>(pid),
           ProcessName(pid).c_str(), kNewline);
+  HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+  if (process == nullptr) {
+    fprintf(stderr, "gesher-ime:   (the process cannot be read: %lu)%s",
+            static_cast<unsigned long>(GetLastError()), kNewline);
+  }
   int shown = 0;
   for (BOOL ok = Thread32First(snapshot, &entry); ok && shown < 40;
        ok = Thread32Next(snapshot, &entry)) {
@@ -231,8 +317,10 @@ void DumpProcessChains(DWORD pid) {
     snprintf(prefix, sizeof(prefix), "gesher-ime:   waits (thread %lu):",
              static_cast<unsigned long>(entry.th32ThreadID));
     DumpWaitChain(entry.th32ThreadID, nullptr, prefix);
+    if (process != nullptr) DumpRemoteStack(process, entry.th32ThreadID);
     shown++;
   }
+  if (process != nullptr) CloseHandle(process);
   CloseHandle(snapshot);
   fflush(stderr);
 }
