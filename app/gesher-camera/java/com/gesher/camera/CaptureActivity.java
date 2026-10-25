@@ -72,6 +72,7 @@ public class CaptureActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        log("onCreate: " + getIntent() + ", from " + getCallingPackage());
         FrameLayout root = new FrameLayout(this);
         mPreview = new ImageView(this);
         mPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);

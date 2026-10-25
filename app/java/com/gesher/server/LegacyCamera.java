@@ -416,14 +416,16 @@ public final class LegacyCamera {
             s.preview = null;
             s.capture = null;
         }
-        if (capture != null) capture.close();
-        if (t != null) {
+        // The preview thread ends after the frame it is reading (a closed capture must not
+        // be read from), then the capture closes.
+        if (t != null && t != Thread.currentThread()) {
             try {
-                t.join(2000);
+                t.join(3000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
+        if (capture != null) capture.close();
         log("preview stopped");
     }
 
