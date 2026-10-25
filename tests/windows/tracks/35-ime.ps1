@@ -278,6 +278,17 @@ $imeProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Proces
   Group-Object ProcessName | ForEach-Object { "$($_.Name) x$($_.Count)" }
 $imeSvcs = Get-Service -Name TabletInputService, TextInputManagementService, CDPUserSvc*, cbdhsvc* -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Status)" }
 Write-Host "INFO  ime: processes: $($imeProcs -join ', '); services: $($imeSvcs -join ', ')"
+# ImeBroker.exe (Microsoft IME's shared out-of-process side) started anew:
+# on Server 2022 runners the one running since the session began never
+# answered the IME's COM calls (thread_watch.cc's wait chains: the window's
+# thread -> the IME's worker -> ImeBroker.exe, blocked), so that each switch
+# away from the IME kept the window's thread 180 s. COM starts it again.
+$brokers = @(Get-Process -Name ImeBroker -ErrorAction SilentlyContinue)
+foreach ($b in $brokers) {
+  $started = try { $b.StartTime.ToString('HH:mm:ss') } catch { '?' }
+  try { $b.Kill(); [void]$b.WaitForExit(10000); Write-Host "INFO  ime: ImeBroker.exe (pid $($b.Id), started $started) ended, to be started again by the IME" }
+  catch { Write-Host "INFO  ime: ImeBroker.exe (pid $($b.Id)) could not be ended: $($_.Exception.Message)" }
+}
 foreach ($klid in '0000040D', '00000411', '00000409') { [void][ImeInput]::SwitchLayout([IntPtr]::Zero, $klid) }
 Start-Sleep -Seconds 3
 
