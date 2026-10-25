@@ -47,6 +47,14 @@ Merged so far:
   recreate in single process, LocaleConfig overrides not persisted, no
   ACTION_APPLICATION_LOCALE_CHANGED, display-language list changes untested
   (need a sign-in).
+- net: merged as ac38344 (verified at 05aaeb5, ci 40191501348; its package
+  job failed once on "the .apk open command did not take lifecycle.apk to
+  onResume" and passed on rerun: an unexplained flake, watch for it).
+  ADR 0037. Integration ci 40194107633 on ac38344 (locale + net).
+- lifecycle: verified at 404cd11 (ci 40191526766) but not merged: it and
+  locale each added a configuration-change mechanism to
+  ActivityTaskManagerService; the lifecycle agent is unifying them on its
+  branch.
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 
