@@ -310,6 +310,10 @@ public static class GesherMediaCapture {
   $video = RunVideoApp 'cpu' @()
   $videoOut = $video.Out
   $videoExit = $video.Exit
+  if ($video.Exit -ne 0) {
+    # Why the app ended badly: the runtime's fatal lines and the last of the app's own.
+    Write-Host (($video.Out -split "`n") | Where-Object { $_ -match ' F dalvikvm|JNI DETECTED|VideoTest|GesherMedia.* (E|W) ' } | Select-Object -First 60 | Out-String)
+  }
   Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest codec list \(info\)|GesherMedia.*video decoders' } | ForEach-Object { $_.Trim() }) -join '; ')"
   Check 'media: MediaExtractor in videoapp.apk: an MP4''s H.264 and AAC tracks, csd-0/csd-1 as Annex B parameter sets, samples, sync samples and times' {
     $global:LASTEXITCODE = $videoExit
