@@ -72,7 +72,8 @@ Merged so far:
   holds; no symlink resolution in DexFileLoader; ScopedFlock unsupported;
   NTFS reports writes late (IN_MODIFY often only at close).
 - webview2: merged as ae3471d (verified at 55ab46a, ci 40216380541). ADR
-  0050. Integration ci 40218162937 on ae3471d (posix + webview2).
+  0050. Integration ci 40218162937 on ae3471d (posix + webview2): all
+  green.
   Leftovers: on WebView2 runtime 131 (windows-2022) a click on an app view
   inside a cut-out waits until the app window's thread is woken (its input
   queue is attached to WebView2's): compat/hwui/window's thread should wake
