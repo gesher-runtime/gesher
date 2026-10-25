@@ -211,6 +211,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   } else {
     ImeCheck $Mode 'the IME''s candidate window is placed at the caret (ImmSetCandidateWindow, CFS_EXCLUDE), the composition inline (no composition window)' $false "no candidate window ($($windows -join ' ')), caret $($caret -join ',')"
   }
+  EndImeBroker 'after the composition'
   [void][ImeInput]::Keys(0x19)  # the IME off
   SwitchTo $hwnd '00000409' 0x0409
   Start-Sleep -Seconds 1
@@ -228,6 +229,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
 # runs ImeChecks on it, closes it (WM_CLOSE) and expects $Expect in the output.
 function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [int] $Seconds = 400) {
   $script:imeFailed = $false
+  EndImeBroker 'before the run'
   if (-not (Test-Path "$Dir/imeapp.apk")) {
     ImeCheck $Mode 'imeapp.apk runs' $false 'imeapp.apk is missing'
     return
@@ -272,23 +274,24 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
 
 # Microsoft IME for Japanese enabled for the user, the layouts loaded, before
 # the runs (enabling a profile changes the session's input languages).
-# Windows Server 2022 (build 20348): the previous version of Microsoft IME
-# (the user policy of EAIME.admx, "Configure Japanese IME version"). The
-# current one's prediction engine (imjppred.dll, in ImeBroker.exe) waits in
-# Windows.CloudStore, which on those runners never answers: thread_watch.cc's
-# wait chains showed the app's window thread -> the IME's worker thread -> a
-# COM call into ImeBroker.exe -> imjppred waiting in Windows.CloudStore, so
-# that each switch away from the IME kept the window's thread 180 s (the
-# IME's own timeout), as it would any app's window. History-based predictive
-# input off (EAIME.admx) did not change that. Set before the IME starts, and
-# a running ImeBroker.exe ended.
-$script:imePrevious = [Environment]::OSVersion.Version.Build -lt 26100
-if ($script:imePrevious) {
-  $imePolicy = 'HKCU:\Software\Policies\Microsoft\InputMethod\Settings\JPN'
-  New-Item -Path $imePolicy -Force | Out-Null
-  New-ItemProperty -Path $imePolicy -Name ConfigureImeVersion -PropertyType DWord -Value 1 -Force | Out-Null
-  Get-Process -Name ImeBroker -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(10000) } catch { } }
-  Write-Host "INFO  ime: build $([Environment]::OSVersion.Version.Build): the previous version of Microsoft IME (Configure Japanese IME version)"
+# Windows Server 2022 (build 20348): Microsoft IME's out-of-process side,
+# ImeBroker.exe, hangs. Its prediction engine (imjppred.dll) waits in
+# Windows.CloudStore, which on those runners never answers; the IME's worker
+# thread in the app waits for its COM call into ImeBroker.exe, and the
+# window's thread for that worker whenever the IME is switched away from
+# (WM_INPUTLANGCHANGEREQUEST): 180 s each time, the IME's own timeout, as in
+# any app's window (thread_watch.cc's stacks and wait chains, docs/input.md).
+# History-based predictive input off and the previous IME version (EAIME.admx
+# user policies) changed nothing. There the test ends ImeBroker.exe once a
+# composition is done (the worker's call then fails at once) and before each
+# run (COM starts it again when the IME needs it).
+$script:imeBrokerHangs = [Environment]::OSVersion.Version.Build -lt 26100
+function EndImeBroker([string] $When) {
+  if (-not $script:imeBrokerHangs) { return }
+  foreach ($b in @(Get-Process -Name ImeBroker -ErrorAction SilentlyContinue)) {
+    try { $b.Kill(); [void]$b.WaitForExit(10000); Write-Host "INFO  ime: ImeBroker.exe (pid $($b.Id)) ended $When (Server 2022)" }
+    catch { Write-Host "INFO  ime: ImeBroker.exe (pid $($b.Id)) could not be ended: $($_.Exception.Message)" }
+  }
 }
 $script:imeTsf = [ImeInput]::EnableJapaneseIme()
 # What runs of the text input services (the IME's out-of-process helpers).
