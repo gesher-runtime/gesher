@@ -59,7 +59,17 @@ Merged so far:
   last tones split by a gap, a timing flake the media agent is fixing). Stage 2 (video) handed to the same agent.
   Leftover for a later track: Gesher has no screen orientation (landscape
   activities on a portrait display).
-- lifecycle: verified at 404cd11 (ci 40191526766) but not merged: it and
+- lifecycle: merged as 8bfb83f (verified at aba87e2, ci 40197536380, which
+  contains bf91649, so the integration tree after this merge is the
+  CI-verified one). ADR 0048. locale and lifecycle now share one
+  configuration path in ActivityTaskManagerService (the package's locale
+  config plus the task's size override; override configs carry a growing
+  seq). Resizing relaunches activities without size configChanges.
+- 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
+  after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
+  it was replaced by an Opus successor (model given explicitly) that first
+  reviews its predecessor's work.
+- lifecycle (earlier note): verified at 404cd11 (ci 40191526766) but not merged: it and
   locale each added a configuration-change mechanism to
   ActivityTaskManagerService; the lifecycle agent is unifying them on its
   branch.
