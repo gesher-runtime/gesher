@@ -144,12 +144,13 @@ struct FdAction {
   int flags = 0, mode = 0;
 };
 
-// __builtin_setjmp/longjmp (a plain register save/restore, no SEH unwinding,
-// unlike the UCRT's longjmp): fork() returns 0 and its frame is abandoned as
-// vfork's is; the child runs deeper on the stack and exec/exit longjmps back to
-// fork's buffer (kept in this heap object). The 5-word buffer the builtins use.
+// vfork semantics on one stack (gesher_fork, below): fork() saves its caller's
+// register context and returns 0; the child runs deeper on the same stack and
+// its exec*()/exit returns a second time -- straight to fork's caller, not into
+// fork's own frame (which the child's deeper calls overwrite). caller_ctx holds
+// rbx, rbp, rsi, rdi, r12-r15, the caller's rsp and its return address.
 struct ForkChild {
-  void* resume[5];                      // __builtin_setjmp buffer; fork() returns here
+  uint64_t caller_ctx[10];
   std::map<int, bool> present;          // fd -> open, the shadow table
   std::vector<FdAction> fd_actions;
   std::vector<std::string> env;         // the child's environment, editable
@@ -160,9 +161,6 @@ struct ForkChild {
 };
 
 thread_local ForkChild* t_fork = nullptr;
-// The child being returned through the longjmp; read after __builtin_setjmp,
-// so the fork() local is not relied on across the jump (it may be clobbered).
-thread_local ForkChild* t_fork_result = nullptr;
 
 int LowestFreeFd(ForkChild* c) {
   int fd = 0;
@@ -221,40 +219,90 @@ std::vector<ex::ChildFd> InheritedFds() {
 }
 
 // --- fork / vfork --------------------------------------------------------------
+//
+// gesher_fork (asm) saves its caller's register context into the ForkChild that
+// ForkPrepare builds, then returns 0 (the child). The child's exec*()/exit calls
+// gesher_fork_return(ctx, pid), which restores that context and returns to
+// fork's caller a second time with `pid` -- the parent return. This never
+// re-enters fork's own frame, which the child's deeper calls overwrite.
 
-int BIONIC_SYSV Fork() {
+extern "C" void* gesher_fork_prepare();  // builds the child; returns &caller_ctx
+extern "C" int gesher_fork();            // the fork()/vfork() entry (asm)
+extern "C" [[noreturn]] void gesher_fork_return(const void* ctx, long value);
+
+// Saves the 10-qword caller context (filled by gesher_fork). MS x64: result in
+// rax. On entry rsp points at the return address; rsp%16 == 8.
+asm(".text\n"
+    ".globl gesher_fork\n"
+    ".p2align 4\n"
+    "gesher_fork:\n"
+    "  movq (%rsp), %r11\n"       // return address
+    "  leaq 8(%rsp), %r10\n"      // the caller's rsp after the call returns
+    "  pushq %r11\n"              // [9] ret addr
+    "  pushq %r10\n"              // [8] caller rsp
+    "  pushq %r15\n"              // [7]
+    "  pushq %r14\n"              // [6]
+    "  pushq %r13\n"              // [5]
+    "  pushq %r12\n"              // [4]
+    "  pushq %rdi\n"              // [3]
+    "  pushq %rsi\n"              // [2]
+    "  pushq %rbp\n"              // [1]
+    "  pushq %rbx\n"              // [0]  (rsp%16 == 8 here)
+    "  subq $40, %rsp\n"          // shadow space + align to 16
+    "  call gesher_fork_prepare\n"  // rax = &child->caller_ctx[0]
+    "  addq $40, %rsp\n"
+    "  movq 0(%rsp), %rcx\n"  "  movq %rcx, 0(%rax)\n"
+    "  movq 8(%rsp), %rcx\n"  "  movq %rcx, 8(%rax)\n"
+    "  movq 16(%rsp), %rcx\n" "  movq %rcx, 16(%rax)\n"
+    "  movq 24(%rsp), %rcx\n" "  movq %rcx, 24(%rax)\n"
+    "  movq 32(%rsp), %rcx\n" "  movq %rcx, 32(%rax)\n"
+    "  movq 40(%rsp), %rcx\n" "  movq %rcx, 40(%rax)\n"
+    "  movq 48(%rsp), %rcx\n" "  movq %rcx, 48(%rax)\n"
+    "  movq 56(%rsp), %rcx\n" "  movq %rcx, 56(%rax)\n"
+    "  movq 64(%rsp), %rcx\n" "  movq %rcx, 64(%rax)\n"
+    "  movq 72(%rsp), %rcx\n" "  movq %rcx, 72(%rax)\n"
+    "  addq $80, %rsp\n"          // discard the saved block; rsp -> ret addr
+    "  xorl %eax, %eax\n"         // fork() returns 0 (the child)
+    "  ret\n");
+
+// Returns to fork's caller with `value` in rax, the saved context restored.
+asm(".text\n"
+    ".globl gesher_fork_return\n"
+    ".p2align 4\n"
+    "gesher_fork_return:\n"       // rcx = ctx, rdx = value
+    "  movq 0(%rcx), %rbx\n"
+    "  movq 8(%rcx), %rbp\n"
+    "  movq 16(%rcx), %rsi\n"
+    "  movq 24(%rcx), %rdi\n"
+    "  movq 32(%rcx), %r12\n"
+    "  movq 40(%rcx), %r13\n"
+    "  movq 48(%rcx), %r14\n"
+    "  movq 56(%rcx), %r15\n"
+    "  movq 64(%rcx), %r10\n"     // caller rsp
+    "  movq 72(%rcx), %r11\n"     // ret addr
+    "  movq %rdx, %rax\n"         // the parent's fork() return value
+    "  movq %r10, %rsp\n"
+    "  jmpq *%r11\n");
+
+std::atomic<int> g_synthetic_pid{1};
+
+extern "C" void* gesher_fork_prepare() {
   auto* child = new ForkChild();
   child->env = CurrentEnv();
   child->dir = CurrentDir();
   for (const ex::ChildFd& f : InheritedFds()) child->present[f.fd] = true;
-  if (__builtin_setjmp(child->resume) != 0) {
-    // Back from the child's exec() or _exit(); re-read the child (the local may
-    // not survive the jump).
-    ForkChild* child = t_fork_result;
-    int result;
-    if (child->pid > 0) {
-      result = child->pid;
-    } else if (child->exited) {
-      // The child exited without exec: record it so waitpid can collect it.
-      int pid = static_cast<int>(GetCurrentProcessId()) ^ 0x40000000;  // a synthetic pid
-      static std::atomic<int> counter{1};
-      pid = 0x40000000 | (counter.fetch_add(1) & 0x3fffffff);
-      std::lock_guard<std::mutex> lock(g_children_mutex);
-      Child& c = g_children[pid];
-      c.process = nullptr;
-      c.exited = true;
-      c.status = child->exit_status;
-      result = pid;
-      DeliverExternalSignal(kSigchld, 0, kCldExited, child->exit_status, false);
-    } else {
-      result = -1;  // the child failed to start a program
-      errno = child->pid == -2 ? ENOEXEC : EAGAIN;
-    }
-    delete child;
-    return result;
-  }
   t_fork = child;
-  return 0;  // the child
+  return child->caller_ctx;
+}
+
+// Returns to fork's caller with `result`, after copying the context off the
+// child (which is freed here) onto the stack, so the jump reads valid memory.
+[[noreturn]] void FinishChild(ForkChild* child, int result) {
+  uint64_t ctx[10];
+  std::memcpy(ctx, child->caller_ctx, sizeof(ctx));
+  t_fork = nullptr;
+  delete child;
+  gesher_fork_return(ctx, result);
 }
 
 // Materialises the child's recorded fd/env/dir changes and spawns the program;
@@ -298,16 +346,14 @@ int MaterializeAndSpawn(ForkChild* child, const std::string& program,
   return pid;
 }
 
-// The child's exec*(): spawn with its recorded state, then return to fork()
-// with the pid (or an error). No locals survive the longjmp.
+// The child's exec*(): spawn with its recorded state, then return to fork's
+// caller with the pid (or -1 with errno set). Does not return here.
 [[noreturn]] void ChildExec(const std::string& program, const std::vector<std::string>& argv,
                             bool search) {
   ForkChild* child = t_fork;
   t_fork = nullptr;
   int pid = MaterializeAndSpawn(child, program, argv, search);
-  child->pid = pid > 0 ? pid : (errno == ENOEXEC ? -2 : -1);
-  t_fork_result = child;
-  __builtin_longjmp(child->resume, 1);
+  FinishChild(child, pid > 0 ? pid : -1);
 }
 
 // --- execve / execvp and friends ----------------------------------------------
@@ -756,15 +802,20 @@ int KillOtherProcess(int pid, int sig) {
 }
 
 void ExitIfVforkChild(int status) {
-  if (t_fork != nullptr) {
-    ForkChild* child = t_fork;
-    t_fork = nullptr;
-    child->exited = true;
-    child->exit_status = (status & 0xff) << 8;  // WIFEXITED
-    child->pid = 0;
-    t_fork_result = child;
-    __builtin_longjmp(child->resume, 1);
+  if (t_fork == nullptr) return;
+  ForkChild* child = t_fork;
+  // The child exited without exec: register a synthetic zombie so waitpid can
+  // collect it, then return that pid to fork's caller.
+  int pid = 0x40000000 | (g_synthetic_pid.fetch_add(1) & 0x3fffffff);
+  {
+    std::lock_guard<std::mutex> lock(g_children_mutex);
+    Child& c = g_children[pid];
+    c.process = nullptr;
+    c.exited = true;
+    c.status = (status & 0xff) << 8;  // WIFEXITED
   }
+  DeliverExternalSignal(kSigchld, 0, kCldExited, (status & 0xff) << 8, false);
+  FinishChild(child, pid);
 }
 
 void RegisterProcess(SymbolTable& t) {
@@ -786,8 +837,8 @@ void RegisterProcess(SymbolTable& t) {
   GET(g_unsetenv, "unsetenv", UnsetenvFn);
 #undef GET
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
-  E("fork", Fork);
-  E("vfork", Fork);
+  E("fork", gesher_fork);
+  E("vfork", gesher_fork);
   E("execve", Execve);
   E("execv", Execv);
   E("execvp", Execvp);
