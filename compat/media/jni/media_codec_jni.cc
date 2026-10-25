@@ -772,9 +772,10 @@ class Codec {
     if (async_) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
+      env->PushLocalFrame(64);
       jobject map = OutputFormatLocked().Make(env);
       PostLocked(kCbOutputFormatChange, 0, map);
-      env->DeleteLocalRef(map);
+      env->PopLocalFrame(nullptr);
     } else {
       format_pending_ = true;
     }
@@ -787,10 +788,12 @@ class Codec {
       s.client = true;
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
+      // A local frame: the worker is a native thread, its local references never go away.
+      env->PushLocalFrame(16);
       jobject info = env->NewObject(gJ.buffer_info, gJ.buffer_info_ctor);
       env->CallVoidMethod(info, gJ.buffer_info_set, 0, s.size, static_cast<jlong>(s.time_us), s.flags);
       PostLocked(kCbOutputAvailable, index, info);
-      env->DeleteLocalRef(info);
+      env->PopLocalFrame(nullptr);
     } else {
       ready_.push_back(index);
     }
