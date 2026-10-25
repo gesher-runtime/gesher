@@ -1256,6 +1256,7 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
   jobject details_map = details.Make(env);
   jclass impl_class = env->FindClass("android/media/MediaCodecInfo$CodecCapabilities$CodecCapsLegacyImpl");
   jobject impl = nullptr;
+  if (impl_class == nullptr) env->ExceptionClear();
   if (impl_class != nullptr) {
     jmethodID ctor = env->GetMethodID(impl_class, "<init>",
                                       "([Landroid/media/MediaCodecInfo$CodecProfileLevel;[IZ"
@@ -1272,7 +1273,12 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     }
   }
   jobject caps = nullptr;
+  CheckException(env, "MediaCodecList: CodecCapsLegacyImpl");
   jclass caps_class = env->FindClass("android/media/MediaCodecInfo$CodecCapabilities");
+  if (caps_class == nullptr) {
+    env->ExceptionClear();
+    return nullptr;
+  }
   if (impl != nullptr) {
     jmethodID ctor = env->GetMethodID(caps_class, "<init>",
                                       "(Landroid/media/MediaCodecInfo$CodecCapabilities$CodecCapsIntf;)V");
@@ -1314,6 +1320,14 @@ const JNINativeMethod kListMethods[] = {
 }  // namespace
 
 int RegisterMediaCodec(JNIEnv* env) {
+  // The classes and members both MediaCodec and MediaCodecList use (MediaCodecList may
+  // run before MediaCodec's native_init).
+  if (jclass mc = env->FindClass("android/media/MediaCodec")) {
+    MC_init(env, mc);
+    env->DeleteLocalRef(mc);
+  } else {
+    env->ExceptionClear();
+  }
   if (RegisterStandins(env, "android/media/MediaCodec")) {
     RegisterMethods(env, "android/media/MediaCodec", kCodecMethods);
   }
