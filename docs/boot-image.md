@@ -30,11 +30,12 @@ ships it with the installer. The decision and its reasons are in
   cuts its page-aligned length back at the end; Windows refuses to shrink a
   mapped file (`ERROR_USER_MAPPED_FILE`), so on Gesher the file first ends with
   the dex files and what follows them is written with pwrite (patch 0013).
-- `--compiler-filter=verify`: no compiled code (the code generator does not
-  follow Gesher's thread register yet, ADR 0006); classes are verified and
-  linked, and initialized where dex2oat can do it at compile time.
-  `--image-format=lz4`, `--dex-location=<jar name>` (the image loads wherever
-  the jars are), `--base=0x60000000`.
+- `--compiler-filter=speed` for the primary image and the extensions: AOT
+  code for core-oj, core-libart, core-icu4j, framework.jar and gesher-app.jar
+  ([compiled-code.md](compiled-code.md), ADR 0033, 0036). (Until the codegen
+  and stack tracks: `verify`, no compiled code.) `--image-format=lz4`,
+  `--dex-location=<jar name>` (the image loads wherever the jars are),
+  `--base=0x60000000`.
 
 ## How it is loaded
 - `-Ximage:<dir>/boot.art` looks in `<dir>/x86_64/`. On Gesher a lone location
@@ -77,7 +78,14 @@ windows-2025):
   (run 40055199839; run 40055865380: Hello 105 / 82 -> 55 / 46 ms,
   lifecycle.apk to `onCreate` 788 / 544 -> 489 / 299 ms.)
 
-Sizes: 65 MB in all, of which 50 MB are the `.vdex` files (they carry a copy
+With AOT code in every image (ci run 40138006773): dex2oat takes 2.7 s
+(primary), 8.8 s (framework.jar) and 0.7 s (gesher-app.jar); the `.oat` files
+are 95 MB (boot-framework.oat 75.7 MB), the boot-image artifact 64 MB
+compressed. The oat files are mapped as views (ADR 0036), not read, and
+lifecycle.apk's startup ratio to imageless stays about the same (0.42-0.46,
+was 0.47; compiled-code.md).
+
+Sizes before compiled code: 65 MB in all, of which 50 MB are the `.vdex` files (they carry a copy
 of the dex code, which the runtime reads instead of the jars' compressed entries),
 the `.art` files 14 MB (LZ4) and the `.oat` files 0.4 MB.
 
@@ -85,8 +93,7 @@ Not done yet:
 - Tools around it: the image is not rebuilt on the user's machine (a
   `dex2oat.exe` in the installer could do that for other jars), and there is no
   oatdump.
-- Compiled code in the image (AOT), the JIT and nterp: they need the code
-  generator to reach Thread* the way Gesher's assembly does (ADR 0006).
-- Sharing image and oat pages between processes (placeholder mappings);
-  each process has its own copy now.
+- Compiled code in the image, the JIT and nterp are done (compiled-code.md);
+  the oat files' code is mapped as views of the files, shared between
+  processes (placeholder mappings, ADR 0036).
 - An app image for the app's own classes.

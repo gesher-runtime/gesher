@@ -58,6 +58,18 @@
       "actions": [ { "click": [60, 340] }, { "keys": "3" } ]
     },
     {
+      "package": "org.billthefarmer.notes",
+      "label": "Notes",
+      "versionName": "1.41",
+      "versionCode": 141,
+      "sha256": "ae8aa96794fc55d58916d8fe3a217912fbcc9edd5ec9fb72c547f90d97d3c0ea",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/billthefarmer/notes",
+      "why": "A notes app that shows its note as Markdown in a WebView (loadDataWithBaseURL with the note's file:/// folder, assets' styles, JavaScript, a WebViewClient) under a floating edit button; pure Java, no AndroidX (docs/webview.md). A fresh install has no note: the edit button, a word, the accept button render it.",
+      "expectLog": [ "gesher-webview: WebView2 Runtime ", "view(s) over the WebView cut out of its window, the first ", "gesher-webview: first page loaded: file:///" ],
+      "actions": [ { "click": [344, 744] }, { "keys": "hello" }, { "click": [344, 744] } ]
+    },
+    {
       "package": "name.boyle.chris.sgtpuzzles",
       "label": "Simon Tatham's Puzzles",
       "versionName": "2025-09-12-1919-23762278-fdroid",
