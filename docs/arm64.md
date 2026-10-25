@@ -119,7 +119,7 @@ stub instead of running inside the VEH, xmm6-15 saved in the System V thunk,
 stack arguments 7+, TCB slots, TLSDESC, JNI proxies per side, guest libc
 differences, arch-filtered symbol binding, an honest overhead figure).
 
-### Done and CI-verified (ci `40217845117` at 25683fc and ci `40237320424` at ef57e7d, both runners)
+### Done and CI-verified (final: ci `40240210807` at 8d7bede, both runners; also ci `40217845117`, `40237320424`)
 
 `tracks/47-arm64.ps1`, every line PASS on windows-2022 and windows-2025:
 
