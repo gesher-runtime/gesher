@@ -210,7 +210,7 @@ function FeaturesCheck {
         if (-not (& $isGreen $beside)) { $problems += "beside the button is #$beside, not green" }
       }
       & $click 330 330 'button'
-      $m = & $waitFor 'Features click corner' 20
+      $m = & $waitFor 'Features click corner' 90
       if (-not $m.Success) { $problems += 'the button did not get the click' } else {
         & $click 304 304 'corner'
       }

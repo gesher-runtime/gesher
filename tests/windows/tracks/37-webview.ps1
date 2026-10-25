@@ -262,7 +262,8 @@ $webAppExpect = @(
   'WebActivity shouldOverrideUrlLoading: https://gesher.invalid/blocked',
   'WebActivity evaluateJavascript: "Gesher WebView test|42|42"',
   'WebActivity onPageFinished: https://example.com/',
-  'WebActivity remote title: "Example Domain"',
+  # (Its title is example.com's; Cloudflare's "Rate Limited" page now and then.)
+  'WebActivity remote title: "',
   'WebActivity progress 100',
   'gesher-webview: preview of file:///android_asset/index.html: 400x300, center #00ff00',
   'WebActivity setCookie: true',
