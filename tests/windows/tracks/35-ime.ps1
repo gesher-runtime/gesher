@@ -272,6 +272,19 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
 
 # Microsoft IME for Japanese enabled for the user, the layouts loaded, before
 # the runs (enabling a profile changes the session's input languages).
+# History-based predictive input off (the user policy of EAIME.admx, "Turn
+# off history-based predictive input"). Its engine (imjppred.dll, in
+# ImeBroker.exe) reads its data through Windows.CloudStore, which on the
+# Server 2022 runners never answers: thread_watch.cc's wait chains showed the
+# app's window thread -> the IME's worker -> a COM call into ImeBroker.exe ->
+# imjppred waiting in Windows.CloudStore, so that every switch away from the
+# IME kept the window's thread 180 s (the IME's own timeout); any app's
+# window would. Set before the IME starts; ImeBroker.exe ended so that a new
+# one reads it.
+$imePolicy = 'HKCU:\Software\Policies\Microsoft\IME\IMEJP'
+New-Item -Path $imePolicy -Force | Out-Null
+New-ItemProperty -Path $imePolicy -Name UseHistorybasedPredictiveInput -PropertyType DWord -Value 0 -Force | Out-Null
+Get-Process -Name ImeBroker -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill(); [void]$_.WaitForExit(10000) } catch { } }
 $script:imeTsf = [ImeInput]::EnableJapaneseIme()
 # What runs of the text input services (the IME's out-of-process helpers).
 $imeProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'ctfmon|TextInput|TabTip|InputApp|IME|imjp|Broker|ShellExperience|explorer|sihost|svchost' } |
