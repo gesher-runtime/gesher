@@ -17,6 +17,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
+#include <gesher/inet.h>
+
 #include <string>
 #include <vector>
 
@@ -77,6 +79,15 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
   if (res == nullptr) return EAI_FAIL;
   *res = nullptr;
   if (node == nullptr && service == nullptr) return EAI_NONAME;
+  if (node != nullptr && !gesher_inet_allowed()) {
+    // No INTERNET permission (<gesher/inet.h>): only numeric addresses resolve.
+    unsigned char numeric[16];
+    if (ws::Pton(ws::Family::kInet, node, numeric) != 1 &&
+        ws::Pton(ws::Family::kInet6, node, numeric) != 1) {
+      errno = EACCES;
+      return EAI_SYSTEM;
+    }
+  }
   ws::AddrInfo ws_hints;
   if (hints != nullptr) {
     if ((hints->ai_flags & ~kKnownAiFlags) != 0) return EAI_BADFLAGS;
