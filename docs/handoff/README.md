@@ -89,6 +89,15 @@ Merged so far:
   `timeout-minutes: 60`. compat/input/thread_watch.cc reports window-thread
   hangs (stacks, wait chains). Leftovers: Ctrl+C/V/X use Android's clipboard,
   not Windows'; no TSF reconversion; the touch keyboard gives no IME insets.
+- hwsvc2: merged as cf41c06 (verified at 85f49eb, ci 40235213023; head
+  cf9cf43 adds docs only). ADR 0051. Services.java conflict: ime and hwsvc2
+  each removed an inner stand-in (InputMethodManager, ContentService); both
+  went. Toast clicks after the device stopped (COM activator), vibrator_manager
+  without a vibrator, real content observers and content URI job triggers,
+  job network constraints, sleep/resume as SCREEN_OFF/ON, time zone changes,
+  legacy android.hardware.Camera, Gesher Camera for ACTION_IMAGE_CAPTURE.
+  Leftovers (graphics): camera preview into SurfaceView/TextureView; Bitmap
+  parcels across processes (Gesher Camera's thumbnail); no YuvImage natives.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
