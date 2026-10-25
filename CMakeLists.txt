@@ -71,6 +71,8 @@ include(cmake/aosp/devsvc.cmake)
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
 include(cmake/aosp/core_libs_tests.cmake)
+# ART's own gtests for libartbase and libdexfile (docs/posix.md).
+include(cmake/aosp/art_gtests.cmake)
 include(cmake/aosp/graphics.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
@@ -99,6 +101,11 @@ target_compile_options(mman_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 
+# gesher-base's paths, /proc, /etc/timezone, inotify and process model
+# (docs/posix.md); also run in CI on Windows.
+add_executable(posix_probe probes/posix/posix_probe.cc)
+target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
+
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.
 add_executable(libutils_probe probes/system/libutils_probe.cc)
@@ -113,3 +120,9 @@ target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
 add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
+
+# Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
+# translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
+add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
+target_compile_options(arm64_elf_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)

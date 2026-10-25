@@ -59,6 +59,16 @@ JNIEnv* AttachedEnv(const char* name) {
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return env;
   JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>(name), nullptr};
   if (vm->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK) return nullptr;
+  // Detached when the thread ends (ART aborts on a native thread that exits attached:
+  // a codec's worker, a player's video thread).
+  struct Detacher {
+    JavaVM* vm = nullptr;
+    ~Detacher() {
+      if (vm != nullptr) vm->DetachCurrentThread();
+    }
+  };
+  static thread_local Detacher detacher;
+  detacher.vm = vm;
   return env;
 }
 

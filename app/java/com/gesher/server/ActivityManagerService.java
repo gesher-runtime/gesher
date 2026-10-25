@@ -138,6 +138,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     // --- PendingIntents (PendingIntents) ---------------------------------------------------
 
+    /** The PendingIntents (stored notifications make theirs again: NotificationStore). */
+    PendingIntents pendingIntents() {
+        return mPendingIntents;
+    }
+
     @Override
     public IIntentSender getIntentSenderWithFeature(int type, String packageName,
             String featureId, IBinder token, String resultWho, int requestCode, Intent[] intents,

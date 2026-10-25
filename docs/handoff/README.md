@@ -65,6 +65,52 @@ Merged so far:
   configuration path in ActivityTaskManagerService (the package's locale
   config plus the task's size override; override configs carry a growing
   seq). Resizing relaunches activities without size configChanges.
+- posix: merged (verified at e76dde3, ci 40211480836, which contains
+  2d88915, so the integration tree after this merge is the CI-verified one;
+  241 PASS lines per runner). ADR 0045. Patches 0450/0451 change the AOSP
+  cache key. Leftovers: `stat` shows no execute bit while `access(X_OK)`
+  holds; no symlink resolution in DexFileLoader; ScopedFlock unsupported;
+  NTFS reports writes late (IN_MODIFY often only at close).
+- webview2: merged as ae3471d (verified at 55ab46a, ci 40216380541). ADR
+  0050. Integration ci 40218162937 on ae3471d (posix + webview2): all
+  green.
+  Leftovers: on WebView2 runtime 131 (windows-2022) a click on an app view
+  inside a cut-out waits until the app window's thread is woken (its input
+  queue is attached to WebView2's): compat/hwui/window's thread should wake
+  itself on input; no WebViewCompat (androidx boundary interfaces); web
+  content not in Android's accessibility tree; geolocation position not
+  verified on the runners.
+- ime: merged (verified at 6b88293, ci 40218916953, which contains baf27c9,
+  so the integration tree after this merge is the CI-verified one). ADR
+  0039. The windows-2022 hang was Windows' own: after a Japanese
+  composition, switching away from the IME waits 180 s on ImeBroker.exe's
+  call into Windows.CloudStore, which never answers on Server 2022; 35-ime.ps1
+  ends ImeBroker.exe there (build < 26100). The test job now has
+  `timeout-minutes: 60`. compat/input/thread_watch.cc reports window-thread
+  hangs (stacks, wait chains). Leftovers: Ctrl+C/V/X use Android's clipboard,
+  not Windows'; no TSF reconversion; the touch keyboard gives no IME insets.
+- hwsvc2: merged as cf41c06 (verified at 85f49eb, ci 40235213023; head
+  cf9cf43 adds docs only). ADR 0051. Services.java conflict: ime and hwsvc2
+  each removed an inner stand-in (InputMethodManager, ContentService); both
+  went. Toast clicks after the device stopped (COM activator), vibrator_manager
+  without a vibrator, real content observers and content URI job triggers,
+  job network constraints, sleep/resume as SCREEN_OFF/ON, time zone changes,
+  legacy android.hardware.Camera, Gesher Camera for ACTION_IMAGE_CAPTURE.
+  Leftovers (graphics): camera preview into SurfaceView/TextureView; Bitmap
+  parcels across processes (Gesher Camera's thumbnail); no YuvImage natives.
+  Integration ci 40239177837 on cf41c06: all green.
+- arm64 (Phase 7): merged (verified at 8d7bede, ci 40240210807 attempt 2,
+  which contains d08b439, so the integration tree after this merge is the
+  CI-verified one; attempt 1 failed only net's external https fetch to
+  example.com on windows-2025). ADR 0047 (with a "Revision" section: the
+  successor fixed STXR monitor callbacks, guest faults as crash reports, the
+  DEP redirect, xmm6-15 in the System V thunk, stack args, TLS/TLSDESC, JNI
+  proxies). arm64 executables via gesher-exec and ProcessBuilder; fastmem;
+  NativeActivity arm64-only APK. Overhead x2.1 (compiled kernel) / x5.0
+  (register loop). Leftovers: TIC-80 (e2e knownFailure) needs SurfaceView
+  surfaces (graphics); no guest JIT code, guest signal handlers, LSE, HFAs
+  by value. The arm64 shim fallbacks (sem_*, wchar, libm, dlopen of
+  platform libs) should move into compat/bionic for x86_64 too.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
@@ -75,6 +121,31 @@ Merged so far:
   branch.
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
+
+Wave 3 (2026-10-25 evening), cut from phase4/integration 0b55fa2, briefs in
+[tracks/](tracks/), reusing merged worktrees:
+- `windows3` (C:\work\gesher-lifecycle): screen orientation, window thread
+  wake under WebView2, multi-resume, moveTaskToBack minimizes, single-process
+  relaunch, IME insets, Windows clipboard. ADR 0053, 51-windows3.ps1.
+- `aot2` (C:\work\gesher-stack): app images, profiles, speed-profile
+  framework. ADR 0054, 61-aot2.ps1.
+- `exec2` (C:\work\gesher-exec): fork/exec/posix_spawn from native code,
+  signals between processes, executable TLS, /system/bin programs. ADR 0055,
+  43-exec2.ps1.
+- ADR 0051 is hwsvc2's; 0052 is reserved for media stage 2.
+
+Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
+[tracks/](tracks/):
+- `surfaces` (C:\work\gesher-devices): SurfaceView/TextureView child
+  surfaces, SurfaceTexture, camera preview, TIC-80's first frame, Bitmap
+  parcels, YuvImage. ADR 0056, 52-surfaces.ps1.
+- `native2` (C:\work\gesher-arm64): arm64's shim fallbacks into
+  compat/bionic, dlopen of platform libraries, shim gaps from NDK library
+  tests, posix leftovers (exec bit, symlinks, flock, IN_MODIFY). ADR 0057,
+  44-native2.ps1.
+- `web3` (C:\work\gesher-webview): WebViewCompat, web accessibility,
+  geolocation, system proxy and the net leftovers, a local https check.
+  ADR 0058, 54-web3.ps1.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.

@@ -104,8 +104,9 @@ public final class Services {
                 new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
         services.put(ContentResolver.CONTENT_SERVICE_NAME,
                 StandIn.of(IContentService.class, new ContentService()).asBinder());
+        // input_method: Windows' text input (docs/input.md "Text input", ADR 0039).
         services.put(Context.INPUT_METHOD_SERVICE, StandIn.of(IInputMethodManager.class,
-                new InputMethodManager()).asBinder());
+                new InputMethodManagerService()).asBinder());
         services.put(Context.NOTIFICATION_SERVICE,
                 StandIn.of(INotificationManager.class, notifications).asBinder());
         services.put(Context.UI_MODE_SERVICE,
@@ -141,6 +142,9 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
+        // A device without a vibrator (hwsvc2, ADR 0051).
+        services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
+                android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
         // Devices (docs/devices.md): location over Windows' location service.
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
@@ -255,42 +259,6 @@ public final class Services {
         }
     }
 
-    /**
-     * input_method: InputMethodManagerService, with no input method. A window's
-     * ViewRootImpl needs the service to exist (InputMethodManager's instance); every
-     * call answers its default (no IME, nothing shown).
-     */
-    public static final class InputMethodManager extends IInputMethodManager.Default {
-        @Override
-        public void addClient(com.android.internal.inputmethod.IInputMethodClient client,
-                com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
-                int untrustedDisplayId) {
-            // No input method will ever bind to it.
-        }
-    }
-
-    /**
-     * content: ContentService, without observers' notifications. A text view's key listener
-     * observes the text settings (TextKeyListener.initPrefs: registerContentObserver).
-     */
-    public static final class ContentService extends IContentService.Default {
-        @Override
-        public void registerContentObserver(android.net.Uri uri, boolean notifyForDescendants,
-                android.database.IContentObserver observer, int userHandle,
-                int targetSdkVersion) {
-            // Nothing changes the observed content behind the app's back; never notified.
-        }
-
-        @Override
-        public void unregisterContentObserver(android.database.IContentObserver observer) {
-        }
-
-        @Override
-        public void notifyChange(android.net.Uri[] uris, android.database.IContentObserver observer,
-                boolean observerWantsSelfNotifications, int flags, int userHandle,
-                int targetSdkVersion, String callingPackage) {
-        }
-    }
     /**
      * mount: StorageManagerService on a device without shared (external) storage: no
      * volumes, so Context.getExternalFilesDir and getObbDir are null, as with external
