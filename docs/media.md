@@ -101,72 +101,62 @@ the app's ELF code) or players.
   - `INFO  media: Media Foundation: ... AAC decoders: 1; MP3 decoders: 1; FLAC decoders: 1; Opus decoders: 1; H.264 decoders: 1; HEVC 0; VP9 0; AV1 0; MPEG-4 part 2 decoders: 1`
     (both runners: Media Foundation is there on the CI images).
 
-### Runs
-- **40138223997** (6a88e72): `build` failed at the dalvikvm link, one error:
-  `fopen_utf8` undefined (libFLAC's share/compat.h maps `fopen` to it on
-  _WIN32; its win_utf8_io.c is not built). `media / media` failed: the
-  generators were committed without the executable bit (exit 126).
-- **40139309325** (60c383a: `compat/media/aosp/flac/fopen_utf8.c`, the
-  generators executable): build, media, package green; `test` red on both
-  runners only in 38-media.ps1's mediaapp checks: the app stopped at its
-  first MediaPlayer with `NoClassDefFoundError` (the boot class loader's
-  pre-allocated one, no class name). Found by running the run's artifacts
-  locally (dalvikvm from the CI artifacts, nothing built locally): every
-  `MediaPlayer.setDataSource(FileDescriptor, ...)` goes through
-  `FileUtils.convertToModernFd`, which calls
-  `MediaStore.getOriginalMediaFormatFileDescriptor`; MediaStore is the
-  MediaProvider module's class, not in framework.jar. Fixed in 1aba036 with
-  a placeholder `app/java/android/provider/MediaStore.java` (on the boot
-  class path in gesher-app.jar, as SdkExtensions/ConnectivityManager): with
-  it, the whole mediaapp run printed every expected line locally, and
-  `media_probe analyze` found the 27 sounds of the capture.
-  e2e: Signal Generator FAIL (clicks did not change the window). Two causes,
-  both fixed in 1aba036: (1) its activity is `userLandscape` and its custom
-  views size themselves only when their parent is wider than tall; Gesher has
-  no orientation, so on the 400x800 display they were 0x0. apps.json gives it
-  `"display": "800x400"` (run-e2e.ps1: GESHER_DISPLAY on a device of its own)
-  and clicks on SQU and MUTE (checked locally: the views draw, the clicks
-  change the window). (2) its AudioTrack comes from AudioTrack.Builder with
-  no buffer size (one frame asked for): the track got a one-frame buffer and
-  played a frame per mixer period. Streaming tracks now get at least the
-  minimum buffer (getMinBufferSize's), as AudioFlinger does; mediaapp test 7
-  checks it.
-- Also in 1aba036: `media_probe analyze` counts a zero crossing only after the
-  signal went below -30% of its rms (lossy codecs' low-level noise at a
-  tone's ends had given 540 Hz for the 523 Hz MP3, 720 for the 698 Hz Opus).
-- afbf94c: origin/phase4/integration merged (ci.yml needs/downloads, the
-  CMakeLists include, android_runtime.cc's table, apps.json: both sides kept).
-- Next run: ci at afbf94c+ (dispatched with this status). Last CI-verified
-  commit is still **da91170** (run 40129230078).
+### Stage 1 verified: ci run 40193603079 (commit 32cbb82)
+Every job green, both test runners 0 failed, e2e 0 unexpected failures;
+origin/phase4/integration 6111f0d merged. Both runners print:
+- `PASS  media: AudioTrack in mediaapp.apk: streaming (short, byte, direct ByteBuffer writes) and static tracks, 8-bit/16-bit/float, mono and stereo, a marker, periodic notifications, loop points, setPlaybackRate, getTimestamp, AudioTrack.Builder's defaults`
+- `PASS  media: AudioManager in mediaapp.apk: stream volumes (aliases, set, adjust, mute), the ringer mode, getDevices, audio focus (a transient loss, the gain back, a loss), isMusicActive`
+- `PASS  media: MediaPlayer in mediaapp.apk: MP3, AAC (M4A and ADTS), Ogg Vorbis, Opus, FLAC, WAV (16 and 24-bit, mu-law) from raw resources, assets, a path and http; prepare and prepareAsync, completion, pause, seekTo, looping, errors`
+- `PASS  media: MediaMetadataRetriever and SoundPool in mediaapp.apk: tags, MIME types and durations of an MP3, an M4A and a FLAC; two sounds loaded and played, one at twice its rate`
+- `PASS  media: Ringtone and RingtoneManager in mediaapp.apk: the default ringtone, notification and alarm sounds are Gesher's; the default notification plays`
+- `PASS  media: AAudio and OpenSL ES from an app's NDK library (mediaapp.apk's libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; no input streams yet`
+- `PASS  media: mediaapp.apk's sounds reach the output (AudioTrack, AudioManager volumes, MediaPlayer, SoundPool): each tone at its frequency, duration and level, at its stream's volume (none while the ringer is silent)`
+- (and the engine lines of run 40129230078 again)
+e2e: `PASS  e2e: org.billthefarmer.siggen 1.37 (Signal Generator) installs, draws its first frame (not blank), reacts to input, closes and its process ends`
+(display 800x400; clicks on SQU and MUTE changed 1825 and 4458 pixels).
 
-### Stage 1, part 2 (committed, being verified)
-- `cmake/aosp/media_codecs.cmake` + `aosp.lock` (`frameworks/av-media`,
-  `frameworks/native-media`, `system/media`, `external/tremolo`,
-  `external/libopus`, `external/flac`, `external/libwebm`): the extractors
-  and decoders, linked into dalvikvm.
-- `cmake/aosp/media.cmake`: `gesher_media_player` (OBJECT):
-  `compat/media/player/*`, `jni/media_jni.cc` (builtin `libmedia_jni.so`,
-  `libsoundpool.so`, `libaudioeffect_jni.so`), `media_player_jni.cc`,
-  `media_jni_others.cc` (MediaMetadataRetriever + stand-ins),
-  `media_extractor_jni.cc`, `soundpool_jni.cc`, `ndk/aaudio.cc`,
-  `ndk/opensles.cc`.
-- Tests: `tests/apps/mediaapp` (AudioTrack, AudioManager, MediaPlayer,
-  retriever, SoundPool, Ringtone, NDK AAudio/OpenSL ES via
-  `jni/media_ndk_test.c`), `gen-media.sh`, `compat/media/sounds/
-  gen-system-sounds.sh`, media.yml (ffmpeg, NDK `ndk-27.2.12479018`),
-  `38-media.ps1` (an http server on 127.0.0.1:8765 serves
-  `assets/tone_http.ogg`); Signal Generator in `tests/e2e/apps.json`.
+### How it got there (runs)
+- 40138223997 (6a88e72): link error `fopen_utf8` (libFLAC's compat.h on
+  _WIN32); generators not executable. Fixed: `compat/media/aosp/flac/
+  fopen_utf8.c`, `git update-index --chmod=+x`.
+- 40139309325: mediaapp stopped at its first MediaPlayer with the boot class
+  loader's pre-allocated NoClassDefFoundError: `setDataSource(FileDescriptor,
+  ...)` goes through `FileUtils.convertToModernFd` to MediaStore, the
+  MediaProvider module's class. Fixed with the placeholder
+  `app/java/android/provider/MediaStore.java`. Signal Generator: landscape-only
+  views (0x0 on a portrait display) and a one-frame AudioTrack buffer
+  (Builder without setBufferSizeInBytes); fixed with `"display": "800x400"`
+  in apps.json and a minimum buffer for streaming tracks. media_probe analyze
+  got hysteresis (codec noise at a tone's ends added zero crossings).
+- 40143354361: mediaapp did not compile (a duplicate local). 40191461359:
+  every AOSP fetch failed: aosp.lock had `system/media` twice after the
+  devices track's merge (two fetches into one directory); now one line with
+  both tracks' patterns.
+- 40191708589: windows-2022 only: the OpenSL ES buffer-queue tone had a
+  ~20 ms gap (1517.8 Hz measured for 1568: a normal-priority feeder under
+  load); Signal Generator's first click missed (the installed layout is 52 px
+  lower than a local run's). Fixed: the OpenSL feeder and the AAudio callback
+  thread run at THREAD_PRIORITY_HIGHEST, the player's at ABOVE_NORMAL;
+  clicks at 600,168 and 600,213.
+
+### Remaining gaps (stage 1)
+- No screen orientation: a landscape-only activity gets the device's display
+  as it is (Signal Generator runs on an 800x400 display in e2e). Graphics/
+  windows domain.
+- MediaStore is a placeholder: no media provider (queries of its content
+  URIs find no provider).
+- Only PCM AudioTrack (no compressed/offload), no audio effects
+  (`libaudioeffect_jni` stand-ins), no MediaProfiles (CamcorderProfile).
+- Audio input is stage 3.
 
 ### Exactly what is next
-1. Read the run at the tip; fix what fails; when both test runners and e2e
-   are green, tick the roadmap's MediaPlayer, SoundPool/Ringtone/
-   MediaMetadataRetriever, AAudio/OpenSL ES and e2e boxes with the run id and
-   quote the PASS lines here.
-2. Then report stage 1 to the coordinator; stage 2 (video: MediaCodec,
-   MediaExtractor is written in `media_extractor_jni.cc`, MediaMuxer, video
-   into a Surface) comes after. Stage 3: capture (AudioRecord's setup fails
-   cleanly now; AAudio input answers UNAVAILABLE; OpenSL recorder
-   FEATURE_UNSUPPORTED).
+Stage 2 (video), when the coordinator hands it over: MediaCodec and
+MediaCodecList (audio decoding first: ExoPlayer apps use MediaCodec +
+AudioTrack), MediaExtractor (written: `media_extractor_jni.cc`), MediaMuxer,
+video to a Surface (SurfaceView/TextureView need the graphics track's
+compositor), H.264 through Media Foundation (present on the CI images).
+Stage 3: capture (AudioRecord's setup fails cleanly now; AAudio input answers
+UNAVAILABLE; OpenSL recorder FEATURE_UNSUPPORTED).
 
 ### Debugging with a run's artifacts (no local build)
 `gh run download <run> -n windows-x64 -n framework -n graphics -n angle -n
@@ -206,8 +196,8 @@ be swapped into mediaapp.apk's classes.dex (javac against small stubs, d8).
   `AudioService.putDefaultSounds(system)`.
 - `tools/package/gesher.iss` (media\audio\*) and `tools/package/gesher-app.ps1`
   (copies them to `$ANDROID_ROOT/media/audio`): the installer edit.
-- `aosp.lock`: the new projects above (separate checkouts, no change to
-  existing lines).
+- `aosp.lock`: the new projects above (separate checkouts), and the audio
+  patterns added to the devices track's `system/media` line.
 - `docs/roadmap.md`: the Phase 8 checklist.
 - `app/java/android/provider/MediaStore.java` (new): the MediaProvider
   module's MediaStore as a placeholder on the boot class path (no
