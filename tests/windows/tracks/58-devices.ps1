@@ -239,6 +239,10 @@ DevCheck 'devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesh
     'devices: capture: thumbnail result OK, data 160x120',
     'devices: capture: EXTRA_OUTPUT result OK, the file: ', 'starts FFD8 true, decodes to 640x480',
     'devices: capture: done')) $capCode 'capture'
+if (-not $capOut.Contains('devices: capture: done')) {
+  Write-Host '--- com.gesher.camera.log'
+  Get-Content (Join-Path $root 'logs/com.gesher.camera.log') -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
+}
 Remove-Item Env:GESHER_SENSOR_TEST
 Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120
