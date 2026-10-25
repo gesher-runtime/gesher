@@ -129,6 +129,7 @@ function FeaturesCheck {
   $quoted = ($cmdArgs | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
+  $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
   $psi.Environment['GESHER_WEBAPP_SERVER'] = "$($ports[0]) $($ports[1])"
   $psi.Environment['GESHER_WEBVIEW_ARGS'] = '--use-fake-device-for-media-stream'
   $psi.UseShellExecute = $false
