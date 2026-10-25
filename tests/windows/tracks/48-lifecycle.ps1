@@ -318,12 +318,22 @@ function ComposeScenario([IntPtr] $app, [scriptblock] $ReadLog) {
   $want = 255 * (1 - $dim)
   if ([Math]::Abs($d[0] - $want) -gt 40) { $out += ("the app window behind the dialog is 0x{0:x6}, not dimmed by {1}" -f $behind, $dim) }
   if ($c[0] -lt 200 -or $c[1] -lt 200 -or $c[2] -lt 200) { $out += ("the dialog's card shows 0x{0:x6}, not white" -f $center) }
-  # Behind the transparent corner: the dimmed app window (darkened a little by the shadow), not black.
-  if ($k[0] -lt 0.5 * $want -or $k[0] -gt $want + 30 -or [Math]::Abs($k[0] - $k[1]) -gt 30 -or [Math]::Abs($k[1] - $k[2]) -gt 30) {
-    $out += ("the dialog's transparent edge shows 0x{0:x6}, not the dimmed app window behind it (~{1:n0} gray): the popup is not composed with alpha" -f $corner, $want)
-  }
   [void][GesherWin32]::PostMessageW($dialog, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)  # WM_CLOSE: Back
   [void](WaitAfter $ReadLog $mark 'LifeActivity dialog dismissed' 30)
+  Start-Sleep 2
+  # What the app window shows there without the dialog: the transparent edge must show it,
+  # dimmed (darkened a little more by the shadow), not black or the popup's own color.
+  $plain = [GesherLifeWin32]::ScreenPixel($cornerAt[0], $cornerAt[1])
+  $p = Channels $plain
+  Write-Host ("INFO  the app window at {0} without the dialog: 0x{1:x6}" -f ($cornerAt -join ','), $plain)
+  $bad = $false
+  for ($i = 0; $i -lt 3; $i++) {
+    $e = $p[$i] * (1 - $dim)
+    if ($k[$i] -lt 0.5 * $e - 8 -or $k[$i] -gt $e + 30) { $bad = $true }
+  }
+  if ($bad) {
+    $out += ("the dialog's transparent edge shows 0x{0:x6}, not the app window behind it (0x{1:x6}) dimmed by {2}: the popup is not composed with alpha" -f $corner, $plain, $dim)
+  }
   return $out
 }
 
