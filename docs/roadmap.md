@@ -369,3 +369,21 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+
+## Phase 8 checklist
+
+Media ([media.md](media.md), ADR 0042):
+- [x] Audio output (stage 1; ci run 40193603079, Signal Generator in e2e)
+  - [x] AudioTrack (static and streaming, PCM 8/16/24/32-bit and float, mono
+        and stereo, any rate, resampled) over WASAPI shared mode, or a WAV
+        capture where there is no endpoint (CI); AudioManager stream volumes
+        as the Windows session volumes of the stream groups, the ringer mode,
+        audio focus, getDevices (ci run 40129230078)
+  - [x] MediaPlayer for files, assets, raw resources and http(s): MP3,
+        AAC/M4A, WAV, Ogg Vorbis and Opus, FLAC (ci run 40193603079)
+  - [x] SoundPool, Ringtone/RingtoneManager defaults, MediaMetadataRetriever
+        (ci run 40193603079)
+  - [x] AAudio and OpenSL ES for apps' native code (output; ci run 40193603079)
+- [ ] MediaCodec, MediaExtractor, MediaMuxer; video into SurfaceView and
+      TextureView (stage 2)
+- [ ] Audio input: AudioRecord, MediaRecorder (stage 3)

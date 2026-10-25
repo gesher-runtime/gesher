@@ -73,6 +73,9 @@ Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignor
 ; and the licenses of BoringSSL, Conscrypt, OkHttp and BouncyCastle.
 Source: "{#BuildDir}\cacerts\*"; DestDir: "{app}\cacerts"; Flags: ignoreversion
 Source: "{#BuildDir}\NET-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Gesher's default ringtone, notification and alarm sounds (docs/media.md):
+; gesher-app.ps1 installs them as $ANDROID_ROOT/media/audio.
+Source: "{#BuildDir}\media\audio\*"; DestDir: "{app}\media\audio"; Flags: ignoreversion recursesubdirs
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
