@@ -65,6 +65,20 @@ Merged so far:
   configuration path in ActivityTaskManagerService (the package's locale
   config plus the task's size override; override configs carry a growing
   seq). Resizing relaunches activities without size configChanges.
+- posix: merged (verified at e76dde3, ci 40211480836, which contains
+  2d88915, so the integration tree after this merge is the CI-verified one;
+  241 PASS lines per runner). ADR 0045. Patches 0450/0451 change the AOSP
+  cache key. Leftovers: `stat` shows no execute bit while `access(X_OK)`
+  holds; no symlink resolution in DexFileLoader; ScopedFlock unsupported;
+  NTFS reports writes late (IN_MODIFY often only at close).
+- webview2: merged as ae3471d (verified at 55ab46a, ci 40216380541). ADR
+  0050. Integration ci 40218162937 on ae3471d (posix + webview2).
+  Leftovers: on WebView2 runtime 131 (windows-2022) a click on an app view
+  inside a cut-out waits until the app window's thread is woken (its input
+  queue is attached to WebView2's): compat/hwui/window's thread should wake
+  itself on input; no WebViewCompat (androidx boundary interfaces); web
+  content not in Android's accessibility tree; geolocation position not
+  verified on the runners.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
