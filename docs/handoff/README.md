@@ -134,6 +134,19 @@ Wave 3 (2026-10-25 evening), cut from phase4/integration 0b55fa2, briefs in
   43-exec2.ps1.
 - ADR 0051 is hwsvc2's; 0052 is reserved for media stage 2.
 
+Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
+[tracks/](tracks/):
+- `surfaces` (C:\work\gesher-devices): SurfaceView/TextureView child
+  surfaces, SurfaceTexture, camera preview, TIC-80's first frame, Bitmap
+  parcels, YuvImage. ADR 0056, 52-surfaces.ps1.
+- `native2` (C:\work\gesher-arm64): arm64's shim fallbacks into
+  compat/bionic, dlopen of platform libraries, shim gaps from NDK library
+  tests, posix leftovers (exec bit, symlinks, flock, IN_MODIFY). ADR 0057,
+  44-native2.ps1.
+- `web3` (C:\work\gesher-webview): WebViewCompat, web accessibility,
+  geolocation, system proxy and the net leftovers, a local https check.
+  ADR 0058, 54-web3.ps1.
+
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
 
