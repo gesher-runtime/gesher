@@ -1,6 +1,6 @@
 # 0048. Lifecycle: visibility, minimize, resize, translucent popups
 
-Status: proposed (lifecycle track, Phase 4). The coordinator may renumber.
+Status: accepted (lifecycle track, Phase 4; verified in ci run 40191526766). The coordinator may renumber.
 
 ## Context
 
@@ -53,7 +53,10 @@ observe:
    else when they come back. gesher-app's single process has no server for its
    Activity: it gets `onConfigurationChanged` for handled changes; unhandled
    ones are reported, not relaunched.
-4. **Translucent popups under SkiaGL are read back into layered windows.**
+4. **Translucent popups under SkiaGL are read back into layered windows**,
+   and the dim behind a dialog is then a layered black popup window of its own
+   under the app window's popups (ANGLE's swap chain cannot be dimmed in the
+   app window's paint, as the CPU pipeline's frames are).
    Choices for per-pixel alpha with a GPU renderer on Windows:
    - DirectComposition (`EGL_ANGLE_direct_composition`, a composition swap
      chain with premultiplied alpha on a `WS_EX_NOREDIRECTIONBITMAP` window):
