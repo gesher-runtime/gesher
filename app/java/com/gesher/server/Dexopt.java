@@ -194,6 +194,9 @@ final class Dexopt {
             a.add("--app-image-file=" + new File(newDir, "base.art").getPath());
             a.add("--image-format=lz4");
         }
+        // dex2oat's watchdog thread needs pthread_condattr_setclock, which gesher-base
+        // lacks (tools/boot-image/compile.ps1 turns it off too).
+        a.add("--no-watch-dog");
         a.add("-j4");
         long start = SystemClock.uptimeMillis();
         int code = run("dex2oat", a);
@@ -258,7 +261,12 @@ final class Dexopt {
                 try {
                     long since = idleSince.get();
                     if (since == 0 || SystemClock.uptimeMillis() - since < idleMs) continue;
-                    for (Map.Entry<String, String> e : packages.codePaths().entrySet()) {
+                    // The packages used last first.
+                    List<Map.Entry<String, String>> order =
+                            new ArrayList<>(packages.codePaths().entrySet());
+                    order.sort((x, y) -> Long.compare(currentProfile(y.getKey()).lastModified(),
+                            currentProfile(x.getKey()).lastModified()));
+                    for (Map.Entry<String, String> e : order) {
                         String pkg = e.getKey();
                         File cur = currentProfile(pkg);
                         if (!hasData(cur)) continue;
