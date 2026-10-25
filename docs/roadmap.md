@@ -286,6 +286,20 @@ needs: [framework-build.md](framework-build.md).
   - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
+- [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
+      "Status and next steps (hwsvc2)", docs/devices.md)
+  - [ ] Toast clicks after the device stopped (Gesher's COM toast activator,
+        registered by the installer); uninstalling removes the app's toasts
+        and AppUserModelID
+  - [ ] `vibrator_manager` of a device without a vibrator
+  - [ ] Content observers and content URI job triggers; job network
+        constraints over ConnectivityManager's networks
+  - [ ] Windows sleep and resume (screen off/on, alarms catching up) and a
+        real time zone change (TIMEZONE_CHANGED, processes' default zone reset)
+  - [ ] The legacy android.hardware.Camera over Media Foundation; Gesher
+        Camera for ACTION_IMAGE_CAPTURE; geocoder final (no key: IOException)
+  - [ ] Camera preview into SurfaceView/TextureView (their child surfaces need
+        a native window from the graphics stack)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
