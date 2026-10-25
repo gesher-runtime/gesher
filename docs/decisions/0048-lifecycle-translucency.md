@@ -50,7 +50,12 @@ observe:
    server relaunches (`ActivityRelaunchItem`, the window preserved) the
    activities that do not handle the change, filtered by their size buckets
    (`SizeConfigurationBuckets.filterDiff`), now if they are resumed or paused,
-   else when they come back. gesher-app's single process has no server for its
+   else when they come back. This is the same path as the locale track's
+   configuration changes (ADR 0049): an activity's configuration is its
+   package's (`LocaleManagerService.configurationFor`) with its task's size
+   override, and one diff (`diffPublicOnly`, then the size buckets) decides
+   between `ActivityConfigurationChangeItem` and a relaunch, deferred until it
+   is resumed. gesher-app's single process has no server for its
    Activity: it gets `onConfigurationChanged` for handled changes; unhandled
    ones are reported, not relaunched.
 4. **Translucent popups under SkiaGL are read back into layered windows**,
