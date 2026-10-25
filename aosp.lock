@@ -11,6 +11,8 @@ system/libbase
 system/logging
 system/libziparchive
 system/core libcutils/ libutils/ libsystem/include/ libprocessgroup/include/ property_service/
+# libcamera_metadata, for CameraMetadataNative (compat/devices, docs/devices.md).
+system/media camera/include/ camera/src/ private/camera/include/
 external/zlib
 external/tinyxml2
 external/fmtlib

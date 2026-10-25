@@ -332,9 +332,9 @@ public class MediaActivity extends Activity {
             int rate = t.getSampleRate();
             int frames = rate * 3 / 10;
             short[] pcm = tone16(rate, 1, 750, frames, 0.5);
-            int min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO,
+            int minFrames = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT) / 2;
-            boolean bufferOk = t.getBufferSizeInFrames() >= min;
+            boolean bufferOk = t.getBufferSizeInFrames() >= minFrames;
             t.play();
             long t0 = System.nanoTime();
             int written = t.write(pcm, 0, pcm.length);

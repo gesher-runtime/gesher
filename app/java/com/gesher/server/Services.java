@@ -141,6 +141,9 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
+        // Devices (docs/devices.md): location over Windows' location service.
+        services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
+                new LocationManagerService(pm, am)).asBinder());
         return services;
     }
 
@@ -159,6 +162,8 @@ public final class Services {
         f.setAccessible(true);
         f.set(null, sm.asInterface());
         ServiceManager.initServiceCache(new TreeMap<>(all));
+        // Devices (docs/devices.md): media.camera, in the app's process in every mode.
+        CameraService.installInProcess();
     }
 
     /** servicemanager in a single process: the services above, and nothing else. */
