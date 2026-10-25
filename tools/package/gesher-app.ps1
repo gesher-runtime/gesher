@@ -149,6 +149,16 @@ if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
   }
 }
 
+# Gesher's default sounds (docs/media.md), as /system/media/audio.
+if (Test-Path (Join-Path $here 'media/audio')) {
+  foreach ($f in Get-ChildItem -Recurse -File (Join-Path $here 'media/audio')) {
+    $rel = $f.FullName.Substring((Join-Path $here 'media').Length + 1)
+    $to = Join-Path $root "system/media/$rel"
+    New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+    Install $f.FullName $to
+  }
+}
+
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"

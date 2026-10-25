@@ -119,26 +119,34 @@ Excluded by name (gtest filter in `21-posix.ps1`):
   `RuntimeInit`), but if the framework's time zone supplier is ever installed,
   that line would override Windows' zone.
 
-## Status and next steps (2026-10-25, third agent, in progress)
+## Status and next steps (2026-10-25, third agent)
 
-**CI so far:**
-- ci 40141424142 (at 47df386): every build job, package and e2e (except
-  Puzzles, fixed since: `access(X_OK)` now holds for files) passed; the time
-  zone loop broke on a PowerShell precedence bug (fixed).
-- ci 40144053200 (at fc5b9b6): build, posix/build, package and e2e (all apps,
-  Puzzles included) green; test jobs failed only on art_libartbase_tests
-  (FdFileTest.PipeFlush hung: fsync of a pipe) and FileObserverTest (natives
-  not registered: the test did not load libandroid_runtime). Passing there, on
-  both runners: art_libdexfile_tests (119 tests, 2 excluded), posix probe, the
-  class path on another drive, the four time zones, WatchService.
-- ci 40191738786 (after merging integration 26aa8eb): cancelled; it hung in
-  FileObserverTest (the observer thread kept the VM alive; the test now exits
-  explicitly). libartbase showed Rename (directory fsync), HexDump (`_WIN64`),
-  membarrier, ScopedFlock and FlagsTests failures: fixed or excluded (list
-  above).
+**CI-verified green: ci 40198104086 at 2ba7ed6** (every job: build, posix,
+package, e2e, test on windows-2022 and windows-2025, 177 PASS / 0 FAIL on
+each) and **posix 40198105735** (gtests on both runners). Lines of this track:
 
-**Next:** watch the ci run of the latest push; fix what remains; then tick
-the Phase 1 roadmap boxes with the run id and finish this section.
+- `PASS  art_libartbase_tests: 232 tests passed (4 excluded, docs/posix.md)`
+- `PASS  art_libdexfile_tests: 119 tests passed (2 excluded, docs/posix.md)`
+- `PASS  posix probe: paths, /proc, /etc/timezone, inotify, processes`
+- `PASS  dalvikvm: a class path entry on another drive (/mnt/c/...)`
+- `PASS  time zone {Eastern Standard Time, Israel Standard Time, AUS Eastern
+  Standard Time, UTC}: ... match Windows at N transitions in 2025-2027`
+- `PASS  dalvikvm: java.nio.file.WatchService over inotify`
+- `PASS  dalvikvm: android.os.FileObserver over inotify (framework.jar)`
+- package: the installer carries tzdata and TZDATA-NOTICES.txt; e2e: every
+  app, Puzzles included.
+
+Roadmap Phase 1 boxes ticked: time zone data, paths on another drive + the
+CRT's path functions, ART's gtests. The "BoringSSL, epoll and inotify, a
+process model" box stays open (BoringSSL is the net track's); its inotify and
+process-model parts are noted there.
+
+Then merged origin/phase4/integration 2d88915 (locale, net, media, lifecycle);
+the ci run of that merge is the final check.
+
+**Remaining gaps:** see "Known gaps" above; `X_OK` holds for every file while
+`stat` shows no execute bit; DexFileLoader keeps ART's no-realpath on Windows;
+ART's `LockedFile` stays unsupported under `_WIN32`.
 
 **Pitfalls met:**
 - The Bash tool collapses `\\` to `\` inside commands and heredocs (a `'\\0'`
