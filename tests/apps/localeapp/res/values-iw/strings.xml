@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hebrew (he, which Android's resources name iw): ASCII text, for the logs. -->
+<resources>
+    <string name="greeting">Shalom</string>
+</resources>

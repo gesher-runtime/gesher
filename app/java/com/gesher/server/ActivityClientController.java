@@ -64,10 +64,26 @@ public final class ActivityClientController extends IActivityClientController.De
         if (r != null) mAtm.activityDestroyed(r);
     }
 
+    /** After an ActivityRelaunchItem (locale track): the new instance reports its states. */
+    @Override
+    public void activityRelaunched(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) SystemServer.log("activityRelaunched: " + r.name());
+    }
+
+    /** Activity.recreate(): the app relaunches it by itself (a local transaction). */
+    @Override
+    public void activityLocalRelaunch(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) SystemServer.log("activityLocalRelaunch: " + r.name());
+    }
+
     @Override
     public void reportSizeConfigurations(IBinder token,
             SizeConfigurationBuckets sizeConfigurations) {
-        // Nothing resizes.
+        // Which size changes count when its task is resized (resizeTask).
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) mAtm.reportSizeConfigurations(r, sizeConfigurations);
     }
 
     @Override
@@ -108,9 +124,28 @@ public final class ActivityClientController extends IActivityClientController.De
 
     @Override
     public boolean willActivityBeVisible(IBinder token) {
-        // The top activity of its task is shown when it resumes (one task at a time).
+        // Visible unless an opaque activity above it in its task covers it, or its task is
+        // at the back (docs/lifecycle.md).
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
-        return r == null || (!r.finishing && mAtm.isTopOfTask(r));
+        return r == null || mAtm.willBeVisible(r);
+    }
+
+    @Override
+    public boolean moveActivityTaskToBack(IBinder token, boolean nonRoot) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && mAtm.moveTaskToBack(r, nonRoot);
+    }
+
+    @Override
+    public boolean convertToTranslucent(IBinder token, Bundle options) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && mAtm.setTranslucent(r, true);
+    }
+
+    @Override
+    public boolean convertFromTranslucent(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null && mAtm.setTranslucent(r, false);
     }
 
     @Override

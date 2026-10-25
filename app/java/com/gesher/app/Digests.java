@@ -15,9 +15,12 @@ import java.util.List;
  * the first JCA use (the framework digests partition fingerprints with SHA-1
  * in SystemProperties.digestOf) fails. {@link #install} keeps the configured
  * providers whose classes exist and puts this provider first, with SHA-1,
- * SHA-256 and MD5 MessageDigests. It must run before anything uses JCA. Once
- * the boot class path carries BouncyCastle or Conscrypt this provider only
- * comes first; their algorithms are still found after it.
+ * SHA-256 and MD5 MessageDigests. It must run before anything uses JCA.
+ *
+ * <p>Conscrypt and BouncyCastle are on the boot class path now (in
+ * core-libart.jar, docs/network.md): when the first configured provider,
+ * Conscrypt's, is there, {@link #install} leaves Android's providers as they
+ * are and this one out. The provider stays for a boot class path without them.
  */
 public final class Digests extends Provider {
     public Digests() {
@@ -76,6 +79,10 @@ public final class Digests extends Provider {
 
     /** Rewrites the configured provider list as described above. */
     public static void install() {
+        String first = Security.getProperty("security.provider.1");
+        if (first != null && exists(first.trim().split("\\s+")[0])) {
+            return;  // Conscrypt: Android's own providers (docs/network.md)
+        }
         List<String> kept = new ArrayList<>();
         kept.add(Digests.class.getName());
         for (int i = 1; ; i++) {
@@ -94,6 +101,15 @@ public final class Digests extends Provider {
         }
         for (int i = 0; i < kept.size(); i++) {
             Security.setProperty("security.provider." + (i + 1), kept.get(i));
+        }
+    }
+
+    private static boolean exists(String className) {
+        try {
+            Class.forName(className, false, Digests.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
         }
     }
 
