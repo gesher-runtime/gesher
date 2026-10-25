@@ -22,8 +22,26 @@ verified SHA is fine.
 Merged so far:
 - popups: 9edfef6 (code verified at 6ce1d20, ci 40129561197). ADR 0040.
 - rtl: 3aae3be (verified at 1c9b6b2, ci 40133992911). ADR 0044.
-- Integration ci run 40135350639 on 6cea4ca (popups + rtl): result not yet
-  read (GitHub API rate limit). Read it first.
+- Integration ci run 40135350639 on 6cea4ca (popups + rtl): all green.
+- exec: merged (verified at 059b267, ci 40137662101; Puzzles passes e2e).
+  ADR 0035.
+- devsvc: merged (verified at a02e84a, ci 40137762701 attempt 2; attempt 1's
+  windows-2022 failure was a one-off rtlapp-under-ar-EG flake, passed on
+  rerun: watch for it). ADR 0038.
+- webview: merged (verified at 9c610d6, ci 40139785905; Notes passes e2e).
+  ADR 0041.
+- stack: merged (verified at 29c5255, ci 40141531509, which already
+  contained every merge above, so the integration tree after this merge is
+  the CI-verified one: 296 PASS lines per runner, up from 263 at 40135350639;
+  the "408" in older briefs counted differently). ADR 0036.
+- devices: merged (verified at f62f1aa, ci 40142590418; Camera2 verified
+  against a test Media Foundation source, no real camera on the runners).
+  ADR 0043. Integration ci 40143864548 on 6111f0d (all seven merged
+  tracks together): all green.
+- 2026-10-25: every agent stopped on the org's API spend limit; all were
+  resumed with SendMessage after it reset (their work was saved).
+- New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
+  wip/webview2 in the C:\work\gesher-webview worktree.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
@@ -46,6 +64,21 @@ abruptly; check `git log origin/main..` on their branch).
 | media (WASAPI, AudioTrack, AudioManager, codecs; ADR 0042) | c729b00 | da91170, ci 40129230078 (audio engine, AudioTrack, AudioManager) | `docs/media.md` | MediaPlayer/SoundPool/codec build (882a1af, run 40135129611) failing in the codec job; F-Droid audio app SHA missing |
 | devices (location, sensors, Camera2; ADR 0043) | 9c684f2 (last commit is WIP) | ci 40134370867: location and sensors on both runners | `docs/devices.md` | Camera2 over Media Foundation in progress (Java side: WindowsCamera, CameraFrames) |
 | posix (paths, /proc, tzdata, inotify, process model, ART gtests; ADR 0045) | 2152bcb | none; runs 40135642983 (ci) and 40135639733 (posix.yml) at 65cccdc unread | `docs/posix.md` | read those runs first |
+
+Coordinator session 2 (2026-10-25) read those runs: integration 40135350639
+had both test jobs green (e2e still running at the time); net 40133972018:
+test jobs still in progress (possibly hung); devsvc 40135237081: both test
+jobs failed; media 40135129611: all green except `media / codecs`; posix
+40135642983/40135639733: compile failure in `build`. A successor agent was
+started for each of the nine tracks above with those findings.
+
+New tracks of wave 2 (cut from phase4/integration, briefs in
+[tracks/](tracks/)): `arm64` (Phase 7, ADR 0047, tests 47-arm64.ps1),
+`lifecycle` (popups leftovers, ADR 0048, 48-lifecycle.ps1), `locale` (rtl
+leftovers, ADR 0049, 49-locale.ps1). Media stage 2 (video) goes to the media
+track after its stage 1 is merged; ime on windows-2022 is the ime
+successor's job. The roadmap box "the framework's own system services" is
+closed by decision in ADR 0046 (Gesher's own server, ADR 0019).
 
 Leftovers reported by finished tracks (for a later wave):
 - popups: the system server stops (Android would only pause) the Activity
@@ -78,6 +111,8 @@ posix), `compat/posix/src/signal.cc` (stack and posix), `tools/package/*`,
 - **Parallel tracks** in disjoint file domains, each one subagent in its own
   worktree. One agent per whole task (not tiny milestones, not huge). A
   stopped agent's successor starts from its brief plus its status section.
+- **Every agent runs on Opus**: pass the model explicitly when starting one;
+  never let it inherit another model.
 - **Keep going without asking** until the goal: a complete, ready installer
   with every gap closed.
 - **Honest reports**: tick roadmap boxes only for what CI verified.

@@ -4,7 +4,8 @@ Design: [0015](decisions/0015-services-binder-ipc.md),
 [0019](decisions/0019-services-system-server.md),
 [0024](decisions/0024-services-app-process.md),
 [0025](decisions/0025-services-app-components.md),
-[0026](decisions/0026-services-persistent-device.md). Tests:
+[0026](decisions/0026-services-persistent-device.md), device services
+[0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
 `tests/windows/tracks/50-services.ps1` (dot-sourced by `run-tests.ps1`).
 
 ## Pieces
@@ -45,6 +46,155 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 `GESHER_APP_METHOD_TRACE=<dir>` (a drive-less path) makes each app process the
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
+
+## Device services (devsvc track)
+
+Design: [0038](decisions/0038-devsvc-windows-backed-services.md). Tests:
+`tests/windows/tracks/57-devsvc.ps1` with `tests/apps/devsvc` (`devsvc.apk`,
+built in framework.yml).
+
+| Service | Class (`app/java/com/gesher/server`) | Windows |
+|---|---|---|
+| `alarm` | `AlarmManagerService` | a waitable timer at the next alarm's wall-clock time (resume flag for `_WAKEUP`); WM_TIMECHANGE, time zone (`GetDynamicTimeZoneInformation`), resume |
+| `jobscheduler` | `JobSchedulerService` | constraints: `INetworkListManager`/`INetworkCostManager`, `GetSystemPowerStatus`, `GetLastInputInfo` |
+| `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
+| `notification` | `NotificationManagerService`, `NotificationIcons` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` |
+| `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver |
+| `batteryproperties`, `batterystats`, sticky ACTION_BATTERY_CHANGED | `BatteryService`, `StickyBroadcasts` | `GetSystemPowerStatus` |
+| natives | `WindowsHost` | `compat/devsvc` (`devsvc_win32.cc`, `devsvc_toast.c`, `devsvc_natives.cc`), `cmake/aosp/devsvc.cmake`, a row in `android_runtime.cc` |
+| scheduled work keeps the device | `DeviceWork` | the idle check in `SystemServer` |
+
+Behaviour, in short (details in the classes' comments and ADR 0038):
+- Alarms: all four types, exact/window/inexact (delivered at the window's
+  start), repeating (missed periods once, `EXTRA_ALARM_COUNT`), alarm clocks,
+  OnAlarmListener; replace on the same PendingIntent or listener; cancel. A
+  PendingIntent alarm starts the package's process when none runs. TIME_SET
+  (WM_TIMECHANGE or a clock jump), TIMEZONE_CHANGED (Windows zone, as an Olson
+  id), DATE_CHANGED (local midnight), NEXT_ALARM_CLOCK_CHANGED.
+- With no Gesher device running nothing fires; scheduled work due within the
+  idle timeout keeps the device running; persisted jobs come back at the next
+  start.
+- Jobs: latency, deadline, periodic windows (interval, flex), backoff,
+  network/charging/battery-not-low/idle constraints, enqueued work, stop after
+  10 min, at most 4 at once; `GESHER_JOBS_TIME_SCALE=N` (tests) divides
+  periods, flex and backoff.
+- Clipboard: both ways with Windows, text and HTML.
+- Notifications: toasts (title, text or big text, sub text, app icon or a
+  bitmap large icon, progress, action buttons; importance none/min/low/
+  default/high; ONLY_ALERT_ONCE updates are quiet), cancel and cancelAll
+  remove them, a click sends the content (or action) intent while the device
+  runs; NotificationListenerServices of installed packages are bound while
+  notifications are posted (onListenerConnected, onNotificationPosted,
+  onNotificationRemoved, getActiveNotifications).
+- Wake locks: one power request of the system server naming the holders
+  (`powercfg /requests`); released with the lock or its process.
+- Battery: present/level/plugged/status; a PC without a battery is on AC,
+  full, battery not present.
+- Vibrator: no `vibrator_manager` service (a PC has no vibrator); not
+  checked what apps get from `getSystemService(VIBRATOR_SERVICE)`.
+
+### Status and next steps (devsvc)
+Branch `wip/devsvc` (worktree `C:\work\gesher-devsvc`), from main 86aa4c7.
+
+- **Verified: ci run 40137762701 at a02e84a, fully green** (b1d04d8 plus a
+  merge of origin/phase4/integration 5561615; attempt 2 reran only test
+  (windows-2022), whose attempt 1 had failed once on the rtl track's
+  `gesher-app: the Gesher device under ar-EG: rtlapp.apk ...` check, no first
+  frame; on the rerun it passed, so a flake, not a devsvc interaction). Every
+  job is green; both test jobs report `0 test(s) failed` (the only FAIL line is
+  the platform probe's informational "%fs base survives Sleep(1)"). On BOTH
+  windows-2022 and windows-2025:
+  - `PASS  devsvc: alarms: an OnAlarmListener alarm fires in the app's process (setExact, ELAPSED_REALTIME)`
+  - `PASS  devsvc: alarms: with the app's process ended, an exact RTC_WAKEUP alarm starts a process for its manifest receiver (PendingIntent broadcast)`
+  - `PASS  devsvc: alarms: setWindow to a service, setRepeating (twice, then cancelled by its receiver), setAlarmClock (getNextAlarmClock); a cancelled alarm never fires`
+  - `PASS  devsvc: jobs: JobScheduler runs a one-off job (latency, deadline, charging) and a periodic job in the app's JobService, its process started for them; the periodic job runs again in its next period`
+  - `PASS  devsvc: clipboard: an app's clip is on Windows' clipboard (Get-Clipboard: text, and HTML Format), and Set-Clipboard reaches the app's OnPrimaryClipChangedListener and getPrimaryClip`
+  - `PASS  devsvc: notifications: posted notifications are toasts of Gesher.App.com.gesher.devsvc in Windows' toast history (ToastNotificationManager.History), removed by cancel and cancelAll`
+  - `PASS  devsvc: notifications: a NotificationListenerService is bound and gets onListenerConnected, onNotificationPosted and onNotificationRemoved`
+  - `PASS  devsvc: power: a partial wake lock is a Windows power request (powercfg /requests) until released`
+  - `PASS  devsvc: battery: the sticky ACTION_BATTERY_CHANGED and BatteryManager from GetSystemPowerStatus (this PC: no battery, AC)`
+  - `PASS  devsvc: clock: WM_TIMECHANGE becomes TIME_SET for registered and manifest receivers`
+
+  The devsvc boxes in docs/roadmap.md (Phase 4) are ticked. Nothing further
+  is pending for the coordinator beyond merging; the open items below remain.
+- Earlier: no fully green run before 40137762701. Closest: **ci run
+  40133991534 at 30ba276** — every build job, package and e2e green; the test
+  jobs failed on both runners only on two devsvc checks (fixed in 68a913f,
+  see below). On both windows-2022 and windows-2025 it passed:
+  - `PASS  devsvc: alarms: an OnAlarmListener alarm fires in the app's process (setExact, ELAPSED_REALTIME)`
+  - `PASS  devsvc: alarms: setWindow to a service, setRepeating (twice, then cancelled by its receiver), setAlarmClock (getNextAlarmClock); a cancelled alarm never fires`
+  - `PASS  devsvc: jobs: JobScheduler runs a one-off job (latency, deadline, charging) and a periodic job in the app's JobService, its process started for them; the periodic job runs again in its next period`
+  - `PASS  devsvc: clipboard: an app's clip is on Windows' clipboard (Get-Clipboard: text, and HTML Format), and Set-Clipboard reaches the app's OnPrimaryClipChangedListener and getPrimaryClip`
+  - `PASS  devsvc: notifications: posted notifications are toasts of Gesher.App.com.gesher.devsvc in Windows' toast history (ToastNotificationManager.History), removed by cancel and cancelAll`
+  - `PASS  devsvc: notifications: a NotificationListenerService is bound and gets onListenerConnected, onNotificationPosted and onNotificationRemoved`
+  - `PASS  devsvc: power: a partial wake lock is a Windows power request (powercfg /requests) until released`
+  - `PASS  devsvc: battery: the sticky ACTION_BATTERY_CHANGED and BatteryManager from GetSystemPowerStatus (this PC: no battery, AC)`
+
+  and every earlier check (224 PASS per runner; the only other FAIL line is
+  the platform probe's informational "%fs base survives Sleep(1)", present on
+  main too).
+- The two failures of 40133991534 and their fixes (68a913f):
+  - "an exact RTC_WAKEUP alarm starts a process for its manifest receiver":
+    the receiver did run in a new process (pid differs), but the test's regex
+    wanted `alarm count 1`; an immutable PendingIntent gets no fill-in, so
+    EXTRA_ALARM_COUNT is 0, as on Android. The regex now takes any count.
+  - "WM_TIMECHANGE becomes TIME_SET": the test broadcast WM_TIMECHANGE with
+    HWND_BROADCAST, which Windows does not pass on from an application (checked
+    locally: a direct SendMessage to the window works, the broadcast returns 0
+    and reaches no one). The test now finds the device's event window
+    (`FindWindowW("GesherDeviceServices")`) and sends it there.
+- **ci run 40135237081 at 68a913f:** build, package and e2e green; both test
+  jobs failed on ONE check, the clock one: `FindWindowW("GesherDeviceServices")`
+  returned 0 on both runners (the device's window is on another window station
+  or desktop than the test's process on CI; every other devsvc check, clipboard
+  included, passed, so the window exists). Fix: `nativeStartEvents` now returns
+  the window's HWND as a long, `WindowsHost.addListener` logs it
+  (`devsvc: Windows events from a hidden window 0x<hex>`), and the test sends
+  WM_TIMECHANGE to that handle read from `system_server.log` (FindWindow kept
+  only as a fallback; a failed SendMessageTimeout is now reported too).
+- Done (code): see the table above and ADR 0038. Locally verified with a
+  mingw-w64 g++ driver on Windows 11: toasts shown/in history/removed, the
+  clipboard's text and HTML, the event window, a power request, the alarm
+  timer. The Java side compiles with ecj 3.38 (`-1.8 -bootclasspath
+  coremod.zip;framework-classes.zip`, CI's `framework-classes` artifact)
+  except generated code (stubs, CompatChanges), which only CI builds.
+- Pitfalls: mingw-w64's C++ WinRT headers do not compile (IReference<BYTE>
+  vs IReference<boolean>), hence the C file `devsvc_toast.c`; message-only
+  windows get no broadcasts; `framework.jar`'s `android.net.NetworkRequest`
+  is only a compile stub (no connectivity module at run time), so job network
+  constraints are guarded with `LinkageError` catches and not tested; app
+  processes log to `logs/<package>.log`, which the device keeps open (read it
+  with FileShare.ReadWrite in PowerShell); `gh` polling must use
+  `--interval 120` (shared rate limit).
+- Edits outside the devsvc domain (all minimal):
+  - `CMakeLists.txt`: `include(cmake/aosp/devsvc.cmake)` after shell.cmake.
+  - `compat/framework/android_runtime.cc`: declaration and row
+    `gesher_WindowsHost` (`com/gesher/server/WindowsHost`).
+  - `app/build.sh`: StubGen list + `android.app.job.IJobScheduler
+    android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats`.
+  - `.github/workflows/framework.yml`: builds `tests/apps/devsvc` and copies
+    `devsvc.apk` into the framework artifact.
+  - `app/java/com/gesher/server/Services.java`: registration lines only
+    (power, alarm, clipboard replaced; jobscheduler, batteryproperties,
+    batterystats added).
+  - `app/java/com/gesher/server/DeviceServices.java`: the replaced
+    PowerService, AlarmService and ClipboardService stand-ins removed.
+  - `app/java/com/gesher/server/SystemServer.java`: the idle check also needs
+    `!DeviceWork.dueWithin(timeout)`.
+  - `app/java/com/gesher/server/BroadcastController.java`: registerReceiver
+    returns and delivers a matching system sticky intent (`StickyBroadcasts`).
+  - `app/java/com/gesher/server/NotificationManagerService.java`: rewritten
+    (toasts, listeners); its log line keeps the old start that
+    50-services.ps1 checks.
+  - `tests/windows/tracks/50-services.ps1`: the single-process service list
+    now has batteryproperties, batterystats, jobscheduler.
+  - `docs/roadmap.md`: unchecked devsvc boxes (Phase 4).
+- Open (not done): toast clicks after the device stopped (needs a protocol
+  or COM activator from the installer); content-URI job triggers; Windows
+  sleep/resume and real time-zone changes not exercised in CI; app
+  processes' default time zone (posix track); AUMID registry keys of
+  uninstalled packages are not removed (`NotificationManagerService.packageRemoved`
+  exists but nothing calls it yet: hook it into the uninstall path).
 
 ## Status and next steps
 
