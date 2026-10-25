@@ -36,6 +36,19 @@ void gesher_window_show(ANativeWindow* window);
 /* The window's HWND, or null when `window` is not a Gesher window. */
 void* gesher_window_hwnd(ANativeWindow* window);
 
+/* Lifecycle track (docs/lifecycle.md, ADR 0048): whether the window is a
+ * translucent popup (a layered window: what it presents is composed with
+ * per-pixel alpha); 0 for other windows. */
+int gesher_window_translucent(ANativeWindow* window);
+
+/* The window's client area in pixels (0 x 0 when not a Gesher window). */
+void gesher_window_client_size(ANativeWindow* window, int32_t* width, int32_t* height);
+
+/* Presents a frame drawn elsewhere: premultiplied 0xAARRGGBB, rows top-down,
+ * width x height (the SkiaGL pipeline's read-back of a translucent popup). */
+void gesher_window_present_pixels(ANativeWindow* window, const uint32_t* argb, int32_t width,
+                                  int32_t height);
+
 #ifdef __cplusplus
 }
 #endif
