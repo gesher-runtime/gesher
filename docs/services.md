@@ -56,10 +56,12 @@ built in framework.yml).
 | Service | Class (`app/java/com/gesher/server`) | Windows |
 |---|---|---|
 | `alarm` | `AlarmManagerService` | a waitable timer at the next alarm's wall-clock time (resume flag for `_WAKEUP`); WM_TIMECHANGE, time zone (`GetDynamicTimeZoneInformation`), resume |
-| `jobscheduler` | `JobSchedulerService` | constraints: `INetworkListManager`/`INetworkCostManager`, `GetSystemPowerStatus`, `GetLastInputInfo` |
+| `jobscheduler` | `JobSchedulerService` | constraints: the net track's ConnectivityManager networks (`WindowsNetworks`; the Network List Manager without them), `GetSystemPowerStatus`, `GetLastInputInfo`; content URI triggers from `content` |
+| `content` | `ContentService` | (none: observers and `notifyChange` in the system server; hwsvc2) |
+| `vibrator_manager` | `VibratorManagerService` | (none: a device without a vibrator; hwsvc2) |
 | `clipboard` | `ClipboardService` | CF_UNICODETEXT and CF_HTML, `AddClipboardFormatListener` |
-| `notification` | `NotificationManagerService`, `NotificationIcons` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` |
-| `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver |
+| `notification` | `NotificationManagerService`, `NotificationIcons`, `NotificationStore` | toasts of `Gesher.App.<package>` (WinRT `ToastNotificationManager`), `HKCU\Software\Classes\AppUserModelId\<id>` with `CustomActivator`; Gesher's toast activator (COM, `devsvc_activator.c`; the installer's LocalServer32 runs `gesher-app toast-activated`) |
+| `power` | `PowerManagerService` | `PowerCreateRequest`/`PowerSetRequest` (wake locks), battery saver, PBT_APMSUSPEND/RESUME (screen off/on) |
 | `batteryproperties`, `batterystats`, sticky ACTION_BATTERY_CHANGED | `BatteryService`, `StickyBroadcasts` | `GetSystemPowerStatus` |
 | natives | `WindowsHost` | `compat/devsvc` (`devsvc_win32.cc`, `devsvc_toast.c`, `devsvc_natives.cc`), `cmake/aosp/devsvc.cmake`, a row in `android_runtime.cc` |
 | scheduled work keeps the device | `DeviceWork` | the idle check in `SystemServer` |
@@ -69,29 +71,40 @@ Behaviour, in short (details in the classes' comments and ADR 0038):
   start), repeating (missed periods once, `EXTRA_ALARM_COUNT`), alarm clocks,
   OnAlarmListener; replace on the same PendingIntent or listener; cancel. A
   PendingIntent alarm starts the package's process when none runs. TIME_SET
-  (WM_TIMECHANGE or a clock jump), TIMEZONE_CHANGED (Windows zone, as an Olson
-  id), DATE_CHANGED (local midnight), NEXT_ALARM_CLOCK_CHANGED.
+  (WM_TIMECHANGE or a clock jump), TIMEZONE_CHANGED (Windows zone, as an IANA
+  id: ICU's windowsZones, else Windows' own icu.dll; processes reset their
+  default zone first), DATE_CHANGED (local midnight), NEXT_ALARM_CLOCK_CHANGED.
+  Between PBT_APMSUSPEND and the resume only _WAKEUP alarms fire; the others
+  that came due fire on resume.
 - With no Gesher device running nothing fires; scheduled work due within the
   idle timeout keeps the device running; persisted jobs come back at the next
   start.
 - Jobs: latency, deadline, periodic windows (interval, flex), backoff,
-  network/charging/battery-not-low/idle constraints, enqueued work, stop after
+  network (a NetworkRequest against ConnectivityManager's networks; the network
+  in JobParameters)/charging/battery-not-low/idle constraints, content URI
+  triggers (update and maximum delays; triggered URIs and authorities in
+  JobParameters), enqueued work, stop after
   10 min, at most 4 at once; `GESHER_JOBS_TIME_SCALE=N` (tests) divides
   periods, flex and backoff.
 - Clipboard: both ways with Windows, text and HTML.
 - Notifications: toasts (title, text or big text, sub text, app icon or a
   bitmap large icon, progress, action buttons; importance none/min/low/
   default/high; ONLY_ALERT_ONCE updates are quiet), cancel and cancelAll
-  remove them, a click sends the content (or action) intent while the device
-  runs; NotificationListenerServices of installed packages are bound while
+  remove them, a click sends the content (or action) intent, also after the
+  device stopped (Gesher's toast activator starts it; the intents are kept in
+  `system/notifications`); uninstalling a package removes its toasts and app id; NotificationListenerServices of installed packages are bound while
   notifications are posted (onListenerConnected, onNotificationPosted,
   onNotificationRemoved, getActiveNotifications).
 - Wake locks: one power request of the system server naming the holders
   (`powercfg /requests`); released with the lock or its process.
 - Battery: present/level/plugged/status; a PC without a battery is on AC,
   full, battery not present.
-- Vibrator: no `vibrator_manager` service (a PC has no vibrator); not
-  checked what apps get from `getSystemService(VIBRATOR_SERVICE)`.
+- Vibrator: `vibrator_manager` of a device without one: no ids,
+  `hasVibrator()` false, the null vibrator, vibrate/cancel accepted.
+- Content observers: register/unregister/`notifyChange` with ContentService's
+  URI matching, each observer once per change.
+- Screen: not interactive between PBT_APMSUSPEND and the resume; registered
+  receivers get ACTION_SCREEN_OFF and ACTION_SCREEN_ON.
 
 ### Status and next steps (devsvc)
 Branch `wip/devsvc` (worktree `C:\work\gesher-devsvc`), from main 86aa4c7.
@@ -189,12 +202,56 @@ Branch `wip/devsvc` (worktree `C:\work\gesher-devsvc`), from main 86aa4c7.
   - `tests/windows/tracks/50-services.ps1`: the single-process service list
     now has batteryproperties, batterystats, jobscheduler.
   - `docs/roadmap.md`: unchecked devsvc boxes (Phase 4).
-- Open (not done): toast clicks after the device stopped (needs a protocol
+- Open (not done; the hwsvc2 track closed these, see below): toast clicks after the device stopped (needs a protocol
   or COM activator from the installer); content-URI job triggers; Windows
   sleep/resume and real time-zone changes not exercised in CI; app
   processes' default time zone (posix track); AUMID registry keys of
   uninstalled packages are not removed (`NotificationManagerService.packageRemoved`
   exists but nothing calls it yet: hook it into the uninstall path).
+
+### Status and next steps (hwsvc2)
+Branch `wip/hwsvc2` (worktree `C:\work\gesher-devices`), from phase4/integration
+6111f0d; it closes the devsvc open items above and the devices track's (docs/devices.md).
+Design: [0051](decisions/0051-hwsvc2-device-services-completion.md). Checks in
+`tests/windows/tracks/57-devsvc.ps1` (devsvc.apk: ClickActivity, VibrateActivity,
+ContentActivity with NotesProvider, NetJobActivity, SleepActivity, ZoneActivity) and the
+package job (the activator's registration, the uninstaller's cleanup).
+
+- **ci run 40191787315 (at 7c73639, before the merge of net/media/locale):** on both
+  runners PASS for the vibrator, content URI triggers, sleep/resume and the toast
+  activator with the device stopped and running; package job green (activator key,
+  uninstall removes it and the app ids). Two failures, fixed since: the IANA id of the
+  new zone fell back to GMT (the runtime's ICU has no windowsZones: now Windows'
+  icu.dll answers), and the stored notifications' directory stayed after an uninstall
+  (File.delete removes no directory: java.nio now).
+- **Final: ci run 40235213023 at 85f49eb** (merged origin/phase4/integration b74c46e,
+  with webview2): every job green on the first attempt, `0 test(s) failed` on both
+  runners, all hwsvc2 checks below passing again.
+- **Verified: ci run 40214264956 at aaa1f90** (merged origin/phase4/integration
+  786e0ec: net, media, locale, lifecycle, posix): every job green on attempt 3;
+  attempts 1-2 of test (windows-2022) failed only on the media track's "mediaapp.apk's
+  sounds reach the output" tone check (a frequency off; the same on wip/ime's runs
+  40217116856 and 40214353637, so not an hwsvc2 effect).
+  On both runners:
+  - `PASS  devsvc: vibrator: getSystemService(VIBRATOR_SERVICE) and VibratorManager as on a device without a vibrator (vibrator_manager: no ids, hasVibrator false, the null vibrator; vibrate and cancel accepted)`
+  - `PASS  devsvc: jobs: a content URI trigger (TriggerContentUri, descendants) runs the job once for a provider's two notifyChange calls, with the triggered URIs and authority; a ContentObserver gets both changes`
+  - `PASS  devsvc: jobs: network constraints over ConnectivityManager's networks: NETWORK_TYPE_ANY and UNMETERED jobs run (JobParameters.getNetwork 114), a CELLULAR job waits for connectivity`
+  - `PASS  devsvc: sleep: PBT_APMSUSPEND is SCREEN_OFF (isInteractive false) and holds a due RTC alarm; PBT_APMRESUMEAUTOMATIC is SCREEN_ON and the alarm catches up`
+  - `PASS  devsvc: clock: a real time zone change (Set-TimeZone Tokyo Standard Time) becomes TIMEZONE_CHANGED (Asia/Tokyo) for a registered receiver; the app's default zone then: Asia/Tokyo`
+  - `PASS  devsvc: notifications: with the Gesher device stopped, activating a toast through Gesher's toast activator ({C18D9445-A7F0-472E-985F-AC354EBEB660}, the app id's CustomActivator; its LocalServer32 run) starts the device and sends the content intent; with the device running its system server serves the activator and a button sends its action's intent`
+  - `PASS  devsvc: notifications: uninstalling the package removes its toasts, its stored notifications and HKCU\Software\Classes\AppUserModelId\Gesher.App.com.gesher.devsvc`
+  - package job: `PASS  installer: Gesher's toast activator is registered (LocalServer32: gesher-app.ps1 toast-activated)`, `PASS  installer: uninstall removes the toast activator and the apps' AppUserModelIDs`
+- Earlier runs: 40196047045 (6ebe7a6: all devsvc checks green; the legacy camera
+  crashed in takePicture, a capture closed under its reader), 40199131093 and
+  40211527138 (Gesher Camera: YuvImage has no natives; a Bitmap result does not
+  parcel), each fixed after.
+- How the activation is tested: per-user (HKCU) LocalServer32 registrations are not
+  launched by COM's SCM (CoCreateInstance answers REGDB_E_CLASSNOTREG, checked
+  locally, not elevated); Windows' notification platform reads the activator's
+  LocalServer32 command and runs it itself, then activates the class the launched
+  process serves. The test does the same (57-devsvc.ps1, GesherToastActivation).- Not done: preview into SurfaceView/TextureView (ADR 0051: the graphics stack gives
+  their child surfaces no native window); an actual click on a toast is not automated
+  (CI performs the activation as Windows' notification platform does).
 
 ## Status and next steps
 

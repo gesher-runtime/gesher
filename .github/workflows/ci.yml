@@ -227,7 +227,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.
@@ -385,6 +385,11 @@ jobs:
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
+          $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
+          Write-Host "toast activator: $activator"
+          if (-not $activator -or -not $activator.Contains("$app\gesher-app.ps1") -or -not $activator.Contains('toast-activated')) { throw "The toast activator's LocalServer32 is '$activator'" }
+          'PASS  installer: Gesher''s toast activator is registered (LocalServer32: gesher-app.ps1 toast-activated)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's icon: the .apk file type's, and the Start menu entries'.
           $defaultIcon = (Get-ItemProperty "$cls\Gesher.Apk\DefaultIcon" -ErrorAction SilentlyContinue).'(default)'
           if ($defaultIcon -ne "$app\gesher.ico,0") { throw "Gesher.Apk's DefaultIcon is '$defaultIcon'" }
@@ -452,6 +457,8 @@ jobs:
           # Something of the Start menu that is not Gesher's, which uninstalling must keep.
           $sentinel = Join-Path $programs 'gesher-ci-sentinel.txt'
           Set-Content $sentinel 'not Gesher''s'
+          # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
+          $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
@@ -466,6 +473,10 @@ jobs:
           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
+          $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
+          if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
+          'PASS  installer: uninstall removes the toast activator and the apps'' AppUserModelIDs' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           if (Test-Path $appsFolder) { throw "Uninstall left $appsFolder" }
           if (-not (Test-Path $sentinel)) { throw "Uninstall removed $sentinel" }
           Remove-Item $sentinel
