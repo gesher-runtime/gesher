@@ -286,8 +286,16 @@ int pipe2(int fds[2], int flags) {
 
 int pipe(int fds[2]) { return pipe2(fds, 0); }
 
-int fsync(int fd) { return gesher::CrtResult(_commit(fd)); }
-int fdatasync(int fd) { return gesher::CrtResult(_commit(fd)); }
+// Only files are flushed: FlushFileBuffers on a pipe waits until the reader
+// has read everything, where Linux fails at once with EINVAL (pipes, sockets,
+// character devices).
+int fsync(int fd) {
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
+  return gesher::CrtResult(_commit(fd));
+}
+int fdatasync(int fd) { return fsync(fd); }
 
 // Note: unlike Linux, these move the file position (Windows has no positioned
 // I/O that leaves it alone on synchronous handles).
