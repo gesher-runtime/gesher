@@ -56,6 +56,7 @@ int register_android_content_AssetManager(JNIEnv* env);
 int register_android_content_res_ApkAssets(JNIEnv* env);
 int register_android_content_StringBlock(JNIEnv* env);
 int register_android_content_XmlBlock(JNIEnv* env);
+int register_android_os_FileObserver(JNIEnv* env);
 int register_android_os_MessageQueue(JNIEnv* env);
 int register_android_os_Parcel(JNIEnv* env);
 int register_android_os_ServiceManagerNative(JNIEnv* env);
@@ -81,6 +82,7 @@ int register_gesher_DebugStore(JNIEnv* env);
 int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
 int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
 int register_gesher_Shell(JNIEnv* env);  // compat/shell/shell_natives.cc (shell track)
+int register_gesher_media(JNIEnv* env);  // compat/media/jni (media track, docs/media.md)
 int register_gesher_devices(JNIEnv* env);  // compat/devices/devices_jni.cc (devices track)
 int register_gesher_WindowsHost(JNIEnv* env);  // compat/devsvc/devsvc_natives.cc (devsvc track)
 
@@ -367,6 +369,8 @@ static const struct {
     {"android_util_jar_StrictJarFile", "android/util/jar/StrictJarFile",
      register_android_util_jar_StrictJarFile},
     {"android_os_MessageQueue", "android/os/MessageQueue", register_android_os_MessageQueue},
+    // FileObserver over gesher-base's inotify (docs/posix.md).
+    {"android_os_FileObserver", "android/os/FileObserver", register_android_os_FileObserver},
     {"android_os_Binder", "com/android/internal/os/BinderInternal", ::register_android_os_Binder},
     {"android_os_Parcel", "com/android/internal/os/BinderInternal", register_android_os_Parcel},
     {"android_os_ServiceManagerNative", "android/os/ServiceManagerProxy",
@@ -414,6 +418,7 @@ static const struct {
      register_gesher_PropertyInvalidatedCache},
     {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},
     {"gesher_Shell", "com/gesher/app/shell/Shell", register_gesher_Shell},
+    {"gesher_media", "android/media/AudioSystem", register_gesher_media},
     // Location, sensors, cameras; after gesher_device_standins (whose sensor tables it replaces).
     {"gesher_devices", "android/hardware/SystemSensorManager", register_gesher_devices},
     {"gesher_WindowsHost", "com/gesher/server/WindowsHost", register_gesher_WindowsHost},

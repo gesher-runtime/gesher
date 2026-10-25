@@ -46,6 +46,8 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
 cp "$work/dex-codegen/classes.dex" "$out/codegen-tests.dex"
 # Some of ART's own run-tests (art/test), for the same checks.
 "$root/tests/build-art-run-tests.sh" "$out" "$r8"
+# Networking (tests/dex-net, docs/network.md).
+"$root/tests/dex-net/build.sh" "$out" "$r8"
 
 # framework.jar on the boot class path (tests/dex-framework).
 javac --release 11 -d "$work/classes-framework" "$root"/tests/dex-framework/*.java
@@ -53,6 +55,15 @@ mkdir -p "$work/dex-framework"
 java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-framework" $(find "$work/classes-framework" -name '*.class')
 cp "$work/dex-framework/classes.dex" "$out/framework-tests.dex"
+
+# gesher-base's POSIX layer under the framework (tests/dex-posix), compiled
+# against tests/dex-posix-stubs, which are not dexed: framework.jar has them.
+javac --release 11 -d "$work/classes-posix-stubs" $(find "$root/tests/dex-posix-stubs" -name '*.java')
+javac --release 11 -cp "$work/classes-posix-stubs" -d "$work/classes-posix" "$root"/tests/dex-posix/*.java
+mkdir -p "$work/dex-posix"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-posix" $(find "$work/classes-posix" -name '*.class')
+cp "$work/dex-posix/classes.dex" "$out/posix-tests.dex"
 
 # The framework-natives tests (tests/dex-natives): gesher.NativeTest,
 # gesher.LooperTest and gesher.ResourcesTest. LooperTest runs the real Looper,

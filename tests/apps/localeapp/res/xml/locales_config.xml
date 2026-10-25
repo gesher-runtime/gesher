@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- android:localeConfig: the languages the app offers (LocaleConfig). -->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en-US" />
+    <locale android:name="he-IL" />
+    <locale android:name="fr-FR" />
+</locale-config>

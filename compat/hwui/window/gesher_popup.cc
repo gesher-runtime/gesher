@@ -99,15 +99,14 @@ bool Window::RouteEvent(const WindowEvent& event) {
     gesture_active_ = true;
     gesture_target_ = route_pointer_ != this ? route_pointer_ : nullptr;
     gesture_routed_ = gesture_target_ != nullptr;
-    // Windows watching touches outside them see where this one starts.
+    // Windows watching touches outside them get ACTION_OUTSIDE where this one
+    // starts, as InputDispatcher sends it to FLAG_WATCH_OUTSIDE_TOUCH windows.
     for (Window* w : route_outside_) {
       if (w == this || w == gesture_target_) continue;
-      WindowEvent press = Translated(event, static_cast<HWND>(hwnd_), static_cast<HWND>(w->hwnd_));
-      WindowEvent release = press;
-      release.type = event.type == WindowEvent::kTouchDown ? WindowEvent::kTouchUp
-                                                           : WindowEvent::kMouseUp;
-      w->QueueOwn(press);
-      w->QueueOwn(release);
+      WindowEvent outside = Translated(event, static_cast<HWND>(hwnd_), static_cast<HWND>(w->hwnd_));
+      outside.type = WindowEvent::kOutside;
+      outside.tool = event.type == WindowEvent::kTouchDown ? (event.tool == 2 ? 2 : 1) : 0;
+      w->QueueOwn(outside);
     }
   }
   if (gesture_active_) {
@@ -305,6 +304,19 @@ void Window::SetScreenPosition(int x, int y) {
   const POINT o = ClientOrigin(hwnd);
   SetWindowPos(hwnd, nullptr, x - (o.x - wr.left), y - (o.y - wr.top), 0, 0,
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void Window::PresentPixels(const uint32_t* argb, int width, int height) {
+  int w = 0, h = 0, stride = 0;
+  // BGRA bytes are 0xAARRGGBB little-endian words: the rows copy as they are.
+  auto* dst = reinterpret_cast<uint32_t*>(Lock(&w, &h, &stride));
+  for (int y = 0; y < h; y++) {
+    uint32_t* row = dst + static_cast<size_t>(y) * stride;
+    const int n = y < height ? std::min(w, width) : 0;
+    if (n > 0) std::memcpy(row, argb + static_cast<size_t>(y) * width, static_cast<size_t>(n) * 4);
+    if (n < w) std::memset(row + n, 0, static_cast<size_t>(w - n) * 4);
+  }
+  UnlockAndPost();
 }
 
 void Window::PresentLayered() {

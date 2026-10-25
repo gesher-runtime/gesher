@@ -86,15 +86,25 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] ICU4C built from `external/icu`, its data mapped from
       `ANDROID_I18N_ROOT` as on Android; `libicu_jni`, libcore's ICU natives
       and `core-icu4j.jar` on the boot class path
-- [ ] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`)
+- [x] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`): the
+      com.android.tzdata files installed; `TimeZone.getDefault()` follows
+      Windows' zone; java.util, java.time and android.icu match Windows'
+      offsets at every 2025-2027 transition in four zones ([posix.md](posix.md),
+      ADR 0045; ci 40198104086)
 - [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+      (inotify over `ReadDirectoryChangesW`, epoll-compatible, with
+      `WatchService` and `FileObserver` on it; `kill`/`getppid` across
+      Gesher processes, `/proc/self/{status,maps,fd,task}`: posix track,
+      ci 40198104086)
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
       need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
       `/proc/self/cmdline` are emulated; `open` takes Linux's `O_*` flags
       over `CreateFileW`; tested in CI
-- [ ] Paths on another drive in `:`-separated lists, and the rest of the
-      CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
+- [x] Paths on another drive in `:`-separated lists, and the rest of the
+      CRT's path functions (`fopen`, `unlink`, `rename`, `access`): other
+      drives are `/mnt/<drive>/...` (ADR 0045); long and non-ASCII names
+      (posix probe, a class path entry on another drive; ci 40198104086)
 - [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
       ART's signal catcher takes them
 - [x] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
@@ -104,7 +114,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] `MAP_FIXED` over existing reservations (placeholder mappings; ADR 0036,
       `mman_probe`; ci 40138006773)
 - [x] Executable file mappings (`.oat` code mapped as views; ci 40138006773)
-- [ ] ART's own gtests for libartbase/libdexfile running on Windows
+- [x] ART's own gtests for libartbase/libdexfile running on Windows
+      (232 and 119 tests, exclusions in [posix.md](posix.md); ci 40198104086,
+      posix 40198105735)
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
 - [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
       dex2oat.exe, built for Windows on the same libart, compiles the boot class
@@ -219,6 +231,19 @@ needs: [framework-build.md](framework-build.md).
         list, layout direction and regional preferences from Windows (or
         `$GESHER_LOCALES`); single process and the Gesher device (ci run
         40133992911, both runners and the installer; docs/fonts.md, ADR 0044)
+  - [x] Per-app locales: `LocaleManager.setApplicationLocales` (and
+        AppCompatDelegate's on API 33+) served by the `locale` service,
+        persisted per package, the app's activities relaunched with them,
+        kept across app and device restarts, `android:localeConfig` read
+        (docs/locale.md, ADR 0049)
+  - [x] Windows' language and format changes (WM_SETTINGCHANGE) delivered to
+        running apps: configuration change (relaunch or onConfigurationChanged
+        per `configChanges`), LOCALE_CHANGED, TIME_SET with the 24-hour extra
+  - [x] Windows' regional formats as Android's regional preferences (calendar,
+        first day, hour cycle, temperature unit, digits; TIME_12_24); custom
+        decimal/grouping symbols and date patterns recorded as not carried over
+        (these three: ci run 40191538466, both runners, single process and
+        the Gesher device)
 
 ## Phase 4 checklist
 
@@ -282,6 +307,16 @@ needs: [framework-build.md](framework-build.md).
       app's processes set too; removed by `gesher-app uninstall` and with
       Gesher; Gesher's own icon for Setup, its entries and `.apk` files
       (ci run 40024847287; docs/installer.md, ADR 0028)
+- [x] The activity and window lifecycle apps observe (lifecycle track;
+      docs/lifecycle.md, ADR 0048): an Activity under a translucent or
+      floating one paused, not stopped, its window shown; minimizing the
+      window stops the Activity, restoring it resumes it; losing the focus is
+      onWindowFocusChanged(false) only; resizing the window changes the
+      configuration (onConfigurationChanged, or a relaunch per configChanges;
+      size and orientation qualifiers); ACTION_OUTSIDE; translucent popups
+      composed with alpha with the CPU pipeline and SkiaGL (ci run
+      40191526766 at 404cd11, both runners, single process and the Gesher
+      device; package and e2e green)
 
 - [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
@@ -300,6 +335,30 @@ needs: [framework-build.md](framework-build.md).
         process)
 
 ## Phase 5 checklist
+
+- [x] Networking ([network.md](network.md), ADR 0037; tests/windows/tracks/56-net.ps1,
+      ci runs 40141520320, 40143168361 and 40191501348 on windows-2022 and windows-2025)
+  - [x] Sockets and DNS through gesher-base over Winsock: TCP over IPv4 and
+        IPv6 loopback, timeouts, refused connects, UDP (DatagramSocket), NIO
+        with a Selector, echo with .NET servers, name lookups on the internet
+        ("net: sockets, DNS, NIO, HTTP and crypto on this machine")
+  - [x] BoringSSL with NativeBN (BigInteger) and Conscrypt's natives; JCA
+        providers Conscrypt first, then BouncyCastle; TLS 1.2/1.3 by default
+  - [x] OkHttp behind HttpURLConnection/HttpsURLConnection: HTTP to a local
+        server, HTTPS to example.com and google.com, TLS 1.3 with SNI and
+        hostname verification; expired, wrong-host, self-signed and
+        untrusted-root certificates (badssl.com) rejected
+  - [x] TLS against the Windows certificate store: Windows' roots merged into
+        `$ANDROID_ROOT/etc/security/cacerts`; a test root added to the machine
+        ROOT store is trusted, removed is not; `GESHER_WINDOWS_CERTS=0` keeps
+        only Android's CAs
+  - [x] ConnectivityManager over a connectivity service of Windows' networks
+        (NetworkCapabilities, LinkProperties, NetworkInfo, default and request
+        callbacks), in one process and over binder from an app process; an
+        address added to Windows' default-route adapter reaches the callback
+  - [x] Permissions: INTERNET (no inet sockets or lookups without it, EACCES)
+        and ACCESS_NETWORK_STATE (SecurityException); the app's network
+        security config (cleartext refused for target SDK 36)
 
 - [x] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041; limits there)
   - [x] The WebView2 SDK (NuGet, pinned) with llvm-mingw, the static loader
@@ -356,3 +415,21 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       arm64-v8a after x86_64 (build.prop) — written, not yet exercised by a test
 - [ ] A real arm64-only F-Droid app in the e2e job
 - [ ] Translation overhead measured and recorded (docs/arm64.md)
+
+## Phase 8 checklist
+
+Media ([media.md](media.md), ADR 0042):
+- [x] Audio output (stage 1; ci run 40193603079, Signal Generator in e2e)
+  - [x] AudioTrack (static and streaming, PCM 8/16/24/32-bit and float, mono
+        and stereo, any rate, resampled) over WASAPI shared mode, or a WAV
+        capture where there is no endpoint (CI); AudioManager stream volumes
+        as the Windows session volumes of the stream groups, the ringer mode,
+        audio focus, getDevices (ci run 40129230078)
+  - [x] MediaPlayer for files, assets, raw resources and http(s): MP3,
+        AAC/M4A, WAV, Ogg Vorbis and Opus, FLAC (ci run 40193603079)
+  - [x] SoundPool, Ringtone/RingtoneManager defaults, MediaMetadataRetriever
+        (ci run 40193603079)
+  - [x] AAudio and OpenSL ES for apps' native code (output; ci run 40193603079)
+- [ ] MediaCodec, MediaExtractor, MediaMuxer; video into SurfaceView and
+      TextureView (stage 2)
+- [ ] Audio input: AudioRecord, MediaRecorder (stage 3)

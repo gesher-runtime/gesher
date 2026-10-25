@@ -12,7 +12,7 @@ system/logging
 system/libziparchive
 system/core libcutils/ libutils/ libsystem/include/ libprocessgroup/include/ property_service/
 # libcamera_metadata, for CameraMetadataNative (compat/devices, docs/devices.md).
-system/media camera/include/ camera/src/ private/camera/include/
+system/media camera/include/ camera/src/ private/camera/include/ /audio/include/ /audio_utils/
 external/zlib
 external/tinyxml2
 external/fmtlib
@@ -23,8 +23,14 @@ external/libpng
 external/cpu_features
 system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
-external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/
-external/okhttp Android.bp repackaged/
+external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/ icu4c/source/data/misc/windowsZones.txt
+external/okhttp Android.bp repackaged/ /LICENSE
+# Networking (docs/network.md): BoringSSL for Windows (cmake/aosp/boringssl.cmake),
+# Conscrypt's natives and Java (cmake/aosp/conscrypt.cmake, tools/net), BouncyCastle
+# (external/bouncycastle, below, widened to its sources).
+external/boringssl /NOTICE android-sources.cmake src/crypto/ src/ssl/ src/include/ src/gen/ src/third_party/fiat/
+# Time zone data, as the com.android.tzdata module ships it (docs/posix.md).
+system/timezone output_data/
 external/fdlibm
 external/expat Android.bp expat_config.h expat/lib/
 # SQLite (cmake/aosp/sqlite.cmake): sqlite-default is sqlite-autoconf-3500400.
@@ -55,8 +61,8 @@ external/noto-fonts /notosanshebrew/ /notoserif/ /notonaskharabic/ /notonaskhara
 build/make=platform/build *.bp
 build/soong *.bp
 external/abseil-cpp
-external/bouncycastle *.bp
-external/conscrypt *.bp
+external/bouncycastle *.bp /NOTICE repackaged/bcprov/src/main/java/
+external/conscrypt *.bp /NOTICE common/src/jni/main/ repackaged/common/src/main/java/ repackaged/platform/src/main/java/ publicapi/src/main/java/ constants/src/gen/ conscrypt.aconfig networksecurity.aconfig apex/ca-certificates/files/
 external/cronet *.bp
 external/error_prone *.bp
 external/gflags
@@ -125,3 +131,14 @@ system/tools/sysprop
 system/tools/xsdc
 system/update_engine *.bp
 system/vold *.bp
+
+# Media (docs/media.md, cmake/aosp/media_codecs.cmake): AOSP's extractors and
+# the open audio codecs. frameworks/av and frameworks/native's media pieces are
+# checkouts of their own (av-media, native-media), so the sparse sets the
+# framework build widens stay as they are.
+frameworks/av-media=platform/frameworks/av /include/ /media/module/extractors/ /media/module/foundation/ /media/module/id3/ /media/module/esds/ /media/module/metadatautils/ /media/module/codecs/mp3dec/ /media/module/codecs/m4v_h263/ /media/ndk/ /media/libstagefright/include/ /media/libmedia/include/ /media/libmedia/NdkMediaErrorPriv.cpp /media/libmedia/NdkMediaFormatPriv.cpp /media/libaudioclient/include/
+frameworks/native-media=platform/frameworks/native /headers/media_plugin/
+external/tremolo
+external/libopus /celt/ /silk/ /src/ /include/
+external/flac /include/ /src/libFLAC/ /src/share/ /config.h
+external/libwebm
