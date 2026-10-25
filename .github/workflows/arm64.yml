@@ -39,6 +39,8 @@ env:
   NDK_VERSION: "27.2.12479018"
   NDK_ZIP: android-ndk-r27c-linux.zip
   NDK_DIR: android-ndk-r27c
+  # d8, for the guest JNI test's dex (as native-libs.yml).
+  R8_VERSION: "9.5.26"
 
 jobs:
   build:
@@ -159,9 +161,42 @@ jobs:
           "$cc" -shared -fPIC -O2 -fno-stack-protector \
             -Wl,-soname,libc_test.so \
             -o dist-arm64/libc_test_arm64.so tests/native/libc_test.c -llog -ldl -lm
+          # Step 3/4 (guest JNI): natives found by name and registered, calling
+          # back into ART through the guest JNIEnv/JavaVM proxy tables.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector \
+            -Wl,-soname,libjni_test.so \
+            -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
           ro="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           echo "--- trivial_arm64.so ---"; "$ro" -h dist-arm64/trivial_arm64.so | grep -E 'Machine|Type'
           echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
+          ls -la dist-arm64
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar \
+            "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build the guest JNI test's dex
+        run: |
+          set -euo pipefail
+          mkdir -p work/jni-classes work/jni-dex
+          javac --release 11 -encoding UTF-8 -d work/jni-classes tests/native/java/gesher/Arm64Jni.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
+            --output work/jni-dex $(find work/jni-classes -name '*.class')
+          cp work/jni-dex/classes.dex dist-arm64/arm64-jni.dex
           ls -la dist-arm64
 
       - uses: actions/upload-artifact@v4
