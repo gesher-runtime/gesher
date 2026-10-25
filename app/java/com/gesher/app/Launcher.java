@@ -59,6 +59,7 @@ import java.util.Properties;
  *     start             start the device (if it is not running)
  *     shutdown          stop the device: its app processes, the system server,
  *                       servicemanager and binderd
+ *     toast-activated   (run by COM) a click on an app's toast, given to the device
  * </pre>
  *
  * Every command but shutdown and status starts the device if it does not run: binderd,
@@ -151,8 +152,37 @@ public final class Launcher {
                 return 0;
             }
             case "shutdown": return shutdown();
+            case "toast-activated": return toastActivated();
             default: return usage();
         }
+    }
+
+    /**
+     * {@code toast-activated [-Embedding]}: what COM runs for Gesher's toast activator when
+     * no Gesher process serves it (the installer's LocalServer32; hwsvc2, ADR 0051): a click
+     * on an app's toast after the device stopped. Serves the activator for that one
+     * activation, then starts the device (if it does not run) and hands it the click, which
+     * sends the notification's content (or action) intent.
+     */
+    private static int toastActivated() throws Exception {
+        int hr = com.gesher.server.WindowsHost.registerToastActivator(true);
+        if (hr != 0) {
+            log(String.format("toast activator: not registered (0x%08x)", hr));
+            return 1;
+        }
+        log("toast activator: serving " + com.gesher.server.WindowsHost.TOAST_ACTIVATOR_CLSID
+                + " for one activation");
+        String[] a = com.gesher.server.WindowsHost.waitActivation(60_000);
+        com.gesher.server.WindowsHost.revokeToastActivator();
+        if (a == null) {
+            log("toast activator: no activation came in 60 s");
+            return 1;
+        }
+        log("toast activator: a click on a toast of " + a[0] + ": " + a[3]);
+        ensureDevice(true);
+        gesher().toastActivated(a[0], a[3]);
+        log("toast activator: the click went to the Gesher device");
+        return 0;
     }
 
     private static int usage() {

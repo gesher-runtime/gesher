@@ -304,6 +304,21 @@ needs: [framework-build.md](framework-build.md).
   - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
+- [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
+      "Status and next steps (hwsvc2)", docs/devices.md; ci runs 40214264956 at
+      aaa1f90 and 40235213023 at 85f49eb; all but the last sub-item)
+  - [x] Toast clicks after the device stopped (Gesher's COM toast activator,
+        registered by the installer); uninstalling removes the app's toasts
+        and AppUserModelID
+  - [x] `vibrator_manager` of a device without a vibrator
+  - [x] Content observers and content URI job triggers; job network
+        constraints over ConnectivityManager's networks
+  - [x] Windows sleep and resume (screen off/on, alarms catching up) and a
+        real time zone change (TIMEZONE_CHANGED, processes' default zone reset)
+  - [x] The legacy android.hardware.Camera over Media Foundation; Gesher
+        Camera for ACTION_IMAGE_CAPTURE; geocoder final (no key: IOException)
+  - [ ] Camera preview into SurfaceView/TextureView (their child surfaces need
+        a native window from the graphics stack)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
@@ -403,6 +418,43 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+
+## Phase 7 checklist (arm64 translation)
+
+See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md).
+
+- [x] Translator chosen and an ADR written: **dynarmic** (0BSD; A64 frontend,
+      x86-64 backend) in a proxy DLL `gesher_arm64.dll`, the guest sharing the
+      host address space, trampolines marshalling AAPCS64 ⇄ the host ABI
+      ([0047](decisions/0047-arm64-translation.md)); Berberis is riscv64-only
+      at the pinned tag, QEMU is GPL
+- [x] `gesher_arm64.dll` builds with llvm-mingw and runs host↔guest round
+      trips (`compat/arm64`, `arm64.yml`, `tracks/47-arm64.ps1`)
+- [x] ELF loader for arm64-v8a `.so` files (EM_AARCH64, aarch64 relocations,
+      guest code non-executable and registered with the translator); a
+      self-contained `.so` and a libc/pthread one through the shim
+      (ci 40217845117, both runners)
+- [x] `System.load` of an arm64-v8a NDK library, with JNI calls both ways
+      (guest JNIEnv/JavaVM proxies), `Call*MethodV`, Java↔guest nesting
+      (ci 40217845117)
+- [x] arm64 TLS (TPIDR_EL0, TLSDESC), the stack protector, guest-created
+      threads and `AttachCurrentThread`; guest atomics; struct stat/epoll,
+      syscall numbers, auxv, setjmp, va_list; guest faults as Android-style
+      fatal-signal reports (ci 40217845117)
+- [x] libandroid, EGL/GLES and NativeActivity for an arm64-v8a `.so`:
+      nativeactivity.apk built with only lib/arm64-v8a, same checks and
+      pixels as the x86_64 app (ci 40217845117)
+- [x] gesher-app picks arm64-v8a when an APK has no x86_64 libraries
+      (`NativeLibs.abiFor`, `primaryCpuAbi`, the installer's `lib/arm64`);
+      `Build.SUPPORTED_ABIS` lists arm64-v8a after x86_64 (build.prop)
+      (exercised by nativeactivity-arm64.apk, ci 40217845117)
+- [x] arm64-v8a ELF executables through gesher-exec and ProcessBuilder
+      (ci 40217845117)
+- [ ] A real arm64-only F-Droid app in the e2e job: TIC-80 1.01.00 is listed;
+      its arm64 libraries load and its JNI runs translated, but it waits on a
+      SurfaceView Surface Gesher does not provide yet (known failure)
+- [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
+      compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
 
 ## Phase 8 checklist
 

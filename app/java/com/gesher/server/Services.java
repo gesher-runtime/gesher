@@ -142,6 +142,9 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
+        // A device without a vibrator (hwsvc2, ADR 0051).
+        services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
+                android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
         // Devices (docs/devices.md): location over Windows' location service.
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
@@ -256,28 +259,6 @@ public final class Services {
         }
     }
 
-    /**
-     * content: ContentService, without observers' notifications. A text view's key listener
-     * observes the text settings (TextKeyListener.initPrefs: registerContentObserver).
-     */
-    public static final class ContentService extends IContentService.Default {
-        @Override
-        public void registerContentObserver(android.net.Uri uri, boolean notifyForDescendants,
-                android.database.IContentObserver observer, int userHandle,
-                int targetSdkVersion) {
-            // Nothing changes the observed content behind the app's back; never notified.
-        }
-
-        @Override
-        public void unregisterContentObserver(android.database.IContentObserver observer) {
-        }
-
-        @Override
-        public void notifyChange(android.net.Uri[] uris, android.database.IContentObserver observer,
-                boolean observerWantsSelfNotifications, int flags, int userHandle,
-                int targetSdkVersion, String callingPackage) {
-        }
-    }
     /**
      * mount: StorageManagerService on a device without shared (external) storage: no
      * volumes, so Context.getExternalFilesDir and getObbDir are null, as with external
