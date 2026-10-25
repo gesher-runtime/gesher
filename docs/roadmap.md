@@ -435,8 +435,9 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       (exercised by nativeactivity-arm64.apk, ci 40217845117)
 - [x] arm64-v8a ELF executables through gesher-exec and ProcessBuilder
       (ci 40217845117)
-- [ ] A real arm64-only F-Droid app in the e2e job (TIC-80 1.01.00 is listed;
-      it does not reach its first frame yet)
+- [ ] A real arm64-only F-Droid app in the e2e job: TIC-80 1.01.00 is listed;
+      its arm64 libraries load and its JNI runs translated, but it waits on a
+      SurfaceView Surface Gesher does not provide yet (known failure)
 - [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
       compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
 
