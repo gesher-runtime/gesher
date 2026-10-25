@@ -1,3 +1,89 @@
+diff --git a/libartbase/base/scoped_flock.cc b/libartbase/base/scoped_flock.cc
+index 3f44e25..2f0340b 100644
+--- a/libartbase/base/scoped_flock.cc
++++ b/libartbase/base/scoped_flock.cc
+@@ -25,17 +25,59 @@
+ #include "file_utils.h"
+ #include "unix_file/fd_file.h"
+ 
++#if defined(_WIN32) && defined(GESHER)
++#include <errno.h>
++#include <io.h>
++#include <string.h>
++#include <windows.h>
++#endif
++
+ namespace art {
+ 
+ using android::base::StringPrintf;  // NOLINT - StringPrintf is actually used
+ 
++#if defined(_WIN32) && defined(GESHER)
++// Gesher (ADR 0054): flock as Windows' byte-range lock of the whole file
++// (LockFileEx on the descriptor's handle), for the JIT's profile saver and
++// profman. The lock goes with the handle, when the file is closed. Windows'
++// locks are mandatory, not advisory: every user of a profile takes the lock
++// before it reads or writes, as ART's do.
++static bool GesherLock(int fd, bool block, std::string* error_msg, const std::string& name) {
++  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
++  if (h == INVALID_HANDLE_VALUE) {
++    *error_msg = StringPrintf("Failed to lock file '%s': bad descriptor", name.c_str());
++    return false;
++  }
++  OVERLAPPED overlapped = {};
++  DWORD flags = LOCKFILE_EXCLUSIVE_LOCK | (block ? 0 : LOCKFILE_FAIL_IMMEDIATELY);
++  if (!LockFileEx(h, flags, 0, MAXDWORD, MAXDWORD, &overlapped)) {
++    DWORD error = GetLastError();
++    *error_msg = StringPrintf("Failed to lock file '%s': Win32 error %lu", name.c_str(),
++                              static_cast<unsigned long>(error));
++    errno = (error == ERROR_LOCK_VIOLATION || error == ERROR_IO_PENDING) ? EWOULDBLOCK : EIO;
++    return false;
++  }
++  return true;
++}
++#endif
++
+ /* static */ ScopedFlock LockedFile::Open(const char* filename, std::string* error_msg) {
+   return Open(filename, O_CREAT | O_RDWR, true, error_msg);
+ }
+ 
+ /* static */ ScopedFlock LockedFile::Open(const char* filename, int flags, bool block,
+                                           std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && defined(GESHER)
++  std::unique_ptr<File> file(OS::OpenFileWithFlags(filename, flags, /* auto_flush= */ false));
++  if (file.get() == nullptr) {
++    *error_msg = StringPrintf("Failed to open file '%s': %s", filename, strerror(errno));
++    return nullptr;
++  }
++  if (!GesherLock(file->Fd(), block, error_msg, filename)) {
++    return nullptr;
++  }
++  return ScopedFlock(new LockedFile(std::move((*file.get()))));
++#elif defined(_WIN32)
+   // TODO: implement file locking for Windows.
+   UNUSED(filename);
+   UNUSED(flags);
+@@ -102,7 +144,19 @@ using android::base::StringPrintf;  // NOLINT - StringPrintf is actually used
+ 
+ ScopedFlock LockedFile::DupOf(const int fd, const std::string& path,
+                               const bool read_only_mode, std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && defined(GESHER)
++  ScopedFlock locked_file(
++      new LockedFile(DupCloexec(fd), path, /* check_usage= */ false, read_only_mode));
++  if (locked_file->Fd() == -1) {
++    *error_msg = StringPrintf("Failed to duplicate open file '%s': %s",
++                              locked_file->GetPath().c_str(), strerror(errno));
++    return nullptr;
++  }
++  if (!GesherLock(locked_file->Fd(), /* block= */ true, error_msg, locked_file->GetPath())) {
++    return nullptr;
++  }
++  return locked_file;
++#elif defined(_WIN32)
+   // TODO: implement file locking for Windows.
+   UNUSED(fd);
+   UNUSED(path);
 diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
 index beef83e..eb334ff 100644
 --- a/runtime/class_linker.cc
@@ -106,6 +192,26 @@ index fc0ce69..2d13943 100644
    // Image pointer size.
    PointerSize image_pointer_size_;
  
+diff --git a/runtime/oat/oat_file.cc b/runtime/oat/oat_file.cc
+index 02ba0f0..ecb8fdd 100644
+--- a/runtime/oat/oat_file.cc
++++ b/runtime/oat/oat_file.cc
+@@ -107,7 +107,15 @@ using android::base::StringAppendV;
+ using android::base::StringPrintf;
+ 
+ // Whether OatFile::Open will try dlopen. Fallback is our own ELF loader.
++#if defined(GESHER)
++// Gesher (ADR 0054): dlopen is gesher-base's (Windows modules, and ELF objects
++// through the ELF loader for apps' native libraries), which dl_iterate_phdr
++// does not show ART an oat file's mappings from: app oat files are loaded by
++// ART's own ELF loader, as the boot image's are (they come with a reservation).
++static constexpr bool kUseDlopen = false;
++#else
+ static constexpr bool kUseDlopen = true;
++#endif
+ 
+ // Whether OatFile::Open will try dlopen on the host. On the host we're not linking against
+ // bionic, so cannot take advantage of the support for changed semantics (loading the same soname
 diff --git a/runtime/oat/oat_file_manager.cc b/runtime/oat/oat_file_manager.cc
 index 5612c0d..54784bb 100644
 --- a/runtime/oat/oat_file_manager.cc
