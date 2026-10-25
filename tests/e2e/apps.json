@@ -103,6 +103,7 @@
       "source": "https://github.com/nesbox/TIC-80",
       "why": "Ships native code only for arm64-v8a (Phase 7, docs/arm64.md): the TIC-80 fantasy console and SDL2 in C (lib/arm64-v8a), run by the arm64 translator; SDLActivity's JNI both ways, native threads, EGL/GLES 2 on the Activity's window.",
       "expectLog": [ "is arm64-v8a: translated" ],
+      "diagnoseLog": "gesher arm64|Fatal signal|Cause:|#[0-9][0-9] pc|FATAL|AndroidRuntime|UnsatisfiedLink|stubbed|SDL|TIC|gesher elf|Exception|exited",
       "actions": [ { "click": [200, 400] } ]
     }
   ]
