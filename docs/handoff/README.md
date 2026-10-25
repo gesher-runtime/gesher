@@ -36,7 +36,31 @@ Merged so far:
   the "408" in older briefs counted differently). ADR 0036.
 - devices: merged (verified at f62f1aa, ci 40142590418; Camera2 verified
   against a test Media Foundation source, no real camera on the runners).
-  ADR 0043. Integrated with stack: see the next integration ci run.
+  ADR 0043. Integration ci 40143864548 on 6111f0d (all seven merged
+  tracks together): all green.
+- 2026-10-25: every agent stopped on the org's API spend limit; all were
+  resumed with SendMessage after it reset (their work was saved).
+- locale: merged (verified at 0946451, ci 40191538466, which already
+  contained 26aa8eb, so the integration tree after this merge is the
+  CI-verified one). ADR 0049. Other tracks adding services must keep
+  `locale` in 50-services.ps1's expected list. Leftovers: no activity
+  recreate in single process, LocaleConfig overrides not persisted, no
+  ACTION_APPLICATION_LOCALE_CHANGED, display-language list changes untested
+  (need a sign-in).
+- net: merged as ac38344 (verified at 05aaeb5, ci 40191501348; its package
+  job failed once on "the .apk open command did not take lifecycle.apk to
+  onResume" and passed on rerun: an unexplained flake, watch for it).
+  ADR 0037. Integration ci 40194107633 on ac38344 (locale + net).
+- media stage 1: merged as a13989c (verified at 32cbb82, ci 40193603079;
+  Signal Generator passes e2e on an 800x400 display: e2e apps.json has a new
+  optional per-app `"display": "WxH"`). ADR 0042. Integration ci
+  40195168384 on a13989c. Stage 2 (video) handed to the same agent.
+  Leftover for a later track: Gesher has no screen orientation (landscape
+  activities on a portrait display).
+- lifecycle: verified at 404cd11 (ci 40191526766) but not merged: it and
+  locale each added a configuration-change mechanism to
+  ActivityTaskManagerService; the lifecycle agent is unifying them on its
+  branch.
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 

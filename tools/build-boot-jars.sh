@@ -54,6 +54,10 @@ icu4j=$aosp/external/icu/android_icu4j
 { find "$icu4j/src/main/java/android/icu" "$icu4j/libcore_bridge/src/java" -name '*.java'
   grep -E '/com/android/icu/(Flags|FeatureFlags|FeatureFlagsImpl)\.java$' "$work/gen.txt"; } | sort > "$work/core-icu4j.txt"
 find "$icu4j/resources" -type f | sort > "$work/core-icu4j-resources.txt"
+# The networking libraries (Conscrypt, OkHttp, BouncyCastle; tools/net/net-java.sh,
+# docs/network.md): compiled with libcore and dexed into core-libart.jar, so the
+# boot class path keeps its jars; left out of the coremod (make-coremod.sh).
+"$root/tools/net/net-java.sh" "$aosp" "$work"
 
 # --- core-all ----------------------------------------------------------------
 # Libraries libcore compiles against: javac takes from these source roots
@@ -76,7 +80,7 @@ for r in "${roots[@]}"; do patch+="${patch:+$sep}$(native "$r")"; done
 
 argfile=$work/javac.args
 : > "$argfile"
-for list in core-oj core-libart core-icu4j gen module; do
+for list in core-oj core-libart core-icu4j gen module net; do
   while read -r f; do native "$f"; done < "$work/$list.txt" >> "$argfile"
 done
 
@@ -93,7 +97,7 @@ split=$work/split
 rm -rf "$split"
 "$py" "$root/tools/gen/split_classes.py" "$classes" "$split" \
   core-oj="$work/core-oj.txt" core-libart="$work/core-libart.txt" \
-  core-libart="$work/core-libart-flags.txt" core-icu4j="$work/core-icu4j.txt"
+  core-libart="$work/core-libart-flags.txt" core-icu4j="$work/core-icu4j.txt" net="$work/net.txt"
 
 r8=${R8_JAR:-$work/r8-$R8_VERSION.jar}
 if [[ ! -f $r8 ]]; then
@@ -105,6 +109,7 @@ for jar in core-oj core-libart core-icu4j; do
   dex=$work/dex/$jar
   rm -rf "$dex" && mkdir -p "$dex"
   find "$split/$jar" -name '*.class' > "$work/$jar.classes"
+  [[ $jar == core-libart ]] && find "$split/net" -name '*.class' >> "$work/$jar.classes"
   while read -r f; do native "$f"; done < "$work/$jar.classes" > "$work/$jar.d8args"
   "${bin}java" -Xmx4g -cp "$(native "$r8")" com.android.tools.r8.D8 \
     --release --min-api 36 --android-platform-build \
