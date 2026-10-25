@@ -97,6 +97,12 @@ Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName:
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher.ico,0"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "Run with Gesher"
 Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-app.cmd"" ""%1"""
+; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
+; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
+; start `gesher-app toast-activated`, which starts the device and hands it the
+; click (the notification's intent is sent).
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{sys}\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\gesher-app.ps1"" toast-activated"
 
 [UninstallRun]
 ; The Gesher device (binderd, servicemanager, the system server and app
@@ -201,6 +207,19 @@ begin
   end;
 end;
 
+// The apps' AppUserModelIDs (Gesher.App.<package>, registered for their toasts by
+// the system server, ADR 0038/0051) go with Gesher.
+procedure RemoveAppIds();
+var
+  Names: TArrayOfString;
+  I: Integer;
+begin
+  if RegGetSubkeyNames(HKEY_CURRENT_USER, 'Software\Classes\AppUserModelId', Names) then
+    for I := 0 to GetArrayLength(Names) - 1 do
+      if Pos('Gesher.App.', Names[I]) = 1 then
+        RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\Classes\AppUserModelId\' + Names[I]);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Path, Dir: String;
@@ -208,6 +227,7 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    RemoveAppIds();
     if RegQueryStringValue(HKEY_CURRENT_USER, ApkKey, '', Path) and
        (CompareText(Path, ApkProgId) = 0) then
       RegDeleteValue(HKEY_CURRENT_USER, ApkKey, '');

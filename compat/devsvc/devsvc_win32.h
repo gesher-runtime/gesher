@@ -100,6 +100,15 @@ long RegisterAppId(const std::u16string& app_id, const std::u16string& display_n
                    const std::u16string& icon);
 long UnregisterAppId(const std::u16string& app_id);
 
+// Gesher's toast activator (ADR 0051, devsvc_activator.c): this process's class
+// object for it, single use (a launcher started by COM) or for every click (the
+// system server); clicks come back as kToastActivated events. RegisterAppId
+// names it as the app id's CustomActivator when it is registered as a local
+// server (HKCU or HKLM Software\Classes\CLSID\{...}\LocalServer32: the installer).
+extern const char16_t kToastActivatorClsid[];
+long RegisterActivator(bool single_use);
+void RevokeActivator();
+
 // GetFullPathNameW: a drive-less path ("\\a\\b") made absolute on the current drive.
 std::u16string FullPath(const std::u16string& path);
 

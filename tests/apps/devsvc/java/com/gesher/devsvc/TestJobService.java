@@ -22,6 +22,11 @@ public class TestJobService extends JobService {
         int run = Report.count(this, "job" + params.getJobId());
         Report.line("jobs: onStartJob " + params.getJobId() + " (" + kind + ") run " + run
                 + Report.pid());
+        if (params.getTriggeredContentAuthorities() != null) {
+            Report.line("jobs: triggered by " + java.util.Arrays.toString(
+                    params.getTriggeredContentUris()) + " authorities "
+                    + java.util.Arrays.toString(params.getTriggeredContentAuthorities()));
+        }
         new Thread(() -> {
             try {
                 Thread.sleep(500);

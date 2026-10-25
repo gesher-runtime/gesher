@@ -4,7 +4,9 @@
      activity option: alarms (a manifest receiver and a service reached with the app's
      process stopped, a listener, a repeating alarm, an alarm clock, a cancelled alarm), jobs
      (a one-off and a periodic JobService), the clipboard with Windows', notifications
-     (toasts, a notification listener), wake locks and the battery, clock changes. No
+     (toasts, a notification listener), wake locks and the battery, clock changes; and the
+     hwsvc2 track's: toast clicks after the device stopped, the vibrator, content URI job
+     triggers, sleep and resume, a time zone change. No
      action bar: no text to lay out while app processes have no system fonts. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gesher.devsvc"
@@ -13,6 +15,7 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
@@ -28,6 +31,16 @@
         <activity android:name=".NotifyActivity" android:exported="true" />
         <activity android:name=".PowerActivity" android:exported="true" />
         <activity android:name=".TimeActivity" android:exported="true" />
+        <activity android:name=".ClickActivity" android:exported="true" />
+        <activity android:name=".VibrateActivity" android:exported="true" />
+        <activity android:name=".ContentActivity" android:exported="true" />
+        <activity android:name=".SleepActivity" android:exported="true" />
+        <activity android:name=".ZoneActivity" android:exported="true" />
+        <receiver android:name=".ClickReceiver" android:exported="false" />
+        <provider
+            android:name=".NotesProvider"
+            android:authorities="com.gesher.devsvc.notes"
+            android:exported="false" />
         <receiver android:name=".AlarmReceiver" android:exported="false" />
         <receiver android:name=".TimeReceiver" android:exported="false">
             <intent-filter>
