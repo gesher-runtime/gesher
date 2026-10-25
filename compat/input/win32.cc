@@ -5,6 +5,9 @@
 
 #include <wchar.h>
 
+#include <string>
+#include <vector>
+
 #include "win32.h"
 
 namespace gesher {
@@ -40,6 +43,47 @@ bool ClientToScreenPoint(void* hwnd, int32_t* x, int32_t* y) {
   *x = p.x;
   *y = p.y;
   return true;
+}
+
+namespace {
+
+std::string Narrow(const wchar_t* s) {
+  int n = WideCharToMultiByte(CP_UTF8, 0, s, -1, nullptr, 0, nullptr, nullptr);
+  if (n <= 1) return {};
+  std::vector<char> out(static_cast<size_t>(n));
+  WideCharToMultiByte(CP_UTF8, 0, s, -1, out.data(), n, nullptr, nullptr);
+  return std::string(out.data());
+}
+
+}  // namespace
+
+std::vector<KeyboardLayout> KeyboardLayouts() {
+  std::vector<KeyboardLayout> out;
+  int n = GetKeyboardLayoutList(0, nullptr);
+  if (n <= 0) return out;
+  std::vector<HKL> list(static_cast<size_t>(n));
+  n = GetKeyboardLayoutList(n, list.data());
+  for (int i = 0; i < n; i++) {
+    KeyboardLayout layout;
+    layout.hkl = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(list[i]));
+    const LCID lcid = MAKELCID(static_cast<WORD>(layout.hkl & 0xffff), SORT_DEFAULT);
+    wchar_t name[LOCALE_NAME_MAX_LENGTH];
+    if (LCIDToLocaleName(lcid, name, LOCALE_NAME_MAX_LENGTH, 0) > 0) {
+      layout.locale = Narrow(name);
+      wchar_t display[256];
+      if (GetLocaleInfoEx(name, LOCALE_SLOCALIZEDDISPLAYNAME, display, 256) > 0) {
+        layout.name = Narrow(display);
+      }
+    }
+    out.push_back(layout);
+  }
+  return out;
+}
+
+uint64_t ThreadKeyboardLayout(void* hwnd) {
+  DWORD thread = 0;
+  if (hwnd != nullptr) thread = GetWindowThreadProcessId(static_cast<HWND>(hwnd), nullptr);
+  return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(GetKeyboardLayout(thread)));
 }
 
 }  // namespace input

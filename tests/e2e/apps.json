@@ -78,7 +78,7 @@
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/billthefarmer/notes",
       "why": "A notes app that shows its note as Markdown in a WebView (loadDataWithBaseURL with the note's file:/// folder, assets' styles, JavaScript, a WebViewClient) under a floating edit button; pure Java, no AndroidX (docs/webview.md). A fresh install has no note: the edit button, a word, the accept button render it.",
-      "expectLog": [ "gesher-webview: WebView2 Runtime ", "view(s) over the WebView cut out of its window, the first ", "gesher-webview: first page loaded: file:///" ],
+      "expectLog": [ "gesher-webview: WebView2 Runtime ", "view(s) over the WebView cut out of its window: ", "gesher-webview: first page loaded: file:///" ],
       "actions": [ { "click": [344, 744] }, { "keys": "hello" }, { "click": [344, 744] } ]
     },
     {
