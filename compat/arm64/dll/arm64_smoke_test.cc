@@ -29,6 +29,14 @@ extern "C" __attribute__((sysv_abi)) uint64_t host_add(uint64_t a, uint64_t b) {
 // A host function with a double argument and double return.
 extern "C" __attribute__((sysv_abi)) double host_scale(double x, uint64_t n) { return x * n; }
 
+// A host function that calls back a callback (System V), like qsort's
+// comparator: when the callback is guest code, the call faults (DEP) and the
+// translator redirects it into the guest.
+using Callback = uint64_t(__attribute__((sysv_abi))*)(uint64_t);
+extern "C" __attribute__((sysv_abi)) uint64_t host_apply(Callback cb, uint64_t x) {
+  return cb(x);
+}
+
 // AArch64 instruction encodings (little-endian 32-bit words).
 constexpr uint32_t kRet = 0xD65F03C0;         // ret
 uint32_t MovzX(int rd, uint16_t imm) {         // movz xRd, #imm
@@ -43,6 +51,15 @@ void* GuestPage(const uint32_t* code, size_t n) {
   void* p = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
   std::memcpy(p, code, n * 4);
   FlushInstructionCache(GetCurrentProcess(), p, n * 4);
+  return p;
+}
+
+// Like GuestPage but readable and NOT executable, as the real ELF loader maps a
+// guest object's code: a host call to it faults (DEP) and the translator's
+// vectored handler redirects it into the guest.
+void* GuestPageNX(const uint32_t* code, size_t n) {
+  void* p = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+  std::memcpy(p, code, n * 4);
   return p;
 }
 
@@ -127,7 +144,19 @@ int main() {
     Check("guest calls a host function through a trampoline (30+12)", r == 42);
   }
 
-  // 5. Performance: a CPU-bound guest loop (sum of 0..n-1) timed against the
+  // 5. Host -> guest callback via the DEP-fault redirect: a host function calls
+  //    a guest callback pointer directly (as qsort calls its comparator). The
+  //    guest's pages are non-executable, so the call faults and the translator
+  //    enters the guest. The guest callback here doubles its argument.
+  {
+    uint32_t code[] = {0xD37FF800u /* lsl x0, x0, #1 */, kRet};
+    void* cb = GuestPageNX(code, 2);
+    api->add_code(cb, sizeof(code), "double_cb");
+    uint64_t r = host_apply(reinterpret_cast<Callback>(cb), 21);
+    Check("host->guest callback through the DEP-fault redirect (21*2)", r == 42);
+  }
+
+  // 6. Performance: a CPU-bound guest loop (sum of 0..n-1) timed against the
   //    same loop compiled natively, to record the translation overhead
   //    (docs/arm64.md). Reported as INFO; not a pass/fail gate.
   {
