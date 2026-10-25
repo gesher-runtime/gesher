@@ -99,6 +99,8 @@ public static class GesherWebViewInput {
     PostMessageW(dlg, 0x0111 /* WM_COMMAND */, (IntPtr)1 /* IDOK */, GetDlgItem(dlg, 1));
     return "";
   }
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  public static string Foreground() { IntPtr f = GetForegroundWindow(); return "0x" + f.ToString("x") + " (" + Class(f) + ", process " + Pid(f) + ")"; }
   public static int Pid(IntPtr hwnd) { uint p; GetWindowThreadProcessId(hwnd, out p); return (int)p; }
 }
 '@
@@ -210,7 +212,11 @@ function FeaturesCheck {
         if (-not (& $isGreen $beside)) { $problems += "beside the button is #$beside, not green" }
       }
       & $click 330 330 'button'
-      $m = & $waitFor 'Features click corner' 90
+      $m = & $waitFor 'Features click corner' 20
+      if (-not $m.Success) {
+        Write-Host "INFO  features: no click on the button after 20 s; the foreground window is $([GesherWebViewInput]::Foreground())"
+        $m = & $waitFor 'Features click corner' 70
+      }
       if (-not $m.Success) { $problems += 'the button did not get the click' } else {
         & $click 304 304 'corner'
       }

@@ -152,6 +152,7 @@ public class FeaturesActivity extends Activity {
                     @Override
                     public void onCloseWindow(WebView window) {
                         say("onCloseWindow: " + (window == mPopup ? "the popup" : "another"));
+                        mPopupClosed = true;
                         window.destroy();
                     }
                 });
@@ -296,10 +297,16 @@ public class FeaturesActivity extends Activity {
     }
 
     private boolean mClickedApp;
+    private boolean mPopupClosed;
 
     private void clickApp() {
         if (mClickedApp) return;
         mClickedApp = true;
+        if (mPopup != null && !mPopupClosed) {
+            // It did not close itself (runtime 131): the app closes it, as one would.
+            say("popup still open: destroying it");
+            mPopup.destroy();
+        }
         mMain.evaluateJavascript("place('pickApp')", value -> say("click pickApp at "
                 + inWindow(value)));
     }
