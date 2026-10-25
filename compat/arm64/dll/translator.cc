@@ -312,6 +312,7 @@ class Env final : public A64::UserCallbacks {
         }
       }
     }
+    if (t_env_raw == this) t_env_raw = nullptr;
     jits_.clear();
     VirtualFree(tls_block_, 0, MEM_RELEASE);
     VirtualFree(stack_base_, 0, MEM_RELEASE);
