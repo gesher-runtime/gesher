@@ -301,6 +301,8 @@ final class Dexopt {
         a.add("--reference-profile-file=" + ref.getPath());
         a.add("--apk=" + apk);
         a.add("--dex-location=" + apk);
+        // As artd merges since Android 14: compile unless the merge added nothing.
+        a.add("--force-merge-and-analyze");
         int code = run("profman", a);
         // ProfmanResult: 1 compile, 2 small delta, 7 empty profiles.
         SystemServer.log("dexopt: " + packageName + ": profman merged " + cur.length()
