@@ -207,6 +207,38 @@ jlong JNICALL Surface_createFromSurfaceTexture(JNIEnv* env, jclass, jobject surf
   return reinterpret_cast<jlong>(static_cast<android::Surface*>(s->surface.get()));
 }
 
+// TextureView.nCreateNativeWindow(SurfaceTexture) / nDestroyNativeWindow(): the window
+// TextureView.lockCanvas would draw into (TextureView.mNativeWindow).
+jfieldID gTextureViewNativeWindow;
+
+void JNICALL TV_createNativeWindow(JNIEnv* env, jobject thiz, jobject surface_texture) {
+  if (gTextureViewNativeWindow == nullptr) {
+    jclass c = env->GetObjectClass(thiz);
+    gTextureViewNativeWindow = env->GetFieldID(c, "mNativeWindow", "J");
+    env->DeleteLocalRef(c);
+    if (gTextureViewNativeWindow == nullptr) {
+      env->ExceptionClear();
+      return;
+    }
+  }
+  SurfaceTextureState* s = surface_texture != nullptr ? StateOf(env, surface_texture) : nullptr;
+  if (s == nullptr) return;
+  s->surface->incStrong(reinterpret_cast<void*>(&TV_createNativeWindow));
+  env->SetLongField(thiz, gTextureViewNativeWindow,
+                    reinterpret_cast<jlong>(static_cast<ANativeWindow*>(s->surface.get())));
+}
+
+void JNICALL TV_destroyNativeWindow(JNIEnv* env, jobject thiz) {
+  if (gTextureViewNativeWindow == nullptr) return;
+  auto* w = reinterpret_cast<ANativeWindow*>(env->GetLongField(thiz, gTextureViewNativeWindow));
+  env->SetLongField(thiz, gTextureViewNativeWindow, 0);
+  if (QueueSurface* q = QueueSurface::From(w)) q->decStrong(reinterpret_cast<void*>(&TV_createNativeWindow));
+}
+
+// TextureView.lockCanvas: not supported (null, as when the surface is not ready).
+jboolean JNICALL TV_lockCanvas(JNIEnv*, jclass, jlong, jobject, jobject) { return JNI_FALSE; }
+void JNICALL TV_unlockCanvasAndPost(JNIEnv*, jclass, jlong, jobject) {}
+
 // --- TextureView's layer --------------------------------------------------------------------
 
 class TextureLayer : public android::VirtualLightRefBase {
@@ -594,6 +626,13 @@ const JNINativeMethod kBlast[] = {
     {"nativeDestroy", "(J)V", N(BBQ_destroy)},
 };
 
+const JNINativeMethod kTextureView[] = {
+    {"nCreateNativeWindow", "(Landroid/graphics/SurfaceTexture;)V", N(TV_createNativeWindow)},
+    {"nDestroyNativeWindow", "()V", N(TV_destroyNativeWindow)},
+    {"nLockCanvas", "(JLandroid/graphics/Canvas;Landroid/graphics/Rect;)Z", N(TV_lockCanvas)},
+    {"nUnlockCanvasAndPost", "(JLandroid/graphics/Canvas;)V", N(TV_unlockCanvasAndPost)},
+};
+
 const JNINativeMethod kSurfaceView[] = {
     {"nativeGesherDrawSurface", "(JJLandroid/view/SurfaceView;IIFF)V", N(SV_drawSurface)},
 };
@@ -629,6 +668,7 @@ int register_gesher_media_surfaces(JNIEnv* env) {
   REG("android/graphics/RecordingCanvas", kRecordingCanvas);
   REG("android/graphics/BLASTBufferQueue", kBlast);
   REG("android/view/SurfaceView", kSurfaceView);
+  REG("android/view/TextureView", kTextureView);
 #undef REG
   return 0;
 }
