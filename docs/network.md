@@ -192,8 +192,10 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 origin/phase4/integration incl. webview, stack, devsvc): build, every reusable
 workflow, both test jobs (windows-2022, windows-2025), package and e2e. Every
 56-net.ps1 check PASSes on both runners; the roadmap's Phase 5 networking box
-cites these runs. The tip merges origin/phase4/integration 6111f0d (devices)
-on top; its ci run is the final one (see the coordinator report).
+cites these runs. Final: ci 40191501348 at 05aaeb5 (merged with origin/phase4/integration
+6111f0d, devices) green, 39 `PASS  net:` lines and no FAIL on each test job;
+its package job failed once on the .apk open command (the exception text is
+cut off by the step's 5-line tail) and passed on rerun (attempt 2).
 
 Done: BoringSSL, NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle
 (in core-libart), the Windows trust store sync, ConnectivityService +

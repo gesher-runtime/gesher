@@ -302,7 +302,7 @@ needs: [framework-build.md](framework-build.md).
 ## Phase 5 checklist
 
 - [x] Networking ([network.md](network.md), ADR 0037; tests/windows/tracks/56-net.ps1,
-      ci runs 40141520320 and 40143168361 on windows-2022 and windows-2025)
+      ci runs 40141520320, 40143168361 and 40191501348 on windows-2022 and windows-2025)
   - [x] Sockets and DNS through gesher-base over Winsock: TCP over IPv4 and
         IPv6 loopback, timeouts, refused connects, UDP (DatagramSocket), NIO
         with a Selector, echo with .NET servers, name lookups on the internet
