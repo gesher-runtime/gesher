@@ -119,6 +119,18 @@ described above. dynarmic is pinned at
 - Faults *inside* guest code are the translator's to interpret (a guest null
   dereference is a host access violation at a fastmem/callback site); turning
   them into Android-like crashes rather than hangs is handled in the DLL.
+- **Variadic and `va_list` marshalling is approximate.** A guest variadic call
+  (`printf`, `CallIntMethod`) is marshalled by the same register/stack mapping
+  as a fixed call: X0–X7 and V0–V7 to the System V argument registers and a
+  window of guest stack words to the System V stack. This is correct for the
+  common case (the shim's `printf` family, the JNI bridge's `Call*Method`) but
+  not for a host function that takes an explicit `va_list*` argument and walks
+  it (the `v*printf` forms): `add_va_list_function` records which host functions
+  those are, but the AAPCS64→System V `va_list` conversion is not yet done.
+- Each nesting level of a guest→host→guest chain, and each guest thread, uses
+  its own `dynarmic::A64::Jit` with its own translated-code cache (Run() is not
+  reentrant and a Jit is single-threaded), so deep callbacks and many threads
+  cost memory. A shared block cache is possible future work.
 - Berberis remains the better long-term native bridge if its arm64 guest is
   completed upstream; the `gesher_arm64_init` interface would let it replace
   dynarmic behind the same DLL.

@@ -64,27 +64,42 @@ ships as a single file next to dalvikvm. Its license notice is installed as
 
 _Last updated 2026-10-25 by the arm64 track; branch `wip/arm64`._
 
-### Done
+### Done and CI-verified (ci `40192217495`, both runners)
 
 - **ADR 0047**: dynarmic chosen (Berberis is riscv64-only at the pinned tag;
   QEMU is GPL); the proxy-DLL, shared-address-space, trampoline design.
-- The translator interface (`gesher/arm64_translator.h`), the DLL
-  (`translator.cc`, `thunks.S`), its standalone CMake and a smoke test
-  (`arm64_smoke_test.cc`).
+- `gesher_arm64.dll` builds with llvm-mingw (`arm64.yml`, two external patches
+  for the 2026 clang). `tracks/47-arm64.ps1`:
+  - `PASS arm64: translator DLL round-trips (host<->guest, dynarmic)` — the
+    smoke test: host→guest via `call()` and a `host_entry` stub, guest→host via
+    a bound `SVC` trampoline, a host→guest callback via the DEP-fault redirect,
+    and a CPU-bound loop whose overhead is ~1.3–1.6× native (`INFO arm64 perf`).
+  - `PASS arm64: loader runs a self-contained arm64-v8a .so` — the ELF loader
+    maps an EM_AARCH64 object (NDK, `-nostdlib`), applies its relocations, runs
+    its constructor through the translator and calls its exports via `host_entry`.
+  - `PASS arm64: System.load of an arm64-v8a .so; JNI_OnLoad, RegisterNatives,
+    Java_* and callbacks into ART` — a guest `.so` through ART's libnativeloader
+    path, the JNI bridge's guest proxy tables both ways.
 
-### In progress / not yet CI-verified
+### Done, verification pending the current CI run
 
-- Building `gesher_arm64.dll` with llvm-mingw and the step-1 smoke test
-  (host↔guest round trips) in `.github/workflows/arm64.yml` and
-  `tracks/47-arm64.ps1`.
-- EM_AARCH64 support in `compat/elf` (relocations, TLS), the loader glue in
-  `compat/arm64`, binding guest imports to trampolines, and loading a guest
-  `.so` built by the NDK for `arm64-v8a` that calls libc.
-- JNI both ways, libandroid, EGL/GLES, NativeActivity for guest `.so` files.
-- ABI selection: `arm64-v8a` chosen when an APK has no x86_64 libs;
-  `Build.SUPPORTED_ABIS` lists it after x86_64; `ro.dalvik.vm.native.bridge`.
-- Tests: the arm64-only test APKs, a real arm64-only F-Droid app in the e2e
-  job, and the translation-overhead measurement.
+- The guest libc/pthread `.so` through the shim (ci `40192217495` got as far as
+  `qsort`, where a host→guest comparator call crashed; fixed by the DEP-fault
+  redirect and the per-depth Jit pool, re-running).
+
+### Not yet done
+
+- arm64 TLS beyond local/initial-exec `TLS_TPREL` (no TLSDESC / general-dynamic
+  / guest-created-thread TLS); the stack protector; guest-created threads
+  (`pthread_create` of a guest start routine, `AttachCurrentThread`).
+- libandroid, EGL/GLES and NativeActivity for a guest `.so`.
+- ABI selection is written (`NativeLibs.abiFor`, build.prop) but not yet
+  exercised by a test with an arm64-only APK.
+- arm64 **executables** (the exec track, ADR 0035): the launcher enters the
+  program with `gesher_exec_enter` (host); for a guest it must run `_start`
+  through the translator at the Linux stack block, and `__libc_init` must enter
+  the guest `main` via `host_entry`. Not started.
+- A real arm64-only F-Droid app in the e2e job.
 
 ### Dead ends ruled out
 
