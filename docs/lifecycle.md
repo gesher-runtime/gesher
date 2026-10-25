@@ -82,8 +82,12 @@ in a single process and on the Gesher device.
   above the card) and no dim under SkiaGL (now a dim layer window). uiapp's
   device check broke because a resize now relaunches it, as on Android: it
   declares the size changes it handles.
-- Next: the re-run (dim layer, test fixes), then merge
-  origin/phase4/integration and the final run.
+- ci run 40191526766 at 404cd11 (phase4/integration 26aa8eb merged): all
+  green on windows-2022 and windows-2025, package and e2e: the single-process
+  and device lifecycle checks, and the composition check with the CPU
+  pipeline and SkiaGL (the dialog's transparent edge shows the red under it
+  dimmed to 0x660000, its card white, the app window dimmed to 0x666666).
+- Next: nothing pending for this track beyond the gaps below.
 
 ## Remaining gaps
 
