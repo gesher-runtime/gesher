@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No action bar: the content starts at the window's top. -->
+    <style name="LifeTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+    <!-- windowIsTranslucent, a transparent background: the Activity below shows through. -->
+    <style name="TranslucentTheme" parent="android:Theme.Translucent.NoTitleBar" />
+</resources>
