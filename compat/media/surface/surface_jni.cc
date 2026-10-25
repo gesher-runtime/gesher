@@ -72,6 +72,15 @@ JNIEnv* Env() {
   if (gVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return env;
   JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("gesher-surface"), nullptr};
   if (gVm->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK) return nullptr;
+  // Detached when the thread ends (ART aborts on a native thread that exits attached).
+  struct Detacher {
+    JavaVM* vm = nullptr;
+    ~Detacher() {
+      if (vm != nullptr) vm->DetachCurrentThread();
+    }
+  };
+  static thread_local Detacher detacher;
+  detacher.vm = gVm;
   return env;
 }
 
