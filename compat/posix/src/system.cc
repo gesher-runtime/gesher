@@ -145,38 +145,7 @@ int umount2(const char*, int) { return errno = ENOSYS, -1; }
 
 // --- resources and priorities -------------------------------------------------
 
-int getrlimit(int resource, struct rlimit* rlim) {
-  rlim->rlim_cur = RLIM_INFINITY;
-  rlim->rlim_max = RLIM_INFINITY;
-  if (resource == RLIMIT_STACK) {
-    ULONG_PTR low, high;
-    GetCurrentThreadStackLimits(&low, &high);
-    rlim->rlim_cur = high - low;
-  } else if (resource == RLIMIT_NOFILE) {
-    rlim->rlim_cur = rlim->rlim_max = 8192;
-  }
-  return 0;
-}
-
-int setrlimit(int, const struct rlimit*) { return 0; }
-
-int getrusage(int who, struct rusage* usage) {
-  memset(usage, 0, sizeof(*usage));
-  FILETIME create, exit, kernel, user;
-  BOOL ok = who == RUSAGE_THREAD
-      ? GetThreadTimes(GetCurrentThread(), &create, &exit, &kernel, &user)
-      : GetProcessTimes(GetCurrentProcess(), &create, &exit, &kernel, &user);
-  if (!ok) return gesher::FailWithLastError();
-  auto to_timeval = [](FILETIME ft, struct timeval* tv) {
-    unsigned long long t = (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) |
-                           ft.dwLowDateTime;  // 100 ns units
-    tv->tv_sec = static_cast<long>(t / 10'000'000);
-    tv->tv_usec = static_cast<long>((t % 10'000'000) / 10);
-  };
-  to_timeval(user, &usage->ru_utime);
-  to_timeval(kernel, &usage->ru_stime);
-  return 0;
-}
+// getrlimit, setrlimit and getrusage are in process.cc.
 
 int getpriority(int which, id_t who) {
   if (which != PRIO_PROCESS) return errno = EINVAL, -1;
@@ -458,7 +427,6 @@ ssize_t process_vm_readv(pid_t, const struct iovec*, unsigned long, const struct
 
 // --- extra stat calls (lstat, fstatat, mkdirat: path.cc) ----------------------
 
-int fchmod(int, mode_t) { return 0; }
 // fchown is in unistd.cc, with chown.
 int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }
 

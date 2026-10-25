@@ -17,8 +17,11 @@
 
 #include <jni.h>
 
+#include <stdio.h>
+
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <input/Input.h>
 #include <input/KeyCharacterMap.h>
@@ -64,6 +67,7 @@ const JNINativeMethod kVirtualKeyboardMethods[] = {
 // --- com.gesher.app.input.WindowInput ---------------------------------------------------
 
 jmethodID gOnWindowEvent;
+jmethodID gOnTextEvent;
 
 struct JavaConnection {
   std::unique_ptr<Connection> connection;
@@ -114,6 +118,25 @@ jlong JNICALL WindowInput_attach(JNIEnv* env, jclass, jobject self, jlong hwnd, 
       tenv->ExceptionDescribe();
       tenv->ExceptionClear();
     }
+  };
+  // Text for the focused editor goes to WindowInput.onTextEvent (its text
+  // listener, the window's input method), which finishes it.
+  o.on_text_event = [vm, target](const gesher::input::TextEvent& e, uint32_t seq) {
+    JNIEnv* tenv = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&tenv), JNI_VERSION_1_6) != JNI_OK) {
+      JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("gesher-input"), nullptr};
+      if (vm->AttachCurrentThreadAsDaemon(&tenv, &args) != JNI_OK) return;
+    }
+    jstring text = tenv->NewString(reinterpret_cast<const jchar*>(e.text.data()),
+                                   static_cast<jsize>(e.text.size()));
+    tenv->CallVoidMethod(target, gOnTextEvent, static_cast<jint>(seq), e.kind, text, e.cursor,
+                         e.target_start, e.target_end);
+    if (tenv->ExceptionCheck()) {
+      ALOGE("WindowInput.onTextEvent threw");
+      tenv->ExceptionDescribe();
+      tenv->ExceptionClear();
+    }
+    if (text != nullptr) tenv->DeleteLocalRef(text);
   };
   o.on_thread_exit = [vm]() {
     JNIEnv* tenv = nullptr;
@@ -177,6 +200,60 @@ jlong JNICALL WindowInput_clientToScreen(JNIEnv*, jclass, jlong hwnd, jint x, ji
   return (static_cast<jlong>(sy) << 32) | static_cast<uint32_t>(sx);
 }
 
+Connection* ConnectionOf(jlong ptr) {
+  return reinterpret_cast<JavaConnection*>(ptr)->connection.get();
+}
+
+void JNICALL WindowInput_setTextInput(JNIEnv*, jclass, jlong ptr, jboolean active, jboolean ime,
+                                      jint enterAction) {
+  gesher::input::TextInputState state;
+  state.active = active;
+  state.ime = ime;
+  state.enter_action = enterAction;
+  ConnectionOf(ptr)->SetTextInput(state);
+}
+
+void JNICALL WindowInput_setCaret(JNIEnv*, jclass, jlong ptr, jint x, jint y, jint width,
+                                  jint height) {
+  ConnectionOf(ptr)->SetCaret(x, y, width, height);
+}
+
+void JNICALL WindowInput_completeComposition(JNIEnv*, jclass, jlong ptr, jboolean cancel) {
+  ConnectionOf(ptr)->CompleteComposition(cancel);
+}
+
+jint JNICALL WindowInput_showTouchKeyboard(JNIEnv*, jclass, jlong ptr, jboolean show) {
+  return ConnectionOf(ptr)->ShowTouchKeyboard(show);
+}
+
+void JNICALL WindowInput_finishTextEvent(JNIEnv*, jclass, jlong ptr, jint seq) {
+  ConnectionOf(ptr)->FinishTextEvent(static_cast<uint32_t>(seq));
+}
+
+// {hkl as hex, BCP 47 locale, display name} for each keyboard layout.
+jobjectArray JNICALL WindowInput_keyboardLayouts(JNIEnv* env, jclass) {
+  std::vector<gesher::input::KeyboardLayout> layouts = gesher::input::KeyboardLayouts();
+  jclass string_class = env->FindClass("java/lang/String");
+  jobjectArray out =
+      env->NewObjectArray(static_cast<jsize>(layouts.size() * 3), string_class, nullptr);
+  if (out == nullptr) return nullptr;
+  for (size_t i = 0; i < layouts.size(); i++) {
+    char hkl[32];
+    snprintf(hkl, sizeof hkl, "%llx", static_cast<unsigned long long>(layouts[i].hkl));
+    const std::string* fields[3] = {nullptr, &layouts[i].locale, &layouts[i].name};
+    for (int f = 0; f < 3; f++) {
+      jstring v = env->NewStringUTF(f == 0 ? hkl : fields[f]->c_str());
+      env->SetObjectArrayElement(out, static_cast<jsize>(i * 3 + f), v);
+      env->DeleteLocalRef(v);
+    }
+  }
+  return out;
+}
+
+jlong JNICALL WindowInput_keyboardLayout(JNIEnv*, jclass, jlong hwnd) {
+  return static_cast<jlong>(gesher::input::ThreadKeyboardLayout(reinterpret_cast<void*>(hwnd)));
+}
+
 const JNINativeMethod kWindowInputMethods[] = {
     {"nAttach", "(Lcom/gesher/app/input/WindowInput;JLandroid/view/InputChannel;FFFIIZ)J",
      reinterpret_cast<void*>(&WindowInput_attach)},
@@ -185,13 +262,22 @@ const JNINativeMethod kWindowInputMethods[] = {
     {"nStats", "(J)[J", reinterpret_cast<void*>(&WindowInput_stats)},
     {"nPostMessage", "(JIJJ)Z", reinterpret_cast<void*>(&WindowInput_postMessage)},
     {"nClientToScreen", "(JII)J", reinterpret_cast<void*>(&WindowInput_clientToScreen)},
+    {"nSetTextInput", "(JZZI)V", reinterpret_cast<void*>(&WindowInput_setTextInput)},
+    {"nSetCaret", "(JIIII)V", reinterpret_cast<void*>(&WindowInput_setCaret)},
+    {"nCompleteComposition", "(JZ)V", reinterpret_cast<void*>(&WindowInput_completeComposition)},
+    {"nFinishTextEvent", "(JI)V", reinterpret_cast<void*>(&WindowInput_finishTextEvent)},
+    {"nShowTouchKeyboard", "(JZ)I", reinterpret_cast<void*>(&WindowInput_showTouchKeyboard)},
+    {"nKeyboardLayouts", "()[Ljava/lang/String;",
+     reinterpret_cast<void*>(&WindowInput_keyboardLayouts)},
+    {"nKeyboardLayout", "(J)J", reinterpret_cast<void*>(&WindowInput_keyboardLayout)},
 };
 
 int RegisterWindowInput(JNIEnv* env) {
   jclass clazz = env->FindClass("com/gesher/app/input/WindowInput");
   gOnWindowEvent = env->GetMethodID(clazz, "onWindowEvent", "(III)V");
+  gOnTextEvent = env->GetMethodID(clazz, "onTextEvent", "(IILjava/lang/String;III)V");
   env->DeleteLocalRef(clazz);
-  if (gOnWindowEvent == nullptr) return -1;
+  if (gOnWindowEvent == nullptr || gOnTextEvent == nullptr) return -1;
   return jniRegisterNativeMethods(env, "com/gesher/app/input/WindowInput", kWindowInputMethods,
                                   sizeof(kWindowInputMethods) / sizeof(kWindowInputMethods[0]));
 }

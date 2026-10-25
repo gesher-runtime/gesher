@@ -18,5 +18,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- The second test (gesher-app - -activity com.gesher.webapp.FeaturesActivity). -->
+        <activity
+            android:name=".FeaturesActivity"
+            android:label="@string/activity_label"
+            android:exported="true" />
     </application>
 </manifest>

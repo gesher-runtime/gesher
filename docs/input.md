@@ -133,6 +133,149 @@ new VirtualKeyboard.InputManager())`) so that `KeyCharacterMap.load`,
 InputManagerGlobal for its strategy and throws a NullPointerException
 without an input service) work in apps.
 
+## Text input (ime track)
+
+Goal: text input like a native Windows app's: any keyboard layout, IMEs
+(Japanese, Chinese, Korean) composing inline, the emoji panel (Win+.) and
+dictation, the IME's windows at the caret, Enter as the editor's action,
+and InputMethodManager real enough for apps. ADR 0039 has the decisions.
+
+```
+ window thread (subclassed procedure, ime.cc)        connection thread            app process (Java)
+ WM_KEYDOWN: peek its WM_CHAR ─┬─ key the KCM types ─► gesher::Window ─► KeyEvent ═══► ViewRootImpl ─► TextView
+                               └─ other text / dead ─► (key taken)
+ WM_CHAR, WM_UNICHAR, VK_PACKET ─► TextEvent ─► marker WM_CHAR ─► in order ─► onTextEvent ─► WindowsInputMethod
+ WM_IME_COMPOSITION (IMM32)     ─► TextEvent ─┘   (waits for earlier events,           │  commitText / setComposingText /
+ Enter with an editor action    ─► TextEvent      later ones wait for its finish)      │  finishComposingText /
+                                                                                       │  performEditorAction
+ caret, IME on/off ◄── WindowInput.setCaret / setTextInput ◄── CursorAnchorInfo, EditorInfo ◄─┘ (IRemoteInputConnection)
+```
+
+- **The input method service** (`com.gesher.server.InputMethodManagerService`,
+  registered by `Services` as `input_method`): one input method,
+  `com.gesher.app/.input.WindowsInputMethod` ("Windows text input"); its
+  subtypes are the session's keyboard layouts (`GetKeyboardLayoutList`,
+  locale tags and display names; mode `keyboard`, extra value
+  `KeyboardLayout=<hkl>`), the current subtype the focused window's thread's
+  layout. `startInputOrWindowGainedFocus` makes the client active and binds
+  it (`onStartInputResult`, SUCCESS_WITH_IME_SESSION) to the window's
+  session from the process's `Host`; `getInputMethodList`,
+  `getEnabledInputMethodList`, `getCurrentInputMethodInfoAsUser`,
+  `getEnabledInputMethodSubtypeList`, `getCurrentInputMethodSubtype` and
+  the rest answer as on a device with one IME. Showing and hiding the soft
+  input do not reach the service on Android 16: they go through the
+  window's insets to the window session (`updateRequestedVisibleTypes`).
+- **The input method** (`com.gesher.app.input.WindowsInputMethod`): the host
+  in the process with the Win32 windows (installed by `WindowMode.install`:
+  in a single process on Services' instance; in an app process of the
+  Gesher device on an instance of its own that
+  `IInputMethodManagerGlobalInvoker`'s cache points to). Each window
+  (`addWindow` from the window session) is an `IInputMethodSession`; the
+  binding has an InputChannel too, so key events pass the input method
+  stage as on a device (all handed back). On startInput the native side
+  learns whether an editor has the focus (`inputType` not TYPE_NULL), whether
+  it takes compositions (text, not a password, not IME_FLAG_FORCE_ASCII)
+  and its Enter action (`imeOptions` action unless multi-line or
+  IME_FLAG_NO_ENTER_ACTION); the input method asks the editor for its cursor
+  (`requestCursorUpdates` MONITOR|IMMEDIATE). Text events become
+  `commitText`, `setComposingText` (underlined, the target clause
+  highlighted, the IME's caret through `setSelection`),
+  `finishComposingText`, `performEditorAction` on the editor's
+  `IRemoteInputConnection`; each is finished when a query after it answers.
+  Without an editor, typed text reaches the focused view as an
+  `ACTION_MULTIPLE` KeyEvent. `viewClicked` while composing completes the
+  composition.
+- **The window procedure's side** (`compat/input/ime.cc`, subclassing each
+  attached window): see ime.h and ADR 0039: keys whose character Generic.kcm
+  would not type with the thread's modifiers are taken while an editor has
+  the focus (their WM_CHAR is the text), VK_PACKET and VK_PROCESSKEY always;
+  a key whose KeyEvent types its character drops that WM_CHAR; control
+  characters are their keys' business. IMM32 compositions inline
+  (ISC_SHOWUICOMPOSITIONWINDOW cleared, GCS_RESULTSTR/COMPSTR/CURSORPOS/
+  COMPATTR), WM_IME_CHAR, WM_UNICHAR, IMR_QUERYCHARPOSITION. Without an
+  editor (or in a password field) the window has no input context.
+- **The caret**: CursorAnchorInfo's insertion marker through its matrix,
+  less the window's origin on the display, is the window's caret
+  (`WindowInput.setCaret`): the system caret (CreateCaret, hidden),
+  ImmSetCompositionWindow (CFS_POINT) and ImmSetCandidateWindow
+  (CFS_EXCLUDE).
+- **The touch keyboard** (`compat/input/touch_keyboard.cc`): when the app
+  shows the soft input and its editor was focused by a finger or a pen,
+  InputPane.TryShow through IInputPaneInterop::GetForWindow (looked up in
+  combase.dll); TryHide when it hides it.
+- **Clipboard**: Ctrl+C/X/V go to TextView as KeyEvents and use Android's
+  clipboard service (`DeviceServices.ClipboardService`, in the services
+  domain); it is not Windows' clipboard yet.
+
+- **A watch on the window's thread** (`compat/input/thread_watch.cc`,
+  started for each window the input method attaches to): it posts the
+  window a message every second; when one waits over 5 s it writes to
+  stderr the thread's stack (x64 unwind tables, module!export+offset), the
+  thread's wait chain (Wait Chain Traversal: ALPC, COM, locks, across
+  processes), the stacks and wait chains of the process's threads that are
+  in the IME or TSF and of the threads of any other process a chain ends in
+  (dbghelp's StackWalk64); again a minute later while it lasts, and how
+  long it was once the thread answers. ime.cc reports window-thread
+  messages that take over 500 ms.
+- **Server 2022's Microsoft IME hangs** (found with that watch, ci runs
+  40140095142 to 40199105986): after a Japanese composition, every switch
+  of the window's thread away from the IME (WM_INPUTLANGCHANGEREQUEST in
+  DefWindowProc) took 180 s: the thread waits in imjpapi.dll for the IME's
+  worker thread, which waits on a COM call into ImeBroker.exe
+  (C:\Windows\System32\IME\SHARED), whose call waits for imjppred.dll's
+  prediction engine, which waits in Windows.CloudStore, which never answers
+  on those runners. It is Windows' (any app's window would wait the same);
+  turning off history-based predictive input and choosing the previous IME
+  version (EAIME.admx user policies) changed nothing. On Server 2022
+  (build < 26100) 35-ime.ps1 ends ImeBroker.exe before each run and once a
+  composition is done; the worker's call then fails at once and the switch
+  is immediate. The checks stay as strict as on Server 2025.
+
+### Status and next steps (ime track)
+
+Branch `wip/ime` (worktree C:\work\gesher-ime), origin/phase4/integration
+merged in (popups, rtl, exec, devsvc, webview, stack, devices, locale, net,
+media, lifecycle; conflicts only in framework.yml's app lists, both sides
+kept).
+
+**CI-verified**: ci run 40218916953 (commit 6b88293, origin/phase4/integration
+baf27c9 merged in): green on every job, all 22 ime checks pass on both
+runners. Before it, ci run 40217116856 (commit 42b24f3): every ime check passes
+on windows-2022 and windows-2025, single process and the Gesher device;
+package and e2e green (its one failure was the media track's tone check on
+2022, `sound 25: 1302.3 Hz, not 1397`, not ime's). Before it, Server 2022
+failed the password field (and the device run's conversion) and its app
+did not end on WM_CLOSE: the Microsoft IME hang above. The test job now has
+`timeout-minutes: 60` (ci.yml), so a hang fails fast.
+
+**Next** (if anything is left): the Windows clipboard (Ctrl+C/V use
+Android's clipboard service), TSF-only features (reconversion), IME insets
+for the touch keyboard. The thread watch can stay: it costs one posted
+message a second and writes only when the thread hangs.
+
+**Pitfalls**: the Bash tool turns `\` into `\` in commands and heredocs,
+and tool parameters turn backslash-u escapes into characters: write files
+with escapes through a script that uses chr(92). PowerShell 7's
+Get-WinUserLanguageList fails on the runners (use powershell.exe). The
+Japanese IME is enabled with TSF (ImeInput.EnableJapaneseIme, before the
+runs) and chosen by posting WM_INPUTLANGCHANGEREQUEST; switch layouts with
+SwitchTo (re-posts until the thread has it). The CI log splits a line with
+highlighted words over several lines; join them before grepping.
+
+**Edits outside the ime domain**: `.github/workflows/framework.yml` (build
+and collect imeapp.apk), `.github/workflows/ci.yml` (the test job's
+`timeout-minutes: 60`), `cmake/aosp/input.cmake` (ime.cc,
+touch_keyboard.cc, thread_watch.cc, imm32),
+`app/java/com/gesher/app/window/WindowMode.java` (WindowsInputMethod.install
+instead of the no-IME stand-in),
+`app/java/com/gesher/app/window/WindowSession.java` (three hooks:
+addWindow after WindowInput.attach, removeWindow before input.close,
+onRequestedVisibleTypes in updateRequestedVisibleTypes),
+`app/java/com/gesher/server/Services.java` (input_method registration; the
+old Services.InputMethodManager stand-in removed), `docs/services.md` and
+`app/README.md` (one line each about input_method), `docs/roadmap.md` (the
+text input box), the merges of origin/phase4/integration.
+
 ## Status
 
 ### Done and CI-verified
@@ -224,10 +367,10 @@ holds no state of the window session's, so it is usable from there as is.
   a single process, in an app process of the Gesher device and with the
   installed gesher-app (ci run 40056527378, below).
 
-- Text input: WM_CHARs Generic.kcm cannot type reach the focused view as
-  `ACTION_MULTIPLE` KeyEvents (the window session, above); with a non-US
-  keyboard layout a key then types both its US character (its KeyEvent)
-  and the layout's (its WM_CHAR). No InputConnection (IME) path.
+- Text input: see "Text input (ime track)" above: other keyboard layouts,
+  IMEs and Unicode input go through the input method to the focused
+  editor's InputConnection; without an editor, characters the key map
+  cannot type still reach the focused view as `ACTION_MULTIPLE` KeyEvents.
 - One process: an InputChannel's fd cannot cross processes yet (gesher-base
   does not duplicate sockets into another process).
 - SOCK_SEQPACKET as UDP: no hangup on close; a full buffer drops (bounded by

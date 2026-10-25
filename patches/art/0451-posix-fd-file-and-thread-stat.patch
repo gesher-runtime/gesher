@@ -1,0 +1,44 @@
+diff --git a/libartbase/base/unix_file/fd_file.cc b/libartbase/base/unix_file/fd_file.cc
+index 2bdeb0c..6b5f1ce 100644
+--- a/libartbase/base/unix_file/fd_file.cc
++++ b/libartbase/base/unix_file/fd_file.cc
+@@ -68,7 +68,7 @@ bool AllowSparseFiles() {
+   return allow;
+ }
+ 
+-#if defined(_WIN32)
++#if defined(_WIN32) && !defined(GESHER)
+ // RAII wrapper for an event object to allow asynchronous I/O to correctly signal completion.
+ class ScopedEvent {
+  public:
+@@ -813,7 +813,7 @@ bool FdFile::IsOpenFd(int fd) {
+   if (fd == kInvalidFd) {
+     return false;
+   }
+-  #ifdef _WIN32  // Windows toolchain does not support F_GETFD.
++  #if defined(_WIN32) && !defined(GESHER)  // Windows toolchain does not support F_GETFD.
+     return true;
+   #else
+     int saved_errno = errno;
+diff --git a/libartbase/base/utils.cc b/libartbase/base/utils.cc
+index 4c38566..a90a44c 100644
+--- a/libartbase/base/utils.cc
++++ b/libartbase/base/utils.cc
+@@ -385,7 +385,7 @@ std::string GetProcessStatus(const char* key) {
+ }
+ 
+ size_t GetOsThreadStat(pid_t tid, char* buf, size_t len) {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+   static constexpr int NAME_BUF_SIZE = 60;
+   char file_name_buf[NAME_BUF_SIZE];
+   // We don't use just /proc/<pid>/stat since, in spite of some documentation to the contrary,
+@@ -409,7 +409,7 @@ size_t GetOsThreadStat(pid_t tid, char* buf, size_t len) {
+ }
+ 
+ std::string GetOsThreadStatQuick(pid_t tid) {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+   static constexpr int BUF_SIZE = 100;
+   char buf[BUF_SIZE];
+   if (GetOsThreadStat(tid, buf, BUF_SIZE) == 0) {

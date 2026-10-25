@@ -1,0 +1,76 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Gesher features</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #00ff00; font-family: sans-serif; }
+  h1 { position: absolute; left: 10px; top: 0; margin: 0; font-size: 18px; }
+  #text { position: absolute; left: 10px; top: 150px; margin: 0; font-size: 14px; }
+  input[type=file] { position: absolute; left: 20px; width: 200px; height: 30px; }
+  #pickApp { top: 40px; }
+  #pickWin { top: 90px; }
+  #zoom { position: absolute; left: 10px; top: 200px; width: 100px; font-size: 16px; }
+</style>
+</head>
+<body>
+<h1>Gesher features</h1>
+<input type="file" id="pickApp" accept=".txt,text/plain">
+<input type="file" id="pickWin" accept="text/plain">
+<p id="text">apple banana apple Apple pineapple</p>
+<div id="zoom">zoom</div>
+<script>
+  // window.Features is FeaturesActivity.Bridge (addJavascriptInterface).
+  function report(s) { Features.report(s); }
+  // WebMessagePort: the first message's port answers "echo <message>".
+  window.addEventListener('message', function (e) {
+    if (e.data === 'hello opener') { report('opener got: ' + e.data); return; }
+    if (e.ports && e.ports.length) {
+      var port = e.ports[0];
+      port.onmessage = function (m) { port.postMessage('echo ' + m.data); };
+      report('port received ' + e.data + ' (origin "' + e.origin + '")');
+    }
+  });
+  ['pickApp', 'pickWin'].forEach(function (id) {
+    var input = document.getElementById(id);
+    input.addEventListener('change', function () {
+      var f = input.files[0];
+      if (!f) { report('picked ' + id + ': nothing'); return; }
+      f.text().then(function (t) {
+        report('picked ' + id + ': ' + f.name + ' (' + f.size + '): ' + t.trim());
+      });
+    });
+    input.addEventListener('cancel', function () { report('picked ' + id + ': cancelled'); });
+  });
+  // Clicks on the page (the round button's corners are the page's).
+  document.addEventListener('mousedown', function (e) {
+    report('page mousedown at ' + e.clientX + ',' + e.clientY);
+  });
+  window.place = function (id) {
+    var r = document.getElementById(id).getBoundingClientRect();
+    return Math.round(r.left + r.width / 2) + ',' + Math.round(r.top + r.height / 2);
+  };
+  window.askGeo = function () {
+    navigator.geolocation.getCurrentPosition(
+        function () { report('geolocation: position'); },
+        function (e) { report('geolocation: error ' + e.code); }, {timeout: 5000});
+  };
+  window.askMedia = function (what) {
+    var c = what === 'camera' ? {video: true} : {audio: true};
+    navigator.mediaDevices.getUserMedia(c).then(function (s) {
+      report(what + ': stream with ' + s.getTracks().length + ' track(s)');
+      s.getTracks().forEach(function (t) { t.stop(); });
+    }, function (e) { report(what + ': ' + e.name); });
+  };
+  window.openPopup = function () {
+    var w = window.open('popup.html');
+    report('window.open returned ' + (w ? 'a window' : 'null'));
+  };
+  window.zoomed = function () {
+    var z = document.getElementById('zoom');
+    return getComputedStyle(z).fontSize + ' ' + Math.round(z.getBoundingClientRect().width)
+        + ' ' + window.innerWidth;
+  };
+</script>
+</body>
+</html>
