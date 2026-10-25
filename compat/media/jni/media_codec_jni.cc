@@ -73,7 +73,6 @@ constexpr int kColorFormatYuv420Planar = 19;
 constexpr int kColorFormatYuv420Flexible = 0x7F420888;
 constexpr int kColorFormatSurface = 0x7F000789;
 constexpr int kSlots = 8;
-constexpr int kHalRgba8888 = 1;
 
 // --- The codecs this machine has ------------------------------------------------------------
 
