@@ -10,6 +10,7 @@ LOAD_THREAD_ID, or sit in the non-GESHER branch of a GESHER conditional.
 """
 import glob
 import os
+import re
 import sys
 
 # Lines that are the original (Linux) side of a ported macro.
@@ -35,7 +36,10 @@ def pending_sites(runtime):
             elif s.startswith('#endif') and depth:
                 depth.pop()
             code = line.split('//')[0]
-            if '%gs:' not in code and 'rSELF:' not in code:
+            # `gs:FIELD` without the % is a macro argument that becomes a
+            # %gs access inside the macro (REG_VAR), as in the JNI trampolines.
+            if ('%gs:' not in code and 'rSELF:' not in code and
+                    not re.search(r'(?<![%\w])gs:', code)):
                 continue
             if code.lstrip().startswith('#define') or any(f in code for f in PORTED_FORMS):
                 continue
