@@ -149,3 +149,15 @@ _Updated by the exec track (branch `wip/exec`)._
   generator ran through gesher-exec), `0 unexpected failures`. Roadmap box
   ticked.
 - Next: final CI on the branch merged with origin/phase4/integration.
+
+_exec2 track (branch `wip/exec2`, ADR 0055):_
+
+- d63005d: process_bionic.cc (fork/vfork, exec*, posix_spawn, system, popen,
+  wait*), signals between processes through the mailbox hook,
+  destroy/destroyForcibly, `gesher-exec --tool`, tests (43-exec2.ps1,
+  exec2_test.c/exec2_child.c). ci 40238884918: the libcore patch was malformed
+  and the test had a `-Wnonnull`; ci 40239339448: process_bionic.cc lacked
+  `<fcntl.h>` (fixed in fa01b01).
+- 784c47b: merged origin/phase4/integration (hwsvc2); ci 40240910969 running.
+- Not done: ELF TLS in the executable (ADR 0055 explains why); `pm`/`am`
+  decline; `setprop` does not persist; a real fork that does work before exec.
