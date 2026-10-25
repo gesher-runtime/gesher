@@ -28,7 +28,7 @@ jobs:
           ccache-key: runtime
 
       - name: Build
-        run: ninja -C out
+        run: ninja -C out -k 0  # TEMP media-soft: every error at once (reverted before merge)
 
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp

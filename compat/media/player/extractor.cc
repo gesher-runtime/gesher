@@ -23,6 +23,7 @@ android::ExtractorDef GesherExtractorDef_ogg();
 android::ExtractorDef GesherExtractorDef_flac();
 android::ExtractorDef GesherExtractorDef_wav();
 android::ExtractorDef GesherExtractorDef_aac();
+android::ExtractorDef GesherExtractorDef_mkv();
 }
 
 namespace gesher::media {
@@ -91,6 +92,7 @@ const Plugin kPlugins[] = {
     {"mp3", GesherExtractorDef_mp3}, {"mp4", GesherExtractorDef_mp4},
     {"ogg", GesherExtractorDef_ogg}, {"flac", GesherExtractorDef_flac},
     {"wav", GesherExtractorDef_wav}, {"aac", GesherExtractorDef_aac},
+    {"mkv", GesherExtractorDef_mkv},
 };
 
 // The data source, as the plugins read it.

@@ -134,9 +134,13 @@ system/vold *.bp
 # the open audio codecs. frameworks/av and frameworks/native's media pieces are
 # checkouts of their own (av-media, native-media), so the sparse sets the
 # framework build widens stay as they are.
-frameworks/av-media=platform/frameworks/av /include/ /media/module/extractors/ /media/module/foundation/ /media/module/id3/ /media/module/esds/ /media/module/metadatautils/ /media/module/codecs/mp3dec/ /media/module/codecs/m4v_h263/ /media/ndk/ /media/libstagefright/include/ /media/libmedia/include/ /media/libmedia/NdkMediaErrorPriv.cpp /media/libmedia/NdkMediaFormatPriv.cpp /media/libaudioclient/include/
+frameworks/av-media=platform/frameworks/av /include/ /media/module/extractors/ /media/module/foundation/ /media/module/id3/ /media/module/esds/ /media/module/metadatautils/ /media/module/codecs/mp3dec/ /media/module/codecs/m4v_h263/ /media/ndk/ /media/libstagefright/include/ /media/libmedia/include/ /media/libmedia/NdkMediaErrorPriv.cpp /media/libmedia/NdkMediaFormatPriv.cpp /media/libaudioclient/include/ /media/module/codecs/flac/
 frameworks/native-media=platform/frameworks/native /headers/media_plugin/
 external/tremolo
 external/libopus /celt/ /silk/ /src/ /include/
 external/flac /include/ /src/libFLAC/ /src/share/ /config.h
 external/libwebm
+# The software video decoders (cmake/aosp/media_video_codecs.cmake).
+external/libvpx /config/generic/ /vp8/ /vp9/ /vpx/ /vpx_dsp/ /vpx_mem/ /vpx_ports/ /vpx_scale/ /vpx_util/
+external/libdav1d /config/x86_64/ /include/ /src/
+external/libhevc /common/ /decoder/
