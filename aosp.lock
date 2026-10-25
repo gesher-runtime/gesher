@@ -12,7 +12,7 @@ system/logging
 system/libziparchive
 system/core libcutils/ libutils/ libsystem/include/ libprocessgroup/include/ property_service/
 # libcamera_metadata, for CameraMetadataNative (compat/devices, docs/devices.md).
-system/media camera/include/ camera/src/ private/camera/include/
+system/media camera/include/ camera/src/ private/camera/include/ /audio/include/ /audio_utils/
 external/zlib
 external/tinyxml2
 external/fmtlib
@@ -132,7 +132,6 @@ system/vold *.bp
 # framework build widens stay as they are.
 frameworks/av-media=platform/frameworks/av /include/ /media/module/extractors/ /media/module/foundation/ /media/module/id3/ /media/module/esds/ /media/module/metadatautils/ /media/module/codecs/mp3dec/ /media/module/codecs/m4v_h263/ /media/ndk/ /media/libstagefright/include/ /media/libmedia/include/ /media/libmedia/NdkMediaErrorPriv.cpp /media/libmedia/NdkMediaFormatPriv.cpp /media/libaudioclient/include/
 frameworks/native-media=platform/frameworks/native /headers/media_plugin/
-system/media /audio/include/ /audio_utils/
 external/tremolo
 external/libopus /celt/ /silk/ /src/ /include/
 external/flac /include/ /src/libFLAC/ /src/share/ /config.h
