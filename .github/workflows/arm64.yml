@@ -1,0 +1,279 @@
+name: arm64
+
+# gesher_arm64.dll (docs/arm64.md, ADR 0047): the arm64 translator (dynarmic,
+# A64 frontend + x86-64 backend), cross-compiled with the project's llvm-mingw
+# into a proxy DLL dalvikvm LoadLibrary()s. dynarmic and its externals stay out
+# of the main build graph entirely.
+#
+#   gh workflow run arm64 --ref <branch>
+#
+# ci.yml calls this workflow too; its artifact "arm64" (gesher_arm64.dll, the
+# step-1 smoke test, and DYNARMIC-NOTICES.txt) is downloaded by the test and
+# package jobs.
+on:
+  push:
+    branches: ['wip/arm64']
+    paths:
+      - 'compat/arm64/**'
+      - '.github/workflows/arm64.yml'
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  # yuzu-mirror/dynarmic, pinned (ADR 0047). 0BSD; A64 frontend, x86-64 backend.
+  DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
+  # fmt replacing dynarmic's vendored 10.1.0 (removed libc++ <__std_stream>).
+  FMT_VERSION: "11.0.2"
+  # Boost headers (interval containers) dynarmic needs to build.
+  BOOST_VERSION: "1.83.0"
+  # The Android NDK for the arm64-v8a guest test .so files (as native-libs.yml).
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  # d8, for the guest JNI test's dex (as native-libs.yml).
+  R8_VERSION: "9.5.26"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compat/arm64
+            cmake/toolchain-llvm-mingw.cmake
+            tests/native
+            tests/apps/nativeactivity
+            tests/exec
+
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
+            | tar -xJ -C ~/toolchain
+
+      - name: Cache dynarmic, fmt and Boost headers
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p2
+
+      - name: Fetch and patch dynarmic, fmt and Boost
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+
+          # dynarmic at the pinned commit, with its vendored externals.
+          git init -q dynarmic
+          git -C dynarmic fetch -q --depth 1 https://github.com/yuzu-mirror/dynarmic "$DYNARMIC_COMMIT"
+          git -C dynarmic checkout -q FETCH_HEAD
+
+          # Replace the vendored fmt (10.1.0) with a newer one that builds on
+          # the pinned llvm-mingw clang (docs/arm64.md).
+          curl -fsSL -o fmt.tar.gz "https://github.com/fmtlib/fmt/archive/refs/tags/$FMT_VERSION.tar.gz"
+          tar -xzf fmt.tar.gz
+          rm -rf dynarmic/externals/fmt
+          mv "fmt-$FMT_VERSION" dynarmic/externals/fmt
+          rm fmt.tar.gz
+
+          # Patch for the 2026 clang (docs/arm64.md, ADR 0047):
+          #  - fmt: force FMT_USE_CONSTEVAL 0 (FMT_STRING trips a consteval
+          #    evaluation error in fmt's own sources on this clang).
+          sed -i 's/^#  define FMT_USE_CONSTEVAL 1$/#  define FMT_USE_CONSTEVAL 0/' \
+            dynarmic/externals/fmt/include/fmt/base.h
+          #  - mcl: the template-template parameter no longer matches
+          #    std::integer_sequence on this clang.
+          sed -i 's@template<class T, template<class, T\.\.\.> class VLT, T\.\.\. values>@template<class T, template<class VT, VT...> class VLT, T... values>@' \
+            dynarmic/externals/mcl/include/mcl/mp/typelist/lift_sequence.hpp
+          #  - dynarmic: ir_emitter.h uses std::vector without including <vector>
+          #    (this clang's libc++ no longer provides it transitively).
+          sed -i 's@#include <mcl/stdint.hpp>@#include <vector>\n\n#include <mcl/stdint.hpp>@' \
+            dynarmic/src/dynarmic/ir/ir_emitter.h
+          grep -q 'FMT_USE_CONSTEVAL 1' dynarmic/externals/fmt/include/fmt/base.h && { echo 'fmt patch failed'; exit 1; } || true
+
+          # Boost headers (interval containers): header-only, extract just boost/.
+          curl -fsSL -o boost.tar.bz2 "https://archives.boost.io/release/$BOOST_VERSION/source/boost_${BOOST_VERSION//./_}.tar.bz2"
+          tar -xjf boost.tar.bz2 "boost_${BOOST_VERSION//./_}/boost"
+          mv "boost_${BOOST_VERSION//./_}" boost
+          rm boost.tar.bz2
+
+      - name: Install Ninja
+        run: sudo apt-get install -y --no-install-recommends ninja-build
+
+      - name: Build gesher_arm64.dll and the smoke test
+        run: |
+          set -euo pipefail
+          llvm="$HOME/toolchain/$LLVM_MINGW_NAME"
+          "$llvm/bin/x86_64-w64-mingw32-clang" --version | head -1
+          cmake -S compat/arm64/dll -B out-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
+            -DBoost_INCLUDE_DIR="$PWD/deps/boost"
+          ninja -C out-arm64 gesher_arm64 arm64_smoke_test
+          mkdir -p dist-arm64
+          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe dist-arm64/
+          cp deps/dynarmic/LICENSE.txt dist-arm64/DYNARMIC-NOTICES.txt
+          "$llvm/bin/llvm-objdump" -p dist-arm64/gesher_arm64.dll | grep -iE 'Export|gesher_arm64' | head
+          ls -la dist-arm64
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Build the arm64-v8a guest test .so files
+        run: |
+          set -euo pipefail
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
+          "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
+            -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
+            -o dist-arm64/trivial_arm64.so tests/native/trivial.c
+          # Step 2 (guest): bionic libc/libm/libdl/liblog/pthread through the
+          # shim, over the guest->host trampolines (the NDK's default stack
+          # protector: its guard is a TLS slot on arm64).
+          "$cc" -shared -fPIC -O2 \
+            -Wl,-soname,libc_test.so \
+            -o dist-arm64/libc_test_arm64.so tests/native/libc_test.c -llog -ldl -lm
+          # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
+          # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
+          # and the perf kernel (docs/arm64.md).
+          "$cc" -shared -fPIC -O2 -fstack-protector-all \
+            -Wl,-soname,libarm64_abi_test.so \
+            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c -ldl
+          # Step 3/4 (guest JNI): natives found by name and registered, calling
+          # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
+          # thread attached to the VM.
+          "$cc" -shared -fPIC -O2 -fstack-protector-strong \
+            -Wl,-soname,libjni_test.so \
+            -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
+          # An arm64-v8a ELF executable (the exec track's test program, ADR 0035)
+          # and its DT_NEEDED library, for gesher-exec through the translator:
+          # in a directory of their own (the x86_64 ones have the same names).
+          mkdir -p dist-arm64/arm64-exec
+          cca="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$cca" -shared -fPIC -O2 -fstack-protector-strong \
+            -Wl,-soname,libexechelper.so -o dist-arm64/arm64-exec/libexechelper.so tests/exec/exec_helper.c
+          "$cca" -O2 -fstack-protector-strong -Wall -Werror \
+            -o dist-arm64/arm64-exec/libexectest.so tests/exec/exec_test.c \
+            -Ldist-arm64/arm64-exec -lexechelper
+          ro="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$ro" -h -l dist-arm64/arm64-exec/libexectest.so | grep -E 'Machine|Type:|Entry|INTERP|TLS' || true
+          echo "--- trivial_arm64.so ---"; "$ro" -h dist-arm64/trivial_arm64.so | grep -E 'Machine|Type'
+          echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
+          ls -la dist-arm64
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar \
+            "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build the guest JNI test's dex
+        run: |
+          set -euo pipefail
+          mkdir -p work/jni-classes work/jni-dex
+          javac --release 11 -encoding UTF-8 -d work/jni-classes tests/native/java/gesher/Arm64Jni.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
+            --output work/jni-dex $(find work/jni-classes -name '*.class')
+          cp work/jni-dex/classes.dex dist-arm64/arm64-jni.dex
+          ls -la dist-arm64
+
+      # aapt2, zipalign and android.jar (the same cache as native-libs.yml).
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+
+      # The NativeActivity test app (tests/apps/nativeactivity) with only
+      # lib/arm64-v8a: gesher-app must pick arm64-v8a (NativeLibs.abiFor) and
+      # run its libandroid/EGL/GLES/AChoreographer/AInputQueue code translated.
+      - name: Build the arm64-only NativeActivity test APK
+        run: |
+          tests/apps/nativeactivity/build.sh dist-arm64 --ndk "$PWD/$NDK_DIR" \
+            --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" \
+            --abi arm64-v8a --apk nativeactivity-arm64.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64
+          path: dist-arm64/
+
+  # The step-1 smoke test on both runner images when this workflow runs on its
+  # own; ci.yml's test jobs run it from tests/windows/tracks/47-arm64.ps1.
+  smoke:
+    if: github.workflow == 'arm64' && !cancelled()
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+
+      - name: arm64 translator smoke test
+        shell: pwsh
+        run: |
+          Copy-Item dist/gesher_arm64.dll .
+          & dist/arm64_smoke_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

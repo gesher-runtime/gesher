@@ -28,6 +28,8 @@ public final class GesherService extends Binder {
     static final int LAST_EXIT = IBinder.FIRST_CALL_TRANSACTION + 4;
     /** The window mode of a package's next process (WindowManagerService.setWindowMode). */
     static final int WINDOW_MODE = IBinder.FIRST_CALL_TRANSACTION + 5;
+    /** A click on a toast, which Windows' toast activator gave a launcher (ADR 0051). */
+    static final int TOAST_ACTIVATED = IBinder.FIRST_CALL_TRANSACTION + 6;
 
     /** What the service does; the system server implements it. */
     interface Device {
@@ -39,6 +41,8 @@ public final class GesherService extends Binder {
         int lastExitCode(String packageName);
         /** A call came: the device is not idle. */
         void touch();
+        /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
+        void toastActivated(String appId, String arguments);
     }
 
     private final Device mDevice;
@@ -51,7 +55,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > WINDOW_MODE) {
+        if (code < INSTALL || code > TOAST_ACTIVATED) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -86,6 +90,12 @@ public final class GesherService extends Binder {
                 case WINDOW_MODE: {
                     String pkg = data.readString();
                     WindowManagerService.setWindowMode(pkg, data.readString());
+                    reply.writeNoException();
+                    return true;
+                }
+                case TOAST_ACTIVATED: {
+                    String appId = data.readString();
+                    mDevice.toastActivated(appId, data.readString());
                     reply.writeNoException();
                     return true;
                 }
@@ -176,6 +186,22 @@ public final class GesherService extends Binder {
                 data.writeString(packageName);
                 data.writeString(mode);
                 mBinder.transact(WINDOW_MODE, data, reply, 0);
+                reply.readException();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Hands the device a toast click that Windows gave this process (the activator). */
+        public void toastActivated(String appId, String arguments) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(appId);
+                data.writeString(arguments);
+                mBinder.transact(TOAST_ACTIVATED, data, reply, 0);
                 reply.readException();
             } finally {
                 data.recycle();

@@ -71,6 +71,11 @@ public final class CameraFrames {
         }
     }
 
+    /** {@code nv12} (w x h) as NV21 of tw x th (the legacy Camera's preview format). */
+    public static byte[] nv21(byte[] nv12, int w, int h, int tw, int th) {
+        return nativeToNv21(nv12, w, h, tw, th);
+    }
+
     private static int clamp(int v) {
         return v < 0 ? 0 : v > 255 ? 255 : v;
     }
