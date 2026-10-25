@@ -1,0 +1,96 @@
+name: posix
+
+# ART's own gtests for libartbase and libdexfile (docs/posix.md), built by
+# cmake/aosp/art_gtests.cmake with the project's toolchain, and the test jars
+# they read (tests/art-gtests/build-test-jars.sh). ci.yml calls this workflow
+# and its test job runs them on Windows (tests/windows/tracks/21-posix.ps1).
+# Run on its own (a push to the posix branch, or `gh workflow run posix --ref
+# <branch>`), it runs them too.
+on:
+  push:
+    branches: ['wip/posix']
+    paths:
+      - 'cmake/aosp/art_gtests.cmake'
+      - 'tests/art-gtests/**'
+      - 'compat/posix/**'
+      - 'tests/windows/tracks/21-posix.ps1'
+      - '.github/workflows/posix.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-posix-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: posix
+
+      - name: Build the tests
+        run: ninja -C out -k 0 art_gtests
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build the test jars
+        run: tests/art-gtests/build-test-jars.sh out/art-gtests
+
+      # Under ci.yml the test job has the boot jars from the build job.
+      - name: Build core-oj.jar (on its own only)
+        if: github.workflow == 'posix'
+        run: |
+          tools/build-boot-jars.sh out/boot-jars
+          cp out/boot-jars/core-oj.jar out/art-gtests/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: art-gtests
+          path: out/art-gtests/
+
+  # Only when run on its own: under ci.yml, its test job runs them.
+  test:
+    if: github.workflow == 'posix'
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: art-gtests
+          path: dist/art-gtests
+
+      - name: Run the tests
+        shell: pwsh
+        run: |
+          Copy-Item dist/art-gtests/core-oj.jar dist/
+          pwsh -NoProfile -Command '$Dir = "dist"; $failed = 0; $PosixGtestsOnly = $true; . ./tests/windows/tracks/21-posix.ps1; exit $failed' |
+            Tee-Object -FilePath results.txt
+          $code = $LASTEXITCODE
+          "### ART gtests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL)' >> $env:GITHUB_STEP_SUMMARY
+          '```' >> $env:GITHUB_STEP_SUMMARY
+          exit $code

@@ -121,6 +121,15 @@ int prctl(int option, ...) {
       snprintf(name, sizeof(name), "%s", va_arg(args, const char*));
       int error = pthread_setname_np(pthread_self(), name);
       result = error == 0 ? 0 : (errno = error, -1);
+      // Also Windows' own thread name, which /proc/self/task/<tid>/comm
+      // (procfs.cc) and debuggers read (Windows 10 1607 and later).
+      using SetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+      static auto set_description = reinterpret_cast<SetThreadDescriptionFn>(
+          reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+                                                 "SetThreadDescription")));
+      if (result == 0 && set_description != nullptr) {
+        set_description(GetCurrentThread(), gesher::Widen(name).c_str());
+      }
       break;
     }
     case PR_GET_NAME: {

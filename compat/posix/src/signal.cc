@@ -24,6 +24,8 @@
 // everyone else to gesher_pthread_kill.
 #undef pthread_kill
 
+extern "C" int gesher_kill_other(pid_t pid, int sig);
+
 namespace {
 
 constexpr int kMaxSignal = NSIG - 1;
@@ -53,8 +55,8 @@ sigset_t Bit(int signum) { return static_cast<sigset_t>(1) << (signum - 1); }
 int Send(pid_t pid, int signum, int code, const union sigval* value) {
   if (signum != 0 && !Valid(signum)) return errno = EINVAL, -1;
   if (pid != getpid() && pid != 0) {
-    // Other processes would need a channel of their own.
-    return errno = ENOSYS, -1;
+    // Another process: through its mailbox (process.cc).
+    return gesher_kill_other(pid, signum);
   }
   if (signum == 0) return 0;
   State& s = state();

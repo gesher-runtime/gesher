@@ -40,6 +40,8 @@ struct EventFd {
   uint64_t counter = 0;
   bool semaphore = false;
   bool nonblocking = false;
+  // An inotify's readiness (inotify.cc): never writable, as an inotify fd is not.
+  bool read_only = false;
   HANDLE readable = nullptr;  // set while counter > 0
   HANDLE writable = nullptr;  // set while counter < kMax, as Linux's POLLOUT
   bool readable_set = false;
@@ -90,10 +92,12 @@ struct Epoll {
   }
 };
 
-// fd -> object, for both kinds.
+// fd -> object, for each kind. An inotify's fd has its readiness as its
+// eventfd too, so poll and epoll_wait see it as one.
 struct Object {
   std::shared_ptr<EventFd> eventfd;
   std::shared_ptr<Epoll> epoll;
+  std::shared_ptr<Inotify> inotify;
 };
 
 std::mutex objects_mutex;
@@ -194,12 +198,12 @@ short PollEventFd(EventFd& e, short events, HANDLE* wake) {
   std::lock_guard<std::mutex> lock(e.mutex);
   short ready = 0;
   if (e.counter > 0) ready |= events & (POLLIN | POLLRDNORM);
-  if (e.counter < EventFd::kMax) ready |= events & (POLLOUT | POLLWRNORM);
+  if (!e.read_only && e.counter < EventFd::kMax) ready |= events & (POLLOUT | POLLWRNORM);
   if (wake != nullptr) {
     // One of the two is always ready, so at most one needs waiting for.
     *wake = ready != 0                               ? nullptr
             : (events & (POLLIN | POLLRDNORM)) != 0  ? e.readable
-            : (events & (POLLOUT | POLLWRNORM)) != 0 ? e.writable
+            : (events & (POLLOUT | POLLWRNORM)) != 0 && !e.read_only ? e.writable
                                                      : nullptr;
   }
   return ready;
@@ -219,14 +223,17 @@ void SetNonBlocking(EventFd& e, bool on) {
 bool ReadEventObject(int fd, void* buf, unsigned int count, int* result) {
   Object object;
   if (!Lookup(fd, &object)) return false;
-  *result = object.eventfd ? ReadEventFd(*object.eventfd, buf, count) : (errno = EINVAL, -1);
+  *result = object.inotify   ? ReadInotify(*object.inotify, buf, count)
+            : object.eventfd ? ReadEventFd(*object.eventfd, buf, count)
+                             : (errno = EINVAL, -1);
   return true;
 }
 
 bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) {
   Object object;
   if (!Lookup(fd, &object)) return false;
-  *result = object.eventfd ? WriteEventFd(*object.eventfd, buf, count) : (errno = EINVAL, -1);
+  *result = object.eventfd && !object.inotify ? WriteEventFd(*object.eventfd, buf, count)
+                                              : (errno = EINVAL, -1);
   return true;
 }
 
@@ -240,6 +247,33 @@ bool ForgetEventObject(int fd) {
   objects.erase(it);
   object_count.fetch_sub(1, std::memory_order_release);
   return true;
+}
+
+std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
+  auto e = std::make_shared<EventFd>();
+  e->read_only = true;
+  e->nonblocking = nonblocking;
+  e->readable = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  e->writable = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (e->readable == nullptr || e->writable == nullptr) return nullptr;
+  std::lock_guard<std::mutex> lock(e->mutex);
+  e->Update();
+  return e;
+}
+
+void SetReadable(EventFd& e, bool readable) {
+  std::lock_guard<std::mutex> lock(e.mutex);
+  e.counter = readable ? 1 : 0;
+  e.Update();
+}
+
+std::shared_ptr<Inotify> LookupInotify(int fd) {
+  Object object;
+  return Lookup(fd, &object) ? object.inotify : nullptr;
+}
+
+int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness) {
+  return Register({std::move(readiness), nullptr, std::move(inotify)});
 }
 
 void DupEventObject(int fd, int fd2) {
@@ -291,7 +325,7 @@ int eventfd(unsigned int initval, int flags) {
   e->writable = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (e->readable == nullptr || e->writable == nullptr) return gesher::FailWithLastError();
   e->Update();
-  return gesher::Register({std::move(e), nullptr});
+  return gesher::Register({std::move(e), nullptr, nullptr});
 }
 
 int eventfd_read(int fd, eventfd_t* value) {
@@ -313,7 +347,7 @@ int epoll_create1(int flags) {
     std::lock_guard<std::mutex> lock(gesher::epolls_mutex);
     gesher::epolls.push_back(ep);
   }
-  return gesher::Register({nullptr, std::move(ep)});
+  return gesher::Register({nullptr, std::move(ep), nullptr});
 }
 
 int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_create1(0); }

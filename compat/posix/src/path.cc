@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -37,9 +38,8 @@ bool IsAbsolute(const char* path) {
   return path[0] == '/' || path[0] == '\\' || (IsDriveLetter(path[0]) && path[1] == ':');
 }
 
-// /dev, /proc and /sys are Linux's virtual file systems: their names never
-// reach the disk. Returns kFile for any other path.
-PathKind VirtualKind(std::string_view path) {
+// The parts of an absolute path, without empty and "." components.
+std::vector<std::string_view> Parts(std::string_view path) {
   std::vector<std::string_view> parts;
   while (!path.empty()) {
     size_t end = path.find('/');
@@ -48,20 +48,53 @@ PathKind VirtualKind(std::string_view path) {
     if (end == std::string_view::npos) break;
     path.remove_prefix(end + 1);
   }
-  if (parts.empty() || (parts[0] != "dev" && parts[0] != "proc" && parts[0] != "sys")) {
-    return PathKind::kFile;
+  return parts;
+}
+
+// /dev, /proc and /sys are Linux's virtual file systems: their names never
+// reach the disk; nor does /etc/timezone, which libcore reads for the default
+// time zone. Returns kFile for any other path. For kVirtual, *name is the
+// normalized name ("proc/self/status").
+PathKind VirtualKind(std::string_view path, std::wstring* name) {
+  std::vector<std::string_view> parts = Parts(path);
+  if (parts.empty()) return PathKind::kFile;
+  if (parts.size() == 2 && parts[0] == "etc" && parts[1] == "timezone") {
+    *name = L"etc/timezone";
+    return PathKind::kVirtual;
   }
+  if (parts[0] == "proc") {
+    std::string joined;
+    for (std::string_view part : parts) {
+      if (!joined.empty()) joined += '/';
+      joined += part;
+    }
+    *name = Widen(joined.c_str());
+    return PathKind::kVirtual;
+  }
+  if (parts[0] != "dev" && parts[0] != "sys") return PathKind::kFile;
   if (parts.size() == 2 && parts[0] == "dev") {
     if (parts[1] == "null") return PathKind::kNull;
     if (parts[1] == "zero") return PathKind::kZero;
     if (parts[1] == "random" || parts[1] == "urandom") return PathKind::kRandom;
     if (parts[1] == "binder") return BinderDeviceExists() ? PathKind::kBinder : PathKind::kMissing;
   }
-  if (parts.size() == 3 && parts[0] == "proc" && parts[2] == "cmdline" &&
-      (parts[1] == "self" || parts[1] == std::to_string(GetCurrentProcessId()))) {
-    return PathKind::kCmdline;
-  }
   return PathKind::kMissing;
+}
+
+// /mnt/<drive>[/...] is that drive's path (ADR 0045): "D:\..." for "/mnt/d/...".
+// False if `path` is not such a name.
+bool DrivePath(const char* path, std::wstring* windows) {
+  if (strncmp(path, "/mnt/", 5) != 0 || !IsDriveLetter(path[5]) ||
+      (path[6] != '\0' && path[6] != '/')) {
+    return false;
+  }
+  std::wstring rest = Widen(path + 6);
+  for (wchar_t& c : rest) {
+    if (c == L'/') c = L'\\';
+  }
+  *windows = std::wstring(1, static_cast<wchar_t>(towupper(path[5]))) + L":" +
+             (rest.empty() ? L"\\" : rest);
+  return true;
 }
 
 // Paths from MAX_PATH on need the \\?\ form, which takes only full paths
@@ -75,32 +108,6 @@ void Lengthen(std::wstring* path) {
   if (n == 0 || n >= full.size()) return;
   full.resize(n);
   *path = full.rfind(L"\\\\", 0) == 0 ? L"\\\\?\\UNC\\" + full.substr(2) : L"\\\\?\\" + full;
-}
-
-// Joins a path relative to dirfd onto that directory's path; absolute paths
-// and AT_FDCWD pass unchanged. False (errno set) if dirfd is not a directory.
-bool ResolveAt(int dirfd, const char* path, std::string* out) {
-  if (path == nullptr) return errno = EFAULT, false;
-  if (dirfd == AT_FDCWD || IsAbsolute(path)) {
-    *out = path;
-    return true;
-  }
-  HANDLE h = HandleFromFd(dirfd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
-  BY_HANDLE_FILE_INFORMATION info;
-  if (!GetFileInformationByHandle(h, &info) ||
-      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    return errno = ENOTDIR, false;
-  }
-  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  std::wstring dir(n, L'\0');
-  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
-  dir.resize(n);
-  *out = LinuxPath(dir.c_str());
-  if (out->back() != '/') *out += '/';
-  *out += path;
-  return true;
 }
 
 DWORD Access(int flags) {
@@ -124,7 +131,7 @@ int FdFromHandle(HANDLE h, int flags) {
   return fd;
 }
 
-int OpenFile(const std::wstring& path, int flags) {
+int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if ((flags & O_TMPFILE) == O_TMPFILE) return errno = EOPNOTSUPP, -1;
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
@@ -134,13 +141,27 @@ int OpenFile(const std::wstring& path, int flags) {
   } else {
     disposition = (flags & O_TRUNC) != 0 ? TRUNCATE_EXISTING : OPEN_EXISTING;
   }
-  // Backup semantics open directories too, as Linux does for reading.
-  DWORD attributes = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS |
+  // Backup semantics open directories too, as Linux does for reading. A new
+  // file without the owner's write permission is read-only, as chmod makes
+  // it (fsops.cc); the fd itself may still write, as on Linux. O_NOFOLLOW
+  // opens a symbolic link itself, to refuse it below (or, with O_PATH, to
+  // return it).
+  DWORD attributes = FILE_FLAG_BACKUP_SEMANTICS |
+                     ((flags & O_CREAT) != 0 && (mode & 0200) == 0 ? FILE_ATTRIBUTE_READONLY
+                                                                   : FILE_ATTRIBUTE_NORMAL) |
+                     ((flags & O_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0) |
                      ((flags & O_DSYNC) != 0 ? FILE_FLAG_WRITE_THROUGH : 0);
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
   DWORD access = Access(flags);
-  HANDLE h = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                         &inherit, disposition, attributes, nullptr);
+  HANDLE h = INVALID_HANDLE_VALUE;
+  // A brief open that denies sharing (a scanner, inotify.cc's check for
+  // writers) is waited out.
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    h = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    &inherit, disposition, attributes, nullptr);
+    if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+    Sleep(1);
+  }
   if (h == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
     DWORD existing = GetFileAttributesW(path.c_str());
@@ -150,6 +171,10 @@ int OpenFile(const std::wstring& path, int flags) {
     }
     SetLastError(error);
     return FailWithLastError();
+  }
+  if ((flags & (O_NOFOLLOW | O_PATH)) == O_NOFOLLOW && IsSymlinkHandle(h)) {
+    CloseHandle(h);
+    return errno = ELOOP, -1;
   }
   BY_HANDLE_FILE_INFORMATION info;
   bool directory = GetFileInformationByHandle(h, &info) &&
@@ -179,42 +204,17 @@ int OpenDevice(PathKind kind, int flags) {
   return fd;
 }
 
-// /proc/self/cmdline: the arguments, each followed by a NUL, in an anonymous
-// file.
-int OpenCmdline(int flags) {
-  if ((flags & O_ACCMODE) != O_RDONLY) return errno = EACCES, -1;
-  int argc = 0;
-  wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (argv == nullptr) return FailWithLastError();
-  std::string content;
-  for (int i = 0; i < argc; ++i) {
-    content += Narrow(argv[i]);
-    content += '\0';
-  }
-  LocalFree(argv);
-  int fd = memfd_create("cmdline", (flags & O_CLOEXEC) != 0 ? MFD_CLOEXEC : 0);
-  if (fd < 0) return -1;
-  if (_write(fd, content.data(), static_cast<unsigned>(content.size())) !=
-          static_cast<int>(content.size()) ||
-      _lseeki64(fd, 0, SEEK_SET) != 0) {
-    int saved = gesher_errno_from_crt(errno);
-    _close(fd);
-    return errno = saved, -1;
-  }
-  return fd;
-}
-
-int OpenPath(const char* path, int flags) {
+int OpenPath(const char* path, int flags, mode_t mode) {
   if (path == nullptr) return errno = EFAULT, -1;
   if (*path == '\0') return errno = ENOENT, -1;
   std::wstring windows;
   PathKind kind = MapPath(path, &windows);
   switch (kind) {
-    case PathKind::kFile: return OpenFile(windows, flags);
+    case PathKind::kFile: return OpenFile(windows, flags, mode);
     case PathKind::kNull:
     case PathKind::kZero:
     case PathKind::kRandom: return OpenDevice(kind, flags);
-    case PathKind::kCmdline: return OpenCmdline(flags);
+    case PathKind::kVirtual: return procfs::Open(windows, flags);
     case PathKind::kBinder: return OpenBinder(flags);
     case PathKind::kMissing: break;
   }
@@ -223,16 +223,79 @@ int OpenPath(const char* path, int flags) {
 
 }  // namespace
 
+// Joins a path relative to dirfd onto that directory's path; absolute paths
+// and AT_FDCWD pass unchanged. False (errno set) if dirfd is not a directory.
+bool ResolveAt(int dirfd, const char* path, std::string* out) {
+  if (path == nullptr) return errno = EFAULT, false;
+  if (dirfd == AT_FDCWD || IsAbsolute(path)) {
+    *out = path;
+    return true;
+  }
+  HANDLE h = HandleFromFd(dirfd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+  BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(h, &info) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    return errno = ENOTDIR, false;
+  }
+  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  std::wstring dir(n, L'\0');
+  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
+  dir.resize(n);
+  *out = LinuxPath(dir.c_str());
+  if (out->back() != '/') *out += '/';
+  *out += path;
+  return true;
+}
+
 PathKind MapPath(const char* path, std::wstring* windows) {
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning.
   if (path[0] == '/' && path[1] != '/') {
-    PathKind kind = VirtualKind(path);
+    PathKind kind = VirtualKind(path, windows);
     if (kind != PathKind::kFile) return kind;
+    if (DrivePath(path, windows)) {
+      Lengthen(windows);
+      return PathKind::kFile;
+    }
   }
   *windows = Widen(path);
   Lengthen(windows);
   return PathKind::kFile;
+}
+
+bool DiskPath(const char* path, std::wstring* windows, int special) {
+  if (path == nullptr) return errno = EFAULT, false;
+  if (path[0] == '\0') return errno = ENOENT, false;
+  switch (MapPath(path, windows)) {
+    case PathKind::kFile:
+      return true;
+    case PathKind::kMissing:
+      return errno = ENOENT, false;
+    case PathKind::kVirtual:
+      return errno = procfs::Type(*windows) == 0 ? ENOENT : special, false;
+    default:
+      return errno = special, false;
+  }
+}
+
+// The current directory's drive, 1 for A:; 0 when it has none (UNC). Unlike
+// _getdrive, it also reads a \\?\ current directory.
+int CurrentDrive() {
+  wchar_t cwd[8];
+  DWORD n = GetCurrentDirectoryW(8, cwd);
+  std::wstring head;
+  if (n >= 8) {
+    std::wstring full(n, L'\0');
+    n = GetCurrentDirectoryW(n, full.data());
+    head = full.substr(0, n);
+  } else {
+    head.assign(cwd, n);
+  }
+  if (head.rfind(L"\\\\?\\", 0) == 0) head = head.substr(4);
+  if (head.size() >= 2 && head[1] == L':' && iswalpha(head[0])) return towupper(head[0]) - L'A' + 1;
+  return 0;
 }
 
 std::string LinuxPath(const wchar_t* windows) {
@@ -245,14 +308,69 @@ std::string LinuxPath(const wchar_t* windows) {
   for (wchar_t& c : path) {
     if (c == L'\\') c = L'/';
   }
-  // _getdrive is 0 when the current directory is a UNC path.
-  int drive = _getdrive();
-  if (drive > 0 && path.size() >= 2 && path[1] == L':' && (path.size() == 2 || path[2] == L'/') &&
-      towupper(path[0]) == static_cast<wchar_t>(L'A' + drive - 1)) {
-    path.erase(0, 2);
-    if (path.empty()) path = L"/";
+  int drive = CurrentDrive();
+  if (path.size() >= 2 && path[1] == L':' && iswalpha(path[0]) && (path.size() == 2 || path[2] == L'/')) {
+    if (drive > 0 && towupper(path[0]) == static_cast<wchar_t>(L'A' + drive - 1)) {
+      path.erase(0, 2);
+      if (path.empty()) path = L"/";
+    } else {
+      // Another drive: /mnt/<drive>, so the path needs no colon either.
+      std::wstring rest = path.substr(2);
+      if (rest == L"/") rest.clear();
+      path = std::wstring(L"/mnt/") + static_cast<wchar_t>(towlower(path[0])) + rest;
+    }
   }
   return Narrow(path.c_str());
+}
+
+// Linux's unlink and rmdir remove the name at once, even while the file is
+// open; Windows' DeleteFile and RemoveDirectory may leave it in place (delete
+// pending) until the last handle closes. The POSIX-semantics delete gives
+// Linux's behaviour where the volume has it, the classic one otherwise; a
+// scanner's brief open of a new file is waited out. A symbolic link is
+// removed itself, by unlink, also when it points to a directory.
+int PosixDelete(const std::wstring& windows, bool directory) {
+  HANDLE h = INVALID_HANDLE_VALUE;
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+    Sleep(10);
+  }
+  if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
+  FILE_BASIC_INFO basic;
+  bool is_directory = GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof(basic)) &&
+                      (basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+                      !IsSymlinkHandle(h);
+  if (is_directory != directory) {
+    CloseHandle(h);
+    return errno = directory ? ENOTDIR : EISDIR, -1;
+  }
+  FILE_DISPOSITION_INFO_EX posix = {FILE_DISPOSITION_FLAG_DELETE |
+                                    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
+                                    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
+  // FileDispositionInfoEx (21), which older SDK headers declare only for
+  // newer _WIN32_WINNT values.
+  BOOL ok = SetFileInformationByHandle(h, static_cast<FILE_INFO_BY_HANDLE_CLASS>(21), &posix,
+                                       sizeof(posix));
+  DWORD error = GetLastError();
+  if (!ok && error != ERROR_DIR_NOT_EMPTY) {
+    // Linux removes read-only files; the classic delete does not.
+    if ((basic.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0) {
+      basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+      SetFileInformationByHandle(h, FileBasicInfo, &basic, sizeof(basic));
+    }
+    FILE_DISPOSITION_INFO classic = {TRUE};
+    ok = SetFileInformationByHandle(h, FileDispositionInfo, &classic, sizeof(classic));
+    error = GetLastError();
+  }
+  CloseHandle(h);
+  if (!ok) {
+    SetLastError(error);
+    return FailWithLastError();
+  }
+  return 0;
 }
 
 }  // namespace gesher
@@ -261,15 +379,34 @@ using gesher::PathKind;
 
 extern "C" {
 
+// Of the mode, only the owner's write permission is kept: without it a new
+// file is read-only.
 int open(const char* path, int flags, ...) {
-  // The mode is not used: permissions are not modelled.
-  return gesher::OpenPath(path, flags);
+  mode_t mode = 0666;
+  if ((flags & O_CREAT) != 0) {
+    va_list args;
+    va_start(args, flags);
+    mode = static_cast<mode_t>(va_arg(args, int));
+    va_end(args);
+  }
+  return gesher::OpenPath(path, flags, mode);
 }
 
 int openat(int dirfd, const char* path, int flags, ...) {
+  mode_t mode = 0666;
+  if ((flags & O_CREAT) != 0) {
+    va_list args;
+    va_start(args, flags);
+    mode = static_cast<mode_t>(va_arg(args, int));
+    va_end(args);
+  }
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
-  return gesher::OpenPath(resolved.c_str(), flags);
+  return gesher::OpenPath(resolved.c_str(), flags, mode);
+}
+
+int creat(const char* path, int mode) {
+  return gesher::OpenPath(path, O_CREAT | O_WRONLY | O_TRUNC, static_cast<mode_t>(mode));
 }
 
 // stat, fstat and lstat are in stat.cc.
@@ -278,7 +415,8 @@ int fstatat(int dirfd, const char* path, struct stat* buf, int flags) {
   if ((flags & AT_EMPTY_PATH) != 0 && path != nullptr && path[0] == '\0') return fstat(dirfd, buf);
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
-  return stat(resolved.c_str(), buf);
+  return (flags & AT_SYMLINK_NOFOLLOW) != 0 ? lstat(resolved.c_str(), buf)
+                                            : stat(resolved.c_str(), buf);
 }
 
 // --- file times ---------------------------------------------------------------
@@ -394,55 +532,10 @@ int mkdir(const char* path) {
   }
 }
 
-// Linux's unlink removes the name at once, even while the file is open; the
-// CRT's DeleteFile may leave it in place (delete pending) until the last
-// handle closes. The POSIX-semantics delete gives Linux's behaviour where the
-// volume has it, the classic one otherwise; a scanner's brief open of a new
-// file is waited out.
 int unlink(const char* path) {
-  if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
-  switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
-    case PathKind::kFile:
-      break;
-    case PathKind::kMissing:
-      return errno = ENOENT, -1;
-    default:
-      return errno = EACCES, -1;  // the /dev and /proc names
-  }
-  HANDLE h = INVALID_HANDLE_VALUE;
-  for (int attempt = 0; attempt < 20; ++attempt) {
-    h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                    FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-    if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
-    Sleep(10);
-  }
-  if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  FILE_ATTRIBUTE_TAG_INFO tag;
-  if (GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof(tag)) &&
-      (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-    CloseHandle(h);
-    return errno = EISDIR, -1;
-  }
-  FILE_DISPOSITION_INFO_EX posix = {FILE_DISPOSITION_FLAG_DELETE |
-                                    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
-                                    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
-  // FileDispositionInfoEx (21), which older SDK headers declare only for
-  // newer _WIN32_WINNT values.
-  BOOL ok = SetFileInformationByHandle(h, static_cast<FILE_INFO_BY_HANDLE_CLASS>(21), &posix,
-                                       sizeof(posix));
-  if (!ok) {
-    FILE_DISPOSITION_INFO classic = {TRUE};
-    ok = SetFileInformationByHandle(h, FileDispositionInfo, &classic, sizeof(classic));
-  }
-  DWORD error = GetLastError();
-  CloseHandle(h);
-  if (!ok) {
-    SetLastError(error);
-    return gesher::FailWithLastError();
-  }
-  return 0;
+  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
+  return gesher::PosixDelete(windows, false);
 }
 
 int mkdirat(int dirfd, const char* path, mode_t) {
