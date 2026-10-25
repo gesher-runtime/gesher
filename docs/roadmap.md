@@ -219,6 +219,19 @@ needs: [framework-build.md](framework-build.md).
         list, layout direction and regional preferences from Windows (or
         `$GESHER_LOCALES`); single process and the Gesher device (ci run
         40133992911, both runners and the installer; docs/fonts.md, ADR 0044)
+  - [x] Per-app locales: `LocaleManager.setApplicationLocales` (and
+        AppCompatDelegate's on API 33+) served by the `locale` service,
+        persisted per package, the app's activities relaunched with them,
+        kept across app and device restarts, `android:localeConfig` read
+        (docs/locale.md, ADR 0049)
+  - [x] Windows' language and format changes (WM_SETTINGCHANGE) delivered to
+        running apps: configuration change (relaunch or onConfigurationChanged
+        per `configChanges`), LOCALE_CHANGED, TIME_SET with the 24-hour extra
+  - [x] Windows' regional formats as Android's regional preferences (calendar,
+        first day, hour cycle, temperature unit, digits; TIME_12_24); custom
+        decimal/grouping symbols and date patterns recorded as not carried over
+        (these three: ci run 40191538466, both runners, single process and
+        the Gesher device)
 
 ## Phase 4 checklist
 

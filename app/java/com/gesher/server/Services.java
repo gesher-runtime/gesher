@@ -144,6 +144,7 @@ public final class Services {
         // Devices (docs/devices.md): location over Windows' location service.
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
+        services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
         return services;
     }
 

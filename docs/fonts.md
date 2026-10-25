@@ -262,10 +262,9 @@ RTL layout direction.
   fallback families (38 fonts) of Windows' from /Windows/Fonts/; font map
   through SharedMemory, 154421 bytes`). Installer artifact 84.6 MB (was
   84.3 MB). The roadmap's Phase 3 fonts box is ticked.
-- Not done / gaps: per-app locales (`LocaleManager.setApplicationLocales`) are
-  not served; Windows settings changed while an app runs are not sent as a
-  configuration change; custom decimal/grouping symbols and date patterns
-  from Windows are not taken over (only what a locale and its -u- extensions
-  express); fonts on another drive than the current one need
+- Not done / gaps: per-app locales, Windows settings changed while an app
+  runs, and the regional formats are the locale track's (docs/locale.md, ADR
+  0049; custom decimal/grouping symbols and date patterns stay not carried
+  over, by decision); fonts on another drive than the current one need
   `$GESHER_WINDOWS_FONTS`; the emoji and CJK look is Windows' (Segoe UI
   Emoji, YaHei...), not Noto's.
