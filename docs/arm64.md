@@ -45,6 +45,24 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   segments non-executable, applies the AArch64 relocations and TLS, and
   registers the code with the translator. x86-64 objects are unchanged.
 
+- **Executables** (the exec track, ADR 0035): gesher-exec loads an arm64-v8a
+  PIE like an x86-64 one, sees `ExecutableInfo::aarch64` and enters its
+  `_start` through the translator (`run_program`, API version 2) with the
+  Linux initial stack block copied to the top of the guest stack; bionic's
+  `__libc_init`, `exit` and `getauxval` are gesher-exec's own, reached through
+  trampolines. `exec_spawn` accepts EM_AARCH64, so ProcessBuilder runs arm64
+  programs too.
+
+- **Fastmem**: guest loads and stores are generated inline as host accesses
+  at `[0 + vaddr]` (the shared address space) rather than a callback each;
+  `GESHER_ARM64_FASTMEM=0` turns it off. Exclusives go through the CAS
+  callbacks.
+
+- **ABI selection**: `NativeLibs.abiFor` picks x86_64, else arm64-v8a; the
+  installer extracts to `lib/arm64` and sets `primaryCpuAbi`; gesher-app logs
+  the ABI; System.loadLibrary of an arm64 object logs
+  `gesher arm64: <lib> is arm64-v8a: translated`.
+
 ## Building the DLL
 
 `gesher_arm64.dll` is built by its own reusable workflow
@@ -101,56 +119,40 @@ stub instead of running inside the VEH, xmm6-15 saved in the System V thunk,
 stack arguments 7+, TCB slots, TLSDESC, JNI proxies per side, guest libc
 differences, arch-filtered symbol binding, an honest overhead figure).
 
-### Done and CI-verified (ci `40192217495`, by the first agent, both runners)
+### Done and CI-verified (ci `40217845117`, SHA 25683fc, both runners)
 
-- `PASS arm64: translator DLL round-trips (host<->guest, dynarmic)`
-- `PASS arm64: loader runs a self-contained arm64-v8a .so`
-- `PASS arm64: System.load of an arm64-v8a .so; JNI_OnLoad, RegisterNatives,
-  Java_* and callbacks into ART`
+`tracks/47-arm64.ps1`, every line PASS on windows-2022 and windows-2025:
 
-### Written, verified locally, CI pending (this push)
+- `arm64: translator DLL round-trips (host<->guest, dynarmic)` (with LL/SC
+  atomics from four threads)
+- `arm64: a guest null dereference is a SIGSEGV crash report`, `... an
+  undefined guest instruction is a SIGILL crash report`, `... a guest jump to
+  no code is a SIGSEGV crash report`
+- `arm64: loader runs a self-contained arm64-v8a .so`
+- `arm64: an arm64-v8a libc/pthread .so runs its checks through the shim`
+- `arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall,
+  atomics, va_list)`
+- `arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV,
+  nesting, an attached guest thread`
+- `arm64: gesher-exec runs an arm64-v8a ELF executable (...)`, its exit
+  statuses (3, 134, 139), and `ProcessBuilder runs an arm64-v8a ELF
+  executable`
+- `native libs: arm64: gesher-app runs nativeactivity-arm64.apk (only
+  lib/arm64-v8a, translated): the ABI picked, ANativeActivity_onCreate, the
+  glue thread, GLES 2 (glReadPixels, PrintWindow), AChoreographer, a click and
+  a key through AInputQueue, an ANativeWindow_lock frame; WM_CLOSE finishes it`
+- `INFO arm64 perf`: register loop ×3.7–4.2, compiled kernel ×2.0–2.3 (fastmem).
 
-- The libc/pthread `.so` through the shim passes locally with the fixed DLL
-  (qsort, threads, keys, once, cond vars, dl*, liblog).
-- Guest crashes: `arm64_smoke_test crash-segv|crash-ill|crash-jump` print
-  `Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0` (etc.) and
-  exit 139/132 (locally).
-- LL/SC atomics from four threads (smoke test, locally).
-- `tests/native/arm64_abi_test.c`: ELF TLS via TLSDESC in several threads, the
-  stack protector, setjmp/longjmp, struct stat/epoll_event, syscall numbers,
-  AT_HWCAP, C11 atomics, va_list conversion, a host pointer from dlsym.
-- The JNI test: Call*MethodV from a guest va_list, Java<->guest nesting 8
-  deep, a guest pthread that AttachCurrentThread()s, calls Java, detaches.
-- ABI selection: `NativeLibs.forApk` / `instructionSetDir`; the installer puts
-  an arm64-only APK's libraries in `lib/arm64` and sets
-  `ApplicationInfo.primaryCpuAbi`; gesher-app logs the ABI. Exercised by
-  `nativeactivity-arm64.apk` (tests/apps/nativeactivity built with
-  `--abi arm64-v8a`): NativeActivity, the glue thread, libandroid, EGL/GLES,
-  AChoreographer, AInputQueue, ANativeWindow_lock, all translated, with the
-  same checks as the x86_64 app.
-- Perf: the smoke test's register-only loop is ~8.5x native (locally; the
-  first agent's 1.3x compared against a native loop with a `volatile` store
-  per iteration). `arm64_elf_test` also times a compiled C kernel (sieve,
-  CRC-32, LCG) translated vs. the same code built natively.
+The arm64 workflow alone (run `40215298386`) ran the smoke test on both
+runners too.
 
-- arm64 **executables** (the exec track, ADR 0035): gesher-exec loads an
-  arm64-v8a PIE like an x86-64 one, sees `ExecutableInfo::aarch64` and enters
-  its `_start` through the translator (`run_program`, API version 2) with the
-  Linux initial stack block copied to the top of the thread's guest stack;
-  bionic's `__libc_init`, `exit` and `getauxval` are gesher-exec's host
-  functions, reached through trampolines. `exec_spawn` accepts EM_AARCH64, so
-  ProcessBuilder runs arm64 programs too. Tested with the exec track's own test
-  program built for arm64 (`arm64-exec/`), the same checks as
-  tracks/42-exec.ps1.
-- **Fastmem**: guest loads and stores are generated inline as host accesses
-  at `[0 + vaddr]` (the shared address space), instead of a callback per
-  access; `GESHER_ARM64_FASTMEM=0` turns it off. Exclusive accesses still go
-  through the CAS callbacks.
-- e2e: **TIC-80** 1.01.00 (`com.nesbox.tic`, F-Droid versionCode 10100,
-  MIT), whose APK ships native code only for arm64-v8a (SDL2 and the console
-  in C), in tests/e2e/apps.json; its log must show the translated library
-  (`gesher arm64: <lib> is arm64-v8a: translated`, printed when
-  System.loadLibrary loads an arm64 object).
+### Written, CI pending
+
+- The guest dlopen/dlsym fallbacks to the shim's platform libraries were in
+  25683fc (the ABI test's RTLD_DEFAULT check passes).
+- e2e: TIC-80 1.01.00 (`com.nesbox.tic`, arm64-v8a only) is in apps.json but
+  does not reach its first frame (ci 40217845117: the launcher exited with
+  code 1); `diagnoseLog` prints its log lines in the next run to find out why.
 
 ### Not yet done
 
