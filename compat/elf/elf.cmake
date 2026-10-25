@@ -7,3 +7,5 @@ add_library(gesher_elf STATIC
 target_include_directories(gesher_elf PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_include_directories(gesher_elf PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_compile_options(gesher_elf PRIVATE -Wall -Wextra -Werror)
+# gesher-exec.exe, the launcher for ELF executables (compat/elf/exec).
+include(${CMAKE_CURRENT_LIST_DIR}/exec/exec.cmake)
