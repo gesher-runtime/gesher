@@ -293,6 +293,12 @@ int fsync(int fd) {
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
+  // A directory (opened for reading, as Linux programs do to fsync a rename):
+  // NTFS journals its entries; FlushFileBuffers would need write access.
+  BY_HANDLE_FILE_INFORMATION info;
+  if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    return 0;
+  }
   return gesher::CrtResult(_commit(fd));
 }
 int fdatasync(int fd) { return fsync(fd); }

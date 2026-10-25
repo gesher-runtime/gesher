@@ -60,12 +60,14 @@ as ART's host test setup expects (a `linux-x86` build tree, core-oj.jar under
 compile off Linux: `testing.cc` assigns `std::filesystem::path` to a
 `std::string` (a `wstring` path on Windows: `.string()` added), and
 `fd_file_test.cc`'s `Rename` test calls `CreateSparseSourceFile`, declared only
-`#ifdef __linux__` (the guard also takes `GESHER`).
+`#ifdef __linux__` (the guard also takes `GESHER`); `hex_dump_test.cc` expects
+16-digit offsets with `__LP64__`, which ART takes 64-bit Windows to be (patch
+`0002`) but the compiler does not define (`_WIN64` added).
 `patches/art/0451-posix-fd-file-and-thread-stat.patch` changes libartbase
 itself: `fd_file.cc` uses gesher-base's `pread`/`pwrite`/`fsync` (EOF reads 0,
 a negative offset is `EINVAL`) and `fcntl(F_GETFD)` (`IsOpenFd`) instead of
 ART's own `_WIN32` versions (which report EOF as `EIO` and every fd as open),
-and `GetOsThreadStat` reads `/proc/<pid>/task/<tid>/stat` (gesher-base's
+and `GetOsThreadStat`/`GetOsThreadStatQuick` read `/proc/<pid>/task/<tid>/stat` (gesher-base's
 procfs) as on Linux. `art_gtest_common` also builds
 `runtime/common_runtime_test.cc` (libart-runtime-gtest), the fixture of
 `flags_test.cc`.
@@ -75,6 +77,18 @@ configuration's test flag values (`test`, `v_apis` true); Gesher's aconfig
 values (`config/aconfig/art.values`) leave them false.
 
 Excluded by name (gtest filter in `21-posix.ps1`):
+
+- `FlagsTests*` (`flags_test.cc`): their fixture, `CommonRuntimeTest`, starts
+  a runtime on the host build's whole boot class path (core-libart, conscrypt,
+  okhttp, bouncycastle, apache-xml, ...), which the gtest layout does not
+  have; the runtime aborts without it.
+- `membarrier.private_expedited`, `membarrier.private_expedited_sync_core`:
+  they expect a private barrier to fail with `EPERM` before registration;
+  Gesher's `art::membarrier` (patch `0014`, FlushProcessWriteBuffers) treats
+  registration as a no-op.
+- `ScopedFlockTest.TestLocking`: ART's `LockedFile` returns "flock is
+  unsupported on Windows" under `_WIN32`, and Gesher keeps that (it takes
+  part in oat and profile file handling).
 
 - `ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile`: reads
   `art-gtest-jars-VerifierDeps.dex`, which is assembled from smali; the build
@@ -105,57 +119,26 @@ Excluded by name (gtest filter in `21-posix.ps1`):
   `RuntimeInit`), but if the framework's time zone supplier is ever installed,
   that line would override Windows' zone.
 
-## Status and next steps (2026-10-25, second handoff checkpoint)
+## Status and next steps (2026-10-25, third agent, in progress)
 
-**CI-verified: nothing green yet.** What CI showed so far:
-- 65cccdc (ci 40135642983, posix 40135639733) and 2152bcb (posix 40136578167):
-  every build job failed on one clang `-Werror` error, the unused
-  `kRenameExchange` in compat/posix/src/fsops.cc. Fixed in 2686c82.
-- 2686c82: posix run 40137598478 failed in "Build the tests": gesher-base now
-  compiles; three ART gtest sources did not (testing.cc path-to-string,
-  fd_file_test.cc `CreateSparseSourceFile` under `__linux__` only,
-  aconfig_flags_test.cc static_assert). Fixed in f92261a by
-  `patches/art/0450-posix-gtests-on-windows.patch` (applies cleanly to the
-  pinned art, checked locally) and by not building aconfig_flags_test.cc.
-  Adding the patch changes the AOSP cache key (one refetch).
-- 2686c82: ci run 40137606776 (workflow_dispatch) was still running at
-  handoff: graphics/libs/native-libs/angle builds succeeded; posix/build
-  failed (the gtests above); framework/framework failed on a transient
-  `curl: (92) HTTP/2 stream ... INTERNAL_ERROR` in the test-app build step (not
-  a code error); the main `build` job was still in progress (its result says
-  whether LinuxWatchService.c, android_util_FileObserver.cpp + patch
-  frameworks/base 0450 compile). Cancel it if still running.
-- f92261a: posix run 40138717476 (push-triggered) was in flight, not watched
-  to the end.
-- `git merge-tree HEAD origin/phase4/integration` at 2686c82: no conflicts.
-- Patch frameworks/base 0450 applies cleanly to the pinned frameworks/base
-  (checked locally in a sparse clone).
+**CI so far:**
+- ci 40141424142 (at 47df386): every build job, package and e2e (except
+  Puzzles, fixed since: `access(X_OK)` now holds for files) passed; the time
+  zone loop broke on a PowerShell precedence bug (fixed).
+- ci 40144053200 (at fc5b9b6): build, posix/build, package and e2e (all apps,
+  Puzzles included) green; test jobs failed only on art_libartbase_tests
+  (FdFileTest.PipeFlush hung: fsync of a pipe) and FileObserverTest (natives
+  not registered: the test did not load libandroid_runtime). Passing there, on
+  both runners: art_libdexfile_tests (119 tests, 2 excluded), posix probe, the
+  class path on another drive, the four time zones, WatchService.
+- ci 40191738786 (after merging integration 26aa8eb): cancelled; it hung in
+  FileObserverTest (the observer thread kept the VM alive; the test now exits
+  explicitly). libartbase showed Rename (directory fsync), HexDump (`_WIN64`),
+  membarrier, ScopedFlock and FlagsTests failures: fixed or excluded (list
+  above).
 
-**Verified locally only** (WinLibs gcc 16 UCRT on Windows 11, not the CI
-toolchain): gesher-base compiles with -Wall -Wextra; `posix_probe` ("all
-passed", 3 runs), `socket_probe` and `epoll_probe` pass; `posix_probe
---timezone` printed Asia/Jerusalem. Nothing ART/libcore/Java built locally.
-
-**Exact next step:** read posix run 40138717476 (`gh run view 40138717476 -R
-gesher-runtime/gesher --log-failed | grep -E "error:|FAILED"`); if its build
-passed, read its test job (gtest failures: fix or exclude by name in
-21-posix.ps1 with the reason in the list above). Read the main `build` job of
-ci 40137606776 for compile errors. Then, once posix.yml is green:
-1. Merge origin/phase4/integration, push, `gh workflow run ci -R
-   gesher-runtime/gesher --ref wip/posix`; iterate until both runners pass
-   every 21-posix.ps1 line and every existing line, plus package and e2e.
-2. Things to watch in the test job: the time zone loop (`Set-TimeZone`, needs
-   admin; restores the zone in `finally`); TimeZoneTest needs the tzdata copied
-   by run-tests.ps1 into `$root/tzdata`; FileObserverTest needs patch 0450 and
-   the `android_util_FileObserver.cpp` source in framework.cmake;
-   WatchServiceTest needs LinuxWatchService.c (removed from
-   GESHER_OPENJDK_UNPORTED) and its symbols in compat/libcore/builtins.cc.
-3. The package job checks `tzdata\etc\tz\versioned\9\tzdata`, `...\icu\zoneinfo64.res`
-   and `licenses\TZDATA-NOTICES.txt` in the installed Gesher.
-4. Then tick the Phase 1 roadmap boxes (time zone data; inotify part of
-   "BoringSSL, epoll and inotify, a process model"; "Paths on another drive
-   ... the rest of the CRT's path functions"; "ART's own gtests for
-   libartbase/libdexfile") quoting the run id, and update this section.
+**Next:** watch the ci run of the latest push; fix what remains; then tick
+the Phase 1 roadmap boxes with the run id and finish this section.
 
 **Pitfalls met:**
 - The Bash tool collapses `\\` to `\` inside commands and heredocs (a `'\\0'`
