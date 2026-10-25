@@ -241,6 +241,8 @@ public final class SystemServer {
         }
 
         void start() throws Exception {
+            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
+            CameraApp.sync(mInstaller, mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
             ready.getParentFile().mkdirs();

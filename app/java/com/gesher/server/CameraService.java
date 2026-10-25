@@ -70,7 +70,7 @@ public final class CameraService extends ICameraService.Default {
     }
 
     /** The devices, found on first use (not when the process starts). */
-    private List<WindowsCamera.Device> devices() {
+    List<WindowsCamera.Device> devices() {
         List<WindowsCamera.Device> devices = mDevices;
         if (devices == null) {
             synchronized (this) {
@@ -459,7 +459,7 @@ public final class CameraService extends ICameraService.Default {
     }
 
     /** What the package's manifest asks for (Gesher grants that; docs/devices.md). */
-    private static boolean hasCameraPermission(String packageName) {
+    static boolean hasCameraPermission(String packageName) {
         if (packageName == null) return false;
         try {
             PackageInfo info = ActivityThread.getPackageManager().getPackageInfo(packageName,
