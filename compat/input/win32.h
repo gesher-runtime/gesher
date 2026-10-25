@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 
+#include <string>
+#include <vector>
+
 #include "gesher_window.h"
 
 namespace gesher {
@@ -20,6 +23,16 @@ bool PostWindowMessage(void* hwnd, uint32_t msg, uint64_t wparam, int64_t lparam
 // ClientToScreen; for tests (wheel and pointer messages carry screen
 // coordinates).
 bool ClientToScreenPoint(void* hwnd, int32_t* x, int32_t* y);
+
+// A keyboard layout (input language) of the session (GetKeyboardLayoutList).
+struct KeyboardLayout {
+  uint64_t hkl = 0;
+  std::string locale;  // BCP 47 tag of its language (LCIDToLocaleName), "" if unknown
+  std::string name;    // its language's display name (LOCALE_SLOCALIZEDDISPLAYNAME)
+};
+std::vector<KeyboardLayout> KeyboardLayouts();
+// The keyboard layout of the thread of `hwnd` (0: this thread).
+uint64_t ThreadKeyboardLayout(void* hwnd);
 
 }  // namespace input
 }  // namespace gesher

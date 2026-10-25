@@ -6,15 +6,9 @@ package com.gesher.app.window;
 
 import android.app.Activity;
 import android.app.GesherActivityWindow;
-import android.content.Context;
-import android.os.ServiceManager;
 import android.os.SystemProperties;
 
-import com.android.internal.inputmethod.IInputMethodClient;
-import com.android.internal.inputmethod.IRemoteInputConnection;
-import com.android.internal.view.IInputMethodManager;
 import com.gesher.app.DeviceProfile;
-import com.gesher.server.StandIn;
 
 /**
  * gesher-app's window mode ({@code --window}, {@code --hidden-window}): the launched
@@ -88,25 +82,13 @@ public final class WindowMode {
         if (SystemProperties.get("debug.choreographer.vsync").isEmpty()) {
             SystemProperties.set("debug.choreographer.vsync", "false");
         }
-        // ViewRootImpl gets InputMethodManager's instance, which needs input_method. The
-        // system services may serve one (com.gesher.server.Services); if not, a stand-in
-        // with no input method is added here.
-        if (ServiceManager.checkService(Context.INPUT_METHOD_SERVICE) == null) {
-            ServiceManager.addService(Context.INPUT_METHOD_SERVICE,
-                    StandIn.of(IInputMethodManager.class, new NoInputMethod()).asBinder());
-        }
+        // ViewRootImpl gets InputMethodManager's instance, which needs input_method: the
+        // process's windows get Windows' text input (input track, ADR 0039).
+        com.gesher.app.input.WindowsInputMethod.install();
         WindowSession session = WindowSession.install(show);
         // Toasts are this process's popups too (no SystemUI draws them).
         ToastHost.install();
         return session;
-    }
-
-    /** input_method with no input method: clients are accepted, nothing is shown. */
-    static final class NoInputMethod extends IInputMethodManager.Default {
-        @Override
-        public void addClient(IInputMethodClient client, IRemoteInputConnection inputConnection,
-                int untrustedDisplayId) {
-        }
     }
 
     /**

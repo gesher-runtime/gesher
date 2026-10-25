@@ -262,12 +262,13 @@ $webAppExpect = @(
   'WebActivity shouldOverrideUrlLoading: https://gesher.invalid/blocked',
   'WebActivity evaluateJavascript: "Gesher WebView test|42|42"',
   'WebActivity onPageFinished: https://example.com/',
-  'WebActivity remote title: "Example Domain"',
+  # (Its title is example.com's; Cloudflare's "Rate Limited" page now and then.)
+  'WebActivity remote title: "',
   'WebActivity progress 100',
   'gesher-webview: preview of file:///android_asset/index.html: 400x300, center #00ff00',
   'WebActivity setCookie: true',
   'WebActivity cookie: gesher=1',
-  'view(s) over the WebView cut out of its window, the first ',
+  'view(s) over the WebView cut out of its window: rect 360,220-400,260',
   'WebActivity onDestroy')
 $webAppName = 'webapp.apk''s WebViews on WebView2 (child windows of its Win32 window at the views'' bounds, moved and hidden with them, a view over one cut out of it): an asset page whose script calls a @JavascriptInterface method, console, alert through WebChromeClient, shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript returns values, onPageFinished; a remote https page; cookies; the window read back with PW_RENDERFULLCONTENT'
 
@@ -303,4 +304,5 @@ try {
   $env:GESHER_LOGS = $savedLogs
   Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue
 }
+. "$PSScriptRoot/../webview/Features.ps1"
 if ($failed -eq $webviewFailedBefore) { Write-Host 'INFO  webview: every check passed' }

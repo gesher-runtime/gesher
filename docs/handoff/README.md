@@ -71,6 +71,24 @@ Merged so far:
   cache key. Leftovers: `stat` shows no execute bit while `access(X_OK)`
   holds; no symlink resolution in DexFileLoader; ScopedFlock unsupported;
   NTFS reports writes late (IN_MODIFY often only at close).
+- webview2: merged as ae3471d (verified at 55ab46a, ci 40216380541). ADR
+  0050. Integration ci 40218162937 on ae3471d (posix + webview2): all
+  green.
+  Leftovers: on WebView2 runtime 131 (windows-2022) a click on an app view
+  inside a cut-out waits until the app window's thread is woken (its input
+  queue is attached to WebView2's): compat/hwui/window's thread should wake
+  itself on input; no WebViewCompat (androidx boundary interfaces); web
+  content not in Android's accessibility tree; geolocation position not
+  verified on the runners.
+- ime: merged (verified at 6b88293, ci 40218916953, which contains baf27c9,
+  so the integration tree after this merge is the CI-verified one). ADR
+  0039. The windows-2022 hang was Windows' own: after a Japanese
+  composition, switching away from the IME waits 180 s on ImeBroker.exe's
+  call into Windows.CloudStore, which never answers on Server 2022; 35-ime.ps1
+  ends ImeBroker.exe there (build < 26100). The test job now has
+  `timeout-minutes: 60`. compat/input/thread_watch.cc reports window-thread
+  hangs (stacks, wait chains). Leftovers: Ctrl+C/V/X use Android's clipboard,
+  not Windows'; no TSF reconversion; the touch keyboard gives no IME insets.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
