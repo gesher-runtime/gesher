@@ -194,6 +194,12 @@ needs: [framework-build.md](framework-build.md).
         resizes the window (at least its minimum) and it redraws at the new
         size (ci run 40056527378, both runners and the installer;
         docs/graphics.md)
+  - [x] Text input like a native app: other keyboard layouts (Hebrew), SendInput
+        Unicode (emoji panel, dictation), IME compositions (Microsoft IME
+        Japanese) inline with the candidate window at the caret, Enter as the
+        editor action, clipboard shortcuts, password fields without IMEs,
+        InputMethodManager (ci run 40217116856, both runners; docs/input.md
+        "Text input", ADR 0039)
 - [x] Dialogs, menus, dropdowns and toasts as owned popup windows of the app
       window (ADR 0040; popups track): an AlertDialog over its activity with
       the dim behind it, its button, Esc and a click outside; a Toast; an

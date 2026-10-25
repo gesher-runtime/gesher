@@ -207,86 +207,72 @@ and InputMethodManager real enough for apps. ADR 0039 has the decisions.
   clipboard service (`DeviceServices.ClipboardService`, in the services
   domain); it is not Windows' clipboard yet.
 
+- **A watch on the window's thread** (`compat/input/thread_watch.cc`,
+  started for each window the input method attaches to): it posts the
+  window a message every second; when one waits over 5 s it writes to
+  stderr the thread's stack (x64 unwind tables, module!export+offset), the
+  thread's wait chain (Wait Chain Traversal: ALPC, COM, locks, across
+  processes), the stacks and wait chains of the process's threads that are
+  in the IME or TSF and of the threads of any other process a chain ends in
+  (dbghelp's StackWalk64); again a minute later while it lasts, and how
+  long it was once the thread answers. ime.cc reports window-thread
+  messages that take over 500 ms.
+- **Server 2022's Microsoft IME hangs** (found with that watch, ci runs
+  40140095142 to 40199105986): after a Japanese composition, every switch
+  of the window's thread away from the IME (WM_INPUTLANGCHANGEREQUEST in
+  DefWindowProc) took 180 s: the thread waits in imjpapi.dll for the IME's
+  worker thread, which waits on a COM call into ImeBroker.exe
+  (C:\Windows\System32\IME\SHARED), whose call waits for imjppred.dll's
+  prediction engine, which waits in Windows.CloudStore, which never answers
+  on those runners. It is Windows' (any app's window would wait the same);
+  turning off history-based predictive input and choosing the previous IME
+  version (EAIME.admx user policies) changed nothing. On Server 2022
+  (build < 26100) 35-ime.ps1 ends ImeBroker.exe before each run and once a
+  composition is done; the worker's call then fails at once and the switch
+  is immediate. The checks stay as strict as on Server 2025.
+
 ### Status and next steps (ime track)
 
-Branch `wip/ime` (worktree C:\work\gesher-ime). origin/phase4/integration
-(the popups track) is merged in (commit "Merge origin/phase4/integration
-(popups) into wip/ime"); conflicts were in framework.yml (popupapp and
-imeapp both built and collected) and WindowMode.install (WindowsInputMethod
-.install, then WindowSession.install, then ToastHost.install).
+Branch `wip/ime` (worktree C:\work\gesher-ime), origin/phase4/integration
+merged in (popups, rtl, exec, devsvc, webview, stack, devices, locale, net,
+media, lifecycle; conflicts only in framework.yml's app lists, both sides
+kept).
 
-**Last CI run: 40134234988** (commit of the merge, before the last three
-commits). Not green yet:
+**CI-verified**: ci run 40217116856 (commit 42b24f3): every ime check passes
+on windows-2022 and windows-2025, single process and the Gesher device;
+package and e2e green (its one failure was the media track's tone check on
+2022, `sound 25: 1302.3 Hz, not 1397`, not ime's). Before it, Server 2022
+failed the password field (and the device run's conversion) and its app
+did not end on WM_CLOSE: the Microsoft IME hang above. The test job now has
+`timeout-minutes: 60` (ci.yml), so a hang fails fast.
 
-- windows-2025: every check passes, single process and the Gesher device:
-  `PASS  ime: imeapp.apk's window is the foreground window`,
-  `PASS  ime: InputMethodManager: the focused EditText is active and
-  accepting text, the input method is Windows text input ...`,
-  `PASS  ime: SendInput Unicode text (VK_PACKET ...) is committed: Hebrew and
-  an emoji`, `PASS  ime: editing keys and clipboard shortcuts in the EditText
-  (Ctrl+A/C/V/Z/X, End, Backspace, Delete)`, `PASS  ime: a Hebrew keyboard
-  layout ...: keys A, B, C type Hebrew letters ...; the current subtype is
-  he`, `PASS  ime: the window thread's caret (GetGUIThreadInfo) is the
-  editor's cursor (CursorAnchorInfo)`, `PASS  ime: Enter performs the
-  editor's IME action through the InputConnection: IME_ACTION_DONE,
-  IME_ACTION_SEARCH, IME_ACTION_NEXT`, `PASS  ime: IME composition
-  (Microsoft IME, Japanese, typed with SendInput) ...` (composing
-  にほん, converted, committed 二本), `PASS  ime: the IME's candidate window
-  is placed at the caret ...` (mscandui40.candidate under the caret), `PASS
-  ime: a password field: typed into, no IME compositions`, uiapp's input
-  checks (34-windows.ps1) pass again; package and e2e jobs green.
-- windows-2022: all of the above pass in the single process up to the
-  Japanese IME (which also passed there), then the password field gets no
-  text and the app does not end on WM_CLOSE (single process and device);
-  in the device run the conversion took over 60 s (the test waited 60).
-  Server 2022's Microsoft IME is very slow (the probe outside Gesher saw
-  the same: compositions arriving tens of seconds late), and the window's
-  thread seems blocked inside an IMM/TSF call afterwards.
+**Next** (if anything is left): the Windows clipboard (Ctrl+C/V use
+Android's clipboard service), TSF-only features (reconversion), IME insets
+for the touch keyboard. The thread watch can stay: it costs one posted
+message a second and writes only when the thread hangs.
 
-**Not run yet** (pushed after 40134234988): b47f3a3 and its two parents:
-(1) a commit with a result string ends `composing` (so focusing the
-password field no longer calls ImmNotifyIME(CPS_CANCEL) on a finished
-composition: the likely 2022 blocker); (2) the test waits up to 180 s for
-the conversion, 150 s for the candidate window and the commit, 120 s for the
-password text; (3) window-thread IME work over 500 ms is reported on stderr
-(`gesher-ime: ... took N ms on the window's thread`).
-
-**Next**: run ci on the tip (`gh workflow run ci -R gesher-runtime/gesher
---ref wip/ime`, watch with `--interval 120`). If 2022 still hangs, read the
-`took N ms` lines to see which call blocks (ImmAssociateContextEx on the
-switch to the password field is the other suspect: then do it only when the
-IME is not mid-request, or skip disassociating for password fields on that
-build and document it); if 2022's IME stays too slow for CI, keep the
-2022 IME checks strict but give them longer, or document an INFO for 2022
-only with the reason. Then: fill the CI run ids in this section, tick the
-roadmap box below, update ADR 0039's status, final report.
-
-Roadmap box to add under Phase 3's input item once green:
-"- [x] Text input like a native app: other keyboard layouts, SendInput
-Unicode (emoji panel, dictation), IME compositions (Microsoft IME Japanese)
-inline with the candidate window at the caret, Enter as the editor action,
-InputMethodManager (ci run N, both runners; docs/input.md "Text input")".
-
-**Pitfalls**: the Bash tool turns `\\` into `\` in commands and heredocs,
+**Pitfalls**: the Bash tool turns `\` into `\` in commands and heredocs,
 and tool parameters turn backslash-u escapes into characters: write files
 with escapes through a script that uses chr(92). PowerShell 7's
 Get-WinUserLanguageList fails on the runners (use powershell.exe). The
 Japanese IME is enabled with TSF (ImeInput.EnableJapaneseIme, before the
 runs) and chosen by posting WM_INPUTLANGCHANGEREQUEST; switch layouts with
-SwitchTo (re-posts until the thread has it). The emulated GitHub API limit
-is shared by all agents: poll at 120 s.
+SwitchTo (re-posts until the thread has it). The CI log splits a line with
+highlighted words over several lines; join them before grepping.
 
 **Edits outside the ime domain**: `.github/workflows/framework.yml` (build
-and collect imeapp.apk), `cmake/aosp/input.cmake` (ime.cc,
-touch_keyboard.cc, imm32), `app/java/com/gesher/app/window/WindowMode.java`
-(WindowsInputMethod.install instead of the no-IME stand-in),
+and collect imeapp.apk), `.github/workflows/ci.yml` (the test job's
+`timeout-minutes: 60`), `cmake/aosp/input.cmake` (ime.cc,
+touch_keyboard.cc, thread_watch.cc, imm32),
+`app/java/com/gesher/app/window/WindowMode.java` (WindowsInputMethod.install
+instead of the no-IME stand-in),
 `app/java/com/gesher/app/window/WindowSession.java` (three hooks:
 addWindow after WindowInput.attach, removeWindow before input.close,
 onRequestedVisibleTypes in updateRequestedVisibleTypes),
 `app/java/com/gesher/server/Services.java` (input_method registration; the
 old Services.InputMethodManager stand-in removed), `docs/services.md` and
-`app/README.md` (one line each about input_method), the merge of
-origin/phase4/integration.
+`app/README.md` (one line each about input_method), `docs/roadmap.md` (the
+text input box), the merges of origin/phase4/integration.
 
 ## Status
 

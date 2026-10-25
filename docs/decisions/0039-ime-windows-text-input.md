@@ -100,3 +100,9 @@ sees its text as WM_CHAR and WM_IME_* messages.
 - TSF-only features (reconversion, a TSF text store's document access) are
   not offered; the touch keyboard does not resize the window (no IME
   insets).
+- A hung IME keeps the window's thread: on Windows Server 2022 the
+  Microsoft IME's ImeBroker.exe waits in Windows.CloudStore and every switch
+  away from the IME took 180 s (docs/input.md "Text input"). Gesher cannot
+  avoid Windows' own wait; a watch on the window's thread
+  (thread_watch.cc) writes the thread's stack and wait chains when it stops
+  answering, and CI ends that broker on Server 2022 after compositions.
