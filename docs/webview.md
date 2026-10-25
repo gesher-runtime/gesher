@@ -284,10 +284,17 @@ drawing in a window that is covered or off the desktop;
   center #0000ff, its corner #00ff00, inside its right edge #0000ff, beside
   it #00ff00`, `gesher-webview: 1 view(s) over the WebView cut out of its
   window: oval 300,300-360,360` and `INFO  features: UI Automation of the
-  WebView2 window: found: ControlType.Pane 'Gesher features'`. On
-  windows-2022 (runtime 131) everything up to the button's click passed in
-  the same run (the test waited too briefly for it; fixed). The final run's
-  id is in "In progress" below.
+  WebView2 window: found: ControlType.Pane 'Gesher features'`. Final run
+  after merging phase4/integration 8bfb83f: ci run 40216380541 at 55ab46a,
+  green on both runners (the same FeaturesActivity PASS line on windows-2025
+  and windows-2022, the webapp PASS lines in both modes, e2e Notes PASS).
+- Runtime 131 (windows-2022): a real click on the app's view in a cut-out
+  waits in the app window's thread until something wakes it (the thread's
+  input queue is attached to the WebView2 windows', and the wake goes
+  elsewhere); the test posts WM_NULL after 20 s and says so (`INFO  features:
+  no click on the button after 20 s ...`), then the click arrives. Runtime 155
+  delivers it at once. Next step: the window thread could wake itself on
+  input (outside this track's files: compat/hwui/window).
 - Observed: on windows-2025 the OS denies geolocation (the page gets error 1
   after the app granted it); on windows-2022 it times out (error 3). Runtime
   131 keeps `window.opener` in the new window but the opener gets no
@@ -301,7 +308,7 @@ drawing in a window that is covered or off the desktop;
 
 ### In progress
 
-- The final run after merging phase4/integration (8bfb83f).
+- Nothing: verified at 55ab46a (ci run 40216380541).
 
 ### Not done / limits
 
