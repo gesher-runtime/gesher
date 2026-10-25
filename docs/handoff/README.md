@@ -36,7 +36,10 @@ Merged so far:
   the "408" in older briefs counted differently). ADR 0036.
 - devices: merged (verified at f62f1aa, ci 40142590418; Camera2 verified
   against a test Media Foundation source, no real camera on the runners).
-  ADR 0043. Integrated with stack: see the next integration ci run.
+  ADR 0043. Integration ci 40143864548 on 6111f0d (all seven merged
+  tracks together): all green.
+- 2026-10-25: every agent stopped on the org's API spend limit; all were
+  resumed with SendMessage after it reset (their work was saved).
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 
