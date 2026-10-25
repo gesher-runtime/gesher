@@ -20,7 +20,7 @@ using System.Text;
 public static class GesherWebViewInput {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
   [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT { public int dx, dy; public uint data, flags, time; public IntPtr extra; }
-  [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public MOUSEINPUT mi; public uint pad1, pad2; }
+  [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public MOUSEINPUT mi; }  // 40 bytes on x64, as user32 wants
   delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
   [DllImport("user32.dll")] static extern bool ScreenToClient(IntPtr hwnd, ref POINT p);
   [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
@@ -128,7 +128,7 @@ function WebViewUia([IntPtr] $Container, [string] $Name) {
 }
 
 function FeaturesCheck {
-  $name = 'webapp.apk''s FeaturesActivity on WebView2: WebMessagePorts both ways, find in page, capturePicture, geolocation and camera/microphone permissions (granted and denied), window.open into the WebView onCreateWindow gave and window.close, onShowFileChooser and the Windows file dialog (clicked with real mouse input), text zoom (text only), Basic authentication, postUrl with a body, a certificate error and a client certificate request, the back/forward list, an MHTML web archive, a round button cut out of the WebView2 window by its outline and real clicks inside and outside its circle'
+  $name = 'webapp.apk''s FeaturesActivity on WebView2: WebMessagePorts both ways, find in page, capturePicture, geolocation and camera/microphone permissions (granted and denied), window.open into the WebView onCreateWindow gave and window.close, onShowFileChooser and the Windows file dialog (clicked with INPUTKIND), text zoom (text only), Basic authentication, postUrl with a body, a certificate error and a client certificate request, the back/forward list, an MHTML web archive, a round button cut out of the WebView2 window by its outline and clicks (INPUTKIND) inside and outside its circle'
   if (-not (Test-Path "$Dir/webapp.apk")) {
     Write-Host "FAIL  gesher-app: $name (webapp.apk is missing)"; $script:failed++; return
   }
@@ -284,6 +284,8 @@ function FeaturesCheck {
     $problems += 'the page got the click on the button'
   }
   Write-Host "INFO  features: the server saw: $(([GesherWebTestServer]::Log -split "`n" | Where-Object { $_ }) -join '; ')"
+  $kind = if ($clicks.Count -gt 0 -and -not ($clicks | Where-Object { $_ -notmatch ': SendInput$' })) { 'real mouse input (SendInput)' } else { 'mouse messages posted to the window WindowFromPoint hit-tests (SendInput unavailable)' }
+  $name = $name.Replace('INPUTKIND', $kind)
   if (-not $problems) {
     Write-Host "PASS  gesher-app: $name"
     ("$text" -split "`n" | Select-String -Pattern '(Features |gesher-webview: )' | Select-Object -First 80) | Out-Host
