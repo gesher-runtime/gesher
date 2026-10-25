@@ -996,16 +996,22 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return info;
     }
 
+    /** The last sequence number given to an activity's override configuration. */
+    private int mConfigSeq;
+
     /**
      * The override of a task {@code task} in size (null: the display's): its size
-     * configuration (TaskConfiguration), with the sequence number of the package's
-     * configuration {@code global} (the client drops an override whose seq is 0 as older
-     * than the one it has pending).
+     * configuration (TaskConfiguration), with a sequence number newer than every one given
+     * before and than the package's configuration {@code global}'s: the client drops an
+     * override that is not newer than the one it has (a seq of 0 too), and a task's size
+     * changes back and forth with the same package configuration.
      */
-    private static Configuration taskOverride(Rect task, Configuration global) {
+    private synchronized Configuration taskOverride(Rect task, Configuration global) {
         Configuration override = task != null ? TaskConfiguration.override(task)
                 : new Configuration();
-        override.seq = global.seq;
+        mConfigSeq = Math.max(mConfigSeq, global.seq) + 1;
+        if (mConfigSeq == 0) mConfigSeq = 1;
+        override.seq = mConfigSeq;
         return override;
     }
 
