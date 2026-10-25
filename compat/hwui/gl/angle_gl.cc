@@ -19,6 +19,15 @@
 //    not report EGL_ANDROID_native_fence_sync, so EglManager does not call it).
 // Skia's Ganesh reaches GLES through its GrGLInterface, not through these.
 //
+// Translucent popups (lifecycle track, docs/lifecycle.md, ADR 0048): a
+// popup whose format has alpha is a layered window, which a swap chain cannot
+// present to. Its "window surface" is a pbuffer of the window's size behind a
+// handle of ours (LayeredSurface); each swap reads the frame back
+// (premultiplied, as Skia draws it) into the window's back buffer, which the
+// window presents with UpdateLayeredWindow, composed with per-pixel alpha over
+// what is behind it, as the CPU pipeline's frames are. When the window's size
+// changes the pbuffer is made again at the next eglMakeCurrent.
+//
 // gesher_hwui_gl_usable() is the check that decides whether the SkiaGL
 // pipeline can be used at all (pipeline_select.cc): EglManager aborts the
 // process when EGL fails, so it is tried here first.
@@ -34,6 +43,8 @@
 #include <include/gpu/ganesh/gl/GrGLInterface.h>
 
 #include <gesher/egl_angle.h>
+
+#include "gesher_native_window.h"
 
 #include <atomic>
 #include <cstdio>
@@ -83,6 +94,76 @@ bool AngleExtension(EGLDisplay dpy, const char* extension) {
   if (list == nullptr) return false;
   std::string padded = std::string(" ") + list + " ";
   return padded.find(std::string(" ") + extension + " ") != std::string::npos;
+}
+
+// --- translucent popups: pbuffers read back into layered windows -----------------------------------
+
+struct LayeredSurface {
+  EGLSurface pbuffer = EGL_NO_SURFACE;
+  EGLConfig config = nullptr;
+  ANativeWindow* window = nullptr;
+  EGLint width = 0, height = 0;
+};
+
+std::mutex g_layered_mutex;
+std::unordered_map<void*, LayeredSurface*>& Layered() {
+  static auto* map = new std::unordered_map<void*, LayeredSurface*>();
+  return *map;
+}
+
+LayeredSurface* LayeredOf(EGLSurface surface) {
+  if (surface == EGL_NO_SURFACE) return nullptr;
+  std::lock_guard<std::mutex> lock(g_layered_mutex);
+  auto it = Layered().find(surface);
+  return it != Layered().end() ? it->second : nullptr;
+}
+
+// The pbuffer for the window's size now (made again when it changed).
+EGLSurface LayeredPbuffer(EGLDisplay dpy, LayeredSurface* s) {
+  int32_t w = 0, h = 0;
+  gesher_window_client_size(s->window, &w, &h);
+  if (w < 1) w = 1;
+  if (h < 1) h = 1;
+  if (s->pbuffer != EGL_NO_SURFACE && w == s->width && h == s->height) return s->pbuffer;
+  const EGLint attribs[] = {EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE};
+  EGLSurface pbuffer = ANGLE(eglCreatePbufferSurface)(dpy, s->config, attribs);
+  if (pbuffer == EGL_NO_SURFACE) return s->pbuffer;  // keep the old size
+  if (s->pbuffer != EGL_NO_SURFACE) ANGLE(eglDestroySurface)(dpy, s->pbuffer);
+  s->pbuffer = pbuffer;
+  s->width = w;
+  s->height = h;
+  return pbuffer;
+}
+
+// The ANGLE surface behind `surface` (a layered surface's pbuffer).
+EGLSurface Real(EGLSurface surface) {
+  LayeredSurface* s = LayeredOf(surface);
+  return s != nullptr ? s->pbuffer : surface;
+}
+
+// Reads the frame back from the current draw surface (the pbuffer) into the
+// window, which presents it as a layered window.
+void PresentLayered(LayeredSurface* s) {
+  const EGLint w = s->width, h = s->height;
+  if (w < 1 || h < 1) return;
+  GLint read_fb = 0, draw_fb = 0;
+  ANGLE(glGetIntegerv)(GL_READ_FRAMEBUFFER_BINDING, &read_fb);
+  ANGLE(glGetIntegerv)(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fb);
+  ANGLE(glBindFramebuffer)(GL_FRAMEBUFFER, 0);
+  std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
+  ANGLE(glReadPixels)(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+  ANGLE(glBindFramebuffer)(GL_READ_FRAMEBUFFER, read_fb);
+  ANGLE(glBindFramebuffer)(GL_DRAW_FRAMEBUFFER, draw_fb);
+  std::vector<uint32_t> argb(static_cast<size_t>(w) * h);
+  for (EGLint y = 0; y < h; y++) {
+    const uint8_t* row = rgba.data() + static_cast<size_t>(h - 1 - y) * w * 4;  // bottom-up
+    uint32_t* out = argb.data() + static_cast<size_t>(y) * w;
+    for (EGLint x = 0; x < w; x++) {
+      const uint8_t* p = row + x * 4;
+      out[x] = (uint32_t{p[3]} << 24) | (uint32_t{p[0]} << 16) | (uint32_t{p[1]} << 8) | p[2];
+    }
+  }
+  gesher_window_present_pixels(s->window, argb.data(), w, h);
 }
 
 }  // namespace
@@ -165,6 +246,9 @@ EGLDisplay EGLAPIENTRY eglGetCurrentDisplay(void) {
 
 EGLBoolean EGLAPIENTRY eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
                                       EGLContext ctx) {
+  // A layered surface's pbuffer follows its window's size.
+  if (LayeredSurface* s = LayeredOf(draw)) draw = LayeredPbuffer(dpy, s);
+  if (LayeredSurface* s = LayeredOf(read)) read = LayeredPbuffer(dpy, s);
   return ANGLE(eglMakeCurrent)(dpy, draw, read, ctx);
 }
 
@@ -175,21 +259,60 @@ EGLSurface EGLAPIENTRY eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config,
 
 EGLSurface EGLAPIENTRY eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config,
                                               EGLNativeWindowType window, const EGLint* attribs) {
-  return gesher_egl_create_window_surface(dpy, config, static_cast<ANativeWindow*>(window),
-                                          attribs);
+  auto* anw = static_cast<ANativeWindow*>(window);
+  if (anw != nullptr && gesher_window_translucent(anw)) {
+    // A translucent popup (a layered window): a pbuffer read back at each swap.
+    auto* s = new LayeredSurface();
+    s->config = config;
+    s->window = anw;
+    if (LayeredPbuffer(dpy, s) == EGL_NO_SURFACE) {
+      delete s;
+      return EGL_NO_SURFACE;
+    }
+    ANativeWindow_acquire(anw);
+    std::lock_guard<std::mutex> lock(g_layered_mutex);
+    Layered()[s] = s;
+    return static_cast<EGLSurface>(s);
+  }
+  return gesher_egl_create_window_surface(dpy, config, anw, attribs);
 }
 
 EGLBoolean EGLAPIENTRY eglDestroySurface(EGLDisplay dpy, EGLSurface surface) {
+  LayeredSurface* s = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_layered_mutex);
+    auto it = Layered().find(surface);
+    if (it != Layered().end()) {
+      s = it->second;
+      Layered().erase(it);
+    }
+  }
+  if (s != nullptr) {
+    EGLBoolean ok = s->pbuffer != EGL_NO_SURFACE ? ANGLE(eglDestroySurface)(dpy, s->pbuffer)
+                                                 : EGL_TRUE;
+    ANativeWindow_release(s->window);
+    delete s;
+    return ok;
+  }
   return gesher_egl_destroy_surface(dpy, surface);
 }
 
 EGLBoolean EGLAPIENTRY eglQuerySurface(EGLDisplay dpy, EGLSurface surface, EGLint attribute,
                                        EGLint* value) {
-  return ANGLE(eglQuerySurface)(dpy, surface, attribute, value);
+  if (LayeredOf(surface) != nullptr && attribute == EGL_BUFFER_AGE_EXT) {
+    *value = 0;  // each frame is drawn whole
+    return EGL_TRUE;
+  }
+  return ANGLE(eglQuerySurface)(dpy, Real(surface), attribute, value);
 }
 
 EGLBoolean EGLAPIENTRY eglSurfaceAttrib(EGLDisplay dpy, EGLSurface surface, EGLint attribute,
                                         EGLint value) {
+  if (LayeredOf(surface) != nullptr) {
+    // A pbuffer's contents are its own between frames: any swap behavior holds.
+    ANGLE(eglSurfaceAttrib)(dpy, Real(surface), attribute, value);
+    return EGL_TRUE;
+  }
   return ANGLE(eglSurfaceAttrib)(dpy, surface, attribute, value);
 }
 
@@ -199,11 +322,16 @@ EGLBoolean EGLAPIENTRY eglSwapInterval(EGLDisplay dpy, EGLint interval) {
 
 EGLBoolean EGLAPIENTRY eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects,
                                              EGLint n_rects) {
+  if (LayeredOf(surface) != nullptr) return EGL_TRUE;  // the whole frame is read back
   return ANGLE(eglSetDamageRegionKHR)(dpy, surface, rects, n_rects);
 }
 
 EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface surface,
                                                    const EGLint* rects, EGLint n_rects) {
+  if (LayeredSurface* s = LayeredOf(surface)) {
+    PresentLayered(s);
+    return EGL_TRUE;
+  }
   static const bool has_damage = AngleExtension(dpy, "EGL_KHR_swap_buffers_with_damage");
   gesher_hwui_gl_before_swap(dpy, surface);
   if (has_damage) return ANGLE(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);

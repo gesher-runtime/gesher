@@ -22,6 +22,7 @@ import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
+import android.app.servertransaction.StartActivityItem;
 import android.app.servertransaction.StopActivityItem;
 import android.content.ComponentName;
 import android.content.Context;
@@ -45,6 +46,7 @@ import android.window.WindowContainerToken;
 
 import com.android.internal.content.ReferrerIntent;
 import com.gesher.app.DeviceProfile;
+import com.gesher.app.window.TaskConfiguration;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -90,8 +92,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** How long startActivityAndWait waits for the activity to be idle. */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
-    enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STOPPING, STOPPED,
-            DESTROYING, DESTROYED }
+    /** STARTED: made visible again without being resumed (StartActivityItem). */
+    enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
+            STOPPED, DESTROYING, DESTROYED }
 
     /** An app process attached to the server. */
     final class ProcessRecord {
@@ -144,10 +147,24 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final List<ResultInfo> pendingResults = new ArrayList<>();
         /** The state it saved when it was last stopped. */
         Bundle savedState;
-        /** The configuration it was launched or relaunched with, or told of last. */
+        /**
+         * Its theme is translucent or floating (ActivityTheme): it does not occlude the
+         * activities below it, as ActivityRecord.occludesParent; convertToTranslucent and
+         * convertFromTranslucent change it.
+         */
+        boolean translucent;
+        /** Resumed once the activity in front ({@link #waitingFor}) is paused. */
+        boolean resumeAfterPause;
+        /**
+         * The configuration it was launched or relaunched with, or told of last: its
+         * package's (locale track: LocaleManagerService.configurationFor) with its task's size
+         * override (lifecycle track: TaskConfiguration), see {@link #effectiveConfiguration}.
+         */
         Configuration config;
-        /** A configuration change waits until it is resumed (it was on its way). */
+        /** A configuration change waits until it is resumed (it was not in front). */
         boolean configPending;
+        /** The size buckets its resources care about (reportSizeConfigurations), or null. */
+        android.window.SizeConfigurationBuckets sizeBuckets;
 
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
@@ -189,6 +206,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Work for a package's process once it is attached and bound (services, broadcasts). */
     private final List<PendingWork> mPendingWork = new ArrayList<>();
     private int mNextTaskId = 1;
+    /** Tasks moved to the back (their window minimized): none of their activities is visible. */
+    private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
+    /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
+    private final android.util.SparseArray<Rect> mTaskBounds = new android.util.SparseArray<>();
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -413,6 +434,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         int callingPid = Binder.getCallingPid();
         int launchFlags = intent.getFlags();
         ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
+        // Whether it leaves the activity below it visible (its theme), read before the lock.
+        boolean translucent = ActivityTheme.isTranslucentOrFloating(info);
         ActivityRecord r = null;
         ActivityRecord deliverTo = null;
         ActivityRecord pause = null;
@@ -431,6 +454,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 ActivityRecord resultRecord = requestCode >= 0 ? source : null;
                 r = new ActivityRecord(info, launch, taskId, callingPid, callingPackage,
                         resultRecord, resultWho, requestCode);
+                r.translucent = translucent;
+                // A start in a task moved to the back brings it to the front.
+                mHiddenTasks.remove(taskId);
                 // The activity in front (one activity is resumed at a time) is paused first.
                 ActivityRecord front = front(r);
                 mActivities.add(r);
@@ -467,6 +493,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 + callerName(callingPackage, callingPid) + ": task " + r.taskId
                 + (r.app != null ? ", in " + r.app : ", waiting for a process")
                 + (r.waitingFor != null ? ", after pausing " + r.waitingFor.name() : "")
+                + (r.translucent ? ", translucent or floating (the activity below stays"
+                        + " visible)" : "")
                 + (r.resultTo != null ? ", result to " + r.resultTo.name() + " (request "
                         + r.requestCode + ")" : ""));
         if (bind != null) bindApplication(bind);
@@ -932,17 +960,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** ActivityTaskSupervisor.realStartActivityLocked: launch and resume. */
     private void realStartActivity(ActivityRecord r) {
         Configuration config = LocaleManagerService.configurationFor(r.info.packageName);
+        Rect task;
         synchronized (this) {
-            r.config = config;
+            task = mTaskBounds.get(r.taskId);
+            r.config = effectiveConfiguration(config, task);
             r.configPending = false;
         }
-        Rect bounds = new Rect(0, 0, DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        ActivityWindowInfo windowInfo = new ActivityWindowInfo();
-        windowInfo.set(false /* isEmbedded */, bounds, bounds);
+        // A task the user resized: the task's configuration overrides the display's.
+        Configuration override = taskOverride(task, config);
+        ActivityWindowInfo windowInfo = windowInfo(task);
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
         t.addTransactionItem(new LaunchActivityItem(r.token, r.intent,
-                System.identityHashCode(r), r.info, config, new Configuration(),
+                System.identityHashCode(r), r.info, config, override,
                 Context.DEVICE_ID_DEFAULT, r.launchedFromPackage, null /* voiceInteractor */,
                 ActivityManager.PROCESS_STATE_TOP, null /* state */, null /* persistentState */,
                 results /* pendingResults */, null /* pendingNewIntents */,
@@ -955,6 +985,80 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 false /* shouldSendCompatFakeFocus */));
         setState(r, State.LAUNCHING);
         schedule(r, t, "LaunchActivityItem, ResumeActivityItem");
+    }
+
+    /** The ActivityWindowInfo of an activity in a task of {@code task} bounds (null: display). */
+    private static ActivityWindowInfo windowInfo(Rect task) {
+        Rect bounds = task != null ? new Rect(task)
+                : new Rect(0, 0, DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
+        ActivityWindowInfo info = new ActivityWindowInfo();
+        info.set(false /* isEmbedded */, bounds, bounds);
+        return info;
+    }
+
+    /** The last sequence number given to an activity's override configuration. */
+    private int mConfigSeq;
+
+    /**
+     * The override of a task {@code task} in size (null: the display's): its size
+     * configuration (TaskConfiguration), with a sequence number newer than every one given
+     * before and than the package's configuration {@code global}'s: the client drops an
+     * override that is not newer than the one it has (a seq of 0 too), and a task's size
+     * changes back and forth with the same package configuration.
+     */
+    private synchronized Configuration taskOverride(Rect task, Configuration global) {
+        Configuration override = task != null ? TaskConfiguration.override(task)
+                : new Configuration();
+        mConfigSeq = Math.max(mConfigSeq, global.seq) + 1;
+        if (mConfigSeq == 0) mConfigSeq = 1;
+        override.seq = mConfigSeq;
+        return override;
+    }
+
+    /** What an activity sees: its package's configuration with its task's override. */
+    private static Configuration effectiveConfiguration(Configuration global, Rect task) {
+        Configuration c = new Configuration(global);
+        if (task != null) c.updateFrom(TaskConfiguration.override(task));
+        return c;
+    }
+
+    /**
+     * IActivityTaskManager.resizeTask (the user resized the task's window: its window
+     * session tells): the task's configuration is that of its size (TaskConfiguration) over
+     * its package's. Each of its activities gets it as for any configuration change
+     * ({@link #ensureConfiguration}: told if it handles the changes, else relaunched; now if
+     * it is resumed, else when it is). The changes it handles also reach it through its
+     * window (ViewRootImpl's activity config callback).
+     */
+    @Override
+    public void resizeTask(int taskId, Rect bounds, int resizeMode) {
+        Rect task = bounds == null || bounds.isEmpty()
+                || (bounds.width() == DeviceProfile.WIDTH && bounds.height() == DeviceProfile.HEIGHT)
+                ? null : new Rect(0, 0, bounds.width(), bounds.height());
+        List<ActivityRecord> activities = new ArrayList<>();
+        synchronized (this) {
+            Rect old = mTaskBounds.get(taskId);
+            if (old == null ? task == null : old.equals(task)) return;
+            if (task != null) {
+                mTaskBounds.put(taskId, task);
+            } else {
+                mTaskBounds.remove(taskId);
+            }
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId == taskId && !a.finishing && a.app != null) activities.add(a);
+            }
+        }
+        SystemServer.log("task " + taskId + " resized to "
+                + (task != null ? task.width() + "x" + task.height() : "the display"));
+        for (ActivityRecord a : activities) ensureConfiguration(a);
+    }
+
+    /** reportSizeConfigurations: the size buckets the activity's resources care about. */
+    void reportSizeConfigurations(ActivityRecord r,
+            android.window.SizeConfigurationBuckets buckets) {
+        synchronized (this) {
+            r.sizeBuckets = buckets;
+        }
     }
 
     private List<ResultInfo> takeResults(ActivityRecord r) {
@@ -1049,6 +1153,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 pause(r, true);
                 return true;
             case PAUSED:
+            case STARTED:
                 stop(r);
                 return true;
             case STOPPED:
@@ -1176,17 +1281,22 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void activityResumed(ActivityRecord r) {
         List<ActivityRecord> toStop;
+        List<ActivityRecord> toStart;
         synchronized (this) {
             // A pause or a finish may already be on its way (startActivity or finish() in
             // onResume).
             if (r.state == State.LAUNCHING || r.state == State.RESUMING) r.state = State.RESUMED;
             toStop = stopping(r);
+            toStart = starting();
             notifyAll();
         }
         SystemServer.log("activityResumed: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+        for (ActivityRecord a : toStart) makeVisible(a);
         boolean pending;
         synchronized (this) {
+            // The configuration changed (a locale change, its task resized) while it was on
+            // its way to the front.
             pending = r.configPending && r.state == State.RESUMED;
         }
         if (pending) ensureConfiguration(r);
@@ -1206,12 +1316,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /**
      * ActivityTaskSupervisor.processStoppingAndFinishingActivities: the activities paused
      * for another one are stopped once an activity in front of them reports it is resumed
-     * (it is visible) or idle. Guarded by this.
+     * (it is visible) or idle, if they are no longer visible ({@link #isVisible}: an
+     * activity under a translucent or floating one stays paused, visible). Guarded by this.
      */
     private List<ActivityRecord> stopping(ActivityRecord reporting) {
         List<ActivityRecord> toStop = new ArrayList<>();
         for (ActivityRecord a : mActivities) {
-            if (a != reporting && a.stopWhenIdle && a.state == State.PAUSED && !a.finishing) {
+            if (a != reporting && a.stopWhenIdle && a.state == State.PAUSED && !a.finishing
+                    && !isVisible(a)) {
                 a.stopWhenIdle = false;
                 toStop.add(a);
             }
@@ -1219,18 +1331,208 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return toStop;
     }
 
+    /**
+     * EnsureActivitiesVisibleHelper, lite: whether an activity is visible. A task moved to
+     * the back (its window minimized) shows nothing; in a task, an activity is visible
+     * unless one above it occludes it (one that is not translucent or floating:
+     * ActivityRecord.occludesParent). Tasks are windows of their own on the Windows
+     * desktop (Android's desktop windowing), so another task never hides this one's
+     * activities. Guarded by this.
+     */
+    private boolean isVisible(ActivityRecord a) {
+        if (a.finishing || a.state == State.DESTROYED || a.state == State.DESTROYING) return false;
+        if (mHiddenTasks.contains(a.taskId)) return false;
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord above = mActivities.get(i);
+            if (above == a) return true;
+            if (above.taskId != a.taskId || above.finishing || above.state == State.DESTROYED) {
+                continue;
+            }
+            if (!above.translucent) return false;
+        }
+        return true;
+    }
+
+    /** Whether the activity is visible (willActivityBeVisible). */
+    synchronized boolean willBeVisible(ActivityRecord a) {
+        return isVisible(a);
+    }
+
+    /**
+     * The stopped activities that are visible again (the one above them finished, went
+     * translucent, or their task came to the front): to be started, not resumed. Guarded
+     * by this.
+     */
+    private List<ActivityRecord> starting() {
+        List<ActivityRecord> toStart = new ArrayList<>();
+        for (ActivityRecord a : mActivities) {
+            if (a.state == State.STOPPED && a.app != null && a.app.ready && !a.finishing
+                    && isVisible(a)) {
+                toStart.add(a);
+            }
+        }
+        return toStart;
+    }
+
+    /**
+     * ActivityRecord.makeActiveIfNeeded for an activity that is visible but not in front:
+     * StartActivityItem (onRestart, onStart; its window shows again), not resumed.
+     */
+    private void makeVisible(ActivityRecord r) {
+        synchronized (this) {
+            if (r.state != State.STOPPED || r.finishing) return;
+            r.state = State.STARTED;
+            notifyAll();
+        }
+        // A configuration change that came meanwhile waits until it is resumed (configPending).
+        ClientTransaction t = new ClientTransaction(r.app.thread);
+        t.addTransactionItem(new StartActivityItem(r.token, null /* sceneTransitionInfo */));
+        schedule(r, t, "StartActivityItem (visible, not resumed)");
+    }
+
+    /**
+     * ActivityClientController.moveActivityTaskToBack (the user minimized the task's window,
+     * or the activity asked: Activity.moveTaskToBack): the task is no longer visible. Its
+     * resumed activity is paused, then stopped; the other visible ones are stopped (each
+     * saves its state, ActivityThread's handleStopActivity).
+     */
+    boolean moveTaskToBack(ActivityRecord r, boolean nonRoot) {
+        List<ActivityRecord> toPause = new ArrayList<>();
+        List<ActivityRecord> toStop = new ArrayList<>();
+        int taskId = r.taskId;
+        synchronized (this) {
+            if (!nonRoot) {
+                // Only the task's root activity may move it back (Android's rule).
+                ActivityRecord root = null;
+                for (ActivityRecord a : mActivities) {
+                    if (a.taskId == taskId && !a.finishing) {
+                        root = a;
+                        break;
+                    }
+                }
+                if (root != r) return false;
+            }
+            if (!mHiddenTasks.add(taskId)) return true;
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId != taskId || a.finishing || a.app == null) continue;
+                switch (a.state) {
+                    case LAUNCHING:
+                    case RESUMING:
+                    case RESUMED:
+                        toPause.add(a);
+                        break;
+                    case PAUSED:
+                    case STARTED:
+                        toStop.add(a);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        SystemServer.log("moving task " + taskId + " to the back: " + toPause.size()
+                + " to pause, " + toStop.size() + " to stop");
+        for (ActivityRecord a : toPause) pause(a, false);
+        for (ActivityRecord a : toStop) stop(a);
+        return true;
+    }
+
+    /**
+     * IActivityTaskManager.moveTaskToFront (the user restored or activated the task's
+     * window): the task is visible again; its top activity is resumed (after the activity
+     * in front of another task is paused), the ones visible under it started.
+     */
+    @Override
+    public void moveTaskToFront(IApplicationThread app, String callingPackage, int taskId,
+            int flags, Bundle options) {
+        ActivityRecord top;
+        ActivityRecord pause = null;
+        boolean resumeNow = false;
+        List<ActivityRecord> toStart;
+        boolean wasHidden;
+        synchronized (this) {
+            wasHidden = mHiddenTasks.remove(taskId);
+            top = topOf(taskId);
+            if (top == null || top.app == null || !top.app.ready) return;
+            switch (top.state) {
+                case PAUSED:
+                case STARTED:
+                case STOPPING:
+                case STOPPED:
+                    break;
+                default:
+                    if (!wasHidden) return;  // already in front
+                    top = null;  // on its way to the front
+            }
+            if (top != null) {
+                ActivityRecord front = front(top);
+                if (front != null && front.taskId != taskId && !front.finishing) {
+                    top.waitingFor = front;
+                    top.resumeAfterPause = true;
+                    if (front.state != State.PAUSING) pause = front;
+                } else {
+                    resumeNow = true;
+                }
+            }
+            toStart = starting();
+            if (top != null) toStart.remove(top);
+        }
+        SystemServer.log("moving task " + taskId + " to the front"
+                + (top != null ? ": resuming " + top.name() : "")
+                + (pause != null ? " after pausing " + pause.name() : ""));
+        if (pause != null) pause(pause, false);
+        if (resumeNow) resume(top);
+        for (ActivityRecord a : toStart) makeVisible(a);
+    }
+
+    /**
+     * Activity.setTranslucent (convertToTranslucent / convertFromTranslucent): whether the
+     * activity occludes the ones below it changes; those now visible are started, those
+     * now hidden stopped.
+     */
+    boolean setTranslucent(ActivityRecord r, boolean translucent) {
+        List<ActivityRecord> toStop = new ArrayList<>();
+        List<ActivityRecord> toStart;
+        synchronized (this) {
+            if (r.translucent == translucent) return true;
+            r.translucent = translucent;
+            for (ActivityRecord a : mActivities) {
+                if (a != r && (a.state == State.PAUSED || a.state == State.STARTED)
+                        && !a.finishing && a.app != null && !isVisible(a)) {
+                    a.stopWhenIdle = false;
+                    toStop.add(a);
+                }
+            }
+            toStart = starting();
+        }
+        SystemServer.log(r.name() + (translucent ? " converted to translucent"
+                : " converted from translucent"));
+        for (ActivityRecord a : toStop) stop(a);
+        for (ActivityRecord a : toStart) makeVisible(a);
+        return true;
+    }
+
     void activityPaused(ActivityRecord r) {
         List<ActivityRecord> launch = new ArrayList<>();
+        List<ActivityRecord> resumeAfter = new ArrayList<>();
         ActivityRecord resume = null;
         boolean finishing;
+        boolean stopNow;
         synchronized (this) {
             r.state = State.PAUSED;
             finishing = r.finishing;
+            // Paused as its task went to the back: stopped now (nothing in front of it will
+            // report idle).
+            stopNow = !finishing && mHiddenTasks.contains(r.taskId);
+            if (stopNow) r.stopWhenIdle = false;
             for (ActivityRecord a : mActivities) {
                 if (a.waitingFor == r) {
                     a.waitingFor = null;
                     if (a.state == State.INITIALIZING && a.app != null && a.app.ready) {
                         launch.add(a);
+                    } else if (a.resumeAfterPause) {
+                        a.resumeAfterPause = false;
+                        if (!a.finishing && a.app != null) resumeAfter.add(a);
                     }
                 }
             }
@@ -1248,6 +1550,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (resume != null) {
                     switch (resume.state) {
                         case PAUSED:
+                        case STARTED:
                         case STOPPING:
                         case STOPPED:
                             break;
@@ -1260,8 +1563,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("activityPaused: " + r.name());
         for (ActivityRecord a : launch) realStartActivity(a);
+        for (ActivityRecord a : resumeAfter) resume(a);
         if (resume != null) resume(resume);
-        if (finishing) stop(r);
+        if (finishing || stopNow) stop(r);
     }
 
     void activityStopped(ActivityRecord r, Bundle savedState) {
@@ -1360,33 +1664,37 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private String configurationItem(ActivityRecord r, ClientTransaction t,
             List<ResultInfo> results) {
-        Configuration config = LocaleManagerService.configurationFor(r.info.packageName);
+        // One configuration for both tracks: the package's (locales, formats: locale track)
+        // with the task's size override (a resized window: lifecycle track).
+        Configuration global = LocaleManagerService.configurationFor(r.info.packageName);
+        Configuration config;
+        Rect task;
         int diff;
         synchronized (this) {
             if (r.config == null) return null;
-            diff = r.config.diffPublicOnly(config);
+            task = mTaskBounds.get(r.taskId);
+            config = effectiveConfiguration(global, task);
+            // Size changes within the buckets its resources care about do not count.
+            diff = android.window.SizeConfigurationBuckets.filterDiff(
+                    r.config.diffPublicOnly(config), r.config, config, r.sizeBuckets);
             r.config = config;
             r.configPending = false;
         }
         if (diff == 0) return null;
-        Rect bounds = new Rect(0, 0, DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
-        ActivityWindowInfo windowInfo = new ActivityWindowInfo();
-        windowInfo.set(false /* isEmbedded */, bounds, bounds);
+        Configuration override = taskOverride(task, global);
+        ActivityWindowInfo windowInfo = windowInfo(task);
         int handled = r.info.getRealConfigChanged();
         String changes = "changes 0x" + Integer.toHexString(diff) + ", handles 0x"
-                + Integer.toHexString(handled) + ", " + config.getLocales().toLanguageTags();
+                + Integer.toHexString(handled) + ", " + config.getLocales().toLanguageTags()
+                + ", " + config.screenWidthDp + "x" + config.screenHeightDp + " dp";
         if ((diff & ~handled) == 0) {
-            // Its override (none) with the change's sequence number: the client drops an
-            // override config whose seq is 0 as older than the one it has pending.
-            Configuration override = new Configuration();
-            override.seq = config.seq;
             t.addTransactionItem(new ActivityConfigurationChangeItem(r.token, override,
                     windowInfo, Display.DEFAULT_DISPLAY));
             return "ActivityConfigurationChangeItem (" + changes + ")";
         }
         t.addTransactionItem(new ActivityRelaunchItem(r.token, results,
                 null /* pendingNewIntents */, diff,
-                new MergedConfiguration(config, new Configuration()),
+                new MergedConfiguration(global, override),
                 true /* preserveWindow */, windowInfo, Display.DEFAULT_DISPLAY));
         return "ActivityRelaunchItem (" + changes + ")";
     }

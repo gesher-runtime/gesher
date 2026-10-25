@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher lifecycle</string>
+    <string name="activity_label">Gesher lifecycle test</string>
+    <string name="translucent_label">Gesher translucent activity</string>
+    <string name="dialog_label">Gesher dialog-themed activity</string>
+    <string name="opaque_label">Gesher opaque activity</string>
+</resources>

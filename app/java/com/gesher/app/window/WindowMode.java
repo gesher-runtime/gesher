@@ -127,6 +127,26 @@ public final class WindowMode {
             log(name + " finished, destroyed");
             onClosed.run();
         });
+        // Minimizing the window stops the Activity, restoring it resumes it
+        // (docs/lifecycle.md): the single process has no system server to move its task.
+        session.setLifecycleHandler(new WindowSession.LifecycleHandler() {
+            @Override
+            public void onTaskVisibility(android.os.IBinder token, int taskId, boolean visible) {
+                if (token != activity.getActivityToken()) return;
+                if (visible) {
+                    GesherActivityWindow.restart(activity);
+                    log(name + " restarted, resumed (its window was restored)");
+                } else {
+                    android.os.Bundle state = GesherActivityWindow.stop(activity);
+                    log(name + " paused, stopped (its window was minimized)"
+                            + (state != null ? ", saved state of " + state.size() + " keys" : ""));
+                }
+            }
+
+            @Override
+            public void onTaskActivated(android.os.IBinder token, int taskId) {
+            }
+        });
         GesherActivityWindow.makeVisible(activity);
         log(name + " window added");
     }
