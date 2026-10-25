@@ -241,6 +241,15 @@ std::unordered_map<uintptr_t, bool> g_host_pages;
 
 bool HostExecutableUncached(uintptr_t addr);
 
+bool FastmemEnabled() {
+  static const bool enabled = [] {
+    char v[8] = {};
+    DWORD n = GetEnvironmentVariableA("GESHER_ARM64_FASTMEM", v, sizeof(v));
+    return !(n > 0 && v[0] == '0');
+  }();
+  return enabled;
+}
+
 bool HostExecutable(uintptr_t addr) {
   uintptr_t page = addr & ~uintptr_t{0xFFF};
   {
@@ -322,6 +331,17 @@ class Env final : public A64::UserCallbacks {
       conf.global_monitor = &Monitor();
       conf.enable_cycle_counting = false;
       conf.wall_clock_cntpct = true;
+      // Fastmem: the guest shares the host address space, so a guest access
+      // is generated inline as a host access at [0 + vaddr] (all 64 bits),
+      // not a callback. A fault there is a guest fault (the vectored handler
+      // reports it). Exclusive accesses still go through the callbacks (the
+      // CAS above). GESHER_ARM64_FASTMEM=0 turns it off.
+      if (FastmemEnabled()) {
+        conf.fastmem_pointer = uintptr_t{0};
+        conf.fastmem_address_space_bits = 64;
+        conf.silently_mirror_fastmem = false;
+        conf.recompile_on_fastmem_failure = false;
+      }
       // The outermost Jit runs almost all guest code; nested ones are short.
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
@@ -476,6 +496,32 @@ class Env final : public A64::UserCallbacks {
     --depth_;
     stack_cur_ = saved_stack_cur;
     return result;
+  }
+
+  // A guest program's _start (ApiRunProgram): SP = the Linux initial stack
+  // block, copied to the top of this thread's guest stack.
+  uint64_t EnterProgram(const void* entry, const uint64_t* block, size_t words) {
+    uint64_t sp = (stack_top_ - 64 - words * 8) & ~uint64_t{15};
+    std::memcpy(reinterpret_cast<void*>(sp), block, words * 8);
+    stack_cur_ = sp;
+    uint64_t gpr[8] = {0}, xmm[8] = {0};
+    // Enter() places SP below stack_cur_; _start wants SP == the block.
+    A64::Jit* jit = JitAt(depth_);
+    ++depth_;
+    for (int i = 0; i < 8; ++i) {
+      jit->SetRegister(i, gpr[i]);
+      jit->SetVector(i, A64::Vector{xmm[i], 0});
+    }
+    jit->SetRegister(29, 0);
+    jit->SetRegister(30, g_return_stub);
+    jit->SetSP(sp);
+    jit->SetPC(reinterpret_cast<uint64_t>(entry));
+    t_guest_running = 1;
+    jit->ClearHalt(Dynarmic::HaltReason::UserDefined1);
+    jit->Run();
+    t_guest_running = 0;
+    --depth_;
+    return jit->GetRegister(0);
   }
 
   uint64_t last_fp_result() const { return last_fp_result_; }
@@ -667,6 +713,10 @@ int ApiIsGuestCode(const void* addr) {
   return InGuestCode(reinterpret_cast<uintptr_t>(addr)) ? 1 : 0;
 }
 
+uint64_t ApiRunProgram(const void* entry, const uint64_t* block, size_t words) {
+  return ThreadEnv()->EnterProgram(entry, block, words);
+}
+
 gesher_arm64_api g_api = {
     GESHER_ARM64_API_VERSION,
     ApiAddCode,
@@ -678,6 +728,7 @@ gesher_arm64_api g_api = {
     ApiTlsPublish,
     ApiTlsDescStatic,
     ApiIsGuestCode,
+    ApiRunProgram,
 };
 
 }  // namespace
@@ -821,8 +872,12 @@ extern "C" __declspec(dllexport) void* gesher_arm64_bind(void* fn) { return Bind
 
 extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {
-  if (host == nullptr || host->version != GESHER_ARM64_API_VERSION) return nullptr;
+  // Version 1 hosts (no run_program) are served too: the table only grew.
+  if (host == nullptr || host->version < 1 || host->version > GESHER_ARM64_API_VERSION) {
+    return nullptr;
+  }
   g_host = host;
+  g_api.version = host->version;
   {
     uint32_t ret_stub[] = {Svc(kReturnSvc), kRet};
     g_return_stub = reinterpret_cast<uintptr_t>(EmitGuestCode(ret_stub, 2));

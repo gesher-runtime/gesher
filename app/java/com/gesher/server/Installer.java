@@ -201,7 +201,8 @@ final class Installer {
         }
         String what = old != null ? "updated" : "installed";
         SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
-                + (libs > 0 ? ", " + libs + " native libraries" : ""));
+                + (libs > 0 ? ", " + libs + " native libraries (" + NativeLibs.forApk(base.getPath())
+                        + ")" : ""));
         return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
     }
 

@@ -115,11 +115,27 @@ differences, arch-filtered symbol binding, an honest overhead figure).
   per iteration). `arm64_elf_test` also times a compiled C kernel (sieve,
   CRC-32, LCG) translated vs. the same code built natively.
 
+- arm64 **executables** (the exec track, ADR 0035): gesher-exec loads an
+  arm64-v8a PIE like an x86-64 one, sees `ExecutableInfo::aarch64` and enters
+  its `_start` through the translator (`run_program`, API version 2) with the
+  Linux initial stack block copied to the top of the thread's guest stack;
+  bionic's `__libc_init`, `exit` and `getauxval` are gesher-exec's host
+  functions, reached through trampolines. `exec_spawn` accepts EM_AARCH64, so
+  ProcessBuilder runs arm64 programs too. Tested with the exec track's own test
+  program built for arm64 (`arm64-exec/`), the same checks as
+  tracks/42-exec.ps1.
+- **Fastmem**: guest loads and stores are generated inline as host accesses
+  at `[0 + vaddr]` (the shared address space), instead of a callback per
+  access; `GESHER_ARM64_FASTMEM=0` turns it off. Exclusive accesses still go
+  through the CAS callbacks.
+- e2e: **TIC-80** 1.01.00 (`com.nesbox.tic`, F-Droid versionCode 10100,
+  MIT), whose APK ships native code only for arm64-v8a (SDL2 and the console
+  in C), in tests/e2e/apps.json; its log must show the translated library
+  (`gesher arm64: <lib> is arm64-v8a: translated`, printed when
+  System.loadLibrary loads an arm64 object).
+
 ### Not yet done
 
-- arm64 **executables** (the exec track, ADR 0035): the launcher must run a
-  guest `_start` through the translator at the Linux stack block.
-- A real arm64-only F-Droid app in the e2e job.
 - Guest JIT code (RWX pages the guest writes), guest signal handlers with an
   arm64 `ucontext`, LSE atomics (dynarmic does not decode them; HWCAP hides
   them), HFAs by value.
