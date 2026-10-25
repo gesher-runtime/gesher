@@ -98,6 +98,19 @@ Merged so far:
   legacy android.hardware.Camera, Gesher Camera for ACTION_IMAGE_CAPTURE.
   Leftovers (graphics): camera preview into SurfaceView/TextureView; Bitmap
   parcels across processes (Gesher Camera's thumbnail); no YuvImage natives.
+  Integration ci 40239177837 on cf41c06: all green.
+- arm64 (Phase 7): merged (verified at 8d7bede, ci 40240210807 attempt 2,
+  which contains d08b439, so the integration tree after this merge is the
+  CI-verified one; attempt 1 failed only net's external https fetch to
+  example.com on windows-2025). ADR 0047 (with a "Revision" section: the
+  successor fixed STXR monitor callbacks, guest faults as crash reports, the
+  DEP redirect, xmm6-15 in the System V thunk, stack args, TLS/TLSDESC, JNI
+  proxies). arm64 executables via gesher-exec and ProcessBuilder; fastmem;
+  NativeActivity arm64-only APK. Overhead x2.1 (compiled kernel) / x5.0
+  (register loop). Leftovers: TIC-80 (e2e knownFailure) needs SurfaceView
+  surfaces (graphics); no guest JIT code, guest signal handlers, LSE, HFAs
+  by value. The arm64 shim fallbacks (sem_*, wchar, libm, dlopen of
+  platform libs) should move into compat/bionic for x86_64 too.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
