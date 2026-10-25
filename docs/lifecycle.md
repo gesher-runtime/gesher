@@ -87,6 +87,9 @@ in a single process and on the Gesher device.
   and device lifecycle checks, and the composition check with the CPU
   pipeline and SkiaGL (the dialog's transparent edge shows the red under it
   dimmed to 0x660000, its card white, the app window dimmed to 0x666666).
+- Merged with the locale track (ADR 0049): one configuration mechanism in the
+  server (the package's configuration with the task's size override; one diff
+  for a locale change and a resize). Re-verification run: see below.
 - Next: nothing pending for this track beyond the gaps below.
 
 ## Remaining gaps
