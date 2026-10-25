@@ -70,6 +70,13 @@ void* Lookup(Library* library, const char* name);
 // another). nullptr if not found.
 void* LookupGlobal(const char* name);
 
+// Resolves `name` through the bionic resolver (SetBionicResolver) alone: the
+// host (shim) definition, or nullptr. The arm64 translator wraps some of them.
+void* ResolveBionic(const char* name);
+
+// Is `library` an arm64-v8a object (run by the arm64 translator, ADR 0047)?
+bool IsAarch64(Library* library);
+
 // Returns the already-loaded object whose soname or file base name is `name`,
 // or nullptr. Load() uses this to share dependencies.
 Library* Find(const char* name);
@@ -149,6 +156,7 @@ struct ExecutableInfo {
   uint16_t phnum = 0;           // AT_PHNUM
   void* base = nullptr;         // the mapping's start
   bool has_interp = false;      // PT_INTERP present: built as an executable
+  bool aarch64 = false;         // an arm64-v8a program: entered through the translator
 };
 // Fills `info` for `library`; false if `library` is null.
 bool GetExecutableInfo(Library* library, ExecutableInfo* info);
