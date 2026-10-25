@@ -403,6 +403,14 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+- [ ] Native processes from native code ([exec.md](exec.md), ADR 0055):
+      `fork()`+`exec*()` (vfork-style), `posix_spawn`, `system()` and `popen()`
+      with fd redirections, environment and working directory; `waitpid`/`wait4`
+      status decoding; signals between processes (`kill`, signal 0, SIGKILL, a
+      target's SIGTERM/SIGUSR1 handlers), `Process.destroy()`/`destroyForcibly()`;
+      the `/system/bin` programs apps call (`sh`, `ls`, `cat`, `id`, `ps`,
+      `getprop`, `kill`, `sleep`, `logcat`); static executables and ELF TLS in
+      the executable recorded as not supported
 
 ## Phase 8 checklist
 

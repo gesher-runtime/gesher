@@ -67,30 +67,55 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   argc 0 and null argv/envp, where they used to get whatever was in the
   registers), and `DT_PREINIT_ARRAY`.
 
+## Native processes from native code (exec2 track, ADR 0055)
+
+An app's `.so` starting other programs is supported too, over `exec_spawn` and
+gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
+
+- **`system()`, `popen()`/`pclose()`, `posix_spawn()`/`posix_spawnp()`** (with
+  its file actions: open, close, dup2, chdir) run programs directly, no fork
+  needed; `system`/`popen` through the launcher's `sh -c`.
+- **`fork()`/`vfork()`** are a **vfork-style** child on the calling thread:
+  `fork()` returns 0, the child's fd (`dup2`, `close`, `open`), environment and
+  `chdir` calls are recorded, and its `exec*()` spawns the program with them
+  while `fork()` returns the child's pid to the parent; its `exit`/`_exit` ends
+  the child. The child must only prepare and `exec`/`_exit`, as `vfork` requires.
+- **`exec*()` outside a fork** spawns the program with this process's fds,
+  environment and working directory, waits and exits with its status (the pid
+  changes).
+- **`waitpid`/`wait`/`wait4`** return Linux's status word
+  (`WIFEXITED`/`WIFSIGNALED`); a child's exit raises `SIGCHLD`.
+- **`kill(pid, sig)` to another process** (any Gesher process, children
+  included) goes through the signal mailbox and is delivered to the target's
+  `sigaction` handlers (SIGTERM, SIGKILL, SIGINT, SIGUSR1/2, SIGHUP; signal 0
+  for existence), with the sleeps interruptible (`EINTR`).
+- **`Process.destroy()`** now sends SIGTERM (the program's handler runs; a
+  program with none is terminated with 143); **`destroyForcibly()`** kills
+  (137), through a new `UNIXProcess` native.
+- **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
+  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, as a bare name or a
+  `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
+  `pm`/`am` decline (no binder from a bare process), `setprop` cannot persist
+  (no shared property store).
+
 ## Not done / limits
 
-- **ELF TLS in the executable itself** (`__thread` at API 29+): the linker
-  resolves an executable's own thread-locals as local-exec offsets from the
-  thread pointer (`%fs:-N`), which assume the executable's TLS block sits
-  first; the loader's `%fs` rewrite traps those forms (an `int3` with a
-  message if reached). Emulated TLS (API < 29), and ELF TLS in the libraries
-  the executable loads, work.
-- Signals between processes: `destroy()` terminates (status 143) without
-  running the program's SIGTERM handler; `kill(pid, sig)` from native code is
-  still `ESRCH` for other processes.
+- **ELF TLS in the executable itself** (`__thread` at API 29+): still
+  unsupported. The linker resolves an executable's own thread-locals as
+  local-exec offsets from the thread pointer (`%fs:-N`), filled by
+  `R_X86_64_TPOFF` relocations; the loader's `%fs` rewrite runs before
+  relocations, so it cannot tell a local-exec site from a thread-pointer access,
+  and such forms trap. Emulated TLS (API < 29), and ELF TLS in the libraries the
+  executable loads, work.
+- A real `fork()` that does work other than `exec`/`_exit` in the child is not
+  supported (vfork-style only, ADR 0055).
 - Exit-status convention: a child that dies of a signal carries a Windows
   exit code of 128 + signal (the posix layer's `kill` and the launcher's
   fault mapping both use it), and `waitForProcessExit` passes such codes
   through unchanged, so Java's `waitFor()` sees the same 128 + N that
   Linux's `Process` reports.
-- No `fork()`, `exec*()`, `posix_spawn`, `system()` or `popen()` inside native
-  code yet (the shim's gaps, docs/native-libs.md); Java's ProcessBuilder is
-  the supported path.
-- Programs Android has in `/system/bin` (`getprop`, `logcat`, `su`, `ls`...)
-  do not exist: `ENOENT` (`IOException error=2`), or 127 from the shell, as on
-  a device without them.
 - Static executables (`ET_EXEC`, no `PT_INTERP`) and non-NDK runtimes (Go)
-  are not supported.
+  are not supported (`ENOEXEC`).
 - Windows programs get the command line quoted for the CRT's rules; a
   Windows program's exit code is passed through unchanged (it may exceed 255).
 
