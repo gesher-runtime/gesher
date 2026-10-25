@@ -33,9 +33,18 @@
 
 namespace A64 = Dynarmic::A64;
 
+// A guest -> host call, marshalled to System V by gesher_call_host_sysv.
+struct HostCall {
+  void* fn;              // the host System V function
+  const uint64_t* gpr;   // X0..X5 -> rdi,rsi,rdx,rcx,r8,r9
+  const uint64_t* xmm;   // V0..V7 low 64 bits -> xmm0..xmm7
+  const uint64_t* stack; // host stack arguments: X6, X7, then guest stack args
+  uint64_t nstack;       // count of `stack` (even, for 16-byte alignment)
+  uint64_t out_xmm0;     // written by the thunk: the result's xmm0 low 64 bits
+};
+
 // thunks.S (Microsoft x64 entry):
-extern "C" uint64_t gesher_call_host_sysv(void* fn, const uint64_t* gpr, const uint64_t* xmm,
-                                          uint64_t* out_xmm0);
+extern "C" uint64_t gesher_call_host_sysv(HostCall* call);
 extern "C" void gesher_guest_entry_shim();  // host_entry stubs jump here
 
 namespace {
@@ -309,15 +318,26 @@ class Env final : public A64::UserCallbacks {
   }
 
   void CallHost(const Trampoline* t) {
-    uint64_t gpr[8], xmm[8];
-    for (int i = 0; i < 8; ++i) {
-      gpr[i] = jit_->GetRegister(i);
-      xmm[i] = jit_->GetVector(i)[0];
+    // AAPCS64 -> System V. X0..X5 are the first six System V integer arguments;
+    // X6, X7 are System V arguments 7 and 8, which go on the stack; any further
+    // arguments (a variadic call with more than eight) are on the guest stack at
+    // SP and follow on the host stack. Copying a generous, fixed window of guest
+    // stack words covers them without knowing the real count (the callee reads
+    // only what its signature or format string names).
+    uint64_t gpr[6], xmm[8];
+    for (int i = 0; i < 6; ++i) gpr[i] = jit_->GetRegister(i);
+    for (int i = 0; i < 8; ++i) xmm[i] = jit_->GetVector(i)[0];
+    uint64_t stack[2 + 14];
+    stack[0] = jit_->GetRegister(6);
+    stack[1] = jit_->GetRegister(7);
+    uint64_t gsp = jit_->GetSP();
+    for (int i = 0; i < 14; ++i) {
+      std::memcpy(&stack[2 + i], reinterpret_cast<void*>(gsp + i * 8), 8);
     }
-    uint64_t out_xmm0 = 0;
-    uint64_t rax = gesher_call_host_sysv(t->host_fn, gpr, xmm, &out_xmm0);
+    HostCall call{t->host_fn, gpr, xmm, stack, 16, 0};
+    uint64_t rax = gesher_call_host_sysv(&call);
     jit_->SetRegister(0, rax);
-    jit_->SetVector(0, A64::Vector{out_xmm0, 0});
+    jit_->SetVector(0, A64::Vector{call.out_xmm0, 0});
   }
 
   std::unique_ptr<A64::Jit> jit_;

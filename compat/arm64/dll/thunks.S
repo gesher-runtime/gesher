@@ -10,14 +10,21 @@
 	.intel_syntax noprefix
 	.text
 
-// uint64_t gesher_call_host_sysv(void* fn,            // rcx
-//                                const uint64_t* gpr, // rdx: X0..X7
-//                                const uint64_t* xmm, // r8 : V0..V7 low 64 bits
-//                                uint64_t* out_xmm0); // r9 : V0 of the result
+// uint64_t gesher_call_host_sysv(HostCall* call);  // rcx = call
 //
-// Calls System V `fn` with X0..X5 in rdi,rsi,rdx,rcx,r8,r9, X6,X7 as the first
-// two stack arguments, and V0..V7 in xmm0..xmm7. Returns rax; stores the
-// low 64 bits of the result's xmm0 through out_xmm0. Microsoft x64 entry.
+//   struct HostCall { void* fn;            // +0
+//                     const uint64_t* gpr; // +8:  X0..X5
+//                     const uint64_t* xmm; // +16: V0..V7 low 64 bits
+//                     const uint64_t* stack; // +24: X6, X7, then guest stack args
+//                     uint64_t nstack;     // +32: count of `stack` (even)
+//                     uint64_t out_xmm0; }; // +40: written with the result's xmm0
+//
+// Calls System V `fn` with X0..X5 in rdi,rsi,rdx,rcx,r8,r9 and V0..V7 in
+// xmm0..xmm7, the `stack` words as System V stack arguments (System V's 7th and
+// 8th arguments and any variadic overflow), and AL = 8 for a variadic callee.
+// Returns rax and stores the result's xmm0 low 64 bits in call->out_xmm0.
+// Microsoft x64 entry; rbx holds `call` across the call (it survives, being
+// MS-ABI callee-saved and restored at the end).
 	.globl gesher_call_host_sysv
 	.p2align 4
 gesher_call_host_sysv:
@@ -26,42 +33,46 @@ gesher_call_host_sysv:
 	push rbx
 	push rsi            // preserve MS-ABI callee-saved regs we clobber as SysV args
 	push rdi
-	push r12
-	mov  r12, rcx       // fn
-	mov  r11, r9        // out_xmm0
-	// Load the 8 SSE argument registers from xmm[0..7].
-	movsd xmm0, qword ptr [r8 + 0]
-	movsd xmm1, qword ptr [r8 + 8]
-	movsd xmm2, qword ptr [r8 + 16]
-	movsd xmm3, qword ptr [r8 + 24]
-	movsd xmm4, qword ptr [r8 + 32]
-	movsd xmm5, qword ptr [r8 + 40]
-	movsd xmm6, qword ptr [r8 + 48]
-	movsd xmm7, qword ptr [r8 + 56]
-	// Stack arguments X6, X7, with 16-byte alignment at the call.
-	mov  rax, qword ptr [rdx + 56]   // X7
-	mov  r10, qword ptr [rdx + 48]   // X6
-	sub  rsp, 32                     // 2 args (16) + 16 pad keeps rsp%16==0
-	mov  qword ptr [rsp + 0], r10    // X6 -> first stack slot
-	mov  qword ptr [rsp + 8], rax    // X7 -> second stack slot
-	// Integer argument registers X0..X5.
-	mov  rdi, qword ptr [rdx + 0]
-	mov  rsi, qword ptr [rdx + 8]
-	mov  r8,  qword ptr [rdx + 32]   // X4 (before clobbering rdx/rcx)
-	mov  r9,  qword ptr [rdx + 40]   // X5
-	mov  rcx, qword ptr [rdx + 24]   // X3
-	mov  rax, qword ptr [rdx + 16]   // X2 via rax, then move
-	mov  rdx, rax
-	// rax = number of vector registers used (varargs AL); 8 is always safe.
-	mov  eax, 8
-	call r12
-	// Return: rax already holds the integer result; capture xmm0.
-	test r11, r11
-	je   1f
-	movsd qword ptr [r11], xmm0
-1:
-	add  rsp, 32
-	pop  r12
+	mov  rbx, rcx       // the HostCall*, kept across the call
+	// Reserve and fill the host stack arguments (16-byte aligned at the call).
+	mov  r10, qword ptr [rbx + 24]   // stack ptr
+	mov  r11, qword ptr [rbx + 32]   // nstack
+	lea  rax, [r11*8]
+	add  rax, 15
+	and  rax, -16                    // bytes rounded up to 16
+	and  rsp, -16
+	sub  rsp, rax
+	xor  rcx, rcx
+2:
+	cmp  rcx, r11
+	jge  3f
+	mov  rax, qword ptr [r10 + rcx*8]
+	mov  qword ptr [rsp + rcx*8], rax
+	inc  rcx
+	jmp  2b
+3:
+	// SSE argument registers from xmm[0..7].
+	mov  r10, qword ptr [rbx + 16]
+	movsd xmm0, qword ptr [r10 + 0]
+	movsd xmm1, qword ptr [r10 + 8]
+	movsd xmm2, qword ptr [r10 + 16]
+	movsd xmm3, qword ptr [r10 + 24]
+	movsd xmm4, qword ptr [r10 + 32]
+	movsd xmm5, qword ptr [r10 + 40]
+	movsd xmm6, qword ptr [r10 + 48]
+	movsd xmm7, qword ptr [r10 + 56]
+	// Integer argument registers X0..X5 from gpr[0..5].
+	mov  r9, qword ptr [rbx + 8]     // gpr ptr
+	mov  rdi, qword ptr [r9 + 0]
+	mov  rsi, qword ptr [r9 + 8]
+	mov  rdx, qword ptr [r9 + 16]
+	mov  rcx, qword ptr [r9 + 24]
+	mov  r8,  qword ptr [r9 + 32]
+	mov  r9,  qword ptr [r9 + 40]    // X5 (overwrites gpr ptr last)
+	mov  eax, 8                      // AL = vector regs for a variadic callee
+	call qword ptr [rbx + 0]         // fn
+	movsd qword ptr [rbx + 40], xmm0 // out_xmm0
+	lea  rsp, [rbp - 24]             // undo the pushes (rbx, rsi, rdi)
 	pop  rdi
 	pop  rsi
 	pop  rbx

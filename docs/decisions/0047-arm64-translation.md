@@ -61,18 +61,21 @@ This makes the two directions of the bridge:
   `RET` returns to the guest caller. A host function with a `va_list` parameter
   (the shim's `vsnprintf`, the JNI bridge's `Call*MethodV`) gets an AAPCS64 →
   System V `va_list` conversion.
-- **Host → guest.** Host code calls a guest function pointer as a System V (or
-  Microsoft-x64) function — init/fini arrays, IFUNC resolvers, `JNI_OnLoad`
-  and the `Java_*` natives through the JNI bridge, pthread start routines,
-  qsort comparators, the NativeActivity callbacks. The guest's executable
-  pages are mapped **readable but not executable**, so such a call faults with
-  DEP; a vectored exception handler sees an *execute* fault at an address in a
-  registered guest code region and enters the guest on that thread with a
-  per-thread `dynarmic::A64::Jit`: the System V argument registers (and XMM0–7)
-  become AAPCS64 X0–X7/V0–V7, the guest runs on its own stack until it returns
-  to a sentinel address, and X0/V0 become RAX/XMM0 for the host caller. The
-  loader also offers an explicit `host_entry(fn)` x86-64 stub for the call
-  sites it knows, which avoids the fault.
+- **Host → guest.** Host code calls a guest function — init/fini arrays,
+  IFUNC resolvers, `JNI_OnLoad` and the `Java_*` natives through the JNI
+  bridge, pthread start routines, qsort comparators, the NativeActivity
+  callbacks — through an explicit **`host_entry(fn)` System V x86-64 stub** the
+  loader obtains for each such function and hands to host code in the guest
+  function's place. The stub (`gesher_guest_entry_shim`) spills the System V
+  argument registers and enters the guest on the calling thread with a
+  per-thread `dynarmic::A64::Jit`: the System V argument registers (and
+  XMM0–7) become AAPCS64 X0–X7/V0–V7, the guest runs on its own stack until it
+  returns to a sentinel X30 (a one-instruction return stub whose `SVC` halts
+  the Jit), and X0/V0 become RAX/XMM0 for the host caller. The guest's
+  executable pages are additionally mapped **readable but not executable** as
+  defence in depth; turning a stray host call straight to a guest address into
+  an automatic guest entry via a fault handler is a possible future addition,
+  not yet implemented — every host→guest path today goes through `host_entry`.
 
 The translator lives in a **proxy DLL, `gesher_arm64.dll`** (one export,
 `gesher_arm64_init`, `compat/arm64/include/gesher/arm64_translator.h`), loaded
