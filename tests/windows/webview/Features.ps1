@@ -214,7 +214,11 @@ function FeaturesCheck {
       & $click 330 330 'button'
       $m = & $waitFor 'Features click corner' 20
       if (-not $m.Success) {
-        Write-Host "INFO  features: no click on the button after 20 s; the foreground window is $([GesherWebViewInput]::Foreground())"
+        # Seen with runtime 131 (windows-2022): the click waits in the app window's
+        # thread until something wakes it (its input queue is attached to the
+        # WebView2 windows'); a posted WM_NULL does.
+        Write-Host "INFO  features: no click on the button after 20 s (the foreground window is $([GesherWebViewInput]::Foreground())); posting WM_NULL to wake the app window's thread"
+        [void][GesherWin32]::PostMessageW($hwnd, 0x0000 <# WM_NULL #>, [IntPtr]::Zero, [IntPtr]::Zero)
         $m = & $waitFor 'Features click corner' 70
       }
       if (-not $m.Success) { $problems += 'the button did not get the click' } else {
