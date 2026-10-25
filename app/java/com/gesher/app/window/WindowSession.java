@@ -114,12 +114,38 @@ public final class WindowSession extends IWindowSession.Stub {
         void onClose(WindowSession session, IBinder window, WindowManager.LayoutParams attrs);
     }
 
+    /**
+     * What the user does to an Activity's top-level window that its lifecycle follows
+     * (docs/lifecycle.md). Runs on the thread that added the window. The default tells the
+     * system server ({@link #serverLifecycle}); gesher-app's single process drives its one
+     * Activity itself (WindowMode.show).
+     */
+    public interface LifecycleHandler {
+        /**
+         * The window was minimized ({@code visible} false: its task goes to the back, its
+         * Activities stop) or restored (true: the task comes to the front, its top Activity
+         * resumes). {@code token}: the Activity's; {@code taskId}: its task, or -1.
+         */
+        void onTaskVisibility(IBinder token, int taskId, boolean visible);
+
+        /** The user activated the window (shown windows): its task comes to the front. */
+        void onTaskActivated(IBinder token, int taskId);
+
+        /**
+         * The user resized the window: its task is {@code bounds} (pixels, from 0,0) in size
+         * now ({@link TaskConfiguration}). The window's own configuration already followed.
+         */
+        default void onTaskResized(IBinder token, int taskId, Rect bounds) {
+        }
+    }
+
     private static WindowSession sInstance;
 
     private final boolean mShow;
     private final WindowLayout mLayout = new WindowLayout();
     private final ArrayMap<IBinder, AppWindow> mWindows = new ArrayMap<>();
     private volatile CloseHandler mCloseHandler = WindowSession::finishActivity;
+    private volatile LifecycleHandler mLifecycleHandler = serverLifecycle();
     /** Windows added so far (AppWindow.seq). Guarded by mWindows. */
     private long mNextSeq;
     /** The top-level window shown or focused last: a toast's owner. Guarded by mWindows. */
@@ -178,6 +204,14 @@ public final class WindowSession extends IWindowSession.Stub {
         int requestedHeight = WindowLayout.UNSPECIFIED_LENGTH;
         /** What updateGroup last logged of the group of this top-level window. */
         String groupState;
+        /** A top-level window the user minimized (WM_SIZE SIZE_MINIMIZED), until restored. */
+        boolean minimized;
+        /** SkiaGL: the dim behind its popups, a layered window of its own (setDimLayer). */
+        NativeWindow dimLayer;
+        /** What dimLayer was drawn with: alpha, width, height. */
+        int dimDrawn;
+        int dimWidth;
+        int dimHeight;
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -239,6 +273,68 @@ public final class WindowSession extends IWindowSession.Stub {
 
     public void setCloseHandler(CloseHandler handler) {
         mCloseHandler = handler != null ? handler : WindowSession::finishActivity;
+    }
+
+    public void setLifecycleHandler(LifecycleHandler handler) {
+        mLifecycleHandler = handler != null ? handler : serverLifecycle();
+    }
+
+    /**
+     * The default lifecycle handler: the system server moves the Activity's task, as a
+     * desktop's window manager has Android's do (ActivityClient.moveActivityTaskToBack,
+     * IActivityTaskManager.moveTaskToFront).
+     */
+    public static LifecycleHandler serverLifecycle() {
+        return new LifecycleHandler() {
+            @Override
+            public void onTaskVisibility(IBinder token, int taskId, boolean visible) {
+                try {
+                    if (!visible) {
+                        android.app.ActivityClient.getInstance().moveActivityTaskToBack(token,
+                                true /* nonRoot */);
+                    } else if (taskId >= 0) {
+                        moveTaskToFront(taskId);
+                    }
+                } catch (RuntimeException e) {
+                    log("task " + taskId + (visible ? " to the front" : " to the back") + ": "
+                            + e);
+                }
+            }
+
+            @Override
+            public void onTaskActivated(IBinder token, int taskId) {
+                if (taskId < 0) return;
+                try {
+                    moveTaskToFront(taskId);
+                } catch (RuntimeException e) {
+                    log("task " + taskId + " to the front: " + e);
+                }
+            }
+
+            @Override
+            public void onTaskResized(IBinder token, int taskId, Rect bounds) {
+                if (taskId < 0) return;
+                try {
+                    android.app.ActivityTaskManager.getService().resizeTask(taskId, bounds,
+                            android.app.ActivityTaskManager.RESIZE_MODE_USER);
+                } catch (RemoteException e) {
+                    log("task " + taskId + " resized: " + e);
+                } catch (RuntimeException e) {
+                    log("task " + taskId + " resized: " + e);
+                }
+            }
+        };
+    }
+
+    private static void moveTaskToFront(int taskId) {
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        try {
+            android.app.ActivityTaskManager.getService().moveTaskToFront(
+                    thread != null ? thread.getApplicationThread() : null,
+                    ActivityThread.currentPackageName(), taskId, 0, null);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
     }
 
     /** The default close handler: finish the window's Activity, if this process has it. */
@@ -330,12 +426,13 @@ public final class WindowSession extends IWindowSession.Stub {
         Configuration global = processConfiguration();
         Configuration override = new Configuration();
         if (!root.bounds.isEmpty()) {
-            // Resized by the user: the window's bounds, as a freeform task's on a device.
-            // ViewRootImpl computes its frames from them (relayoutWindow's local layout), so
-            // the frames alone would not move it. The rest of the configuration (screen size
-            // in dp) stays the display's: no Activity is relaunched.
-            override.windowConfiguration.setBounds(bounds);
-            override.windowConfiguration.setAppBounds(bounds);
+            // Resized by the user: the configuration of a freeform task of the window's size
+            // (TaskConfiguration, docs/lifecycle.md): its bounds (ViewRootImpl computes its
+            // frames from them, relayoutWindow's local layout), its screen size in dp, smallest
+            // width, orientation and screen layout. An Activity that handles those changes gets
+            // onConfigurationChanged (ViewRootImpl's activity config callback); the system
+            // server relaunches one that does not (resizeTask).
+            override = TaskConfiguration.override(bounds);
         }
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
@@ -504,9 +601,32 @@ public final class WindowSession extends IWindowSession.Stub {
             case WindowInput.EVENT_CHAR:
                 w.handler.post(() -> deliverChar(key, (char) a));
                 break;
+            case WindowInput.EVENT_VISIBILITY:
+                w.handler.post(() -> onVisibility(key, a != 0));
+                break;
             default:
                 break;
         }
+    }
+
+    /**
+     * The user minimized ({@code visible} false) or restored a top-level window
+     * (docs/lifecycle.md): its Activity's task goes to the back (its Activities stop, as
+     * those of an Android task that is not visible) or comes to the front (its top Activity
+     * resumes), through the lifecycle handler. While it is minimized, the windows of its
+     * group stay as they are when their Activities stop (Windows keeps the taskbar button
+     * and hides the owned popups) instead of being hidden.
+     */
+    private void onVisibility(IBinder key, boolean visible) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.nativeWindow == null || w.popup || w.minimized == !visible) return;
+        w.minimized = !visible;
+        log("window \"" + w.title() + "\" " + (visible ? "restored" : "minimized")
+                + (w.taskId >= 0 ? ", task " + w.taskId : ""));
+        mLifecycleHandler.onTaskVisibility(w.attrs.token, w.taskId, visible);
     }
 
     /** The user closed the Win32 window: the close handler (by default, finish its Activity). */
@@ -569,8 +689,9 @@ public final class WindowSession extends IWindowSession.Stub {
      * The user resized the Win32 window (WM_SIZE): the window's bounds become its client
      * area, and ViewRootImpl gets the frames for them (IWindow.resized, as
      * WindowStateResizeItem gives them on a device), lays out, relayouts (whose frames now
-     * match the Win32 window) and draws at the new size. The configuration stays the
-     * process's (no Activity relaunch).
+     * match the Win32 window) and draws at the new size. The configuration is a task's of
+     * that size (TaskConfiguration); the system server is told (resizeTask) and relaunches
+     * the task's Activities that do not handle the change (docs/lifecycle.md).
      */
     private void applyResize(IBinder key) {
         AppWindow w;
@@ -603,6 +724,10 @@ public final class WindowSession extends IWindowSession.Stub {
             log("window \"" + w.title() + "\": resized: " + e);
         }
         resizePopups(w);
+        if (w.dimLayer != null && w.dimDrawn != 0) updateGroup(w);  // the dim layer's size
+        if (w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            mLifecycleHandler.onTaskResized(w.attrs.token, w.taskId, new Rect(w.bounds));
+        }
         if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
             // Debugging: where ViewRootImpl is a second later.
             for (int delay : new int[] {1500, 5000}) {
@@ -745,8 +870,54 @@ public final class WindowSession extends IWindowSession.Stub {
         boolean close = false;
         while ((type = w.nativeWindow.pollEvent(mEvent)) != 0) {
             if (type == NativeWindow.EVENT_CLOSE) close = true;
+            if (type == WindowInput.EVENT_VISIBILITY) onVisibility(key, mEvent[3] != 0);
         }
         if (close) close(key);
+    }
+
+    /**
+     * The dim behind a dialog with SkiaGL (ADR 0048): ANGLE's swap chain presents the app
+     * window, so it cannot dim what it shows in its paint as the CPU pipeline's frames are
+     * dimmed (Window::SetDim). The dim is then what Android's is, a layer of its own: a
+     * layered popup window over the app window's client area, black at the dim amount,
+     * clicked through, below its popups (they are raised after it).
+     */
+    private void setDimLayer(AppWindow root, float dim) {
+        int alpha = Math.round(Math.max(0f, Math.min(1f, dim)) * 255f);
+        NativeWindow layer = root.dimLayer;
+        if (alpha == 0) {
+            if (layer != null && root.dimDrawn != 0) {
+                layer.hide();
+                root.dimDrawn = 0;
+            }
+            return;
+        }
+        int width = root.nativeWindow.getWidth();
+        int height = root.nativeWindow.getHeight();
+        if (layer == null) {
+            layer = NativeWindow.createPopup("Gesher dim", width, height, root.nativeWindow);
+            layer.setTranslucent(true);
+            layer.setNoActivate(true, true);
+            root.dimLayer = layer;
+        }
+        if (root.dimDrawn != alpha || root.dimWidth != width || root.dimHeight != height) {
+            layer.setPopupBounds(root.nativeWindow, 0, 0, width, height);
+            android.view.Surface surface = layer.getSurface();
+            try {
+                android.graphics.Canvas c = surface.lockCanvas(null);
+                c.drawColor(android.graphics.Color.argb(alpha, 0, 0, 0),
+                        android.graphics.PorterDuff.Mode.SRC);
+                surface.unlockCanvasAndPost(c);
+            } catch (RuntimeException e) {
+                log("window \"" + root.title() + "\": dim layer: " + e);
+            } finally {
+                surface.release();
+            }
+            root.dimDrawn = alpha;
+            root.dimWidth = width;
+            root.dimHeight = height;
+        }
+        layer.showPopup(false);
     }
 
     private void closeNativeWindow(AppWindow w) {
@@ -762,6 +933,12 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         w.queue = null;
         w.eventFd = null;
+        if (w.dimLayer != null) {
+            w.dimLayer.hide();
+            w.dimLayer.close();
+            w.dimLayer = null;
+            w.dimDrawn = 0;
+        }
         if (w.nativeWindow != null) {
             // Hidden at once; the HWND goes when the last Surface over it is released too.
             w.nativeWindow.hide();
@@ -1005,8 +1182,8 @@ public final class WindowSession extends IWindowSession.Stub {
     /**
      * A popup's Win32 window: owned by its parent's (Windows keeps it above it, hides and
      * minimizes it with it; no taskbar button), translucent when its format has alpha (a
-     * layered window: a dialog's rounded corners and shadow show what is behind; not with
-     * SkiaGL, whose swap chain presents), never activated when it is not focusable, clicked
+     * layered window: a dialog's rounded corners and shadow show what is behind; with
+     * SkiaGL its frames are read back into it), never activated when it is not focusable, clicked
      * through when it is not touchable.
      */
     private void createPopup(AppWindow w, int width, int height) {
@@ -1021,15 +1198,17 @@ public final class WindowSession extends IWindowSession.Stub {
         w.resizable = false;
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         w.handler = new Handler(looper);
-        boolean translucent = android.graphics.PixelFormat.formatHasAlpha(w.attrs.format)
-                && !glRenderer();
+        // With SkiaGL too: hwui draws a translucent popup into a pbuffer read back into the
+        // layered window (compat/hwui/gl/angle_gl.cc, ADR 0048).
+        boolean translucent = android.graphics.PixelFormat.formatHasAlpha(w.attrs.format);
         nw.setTranslucent(translucent);
         nw.setNoActivate(!w.focusable(), !w.touchable());
         attachInput(w);
         log("window \"" + w.title() + "\": Win32 popup 0x" + Long.toHexString(nw.getHwnd())
                 + " owned by " + (owner != null ? "\"" + w.parent.title() + "\" 0x"
                         + Long.toHexString(owner.getHwnd()) : "no window")
-                + ", type " + w.attrs.type + (translucent ? ", translucent" : ", opaque")
+                + ", type " + w.attrs.type + (translucent ? ", translucent"
+                        + (glRenderer() ? " (SkiaGL frames read back)" : "") : ", opaque")
                 + (w.focusable() ? ", focusable" : "") + (w.touchable() ? "" : ", not touchable")
                 + ", input " + (w.input != null ? "attached" : "none"));
         if (w.input == null) listenForEvents(w);
@@ -1188,7 +1367,13 @@ public final class WindowSession extends IWindowSession.Stub {
                     watchers.add(v);
                 }
             }
-            if (root.nativeWindow != null) root.nativeWindow.setDim(dim);
+            if (root.nativeWindow != null) {
+                if (glRenderer()) {
+                    setDimLayer(root, dim);
+                } else {
+                    root.nativeWindow.setDim(dim);
+                }
+            }
             for (AppWindow v : group) {
                 if (v != root) v.nativeWindow.raise();
             }
@@ -1252,6 +1437,12 @@ public final class WindowSession extends IWindowSession.Stub {
             if (!w.popup) mActiveRoot = w;
         }
         if (keys != null && keys != w && keys.nativeWindow != null) keys.nativeWindow.activate();
+        // The user activated a task's window: the task comes to the front (resumed), as a
+        // click on a freeform task does on Android's desktop.
+        if (root.taskId >= 0 && !root.minimized
+                && root.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+            mLifecycleHandler.onTaskActivated(root.attrs.token, root.taskId);
+        }
     }
 
     /** Back (KEYCODE_BACK: VK_BROWSER_BACK) in a window, pressed and released. */
@@ -1370,7 +1561,7 @@ public final class WindowSession extends IWindowSession.Stub {
             if (w.popup && wasShown) updateGroup(root(w));
             AppWindow below = w.parent;
             if (below != null && below.appHidden && below.nativeWindow != null
-                    && !hasActivityPopup(below)) {
+                    && !hasActivityPopup(below) && !root(below).minimized) {
                 hideWindow(below);  // its Activity stayed stopped
             }
         }
@@ -1432,7 +1623,12 @@ public final class WindowSession extends IWindowSession.Stub {
         } else {
             if (outSurface != null) outSurface.release();
             if (w.nativeWindow != null && w.shown) {
-                if (hasActivityPopup(w)) {
+                if (root(w).minimized) {
+                    // Its Activity stopped as the user minimized its window: the window
+                    // stays minimized (its taskbar button), not hidden, until restored.
+                    if (!w.appHidden) log("window \"" + w.title() + "\" stays minimized");
+                    w.appHidden = true;
+                } else if (hasActivityPopup(w)) {
                     // Its Activity stopped under an Activity with a translucent or floating
                     // theme: it stays on the screen (its last frame) as the one below it does
                     // on a device, until that one goes.

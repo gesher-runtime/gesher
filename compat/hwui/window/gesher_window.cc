@@ -554,7 +554,23 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       return 0;
     }
     case WM_SIZE: {
-      if (wparam == SIZE_MINIMIZED) return 0;
+      // Minimized and restored: the app's lifecycle follows (docs/lifecycle.md).
+      if (wparam == SIZE_MINIMIZED) {
+        if (!minimized_) {
+          minimized_ = true;
+          e.type = WindowEvent::kVisibility;
+          e.button = 0;
+          Queue(e);
+        }
+        return 0;
+      }
+      if (minimized_) {
+        minimized_ = false;
+        WindowEvent restored = e;
+        restored.type = WindowEvent::kVisibility;
+        restored.button = 1;
+        Queue(restored);
+      }
       int w = LOWORD(lparam), h = HIWORD(lparam);
       bool changed;
       {
