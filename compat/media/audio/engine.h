@@ -212,6 +212,14 @@ struct OutputInfo {
 };
 OutputInfo GetOutputInfo();
 
+// Raises the calling thread's priority for audio work that feeds the engine
+// (Android runs such threads at ANDROID_PRIORITY_AUDIO or SCHED_FIFO):
+// `urgent` (an app's callback, a buffer queue's feeder) is
+// THREAD_PRIORITY_HIGHEST, else (a player's decoder) ABOVE_NORMAL. Under load
+// a normal-priority feeder may not run before the engine's time-critical
+// mixer has played what the track holds.
+void RaiseAudioThreadPriority(bool urgent);
+
 // Runs `fn` on the engine's event thread (after earlier events).
 void PostEvent(std::function<void()> fn);
 

@@ -184,6 +184,7 @@ void ApplyVolume(Object* o) {
 // calls the queue's callback as each is taken.
 void FeedLoop(Object* o) {
   gesher::bionic::EnterLoadedCode();
+  RaiseAudioThreadPriority(true);
   for (;;) {
     void(SYSV* cb)(Itf, void*) = nullptr;
     void* ctx = nullptr;

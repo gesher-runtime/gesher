@@ -394,6 +394,11 @@ class Engine : public Mixer {
 
 OutputInfo GetOutputInfo() { return Engine::Get()->Info(); }
 
+void RaiseAudioThreadPriority(bool urgent) {
+  SetThreadPriority(GetCurrentThread(),
+                    urgent ? THREAD_PRIORITY_HIGHEST : THREAD_PRIORITY_ABOVE_NORMAL);
+}
+
 void PostEvent(std::function<void()> fn) { Engine::Get()->Post(std::move(fn)); }
 
 bool IsStreamActive(int stream, int in_past_ms) { return StreamActive(stream, in_past_ms); }
