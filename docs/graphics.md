@@ -147,7 +147,7 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   `WM_WINDOWPOSCHANGED`); resizing the app window lays its popups out again.
   A popup whose format has alpha is a layered window (`UpdateLayeredWindow`
   from the CPU pipeline's premultiplied buffer: the dialog's card and shadow
-  over the app; opaque with SkiaGL). The session keeps each app window's
+  over the app; with SkiaGL a pbuffer read back into it, ADR 0048). The session keeps each app window's
   group (`WindowSession.updateGroup`): the app window dimmed by the topmost
   `FLAG_DIM_BEHIND` popup's `dimAmount` (`Window::SetDim`, in its paint), the
   popups raised by Android layer, and input routes (`Window::SetInputRoute`:
@@ -486,7 +486,10 @@ with `tests/apps/popupapp` (built by framework.yml next to uiapp).
 - Found on the way: an app targeting SDK 36 lays out edge to edge, so its
   content starts under the action bar unless it fits the insets
   (`android:fitsSystemWindows`); popupapp does, as apps have to on Android 16.
-- Not done / stand-ins: popups are opaque with SkiaGL; the system server
+- Since done by the lifecycle track (docs/lifecycle.md, ADR 0048): translucent
+  popups under SkiaGL, the Activity below a translucent one paused (not
+  stopped), `ACTION_OUTSIDE`, minimizing stopping the Activity.
+- Not done / stand-ins (as the popups track left them): popups are opaque with SkiaGL; the system server
   stops the Activity below a translucent one (the session keeps its window
   shown, frozen; a server-side `occludesParent` would keep it paused only);
   `ACTION_OUTSIDE` is delivered as a press and release outside the watcher;

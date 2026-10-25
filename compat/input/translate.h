@@ -95,6 +95,7 @@ class Translator {
   void Mouse(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out);
   void Key(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out);
   void TouchEvent(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out);
+  void Outside(const WindowEvent& event, int64_t t, std::vector<AndroidEvent>* out);
   AndroidEvent MouseMotion(int32_t action, float x, float y, int64_t t, int32_t meta) const;
   AndroidEvent TouchMotion(int32_t action, int64_t t, int32_t meta) const;
   float X(float x) const { return x * options_.scale + options_.offset_x; }
