@@ -89,6 +89,15 @@ Merged so far:
   `timeout-minutes: 60`. compat/input/thread_watch.cc reports window-thread
   hangs (stacks, wait chains). Leftovers: Ctrl+C/V/X use Android's clipboard,
   not Windows'; no TSF reconversion; the touch keyboard gives no IME insets.
+- hwsvc2: merged as cf41c06 (verified at 85f49eb, ci 40235213023; head
+  cf9cf43 adds docs only). ADR 0051. Services.java conflict: ime and hwsvc2
+  each removed an inner stand-in (InputMethodManager, ContentService); both
+  went. Toast clicks after the device stopped (COM activator), vibrator_manager
+  without a vibrator, real content observers and content URI job triggers,
+  job network constraints, sleep/resume as SCREEN_OFF/ON, time zone changes,
+  legacy android.hardware.Camera, Gesher Camera for ACTION_IMAGE_CAPTURE.
+  Leftovers (graphics): camera preview into SurfaceView/TextureView; Bitmap
+  parcels across processes (Gesher Camera's thumbnail); no YuvImage natives.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
@@ -99,6 +108,18 @@ Merged so far:
   branch.
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
+
+Wave 3 (2026-10-25 evening), cut from phase4/integration 0b55fa2, briefs in
+[tracks/](tracks/), reusing merged worktrees:
+- `windows3` (C:\work\gesher-lifecycle): screen orientation, window thread
+  wake under WebView2, multi-resume, moveTaskToBack minimizes, single-process
+  relaunch, IME insets, Windows clipboard. ADR 0053, 51-windows3.ps1.
+- `aot2` (C:\work\gesher-stack): app images, profiles, speed-profile
+  framework. ADR 0054, 61-aot2.ps1.
+- `exec2` (C:\work\gesher-exec): fork/exec/posix_spawn from native code,
+  signals between processes, executable TLS, /system/bin programs. ADR 0055,
+  43-exec2.ps1.
+- ADR 0051 is hwsvc2's; 0052 is reserved for media stage 2.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.

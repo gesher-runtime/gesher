@@ -43,7 +43,9 @@ Windows without them (no location service, no Media Foundation) gets clean
   the mock-location app op; Gesher's app ops allow everything).
 - `PROVIDERS_CHANGED_ACTION` is broadcast on changes.
 - Not there: a geocoder (`Geocoder.isPresent()` is false and its calls throw
-  IOException), GNSS status, NMEA and measurements (accepted, never called
+  IOException; final: Windows.Services.Maps' MapLocationFinder answers
+  InvalidCredentials without a Bing Maps key, checked on the runners by
+  58-devices.ps1 and locally; hwsvc2, ADR 0051), GNSS status, NMEA and measurements (accepted, never called
   back), geofences (accepted, not monitored).
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
@@ -122,10 +124,22 @@ Windows without them (no location service, no Media Foundation) gets clean
   `SurfaceUtils` (size, format, usage of readers and native windows). An empty
   `libmedia_jni.so` builtin is registered when nothing else provides one
   (ImageReader's static initializer loads it).
-- Legacy `android.hardware.Camera`: no cameras (`getNumberOfCameras()` 0,
-  `open()` null, `open(id)` throws as without a camera service).
-- `MediaStore.ACTION_IMAGE_CAPTURE`: no activity resolves it (Gesher has no
-  system camera app); apps see "no camera app", as on a device without one.
+- Legacy `android.hardware.Camera` (hwsvc2, ADR 0051): the same devices as
+  Camera2, in the app's process (`LegacyCamera`, natives in camera_frames.cc that
+  call it): ids in Windows' order, a PC's camera FRONT, the test camera BACK;
+  parameters of a fixed-focus camera without flash, zoom or face detection; preview
+  callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
+  window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
+  null raw image, postview, JPEG at the picture size; the preview stops);
+  `autoFocus` succeeds at once; CAMERA in the manifest, else `Fail to connect to
+  camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
+- `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
+  `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
+  installs it at its start when Camera2 has cameras and removes it when there are
+  none (so without a camera nothing resolves it, as on a device without one). A
+  Camera2 preview in an ImageView with Take photo and Cancel; the JPEG (largest size)
+  goes to EXTRA_OUTPUT (RESULT_OK) or comes back as a 160-pixel-wide thumbnail in
+  `data`. `com.gesher.camera.extra.AUTO_CAPTURE_MS` takes it by itself (tests).
 - Not there: reprocessing, offline sessions, extensions, torch, high-speed
   sessions, multi-resolution readers, ImageReader surfaces used by other
   producers than the camera (MediaCodec...), preview into SurfaceView or
@@ -135,7 +149,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 ## Status and next steps
 
 ### Done and verified
-- **CI run 40142590418** (ci at f62f1aa, merged with origin/phase4/integration
+- **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,
+  both runners; see docs/services.md "Status and next steps (hwsvc2)"):
+  - `PASS  devices: camera (single process): the legacy android.hardware.Camera over GESHER_CAMERA_TEST's camera: info, parameters, a 320x240 NV21 preview into callback buffers, autoFocus, takePicture (shutter, raw, JPEG), release`
+  - the same on the Gesher device
+  - `PASS  devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesher Camera (installed by the device as the PC has a camera); without EXTRA_OUTPUT it answers RESULT_OK (thumbnail: none), with it it writes a 640x480 JPEG to the caller's provider's content URI`
+  - `PASS  devices: geocoder: Windows.Services.Maps without a map service key answers InvalidCredentials (Geocoder stays absent: isPresent false, IOException)`
+  - Still open: preview into SurfaceView/TextureView (no native window for their
+    child surfaces); the thumbnail Bitmap across processes (Gesher's hwui has no
+    Bitmap parcel natives: graphics track).- **CI run 40142590418** (ci at f62f1aa, merged with origin/phase4/integration
   at 6751717; every job green: test on windows-2022 and windows-2025, package,
   e2e): location, sensors and cameras, single process and on the Gesher device.
   The devices checks, the same on both runners:
@@ -171,8 +193,8 @@ Windows without them (no location service, no Media Foundation) gets clean
 ### Next steps (beyond the brief)
 1. Preview into SurfaceView/TextureView once the graphics stack gives them a
    native window.
-2. A Gesher camera activity for ACTION_IMAGE_CAPTURE; the legacy
-   android.hardware.Camera over the same service.
+2. (Done by hwsvc2: Gesher Camera, the legacy android.hardware.Camera.) Bitmap
+   parcelling in hwui, so Gesher Camera's thumbnail reaches the caller.
 3. A virtual camera (MFCreateVirtualCamera) where Frame Server is available.
 
 ### Open problems, dead ends ruled out
