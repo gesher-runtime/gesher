@@ -9,8 +9,6 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -35,7 +33,6 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 
-import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -179,7 +176,7 @@ public class CaptureActivity extends Activity {
         }
     }
 
-    /** A preview frame: shown a few times a second (YUV to JPEG to Bitmap). */
+    /** A preview frame: shown a few times a second (YUV converted to a Bitmap here). */
     private void showPreview(ImageReader reader) {
         Image image = reader.acquireLatestImage();
         if (image == null) return;
@@ -187,42 +184,46 @@ public class CaptureActivity extends Activity {
             long now = System.currentTimeMillis();
             if (now - mLastShown < 200) return;
             mLastShown = now;
-            byte[] nv21 = nv21(image);
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null)
-                    .compressToJpeg(new Rect(0, 0, image.getWidth(), image.getHeight()), 70, out);
-            byte[] jpeg = out.toByteArray();
-            Bitmap b = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-            if (b != null) mMain.post(() -> mPreview.setImageBitmap(b));
-        } catch (RuntimeException e) {
+            Bitmap b = bitmap(image);
+            mMain.post(() -> mPreview.setImageBitmap(b));
+        } catch (Throwable t) {
             // a frame not shown
         } finally {
             image.close();
         }
     }
 
-    private static byte[] nv21(Image image) {
+    /** A YUV_420_888 image as an ARGB Bitmap (BT.601). */
+    private static Bitmap bitmap(Image image) {
         int w = image.getWidth();
         int h = image.getHeight();
-        byte[] out = new byte[w * h * 3 / 2];
         Image.Plane[] p = image.getPlanes();
-        copyPlane(p[0], w, h, out, 0, 1);
-        copyPlane(p[2], w / 2, h / 2, out, w * h, 2);      // V
-        copyPlane(p[1], w / 2, h / 2, out, w * h + 1, 2);  // U
-        return out;
-    }
-
-    private static void copyPlane(Image.Plane plane, int w, int h, byte[] out, int at, int step) {
-        ByteBuffer b = plane.getBuffer();
-        int row = plane.getRowStride();
-        int pixel = plane.getPixelStride();
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                out[at + (y * w + x) * step] = b.get(y * row + x * pixel);
+        ByteBuffer y = p[0].getBuffer();
+        ByteBuffer u = p[1].getBuffer();
+        ByteBuffer v = p[2].getBuffer();
+        int yRow = p[0].getRowStride();
+        int yPixel = p[0].getPixelStride();
+        int cRow = p[1].getRowStride();
+        int cPixel = p[1].getPixelStride();
+        int[] argb = new int[w * h];
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                int c = (y.get(j * yRow + i * yPixel) & 0xff) - 16;
+                int at = (j / 2) * cRow + (i / 2) * cPixel;
+                int d = (u.get(at) & 0xff) - 128;
+                int e = (v.get(at) & 0xff) - 128;
+                int r = clamp((298 * c + 409 * e + 128) >> 8);
+                int g = clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
+                int bl = clamp((298 * c + 516 * d + 128) >> 8);
+                argb[j * w + i] = 0xff000000 | (r << 16) | (g << 8) | bl;
             }
         }
+        return Bitmap.createBitmap(argb, w, h, Bitmap.Config.ARGB_8888);
     }
 
+    private static int clamp(int v) {
+        return v < 0 ? 0 : v > 255 ? 255 : v;
+    }
     private void capture() {
         mHandler.post(() -> {
             if (mSession == null || mDone) {
