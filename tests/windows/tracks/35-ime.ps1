@@ -262,7 +262,7 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
   }
   ImeCheck $Mode 'imeapp.apk runs, its window closes with WM_CLOSE' (-not $problems) ($problems -join '; ')
   # The window thread's long waits (thread_watch.cc, ime.cc's SlowWatch).
-  ($text -split "`n" | Select-String -Pattern 'gesher-ime: (the thread of window| +#| +thread \d+:|.* took \d+ ms)') | Select-Object -First 700 | Out-Host
+  ($text -split "`n" | Select-String -Pattern 'gesher-ime: (the thread of window| +#| +thread \d+:| +waits:|.* took \d+ ms)') | Select-Object -First 700 | Out-Host
   if ($script:imeFailed) {
     ($text -split "`n" | Select-String -Pattern '(gesher-ime|gesher-app: window|ImeActivity|Exception|FATAL| at )') | Select-Object -Last 150 | Out-Host
   } else {
@@ -272,20 +272,12 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
 
 # Microsoft IME for Japanese enabled for the user, the layouts loaded, before
 # the runs (enabling a profile changes the session's input languages).
-# Enabled from a process of its own that then ends: ActivateProfile also
-# starts the IME on the calling thread, and an instance left on this script's
-# thread (which pumps no messages) is one the IME in the app process calls
-# (COM, through mtf.dll and imjppred.dll) and waits for: on Server 2022 the
-# app's window thread then sat 180 s in each layout switch away from the IME
-# (thread_watch.cc's stacks: imjpapi waiting for its workers, the workers in
-# an ALPC call).
-$imeCs = (Resolve-Path "$PSScriptRoot/../ime/ImeInput.cs").Path
-$enableOut = & pwsh -NoProfile -NonInteractive -Command "Add-Type -Path '$imeCs'; [ImeInput]::EnableJapaneseIme()" 2>&1
-$script:imeTsf = 0
-if (-not [int]::TryParse("$($enableOut | Select-Object -Last 1)".Trim(), [ref]$script:imeTsf)) {
-  Write-Host "INFO  ime: enabling Microsoft IME for Japanese: $enableOut"
-  $script:imeTsf = -1
-}
+$script:imeTsf = [ImeInput]::EnableJapaneseIme()
+# What runs of the text input services (the IME's out-of-process helpers).
+$imeProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'ctfmon|TextInput|TabTip|InputApp|IME|imjp|Broker|ShellExperience|explorer|sihost|svchost' } |
+  Group-Object ProcessName | ForEach-Object { "$($_.Name) x$($_.Count)" }
+$imeSvcs = Get-Service -Name TabletInputService, TextInputManagementService, CDPUserSvc*, cbdhsvc* -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Status)" }
+Write-Host "INFO  ime: processes: $($imeProcs -join ', '); services: $($imeSvcs -join ', ')"
 foreach ($klid in '0000040D', '00000411', '00000409') { [void][ImeInput]::SwitchLayout([IntPtr]::Zero, $klid) }
 Start-Sleep -Seconds 3
 
