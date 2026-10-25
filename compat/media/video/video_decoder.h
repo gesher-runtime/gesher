@@ -91,4 +91,11 @@ void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, i
 // NV12 (Y plane, interleaved UV) to the frame's I420 planes.
 void Nv12ToI420(const uint8_t* src, int src_stride, int src_height, VideoFrame* f);
 
+// Draws `f` (its visible part, as RGBA_8888) into a Surface's ANativeWindow
+// (render.cc): a window's, a SurfaceTexture's or a SurfaceView's.
+}  // namespace gesher::media
+struct ANativeWindow;
+namespace gesher::media {
+bool RenderFrame(ANativeWindow* window, const VideoFrame& f);
+
 }  // namespace gesher::media

@@ -206,18 +206,110 @@ if (Test-Path "$Dir/mediaapp.apk") {
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.
 if (Test-Path "$Dir/videoapp.apk") {
-  $bcpVideo = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
-  $videoLog = Join-Path $mediaTmp 'videoapp.log'
-  $env:GESHER_AUDIO_CAPTURE = Join-Path $mediaTmp 'video'
-  New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
-  $p = Start-Process -FilePath "$Dir/dalvikvm.exe" -PassThru -NoNewWindow -RedirectStandardOutput $videoLog `
-    -RedirectStandardError "$videoLog.err" -ArgumentList @("-Xbootclasspath:$bcpVideo",
-      "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false', 'com.gesher.app.Main',
-      (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
-  if (-not $p.WaitForExit(300000)) { $p.Kill($true); Write-Host 'INFO  media: videoapp.apk did not end within 300 s' }
-  Remove-Item Env:GESHER_AUDIO_CAPTURE
-  $videoOut = (Get-Content -Raw $videoLog -ErrorAction SilentlyContinue) + (Get-Content -Raw "$videoLog.err" -ErrorAction SilentlyContinue)
-  $videoExit = if ($p.HasExited) { $p.ExitCode } else { -1 }
+  # What Windows composed of a window's client area (PrintWindow with
+  # PW_RENDERFULLCONTENT: a GL swap chain's frames too), as 0xRRGGBB.
+  if (-not ('GesherMediaCapture' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class GesherMediaCapture {
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] struct BMIH { public int Size, W, H; public short Planes, Bits; public int Comp, SizeImage, X, Y, Used, Important; }
+  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BMIH bmi, uint usage, out IntPtr bits, IntPtr s, uint o);
+  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool GdiFlush();
+  // {width, height, pixels...} or null.
+  public static int[] Capture(IntPtr hwnd) {
+    RECT r;
+    if (!GetClientRect(hwnd, out r)) return null;
+    int w = r.R - r.L, h = r.B - r.T;
+    if (w < 1 || h < 1) return null;
+    IntPtr screen = GetDC(IntPtr.Zero), dc = CreateCompatibleDC(screen);
+    var bmi = new BMIH { Size = 40, W = w, H = -h, Planes = 1, Bits = 32 };
+    IntPtr bits;
+    IntPtr bmp = CreateDIBSection(dc, ref bmi, 0, out bits, IntPtr.Zero, 0);
+    int[] px = null;
+    if (bmp != IntPtr.Zero) {
+      IntPtr old = SelectObject(dc, bmp);
+      if (PrintWindow(hwnd, dc, 3 /* PW_CLIENTONLY | PW_RENDERFULLCONTENT */)) {
+        GdiFlush();
+        px = new int[w * h + 2];
+        px[0] = w; px[1] = h;
+        Marshal.Copy(bits, px, 2, w * h);
+        for (int i = 2; i < px.Length; i++) px[i] &= 0xffffff;
+      }
+      SelectObject(dc, old);
+      DeleteObject(bmp);
+    }
+    DeleteDC(dc);
+    ReleaseDC(IntPtr.Zero, screen);
+    return px;
+  }
+}
+'@
+  }
+  # Runs videoapp.apk in a window shown off the desktop; when it says its surfaces are
+  # ready, reads the window back at the TextureView's and the SurfaceView's centers.
+  function RunVideoApp([string] $tag, [string[]] $extra) {
+    $bcpVideo = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+    $log = Join-Path $mediaTmp "videoapp-$tag.log"
+    $env:GESHER_AUDIO_CAPTURE = Join-Path $mediaTmp "video-$tag"
+    New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+    # hwui's SkiaGL pipeline over ANGLE for the 'gl' run (docs/angle.md).
+    if ($tag -eq 'gl') { $env:GESHER_HWUI_RENDERER = 'skiagl' }
+    $p = Start-Process -FilePath "$Dir/dalvikvm.exe" -PassThru -NoNewWindow -RedirectStandardOutput $log `
+      -RedirectStandardError "$log.err" -ArgumentList (@("-Xbootclasspath:$bcpVideo",
+        "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false', 'com.gesher.app.Main',
+        (NoDrive "$Dir/videoapp.apk"), '--hidden-window') + $extra)
+    $read = $null
+    $deadline = (Get-Date).AddSeconds(300)
+    while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Milliseconds 500
+      $text = (Get-Content -Raw $log -ErrorAction SilentlyContinue) + (Get-Content -Raw "$log.err" -ErrorAction SilentlyContinue)
+      $m = [regex]::Match($text, 'VideoTest surfaces ready: texture view center (\d+),(\d+), surface view center (\d+),(\d+)')
+      $h = [regex]::Match($text, 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+      if ($m.Success -and $h.Success -and $null -eq $read) {
+        Start-Sleep 1
+        $px = [GesherMediaCapture]::Capture([IntPtr][Convert]::ToInt64($h.Groups[1].Value, 16))
+        $read = 'no capture'
+        if ($null -ne $px) {
+          $at = { param($x, $y) '{0:x6}' -f $px[2 + [int]$y * $px[0] + [int]$x] }
+          $read = "texture view #$(& $at $m.Groups[1].Value $m.Groups[2].Value), surface view #$(& $at $m.Groups[3].Value $m.Groups[4].Value)"
+        }
+      }
+    }
+    if (-not $p.HasExited) { $p.Kill($true); Write-Host "INFO  media: videoapp.apk ($tag) did not end within 300 s" }
+    Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_HWUI_RENDERER -ErrorAction SilentlyContinue
+    $text = (Get-Content -Raw $log -ErrorAction SilentlyContinue) + (Get-Content -Raw "$log.err" -ErrorAction SilentlyContinue)
+    return @{ Out = $text; Exit = $(if ($p.HasExited) { $p.ExitCode } else { -1 }); Read = $read }
+  }
+  # A window color near the expected one (each channel within 40).
+  function NearColor([string] $hex, [int] $want) {
+    if ($hex -notmatch '^[0-9a-f]{6}$') { return $false }
+    $c = [Convert]::ToInt32($hex, 16)
+    foreach ($s in 16, 8, 0) { if ([math]::Abs((($c -shr $s) -band 255) - (($want -shr $s) -band 255)) -gt 40) { return $false } }
+    return $true
+  }
+  function CheckSurfaceColors([string] $name, $run) {
+    $m = [regex]::Match("$($run.Read)", 'texture view #([0-9a-f]{6}), surface view #([0-9a-f]{6})')
+    if ($m.Success -and (NearColor $m.Groups[1].Value 0xff0000) -and (NearColor $m.Groups[2].Value 0x0000ff)) {
+      Write-Host "PASS  $name (read back: $($run.Read))"
+    } else {
+      Write-Host "FAIL  $name (read back: $($run.Read))"
+      Write-Host (($run.Out -split "`n") | Where-Object { $_ -match 'VideoTest|GesherMedia|Exception|FATAL' } | Select-Object -First 40 | Out-String)
+      $script:failed++
+    }
+  }
+  $video = RunVideoApp 'cpu' @()
+  $videoOut = $video.Out
+  $videoExit = $video.Exit
   Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest codec list \(info\)|GesherMedia.*video decoders' } | ForEach-Object { $_.Trim() }) -join '; ')"
   Check 'media: MediaExtractor in videoapp.apk: an MP4''s H.264 and AAC tracks, csd-0/csd-1 as Annex B parameter sets, samples, sync samples and times' {
     $global:LASTEXITCODE = $videoExit
@@ -235,6 +327,25 @@ if (Test-Path "$Dir/videoapp.apk") {
       'VideoTest codec h264 seek: before 5 frames, extractor at 1000 ms, first frame after the flush at 1000 ms, blue',
       'VideoTest codec aac: 44100 Hz 2 ch, encoding 2, 2 s, 1661 Hz',
       'VideoTest done')
+  Check 'media: MediaCodec into a TextureView''s SurfaceTexture and a SurfaceView''s surface in videoapp.apk; TextureView.getBitmap' {
+    $global:LASTEXITCODE = $video.Exit
+    $video.Out
+  } @('VideoTest surfaces: texture view 8 frames rendered, getBitmap 320x240 red; surface view valid true, 38 frames rendered')
+  CheckSurfaceColors 'media: the window shows the TextureView''s and the SurfaceView''s frames where they are (hwui''s CPU pipeline), the TextureView red, the SurfaceView blue' $video
+  Check 'media: MediaMetadataRetriever.getFrameAtTime in videoapp.apk: the closest frame, the previous sync frame, a scaled frame' {
+    $global:LASTEXITCODE = $video.Exit
+    $video.Out
+  } @('VideoTest retriever frames: video 320x240 yes, at 1.25 s closest 320x240 blue, at 1.6 s previous sync 320x240 white, scaled at 0.25 s 160x120 red')
+  Check 'media: MediaPlayer with video in videoapp.apk: the clip''s H.264 into a TextureView with its AAC audio, the video size, the frames shown, completion, A/V sync (the frame shown matches the audio position within 120 ms); VideoView plays to its end' {
+    $global:LASTEXITCODE = $video.Exit
+    $video.Out
+  } @('VideoTest player video: size 320x240 (listener 320x240), duration ok, frames shown 30+, completed true, at the end ok',
+      'VideoTest player sync: ',
+      'in sync',
+      'VideoTest video view: prepared true, duration ok, playing true, completed true')
+  $videoGl = RunVideoApp 'gl' @('--ez', 'surfacesOnly', 'true')
+  Write-Host "INFO  media: SkiaGL run: $((($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces: ' } | Select-Object -First 1))"
+  CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE): the TextureView red, the SurfaceView blue' $videoGl
   # The other codecs: decoded where this machine has a decoder (informational until
   # Gesher's software decoders are in).
   foreach ($c in 'hevc', 'vp8', 'vp9', 'av1') {

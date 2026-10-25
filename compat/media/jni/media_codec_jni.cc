@@ -470,7 +470,7 @@ class Codec {
       cv_.notify_all();
     }
     if (window != nullptr && frame != nullptr) {
-      Render(window, *frame);
+      RenderFrame(window, *frame);
       if (frame_rendered_) PostFrameRendered(time_us);
     }
     return true;
@@ -877,17 +877,6 @@ class Codec {
     s.flags = kFlagEndOfStream;
     s.frame.reset();
     Publish(i);
-  }
-
-  static void Render(ANativeWindow* window, const VideoFrame& f) {
-    const int w = f.visible_width(), h = f.visible_height();
-    if (ANativeWindow_setBuffersGeometry(window, w, h, kHalRgba8888) != 0) return;
-    ANativeWindow_Buffer b = {};
-    if (ANativeWindow_lock(window, &b, nullptr) != 0) return;
-    if (b.format == kHalRgba8888 || b.format == 2 /* RGBX */) {
-      I420ToRgba(f, static_cast<uint32_t*>(b.bits), b.stride, b.width, b.height);
-    }
-    ANativeWindow_unlockAndPost(window);
   }
 
   CodecEntry entry_;
