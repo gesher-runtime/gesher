@@ -216,6 +216,9 @@ final class Installer {
         writeRegistry();
         delete(new File(e.codePath));
         delete(new File(Device.dataDir(), "data/" + packageName));
+        // Its toasts and its AppUserModelID's registration go too (hwsvc2, ADR 0051).
+        NotificationManagerService notifications = NotificationManagerService.sLast;
+        if (notifications != null) notifications.packageRemoved(packageName);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;
     }

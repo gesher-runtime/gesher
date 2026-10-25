@@ -37,7 +37,7 @@ import java.util.TimeZone;
  * ({@link WindowsHost#alarmWait}): an absolute wall-clock time, so RTC alarms follow clock
  * changes, and an alarm whose time passed while Windows slept fires on resume; a _WAKEUP
  * alarm's timer may wake Windows from sleep (where wake timers are allowed). The thread
- * also notices clock and time zone changes (WM_TIMECHANGE, and a jump of the wall clock
+ * also notices clock and time zone changes (WM_TIMECHANGE, WM_SETTINGCHANGE, a jump of the wall clock
  * against the monotonic one) and the local date's change, and sends TIME_SET,
  * TIMEZONE_CHANGED and DATE_CHANGED to each package (registered and manifest receivers).
  * There are no idle or doze restrictions, and exact alarms are allowed to every app.
@@ -120,6 +120,10 @@ final class AlarmManagerService extends IAlarmManager.Default
     private long mLocalDay = -1;  // the local date, as last seen (days since the epoch)
     private AlarmManager.AlarmClockInfo mNextAlarmClock;
     private boolean mTimeEvent;   // WM_TIMECHANGE came: the time was set
+    private boolean mSuspended;   // Windows goes to sleep (PBT_APMSUSPEND) until it resumes
+    private long mSuspendedAt;    // uptimeMillis of PBT_APMSUSPEND
+    /** Still running this long after PBT_APMSUSPEND: Windows did not sleep after all. */
+    private static final long SUSPEND_GIVE_UP_MS = 120_000;
 
     AlarmManagerService(ActivityManagerService am, PackageManagerService pm) {
         mAm = am;
@@ -250,6 +254,21 @@ final class AlarmManagerService extends IAlarmManager.Default
 
     @Override
     public void onWindowsEvents(int events) {
+        if ((events & WindowsHost.EVENT_SUSPENDING) != 0) {
+            // As on a phone going to sleep: only _WAKEUP alarms fire until it is awake;
+            // the others are delivered when it resumes (Windows does not run the device
+            // while it sleeps; a _WAKEUP alarm's timer may wake it).
+            synchronized (this) {
+                mSuspended = true;
+                mSuspendedAt = SystemClock.uptimeMillis();
+            }
+            SystemServer.log("alarm: Windows goes to sleep: only _WAKEUP alarms until it resumes");
+        }
+        if ((events & WindowsHost.EVENT_RESUMED) != 0) {
+            synchronized (this) {
+                mSuspended = false;
+            }
+        }
         if ((events & (WindowsHost.EVENT_TIME_CHANGED | WindowsHost.EVENT_RESUMED
                 | WindowsHost.EVENT_SETTING_CHANGED)) != 0) {
             if ((events & WindowsHost.EVENT_TIME_CHANGED) != 0) {
@@ -268,6 +287,12 @@ final class AlarmManagerService extends IAlarmManager.Default
         while (true) {
             try {
                 checkClocks();
+                synchronized (this) {
+                    if (mSuspended && SystemClock.uptimeMillis() - mSuspendedAt > SUSPEND_GIVE_UP_MS) {
+                        mSuspended = false;
+                        SystemServer.log("alarm: no resume came after the suspend: alarms as usual");
+                    }
+                }
                 List<Alarm> due = new ArrayList<>();
                 long nextRtc;
                 boolean wakeup = false;
@@ -277,7 +302,7 @@ final class AlarmManagerService extends IAlarmManager.Default
                     for (int i = 0; i < mAlarms.size(); i++) {
                         Alarm a = mAlarms.get(i);
                         long at = a.elapsed(nowElapsed, nowRtc);
-                        if (at > nowElapsed) continue;
+                        if (at > nowElapsed || (mSuspended && !a.wakeup())) continue;
                         a.count = 1;
                         if (a.interval > 0) {
                             // Missed periods count, and the next one is in the future.
@@ -292,6 +317,7 @@ final class AlarmManagerService extends IAlarmManager.Default
                     }
                     long nextElapsed = Long.MAX_VALUE;
                     for (Alarm a : mAlarms) {
+                        if (mSuspended && !a.wakeup()) continue;  // after the resume
                         long at = a.elapsed(nowElapsed, nowRtc);
                         if (at < nextElapsed) {
                             nextElapsed = at;
@@ -316,7 +342,11 @@ final class AlarmManagerService extends IAlarmManager.Default
                     if (clocks) alarmClocksChanged();
                     continue;  // delivering took time: look again
                 }
-                WindowsHost.alarmWait(nextRtc, wakeup, CHECK_MS);
+                boolean suspended;
+                synchronized (this) {
+                    suspended = mSuspended;
+                }
+                WindowsHost.alarmWait(nextRtc, wakeup, suspended ? 10_000 : CHECK_MS);
             } catch (Throwable t) {
                 SystemServer.log("alarm: the alarm thread failed: " + t);
                 t.printStackTrace();
@@ -389,6 +419,10 @@ final class AlarmManagerService extends IAlarmManager.Default
         if (zoneChanged) {
             String olson = olsonZone();
             SystemServer.log("alarm: Windows' time zone is now " + zone + " (" + olson + ")");
+            // Processes read the default zone again, as ActivityManagerService's
+            // UPDATE_TIME_ZONE has every app process do (hwsvc2, ADR 0051).
+            TimeZone.setDefault(null);
+            updateTimeZones();
             Intent i = new Intent(Intent.ACTION_TIMEZONE_CHANGED);
             i.putExtra(Intent.EXTRA_TIMEZONE, olson);
             broadcastToAll(i);
@@ -405,6 +439,20 @@ final class AlarmManagerService extends IAlarmManager.Default
         }
     }
 
+    /** IApplicationThread.updateTimeZone to every app process (TimeZone.setDefault(null)). */
+    private static void updateTimeZones() {
+        Services.Created c = Services.sLast;
+        if (c == null) return;
+        for (ActivityTaskManagerService.ProcessRecord p : c.atm.processes()) {
+            if (p.thread == null) continue;
+            try {
+                p.thread.updateTimeZone();
+            } catch (Throwable t) {
+                // the process is gone
+            }
+        }
+    }
+
     /** The Olson id of Windows' time zone (ICU's windowsZones), else the default's. */
     private String olsonZone() {
         String windows;
@@ -418,6 +466,9 @@ final class AlarmManagerService extends IAlarmManager.Default
             } catch (Throwable t) {
                 // no ICU mapping
             }
+            // The runtime's ICU data may have no windowsZones: Windows' own ICU has.
+            String id = WindowsHost.ianaZone(windows);
+            if (id != null) return id;
         }
         return TimeZone.getDefault().getID();
     }
