@@ -210,7 +210,7 @@ needs: [framework-build.md](framework-build.md).
         Unicode (emoji panel, dictation), IME compositions (Microsoft IME
         Japanese) inline with the candidate window at the caret, Enter as the
         editor action, clipboard shortcuts, password fields without IMEs,
-        InputMethodManager (ci run 40217116856, both runners; docs/input.md
+        InputMethodManager (ci run 40218916953, both runners; docs/input.md
         "Text input", ADR 0039)
 - [x] Dialogs, menus, dropdowns and toasts as owned popup windows of the app
       window (ADR 0040; popups track): an AlertDialog over its activity with

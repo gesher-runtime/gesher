@@ -238,7 +238,9 @@ merged in (popups, rtl, exec, devsvc, webview, stack, devices, locale, net,
 media, lifecycle; conflicts only in framework.yml's app lists, both sides
 kept).
 
-**CI-verified**: ci run 40217116856 (commit 42b24f3): every ime check passes
+**CI-verified**: ci run 40218916953 (commit 6b88293, origin/phase4/integration
+baf27c9 merged in): green on every job, all 22 ime checks pass on both
+runners. Before it, ci run 40217116856 (commit 42b24f3): every ime check passes
 on windows-2022 and windows-2025, single process and the Gesher device;
 package and e2e green (its one failure was the media track's tone check on
 2022, `sound 25: 1302.3 Hz, not 1397`, not ime's). Before it, Server 2022
