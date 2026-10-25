@@ -415,18 +415,30 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       at the pinned tag, QEMU is GPL
 - [x] `gesher_arm64.dll` builds with llvm-mingw and runs host↔guest round
       trips (`compat/arm64`, `arm64.yml`, `tracks/47-arm64.ps1`)
-- [ ] ELF loader for arm64-v8a `.so` files (EM_AARCH64, aarch64 relocations,
+- [x] ELF loader for arm64-v8a `.so` files (EM_AARCH64, aarch64 relocations,
       guest code non-executable and registered with the translator); a
       self-contained `.so` and a libc/pthread one through the shim
-- [ ] `System.loadLibrary` of an app's arm64-v8a NDK library, with JNI calls
-      both ways (guest JNIEnv/JavaVM proxy tables)
-- [ ] arm64 TLS (TPIDR_EL0), the stack protector, and guest-created threads
-- [ ] libandroid, EGL/GLES and NativeActivity for an arm64-v8a `.so`
-- [ ] The installer and PackageManager pick arm64-v8a when an APK has no
-      x86_64 libraries (`NativeLibs.abiFor`); `Build.SUPPORTED_ABIS` lists
-      arm64-v8a after x86_64 (build.prop) — written, not yet exercised by a test
-- [ ] A real arm64-only F-Droid app in the e2e job
-- [ ] Translation overhead measured and recorded (docs/arm64.md)
+      (ci 40217845117, both runners)
+- [x] `System.load` of an arm64-v8a NDK library, with JNI calls both ways
+      (guest JNIEnv/JavaVM proxies), `Call*MethodV`, Java↔guest nesting
+      (ci 40217845117)
+- [x] arm64 TLS (TPIDR_EL0, TLSDESC), the stack protector, guest-created
+      threads and `AttachCurrentThread`; guest atomics; struct stat/epoll,
+      syscall numbers, auxv, setjmp, va_list; guest faults as Android-style
+      fatal-signal reports (ci 40217845117)
+- [x] libandroid, EGL/GLES and NativeActivity for an arm64-v8a `.so`:
+      nativeactivity.apk built with only lib/arm64-v8a, same checks and
+      pixels as the x86_64 app (ci 40217845117)
+- [x] gesher-app picks arm64-v8a when an APK has no x86_64 libraries
+      (`NativeLibs.abiFor`, `primaryCpuAbi`, the installer's `lib/arm64`);
+      `Build.SUPPORTED_ABIS` lists arm64-v8a after x86_64 (build.prop)
+      (exercised by nativeactivity-arm64.apk, ci 40217845117)
+- [x] arm64-v8a ELF executables through gesher-exec and ProcessBuilder
+      (ci 40217845117)
+- [ ] A real arm64-only F-Droid app in the e2e job (TIC-80 1.01.00 is listed;
+      it does not reach its first frame yet)
+- [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
+      compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
 
 ## Phase 8 checklist
 
