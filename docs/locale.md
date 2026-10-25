@@ -57,7 +57,27 @@ handles 0x..., <locales>)`, `ActivityConfigurationChangeItem (...)`.
 
 ## Status and next steps
 
-- Code complete for the brief's four items (per-app locales, setting changes
-  delivered, formats mapped or recorded as limits, tests); first CI run
-  pending at the time of writing.
-- Next: CI on both runners; then tick the roadmap boxes with the run id.
+- Done and verified: ci run 40191538466 (09464511, phase4/integration merged),
+  every job green, both runners (windows-2022, windows-2025): the 13 `locale:`
+  checks of 49-locale.ps1 (single process: what the app sees, setApplicationLocales
+  applied in the process, kept across an app restart, cleared, de-DE and back
+  delivered to a running activity that handles locale; the device: what the app
+  sees, setApplicationLocales relaunching the activity with he-IL and sending
+  LOCALE_CHANGED, kept across an app restart and a device restart, cleared,
+  de-DE and back while the app runs: ConfigurationChangeItem,
+  Application.onConfigurationChanged, LOCALE_CHANGED, CONFIGURATION_CHANGED,
+  TIME_SET with the 24-hour extra, onConfigurationChanged in front, the stopped
+  activity relaunched as it comes back and again on the restore), and 39-rtl's
+  de-DE check now expecting `-u-mu-celsius`.
+- Found on the way: an ActivityConfigurationChangeItem whose override config has
+  seq 0 is dropped by the client (it compares it with itself as the pending one);
+  the server gives it the change's seq (run 40142410272 failed on it).
+- Windows' NLS data seen by a long-running process follows `Set-Culture` at once
+  on the CI runners (no registry reading needed).
+- Remaining gaps (by design or small): no recreation of activities in single-process
+  mode; LocaleConfig overrides not persisted; `ACTION_APPLICATION_LOCALE_CHANGED`
+  not sent (no installer app); app locales stay in app_locales when a package
+  is uninstalled (a reinstall gets them back); a display-language list
+  change is only as live as Windows' `GetUserPreferredUILanguages` answer (not
+  tested on CI: changing it needs a sign-in); custom separators and date
+  patterns not carried over (ADR 0049).
