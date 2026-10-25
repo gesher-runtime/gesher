@@ -53,7 +53,11 @@ include(cmake/aosp/art_runtime.cmake)
 # dex2oat, for Gesher's boot image (docs/boot-image.md).
 include(cmake/aosp/dex2oat.cmake)
 include(cmake/aosp/icu.cmake)
+# BoringSSL, for libcore's NativeBN and Conscrypt (docs/network.md).
+include(cmake/aosp/boringssl.cmake)
 include(cmake/aosp/libcore_native.cmake)
+# Conscrypt's libjavacrypto and compat/net: TLS, Windows' trusted roots (docs/network.md).
+include(cmake/aosp/conscrypt.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)

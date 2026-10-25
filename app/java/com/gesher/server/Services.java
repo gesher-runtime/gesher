@@ -145,6 +145,7 @@ public final class Services {
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
         services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
+        services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         return services;
     }
 

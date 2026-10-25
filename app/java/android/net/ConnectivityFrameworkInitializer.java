@@ -10,8 +10,9 @@ import android.content.Context;
 /**
  * The Connectivity module's initializer, which SystemServiceRegistry's static initializer
  * calls (framework.jar compiles against the module's API stubs and does not contain it).
- * It registers the placeholder {@link ConnectivityManager} as {@code connectivity}, a
- * device with no network (docs/e2e.md); the module's other services are not registered.
+ * It registers {@link ConnectivityManager} as {@code connectivity}, the client of the
+ * connectivity service that describes Windows' networks (docs/network.md); the module's
+ * other services are not registered.
  */
 public final class ConnectivityFrameworkInitializer {
     private ConnectivityFrameworkInitializer() {
