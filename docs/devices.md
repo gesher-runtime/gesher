@@ -43,7 +43,9 @@ Windows without them (no location service, no Media Foundation) gets clean
   the mock-location app op; Gesher's app ops allow everything).
 - `PROVIDERS_CHANGED_ACTION` is broadcast on changes.
 - Not there: a geocoder (`Geocoder.isPresent()` is false and its calls throw
-  IOException), GNSS status, NMEA and measurements (accepted, never called
+  IOException; final: Windows.Services.Maps' MapLocationFinder answers
+  InvalidCredentials without a Bing Maps key, checked on the runners by
+  58-devices.ps1 and locally; hwsvc2, ADR 0051), GNSS status, NMEA and measurements (accepted, never called
   back), geofences (accepted, not monitored).
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
@@ -122,10 +124,22 @@ Windows without them (no location service, no Media Foundation) gets clean
   `SurfaceUtils` (size, format, usage of readers and native windows). An empty
   `libmedia_jni.so` builtin is registered when nothing else provides one
   (ImageReader's static initializer loads it).
-- Legacy `android.hardware.Camera`: no cameras (`getNumberOfCameras()` 0,
-  `open()` null, `open(id)` throws as without a camera service).
-- `MediaStore.ACTION_IMAGE_CAPTURE`: no activity resolves it (Gesher has no
-  system camera app); apps see "no camera app", as on a device without one.
+- Legacy `android.hardware.Camera` (hwsvc2, ADR 0051): the same devices as
+  Camera2, in the app's process (`LegacyCamera`, natives in camera_frames.cc that
+  call it): ids in Windows' order, a PC's camera FRONT, the test camera BACK;
+  parameters of a fixed-focus camera without flash, zoom or face detection; preview
+  callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
+  window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
+  null raw image, postview, JPEG at the picture size; the preview stops);
+  `autoFocus` succeeds at once; CAMERA in the manifest, else `Fail to connect to
+  camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
+- `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
+  `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
+  installs it at its start when Camera2 has cameras and removes it when there are
+  none (so without a camera nothing resolves it, as on a device without one). A
+  Camera2 preview in an ImageView with Take photo and Cancel; the JPEG (largest size)
+  goes to EXTRA_OUTPUT (RESULT_OK) or comes back as a 160-pixel-wide thumbnail in
+  `data`. `com.gesher.camera.extra.AUTO_CAPTURE_MS` takes it by itself (tests).
 - Not there: reprocessing, offline sessions, extensions, torch, high-speed
   sessions, multi-resolution readers, ImageReader surfaces used by other
   producers than the camera (MediaCodec...), preview into SurfaceView or
