@@ -186,7 +186,8 @@ public final class SystemServer {
     private static void startAppProcessesOnDemand(ActivityTaskManagerService atm) {
         final String vm;
         try {
-            vm = Zygote.vmCommandLine(SystemServer.class.getName());
+            // With the JIT and its profile saver, as Android's app processes (ADR 0054).
+            vm = Dexopt.appVmOptions(Zygote.vmCommandLine(SystemServer.class.getName()));
         } catch (Throwable t) {
             log("app processes are not started on demand (" + t + "): they attach by"
                     + " themselves");

@@ -14,15 +14,28 @@
 # initialized, with their strings, and the runtime runs them with nterp.
 # Dex locations are bare file names, so the image loads wherever the jars are.
 #
+# -BootProfiles names boot image profiles in text form (AOSP's
+# art/build/boot/boot-image-profile.txt and frameworks/base/boot/
+# boot-image-profile.txt, fetched by tools/boot-image/fetch-profiles.ps1):
+# profman.exe turns them into one binary boot profile (as Soong's
+# boot image profile rule does), and `speed-profile` filters compile only the
+# methods it marks and put only the classes it lists in the image, as
+# Android's boot image is made (docs/compiled-code.md, ADR 0054).
+# -AppFilter is gesher-app.jar's filter (no AOSP profile covers it).
+#
 # BOOT_IMAGE_VERBOSE=compiler (or other -verbose: tags) logs dex2oat's phases.
 param(
   [Parameter(Mandatory)] [string] $Dist,
   [Parameter(Mandatory)] [string] $Out,
   [string] $Filter = 'verify',
   [string] $ExtensionFilter = 'verify',
+  [string] $AppFilter = '',
+  [string[]] $BootProfiles = @(),
   [int] $TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
+# pwsh -File passes "a,b" as one string.
+$BootProfiles = @($BootProfiles | ForEach-Object { $_ -split ',' } | Where-Object { $_ } | ForEach-Object { (Resolve-Path $_).Path })
 
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 
@@ -56,8 +69,35 @@ $common = @(
   '--instruction-set=x86_64', '--image-format=lz4',
   '--no-generate-mini-debug-info', '--no-watch-dog', '--avoid-storing-invocation', '-j4')
 
+# The boot image profile: the text profiles, concatenated, in binary form for
+# the boot class path's jars (profman --output-profile-type=boot, as Soong's
+# boot image profile rule runs it), with the image's dex locations.
+$bootProfile = $null
+if ($BootProfiles) {
+  $text = Join-Path $root 'boot-image-profile.txt'
+  $lines = 0
+  Set-Content -NoNewline -Path $text -Value ''
+  foreach ($p in $BootProfiles) {
+    $content = [IO.File]::ReadAllText((Resolve-Path $p).Path)
+    if (-not $content.EndsWith("`n")) { $content += "`n" }
+    [IO.File]::AppendAllText($text, $content)
+    $lines += ($content -split "`n").Count - 1
+  }
+  $bootProfile = NoDrive (Join-Path $root 'boot.prof')
+  $pa = @('--output-profile-type=boot', "--create-profile-from=$(NoDrive $text)", "--reference-profile-file=$bootProfile")
+  foreach ($jar in $jars) { $pa += "--apk=$(NoDrive "$dist/$jar.jar")", "--dex-location=$jar.jar" }
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  $out = & (Join-Path $dist 'profman.exe') @pa 2>&1 | Out-String
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $root 'boot.prof'))) {
+    Write-Host $out
+    throw ('profman failed to make the boot image profile (exit 0x{0:X8})' -f $LASTEXITCODE)
+  }
+  Write-Host ("profman: boot image profile from {0} ({1:N0} lines): {2:N0} bytes in {3:N1} s" -f
+    (($BootProfiles | ForEach-Object { Split-Path -Leaf $_ }) -join ' + '), $lines, (Get-Item (Join-Path $root 'boot.prof')).Length, $watch.Elapsed.TotalSeconds)
+}
+
 # One image chunk: `count` jars from `first`, on top of the images named in $boot.
-function Compile([int] $first, [int] $count, [string] $boot) {
+function Compile([int] $first, [int] $count, [string] $boot, [string] $filter) {
   $bcp = $jars[0..($first + $count - 1)]
   $a = $common + @(
     "--runtime-arg", "-Xbootclasspath:$(($bcp | ForEach-Object { NoDrive "$dist/$_.jar" }) -join ':')",
@@ -67,9 +107,13 @@ function Compile([int] $first, [int] $count, [string] $boot) {
     $a += "--dex-file=$(NoDrive "$dist/$jar.jar")", "--dex-location=$jar.jar"
   }
   if ($boot) { $a += "--boot-image=$boot" } else { $a += '--base=0x60000000' }
-  $a += "--compiler-filter=$(if ($boot) { $ExtensionFilter } else { $Filter })"
+  $a += "--compiler-filter=$filter"
+  if ($filter -eq 'speed-profile') {
+    if (-not $bootProfile) { throw "the speed-profile filter needs -BootProfiles" }
+    $a += "--profile-file=$bootProfile"
+  }
   if ($env:BOOT_IMAGE_VERBOSE) { $a += '--runtime-arg', "-verbose:$env:BOOT_IMAGE_VERBOSE", '--dump-timings' }
-  $what = "$($jars[$first..($first + $count - 1)] -join ', ') ($(if ($boot) { $ExtensionFilter } else { $Filter }))"
+  $what = "$($jars[$first..($first + $count - 1)] -join ', ') ($filter)"
   Write-Host "dex2oat: $what"
   $log = Join-Path $root "dex2oat-$first.log"
   $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -110,9 +154,14 @@ function Stacks([int] $id) {
   }
 }
 
-Compile 0 3 ''
-Compile 3 1 "$image/boot.art"
-Compile 4 1 "$image/boot.art:$image/boot-framework.art"
+Compile 0 3 '' $Filter
+Compile 3 1 "$image/boot.art" $ExtensionFilter
+Compile 4 1 "$image/boot.art:$image/boot-framework.art" $(if ($AppFilter) { $AppFilter } else { $ExtensionFilter })
 
 Remove-Item -Recurse -Force $root
-Get-ChildItem (Join-Path $outDir 'framework/x86_64') | Format-Table Name, Length | Out-Host
+$files = Get-ChildItem (Join-Path $outDir 'framework/x86_64')
+$files | Format-Table Name, Length | Out-Host
+foreach ($ext in 'art', 'oat', 'vdex') {
+  Write-Host ("boot image: .{0} files {1:N1} MB" -f $ext, (($files | Where-Object Extension -eq ".$ext" | Measure-Object Length -Sum).Sum / 1MB))
+}
+Write-Host ("boot image: {0:N1} MB in all" -f (($files | Measure-Object Length -Sum).Sum / 1MB))

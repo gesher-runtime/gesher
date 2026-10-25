@@ -22,6 +22,7 @@ jobs:
           sparse-checkout: |
             tools/boot-image
             tools/symbolize.py
+            aosp.lock
 
       - uses: actions/download-artifact@v4
         with:
@@ -33,15 +34,26 @@ jobs:
           name: framework
           path: dist
 
+      # AOSP's boot image profiles, at aosp.lock's tag (ADR 0054).
+      - name: Fetch the boot image profiles
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/boot-image/fetch-profiles.ps1 -Out boot-image/profiles
+
       - name: Compile the boot image
         shell: pwsh
         # BOOT_IMAGE_VERBOSE: compiler logs dex2oat's phases; a dex2oat that
         # hangs is stopped after the timeout, with its threads' stacks.
-        # -Filter speed, -ExtensionFilter speed: the primary image (core-oj,
-        # core-libart, core-icu4j) and the extensions (framework.jar,
-        # gesher-app.jar) get AOT-compiled code (docs/compiled-code.md, ADR
-        # 0033, 0036); gesher-base maps the oat files' code as views.
-        run: pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image -Filter speed -ExtensionFilter speed -TimeoutMinutes 15
+        # speed-profile with AOSP's boot image profiles, as Android compiles
+        # its boot image: the primary image (core-oj, core-libart, core-icu4j)
+        # and framework.jar's extension get AOT code for the profile's methods
+        # and hold the profile's classes (docs/compiled-code.md, ADR 0054);
+        # gesher-app.jar, which no AOSP profile covers, is compiled `speed`.
+        # gesher-base maps the oat files' code as views (ADR 0036).
+        run: >-
+          pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image
+          -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed
+          -BootProfiles boot-image/profiles/art-boot-image-profile.txt,boot-image/profiles/framework-boot-image-profile.txt
+          -TimeoutMinutes 15
 
       # A first look before the test jobs: Hello runs on the image.
       - name: Hello on the boot image

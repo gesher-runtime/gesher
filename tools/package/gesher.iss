@@ -54,6 +54,10 @@ Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.
 Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion
+; dex2oat and profman (docs/compiled-code.md, ADR 0054): the device compiles apps at
+; install and, with their JIT profiles, in the background.
+Source: "{#BuildDir}\dex2oat.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\profman.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; The boot image (docs/boot-image.md): the boot class path's classes, verified
 ; and linked by dex2oat, which dalvikvm maps instead of loading them one by one.
