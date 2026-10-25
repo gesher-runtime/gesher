@@ -40,6 +40,13 @@ Merged so far:
   tracks together): all green.
 - 2026-10-25: every agent stopped on the org's API spend limit; all were
   resumed with SendMessage after it reset (their work was saved).
+- locale: merged (verified at 0946451, ci 40191538466, which already
+  contained 26aa8eb, so the integration tree after this merge is the
+  CI-verified one). ADR 0049. Other tracks adding services must keep
+  `locale` in 50-services.ps1's expected list. Leftovers: no activity
+  recreate in single process, LocaleConfig overrides not persisted, no
+  ACTION_APPLICATION_LOCALE_CHANGED, display-language list changes untested
+  (need a sign-in).
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 

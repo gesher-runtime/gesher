@@ -12,9 +12,11 @@ import android.app.IApplicationThread;
 import android.app.ProfilerInfo;
 import android.app.ResultInfo;
 import android.app.WaitResult;
+import android.app.servertransaction.ActivityConfigurationChangeItem;
 import android.app.servertransaction.ActivityRelaunchItem;
 import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ClientTransaction;
+import android.app.servertransaction.ConfigurationChangeItem;
 import android.app.servertransaction.DestroyActivityItem;
 import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.NewIntentItem;
@@ -36,6 +38,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.util.MergedConfiguration;
 import android.view.Display;
 import android.window.ActivityWindowInfo;
 import android.window.IWindowContainerToken;
@@ -101,6 +104,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean ready;       // finishAttachApplication came
         boolean exiting;
         boolean spawned;     // started by this server (startProcess), not by itself
+        /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
+        Configuration config;
         final List<ActivityRecord> activities = new ArrayList<>();
 
         ProcessRecord(int pid, IApplicationThread thread) {
@@ -150,12 +155,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean translucent;
         /** Resumed once the activity in front ({@link #waitingFor}) is paused. */
         boolean resumeAfterPause;
-        /** The configuration it was launched or last told of (process and task). */
-        Configuration lastConfig;
+        /**
+         * The configuration it was launched or relaunched with, or told of last: its
+         * package's (locale track: LocaleManagerService.configurationFor) with its task's size
+         * override (lifecycle track: TaskConfiguration), see {@link #effectiveConfiguration}.
+         */
+        Configuration config;
+        /** A configuration change waits until it is resumed (it was not in front). */
+        boolean configPending;
         /** The size buckets its resources care about (reportSizeConfigurations), or null. */
         android.window.SizeConfigurationBuckets sizeBuckets;
-        /** Configuration changes it does not handle, not yet relaunched for (0: none). */
-        int relaunchChanges;
 
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
@@ -393,7 +402,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 t.isRunning = r.app != null;
                 t.displayId = Display.DEFAULT_DISPLAY;
                 t.userId = 0;
-                t.configuration.setTo(DeviceProfile.configuration());
+                t.configuration.setTo(LocaleManagerService.configurationFor(r.info.packageName));
                 t.token = r.taskToken;  // the task's window container (none of its own)
                 tasks.add(t);
             }
@@ -891,8 +900,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void bindApplication(ProcessRecord app) {
         ApplicationInfo ai = mPm.getApplicationInfo(app.packageName,
                 PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES, 0);
+        Configuration config = LocaleManagerService.configurationFor(app.packageName);
+        synchronized (this) {
+            app.config = config;
+        }
         try {
-            mAm.bindApplication(app.thread, ai);
+            mAm.bindApplication(app.thread, ai, config);
             SystemServer.log("bindApplication: " + app);
         } catch (Throwable e) {
             // Reported to the caller (an exception crosses binder), not fatal to the server.
@@ -946,15 +959,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** ActivityTaskSupervisor.realStartActivityLocked: launch and resume. */
     private void realStartActivity(ActivityRecord r) {
-        Configuration config = DeviceProfile.configuration();
+        Configuration config = LocaleManagerService.configurationFor(r.info.packageName);
         Rect task;
         synchronized (this) {
             task = mTaskBounds.get(r.taskId);
-            r.lastConfig = TaskConfiguration.merged(task);
+            r.config = effectiveConfiguration(config, task);
+            r.configPending = false;
         }
         // A task the user resized: the task's configuration overrides the display's.
-        Configuration override = task != null ? TaskConfiguration.override(task)
-                : new Configuration();
+        Configuration override = taskOverride(task, config);
         ActivityWindowInfo windowInfo = windowInfo(task);
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
@@ -984,22 +997,39 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /**
+     * The override of a task {@code task} in size (null: the display's): its size
+     * configuration (TaskConfiguration), with the sequence number of the package's
+     * configuration {@code global} (the client drops an override whose seq is 0 as older
+     * than the one it has pending).
+     */
+    private static Configuration taskOverride(Rect task, Configuration global) {
+        Configuration override = task != null ? TaskConfiguration.override(task)
+                : new Configuration();
+        override.seq = global.seq;
+        return override;
+    }
+
+    /** What an activity sees: its package's configuration with its task's override. */
+    private static Configuration effectiveConfiguration(Configuration global, Rect task) {
+        Configuration c = new Configuration(global);
+        if (task != null) c.updateFrom(TaskConfiguration.override(task));
+        return c;
+    }
+
+    /**
      * IActivityTaskManager.resizeTask (the user resized the task's window: its window
-     * session tells): the task's configuration is that of its size (TaskConfiguration). Each
-     * of its activities whose configuration changes in a way it does not handle
-     * ({@code android:configChanges}, ActivityInfo.getRealConfigChanged; size changes within
-     * the buckets its resources care about do not count, SizeConfigurationBuckets.filterDiff)
-     * is relaunched, as ActivityRecord.ensureActivityConfiguration does: now if it is resumed
-     * or paused, else when it next comes back. The changes it handles reach it through its
-     * window (ViewRootImpl's activity config callback: onConfigurationChanged).
+     * session tells): the task's configuration is that of its size (TaskConfiguration) over
+     * its package's. Each of its activities gets it as for any configuration change
+     * ({@link #ensureConfiguration}: told if it handles the changes, else relaunched; now if
+     * it is resumed, else when it is). The changes it handles also reach it through its
+     * window (ViewRootImpl's activity config callback).
      */
     @Override
     public void resizeTask(int taskId, Rect bounds, int resizeMode) {
         Rect task = bounds == null || bounds.isEmpty()
                 || (bounds.width() == DeviceProfile.WIDTH && bounds.height() == DeviceProfile.HEIGHT)
                 ? null : new Rect(0, 0, bounds.width(), bounds.height());
-        List<ActivityRecord> relaunch = new ArrayList<>();
-        Configuration merged = TaskConfiguration.merged(task);
+        List<ActivityRecord> activities = new ArrayList<>();
         synchronized (this) {
             Rect old = mTaskBounds.get(taskId);
             if (old == null ? task == null : old.equals(task)) return;
@@ -1009,69 +1039,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 mTaskBounds.remove(taskId);
             }
             for (ActivityRecord a : mActivities) {
-                if (a.taskId != taskId || a.finishing || a.app == null || a.lastConfig == null) {
-                    continue;
-                }
-                int diff = android.window.SizeConfigurationBuckets.filterDiff(
-                        a.lastConfig.diff(merged), a.lastConfig, merged, a.sizeBuckets);
-                a.lastConfig = new Configuration(merged);
-                int unhandled = diff & ~(a.info.getRealConfigChanged()
-                        | ActivityInfo.CONFIG_WINDOW_CONFIGURATION
-                        | ActivityInfo.CONFIG_ASSETS_PATHS);
-                if (unhandled == 0) continue;
-                a.relaunchChanges |= unhandled;
-                if (a.state == State.RESUMED || a.state == State.PAUSED) relaunch.add(a);
+                if (a.taskId == taskId && !a.finishing && a.app != null) activities.add(a);
             }
         }
         SystemServer.log("task " + taskId + " resized to "
-                + (task != null ? task.width() + "x" + task.height() : "the display") + ": "
-                + merged.screenWidthDp + "x" + merged.screenHeightDp + " dp"
-                + (relaunch.isEmpty() ? "" : ", relaunching " + relaunch.size()));
-        for (ActivityRecord a : relaunch) relaunch(a);
-    }
-
-    /**
-     * The relaunch item for configuration changes the activity does not handle, if it has
-     * some pending (else null), with {@code results} for it. Clears them.
-     */
-    private ActivityRelaunchItem takeRelaunch(ActivityRecord r, List<ResultInfo> results) {
-        int changes;
-        Rect task;
-        synchronized (this) {
-            changes = r.relaunchChanges;
-            r.relaunchChanges = 0;
-            task = mTaskBounds.get(r.taskId);
-        }
-        if (changes == 0) return null;
-        Configuration override = task != null ? TaskConfiguration.override(task)
-                : new Configuration();
-        SystemServer.log("relaunching " + r.name() + " for configuration changes 0x"
-                + Integer.toHexString(changes) + " it does not handle");
-        return new ActivityRelaunchItem(r.token, results, null /* pendingNewIntents */, changes,
-                new android.util.MergedConfiguration(DeviceProfile.configuration(), override),
-                true /* preserveWindow */, windowInfo(task), Display.DEFAULT_DISPLAY);
-    }
-
-    /** ActivityRecord.relaunchActivityLocked for a resumed or paused activity. */
-    private void relaunch(ActivityRecord r) {
-        State state;
-        synchronized (this) {
-            state = r.state;
-        }
-        ActivityRelaunchItem item = takeRelaunch(r, null);
-        if (item == null) return;
-        ClientTransaction t = new ClientTransaction(r.app.thread);
-        t.addTransactionItem(item);
-        if (state == State.RESUMED) {
-            t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
-                    false /* shouldSendCompatFakeFocus */));
-            setState(r, State.RESUMING);
-        } else {
-            t.addTransactionItem(new PauseActivityItem(r.token));
-            setState(r, State.PAUSING);
-        }
-        schedule(r, t, "ActivityRelaunchItem, "
-                + (state == State.RESUMED ? "ResumeActivityItem" : "PauseActivityItem"));
+                + (task != null ? task.width() + "x" + task.height() : "the display"));
+        for (ActivityRecord a : activities) ensureConfiguration(a);
     }
 
     /** reportSizeConfigurations: the size buckets the activity's resources care about. */
@@ -1098,12 +1071,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void resume(ActivityRecord r) {
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
-        // Configuration changes it does not handle came while it was not visible: it is
-        // relaunched first (with the results), as Android does when it is made visible.
-        ActivityRelaunchItem relaunch = takeRelaunch(r, results);
-        if (relaunch != null) {
-            t.addTransactionItem(relaunch);
-        } else if (results != null) {
+        // The configuration changed while it was not in front (ActivityRecord's
+        // ensureActivityConfiguration as it becomes visible): relaunched with its results,
+        // or told, before it resumes.
+        String config = configurationItem(r, t, results);
+        boolean relaunch = config != null && config.startsWith("ActivityRelaunchItem");
+        if (results != null && !relaunch) {
             t.addTransactionItem(new ActivityResultItem(r.token, results));
         }
         t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
@@ -1113,8 +1086,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             r.idle = false;
         }
         setState(r, State.RESUMING);
-        schedule(r, t, (relaunch != null ? "ActivityRelaunchItem, "
-                : results != null ? "ActivityResultItem, " : "") + "ResumeActivityItem");
+        schedule(r, t, (config != null ? config + ", " : "")
+                + (results != null && !relaunch ? "ActivityResultItem, " : "")
+                + "ResumeActivityItem");
     }
 
     /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a pause if resumed. */
@@ -1313,12 +1287,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         SystemServer.log("activityResumed: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
         for (ActivityRecord a : toStart) makeVisible(a);
-        boolean relaunch;
+        boolean pending;
         synchronized (this) {
-            // Its task was resized while it was on its way to the front.
-            relaunch = r.relaunchChanges != 0 && r.state == State.RESUMED && !r.finishing;
+            // The configuration changed (a locale change, its task resized) while it was on
+            // its way to the front.
+            pending = r.configPending && r.state == State.RESUMED;
         }
-        if (relaunch) relaunch(r);
+        if (pending) ensureConfiguration(r);
     }
 
     void activityIdle(ActivityRecord r) {
@@ -1403,12 +1378,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             r.state = State.STARTED;
             notifyAll();
         }
+        // A configuration change that came meanwhile waits until it is resumed (configPending).
         ClientTransaction t = new ClientTransaction(r.app.thread);
-        ActivityRelaunchItem relaunch = takeRelaunch(r, null);
-        if (relaunch != null) t.addTransactionItem(relaunch);
         t.addTransactionItem(new StartActivityItem(r.token, null /* sceneTransitionInfo */));
-        schedule(r, t, (relaunch != null ? "ActivityRelaunchItem, " : "")
-                + "StartActivityItem (visible, not resumed)");
+        schedule(r, t, "StartActivityItem (visible, not resumed)");
     }
 
     /**
@@ -1606,6 +1579,118 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     void activityDestroyed(ActivityRecord r) {
         SystemServer.log("activityDestroyed: " + r.name());
         remove(r);
+    }
+
+    // --- configuration changes (locale track, ADR 0049) --------------------------------
+
+    /**
+     * The configuration changed (Windows' languages or formats; a package's app locales):
+     * each running process of {@code packageName} (null: every package) gets the new one
+     * (ConfigurationChangeItem: its resources, default locales and non-UI components'
+     * onConfigurationChanged), then each of its activities is relaunched, or told
+     * (ActivityConfigurationChangeItem: onConfigurationChanged) when it handles every change
+     * ({@code android:configChanges}), as WindowProcessController.dispatchConfiguration and
+     * ActivityRecord.ensureActivityConfiguration do. An activity that is not resumed is
+     * relaunched or told when it is.
+     */
+    void dispatchConfiguration(String packageName) {
+        List<ProcessRecord> processes = new ArrayList<>();
+        synchronized (this) {
+            for (ProcessRecord p : mProcesses) {
+                if (p.exiting || !p.ready || p.packageName == null || p.config == null) continue;
+                if (packageName == null || packageName.equals(p.packageName)) processes.add(p);
+            }
+        }
+        for (ProcessRecord p : processes) {
+            Configuration config = LocaleManagerService.configurationFor(p.packageName);
+            List<ActivityRecord> activities;
+            int diff;
+            synchronized (this) {
+                diff = p.config.diff(config);
+                p.config = config;
+                activities = new ArrayList<>(p.activities);
+            }
+            if (diff != 0) {
+                ClientTransaction t = new ClientTransaction(p.thread);
+                t.addTransactionItem(new ConfigurationChangeItem(config,
+                        Context.DEVICE_ID_DEFAULT));
+                SystemServer.log("scheduleTransaction ConfigurationChangeItem to " + p + ": "
+                        + config.getLocales().toLanguageTags() + " (changes 0x"
+                        + Integer.toHexString(diff) + ", seq " + config.seq + ")");
+                try {
+                    p.thread.scheduleTransaction(t);
+                } catch (RemoteException e) {
+                    SystemServer.log("scheduleTransaction to " + p + " failed: " + e);
+                }
+            }
+            for (ActivityRecord r : activities) ensureConfiguration(r);
+        }
+    }
+
+    /** ActivityRecord.ensureActivityConfiguration: now if resumed, else when it is. */
+    private void ensureConfiguration(ActivityRecord r) {
+        synchronized (this) {
+            if (r.config == null || r.app == null || r.finishing) return;
+            if (r.state != State.RESUMED) {
+                r.configPending = true;
+                return;
+            }
+        }
+        ClientTransaction t = new ClientTransaction(r.app.thread);
+        String what = configurationItem(r, t, null);
+        if (what == null) return;
+        if (what.startsWith("ActivityRelaunchItem")) {
+            t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
+                    false /* shouldSendCompatFakeFocus */));
+            synchronized (this) {
+                r.idle = false;
+            }
+            setState(r, State.RESUMING);
+            what += ", ResumeActivityItem";
+        }
+        schedule(r, t, what);
+    }
+
+    /**
+     * Adds what the activity needs for the package's current configuration to {@code t}:
+     * nothing (null), an ActivityConfigurationChangeItem when it handles every change, else
+     * an ActivityRelaunchItem (with {@code results}); returns its description.
+     */
+    private String configurationItem(ActivityRecord r, ClientTransaction t,
+            List<ResultInfo> results) {
+        // One configuration for both tracks: the package's (locales, formats: locale track)
+        // with the task's size override (a resized window: lifecycle track).
+        Configuration global = LocaleManagerService.configurationFor(r.info.packageName);
+        Configuration config;
+        Rect task;
+        int diff;
+        synchronized (this) {
+            if (r.config == null) return null;
+            task = mTaskBounds.get(r.taskId);
+            config = effectiveConfiguration(global, task);
+            // Size changes within the buckets its resources care about do not count.
+            diff = android.window.SizeConfigurationBuckets.filterDiff(
+                    r.config.diffPublicOnly(config), r.config, config, r.sizeBuckets);
+            r.config = config;
+            r.configPending = false;
+        }
+        if (diff == 0) return null;
+        Configuration override = taskOverride(task, global);
+        ActivityWindowInfo windowInfo = windowInfo(task);
+        int handled = r.info.getRealConfigChanged();
+        String changes = "changes 0x" + Integer.toHexString(diff) + ", handles 0x"
+                + Integer.toHexString(handled) + ", " + config.getLocales().toLanguageTags()
+                + ", " + config.screenWidthDp + "x" + config.screenHeightDp + " dp";
+        if ((diff & ~handled) == 0) {
+            t.addTransactionItem(new ActivityConfigurationChangeItem(r.token, override,
+                    windowInfo, Display.DEFAULT_DISPLAY));
+            return "ActivityConfigurationChangeItem (" + changes + ")";
+        }
+        t.addTransactionItem(new ActivityRelaunchItem(r.token, results,
+                null /* pendingNewIntents */, diff,
+                new MergedConfiguration(global, override),
+                true /* preserveWindow */, windowInfo, Display.DEFAULT_DISPLAY));
+        return "ActivityRelaunchItem (" + changes + ")";
     }
 
     static int taskOf(ActivityRecord r) {

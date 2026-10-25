@@ -54,6 +54,11 @@ public final class GesherAppDriver {
         System.out.flush();
     }
 
+    /** The activity launched last (locale track: configuration changes in a single process). */
+    public static Activity currentActivity() {
+        return sActivity;
+    }
+
     /**
      * Binds the application and launches {@code activityInfo}, on the main thread.
      * Returns the resumed Activity.
@@ -87,7 +92,9 @@ public final class GesherAppDriver {
         } catch (Throwable t) {
             log("VMRuntime.setTargetSdkVersion: " + t);
         }
-        Configuration config = DeviceProfile.configuration();
+        // The device's, with the app's own locales (LocaleManager, locale track).
+        Configuration config = com.gesher.server.LocaleManagerService.configurationFor(
+                appInfo.packageName);
         CompatibilityInfo compat = CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO;
         ActivityThread.AppBindData data = new ActivityThread.AppBindData();
         data.appInfo = appInfo;
