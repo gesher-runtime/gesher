@@ -32,6 +32,14 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// The bottom of the current thread's stack that Windows keeps for itself:
+// the lowest page, never committed, and the stack guarantee above it (two
+// pages by default on x64, or what SetThreadStackGuarantee set). Touching
+// its top page while it is the last guard page raises STATUS_STACK_OVERFLOW.
+// pthread_attr_getguardsize reports it, so ART puts its protected region
+// right above it (fault_signals.cc, docs/decisions/0036).
+size_t StackBottomReserve();
+
 // Microseconds on a monotonic clock (QueryPerformanceCounter). Timeouts keep
 // their deadline on it: GetTickCount64 moves in 15.6 ms steps, and a wait
 // that ends a step early would return before Linux's would.

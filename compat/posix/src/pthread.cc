@@ -11,6 +11,8 @@
 #include <mutex>
 #include <utility>
 
+#include "internal.h"
+
 // The real winpthreads calls; <pthread.h> routes everyone else here.
 #undef pthread_key_create
 #undef pthread_key_delete
@@ -85,11 +87,12 @@ int pthread_getcpuclockid(pthread_t thread, clockid_t* clock_id) {
   return 0;
 }
 
+// The bottom of the stack Windows keeps (gesher::StackBottomReserve): ART
+// puts its protected region for implicit stack overflow checks right above
+// what this reports (fault_signals.cc).
 int pthread_attr_getguardsize(const pthread_attr_t* attr, size_t* guardsize) {
   (void)attr;
-  SYSTEM_INFO si;
-  GetSystemInfo(&si);
-  *guardsize = si.dwPageSize;
+  *guardsize = gesher::StackBottomReserve();
   return 0;
 }
 
