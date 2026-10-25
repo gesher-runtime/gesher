@@ -50,7 +50,7 @@ final class GesherWebViewFactory implements WebViewFactoryProvider {
     @Override
     public GeolocationPermissions getGeolocationPermissions() {
         synchronized (mLock) {
-            if (mGeolocation == null) mGeolocation = new GeolocationPermissions();
+            if (mGeolocation == null) mGeolocation = new GesherGeolocationPermissions();
             return mGeolocation;
         }
     }
@@ -203,7 +203,9 @@ final class GesherWebViewFactory implements WebViewFactoryProvider {
 
         @Override
         public void initSafeBrowsing(Context context, ValueCallback<Boolean> callback) {
-            if (callback != null) callback.onReceiveValue(false);
+            // WebSettings' Safe Browsing is WebView2's SmartScreen (reputation checking),
+            // which needs no initialization.
+            if (callback != null) callback.onReceiveValue(true);
         }
 
         @Override
