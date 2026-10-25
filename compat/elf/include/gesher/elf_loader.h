@@ -70,6 +70,10 @@ void* Lookup(Library* library, const char* name);
 // another). nullptr if not found.
 void* LookupGlobal(const char* name);
 
+// Resolves `name` through the bionic resolver (SetBionicResolver) alone: the
+// host (shim) definition, or nullptr. The arm64 translator wraps some of them.
+void* ResolveBionic(const char* name);
+
 // Returns the already-loaded object whose soname or file base name is `name`,
 // or nullptr. Load() uses this to share dependencies.
 Library* Find(const char* name);

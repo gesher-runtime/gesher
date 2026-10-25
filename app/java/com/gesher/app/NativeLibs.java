@@ -56,6 +56,29 @@ public final class NativeLibs {
     }
 
     /**
+     * The ABI the package runs as ({@code ApplicationInfo.primaryCpuAbi}): the
+     * APK's best match, or {@link #ABI} for an APK without native code (or one
+     * that cannot be read).
+     */
+    public static String forApk(String apk) {
+        try {
+            String abi = abiFor(apk);
+            return abi != null ? abi : ABI;
+        } catch (IOException e) {
+            return ABI;
+        }
+    }
+
+    /**
+     * The directory name Android installs an ABI's libraries under
+     * ({@code <code path>/lib/<name>}): {@code arm64} for arm64-v8a, the ABI's
+     * own name otherwise (x86_64).
+     */
+    public static String instructionSetDir(String abi) {
+        return "arm64-v8a".equals(abi) ? "arm64" : abi;
+    }
+
+    /**
      * Copies the APK's native libraries into {@code dir}; returns how many. The
      * ABI is the APK's best match ({@link #abiFor}); an arm64-v8a-only APK's
      * libraries are extracted and loaded through the translator, exactly as

@@ -5,35 +5,50 @@
 // The DLL is built with llvm-mingw clang, so its functions use the Microsoft
 // x64 ABI. The host functions a guest import resolves to (the bionic shim, the
 // JNI proxies, libandroid, EGL/GLES) are System V (ADR 0006/0017). These
-// thunks move arguments between the two conventions explicitly.
+// thunks move arguments between the two conventions explicitly, and save what
+// one convention preserves and the other does not.
 
 	.intel_syntax noprefix
 	.text
 
 // uint64_t gesher_call_host_sysv(HostCall* call);  // rcx = call
 //
-//   struct HostCall { void* fn;            // +0
-//                     const uint64_t* gpr; // +8:  X0..X5
-//                     const uint64_t* xmm; // +16: V0..V7 low 64 bits
+//   struct HostCall { void* fn;              // +0
+//                     const uint64_t* gpr;   // +8:  X0..X5
+//                     const uint64_t* xmm;   // +16: V0..V7 low 64 bits
 //                     const uint64_t* stack; // +24: X6, X7, then guest stack args
-//                     uint64_t nstack;     // +32: count of `stack` (even)
-//                     uint64_t out_xmm0; }; // +40: written with the result's xmm0
+//                     uint64_t nstack;       // +32: count of `stack`
+//                     uint64_t out_xmm0;     // +40: written with the result's xmm0
+//                     uint64_t out_rdx; };   // +48: written with the result's rdx
 //
 // Calls System V `fn` with X0..X5 in rdi,rsi,rdx,rcx,r8,r9 and V0..V7 in
 // xmm0..xmm7, the `stack` words as System V stack arguments (System V's 7th and
-// 8th arguments and any variadic overflow), and AL = 8 for a variadic callee.
-// Returns rax and stores the result's xmm0 low 64 bits in call->out_xmm0.
-// Microsoft x64 entry; rbx holds `call` across the call (it survives, being
-// MS-ABI callee-saved and restored at the end).
+// 8th arguments and any further ones), and AL = 8 for a variadic callee.
+// Returns rax and stores xmm0/rdx in the HostCall.
+//
+// Microsoft x64 preserves rsi, rdi and xmm6..xmm15 across a call; System V
+// does not, so they are saved here (dynarmic's generated code keeps guest
+// state in xmm6..xmm15 across the callbacks that end up here).
 	.globl gesher_call_host_sysv
 	.p2align 4
 gesher_call_host_sysv:
 	push rbp
 	mov  rbp, rsp
 	push rbx
-	push rsi            // preserve MS-ABI callee-saved regs we clobber as SysV args
+	push rsi
 	push rdi
-	mov  rbx, rcx       // the HostCall*, kept across the call
+	sub  rsp, 168                    // xmm6..xmm15 (160) + 8: rsp 16-aligned
+	movdqu xmmword ptr [rsp + 0], xmm6
+	movdqu xmmword ptr [rsp + 16], xmm7
+	movdqu xmmword ptr [rsp + 32], xmm8
+	movdqu xmmword ptr [rsp + 48], xmm9
+	movdqu xmmword ptr [rsp + 64], xmm10
+	movdqu xmmword ptr [rsp + 80], xmm11
+	movdqu xmmword ptr [rsp + 96], xmm12
+	movdqu xmmword ptr [rsp + 112], xmm13
+	movdqu xmmword ptr [rsp + 128], xmm14
+	movdqu xmmword ptr [rsp + 144], xmm15
+	mov  rbx, rcx                    // the HostCall*, kept across the call
 	// Reserve and fill the host stack arguments (16-byte aligned at the call).
 	mov  r10, qword ptr [rbx + 24]   // stack ptr
 	mov  r11, qword ptr [rbx + 32]   // nstack
@@ -72,7 +87,19 @@ gesher_call_host_sysv:
 	mov  eax, 8                      // AL = vector regs for a variadic callee
 	call qword ptr [rbx + 0]         // fn
 	movsd qword ptr [rbx + 40], xmm0 // out_xmm0
-	lea  rsp, [rbp - 24]             // undo the pushes (rbx, rsi, rdi)
+	mov  qword ptr [rbx + 48], rdx   // out_rdx
+	lea  rsp, [rbp - 192]            // the xmm save area (24 + 168 below rbp)
+	movdqu xmm6, xmmword ptr [rsp + 0]
+	movdqu xmm7, xmmword ptr [rsp + 16]
+	movdqu xmm8, xmmword ptr [rsp + 32]
+	movdqu xmm9, xmmword ptr [rsp + 48]
+	movdqu xmm10, xmmword ptr [rsp + 64]
+	movdqu xmm11, xmmword ptr [rsp + 80]
+	movdqu xmm12, xmmword ptr [rsp + 96]
+	movdqu xmm13, xmmword ptr [rsp + 112]
+	movdqu xmm14, xmmword ptr [rsp + 128]
+	movdqu xmm15, xmmword ptr [rsp + 144]
+	add  rsp, 168
 	pop  rdi
 	pop  rsi
 	pop  rbx
@@ -80,26 +107,36 @@ gesher_call_host_sysv:
 	ret
 
 // void gesher_guest_entry_shim(): entered (System V) by a host_entry stub with
-// the guest function pointer in r10. Spills the System V argument registers and
-// calls gesher_guest_entry_trampoline(fn, gpr[8], xmm[8], out_xmm0) with the
-// Microsoft x64 ABI, then returns the guest result (rax, and xmm0 for a
-// floating-point return) to the System V caller.
+// the guest function pointer in r10, as if called directly by the host caller.
+// Builds an EntryFrame and calls gesher_guest_entry_trampoline(fn, frame)
+// with the Microsoft x64 ABI, then returns the guest result (rax, rdx, and
+// xmm0 for a floating-point return) to the System V caller.
+//
+//   struct EntryFrame { uint64_t gpr[8];          // +0:   X0..X7
+//                       uint64_t xmm[8];          // +64:  V0..V7
+//                       const uint64_t* stack;    // +128: the caller's stack args 9..
+//                       uint64_t out_rdx;         // +136
+//                       uint64_t out_xmm0; };     // +144
+//
+// System V passes integer arguments 7 and 8 on the stack ([rbp+16], [rbp+24]
+// after the push below); AAPCS64 passes them in X6, X7. Further stack
+// arguments start at [rbp+32] and are copied to the guest stack.
 	.globl gesher_guest_entry_shim
 	.p2align 4
 gesher_guest_entry_shim:
 	push rbp
 	mov  rbp, rsp
 	sub  rsp, 160
-	// gpr[8] at [rsp+0]: X0..X5 = rdi,rsi,rdx,rcx,r8,r9; X6,X7 = 0.
 	mov  qword ptr [rsp + 0], rdi
 	mov  qword ptr [rsp + 8], rsi
 	mov  qword ptr [rsp + 16], rdx
 	mov  qword ptr [rsp + 24], rcx
 	mov  qword ptr [rsp + 32], r8
 	mov  qword ptr [rsp + 40], r9
-	mov  qword ptr [rsp + 48], 0
-	mov  qword ptr [rsp + 56], 0
-	// xmm[8] at [rsp+64]: V0..V7 low 64 bits.
+	mov  rax, qword ptr [rbp + 16]
+	mov  qword ptr [rsp + 48], rax
+	mov  rax, qword ptr [rbp + 24]
+	mov  qword ptr [rsp + 56], rax
 	movsd qword ptr [rsp + 64], xmm0
 	movsd qword ptr [rsp + 72], xmm1
 	movsd qword ptr [rsp + 80], xmm2
@@ -108,16 +145,18 @@ gesher_guest_entry_shim:
 	movsd qword ptr [rsp + 104], xmm5
 	movsd qword ptr [rsp + 112], xmm6
 	movsd qword ptr [rsp + 120], xmm7
-	mov  qword ptr [rsp + 128], 0   // out_xmm0
-	// Microsoft x64 call: rcx=fn, rdx=gpr, r8=xmm, r9=out_xmm0, 32B shadow.
+	lea  rax, [rbp + 32]
+	mov  qword ptr [rsp + 128], rax
+	mov  qword ptr [rsp + 136], 0
+	mov  qword ptr [rsp + 144], 0
+	// Microsoft x64 call: rcx = fn, rdx = frame, 32-byte shadow space.
 	mov  rcx, r10
 	lea  rdx, [rsp + 0]
-	lea  r8,  [rsp + 64]
-	lea  r9,  [rsp + 128]
 	sub  rsp, 32
 	call gesher_guest_entry_trampoline
 	add  rsp, 32
-	movsd xmm0, qword ptr [rsp + 128]
+	mov  rdx, qword ptr [rsp + 136]
+	movsd xmm0, qword ptr [rsp + 144]
 	add  rsp, 160
 	pop  rbp
 	ret

@@ -52,6 +52,7 @@ jobs:
             compat/arm64
             cmake/toolchain-llvm-mingw.cmake
             tests/native
+            tests/apps/nativeactivity
 
       - name: Cache toolchain
         id: toolchain
@@ -157,13 +158,21 @@ jobs:
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
             -o dist-arm64/trivial_arm64.so tests/native/trivial.c
           # Step 2 (guest): bionic libc/libm/libdl/liblog/pthread through the
-          # shim, over the guest->host trampolines. No stack protector / TLS yet.
-          "$cc" -shared -fPIC -O2 -fno-stack-protector \
+          # shim, over the guest->host trampolines (the NDK's default stack
+          # protector: its guard is a TLS slot on arm64).
+          "$cc" -shared -fPIC -O2 \
             -Wl,-soname,libc_test.so \
             -o dist-arm64/libc_test_arm64.so tests/native/libc_test.c -llog -ldl -lm
+          # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
+          # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
+          # and the perf kernel (docs/arm64.md).
+          "$cc" -shared -fPIC -O2 -fstack-protector-all \
+            -Wl,-soname,libarm64_abi_test.so \
+            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c -ldl
           # Step 3/4 (guest JNI): natives found by name and registered, calling
-          # back into ART through the guest JNIEnv/JavaVM proxy tables.
-          "$cc" -shared -fPIC -O2 -fno-stack-protector \
+          # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
+          # thread attached to the VM.
+          "$cc" -shared -fPIC -O2 -fstack-protector-strong \
             -Wl,-soname,libjni_test.so \
             -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
           ro="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
@@ -198,6 +207,36 @@ jobs:
             --output work/jni-dex $(find work/jni-classes -name '*.class')
           cp work/jni-dex/classes.dex dist-arm64/arm64-jni.dex
           ls -la dist-arm64
+
+      # aapt2, zipalign and android.jar (the same cache as native-libs.yml).
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+
+      # The NativeActivity test app (tests/apps/nativeactivity) with only
+      # lib/arm64-v8a: gesher-app must pick arm64-v8a (NativeLibs.abiFor) and
+      # run its libandroid/EGL/GLES/AChoreographer/AInputQueue code translated.
+      - name: Build the arm64-only NativeActivity test APK
+        run: |
+          tests/apps/nativeactivity/build.sh dist-arm64 --ndk "$PWD/$NDK_DIR" \
+            --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" \
+            --abi arm64-v8a --apk nativeactivity-arm64.apk
 
       - uses: actions/upload-artifact@v4
         with:

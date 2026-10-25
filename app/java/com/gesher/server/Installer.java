@@ -145,7 +145,10 @@ final class Installer {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
         p.setDataDir(Device.dataDir() + "/data/" + p.packageName);
-        p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.ABI);
+        // lib/x86_64, or lib/arm64 for an arm64-v8a-only APK (docs/arm64.md).
+        String abi = NativeLibs.forApk(e.codePath + "/base.apk");
+        p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.instructionSetDir(abi));
+        p.setPrimaryCpuAbi(NativeLibs.abiFor(e.codePath + "/base.apk"));
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
         new File(p.dataDir()).mkdirs();
         return p;
@@ -184,8 +187,8 @@ final class Installer {
         code.mkdirs();
         File base = new File(code, "base.apk");
         copy(source, base);
-        int libs = NativeLibs.extract(base.getPath(),
-                new File(code, "lib/" + NativeLibs.ABI).getPath());
+        int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
+                + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
         long now = System.currentTimeMillis();
         Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                 now);

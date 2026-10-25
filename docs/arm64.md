@@ -25,14 +25,21 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   the very same System V entry points.
 
 - **Guest → host**: each guest import is bound to a guest trampoline
-  `SVC #0; RET`; the guest's call runs it, `CallSVC` maps the guest's
-  X0–X7/V0–V7 to System V (`gesher_call_host_sysv` in `thunks.S`) and calls the
-  host function.
+  `SVC #n; RET`; the guest's call runs it, `CallSVC(n)` maps the guest's
+  X0–X7/V0–V7 and stack arguments to System V (`gesher_call_host_sysv` in
+  `thunks.S`), converting a `va_list` argument, and calls the host function.
+  A host function the guest reaches as a plain pointer (dlsym, a host table)
+  raises a no-execute fault in dynarmic and is called the same way. A few libc
+  interfaces whose x86-64 layout differs get guest versions (`guest_libc.cc`).
 
 - **Host → guest**: `host_entry(fn)` gives a System V x86-64 stub
   (`gesher_guest_entry_shim`) that enters the guest on the calling thread with a
-  per-thread `dynarmic::A64::Jit`, maps the System V arguments to AAPCS64, runs
-  the guest until it returns to a sentinel X30, and returns X0/V0.
+  per-thread, per-nesting-depth `dynarmic::A64::Jit`, maps the System V
+  arguments to AAPCS64, runs the guest until it returns to a sentinel X30, and
+  returns X0/X1/V0. A host call straight to a guest pointer faults (guest code
+  is not executable) and the vectored handler resumes it at that stub.
+- **Faults** in guest code end the process with an Android-style
+  `Fatal signal` report and exit status 128 + signal, never a hang.
 
 - **The ELF loader** (`compat/elf`) maps `EM_AARCH64` objects with executable
   segments non-executable, applies the AArch64 relocations and TLS, and
@@ -62,47 +69,71 @@ ships as a single file next to dalvikvm. Its license notice is installed as
 
 ## Status and next steps
 
-_Last updated 2026-10-25 by the arm64 track; branch `wip/arm64`._
+_Last updated 2026-10-25 by the successor arm64 agent; branch `wip/arm64`._
 
-### Done and CI-verified (ci `40192217495`, both runners)
+### Review of the first implementation (this agent)
 
-- **ADR 0047**: dynarmic chosen (Berberis is riscv64-only at the pinned tag;
-  QEMU is GPL); the proxy-DLL, shared-address-space, trampoline design.
-- `gesher_arm64.dll` builds with llvm-mingw (`arm64.yml`, two external patches
-  for the 2026 clang). `tracks/47-arm64.ps1`:
-  - `PASS arm64: translator DLL round-trips (host<->guest, dynarmic)` — the
-    smoke test: host→guest via `call()` and a `host_entry` stub, guest→host via
-    a bound `SVC` trampoline, a host→guest callback via the DEP-fault redirect,
-    and a CPU-bound loop whose overhead is ~1.3–1.6× native (`INFO arm64 perf`).
-  - `PASS arm64: loader runs a self-contained arm64-v8a .so` — the ELF loader
-    maps an EM_AARCH64 object (NDK, `-nostdlib`), applies its relocations, runs
-    its constructor through the translator and calls its exports via `host_entry`.
-  - `PASS arm64: System.load of an arm64-v8a .so; JNI_OnLoad, RegisterNatives,
-    Java_* and callbacks into ART` — a guest `.so` through ART's libnativeloader
-    path, the JNI bridge's guest proxy tables both ways.
+The first agent's ci `40196210581` hung both test jobs for hours: guest
+store-exclusives always failed (dynarmic's default callbacks), so the first
+guest atomic spun forever. Reproduced locally (the CI artifacts run on the
+local machine; the DLL builds locally with llvm-mingw in a few minutes) and
+fixed, with the other review findings: ADR 0047's "Revision" section lists
+them all (crash path instead of re-run loops, DEP redirect to the host_entry
+stub instead of running inside the VEH, xmm6-15 saved in the System V thunk,
+stack arguments 7+, TCB slots, TLSDESC, JNI proxies per side, guest libc
+differences, arch-filtered symbol binding, an honest overhead figure).
 
-### Done, verification pending the current CI run
+### Done and CI-verified (ci `40192217495`, by the first agent, both runners)
 
-- The guest libc/pthread `.so` through the shim (ci `40192217495` got as far as
-  `qsort`, where a host→guest comparator call crashed; fixed by the DEP-fault
-  redirect and the per-depth Jit pool, re-running).
+- `PASS arm64: translator DLL round-trips (host<->guest, dynarmic)`
+- `PASS arm64: loader runs a self-contained arm64-v8a .so`
+- `PASS arm64: System.load of an arm64-v8a .so; JNI_OnLoad, RegisterNatives,
+  Java_* and callbacks into ART`
+
+### Written, verified locally, CI pending (this push)
+
+- The libc/pthread `.so` through the shim passes locally with the fixed DLL
+  (qsort, threads, keys, once, cond vars, dl*, liblog).
+- Guest crashes: `arm64_smoke_test crash-segv|crash-ill|crash-jump` print
+  `Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0` (etc.) and
+  exit 139/132 (locally).
+- LL/SC atomics from four threads (smoke test, locally).
+- `tests/native/arm64_abi_test.c`: ELF TLS via TLSDESC in several threads, the
+  stack protector, setjmp/longjmp, struct stat/epoll_event, syscall numbers,
+  AT_HWCAP, C11 atomics, va_list conversion, a host pointer from dlsym.
+- The JNI test: Call*MethodV from a guest va_list, Java<->guest nesting 8
+  deep, a guest pthread that AttachCurrentThread()s, calls Java, detaches.
+- ABI selection: `NativeLibs.forApk` / `instructionSetDir`; the installer puts
+  an arm64-only APK's libraries in `lib/arm64` and sets
+  `ApplicationInfo.primaryCpuAbi`; gesher-app logs the ABI. Exercised by
+  `nativeactivity-arm64.apk` (tests/apps/nativeactivity built with
+  `--abi arm64-v8a`): NativeActivity, the glue thread, libandroid, EGL/GLES,
+  AChoreographer, AInputQueue, ANativeWindow_lock, all translated, with the
+  same checks as the x86_64 app.
+- Perf: the smoke test's register-only loop is ~8.5x native (locally; the
+  first agent's 1.3x compared against a native loop with a `volatile` store
+  per iteration). `arm64_elf_test` also times a compiled C kernel (sieve,
+  CRC-32, LCG) translated vs. the same code built natively.
 
 ### Not yet done
 
-- arm64 TLS beyond local/initial-exec `TLS_TPREL` (no TLSDESC / general-dynamic
-  / guest-created-thread TLS); the stack protector; guest-created threads
-  (`pthread_create` of a guest start routine, `AttachCurrentThread`).
-- libandroid, EGL/GLES and NativeActivity for a guest `.so`.
-- ABI selection is written (`NativeLibs.abiFor`, build.prop) but not yet
-  exercised by a test with an arm64-only APK.
-- arm64 **executables** (the exec track, ADR 0035): the launcher enters the
-  program with `gesher_exec_enter` (host); for a guest it must run `_start`
-  through the translator at the Linux stack block, and `__libc_init` must enter
-  the guest `main` via `host_entry`. Not started.
+- arm64 **executables** (the exec track, ADR 0035): the launcher must run a
+  guest `_start` through the translator at the Linux stack block.
 - A real arm64-only F-Droid app in the e2e job.
+- Guest JIT code (RWX pages the guest writes), guest signal handlers with an
+  arm64 `ucontext`, LSE atomics (dynarmic does not decode them; HWCAP hides
+  them), HFAs by value.
 
 ### Dead ends ruled out
 
 - **Berberis** (AOSP's native bridge): only riscv64 is implemented at
   android-16.0.0_r4; its arm64 guest would have to be written.
 - **QEMU TCG user mode**: GPLv2, incompatible with ADR 0001.
+
+### Local loop (no WSL, no AOSP)
+
+Download a CI run's `windows-x64` and `arm64` artifacts into one directory,
+build `gesher_arm64.dll` locally (llvm-mingw release for Windows, cmake and
+ninja from pip, dynarmic/fmt/Boost fetched and patched as `arm64.yml` does),
+copy it over, and run `arm64_smoke_test.exe` / `arm64_elf_test.exe <so> <dir>`.
+Loader or shim changes still need CI (they are in the main build).

@@ -7,25 +7,22 @@
 // never runs guest code. The translator (dynarmic's A64 frontend and x86-64
 // backend) runs it:
 //
-//  - Host -> guest. Host code calls guest function pointers as System V
-//    functions (init arrays, JNI natives through the JNI bridge, pthread start
-//    routines, qsort comparators, NativeActivity callbacks...). Such a call
-//    faults with DEP on the non-executable guest page; the translator's
-//    vectored exception handler sees an execute fault at an address in a
-//    registered guest code region and redirects the thread into the guest:
-//    the System V argument registers and stack become AAPCS64 ones, the
-//    guest runs on its own stack until it returns to a marker address, and
-//    its X0/X1/V0/V1 become RAX/RDX/XMM0/XMM1 for the caller. `host_entry`
-//    gives an explicit x86-64 entry stub for a guest function, which avoids
-//    the fault.
-//  - Guest -> host. Guest imports are bound straight to the host's System V
-//    functions (the bionic shim, libandroid, EGL/GLES, the JNI proxies'
-//    tables). When guest code branches to an address outside every guest
-//    code region, the translator leaves the guest and calls it with the
-//    guest's X0-X7/V0-V7 and stack arguments mapped to System V, then
-//    returns to the guest's X30. A few functions get guest-specific versions
-//    (`guest_symbol`): setjmp/longjmp as guest code, getauxval with arm64
-//    capabilities, syscall with arm64 numbers, the TLS descriptors.
+//  - Host -> guest. `host_entry(fn)` gives a System V x86-64 stub that enters
+//    the guest: the System V argument registers and stack become AAPCS64
+//    ones, the guest runs on its own stack until it returns to a marker
+//    address, and X0/X1/V0 become RAX/RDX/XMM0. Host code may also call a
+//    guest function pointer directly (pthread start routines, qsort
+//    comparators, NativeActivity callbacks...): that faults with DEP on the
+//    non-executable guest page, and the translator's vectored exception
+//    handler resumes the thread at the function's host_entry stub.
+//  - Guest -> host. Guest imports that resolve to host (System V) functions
+//    are bound to guest trampolines (`SVC #n; RET`, gesher_arm64_bind) that
+//    call them with X0-X7/V0-V7 and the stack arguments mapped to System V.
+//    A branch to host code the guest got as a plain pointer is called the
+//    same way and returns to X30. A few libc functions get guest-specific
+//    versions (`guest_symbol`): struct stat/epoll_event conversions,
+//    setjmp/longjmp as guest code, getauxval with arm64 capabilities,
+//    syscall with arm64 numbers, dlsym.
 //
 // Everything here uses the default (Microsoft x64) calling convention.
 #pragma once

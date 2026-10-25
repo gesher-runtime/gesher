@@ -8,10 +8,16 @@
 // Covers, for a guest library: JNI_OnLoad (GetEnv, FindClass, NewGlobalRef,
 // RegisterNatives), natives found by name and registered, arguments both ways,
 // strings, static/instance/variadic calls back into ART, fields, a Java
-// exception seen and cleared, and a native throw. No thread-locals or threads
-// yet (built with -fno-stack-protector); those are the next step.
+// exception seen and cleared, and a native throw; the va_list forms
+// (Call*MethodV from the guest's own variadic helper); guest natives nested
+// inside Java called from guest natives; and a guest pthread that attaches
+// to the VM (AttachCurrentThread), calls into Java and detaches, with its own
+// thread-locals. Built with the stack protector (a TLS slot on arm64).
 
 #include <jni.h>
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -104,6 +110,79 @@ JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_callbacks(JNIEnv* env, jclass cls, j
   check("GetEnv gives this JNIEnv",
         (*vm)->GetEnv(vm, (void**)&again, JNI_VERSION_1_6) == JNI_OK && again == env);
   return failures;
+}
+
+// --- the va_list forms -----------------------------------------------------------
+
+static jint call_static_int_v(JNIEnv* env, jclass cls, jmethodID mid, ...) {
+  va_list ap;
+  va_start(ap, mid);
+  jint r = (*env)->CallStaticIntMethodV(env, cls, mid, ap);
+  va_end(ap);
+  return r;
+}
+
+static jobject call_static_object_v(JNIEnv* env, jclass cls, jmethodID mid, ...) {
+  va_list ap;
+  va_start(ap, mid);
+  jobject r = (*env)->CallStaticObjectMethodV(env, cls, mid, ap);
+  va_end(ap);
+  return r;
+}
+
+JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_vaForms(JNIEnv* env, jclass cls) {
+  failures = 0;
+  jmethodID twice = (*env)->GetStaticMethodID(env, cls, "twice", "(I)I");
+  check("CallStaticIntMethodV (guest va_list)", call_static_int_v(env, cls, twice, 33) == 66);
+  jmethodID describe = (*env)->GetStaticMethodID(env, cls, "describe", "(IJDF)Ljava/lang/String;");
+  jstring desc = (jstring)call_static_object_v(env, cls, describe, (jint)7, (jlong)-5LL, 0.5,
+                                               (double)(jfloat)1.25f);
+  const char* d = desc ? (*env)->GetStringUTFChars(env, desc, NULL) : NULL;
+  int ok = d != NULL && strcmp(d, "7 -5 0.5 1.25") == 0;
+  if (!ok) printf("    native: describe (V) returned '%s'\n", d ? d : "(null)");
+  check("CallStaticObjectMethodV with mixed arguments", ok);
+  if (d) (*env)->ReleaseStringUTFChars(env, desc, d);
+  return failures;
+}
+
+// --- nesting: Java -> guest -> Java -> guest ... ------------------------------------
+
+JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_nativeNest(JNIEnv* env, jclass cls, jint n) {
+  if (n <= 0) return 0;
+  jmethodID nest = (*env)->GetStaticMethodID(env, cls, "nest", "(I)I");
+  return 1 + (*env)->CallStaticIntMethod(env, cls, nest, n - 1);
+}
+
+// --- a guest thread attached to the VM -----------------------------------------------
+
+static JavaVM* g_vm;
+static __thread int tl_marker = 1;
+
+static void* attached_thread(void* arg) {
+  (void)arg;
+  int ok = tl_marker == 1;
+  tl_marker = 2;
+  JNIEnv* env = NULL;
+  JavaVMAttachArgs args = {JNI_VERSION_1_6, "arm64-guest-thread", NULL};
+  if ((*g_vm)->AttachCurrentThread(g_vm, &env, &args) != JNI_OK || env == NULL) {
+    return (void*)(intptr_t)-1;
+  }
+  jmethodID from = (*env)->GetStaticMethodID(env, g_class, "fromThread", "(I)I");
+  jint r = from ? (*env)->CallStaticIntMethod(env, g_class, from, 20) : -2;
+  JNIEnv* again = NULL;
+  ok = ok && (*g_vm)->GetEnv(g_vm, (void**)&again, JNI_VERSION_1_6) == JNI_OK && again == env;
+  ok = ok && (*g_vm)->DetachCurrentThread(g_vm) == JNI_OK;
+  return (void*)(intptr_t)(ok ? r : -3);
+}
+
+JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_attachedThread(JNIEnv* env, jclass cls) {
+  (void)cls;
+  (*env)->GetJavaVM(env, &g_vm);
+  pthread_t t;
+  if (pthread_create(&t, NULL, attached_thread, NULL) != 0) return -10;
+  void* r = NULL;
+  pthread_join(t, &r);
+  return tl_marker == 1 ? (jint)(intptr_t)r : -4;
 }
 
 // --- registered in JNI_OnLoad ------------------------------------------------
