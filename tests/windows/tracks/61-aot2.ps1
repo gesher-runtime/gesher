@@ -79,13 +79,19 @@ function Aot2Dex2oat([string] $Apk, [string] $Odex, [string] $Filter, [string[]]
     '--instruction-set=x86_64', "--compiler-filter=$Filter", '--class-loader-context=PCL[]',
     "--boot-image=$(NoDrive "$root/system")/framework/boot.art",
     '--runtime-arg', "-Xbootclasspath:$aotBcpApp", '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx512m',
-    '--runtime-arg', '-XX:LargeObjectSpace=map', '-j4') + $Extra
+    '--runtime-arg', '-XX:LargeObjectSpace=map', '--no-watch-dog', '-j4') + $Extra
   Aot2Run "$Dir/dex2oat.exe" $a @{} 600
 }
 
 function Aot2Size([string] $Path) { if (Test-Path $Path) { (Get-Item $Path).Length } else { 0 } }
 
+$aotLauncher = @("-Xbootclasspath:$aotBcpApp", $aotImage, '-Xint', '-Xusejit:false', 'com.gesher.app.Launcher')
+# A device the checks before left running would compile its apps in the
+# background (dexopt) while the timings below run: it goes first.
+$null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
+
 # --- 1. The framework's boot image with a profile ---------------------------------
+try {
 
 $imageDir = Join-Path $root 'system/framework/x86_64'
 $afterOat = Aot2Size (Join-Path $imageDir 'boot-framework.oat')
@@ -165,7 +171,10 @@ if ($beforeOk) {
   Remove-Item -Recurse -Force $before -ErrorAction SilentlyContinue
 }
 
+} catch { Aot2Fail "the boot image checks threw: $($_.Exception.Message)" "$($_.ScriptStackTrace)" }
+
 # --- 2. One process: install-time compile, JIT profile, speed-profile + app image -
+try {
 
 $single = Join-Path $aotRoot 'single'
 New-Item -ItemType Directory -Force $single | Out-Null
@@ -283,19 +292,29 @@ if ($verifyOk) {
   }
 }
 
-# --- 3. The Gesher device ----------------------------------------------------------
+} catch { Aot2Fail "the one-process checks threw: $($_.Exception.Message)" "$($_.ScriptStackTrace)" }
 
-$aotLauncher = @("-Xbootclasspath:$aotBcpApp", $aotImage, '-Xint', '-Xusejit:false', 'com.gesher.app.Launcher')
+# --- 3. The Gesher device ----------------------------------------------------------
+try {
 $aotLogs = Join-Path $root 'logs'
 $serverLog = Join-Path $aotLogs 'system_server.log'
 $pkgLog = Join-Path $aotLogs "$pkg.log"
-function Aot2Tail([string] $File, [long] $From) {
+# A log the device's processes still append to (shared reading).
+function Aot2Read([string] $File) {
   if (-not (Test-Path $File)) { return '' }
-  $text = [IO.File]::ReadAllText($File)
+  try {
+    $fs = [IO.FileStream]::new($File, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]'ReadWrite, Delete')
+    try { return [IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+  } catch {
+    return ''
+  }
+}
+function Aot2Tail([string] $File, [long] $From) {
+  $text = Aot2Read $File
   if ($From -gt $text.Length) { $From = 0 }
   return $text.Substring([int]$From)
 }
-function Aot2Len([string] $File) { if (Test-Path $File) { [IO.File]::ReadAllText($File).Length } else { 0 } }
+function Aot2Len([string] $File) { (Aot2Read $File).Length }
 
 # A device of its own, whose processes log what they run (GESHER_LOG_EXECUTION).
 $null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
@@ -328,7 +347,7 @@ if ($r.Exit -eq 0 -and $r.Out.Contains('gesher-app: done') -and $app -match 'ges
 # Background dexopt: once the device is idle, the profile is merged and the app
 # compiled speed-profile with an app image.
 $bg = $null
-for ($i = 0; $i -lt 90 -and -not $bg; $i++) {
+for ($i = 0; $i -lt 180 -and -not $bg; $i++) {
   Start-Sleep 1
   $server = Aot2Tail $serverLog $serverFrom
   $bg = ($server -split "`n" | Where-Object { $_ -match "dexopt: ${pkg}: speed-profile \(reason bg-dexopt\) in \d+ ms: base\.odex \d+ base\.vdex \d+ base\.art \d+" } | Select-Object -First 1)
@@ -353,4 +372,5 @@ if ($r.Exit -eq 0 -and $r.Out.Contains('gesher-app: done') -and $imageLine -and 
 } else {
   Aot2Fail 'second launch on the device (app image)' ($r.Out + "`n--- $pkg.log`n" + $app)
 }
+} catch { Aot2Fail "the device checks threw: $($_.Exception.Message)" "$($_.ScriptStackTrace)" }
 $null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
