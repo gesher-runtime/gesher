@@ -12,3 +12,5 @@ target_include_directories(gesher_elf PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include
   ${CMAKE_CURRENT_LIST_DIR}/../arm64/include)
 target_include_directories(gesher_elf PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_compile_options(gesher_elf PRIVATE -Wall -Wextra -Werror)
+# gesher-exec.exe, the launcher for ELF executables (compat/elf/exec).
+include(${CMAKE_CURRENT_LIST_DIR}/exec/exec.cmake)

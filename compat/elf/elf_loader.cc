@@ -136,6 +136,13 @@ struct Library {
   void (SYSV** fini_array)() = nullptr;
   size_t fini_array_count = 0;
   bool init_done = false;
+  // DT_PREINIT_ARRAY: only executables have one.
+  void (SYSV** preinit_array)() = nullptr;
+  size_t preinit_array_count = 0;
+
+  // e_entry + load bias (executables: _start), and whether PT_INTERP exists.
+  void* entry = nullptr;
+  bool has_interp = false;
 
   // TLS (PT_TLS).
   TlsModule tls{};
@@ -514,7 +521,9 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
     }
   }
 
+  if (ehdr->e_entry != 0) lib->entry = lib->load_bias + ehdr->e_entry;
   for (int i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type == PT_INTERP) lib->has_interp = true;
     if (phdr[i].p_type == PT_DYNAMIC) {
       dyn = reinterpret_cast<const Elf64_Dyn*>(lib->load_bias + phdr[i].p_vaddr);
     } else if (phdr[i].p_type == PT_TLS) {
@@ -569,6 +578,8 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       case DT_INIT_ARRAYSZ: lib->init_array_count = v / sizeof(void*); break;
       case DT_FINI_ARRAY: lib->fini_array = reinterpret_cast<void (SYSV**)()>(p); break;
       case DT_FINI_ARRAYSZ: lib->fini_array_count = v / sizeof(void*); break;
+      case DT_PREINIT_ARRAY: lib->preinit_array = reinterpret_cast<void (SYSV**)()>(p); break;
+      case DT_PREINIT_ARRAYSZ: lib->preinit_array_count = v / sizeof(void*); break;
       default: break;
     }
   }
@@ -819,26 +830,40 @@ bool Relocate(Library* lib, std::string* error) {
   return true;
 }
 
+// What init functions get (SetInitArguments): bionic's linker calls them as
+// (argc, argv, envp). Under g_mutex for writes; read when running init.
+int g_init_argc = 0;
+char** g_init_argv = nullptr;
+char** g_init_envp = nullptr;
+
+using InitFn = void (SYSV*)(int, char**, char**);
+
+void CallInit(void (SYSV* f)()) {
+  if (f == nullptr || f == reinterpret_cast<void (SYSV*)()>(-1)) return;
+  reinterpret_cast<InitFn>(f)(g_init_argc, g_init_argv, g_init_envp);
+}
+
 void RunInit(Library* lib) {
   if (lib->init_done) return;
   lib->init_done = true;
   if (lib->is_aarch64) {
-    // Init functions are guest code: run them through the translator.
-    if (lib->init_func) gesher::arm64::Call(reinterpret_cast<void*>(lib->init_func), nullptr, 0);
-    for (size_t i = 0; i < lib->init_array_count; ++i) {
-      auto f = lib->init_array[i];
-      if (f && f != reinterpret_cast<void (SYSV*)()>(-1)) {
-        gesher::arm64::Call(reinterpret_cast<void*>(f), nullptr, 0);
-      }
-    }
+    // Init functions are guest code: run them through the translator with the
+    // same (argc, argv, envp) arguments.
+    uint64_t args[3] = {static_cast<uint64_t>(g_init_argc), reinterpret_cast<uint64_t>(g_init_argv),
+                        reinterpret_cast<uint64_t>(g_init_envp)};
+    auto guest_init = [&](void (SYSV* f)()) {
+      if (f == nullptr || f == reinterpret_cast<void (SYSV*)()>(-1)) return;
+      gesher::arm64::Call(reinterpret_cast<void*>(f), args, 3);
+    };
+    for (size_t i = 0; i < lib->preinit_array_count; ++i) guest_init(lib->preinit_array[i]);
+    guest_init(lib->init_func);
+    for (size_t i = 0; i < lib->init_array_count; ++i) guest_init(lib->init_array[i]);
     return;
   }
-  if (lib->init_func) lib->init_func();
-  for (size_t i = 0; i < lib->init_array_count; ++i) {
-    if (lib->init_array[i] && lib->init_array[i] != reinterpret_cast<void (SYSV*)()>(-1)) {
-      lib->init_array[i]();
-    }
-  }
+  // An executable's DT_PREINIT_ARRAY runs before its other initializers.
+  for (size_t i = 0; i < lib->preinit_array_count; ++i) CallInit(lib->preinit_array[i]);
+  if (lib->init_func) CallInit(lib->init_func);
+  for (size_t i = 0; i < lib->init_array_count; ++i) CallInit(lib->init_array[i]);
 }
 
 // Resolves DT_NEEDED: loads a dependency from the search paths, or treats it as
@@ -1095,6 +1120,23 @@ void Close(Library* library) {
 }
 
 bool SetupThreadTls() { return TlsSetupThread(); }
+
+bool GetExecutableInfo(Library* library, ExecutableInfo* info) {
+  if (library == nullptr || info == nullptr) return false;
+  info->entry = library->entry;
+  info->phdr = library->phdr;
+  info->phnum = library->phnum;
+  info->base = library->base;
+  info->has_interp = library->has_interp;
+  return true;
+}
+
+void SetInitArguments(int argc, char** argv, char** envp) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_init_argc = argc;
+  g_init_argv = argv;
+  g_init_envp = envp;
+}
 
 FsRewriteCounts FsRewrites(Library* library) {
   FsRewriteCounts c;
