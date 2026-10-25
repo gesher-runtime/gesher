@@ -73,7 +73,6 @@ public class VideoActivity extends Activity {
                 say("failed: " + t);
                 t.printStackTrace(System.out);
             }
-            runOnUiThread(this::finish);
         }, "video-tests").start();
     }
 
@@ -556,6 +555,14 @@ public class VideoActivity extends Activity {
         say("surfaces: texture view " + toTexture + " frames rendered, getBitmap " + bitmap[0]
                 + "; surface view valid " + holderSurface[0].isValid() + ", " + toView + " frames rendered");
         // The test reads the window now: the views' centers in window coordinates.
+        String renderer;
+        try {
+            renderer = (String) Class.forName("com.gesher.app.graphics.GraphicsDebug")
+                    .getMethod("renderer").invoke(null);
+        } catch (Throwable t) {
+            renderer = "unknown";
+        }
+        say("surfaces renderer: " + renderer);
         say("surfaces ready: texture view center " + (where[0][0] + 160) + "," + (where[0][1] + 120)
                 + ", surface view center " + (where[1][0] + 160) + "," + (where[1][1] + 120));
         Thread.sleep(10000);
