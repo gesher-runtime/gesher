@@ -29,6 +29,27 @@ public final class WebView2Host {
     public static final int EVENT_NEW_WINDOW = 16;
     public static final int EVENT_CAPTURE = 17;
     public static final int EVENT_PARKED = 18;
+    public static final int EVENT_WEB_MESSAGE = 19;
+    public static final int EVENT_DEVTOOLS_RESULT = 20;
+    public static final int EVENT_DEVTOOLS_EVENT = 21;
+    public static final int EVENT_PERMISSION = 22;
+    public static final int EVENT_CLOSE_WINDOW = 23;
+    public static final int EVENT_BASIC_AUTH = 24;
+    public static final int EVENT_CLIENT_CERT = 25;
+    public static final int EVENT_SERVER_CERT_ERROR = 26;
+    public static final int EVENT_FIND = 27;
+    public static final int EVENT_FILE_DIALOG = 28;
+
+    /** {@link #find} operations, as {@code Host::FindOp}. */
+    public static final int FIND_START = 1;
+    public static final int FIND_NEXT = 2;
+    public static final int FIND_PREVIOUS = 3;
+    public static final int FIND_STOP = 4;
+
+    /** COREWEBVIEW2_PERMISSION_STATE. */
+    public static final int PERMISSION_DEFAULT = 0;
+    public static final int PERMISSION_ALLOW = 1;
+    public static final int PERMISSION_DENY = 2;
 
     /** {@link #run} commands, as {@code Host::Command}. */
     public static final int RELOAD = 1;
@@ -137,8 +158,74 @@ public final class WebView2Host {
     }
 
     public void navigate(String url, String headers) {
+        navigate(url, headers, "GET", null);
+    }
+
+    /** A method other than GET sends {@code body} (postUrl). */
+    public void navigate(String url, String headers, String method, byte[] body) {
         long h = mHandle;
-        if (h != 0) nNavigate(h, url, headers);
+        if (h != 0) nNavigate(h, url, headers, method, body);
+    }
+
+    /** The message event of chrome.webview in the page. */
+    public void postWebMessage(String json) {
+        long h = mHandle;
+        if (h != 0) nPostWebMessage(h, json);
+    }
+
+    /** A DevTools protocol method; the result comes as EVENT_DEVTOOLS_RESULT(callbackId). */
+    public void callDevTools(String method, String paramsJson, long callbackId) {
+        long h = mHandle;
+        if (h != 0) nCallDevTools(h, method, paramsJson, callbackId);
+    }
+
+    /** The DevTools protocol event comes as EVENT_DEVTOOLS_EVENT from now on. */
+    public void listenDevTools(String event) {
+        long h = mHandle;
+        if (h != 0) nListenDevTools(h, event);
+    }
+
+    public void completePermission(long id, int state, boolean remember) {
+        long h = mHandle;
+        if (h != 0) nCompletePermission(h, id, state, remember);
+    }
+
+    /** window.open gets {@code window}'s WebView, or none (null). */
+    public void completeNewWindow(long id, WebView2Host window) {
+        long h = mHandle;
+        if (h != 0) nCompleteNewWindow(h, id, window != null ? window.mHandle : 0);
+    }
+
+    public void completeBasicAuth(long id, boolean proceed, String user, String password) {
+        long h = mHandle;
+        if (h != 0) nCompleteBasicAuth(h, id, proceed, user, password);
+    }
+
+    /** choice: a certificate's index; -1 none; -2 cancels. */
+    public void completeClientCert(long id, int choice) {
+        long h = mHandle;
+        if (h != 0) nCompleteClientCert(h, id, choice);
+    }
+
+    public void completeServerCertError(long id, boolean allow) {
+        long h = mHandle;
+        if (h != 0) nCompleteServerCertError(h, id, allow);
+    }
+
+    public void find(int op, String term, boolean caseSensitive, boolean wholeWord) {
+        long h = mHandle;
+        if (h != 0) nFind(h, op, term, caseSensitive, wholeWord);
+    }
+
+    /** filters: "Name|*.a;*.b" lines. EVENT_FILE_DIALOG(callbackId) has the files. */
+    public void showFileDialog(long callbackId, boolean multiple, String title, String filters) {
+        long h = mHandle;
+        if (h != 0) nShowFileDialog(h, callbackId, multiple, title, filters);
+    }
+
+    /** A Java path as a full Windows path ("/a/b" is "C:\a\b" on drive C:). */
+    public static String windowsPath(String path) {
+        return load() ? nWindowsPath(path) : path;
     }
 
     public void navigateToString(String html) {
@@ -151,9 +238,20 @@ public final class WebView2Host {
         if (h != 0) nRun(h, command);
     }
 
+    /** Shape kinds for {@link #setBounds}, as {@code Host::Shape::Kind}. */
+    public static final int HOLE_RECT = 0;
+    public static final int HOLE_ROUND_RECT = 1;
+    public static final int HOLE_OVAL = 2;
+    public static final int HOLE_POLYGON = 3;
+    public static final int CLIP_ROUND_RECT = 10;
+    public static final int CLIP_OVAL = 11;
+    public static final int CLIP_POLYGON = 12;
+
     /**
-     * {@code holes}: left, top, right, bottom of each of the app's views drawn over the
-     * WebView, in the window's coordinates (cut out of the WebView2 window), or null.
+     * {@code holes}: the WebView2 window's shape, in the window's coordinates, or null: per
+     * shape its kind, left, top, right, bottom, radius, point count and the points' x, y.
+     * The HOLE_ kinds are the app's views drawn over the WebView (cut out of the WebView2
+     * window), the CLIP_ kinds the WebView's own outline (it keeps only that).
      */
     public void setBounds(long parentHwnd, int x, int y, int width, int height, int clipX,
             int clipY, int clipWidth, int clipHeight, boolean visible, int[] holes) {
@@ -170,11 +268,12 @@ public final class WebView2Host {
     }
 
     public void setSettings(boolean javascript, boolean zoomControls, boolean pinchZoom,
-            boolean devtools, boolean interceptAll, String userAgent) {
+            boolean devtools, boolean interceptAll, boolean reputationChecking,
+            String userAgent) {
         long h = mHandle;
         if (h != 0) {
             nSetSettings(h, javascript, zoomControls, pinchZoom, devtools, interceptAll,
-                    userAgent);
+                    reputationChecking, userAgent);
         }
     }
 
@@ -295,7 +394,24 @@ public final class WebView2Host {
     private static native long nCreate(WebView2Host peer, long parent, double scale,
             int background);
     private static native void nDestroy(long h);
-    private static native void nNavigate(long h, String url, String headers);
+    private static native void nNavigate(long h, String url, String headers, String method,
+            byte[] body);
+    private static native void nPostWebMessage(long h, String json);
+    private static native void nCallDevTools(long h, String method, String params,
+            long callbackId);
+    private static native void nListenDevTools(long h, String event);
+    private static native void nCompletePermission(long h, long id, int state,
+            boolean remember);
+    private static native void nCompleteNewWindow(long h, long id, long window);
+    private static native void nCompleteBasicAuth(long h, long id, boolean proceed, String user,
+            String password);
+    private static native void nCompleteClientCert(long h, long id, int choice);
+    private static native void nCompleteServerCertError(long h, long id, boolean allow);
+    private static native void nFind(long h, int op, String term, boolean caseSensitive,
+            boolean wholeWord);
+    private static native void nShowFileDialog(long h, long callbackId, boolean multiple,
+            String title, String filters);
+    private static native String nWindowsPath(String path);
     private static native void nNavigateToString(long h, String html);
     private static native void nRun(long h, int command);
     private static native void nSetBounds(long h, long parent, int x, int y, int width,
@@ -303,7 +419,8 @@ public final class WebView2Host {
             int[] holes);
     private static native void nPark(long h, long id);
     private static native void nSetSettings(long h, boolean javascript, boolean zoomControls,
-            boolean pinchZoom, boolean devtools, boolean interceptAll, String userAgent);
+            boolean pinchZoom, boolean devtools, boolean interceptAll,
+            boolean reputationChecking, String userAgent);
     private static native void nSetZoom(long h, double factor);
     private static native void nSetBackground(long h, int argb);
     private static native void nExecuteScript(long h, String script, long callbackId);

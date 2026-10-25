@@ -36,6 +36,8 @@ Connection::Connection(Window* window, std::shared_ptr<InputChannel> channel,
       options_(std::move(options)),
       translator_(options_.translate) {
   if (options_.max_in_flight < 1) options_.max_in_flight = 32;
+  // The window's input method side: text and compositions for its editor.
+  ime_ = ImeWindow::Attach(window_->hwnd());
   wake_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   thread_ = std::thread([this] { Run(); });
 }
@@ -47,7 +49,29 @@ Connection::~Connection() {
   }
   if (wake_fd_ >= 0) eventfd_write(wake_fd_, 1);
   if (thread_.joinable()) thread_.join();
+  ime_.reset();  // the window's procedure is its own again
   if (wake_fd_ >= 0) close(wake_fd_);
+}
+
+void Connection::SetTextInput(const TextInputState& state) {
+  if (ime_) ime_->SetTextInput(state);
+}
+
+void Connection::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height) {
+  if (ime_) ime_->SetCaret(x, y, width, height);
+}
+
+void Connection::CompleteComposition(bool cancel) {
+  if (ime_) ime_->CompleteComposition(cancel);
+}
+
+int32_t Connection::ShowTouchKeyboard(bool show) {
+  return ime_ ? ime_->ShowTouchKeyboard(show) : -1;
+}
+
+void Connection::FinishTextEvent(uint32_t seq) {
+  text_finished_ = seq;
+  if (wake_fd_ >= 0) eventfd_write(wake_fd_, 1);
 }
 
 void Connection::Inject(const WindowEvent& event) {
@@ -110,8 +134,10 @@ void Connection::Run() {
         {wake_fd_, POLLIN, 0},
     };
     // A send the channel refused (full) is retried after a while.
-    const bool blocked = !pending_.empty() &&
-                         in_flight_.size() < static_cast<size_t>(options_.max_in_flight);
+    // A text event's finish is waited for in short steps too.
+    const bool blocked = (!pending_.empty() &&
+                          in_flight_.size() < static_cast<size_t>(options_.max_in_flight)) ||
+                         text_waiting_;
     int n = poll(fds, 3, blocked ? 10 : 1000);
     if (n < 0 && errno != EINTR) {
       ALOGE("input connection '%s': poll failed: %s", channel_->getName().c_str(),
@@ -123,6 +149,12 @@ void Connection::Run() {
 }
 
 void Connection::Handle(const WindowEvent& event) {
+  if (event.type == WindowEvent::kChar && event.ch == kTextEventMarker) {
+    // The input method side's text event, in its place among the window's events.
+    TextEvent text;
+    if (ime_ && ime_->TakeTextEvent(&text)) HandleText(text);
+    return;
+  }
   if (!Translator::IsInput(event) || event.type == WindowEvent::kFocus) {
     if (options_.on_window_event) options_.on_window_event(event);
   }
@@ -130,6 +162,25 @@ void Connection::Handle(const WindowEvent& event) {
   std::vector<AndroidEvent> out;
   translator_.Translate(event, EventTime(event), &out);
   for (const AndroidEvent& e : out) Enqueue(e);
+}
+
+void Connection::HandleText(const TextEvent& text) {
+  if (!options_.on_text_event) {
+    // No text listener: typed text as characters, as the window queues them.
+    if (text.kind != TextEvent::kCommit || !options_.on_window_event) return;
+    for (char16_t unit : text.text) {
+      WindowEvent c;
+      c.type = WindowEvent::kChar;
+      c.ch = unit;
+      options_.on_window_event(c);
+    }
+    return;
+  }
+  AndroidEvent e;
+  e.kind = AndroidEvent::kText;
+  e.text_id = next_text_id_++;
+  texts_[e.text_id] = text;
+  pending_.push_back(e);
 }
 
 void Connection::Enqueue(const AndroidEvent& event) {
@@ -170,7 +221,30 @@ void Connection::ReadResponses() {
 }
 
 void Connection::SendPending() {
-  while (!pending_.empty() && in_flight_.size() < static_cast<size_t>(options_.max_in_flight)) {
+  for (;;) {
+    if (text_waiting_) {
+      // What follows a text event waits until the editor has it.
+      if (text_finished_ != text_seq_ && systemTime(SYSTEM_TIME_MONOTONIC) < text_deadline_) {
+        return;
+      }
+      text_waiting_ = false;
+    }
+    if (pending_.empty()) return;
+    if (pending_.front().kind == AndroidEvent::kText) {
+      // A text event waits until the events before it are handled.
+      if (!in_flight_.empty()) return;
+      auto it = texts_.find(pending_.front().text_id);
+      pending_.pop_front();
+      if (it == texts_.end()) continue;
+      TextEvent text = std::move(it->second);
+      texts_.erase(it);
+      text_seq_ = text_seq_ == UINT32_MAX ? 1 : text_seq_ + 1;
+      text_waiting_ = true;
+      text_deadline_ = systemTime(SYSTEM_TIME_MONOTONIC) + 1000000000LL;
+      options_.on_text_event(text, text_seq_);
+      continue;
+    }
+    if (in_flight_.size() >= static_cast<size_t>(options_.max_in_flight)) return;
     const uint32_t seq = next_seq_;
     status_t status = Publish(seq, pending_.front());
     if (status == android::WOULD_BLOCK) return;  // the channel is full: later
@@ -207,6 +281,8 @@ status_t Connection::Publish(uint32_t seq, const AndroidEvent& e) {
     }
     case AndroidEvent::kFocus:
       return publisher_.publishFocusEvent(seq, event_id, e.has_focus);
+    case AndroidEvent::kText:
+      break;  // never published (SendPending hands it to on_text_event)
   }
   return android::BAD_VALUE;
 }

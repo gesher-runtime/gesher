@@ -94,6 +94,8 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/device_standins.cc
   ${CMAKE_BINARY_DIR}/gen/device_standins_tables.cc
   ${_fwjni}/android_content_res_ApkAssets.cpp
+  # FileObserver over gesher-base's inotify (docs/posix.md).
+  ${_fwjni}/android_util_FileObserver.cpp
   ${_fwjni}/android_os_MessageQueue.cpp
   ${_fwjni}/android_os_Parcel.cpp
   ${_fwjni}/android_os_ServiceManagerNative.cpp

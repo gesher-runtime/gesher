@@ -55,12 +55,15 @@ Work happens on branch `wip/webview`; the decision record is
   Each placement also collects the views drawn above the WebView's branch:
   in every ancestor, the siblings after it (or with a higher Z), descended to
   views with a background or without children, visible and overlapping the
-  visible rectangle. Their rectangles are cut out of the container's window
+  visible rectangle. Their shapes are cut out of the container's window
   region (`SetWindowRgn`), so the app's pixels show and the app's window gets
-  the mouse there. Rectangles, not shapes: a round button's corners show the
-  app's surface behind them, not the page. The log says
-  `gesher-webview: N view(s) over the WebView cut out of its window` when the
-  count changes.
+  the mouse there: each view's outline (`ViewOutlineProvider`: a round button
+  is an oval, a card a round rect, a path a polygon from `Path.approximate`),
+  else its visible rectangle. The WebView's own outline, and its ancestors',
+  when they `clipToOutline` is kept as the region's base (rounded corners).
+  Scale and rotation of those views are not applied. The log says
+  `gesher-webview: N view(s) over the WebView cut out of its window: oval
+  300,300-360,360; ...` when they change (ADR 0050).
 - **Input and focus.** Mouse, touch, pen and keys over the WebView go to
   WebView2's own window; the app's window and its InputChannel never see
   them. WebView2 getting focus (a click) makes the WebView the focused view
@@ -100,6 +103,11 @@ hangs the other for long:
 - `CookieManager.getCookie` waits for WebView2 (up to 5 s); it returns null
   when called on the WebView thread itself.
 - Detaching waits up to 1 s for the container to be parked.
+- `capturePicture` and `findAll` wait up to 3 s; their results are taken on
+  the WebView thread (not posted to the UI thread, which may be the waiting
+  one).
+- The Windows file dialog runs modally on the WebView thread (its modal loop
+  keeps WebView2's events going).
 
 ## URLs
 
@@ -121,24 +129,32 @@ Pages see the https origin: same-origin requests between assets work without
 - `loadDataWithBaseURL`: with an http(s) or file base, the base URL is
   navigated to and its main document answered with the data (so relative
   URLs and the origin are the base's); without one, `NavigateToString`.
-- `postUrl` loads the URL with GET (no body).
+- `postUrl` posts the data (form-encoded, as Android) with
+  `NavigateWithWebResourceRequest`; other schemes load without it.
 
 ## The API surface
 
 | API | On WebView2 |
 |---|---|
 | `loadUrl`, `loadData`, `loadDataWithBaseURL`, `reload`, `stopLoading`, `goBack`, `goForward`, `canGoBack/Forward` (from `HistoryChanged`), `getUrl`, `getTitle`, `getProgress` | as above |
-| `WebSettings` | JavaScript (`IsScriptEnabled`), user agent (`Settings2.UserAgent`; the default is Android WebView's format with WebView2's Chromium version), zoom (`supportZoom` and `builtInZoomControls`: zoom keys and pinch), text zoom (approximated by the controller's zoom factor), DOM storage (off: a document script removes `localStorage`/`sessionStorage`), `blockNetworkLoads`/`blockNetworkImage`/`loadsImagesAutomatically` (requests answered 403), `allowFileAccess`; the rest is kept and reported |
-| `WebViewClient` | `shouldOverrideUrlLoading` (both forms), `onPageStarted` (`NavigationStarting`), `onPageFinished` (`NavigationCompleted`), `onReceivedError` (WebView2's web error status mapped to `ERROR_*`), `onReceivedHttpError` (HTTP status >= 400), `shouldInterceptRequest` (both forms, `WebResourceRequested` with a deferral), `doUpdateVisitedHistory`, `onRenderProcessGone` |
-| `WebChromeClient` | `onProgressChanged` (10 at start, 30 on commit, 70 at DOMContentLoaded, 100), `onReceivedTitle`, `onConsoleMessage` (DevTools protocol `Runtime.consoleAPICalled` and `Runtime.exceptionThrown`), `onJsAlert/Confirm/Prompt/BeforeUnload` (`ScriptDialogOpening` with a deferral; WebView2's own dialogs are off; without a client answer the app's dialog is shown by the framework's `JsDialogHelper`, an AlertDialog in the WebView's Activity) |
+| `WebSettings` | JavaScript (`IsScriptEnabled`), user agent (`Settings2.UserAgent`; the default is Android WebView's format with WebView2's Chromium version), zoom (`supportZoom` and `builtInZoomControls`: zoom keys and pinch), text zoom (text only: a document script multiplies every element's font size, `PageScripts.textZoom`), Safe Browsing (SmartScreen: `Settings8.IsReputationCheckingRequired`; no `onSafeBrowsingHit`), DOM storage (off: a document script removes `localStorage`/`sessionStorage`), `blockNetworkLoads`/`blockNetworkImage`/`loadsImagesAutomatically` (requests answered 403), `allowFileAccess`; the rest is kept and reported |
+| `WebViewClient` | `shouldOverrideUrlLoading` (both forms), `onPageStarted` (`NavigationStarting`), `onPageFinished` (`NavigationCompleted`), `onReceivedError` (WebView2's web error status mapped to `ERROR_*`), `onReceivedHttpError` (HTTP status >= 400), `shouldInterceptRequest` (both forms, `WebResourceRequested` with a deferral), `doUpdateVisitedHistory`, `onRenderProcessGone`, `onReceivedHttpAuthRequest` (`BasicAuthenticationRequested`; the 401 completion and the retry's start are hidden: one page load), `onReceivedSslError` (`ServerCertificateErrorDetected`, `proceed` is `ALWAYS_ALLOW`), `onReceivedClientCertRequest` (`ClientCertificateRequested`; `proceed` selects the Windows store's certificate equal to `chain[0]`, `ignore` goes on without one) |
+| `WebChromeClient` | `onProgressChanged` (10 at start, 30 on commit, 70 at DOMContentLoaded, 100), `onReceivedTitle`, `onConsoleMessage` (DevTools protocol `Runtime.consoleAPICalled` and `Runtime.exceptionThrown`), `onJsAlert/Confirm/Prompt/BeforeUnload` (`ScriptDialogOpening` with a deferral; WebView2's own dialogs are off; without a client answer the app's dialog is shown by the framework's `JsDialogHelper`, an AlertDialog in the WebView's Activity), `onShowFileChooser`, `onPermissionRequest`, `onGeolocationPermissionsShowPrompt`, `onCreateWindow`/`onCloseWindow` (see below) |
 | `evaluateJavascript` | `ExecuteScript`; the result is JSON, as Android's |
 | `addJavascriptInterface` | see below |
 | `CookieManager` | WebView2's cookie manager (`setCookie` parsed with `HttpCookie`, `getCookie`, `removeAllCookies`, `removeSessionCookies`, `hasCookies`); before any WebView exists a hidden service controller provides it |
 | `WebStorage.deleteAllData`, `clearCache` | `Profile2.ClearBrowsingData` (DOM storage kinds; disk cache) |
 | `DownloadListener` | `DownloadStarting`: WebView2's download is cancelled and the listener gets the URL, user agent, Content-Disposition, MIME type and length (Android's WebView never downloads itself) |
-| `window.open` | handled (`NewWindowRequested`): the page opens in the same WebView, as Android's does without multiple-window support |
-| Permissions | denied (WebChromeClient.onPermissionRequest's default) |
-| File chooser | WebView2's own Windows file dialog; `onShowFileChooser` is not called |
+| `window.open`, `window.close` | `NewWindowRequested` with a deferral: with `supportMultipleWindows` (and a user gesture or `javaScriptCanOpenWindowsAutomatically`) `onCreateWindow` gets a `WebViewTransport` and the WebView put there becomes the window (`put_NewWindow`: `window.opener` works); otherwise the page opens in the same WebView, as Android's. `WindowCloseRequested` is `onCloseWindow` |
+| Permissions | `PermissionRequested` with a deferral: geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
+| File chooser | DevTools `Page.setInterceptFileChooserDialog`: `<input type=file>` calls `onShowFileChooser` (`FileChooserParams` from the input); the Uris go in with `DOM.setFileInputFiles` (content: copied to the cache). Not handled by the app: a Windows file dialog (`IFileOpenDialog`, owned by the app's window, filters from `accept`) |
+| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings only; ports end with the page |
+| `copyBackForwardList`, `goBackOrForward(n)`, `clearHistory` | DevTools `Page.getNavigationHistory` (read after each history change), `Page.navigateToHistoryEntry`, `Page.resetNavigationHistory` |
+| `findAllAsync`, `findNext`, `clearMatches`, `findAll` | `ICoreWebView2Find` when the runtime has it (its 1-based index is Android's 0-based ordinal), else a script (`PageScripts.find`, CSS Custom Highlights); `findAll` (synchronous) uses the script |
+| `saveWebArchive` | DevTools `Page.captureSnapshot` (MHTML) |
+| `capturePicture` | `CapturePreview` (waited for up to 3 s) drawn into a `Picture` of the view's size: what is shown, not the whole page |
+| Accessibility | WebView2's own UI Automation tree under its window (screen readers read it directly); nothing in Android's accessibility tree |
+| androidx.webkit (`WebViewCompat`) | not reachable: no `org.chromium.support_lib_glue` boundary; `WebViewFeature.isFeatureSupported` is false |
 
 ### JavaScript interfaces
 
@@ -251,21 +267,67 @@ drawing in a window that is covered or off the desktop;
   ends`: the edit button (344,744) over the WebView, keys, accept; the log has
   the cut-out and `first page loaded: file:///`. Its SHA-256 is pinned.
 
+### webview2 track (ADR 0050)
+
+- webapp.apk's `FeaturesActivity` (tests/windows/webview/Features.ps1, a
+  local HTTP/HTTPS test server in the test's process), ci run 40198256072 on
+  windows-2025 (runtime 155): `PASS  gesher-app: webapp.apk's
+  FeaturesActivity on WebView2: WebMessagePorts both ways, find in page,
+  capturePicture, geolocation and camera/microphone permissions (granted and
+  denied), window.open into the WebView onCreateWindow gave and window.close,
+  onShowFileChooser and the Windows file dialog (clicked with real mouse
+  input (SendInput)), text zoom (text only), Basic authentication, postUrl
+  with a body, a certificate error and a client certificate request, the
+  back/forward list, an MHTML web archive, a round button cut out of the
+  WebView2 window by its outline and clicks (real mouse input (SendInput))
+  inside and outside its circle`, with `INFO  features read back: button
+  center #0000ff, its corner #00ff00, inside its right edge #0000ff, beside
+  it #00ff00`, `gesher-webview: 1 view(s) over the WebView cut out of its
+  window: oval 300,300-360,360` and `INFO  features: UI Automation of the
+  WebView2 window: found: ControlType.Pane 'Gesher features'`. Final run
+  after merging phase4/integration 8bfb83f: ci run 40216380541 at 55ab46a,
+  green on both runners (the same FeaturesActivity PASS line on windows-2025
+  and windows-2022, the webapp PASS lines in both modes, e2e Notes PASS).
+- Runtime 131 (windows-2022): a real click on the app's view in a cut-out
+  waits in the app window's thread until something wakes it (the thread's
+  input queue is attached to the WebView2 windows', and the wake goes
+  elsewhere); the test posts WM_NULL after 20 s and says so (`INFO  features:
+  no click on the button after 20 s ...`), then the click arrives. Runtime 155
+  delivers it at once. Next step: the window thread could wake itself on
+  input (outside this track's files: compat/hwui/window).
+- Observed: on windows-2025 the OS denies geolocation (the page gets error 1
+  after the app granted it); on windows-2022 it times out (error 3). Runtime
+  131 keeps `window.opener` in the new window but the opener gets no
+  `postMessage` from it and `window.close` raises no `WindowCloseRequested`
+  (the test reports it as INFO there; runtime 155 does both). WebView2 counts
+  `evaluateJavascript` as a user gesture (`onCreateWindow`'s
+  `isUserGesture` is true for a script-opened window).
+- The Find API exists on both runtimes' paths: `ICoreWebView2Find` where
+  `ICoreWebView2_28` is there, `PageScripts.find` otherwise (`find: match 0
+  of 4`, `match 1 of 4` on both).
+
 ### In progress
 
-- Nothing. Integrated with phase4/integration (exec merged) at 9c610d6: ci run
-  40139785905 green (build, package, test on windows-2022 and windows-2025,
-  e2e).
+- Nothing: verified at 55ab46a (ci run 40216380541).
 
 ### Not done / limits
 
-- `WebMessagePort`/`createWebMessageChannel` (throws), `postWebMessage` is a
-  `message` event only; `findAll`; `saveWebArchive`; `capturePicture` (empty);
-  `onShowFileChooser`, `onPermissionRequest`, geolocation prompts,
-  `onCreateWindow`; HTTP auth and client certificates callbacks; Safe
-  Browsing; `postUrl` bodies; text zoom is page zoom; `WebBackForwardList` is
-  null; accessibility of web content through Android's tree.
-- Cut-outs are rectangles from views' bounds: rounded or partly transparent
-  views over a WebView show the app's surface in their corners; a view
-  drawn over the WebView by a parent's `onDrawForeground`/`dispatchDraw`
-  (not a child view) is not found.
+- Shapes ignore the views' scale and rotation; partly transparent views over
+  a WebView show the app's surface; a view drawn over the WebView by a
+  parent's `onDrawForeground`/`dispatchDraw` (not a child view) is not
+  found.
+- `WebMessagePort`s carry strings only (no `ArrayBuffer` payloads, no ports
+  from the page to the app inside a port's message); `WebViewCompat`
+  (androidx.webkit boundary interfaces) is not implemented.
+- Client certificates: only certificates in Windows' store can be sent;
+  `proceed()` with any other key goes on without one. Tested: the request
+  callback and `ignore()`.
+- `onSafeBrowsingHit` is never called (SmartScreen has no callback).
+- Accessibility: web content is WebView2's UI Automation tree only, not in
+  Android's `AccessibilityNodeProvider`.
+- `capturePicture` is what is shown, not the whole page; text zoom does not
+  reach cross-origin iframes or closed shadow roots; multi-step
+  `goBackOrForward` may ask `shouldOverrideUrlLoading`.
+- Typical apps open their chooser with `FileChooserParams.createIntent()`
+  (ACTION_GET_CONTENT): Gesher has no document picker Activity for it yet;
+  apps that return false get the Windows dialog.

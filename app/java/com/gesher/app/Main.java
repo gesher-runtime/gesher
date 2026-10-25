@@ -232,11 +232,13 @@ public final class Main {
             WindowMode.install(showWindow);
         }
         new File(appInfo.dataDir).mkdirs();
-        // The APK's lib/x86_64 into nativeLibraryDir, for System.loadLibrary (NativeLibs).
+        // The APK's lib/x86_64 (or, for an arm64-only APK, lib/arm64-v8a: run by the
+        // arm64 translator) into nativeLibraryDir, for System.loadLibrary (NativeLibs).
         int libs = NativeLibs.extract(apk, appInfo.nativeLibraryDir);
         if (libs > 0) {
+            appInfo.primaryCpuAbi = NativeLibs.forApk(apk);
             log("extracted " + libs + " native " + (libs == 1 ? "library" : "libraries")
-                    + " (" + NativeLibs.ABI + ") to " + appInfo.nativeLibraryDir);
+                    + " (" + appInfo.primaryCpuAbi + ") to " + appInfo.nativeLibraryDir);
         }
         log("package " + appInfo.packageName + " (targetSdk " + appInfo.targetSdkVersion
                 + "), launching " + launch.name);

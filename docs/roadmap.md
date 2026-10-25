@@ -86,15 +86,25 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] ICU4C built from `external/icu`, its data mapped from
       `ANDROID_I18N_ROOT` as on Android; `libicu_jni`, libcore's ICU natives
       and `core-icu4j.jar` on the boot class path
-- [ ] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`)
+- [x] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`): the
+      com.android.tzdata files installed; `TimeZone.getDefault()` follows
+      Windows' zone; java.util, java.time and android.icu match Windows'
+      offsets at every 2025-2027 transition in four zones ([posix.md](posix.md),
+      ADR 0045; ci 40198104086)
 - [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+      (inotify over `ReadDirectoryChangesW`, epoll-compatible, with
+      `WatchService` and `FileObserver` on it; `kill`/`getppid` across
+      Gesher processes, `/proc/self/{status,maps,fd,task}`: posix track,
+      ci 40198104086)
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
       need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
       `/proc/self/cmdline` are emulated; `open` takes Linux's `O_*` flags
       over `CreateFileW`; tested in CI
-- [ ] Paths on another drive in `:`-separated lists, and the rest of the
-      CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
+- [x] Paths on another drive in `:`-separated lists, and the rest of the
+      CRT's path functions (`fopen`, `unlink`, `rename`, `access`): other
+      drives are `/mnt/<drive>/...` (ADR 0045); long and non-ASCII names
+      (posix probe, a class path entry on another drive; ci 40198104086)
 - [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
       ART's signal catcher takes them
 - [x] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
@@ -104,7 +114,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] `MAP_FIXED` over existing reservations (placeholder mappings; ADR 0036,
       `mman_probe`; ci 40138006773)
 - [x] Executable file mappings (`.oat` code mapped as views; ci 40138006773)
-- [ ] ART's own gtests for libartbase/libdexfile running on Windows
+- [x] ART's own gtests for libartbase/libdexfile running on Windows
+      (232 and 119 tests, exclusions in [posix.md](posix.md); ci 40198104086,
+      posix 40198105735)
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
 - [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
       dex2oat.exe, built for Windows on the same libart, compiles the boot class
@@ -194,6 +206,12 @@ needs: [framework-build.md](framework-build.md).
         resizes the window (at least its minimum) and it redraws at the new
         size (ci run 40056527378, both runners and the installer;
         docs/graphics.md)
+  - [x] Text input like a native app: other keyboard layouts (Hebrew), SendInput
+        Unicode (emoji panel, dictation), IME compositions (Microsoft IME
+        Japanese) inline with the candidate window at the caret, Enter as the
+        editor action, clipboard shortcuts, password fields without IMEs,
+        InputMethodManager (ci run 40218916953, both runners; docs/input.md
+        "Text input", ADR 0039)
 - [x] Dialogs, menus, dropdowns and toasts as owned popup windows of the app
       window (ADR 0040; popups track): an AlertDialog over its activity with
       the dim behind it, its button, Esc and a click outside; a Toast; an
@@ -286,6 +304,21 @@ needs: [framework-build.md](framework-build.md).
   - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
+- [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
+      "Status and next steps (hwsvc2)", docs/devices.md; ci runs 40214264956 at
+      aaa1f90 and 40235213023 at 85f49eb; all but the last sub-item)
+  - [x] Toast clicks after the device stopped (Gesher's COM toast activator,
+        registered by the installer); uninstalling removes the app's toasts
+        and AppUserModelID
+  - [x] `vibrator_manager` of a device without a vibrator
+  - [x] Content observers and content URI job triggers; job network
+        constraints over ConnectivityManager's networks
+  - [x] Windows sleep and resume (screen off/on, alarms catching up) and a
+        real time zone change (TIMEZONE_CHANGED, processes' default zone reset)
+  - [x] The legacy android.hardware.Camera over Media Foundation; Gesher
+        Camera for ACTION_IMAGE_CAPTURE; geocoder final (no key: IOException)
+  - [ ] Camera preview into SurfaceView/TextureView (their child surfaces need
+        a native window from the graphics stack)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
@@ -362,6 +395,12 @@ needs: [framework-build.md](framework-build.md).
         ci run 40138367211 on windows-2022 and windows-2025)
   - [x] A real app that relies on WebView in the e2e job (Notes 1.41, ci run
         40138367211)
+  - [x] The rest of android.webkit (ADR 0050): WebMessagePorts, file choosers
+        (onShowFileChooser and a Windows file dialog), permissions, onCreateWindow
+        and onCloseWindow, Basic auth, certificate errors and client certificate
+        requests, postUrl bodies, the back/forward list, find, MHTML archives,
+        capturePicture, text-only zoom, UIA of web content, outline-shaped
+        cut-outs with real mouse input (ci run 40216380541, both runners)
 
 ## Phase 6 checklist
 
@@ -379,6 +418,43 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+
+## Phase 7 checklist (arm64 translation)
+
+See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md).
+
+- [x] Translator chosen and an ADR written: **dynarmic** (0BSD; A64 frontend,
+      x86-64 backend) in a proxy DLL `gesher_arm64.dll`, the guest sharing the
+      host address space, trampolines marshalling AAPCS64 ⇄ the host ABI
+      ([0047](decisions/0047-arm64-translation.md)); Berberis is riscv64-only
+      at the pinned tag, QEMU is GPL
+- [x] `gesher_arm64.dll` builds with llvm-mingw and runs host↔guest round
+      trips (`compat/arm64`, `arm64.yml`, `tracks/47-arm64.ps1`)
+- [x] ELF loader for arm64-v8a `.so` files (EM_AARCH64, aarch64 relocations,
+      guest code non-executable and registered with the translator); a
+      self-contained `.so` and a libc/pthread one through the shim
+      (ci 40217845117, both runners)
+- [x] `System.load` of an arm64-v8a NDK library, with JNI calls both ways
+      (guest JNIEnv/JavaVM proxies), `Call*MethodV`, Java↔guest nesting
+      (ci 40217845117)
+- [x] arm64 TLS (TPIDR_EL0, TLSDESC), the stack protector, guest-created
+      threads and `AttachCurrentThread`; guest atomics; struct stat/epoll,
+      syscall numbers, auxv, setjmp, va_list; guest faults as Android-style
+      fatal-signal reports (ci 40217845117)
+- [x] libandroid, EGL/GLES and NativeActivity for an arm64-v8a `.so`:
+      nativeactivity.apk built with only lib/arm64-v8a, same checks and
+      pixels as the x86_64 app (ci 40217845117)
+- [x] gesher-app picks arm64-v8a when an APK has no x86_64 libraries
+      (`NativeLibs.abiFor`, `primaryCpuAbi`, the installer's `lib/arm64`);
+      `Build.SUPPORTED_ABIS` lists arm64-v8a after x86_64 (build.prop)
+      (exercised by nativeactivity-arm64.apk, ci 40217845117)
+- [x] arm64-v8a ELF executables through gesher-exec and ProcessBuilder
+      (ci 40217845117)
+- [ ] A real arm64-only F-Droid app in the e2e job: TIC-80 1.01.00 is listed;
+      its arm64 libraries load and its JNI runs translated, but it waits on a
+      SurfaceView Surface Gesher does not provide yet (known failure)
+- [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
+      compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
 
 ## Phase 8 checklist
 

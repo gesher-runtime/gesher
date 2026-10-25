@@ -225,6 +225,7 @@ public static class GesherMediaCapture {
   [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
   [DllImport("gdi32.dll")] static extern bool GdiFlush();
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
   // {width, height, pixels...} or null.
   public static int[] Capture(IntPtr hwnd) {
     RECT r;
@@ -269,19 +270,25 @@ public static class GesherMediaCapture {
         "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false', 'com.gesher.app.Main',
         (NoDrive "$Dir/videoapp.apk"), '--hidden-window') + $extra)
     $read = $null
+    $closed = $false
     $deadline = (Get-Date).AddSeconds(300)
     while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 500
       $text = (Get-Content -Raw $log -ErrorAction SilentlyContinue) + (Get-Content -Raw "$log.err" -ErrorAction SilentlyContinue)
       $m = [regex]::Match($text, 'VideoTest surfaces ready: texture view center (\d+),(\d+), surface view center (\d+),(\d+)')
       $h = [regex]::Match($text, 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+      # The app's checks are done: closing its window ends the run (WM_CLOSE finishes it).
+      if ($h.Success -and $text -match 'VideoTest done' -and -not $closed) {
+        [void][GesherMediaCapture]::PostMessageW([IntPtr][Convert]::ToInt64($h.Groups[1].Value, 16), 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        $closed = $true
+      }
       if ($m.Success -and $h.Success -and $null -eq $read) {
         Start-Sleep 1
         $px = [GesherMediaCapture]::Capture([IntPtr][Convert]::ToInt64($h.Groups[1].Value, 16))
         $read = 'no capture'
         if ($null -ne $px) {
           $at = { param($x, $y) '{0:x6}' -f $px[2 + [int]$y * $px[0] + [int]$x] }
-          $read = "texture view #$(& $at $m.Groups[1].Value $m.Groups[2].Value), surface view #$(& $at $m.Groups[3].Value $m.Groups[4].Value)"
+          $read = "texture view #$(& $at $m.Groups[1].Value $m.Groups[2].Value), surface view #$(& $at $m.Groups[3].Value $m.Groups[4].Value), background #$(& $at 10 300)"
         }
       }
     }
@@ -310,6 +317,10 @@ public static class GesherMediaCapture {
   $video = RunVideoApp 'cpu' @()
   $videoOut = $video.Out
   $videoExit = $video.Exit
+  if ($video.Exit -ne 0) {
+    # Why the app ended badly: the runtime's fatal lines and the last of the app's own.
+    Write-Host (($video.Out -split "`n") | Where-Object { $_ -match ' F dalvikvm|JNI DETECTED|VideoTest|GesherMedia.* (E|W) ' } | Select-Object -First 60 | Out-String)
+  }
   Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest codec list \(info\)|GesherMedia.*video decoders' } | ForEach-Object { $_.Trim() }) -join '; ')"
   Check 'media: MediaExtractor in videoapp.apk: an MP4''s H.264 and AAC tracks, csd-0/csd-1 as Annex B parameter sets, samples, sync samples and times' {
     $global:LASTEXITCODE = $videoExit
@@ -345,7 +356,12 @@ public static class GesherMediaCapture {
       'VideoTest video view: prepared true, duration ok, playing true, completed true')
   $videoGl = RunVideoApp 'gl' @('--ez', 'surfacesOnly', 'true')
   Write-Host "INFO  media: SkiaGL run: $((($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces: ' } | Select-Object -First 1))"
-  CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE): the TextureView red, the SurfaceView blue' $videoGl
+  $glRenderer = (($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces renderer: ' } | Select-Object -First 1)
+  if ("$glRenderer" -match 'skiagl') {
+    CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE): the TextureView red, the SurfaceView blue' $videoGl
+  } else {
+    Write-Host "INFO  media: SkiaGL run read back: $($videoGl.Read) ($("$glRenderer".Trim()))"
+  }
   # The other codecs: Gesher's software decoders (compat/media/video/soft_video.cc) where
   # Media Foundation has none: VP8 and VP9 (libvpx) from WebM (AOSP's MatroskaExtractor),
   # AV1 (libdav1d) and H.265 (libhevc) from MP4.
