@@ -201,3 +201,46 @@ if (Test-Path "$Dir/mediaapp.apk") {
 } else {
   Write-Host 'INFO  media: mediaapp.apk not in the build output; its checks skipped'
 }
+
+# --- Video (stage 2, ADR 0051): videoapp.apk (tests/apps/videoapp) ---------------------
+# Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
+# color says which frame it is.
+if (Test-Path "$Dir/videoapp.apk") {
+  $bcpVideo = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+  $videoLog = Join-Path $mediaTmp 'videoapp.log'
+  $env:GESHER_AUDIO_CAPTURE = Join-Path $mediaTmp 'video'
+  New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+  $p = Start-Process -FilePath "$Dir/dalvikvm.exe" -PassThru -NoNewWindow -RedirectStandardOutput $videoLog `
+    -RedirectStandardError "$videoLog.err" -ArgumentList @("-Xbootclasspath:$bcpVideo",
+      "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false', 'com.gesher.app.Main',
+      (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
+  if (-not $p.WaitForExit(300000)) { $p.Kill($true); Write-Host 'INFO  media: videoapp.apk did not end within 300 s' }
+  Remove-Item Env:GESHER_AUDIO_CAPTURE
+  $videoOut = (Get-Content -Raw $videoLog -ErrorAction SilentlyContinue) + (Get-Content -Raw "$videoLog.err" -ErrorAction SilentlyContinue)
+  $videoExit = if ($p.HasExited) { $p.ExitCode } else { -1 }
+  Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest codec list \(info\)|GesherMedia.*video decoders' } | ForEach-Object { $_.Trim() }) -join '; ')"
+  Check 'media: MediaExtractor in videoapp.apk: an MP4''s H.264 and AAC tracks, csd-0/csd-1 as Annex B parameter sets, samples, sync samples and times' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest extractor h264.mp4: 2 tracks [video/avc 320x240, audio/mp4a-latm 44100 Hz 2 ch], duration ok, csd-0 SPS true, csd-1 true, 60 samples, 4 sync, Annex B true, last at 1966 ms')
+  Check 'media: MediaCodecList in videoapp.apk: the decoders this machine has (H.264 through Media Foundation, the audio decoders), their capabilities; no encoders' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest codec list: avc decoder c2.gesher.avc.decoder, aac decoder c2.gesher.aac.decoder, avc encoder null, 1920x1080 true, flexible YUV true, profiles 5, software true')
+  Check 'media: MediaCodec in videoapp.apk: H.264 decoded to I420 ByteBuffers and an Image (synchronous), with a callback (asynchronous), a seek with flush; every frame in order, each quarter''s color; the AAC track to PCM' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest codec h264 sync: c2.gesher.avc.decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red',
+      'VideoTest codec h264 async: finished true, format changes 1, 60 frames, ordered true, colors [red, lime, blue, white]',
+      'VideoTest codec h264 seek: before 5 frames, extractor at 1000 ms, first frame after the flush at 1000 ms, blue',
+      'VideoTest codec aac: 44100 Hz 2 ch, encoding 2, 2 s, 1661 Hz',
+      'VideoTest done')
+  # The other codecs: decoded where this machine has a decoder (informational until
+  # Gesher's software decoders are in).
+  foreach ($c in 'hevc', 'vp8', 'vp9', 'av1') {
+    $line = ($videoOut -split "`n") | Where-Object { $_ -match "VideoTest codec $c sync: " } | Select-Object -First 1
+    Write-Host "INFO  media: $($line.Trim())"
+  }
+} else {
+  Write-Host 'INFO  media: videoapp.apk not in the build output; its checks skipped'
+}

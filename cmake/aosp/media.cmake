@@ -40,6 +40,11 @@ add_library(gesher_media_player OBJECT
   ${_media}/player/decode_file.cc
   ${_media}/player/mf_decoder.cc
   ${_media}/player/player.cc
+  # Video (stage 2, ADR 0051): decoders and MediaCodec.
+  ${_media}/video/video_decoder.cc
+  ${_media}/video/mf_video.cc
+  ${_media}/video/soft_video.cc
+  ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
   ${_media}/jni/media_jni_others.cc
