@@ -54,7 +54,9 @@ Merged so far:
 - media stage 1: merged as a13989c (verified at 32cbb82, ci 40193603079;
   Signal Generator passes e2e on an 800x400 display: e2e apps.json has a new
   optional per-app `"display": "WxH"`). ADR 0042. Integration ci
-  40195168384 on a13989c. Stage 2 (video) handed to the same agent.
+  40195168384 on a13989c (locale + net + media): green on attempt 2;
+  attempt 1 failed only media's sound-output check on windows-2022 (the
+  last tones split by a gap, a timing flake the media agent is fixing). Stage 2 (video) handed to the same agent.
   Leftover for a later track: Gesher has no screen orientation (landscape
   activities on a portrait display).
 - lifecycle: verified at 404cd11 (ci 40191526766) but not merged: it and
