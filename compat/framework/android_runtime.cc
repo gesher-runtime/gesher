@@ -81,6 +81,7 @@ int register_gesher_DebugStore(JNIEnv* env);
 int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
 int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
 int register_gesher_Shell(JNIEnv* env);  // compat/shell/shell_natives.cc (shell track)
+int register_gesher_media(JNIEnv* env);  // compat/media/jni (media track, docs/media.md)
 int register_gesher_devices(JNIEnv* env);  // compat/devices/devices_jni.cc (devices track)
 int register_gesher_WindowsHost(JNIEnv* env);  // compat/devsvc/devsvc_natives.cc (devsvc track)
 
@@ -414,6 +415,7 @@ static const struct {
      register_gesher_PropertyInvalidatedCache},
     {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},
     {"gesher_Shell", "com/gesher/app/shell/Shell", register_gesher_Shell},
+    {"gesher_media", "android/media/AudioSystem", register_gesher_media},
     // Location, sensors, cameras; after gesher_device_standins (whose sensor tables it replaces).
     {"gesher_devices", "android/hardware/SystemSensorManager", register_gesher_devices},
     {"gesher_WindowsHost", "com/gesher/server/WindowsHost", register_gesher_WindowsHost},

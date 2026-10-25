@@ -87,4 +87,22 @@ void* gesher_window_hwnd(ANativeWindow* window) {
   return surface != nullptr ? surface->window()->hwnd() : nullptr;
 }
 
+int gesher_window_translucent(ANativeWindow* window) {
+  Win32Surface* surface = Win32Surface::From(window);
+  return surface != nullptr && surface->window()->translucent() ? 1 : 0;
+}
+
+void gesher_window_client_size(ANativeWindow* window, int32_t* width, int32_t* height) {
+  Win32Surface* surface = Win32Surface::From(window);
+  *width = surface != nullptr ? surface->window()->width() : 0;
+  *height = surface != nullptr ? surface->window()->height() : 0;
+}
+
+void gesher_window_present_pixels(ANativeWindow* window, const uint32_t* argb, int32_t width,
+                                  int32_t height) {
+  if (Win32Surface* surface = Win32Surface::From(window)) {
+    surface->window()->PresentPixels(argb, width, height);
+  }
+}
+
 }  // extern "C"

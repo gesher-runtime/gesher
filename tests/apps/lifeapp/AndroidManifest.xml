@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The lifecycle test app (docs/lifecycle.md, tests/windows/tracks/48-lifecycle.ps1): an
+     Activity that reports its lifecycle callbacks, with buttons that start a translucent
+     Activity, a dialog-themed Activity and an opaque Activity, show a PopupWindow that
+     watches touches outside it and an AlertDialog. LifeActivity handles size changes itself
+     (onConfigurationChanged); OpaqueActivity does not, so a resize relaunches it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.lifeapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/LifeTheme">
+        <activity
+            android:name=".LifeActivity"
+            android:label="@string/activity_label"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".TranslucentActivity"
+            android:label="@string/translucent_label"
+            android:theme="@style/TranslucentTheme"
+            android:exported="false" />
+        <activity
+            android:name=".DialogThemeActivity"
+            android:label="@string/dialog_label"
+            android:theme="@android:style/Theme.Material.Light.Dialog"
+            android:exported="false" />
+        <activity
+            android:name=".OpaqueActivity"
+            android:label="@string/opaque_label"
+            android:exported="false" />
+    </application>
+</manifest>

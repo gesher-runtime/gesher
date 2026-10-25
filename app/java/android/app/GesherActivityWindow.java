@@ -45,6 +45,44 @@ public final class GesherActivityWindow {
     }
 
     /**
+     * The Activity goes from resumed to stopped as ActivityThread takes it there when its
+     * task is no longer visible (its window minimized; docs/lifecycle.md): onPause, onStop,
+     * then onSaveInstanceState (targetSdk 28 and up; before onStop below), and its decor
+     * view is made invisible (updateVisibility). Returns the saved state, or null if it was
+     * not resumed or started.
+     */
+    public static android.os.Bundle stop(Activity a) {
+        if (a.mFinished || a.mStopped) return null;
+        if (a.isResumed()) a.performPause();
+        android.os.Bundle state = new android.os.Bundle();
+        boolean before = a.getApplicationInfo().targetSdkVersion < android.os.Build.VERSION_CODES.P;
+        // Instrumentation.callActivityOnSaveInstanceState's call.
+        if (before) a.performSaveInstanceState(state);
+        a.performStop(false /* preserveWindow */, "gesher-app");
+        if (!before) a.performSaveInstanceState(state);
+        View decor = a.mDecor;
+        if (decor != null && a.mVisibleFromServer) {
+            a.mVisibleFromServer = false;
+            decor.setVisibility(View.INVISIBLE);
+        }
+        return state;
+    }
+
+    /**
+     * A stopped Activity comes back to resumed (its window restored): onRestart, onStart,
+     * onResume, its decor view visible again.
+     */
+    public static void restart(Activity a) {
+        if (a.mFinished || !a.mStopped) return;
+        a.performRestart(true /* start */);
+        if (a.mDecor != null && !a.mVisibleFromServer) {
+            a.mVisibleFromServer = true;
+            if (a.mVisibleFromClient) a.makeVisible();
+        }
+        a.performResume(false /* followedByPause */, "gesher-app");
+    }
+
+    /**
      * Finishes the Activity as the server would once its window is closed: finish(), then
      * pause, stop and destroy, and its window is removed (the Win32 window closes).
      */

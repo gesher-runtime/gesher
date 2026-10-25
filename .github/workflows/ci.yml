@@ -55,6 +55,8 @@ jobs:
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
           tools/fonts/collect-fonts.sh third_party/aosp dist
+          # Android's CA certificates and the networking libraries' licenses (docs/network.md).
+          tools/net/collect.sh third_party/aosp dist
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -108,6 +110,12 @@ jobs:
     needs: [build, framework]
     uses: ./.github/workflows/boot-image.yml
 
+  # Media (docs/media.md): the media track's test apps, built against this
+  # run's framework classes: .github/workflows/media.yml.
+  media:
+    needs: [framework]
+    uses: ./.github/workflows/media.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -132,7 +140,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image]
+    needs: [build, framework, graphics, angle, boot-image, media]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -165,6 +173,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
+          path: dist
+
+      # Gesher's default sounds (docs/media.md): dist/media/audio.
+      - uses: actions/download-artifact@v4
+        with:
+          name: media
           path: dist
 
       - name: Build installer
@@ -486,7 +500,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media]
     strategy:
       fail-fast: false
       matrix:
@@ -542,6 +556,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: exec
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: media
           path: dist
 
       - name: Run tests
