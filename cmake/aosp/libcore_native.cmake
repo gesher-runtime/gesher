@@ -63,9 +63,8 @@ libcore_bp_files(_javacore_srcs luni_native_srcs)
 libcore_bp_files(_androidio_srcs libandroidio_srcs)
 # Not ported yet; their natives are registered as missing (see
 # compat/libcore/unported.cc), so calling one throws UnsatisfiedLinkError.
-# BoringSSL (NativeBN) is not built yet.
-set(GESHER_LIBCORE_UNPORTED
-  luni/src/main/native/libcore_math_NativeBN.cpp
+# (NativeBN is built, over BoringSSL: cmake/aosp/boringssl.cmake.)
+set(GESHER_LIBCORE_UNPORTED ""
   CACHE STRING "libcore native sources not built yet")
 foreach(f ${GESHER_LIBCORE_UNPORTED})
   list(REMOVE_ITEM _javacore_srcs "${_lc}/${f}")
@@ -78,22 +77,22 @@ add_library(libcore_javacore OBJECT ${_javacore_srcs} ${_androidio_srcs})
 target_include_directories(libcore_javacore PRIVATE ${_lc}/luni/src/main/native)
 # ICU through the NDK's libicu, as on Android (cmake/aosp/icu.cmake).
 target_link_libraries(libcore_javacore PUBLIC nativehelper base log expat z ziparchive
-  icu_ndk_headers)
+  icu_ndk_headers boringssl_crypto)
 target_compile_options(libcore_javacore PRIVATE ${_libcore_flags})
 set_source_files_properties("${_lc}/luni/src/main/native/Register.cpp" PROPERTIES
   COMPILE_DEFINITIONS "JNI_OnLoad=JNI_OnLoad_javacore;JNI_OnUnload=JNI_OnUnload_javacore")
 
 # --- libopenjdk -------------------------------------------------------------
 libcore_bp_files(_openjdk_srcs libopenjdk_native_srcs)
-# inotify has no Windows equivalent yet. (epoll is gesher-base's, over its
-# file descriptors.)
-set(GESHER_OPENJDK_UNPORTED
-  ojluni/src/main/native/LinuxWatchService.c
+# Every libopenjdk native source is built now. (epoll and inotify, for
+# LinuxWatchService, are gesher-base's, over its file descriptors.)
+set(GESHER_OPENJDK_UNPORTED ""
   CACHE STRING "libopenjdk native sources not built yet")
 # UNIXProcess starts processes with vfork and exec: compat/libcore/process.cc
 # replaces it with CreateProcessW (docs/exec.md). (Also out of a list cached
 # by an older configure.)
-list(REMOVE_ITEM GESHER_OPENJDK_UNPORTED ojluni/src/main/native/UNIXProcess_md.c)
+list(REMOVE_ITEM GESHER_OPENJDK_UNPORTED ojluni/src/main/native/UNIXProcess_md.c
+  ojluni/src/main/native/LinuxWatchService.c)
 list(REMOVE_ITEM _openjdk_srcs "${_lc}/ojluni/src/main/native/UNIXProcess_md.c")
 foreach(f ${GESHER_OPENJDK_UNPORTED})
   list(REMOVE_ITEM _openjdk_srcs "${_lc}/${f}")

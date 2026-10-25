@@ -109,11 +109,18 @@ if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
-if ($apkFull -and $apkFull.Substring(0, 2) -ne $here.Substring(0, 2)) {
-  throw "$apkFull must be on drive $($here.Substring(0, 2)), with Gesher."
-}
 Set-Location $here
-function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+# A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
+# on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
+# hold no drive colons.
+function NoDrive([string] $p) {
+  $p = $p -replace '\\', '/'
+  if ($p -match '^([A-Za-z]):(.*)$') {
+    if ($Matches[1] -ieq (Get-Location).Drive.Name) { return $Matches[2] }
+    return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
+  }
+  return $p
+}
 
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
   New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null
@@ -142,11 +149,21 @@ if (Test-Path (Join-Path $here 'fonts/fonts.xml')) {
   }
 }
 
+# Gesher's default sounds (docs/media.md), as /system/media/audio.
+if (Test-Path (Join-Path $here 'media/audio')) {
+  foreach ($f in Get-ChildItem -Recurse -File (Join-Path $here 'media/audio')) {
+    $rel = $f.FullName.Substring((Join-Path $here 'media').Length + 1)
+    $to = Join-Path $root "system/media/$rel"
+    New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+    Install $f.FullName $to
+  }
+}
+
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
 $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
-$env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
+$env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"  # in place (docs/posix.md)
 
 # gesher-app.jar comes after framework.jar: its placeholders for classes
 # framework.jar lacks must not shadow real ones.

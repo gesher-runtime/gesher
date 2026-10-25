@@ -53,7 +53,11 @@ include(cmake/aosp/art_runtime.cmake)
 # dex2oat, for Gesher's boot image (docs/boot-image.md).
 include(cmake/aosp/dex2oat.cmake)
 include(cmake/aosp/icu.cmake)
+# BoringSSL, for libcore's NativeBN and Conscrypt (docs/network.md).
+include(cmake/aosp/boringssl.cmake)
 include(cmake/aosp/libcore_native.cmake)
+# Conscrypt's libjavacrypto and compat/net: TLS, Windows' trusted roots (docs/network.md).
+include(cmake/aosp/conscrypt.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
@@ -67,9 +71,13 @@ include(cmake/aosp/devsvc.cmake)
 include(compat/bionic/jni.cmake)
 include(cmake/aosp/googletest.cmake)
 include(cmake/aosp/core_libs_tests.cmake)
+# ART's own gtests for libartbase and libdexfile (docs/posix.md).
+include(cmake/aosp/art_gtests.cmake)
 include(cmake/aosp/graphics.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Media (docs/media.md): the audio engine and the framework's media natives.
+include(cmake/aosp/media.cmake)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
 # android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
@@ -92,6 +100,11 @@ target_compile_options(mman_probe PRIVATE -Wall -Wextra -Werror)
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
+
+# gesher-base's paths, /proc, /etc/timezone, inotify and process model
+# (docs/posix.md); also run in CI on Windows.
+add_executable(posix_probe probes/posix/posix_probe.cc)
+target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
 # libutils' Looper over gesher-base's epoll and eventfd, RefBase, String8;
 # also run in CI on Windows.

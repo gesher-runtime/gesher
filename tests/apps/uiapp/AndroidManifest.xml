@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- gesher-app's window test app: one launcher Activity whose layout has colored
-     regions and a line of text, drawn into a Win32 window (docs/graphics.md). -->
+     regions and a line of text, drawn into a Win32 window (docs/graphics.md). It handles
+     size changes itself, so resizing its window does not relaunch it (docs/lifecycle.md). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.gesher.uiapp"
     android:versionCode="1"
@@ -11,6 +12,7 @@
         <activity
             android:name=".UiActivity"
             android:label="@string/activity_label"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
