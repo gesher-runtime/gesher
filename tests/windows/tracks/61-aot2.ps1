@@ -232,7 +232,7 @@ if ($verifyOk) {
 
   # Background dexopt, by hand: profman merges, dex2oat compiles speed-profile.
   $pm = Aot2Run "$Dir/profman.exe" @("--profile-file=$(NoDrive $curProfile)", "--reference-profile-file=$(NoDrive $refProfile)",
-    "--apk=$(NoDrive $apk)", "--dex-location=$(NoDrive $apk)")
+    "--apk=$(NoDrive $apk)", "--dex-location=$(NoDrive $apk)", '--force-merge-and-analyze')
   $dump = Aot2Run "$Dir/profman.exe" @("--dump-only", "--profile-file=$(NoDrive $refProfile)", "--apk=$(NoDrive $apk)", "--dex-location=$(NoDrive $apk)")
   $hot = ([regex]::Matches($dump.Out, 'hot methods: ([0-9 ,]*)')).Count
   if ($pm.Exit -eq 1 -and (Aot2Size $refProfile) -gt 0) {
