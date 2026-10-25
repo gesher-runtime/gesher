@@ -299,8 +299,8 @@ needs: [framework-build.md](framework-build.md).
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
 - [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
-      "Status and next steps (hwsvc2)", docs/devices.md; ci run 40214264956 at
-      aaa1f90; all but the last sub-item)
+      "Status and next steps (hwsvc2)", docs/devices.md; ci runs 40214264956 at
+      aaa1f90 and 40235213023 at 85f49eb; all but the last sub-item)
   - [x] Toast clicks after the device stopped (Gesher's COM toast activator,
         registered by the installer); uninstalling removes the app's toasts
         and AppUserModelID

@@ -224,6 +224,9 @@ package job (the activator's registration, the uninstaller's cleanup).
   new zone fell back to GMT (the runtime's ICU has no windowsZones: now Windows'
   icu.dll answers), and the stored notifications' directory stayed after an uninstall
   (File.delete removes no directory: java.nio now).
+- **Final: ci run 40235213023 at 85f49eb** (merged origin/phase4/integration b74c46e,
+  with webview2): every job green on the first attempt, `0 test(s) failed` on both
+  runners, all hwsvc2 checks below passing again.
 - **Verified: ci run 40214264956 at aaa1f90** (merged origin/phase4/integration
   786e0ec: net, media, locale, lifecycle, posix): every job green on attempt 3;
   attempts 1-2 of test (windows-2022) failed only on the media track's "mediaapp.apk's
