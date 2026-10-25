@@ -31,10 +31,14 @@ typedef struct gesher_DIR DIR;
 DIR* opendir(const char* name);
 DIR* fdopendir(int fd);
 struct dirent* readdir(DIR* dir);
+int readdir_r(DIR* dir, struct dirent* entry, struct dirent** result);
 int closedir(DIR* dir);
 void rewinddir(DIR* dir);
+long telldir(DIR* dir);
+void seekdir(DIR* dir, long position);
 int dirfd(DIR* dir);
 #define readdir64 readdir
+#define readdir64_r readdir_r
 
 #ifdef __cplusplus
 }

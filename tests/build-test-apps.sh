@@ -56,6 +56,15 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
   --output "$work/dex-framework" $(find "$work/classes-framework" -name '*.class')
 cp "$work/dex-framework/classes.dex" "$out/framework-tests.dex"
 
+# gesher-base's POSIX layer under the framework (tests/dex-posix), compiled
+# against tests/dex-posix-stubs, which are not dexed: framework.jar has them.
+javac --release 11 -d "$work/classes-posix-stubs" $(find "$root/tests/dex-posix-stubs" -name '*.java')
+javac --release 11 -cp "$work/classes-posix-stubs" -d "$work/classes-posix" "$root"/tests/dex-posix/*.java
+mkdir -p "$work/dex-posix"
+java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 \
+  --output "$work/dex-posix" $(find "$work/classes-posix" -name '*.class')
+cp "$work/dex-posix/classes.dex" "$out/posix-tests.dex"
+
 # The framework-natives tests (tests/dex-natives): gesher.NativeTest,
 # gesher.LooperTest and gesher.ResourcesTest. LooperTest runs the real Looper,
 # Handler, Message, MessageQueue and HandlerThread from frameworks/base

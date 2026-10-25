@@ -1,0 +1,69 @@
+Gesher (posix track, docs/posix.md): FileObserver over gesher-base's inotify.
+The inotify code is compiled under GESHER as under __linux__, and the JNI
+table registers System V entries (GESHER_JNI, patch 0001), as
+tools/jni-sysv-patch.py does for the other framework sources.
+
+diff --git a/core/jni/android_util_FileObserver.cpp b/core/jni/android_util_FileObserver.cpp
+index 8d3da7b8..3cca1724 100644
+--- a/core/jni/android_util_FileObserver.cpp
++++ b/core/jni/android_util_FileObserver.cpp
+@@ -31,7 +31,7 @@
+ #include <sys/ioctl.h>
+ #include <errno.h>
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+ #include <sys/inotify.h>
+ #endif
+ 
+@@ -41,7 +41,7 @@ static jmethodID method_onEvent;
+ 
+ static jint android_os_fileobserver_init(JNIEnv* env, jobject object)
+ {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+     return (jint)inotify_init1(IN_CLOEXEC);
+ #else
+     return -1;
+@@ -50,7 +50,7 @@ static jint android_os_fileobserver_init(JNIEnv* env, jobject object)
+ 
+ static void android_os_fileobserver_observe(JNIEnv* env, jobject object, jint fd)
+ {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+ 
+     char event_buf[512];
+     struct inotify_event* event;
+@@ -109,7 +109,7 @@ static void android_os_fileobserver_startWatching(JNIEnv* env, jobject object, j
+         jniThrowException(env, "java/lang/IllegalStateException", "Failed to get ScopedIntArrayRW");
+     }
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+ 
+     if (fd >= 0)
+     {
+@@ -129,7 +129,7 @@ static void android_os_fileobserver_startWatching(JNIEnv* env, jobject object, j
+ static void android_os_fileobserver_stopWatching(JNIEnv* env, jobject object,
+                                                  jint fd, jintArray wfdArray)
+ {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(GESHER)
+ 
+     ScopedIntArrayRO wfds(env, wfdArray);
+     if (wfds.get() == nullptr) {
+@@ -145,10 +145,10 @@ static void android_os_fileobserver_stopWatching(JNIEnv* env, jobject object,
+ 
+ static const JNINativeMethod sMethods[] = {
+      /* name, signature, funcPtr */
+-    { "init", "()I", (void*)android_os_fileobserver_init },
+-    { "observe", "(I)V", (void*)android_os_fileobserver_observe },
+-    { "startWatching", "(I[Ljava/lang/String;I[I)V", (void*)android_os_fileobserver_startWatching },
+-    { "stopWatching", "(I[I)V", (void*)android_os_fileobserver_stopWatching }
++    { "init", "()I", GESHER_JNI(android_os_fileobserver_init) },
++    { "observe", "(I)V", GESHER_JNI(android_os_fileobserver_observe) },
++    { "startWatching", "(I[Ljava/lang/String;I[I)V", GESHER_JNI(android_os_fileobserver_startWatching) },
++    { "stopWatching", "(I[I)V", GESHER_JNI(android_os_fileobserver_stopWatching) }
+ 
+ };
+ 
