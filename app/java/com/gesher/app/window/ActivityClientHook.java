@@ -39,6 +39,7 @@ public final class ActivityClientHook implements InvocationHandler {
     }
 
     private static boolean sInstalled;
+    private static IActivityClientController sHook;
     private static volatile IBinder sLocalToken;
     private static volatile Local sLocal;
 
@@ -54,7 +55,18 @@ public final class ActivityClientHook implements InvocationHandler {
         IActivityClientController hook = (IActivityClientController) Proxy.newProxyInstance(
                 IActivityClientController.class.getClassLoader(),
                 new Class<?>[] {IActivityClientController.class}, new ActivityClientHook());
+        sHook = hook;
         ActivityClient.setActivityClientController(hook);
+    }
+
+    /**
+     * Puts the hook back: each LaunchActivityItem sets ActivityClient's controller to the one
+     * it carries (the system server's). The window session calls it as windows are added and
+     * laid out, so the hook is there when their Activities call.
+     */
+    public static void ensure() {
+        IActivityClientController hook = sHook;
+        if (hook != null) ActivityClient.setActivityClientController(hook);
     }
 
     /** The single process's Activity: its token, and what answers for it. */

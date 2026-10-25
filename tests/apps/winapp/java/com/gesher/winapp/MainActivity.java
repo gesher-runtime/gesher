@@ -99,6 +99,13 @@ public class MainActivity extends Reporting {
         root.addView(edit, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
+        // Edge to edge (target SDK 36): the app keeps its content above the IME itself, as
+        // apps do with adjustResize since Android 15 enforces edge to edge.
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int bottom = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+            if (v.getPaddingBottom() != bottom) v.setPadding(0, 0, 0, bottom);
+            return insets;
+        });
         edit.requestFocus();
         root.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
             if (root.getWidth() == 0) return;
@@ -107,7 +114,9 @@ public class MainActivity extends Reporting {
             String where = "content " + root.getWidth() + "x" + root.getHeight() + ", land at "
                     + center(land) + ", task at " + center(task) + ", turn at " + center(turn)
                     + ", back at " + center(back) + ", edit at " + center(edit)
-                    + ", edit bottom " + (at[1] + edit.getHeight()) + ", " + imeInsets();
+                    + ", edit bottom " + (at[1] + edit.getHeight()) + ", " + imeInsets()
+                    + " (edit top in parent " + edit.getTop() + ", padding "
+                    + root.getPaddingBottom() + ")";
             if (!where.equals(mLaidOut)) {
                 mLaidOut = where;
                 say("MainActivity laid out: " + where);

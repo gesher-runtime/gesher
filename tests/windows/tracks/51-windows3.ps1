@@ -208,16 +208,17 @@ function W3ImeChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
   [void][GesherW3Win32]::PostMessageW($app, $w3Input, [IntPtr]($c[3] - 300), [IntPtr]$c[3])
   $m = W3Wait $ReadLog $mark 'MainActivity laid out: content \d+x(\d+),[^\r\n]*edit bottom (\d+), ime visible true, bottom 300' 30
   if (-not $m.Success) { $out += 'no layout with the IME insets (ime visible, bottom 300)' } else {
-    if ([int]$m.Groups[1].Value -ne $h - 300) { $out += "MainActivity's content is $($m.Groups[1].Value) pixels tall with the keyboard up, not $($h - 300) (adjustResize)" }
+    # Target SDK 36 is edge to edge: the window keeps its size and the app pads its
+    # content by the IME insets (as Android 15 and later have adjustResize apps do).
     if ([int]$m.Groups[2].Value -gt $h - 300) { $out += "the EditText's bottom is at $($m.Groups[2].Value), under the keyboard" }
   }
   if (-not (W3After $ReadLog $mark).Contains("the touch keyboard covers rows $($h - 300)-$h")) { $out += 'the window session did not report the keyboard''s rows' }
   $seen = $m.Value
   $mark = W3Mark $ReadLog
   [void][GesherW3Win32]::PostMessageW($app, $w3Input, [IntPtr]::Zero, [IntPtr]::Zero)
-  $m = W3Wait $ReadLog $mark "MainActivity laid out: content \d+x$h,[^\r\n]*ime visible false, bottom 0" 30
+  $m = W3Wait $ReadLog $mark "MainActivity laid out: [^\r\n]*edit bottom $h, ime visible false, bottom 0" 30
   if (-not $m.Success) { $out += 'the content did not grow back when the keyboard went' }
-  W3Check $Mode 'the touch keyboard''s rows (IFrameworkInputPane) are WindowInsets.Type.ime(): adjustResize shrinks the content above them, and it grows back when the keyboard goes' $out $seen
+  W3Check $Mode 'the touch keyboard''s rows (IFrameworkInputPane) are WindowInsets.Type.ime() of the window: the app (edge to edge, adjustResize) keeps its EditText above them, and back down when the keyboard goes' $out $seen
 }
 
 # Ctrl+A/C/V/X in the EditText with Windows' clipboard.
@@ -240,14 +241,14 @@ function W3ClipChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
   if (-not (W3Wait $ReadLog $mark 'MainActivity clip changed: from windows 51' 30).Success) { $out += 'the app''s clip listener did not hear Set-Clipboard' }
   $mark = W3Mark $ReadLog
   [void][ImeInput]::Chord($ctrl, 0x41); [void][ImeInput]::Chord($ctrl, 0x56)
-  $m = W3Wait $ReadLog $mark 'MainActivity edit: from windows 51\r?\n' 30
+  $m = W3Wait $ReadLog $mark 'MainActivity edit: from windows 51[\r\n]' 30
   $steps += "Ctrl+A Ctrl+V: $(if ($m.Success) { 'from windows 51' } else { 'not pasted' })"
   if (-not $m.Success) { $out += 'Ctrl+V did not paste Windows'' clipboard' }
   Set-Clipboard -Value 'other 51'
   Start-Sleep 1
   $mark = W3Mark $ReadLog
   [void][ImeInput]::Chord($ctrl, 0x41); [void][ImeInput]::Chord($ctrl, 0x58)
-  $m = W3Wait $ReadLog $mark 'MainActivity edit: \r?\n' 30
+  $m = W3Wait $ReadLog $mark 'MainActivity edit: [\r\n]' 30
   $deadline = (Get-Date).AddSeconds(15)
   do { Start-Sleep -Milliseconds 300; $win = (Get-Clipboard -Raw) -as [string] } while ($win -ne 'from windows 51' -and (Get-Date) -lt $deadline)
   $steps += "Ctrl+A Ctrl+X: the EditText $(if ($m.Success) { 'empty' } else { 'not emptied' }), Windows has '$win'"
