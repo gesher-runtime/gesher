@@ -276,6 +276,23 @@ public class CaptureActivity extends Activity {
         int tw = THUMBNAIL_WIDTH;
         int th = Math.max(1, full.getHeight() * tw / full.getWidth());
         Bitmap thumbnail = Bitmap.createScaledBitmap(full, tw, th, true);
+        // A Bitmap crosses processes only where hwui parcels Bitmaps (on Gesher's Windows
+        // build it does not): then the result has no thumbnail, rather than failing.
+        android.os.Parcel probe = android.os.Parcel.obtain();
+        boolean parcels;
+        try {
+            thumbnail.writeToParcel(probe, 0);
+            parcels = true;
+        } catch (RuntimeException e) {
+            parcels = false;
+        } finally {
+            probe.recycle();
+        }
+        if (!parcels) {
+            done(RESULT_OK, new Intent("inline-data"), "a " + w + "x" + h
+                    + " photo; its thumbnail not returned (Bitmaps are not parcelled here)");
+            return;
+        }
         done(RESULT_OK, new Intent("inline-data").putExtra("data", thumbnail),
                 "a " + w + "x" + h + " photo, returned as a " + tw + "x" + th + " thumbnail");
     }
