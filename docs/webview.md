@@ -267,21 +267,60 @@ drawing in a window that is covered or off the desktop;
   ends`: the edit button (344,744) over the WebView, keys, accept; the log has
   the cut-out and `first page loaded: file:///`. Its SHA-256 is pinned.
 
+### webview2 track (ADR 0050)
+
+- webapp.apk's `FeaturesActivity` (tests/windows/webview/Features.ps1, a
+  local HTTP/HTTPS test server in the test's process), ci run 40198256072 on
+  windows-2025 (runtime 155): `PASS  gesher-app: webapp.apk's
+  FeaturesActivity on WebView2: WebMessagePorts both ways, find in page,
+  capturePicture, geolocation and camera/microphone permissions (granted and
+  denied), window.open into the WebView onCreateWindow gave and window.close,
+  onShowFileChooser and the Windows file dialog (clicked with real mouse
+  input (SendInput)), text zoom (text only), Basic authentication, postUrl
+  with a body, a certificate error and a client certificate request, the
+  back/forward list, an MHTML web archive, a round button cut out of the
+  WebView2 window by its outline and clicks (real mouse input (SendInput))
+  inside and outside its circle`, with `INFO  features read back: button
+  center #0000ff, its corner #00ff00, inside its right edge #0000ff, beside
+  it #00ff00`, `gesher-webview: 1 view(s) over the WebView cut out of its
+  window: oval 300,300-360,360` and `INFO  features: UI Automation of the
+  WebView2 window: found: ControlType.Pane 'Gesher features'`. On
+  windows-2022 (runtime 131) everything up to the button's click passed in
+  the same run (the test waited too briefly for it; fixed). The final run's
+  id is in "In progress" below.
+- Observed: on windows-2025 the OS denies geolocation (the page gets error 1
+  after the app granted it); on windows-2022 it times out (error 3). Runtime
+  131 keeps `window.opener` in the new window but the opener gets no
+  `postMessage` from it and `window.close` raises no `WindowCloseRequested`
+  (the test reports it as INFO there; runtime 155 does both). WebView2 counts
+  `evaluateJavascript` as a user gesture (`onCreateWindow`'s
+  `isUserGesture` is true for a script-opened window).
+- The Find API exists on both runtimes' paths: `ICoreWebView2Find` where
+  `ICoreWebView2_28` is there, `PageScripts.find` otherwise (`find: match 0
+  of 4`, `match 1 of 4` on both).
+
 ### In progress
 
-- Nothing. Integrated with phase4/integration (exec merged) at 9c610d6: ci run
-  40139785905 green (build, package, test on windows-2022 and windows-2025,
-  e2e).
+- The final run after merging phase4/integration (8bfb83f).
 
 ### Not done / limits
 
-- `WebMessagePort`/`createWebMessageChannel` (throws), `postWebMessage` is a
-  `message` event only; `findAll`; `saveWebArchive`; `capturePicture` (empty);
-  `onShowFileChooser`, `onPermissionRequest`, geolocation prompts,
-  `onCreateWindow`; HTTP auth and client certificates callbacks; Safe
-  Browsing; `postUrl` bodies; text zoom is page zoom; `WebBackForwardList` is
-  null; accessibility of web content through Android's tree.
-- Cut-outs are rectangles from views' bounds: rounded or partly transparent
-  views over a WebView show the app's surface in their corners; a view
-  drawn over the WebView by a parent's `onDrawForeground`/`dispatchDraw`
-  (not a child view) is not found.
+- Shapes ignore the views' scale and rotation; partly transparent views over
+  a WebView show the app's surface; a view drawn over the WebView by a
+  parent's `onDrawForeground`/`dispatchDraw` (not a child view) is not
+  found.
+- `WebMessagePort`s carry strings only (no `ArrayBuffer` payloads, no ports
+  from the page to the app inside a port's message); `WebViewCompat`
+  (androidx.webkit boundary interfaces) is not implemented.
+- Client certificates: only certificates in Windows' store can be sent;
+  `proceed()` with any other key goes on without one. Tested: the request
+  callback and `ignore()`.
+- `onSafeBrowsingHit` is never called (SmartScreen has no callback).
+- Accessibility: web content is WebView2's UI Automation tree only, not in
+  Android's `AccessibilityNodeProvider`.
+- `capturePicture` is what is shown, not the whole page; text zoom does not
+  reach cross-origin iframes or closed shadow roots; multi-step
+  `goBackOrForward` may ask `shouldOverrideUrlLoading`.
+- Typical apps open their chooser with `FileChooserParams.createIntent()`
+  (ACTION_GET_CONTENT): Gesher has no document picker Activity for it yet;
+  apps that return false get the Windows dialog.
