@@ -1,0 +1,47 @@
+diff --git a/libartbase/base/hex_dump_test.cc b/libartbase/base/hex_dump_test.cc
+index bfd5c75..abfe34e 100644
+--- a/libartbase/base/hex_dump_test.cc
++++ b/libartbase/base/hex_dump_test.cc
+@@ -24,7 +24,7 @@
+ 
+ namespace art {
+ 
+-#if defined(__LP64__)
++#if defined(__LP64__) || defined(_WIN64)
+ #define ZEROPREFIX "00000000"
+ #else
+ #define ZEROPREFIX
+diff --git a/libartbase/base/testing.cc b/libartbase/base/testing.cc
+index 6ec207e..3026624 100644
+--- a/libartbase/base/testing.cc
++++ b/libartbase/base/testing.cc
+@@ -43,14 +43,14 @@ std::string GetAndroidBuildTop() {
+     for (; path.parent_path() != path; path = path.parent_path()) {
+       // We are running tests from out/host/linux-x86 on developer machine.
+       if (path.filename() == std::filesystem::path("linux-x86")) {
+-        android_build_top = path.parent_path().parent_path().parent_path();
++        android_build_top = path.parent_path().parent_path().parent_path().string();
+         break;
+       }
+       // We are running tests from testcases (extracted from zip) on tradefed.
+       // The first path is for remote runs and the second path for local runs.
+       if (path.filename() == std::filesystem::path("testcases") ||
+           path.filename().string().starts_with("host_testcases")) {
+-        android_build_top = path.append("art_common");
++        android_build_top = path.append("art_common").string();
+         break;
+       }
+     }
+diff --git a/libartbase/base/unix_file/fd_file_test.cc b/libartbase/base/unix_file/fd_file_test.cc
+index 3de3bd9..0068776 100644
+--- a/libartbase/base/unix_file/fd_file_test.cc
++++ b/libartbase/base/unix_file/fd_file_test.cc
+@@ -39,7 +39,7 @@ class FdFileTest : public RandomAccessFileTest {
+                        size_t input_offset,
+                        size_t output_offset,
+                        size_t copy_length);
+-#ifdef __linux__
++#if defined(__linux__) || defined(GESHER)  // Rename uses CreateSparseSourceFile on every host
+   static constexpr int kNumChunks = 8;
+   static constexpr size_t kChunkSize = 64 * art::KB;
+   static constexpr size_t kStatBlockSize = 512;

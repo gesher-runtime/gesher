@@ -4,9 +4,8 @@
 #   gesher my.dex com.example.Main      # your own program
 #   gesher my.dex com.example.Main arg1 arg2
 #
-# gesher.cmd runs this script. The .dex file must be on the same drive as
-# Gesher: ART separates class path entries with ':', so paths are passed
-# without the drive letter. The runtime's directories go to
+# gesher.cmd runs this script. ART separates class path entries with ':', so
+# paths are passed without the drive letter (another drive is /mnt/<drive>). The runtime's directories go to
 # %LOCALAPPDATA%\Gesher, as the install folder may not be writable.
 param(
   [string] $Dex = '',
@@ -19,14 +18,19 @@ if ($Dex -eq '') { $Dex = Join-Path $here 'hello.dex' }  # PowerShell 5: no $PSS
 
 $dexFull = (Resolve-Path $Dex).Path
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-foreach ($p in $dexFull, $root) {
-  if ($p.Substring(0, 2) -ne $here.Substring(0, 2)) {
-    throw "$p must be on drive $($here.Substring(0, 2)), with Gesher."
-  }
-}
 # Drive-less paths resolve on the current drive.
 Set-Location $here
-function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+# A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
+# on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
+# hold no drive colons.
+function NoDrive([string] $p) {
+  $p = $p -replace '\\', '/'
+  if ($p -match '^([A-Za-z]):(.*)$') {
+    if ($Matches[1] -ieq (Get-Location).Drive.Name) { return $Matches[2] }
+    return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
+  }
+  return $p
+}
 
 # The directories Android's runtime expects.
 foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
@@ -44,7 +48,8 @@ $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
 $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
-$env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
+# Time zone data (docs/posix.md), read in place from the install folder.
+$env:ANDROID_TZDATA_ROOT = NoDrive "$here/tzdata"
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # The boot image (docs/boot-image.md) is installed next to the jars, in framework\x86_64.

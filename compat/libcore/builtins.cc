@@ -29,6 +29,19 @@ JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_socketpair(JNIEnv*, jclass, jin
 JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_interrupt(JNIEnv*, jclass, jint);
 JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_drain1(JNIEnv*, jclass, jint);
 JNIEXPORT void JNICALL Java_sun_nio_ch_EPollPort_close0(JNIEnv*, jclass, jint);
+
+// LinuxWatchService.c's natives (java.nio.file.WatchService over inotify),
+// found by name.
+JNIEXPORT jint JNICALL Java_sun_nio_fs_LinuxWatchService_eventSize(JNIEnv*, jclass);
+JNIEXPORT jintArray JNICALL Java_sun_nio_fs_LinuxWatchService_eventOffsets(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_fs_LinuxWatchService_inotifyInit(JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_sun_nio_fs_LinuxWatchService_inotifyAddWatch(JNIEnv*, jclass, jint, jlong,
+                                                                         jint);
+JNIEXPORT void JNICALL Java_sun_nio_fs_LinuxWatchService_inotifyRmWatch(JNIEnv*, jclass, jint, jint);
+JNIEXPORT void JNICALL Java_sun_nio_fs_LinuxWatchService_configureBlocking(JNIEnv*, jclass, jint,
+                                                                           jboolean);
+JNIEXPORT void JNICALL Java_sun_nio_fs_LinuxWatchService_socketpair(JNIEnv*, jclass, jintArray);
+JNIEXPORT jint JNICALL Java_sun_nio_fs_LinuxWatchService_poll(JNIEnv*, jclass, jint, jint);
 }
 
 namespace {
@@ -60,6 +73,22 @@ const gesher_builtin_symbol kOpenjdk[] = {
      reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_interrupt)},
     {"Java_sun_nio_ch_EPollPort_drain1", reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_drain1)},
     {"Java_sun_nio_ch_EPollPort_close0", reinterpret_cast<void*>(&Java_sun_nio_ch_EPollPort_close0)},
+    {"Java_sun_nio_fs_LinuxWatchService_eventSize",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_eventSize)},
+    {"Java_sun_nio_fs_LinuxWatchService_eventOffsets",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_eventOffsets)},
+    {"Java_sun_nio_fs_LinuxWatchService_inotifyInit",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_inotifyInit)},
+    {"Java_sun_nio_fs_LinuxWatchService_inotifyAddWatch",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_inotifyAddWatch)},
+    {"Java_sun_nio_fs_LinuxWatchService_inotifyRmWatch",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_inotifyRmWatch)},
+    {"Java_sun_nio_fs_LinuxWatchService_configureBlocking",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_configureBlocking)},
+    {"Java_sun_nio_fs_LinuxWatchService_socketpair",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_socketpair)},
+    {"Java_sun_nio_fs_LinuxWatchService_poll",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_poll)},
 };
 
 const bool registered = [] {

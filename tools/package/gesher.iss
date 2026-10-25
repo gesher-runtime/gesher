@@ -70,6 +70,10 @@ Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignor
 ; installs them as $ANDROID_ROOT/fonts and $ANDROID_ROOT/etc/fonts.xml.
 Source: "{#BuildDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
 Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Time zone data (docs/posix.md): the com.android.tzdata module's files,
+; $ANDROID_TZDATA_ROOT for both launchers.
+Source: "{#BuildDir}\tzdata\*"; DestDir: "{app}\tzdata"; Flags: ignoreversion recursesubdirs
+Source: "{#BuildDir}\TZDATA-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 ; Networking (docs/network.md): Android's CA certificates, which dalvikvm joins
 ; with the roots Windows trusts as the system CAs ($ANDROID_ROOT/etc/security/cacerts),
 ; and the licenses of BoringSSL, Conscrypt, OkHttp and BouncyCastle.

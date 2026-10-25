@@ -86,15 +86,25 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] ICU4C built from `external/icu`, its data mapped from
       `ANDROID_I18N_ROOT` as on Android; `libicu_jni`, libcore's ICU natives
       and `core-icu4j.jar` on the boot class path
-- [ ] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`)
+- [x] Time zone data (`ANDROID_TZDATA_ROOT`, libcore's `tzdata`): the
+      com.android.tzdata files installed; `TimeZone.getDefault()` follows
+      Windows' zone; java.util, java.time and android.icu match Windows'
+      offsets at every 2025-2027 transition in four zones ([posix.md](posix.md),
+      ADR 0045; ci 40198104086)
 - [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+      (inotify over `ReadDirectoryChangesW`, epoll-compatible, with
+      `WatchService` and `FileObserver` on it; `kill`/`getppid` across
+      Gesher processes, `/proc/self/{status,maps,fd,task}`: posix track,
+      ci 40198104086)
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
       need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
       `/proc/self/cmdline` are emulated; `open` takes Linux's `O_*` flags
       over `CreateFileW`; tested in CI
-- [ ] Paths on another drive in `:`-separated lists, and the rest of the
-      CRT's path functions (`fopen`, `unlink`, `rename`, `access`)
+- [x] Paths on another drive in `:`-separated lists, and the rest of the
+      CRT's path functions (`fopen`, `unlink`, `rename`, `access`): other
+      drives are `/mnt/<drive>/...` (ADR 0045); long and non-ASCII names
+      (posix probe, a class path entry on another drive; ci 40198104086)
 - [x] Signals sent to the process wait for `sigwait`/`sigwaitinfo`, as
       ART's signal catcher takes them
 - [x] Signal delivery from Windows exceptions (VEH → `sigaction` handlers,
@@ -104,7 +114,9 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] `MAP_FIXED` over existing reservations (placeholder mappings; ADR 0036,
       `mman_probe`; ci 40138006773)
 - [x] Executable file mappings (`.oat` code mapped as views; ci 40138006773)
-- [ ] ART's own gtests for libartbase/libdexfile running on Windows
+- [x] ART's own gtests for libartbase/libdexfile running on Windows
+      (232 and 119 tests, exclusions in [posix.md](posix.md); ci 40198104086,
+      posix 40198105735)
 - [x] `dalvikvm.exe` runs `Hello` with the interpreter (tested in CI)
 - [x] A boot image ([boot-image.md](boot-image.md), [0031](decisions/0031-boot-image-dex2oat-on-windows.md)):
       dex2oat.exe, built for Windows on the same libart, compiles the boot class
