@@ -272,7 +272,20 @@ function ImeAppRun([string] $Mode, [string[]] $Arguments, [string[]] $Expect, [i
 
 # Microsoft IME for Japanese enabled for the user, the layouts loaded, before
 # the runs (enabling a profile changes the session's input languages).
-$script:imeTsf = [ImeInput]::EnableJapaneseIme()
+# Enabled from a process of its own that then ends: ActivateProfile also
+# starts the IME on the calling thread, and an instance left on this script's
+# thread (which pumps no messages) is one the IME in the app process calls
+# (COM, through mtf.dll and imjppred.dll) and waits for: on Server 2022 the
+# app's window thread then sat 180 s in each layout switch away from the IME
+# (thread_watch.cc's stacks: imjpapi waiting for its workers, the workers in
+# an ALPC call).
+$imeCs = (Resolve-Path "$PSScriptRoot/../ime/ImeInput.cs").Path
+$enableOut = & pwsh -NoProfile -NonInteractive -Command "Add-Type -Path '$imeCs'; [ImeInput]::EnableJapaneseIme()" 2>&1
+$script:imeTsf = 0
+if (-not [int]::TryParse("$($enableOut | Select-Object -Last 1)".Trim(), [ref]$script:imeTsf)) {
+  Write-Host "INFO  ime: enabling Microsoft IME for Japanese: $enableOut"
+  $script:imeTsf = -1
+}
 foreach ($klid in '0000040D', '00000411', '00000409') { [void][ImeInput]::SwitchLayout([IntPtr]::Zero, $klid) }
 Start-Sleep -Seconds 3
 
