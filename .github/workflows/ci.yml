@@ -514,6 +514,8 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
+    # A hung app or check fails the job instead of running for six hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:

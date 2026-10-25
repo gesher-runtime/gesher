@@ -25,7 +25,9 @@ constexpr int32_t kStylusDeviceId = 3;
 
 // What to publish.
 struct AndroidEvent {
-  enum Kind { kKey, kMotion, kFocus } kind = kKey;
+  // kText: a text event (text_input.h) for the connection's on_text_event,
+  // in order with the input events.
+  enum Kind { kKey, kMotion, kFocus, kText } kind = kKey;
   int32_t device_id = 0;
   int32_t source = 0;
   int32_t action = 0;
@@ -46,6 +48,8 @@ struct AndroidEvent {
   android::PointerCoords coords[MAX_POINTERS];
   // Focus.
   bool has_focus = false;
+  // Text: the connection's id of the text event.
+  uint32_t text_id = 0;
 
   // A motion that can replace an earlier one still waiting to be sent (a
   // move or hover move of the same device and pointers).
