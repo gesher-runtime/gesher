@@ -28,6 +28,20 @@ Merged so far:
 - devsvc: merged (verified at a02e84a, ci 40137762701 attempt 2; attempt 1's
   windows-2022 failure was a one-off rtlapp-under-ar-EG flake, passed on
   rerun: watch for it). ADR 0038.
+- webview: merged (verified at 9c610d6, ci 40139785905; Notes passes e2e).
+  ADR 0041.
+- stack: merged (verified at 29c5255, ci 40141531509, which already
+  contained every merge above, so the integration tree after this merge is
+  the CI-verified one: 296 PASS lines per runner, up from 263 at 40135350639;
+  the "408" in older briefs counted differently). ADR 0036.
+- devices: merged (verified at f62f1aa, ci 40142590418; Camera2 verified
+  against a test Media Foundation source, no real camera on the runners).
+  ADR 0043. Integration ci 40143864548 on 6111f0d (all seven merged
+  tracks together): all green.
+- 2026-10-25: every agent stopped on the org's API spend limit; all were
+  resumed with SendMessage after it reset (their work was saved).
+- New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
+  wip/webview2 in the C:\work\gesher-webview worktree.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.

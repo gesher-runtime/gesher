@@ -9,7 +9,7 @@
 //     the bottom of the stack that read hits ART's protected pages, and the
 //     handler throws StackOverflowError.
 //
-// A vectored exception handler, first in the chain, does two things:
+// A vectored exception handler, first in the chain, does three things:
 //
 // 1. Stack growth. Windows commits a thread's stack page by page through a
 //    guard page below the committed part; a read further down than the guard
@@ -19,7 +19,7 @@
 //    committed, a guard page is put below them, TEB.StackLimit follows, and
 //    the instruction is retried. ART's protected pages at the bottom of the
 //    stack are committed (no access) by mprotect (mman.cc), so a probe that
-//    reaches them is not mistaken for growth.
+//    reaches them is not mistaken for growth; nothing below them is grown.
 //
 // 2. Signals. EXCEPTION_ACCESS_VIOLATION becomes SIGSEGV (EXCEPTION_ILLEGAL_
 //    INSTRUCTION SIGILL, integer divide by zero and overflow SIGFPE) for the
@@ -32,6 +32,22 @@
 //    (SEH, the crash reporter), so a first-chance fault in native code that
 //    has a __try is not turned into a crash. (libsigchain forwards faults it
 //    does not handle to the action it found when it claimed the signal.)
+//
+// 3. Stack overflow (docs/decisions/0036). Windows' own stack growth (a
+//    guard page that moves down as it is touched) cannot be stopped above
+//    ART's protected region: each guard page fault makes the next page down
+//    a guard page, committed or not, and when the guard reaches the stack
+//    guarantee at the bottom the kernel commits what is left and raises
+//    EXCEPTION_STACK_OVERFLOW instead, on whatever touched it - for compiled
+//    code and nterp, the stack probe. That exception is delivered as SIGSEGV
+//    at its address, like the access violation it stands for, so ART's
+//    handler throws StackOverflowError. ART's protected region sits right
+//    above the guarantee (pthread_attr_getguardsize reports it), so the probe
+//    that raises it is the one that would have hit the region; afterwards the
+//    whole stack is committed, ART protects its region again, and the next
+//    overflow on the thread is an access violation there. The handler runs
+//    below the probing frame, ART_STACK_OVERFLOW_GAP (32 KiB) above the
+//    region: no alternate stack is needed.
 
 #include <signal.h>
 #include <stdio.h>
@@ -44,13 +60,11 @@
 
 #include <initializer_list>
 
+#include "internal.h"
+
 namespace {
 
 constexpr uintptr_t kPage = 4096;
-// The bottom of the stack left for ART's implicit stack overflow checks: its
-// protected region (a page) plus the 32 KiB probe gap (ART_STACK_OVERFLOW_GAP_
-// x86_64) plus a page of margin (ADR 0033).
-constexpr uintptr_t kGrowthFloor = 64 * 1024;
 
 thread_local bool t_unhandled = false;
 thread_local int t_depth = 0;
@@ -92,14 +106,12 @@ bool GrowStack(uintptr_t addr) {
   GetCurrentThreadStackLimits(&low, &high);
   const uintptr_t limit = reinterpret_cast<uintptr_t>(tib->StackLimit);
   if (addr < low || addr >= limit) return false;
-  // Leave the lowest part of the stack ungrown: ART installs its own protected
-  // region there and relies on a fault for implicit stack overflow checks (its
-  // compiled code and nterp probe the stack GAP bytes ahead, ADR 0033). Growing
-  // it would defeat the check and let the stack run to the hard Windows limit
-  // (STATUS_STACK_OVERFLOW). The margin covers ART's protected region and its
-  // reserved gap; a genuine access there faults and ART throws
-  // StackOverflowError.
-  if (addr - low < kGrowthFloor) return false;
+  // Leave the bottom of the stack ungrown: what Windows keeps (the stack
+  // guarantee) and the page above it, where ART puts its protected region for
+  // implicit stack overflow checks (its compiled code and nterp probe the
+  // stack GAP bytes ahead, ADR 0033). A probe that skips over the region
+  // faults there, and ART throws StackOverflowError.
+  if (addr - low < gesher::StackBottomReserve() + kPage) return false;
   const uintptr_t page = addr & ~(kPage - 1);
   MEMORY_BASIC_INFORMATION mbi;
   if (VirtualQuery(reinterpret_cast<void*>(page), &mbi, sizeof(mbi)) == 0 ||
@@ -204,6 +216,22 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
                    : SEGV_MAPERR;
       }
       break;
+    case EXCEPTION_STACK_OVERFLOW:
+      // The last guard page at the bottom of the stack was touched (3. above):
+      // an access violation at that address for ART's handler. Only for a
+      // probe well below the stack pointer, as compiled code and nterp make:
+      // native code that overflows (a push, a call) is left to Windows' own
+      // handling and the crash report, as the few pages left are all the
+      // stack there is to handle it on.
+      if (rec->NumberParameters < 2 ||
+          info->ContextRecord->Rsp - rec->ExceptionInformation[1] <= kPage ||
+          info->ContextRecord->Rsp < rec->ExceptionInformation[1]) {
+        return EXCEPTION_CONTINUE_SEARCH;
+      }
+      signo = SIGSEGV;
+      code = SEGV_ACCERR;
+      addr = reinterpret_cast<void*>(rec->ExceptionInformation[1]);
+      break;
     case EXCEPTION_ILLEGAL_INSTRUCTION:
     case EXCEPTION_PRIV_INSTRUCTION:
       signo = SIGILL;
@@ -265,6 +293,21 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
 }
 
 }  // namespace
+
+namespace gesher {
+
+size_t StackBottomReserve() {
+  // The lowest page, then the guarantee: SetThreadStackGuarantee with 0 only
+  // reads it. 0 means the default, two pages on x64 (measured: the guard
+  // page that raises EXCEPTION_STACK_OVERFLOW is the fourth from the bottom).
+  ULONG guarantee = 0;
+  if (!SetThreadStackGuarantee(&guarantee)) guarantee = 0;
+  uintptr_t reserve = (static_cast<uintptr_t>(guarantee) + kPage - 1) & ~(kPage - 1);
+  if (reserve < 2 * kPage) reserve = 2 * kPage;
+  return kPage + reserve;
+}
+
+}  // namespace gesher
 
 extern "C" void gesher_install_fault_signals(void) {
   static bool installed = false;

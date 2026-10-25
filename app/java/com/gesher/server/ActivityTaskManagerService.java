@@ -341,6 +341,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return true;
     }
 
+    /**
+     * No AppTask binders (devices track: CameraManager's getRotationOverride walks
+     * ActivityManager.getAppTasks(), which needs a list, not null).
+     */
+    @Override
+    public List<IBinder> getAppTasks(String callingPackage) {
+        return new ArrayList<>();
+    }
+
     @Override
     public List<ActivityManager.RunningTaskInfo> getTasks(int maxNum,
             boolean filterOnlyVisibleRecents, boolean keepIntentExtra, int displayId) {
@@ -1367,9 +1376,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         String changes = "changes 0x" + Integer.toHexString(diff) + ", handles 0x"
                 + Integer.toHexString(handled) + ", " + config.getLocales().toLanguageTags();
         if ((diff & ~handled) == 0) {
-            t.addTransactionItem(new ActivityConfigurationChangeItem(r.token,
-                    new Configuration() /* its override: none */, windowInfo,
-                    Display.DEFAULT_DISPLAY));
+            // Its override (none) with the change's sequence number: the client drops an
+            // override config whose seq is 0 as older than the one it has pending.
+            Configuration override = new Configuration();
+            override.seq = config.seq;
+            t.addTransactionItem(new ActivityConfigurationChangeItem(r.token, override,
+                    windowInfo, Display.DEFAULT_DISPLAY));
             return "ActivityConfigurationChangeItem (" + changes + ")";
         }
         t.addTransactionItem(new ActivityRelaunchItem(r.token, results,
