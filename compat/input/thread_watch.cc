@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "thread_watch.h"
 
@@ -136,7 +137,7 @@ const DWORD kWctFlags = 0x1 | 0x2 | 0x4;
 
 // What `tid` waits for, across processes (Wait Chain Traversal: ALPC, COM,
 // locks, SendMessage), one line.
-void DumpWaitChain(DWORD tid) {
+void DumpWaitChain(DWORD tid, std::vector<DWORD>* foreign, const char* prefix) {
   using OpenFn = HWCT(WINAPI*)(DWORD, PWAITCHAINCALLBACK);
   using CloseFn = VOID(WINAPI*)(HWCT);
   using GetFn = BOOL(WINAPI*)(HWCT, DWORD_PTR, DWORD, DWORD, LPDWORD, PWAITCHAIN_NODE_INFO,
@@ -169,7 +170,7 @@ void DumpWaitChain(DWORD tid) {
   WAITCHAIN_NODE_INFO nodes[16];
   DWORD count = 16;
   BOOL cycle = FALSE;
-  std::string line = "gesher-ime:   waits:";
+  std::string line = prefix;
   if (get(session, 0, kWctFlags, tid,
           &count, nodes, &cycle)) {
     static const char* const kTypes[] = {"?", "critical section", "SendMessage", "mutex",
@@ -181,6 +182,12 @@ void DumpWaitChain(DWORD tid) {
       const int type = static_cast<int>(node.ObjectType);
       const char* type_name = type >= 1 && type <= 10 ? kTypes[type] : "?";
       if (node.ObjectType == WctThreadType) {
+        const DWORD pid = node.ThreadObject.ProcessId;
+        if (foreign != nullptr && pid != GetCurrentProcessId() && pid != 0) {
+          bool seen = false;
+          for (DWORD f : *foreign) seen = seen || f == pid;
+          if (!seen) foreign->push_back(pid);
+        }
         snprintf(part, sizeof(part), " -> thread %lu of process %lu (%s, status %d, waiting %lu ms)",
                  static_cast<unsigned long>(node.ThreadObject.ThreadId),
                  static_cast<unsigned long>(node.ThreadObject.ProcessId),
@@ -207,9 +214,32 @@ void DumpWaitChain(DWORD tid) {
   fprintf(stderr, "%s%s", line.c_str(), kNewline);
 }
 
+// The wait chains of process `pid`'s threads that wait (another process the
+// IME's threads wait for, such as ImeBroker.exe).
+void DumpProcessChains(DWORD pid) {
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) return;
+  THREADENTRY32 entry;
+  entry.dwSize = sizeof(entry);
+  fprintf(stderr, "gesher-ime:  process %lu (%s), its threads:%s", static_cast<unsigned long>(pid),
+          ProcessName(pid).c_str(), kNewline);
+  int shown = 0;
+  for (BOOL ok = Thread32First(snapshot, &entry); ok && shown < 40;
+       ok = Thread32Next(snapshot, &entry)) {
+    if (entry.th32OwnerProcessID != pid) continue;
+    char prefix[64];
+    snprintf(prefix, sizeof(prefix), "gesher-ime:   waits (thread %lu):",
+             static_cast<unsigned long>(entry.th32ThreadID));
+    DumpWaitChain(entry.th32ThreadID, nullptr, prefix);
+    shown++;
+  }
+  CloseHandle(snapshot);
+  fflush(stderr);
+}
+
 // The process's other threads that are in the IME or the text services
 // (what the window's thread may be waiting for).
-void DumpImeThreads(DWORD skip) {
+void DumpImeThreads(DWORD skip, std::vector<DWORD>* foreign) {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot == INVALID_HANDLE_VALUE) return;
   THREADENTRY32 entry;
@@ -244,7 +274,7 @@ void DumpImeThreads(DWORD skip) {
     for (int i = 0; i < n; i++) {
       fprintf(stderr, "gesher-ime:   #%02d %s%s", i, frames[i].c_str(), kNewline);
     }
-    DumpWaitChain(entry.th32ThreadID);
+    DumpWaitChain(entry.th32ThreadID, foreign, "gesher-ime:   waits:");
   }
   CloseHandle(snapshot);
   fflush(stderr);
@@ -324,8 +354,12 @@ class ThreadWatch {
       fprintf(stderr, "gesher-ime:   #%02d %s%s", i, Describe(pcs[i]).c_str(), kNewline);
     }
     fflush(stderr);
-    DumpWaitChain(GetThreadId(thread_handle_));
-    if (first) DumpImeThreads(GetThreadId(thread_handle_));
+    std::vector<DWORD> foreign;
+    DumpWaitChain(GetThreadId(thread_handle_), &foreign, "gesher-ime:   waits:");
+    if (first) DumpImeThreads(GetThreadId(thread_handle_), &foreign);
+    if (first) {
+      for (DWORD pid : foreign) DumpProcessChains(pid);
+    }
   }
 
   HWND hwnd_;
