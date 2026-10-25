@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Media (docs/media.md): AudioTrack, AudioManager, MediaPlayer, SoundPool, ringtones and
+     the rest, each checked from what it reports and from what reaches the audio output
+     (a WAV capture in CI, tests/windows/tracks/38-media.ps1). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.mediaapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application android:label="@string/app_name">
+        <activity
+            android:name=".MediaActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

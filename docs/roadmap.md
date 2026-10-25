@@ -219,6 +219,19 @@ needs: [framework-build.md](framework-build.md).
         list, layout direction and regional preferences from Windows (or
         `$GESHER_LOCALES`); single process and the Gesher device (ci run
         40133992911, both runners and the installer; docs/fonts.md, ADR 0044)
+  - [x] Per-app locales: `LocaleManager.setApplicationLocales` (and
+        AppCompatDelegate's on API 33+) served by the `locale` service,
+        persisted per package, the app's activities relaunched with them,
+        kept across app and device restarts, `android:localeConfig` read
+        (docs/locale.md, ADR 0049)
+  - [x] Windows' language and format changes (WM_SETTINGCHANGE) delivered to
+        running apps: configuration change (relaunch or onConfigurationChanged
+        per `configChanges`), LOCALE_CHANGED, TIME_SET with the 24-hour extra
+  - [x] Windows' regional formats as Android's regional preferences (calendar,
+        first day, hour cycle, temperature unit, digits; TIME_12_24); custom
+        decimal/grouping symbols and date patterns recorded as not carried over
+        (these three: ci run 40191538466, both runners, single process and
+        the Gesher device)
 
 ## Phase 4 checklist
 
@@ -301,6 +314,30 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 5 checklist
 
+- [x] Networking ([network.md](network.md), ADR 0037; tests/windows/tracks/56-net.ps1,
+      ci runs 40141520320, 40143168361 and 40191501348 on windows-2022 and windows-2025)
+  - [x] Sockets and DNS through gesher-base over Winsock: TCP over IPv4 and
+        IPv6 loopback, timeouts, refused connects, UDP (DatagramSocket), NIO
+        with a Selector, echo with .NET servers, name lookups on the internet
+        ("net: sockets, DNS, NIO, HTTP and crypto on this machine")
+  - [x] BoringSSL with NativeBN (BigInteger) and Conscrypt's natives; JCA
+        providers Conscrypt first, then BouncyCastle; TLS 1.2/1.3 by default
+  - [x] OkHttp behind HttpURLConnection/HttpsURLConnection: HTTP to a local
+        server, HTTPS to example.com and google.com, TLS 1.3 with SNI and
+        hostname verification; expired, wrong-host, self-signed and
+        untrusted-root certificates (badssl.com) rejected
+  - [x] TLS against the Windows certificate store: Windows' roots merged into
+        `$ANDROID_ROOT/etc/security/cacerts`; a test root added to the machine
+        ROOT store is trusted, removed is not; `GESHER_WINDOWS_CERTS=0` keeps
+        only Android's CAs
+  - [x] ConnectivityManager over a connectivity service of Windows' networks
+        (NetworkCapabilities, LinkProperties, NetworkInfo, default and request
+        callbacks), in one process and over binder from an app process; an
+        address added to Windows' default-route adapter reaches the callback
+  - [x] Permissions: INTERNET (no inet sockets or lookups without it, EACCES)
+        and ACCESS_NETWORK_STATE (SecurityException); the app's network
+        security config (cleartext refused for target SDK 36)
+
 - [x] `WebView` via WebView2 ([webview.md](webview.md), ADR 0041; limits there)
   - [x] The WebView2 SDK (NuGet, pinned) with llvm-mingw, the static loader
         linked; a controller in a child window, a page's script calling a host
@@ -332,3 +369,21 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+
+## Phase 8 checklist
+
+Media ([media.md](media.md), ADR 0042):
+- [x] Audio output (stage 1; ci run 40193603079, Signal Generator in e2e)
+  - [x] AudioTrack (static and streaming, PCM 8/16/24/32-bit and float, mono
+        and stereo, any rate, resampled) over WASAPI shared mode, or a WAV
+        capture where there is no endpoint (CI); AudioManager stream volumes
+        as the Windows session volumes of the stream groups, the ringer mode,
+        audio focus, getDevices (ci run 40129230078)
+  - [x] MediaPlayer for files, assets, raw resources and http(s): MP3,
+        AAC/M4A, WAV, Ogg Vorbis and Opus, FLAC (ci run 40193603079)
+  - [x] SoundPool, Ringtone/RingtoneManager defaults, MediaMetadataRetriever
+        (ci run 40193603079)
+  - [x] AAudio and OpenSL ES for apps' native code (output; ci run 40193603079)
+- [ ] MediaCodec, MediaExtractor, MediaMuxer; video into SurfaceView and
+      TextureView (stage 2)
+- [ ] Audio input: AudioRecord, MediaRecorder (stage 3)

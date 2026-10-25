@@ -21,7 +21,6 @@ import android.hardware.OverlayProperties;
 import android.hardware.display.IDisplayManager;
 import android.hardware.display.IDisplayManagerCallback;
 import android.hardware.input.IInputManager;
-import android.media.IAudioService;
 import android.os.IBinder;
 import android.os.IServiceManager;
 import android.os.IUserManager;
@@ -100,6 +99,7 @@ public final class Services {
                 new VirtualKeyboard.InputManager()).asBinder());
         // No StandIn proxy: IAudioService's methods name android.bluetooth.BluetoothDevice,
         // which framework.jar does not have (a Proxy resolves every method's types).
+        // AudioService.java: volumes, ringer mode, audio focus (docs/media.md).
         services.put(Context.AUDIO_SERVICE,
                 new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
         services.put(ContentResolver.CONTENT_SERVICE_NAME,
@@ -147,6 +147,8 @@ public final class Services {
         // Devices (docs/devices.md): location over Windows' location service.
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 new LocationManagerService(pm, am)).asBinder());
+        services.put(Context.LOCALE_SERVICE, StandIn.of(android.app.ILocaleManager.class, new LocaleManagerService(am, atm, pm)).asBinder());  // locale track, ADR 0049
+        services.put(Context.CONNECTIVITY_SERVICE, new ConnectivityService(pm, atm));  // docs/network.md
         return services;
     }
 
@@ -267,21 +269,6 @@ public final class Services {
                 com.android.internal.inputmethod.IRemoteInputConnection inputConnection,
                 int untrustedDisplayId) {
             // No input method will ever bind to it.
-        }
-    }
-
-    /**
-     * audio: AudioService, silent. A click on a view plays its sound effect
-     * (View.performClick → AudioManager.playSoundEffect), which needs the service.
-     */
-    public static final class AudioService extends IAudioService.Default {
-        @Override
-        public void playSoundEffect(int effectType, int userId) {
-            // No sound.
-        }
-
-        @Override
-        public void playSoundEffectVolume(int effectType, float volume) {
         }
     }
 

@@ -4,8 +4,10 @@
  */
 package com.gesher.app.locale;
 
+import android.icu.text.DecimalFormatSymbols;
 import android.icu.text.NumberingSystem;
 import android.icu.util.Calendar;
+import android.icu.util.LocaleData;
 import android.icu.util.ULocale;
 import android.os.LocaleList;
 
@@ -16,8 +18,8 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * The device's locales, from Windows (docs/fonts.md, "Locale";
- * docs/decisions/0044-rtl-scripts-and-locale.md). What a device's Settings app keeps in
+ * The device's locales, from Windows (docs/locale.md; docs/decisions/0044-rtl-scripts-and-locale.md,
+ * 0049-locale-per-app-and-formats.md). What a device's Settings app keeps in
  * {@code persist.sys.locale} and the system server puts in every process's
  * Configuration, Gesher takes from the user's Windows settings:
  *
@@ -27,26 +29,43 @@ import java.util.Set;
  * <li>the first locale takes the user's regional format ({@code GetUserDefaultLocaleName})
  *     when it is the same language (an en-US display with en-GB formats is en-GB);
  * <li>the regional settings that differ from that locale's own defaults become Unicode
- *     extensions on it, as Android 14+ keeps its regional preferences: the first day of
- *     the week ({@code -u-fw-}, {@code LOCALE_IFIRSTDAYOFWEEK}), the hour cycle
- *     ({@code -u-hc-h23}/{@code h12}, the time format), the digits
- *     ({@code -u-nu-}, {@code LOCALE_IDIGITSUBSTITUTION}).
+ *     extensions on it, as Android 14+ keeps its regional preferences: the calendar
+ *     ({@code -u-ca-}, {@code LOCALE_ICALENDARTYPE}), the first day of the week
+ *     ({@code -u-fw-}, {@code LOCALE_IFIRSTDAYOFWEEK}), the hour cycle
+ *     ({@code -u-hc-h23}/{@code h12}, the time format), the temperature unit
+ *     ({@code -u-mu-celsius}/{@code fahrenhe}, from the measurement system
+ *     {@code LOCALE_IMEASURE}), the digits ({@code -u-nu-}, {@code LOCALE_IDIGITSUBSTITUTION}).
  * </ul>
+ *
+ * <p>Windows' custom decimal and grouping symbols and date patterns have no Android
+ * equivalent (an app formats with its locale's own); they are listed by
+ * {@link #customFormats} for the logs, not applied.
  *
  * <p>{@code $GESHER_LOCALES} (comma-separated language tags, e.g. {@code he-IL,en-US})
  * replaces the list as it is. With neither, the list is en-US. The layout direction
  * follows the first locale (Configuration.setLayoutDirection): right to left for Hebrew,
  * Arabic, Persian, Urdu...
+ *
+ * <p>The list is computed once per process and again on {@link #refresh} (the system
+ * server, when Windows' settings change: WM_SETTINGCHANGE).
  */
 public final class SystemLocale {
     /** The environment variable that sets the locale list (language tags, ',' between). */
     public static final String ENV = "GESHER_LOCALES";
 
     // GetLocaleInfoEx's LCTYPEs.
+    private static final int LOCALE_IMEASURE = 0x0D;
+    private static final int LOCALE_SDECIMAL = 0x0E;
+    private static final int LOCALE_STHOUSAND = 0x0F;
+    private static final int LOCALE_SSHORTDATE = 0x1F;
+    private static final int LOCALE_SLONGDATE = 0x20;
     private static final int LOCALE_STIMEFORMAT = 0x1003;
+    private static final int LOCALE_ICALENDARTYPE = 0x1009;
     private static final int LOCALE_IFIRSTDAYOFWEEK = 0x100C;
     private static final int LOCALE_IDIGITSUBSTITUTION = 0x1014;
     private static final int LOCALE_SSHORTTIME = 0x79;
+    /** The regional format's own value, without the user's overrides. */
+    private static final int LOCALE_NOUSEROVERRIDE = 0x80000000;
 
     private static final String[] DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"};
 
@@ -57,7 +76,7 @@ public final class SystemLocale {
     private SystemLocale() {
     }
 
-    /** The device's locale list (computed once per process). */
+    /** The device's locale list (computed once per process, again on {@link #refresh}). */
     public static synchronized LocaleList locales() {
         if (sLocales == null) {
             compute();
@@ -87,6 +106,63 @@ public final class SystemLocale {
     /** Sets the process's default locales (LocaleList, Locale) to the device's. */
     public static void applyDefault() {
         LocaleList.setDefault(locales());
+    }
+
+    /**
+     * Reads Windows' settings again (they changed: WM_SETTINGCHANGE). Returns what changed,
+     * for the log ({@code "locales en-US → en-US-u-fw-mon", "24-hour false → true"}), or null
+     * when nothing did.
+     */
+    public static synchronized String refresh() {
+        LocaleList oldLocales = locales();
+        boolean old24 = is24Hour();
+        sLocales = null;
+        sSource = null;
+        sIs24Hour = null;
+        LocaleList now = locales();
+        boolean now24 = is24Hour();
+        List<String> changes = new ArrayList<>();
+        if (!now.equals(oldLocales)) {
+            changes.add("locales " + oldLocales.toLanguageTags() + " → " + now.toLanguageTags());
+        }
+        if (now24 != old24) changes.add("24-hour " + old24 + " → " + now24);
+        return changes.isEmpty() ? null : String.join(", ", changes);
+    }
+
+    /**
+     * Windows' custom formats that Android has no setting for, so not carried over: the
+     * decimal and grouping symbols when they are not the first locale's, the short and long
+     * date patterns and the time format when the user changed them from the regional
+     * format's own. Empty when there are none (or with $GESHER_LOCALES).
+     */
+    public static synchronized List<String> customFormats() {
+        List<String> out = new ArrayList<>();
+        if (sSource != null && sSource.startsWith("$")) return out;
+        Locale first = locales().get(0);
+        DecimalFormatSymbols symbols = DecimalFormatSymbols.getInstance(ULocale.forLocale(first));
+        String decimal = windowsInfo(LOCALE_SDECIMAL);
+        if (decimal != null && !decimal.equals(String.valueOf(symbols.getDecimalSeparator()))) {
+            out.add("decimal symbol '" + decimal + "' (" + first.toLanguageTag() + ": '"
+                    + symbols.getDecimalSeparator() + "')");
+        }
+        String grouping = windowsInfo(LOCALE_STHOUSAND);
+        if (grouping != null
+                && !grouping.equals(String.valueOf(symbols.getGroupingSeparator()))) {
+            out.add("grouping symbol '" + grouping + "' (" + first.toLanguageTag() + ": '"
+                    + symbols.getGroupingSeparator() + "')");
+        }
+        for (int[] t : new int[][] {{LOCALE_SSHORTDATE}, {LOCALE_SLONGDATE},
+                {LOCALE_SSHORTTIME}, {LOCALE_STIMEFORMAT}}) {
+            String user = windowsInfo(t[0]);
+            String own = windowsInfo(t[0] | LOCALE_NOUSEROVERRIDE);
+            if (user != null && own != null && !user.equals(own)) {
+                String name = t[0] == LOCALE_SSHORTDATE ? "short date"
+                        : t[0] == LOCALE_SLONGDATE ? "long date"
+                        : t[0] == LOCALE_SSHORTTIME ? "short time" : "time";
+                out.add(name + " '" + user + "' (the regional format's: '" + own + "')");
+            }
+        }
+        return out;
     }
 
     private static void compute() {
@@ -142,20 +218,17 @@ public final class SystemLocale {
         }
         Locale.Builder b = new Locale.Builder().setLocale(first);
         List<String> prefs = new ArrayList<>();
-        String fw = firstDayOfWeek(first);
-        if (fw != null) {
-            b.setUnicodeLocaleKeyword("fw", fw);
-            prefs.add("fw-" + fw);
-        }
-        String hc = hourCycle(first);
-        if (hc != null) {
-            b.setUnicodeLocaleKeyword("hc", hc);
-            prefs.add("hc-" + hc);
-        }
-        String nu = numbers(first);
-        if (nu != null) {
-            b.setUnicodeLocaleKeyword("nu", nu);
-            prefs.add("nu-" + nu);
+        String[][] keywords = {
+            {"ca", calendar(first)},
+            {"fw", firstDayOfWeek(first)},
+            {"hc", hourCycle(first)},
+            {"mu", temperature(first)},
+            {"nu", numbers(first)},
+        };
+        for (String[] k : keywords) {
+            if (k[1] == null) continue;
+            b.setUnicodeLocaleKeyword(k[0], k[1]);
+            prefs.add(k[0] + "-" + k[1]);
         }
         if (!prefs.isEmpty()) {
             how.append(", regional preferences ").append(String.join(" ", prefs));
@@ -164,6 +237,48 @@ public final class SystemLocale {
         Set<Locale> unique = new LinkedHashSet<>(locales);
         sLocales = new LocaleList(unique.toArray(new Locale[0]));
         sSource = how.toString();
+    }
+
+    /**
+     * Windows' calendar, when it is not the locale's own (CAL_* ids: 1 and 2 Gregorian,
+     * 3 Japanese era, 4 Taiwan (ROC), 6 Hijri, 7 Thai Buddhist, 8 Hebrew, 23 Umm al-Qura).
+     */
+    private static String calendar(Locale locale) {
+        String value = windowsInfo(LOCALE_ICALENDARTYPE);
+        if (value == null) return null;
+        String want;
+        switch (value.trim()) {
+            case "1":
+            case "2":
+            case "9":
+            case "10":
+            case "11":
+            case "12":
+                want = "gregorian";  // Gregorian in its localized, US, French, Arabic... forms
+                break;
+            case "3":
+                want = "japanese";
+                break;
+            case "4":
+                want = "roc";
+                break;
+            case "6":
+                want = "islamic";
+                break;
+            case "7":
+                want = "buddhist";
+                break;
+            case "8":
+                want = "hebrew";
+                break;
+            case "23":
+                want = "islamic-umalqura";
+                break;
+            default:
+                return null;  // Korean Tangun era and others: no CLDR calendar
+        }
+        String own = Calendar.getInstance(ULocale.forLocale(locale)).getType();
+        return want.equals(own) ? null : want;
     }
 
     /** Windows' first day of the week, when it is not the locale's own. */
@@ -190,6 +305,35 @@ public final class SystemLocale {
         if (format == null) return null;
         boolean windows24 = hasHour24(format);
         return windows24 == localeIs24Hour(locale) ? null : windows24 ? "h23" : "h12";
+    }
+
+    /**
+     * The temperature unit of Windows' measurement system (0 metric: Celsius, 1 U.S.:
+     * Fahrenheit), when it is not the locale's own (Fahrenheit where CLDR's measurement
+     * system is U.S.).
+     */
+    private static String temperature(Locale locale) {
+        String value = windowsInfo(LOCALE_IMEASURE);
+        if (value == null) return null;
+        String want;
+        switch (value.trim()) {
+            case "0":
+                want = "celsius";
+                break;
+            case "1":
+                want = "fahrenhe";
+                break;
+            default:
+                return null;
+        }
+        String own;
+        try {
+            own = LocaleData.getMeasurementSystem(ULocale.forLocale(locale))
+                    == LocaleData.MeasurementSystem.US ? "fahrenhe" : "celsius";
+        } catch (RuntimeException e) {
+            return null;
+        }
+        return want.equals(own) ? null : want;
     }
 
     /**

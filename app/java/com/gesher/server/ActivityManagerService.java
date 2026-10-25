@@ -32,7 +32,6 @@ import android.system.Os;
 import android.util.ArrayMap;
 
 import com.android.internal.os.ApplicationSharedMemory;
-import com.gesher.app.DeviceProfile;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
@@ -411,7 +410,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
      * no services map (the app asks servicemanager), no font map (Typeface loads the
      * preinstalled one) and the shared memory region with the system features.
      */
-    void bindApplication(IApplicationThread thread, ApplicationInfo ai) throws Exception {
+    void bindApplication(IApplicationThread thread, ApplicationInfo ai,
+            android.content.res.Configuration config) throws Exception {
         FileDescriptor sharedMemory = sharedMemory().getReadOnlyFileDescriptor();
         Bundle coreSettings = new Bundle();
         // CoreSettingsObserver's bundle: the default device's settings, by device id.
@@ -425,7 +425,8 @@ public final class ActivityManagerService extends IActivityManager.Default {
                 null /* instrumentationUiConnection */, ApplicationThreadConstants.DEBUG_OFF,
                 false /* enableBinderTracking */, false /* trackAllocation */,
                 false /* isRestrictedBackupMode */, false /* persistent */,
-                DeviceProfile.configuration(), CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO,
+                config /* the package's: LocaleManagerService */,
+                CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO,
                 null /* services */, coreSettings, "unknown" /* buildSerial */,
                 null /* autofillOptions */, null /* contentCaptureOptions */,
                 CompatChanges.disabledFor(ai.targetSdkVersion), new long[0] /* loggableCompatChanges */,

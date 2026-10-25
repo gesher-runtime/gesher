@@ -70,6 +70,14 @@ Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignor
 ; installs them as $ANDROID_ROOT/fonts and $ANDROID_ROOT/etc/fonts.xml.
 Source: "{#BuildDir}\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
 Source: "{#BuildDir}\FONTS-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Networking (docs/network.md): Android's CA certificates, which dalvikvm joins
+; with the roots Windows trusts as the system CAs ($ANDROID_ROOT/etc/security/cacerts),
+; and the licenses of BoringSSL, Conscrypt, OkHttp and BouncyCastle.
+Source: "{#BuildDir}\cacerts\*"; DestDir: "{app}\cacerts"; Flags: ignoreversion
+Source: "{#BuildDir}\NET-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; Gesher's default ringtone, notification and alarm sounds (docs/media.md):
+; gesher-app.ps1 installs them as $ANDROID_ROOT/media/audio.
+Source: "{#BuildDir}\media\audio\*"; DestDir: "{app}\media\audio"; Flags: ignoreversion recursesubdirs
 Source: "gesher.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
