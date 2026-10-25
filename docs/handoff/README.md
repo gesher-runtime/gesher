@@ -100,6 +100,18 @@ Merged so far:
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 
+Wave 3 (2026-10-25 evening), cut from phase4/integration 0b55fa2, briefs in
+[tracks/](tracks/), reusing merged worktrees:
+- `windows3` (C:\work\gesher-lifecycle): screen orientation, window thread
+  wake under WebView2, multi-resume, moveTaskToBack minimizes, single-process
+  relaunch, IME insets, Windows clipboard. ADR 0053, 51-windows3.ps1.
+- `aot2` (C:\work\gesher-stack): app images, profiles, speed-profile
+  framework. ADR 0054, 61-aot2.ps1.
+- `exec2` (C:\work\gesher-exec): fork/exec/posix_spawn from native code,
+  signals between processes, executable TLS, /system/bin programs. ADR 0055,
+  43-exec2.ps1.
+- ADR 0051 is hwsvc2's; 0052 is reserved for media stage 2.
+
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
 
