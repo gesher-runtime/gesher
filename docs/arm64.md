@@ -67,6 +67,24 @@ fetches a pinned Boost. The DLL links the CRT and libunwind statically, so it
 ships as a single file next to dalvikvm. Its license notice is installed as
 `licenses/DYNARMIC-NOTICES.txt`.
 
+## Performance
+
+Measured on the CI runners (windows-2022/2025, 4 cores), printed as
+`INFO  arm64 perf` by `tracks/47-arm64.ps1`:
+
+| Workload | Translated | Native | Overhead |
+|---|---|---|---|
+| Register-only loop, 2·10⁸ iterations (smoke test, hand-written A64) | ~310 ms | ~62 ms | ×5.0 |
+| Compiled C kernel: sieve, table CRC-32, LCG (`arm64_perf_kernel.h`, NDK -O2 vs. llvm-mingw -O2), 100 rounds | ~95 ms | ~26 ms | ×3.6 |
+
+(ci `40213822267`, before fastmem; the first agent's ×1.3–1.6 compared against
+a native loop with a `volatile` store per iteration.) dynarmic keeps guest
+registers in memory between blocks and materialises NZCV, which a tight
+compare-and-branch loop pays for on every iteration; compiled code with real
+memory traffic fares better. The time includes translating each block once
+(dynarmic caches translations per Jit). Fastmem (inline guest memory
+accesses) took the kernel from ~×4.5 to ~×4.0 locally.
+
 ## Status and next steps
 
 _Last updated 2026-10-25 by the successor arm64 agent; branch `wip/arm64`._
