@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <tlhelp32.h>
+#include <wct.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -113,6 +114,99 @@ int Unwind(HANDLE thread, DWORD64* pcs, int max) {
   return n;
 }
 
+// The image name of process `pid` ("?" when it cannot be opened).
+std::string ProcessName(DWORD pid) {
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (process == nullptr) return "?";
+  wchar_t path[MAX_PATH] = {0};
+  DWORD size = MAX_PATH;
+  std::string out = "?";
+  if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+    char narrow[MAX_PATH * 3] = {0};
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, narrow, sizeof(narrow), nullptr, nullptr);
+    out = narrow;
+  }
+  CloseHandle(process);
+  return out;
+}
+
+// WCT_OUT_PROC_FLAG | WCT_OUT_PROC_COM_FLAG | WCT_OUT_PROC_CS_FLAG (not in
+// every wct.h).
+const DWORD kWctFlags = 0x1 | 0x2 | 0x4;
+
+// What `tid` waits for, across processes (Wait Chain Traversal: ALPC, COM,
+// locks, SendMessage), one line.
+void DumpWaitChain(DWORD tid) {
+  using OpenFn = HWCT(WINAPI*)(DWORD, PWAITCHAINCALLBACK);
+  using CloseFn = VOID(WINAPI*)(HWCT);
+  using GetFn = BOOL(WINAPI*)(HWCT, DWORD_PTR, DWORD, DWORD, LPDWORD, PWAITCHAIN_NODE_INFO,
+                              LPBOOL);
+  using RegisterFn = VOID(WINAPI*)(PCOGETCALLSTATE, PCOGETACTIVATIONSTATE);
+  HMODULE advapi = LoadLibraryW(L"advapi32.dll");
+  if (advapi == nullptr) return;
+  auto open = reinterpret_cast<OpenFn>(
+      reinterpret_cast<void*>(GetProcAddress(advapi, "OpenThreadWaitChainSession")));
+  auto close = reinterpret_cast<CloseFn>(
+      reinterpret_cast<void*>(GetProcAddress(advapi, "CloseThreadWaitChainSession")));
+  auto get = reinterpret_cast<GetFn>(
+      reinterpret_cast<void*>(GetProcAddress(advapi, "GetThreadWaitChain")));
+  auto reg = reinterpret_cast<RegisterFn>(
+      reinterpret_cast<void*>(GetProcAddress(advapi, "RegisterWaitChainCOMCallback")));
+  if (open == nullptr || close == nullptr || get == nullptr) return;
+  static bool registered = false;
+  if (!registered && reg != nullptr) {
+    registered = true;
+    if (HMODULE ole = LoadLibraryW(L"ole32.dll")) {
+      auto call_state = reinterpret_cast<PCOGETCALLSTATE>(
+          reinterpret_cast<void*>(GetProcAddress(ole, "CoGetCallState")));
+      auto activation_state = reinterpret_cast<PCOGETACTIVATIONSTATE>(
+          reinterpret_cast<void*>(GetProcAddress(ole, "CoGetActivationState")));
+      if (call_state != nullptr && activation_state != nullptr) reg(call_state, activation_state);
+    }
+  }
+  HWCT session = open(0, nullptr);
+  if (session == nullptr) return;
+  WAITCHAIN_NODE_INFO nodes[16];
+  DWORD count = 16;
+  BOOL cycle = FALSE;
+  std::string line = "gesher-ime:   waits:";
+  if (get(session, 0, kWctFlags, tid,
+          &count, nodes, &cycle)) {
+    static const char* const kTypes[] = {"?", "critical section", "SendMessage", "mutex",
+                                         "ALPC", "COM", "thread wait", "process wait",
+                                         "thread", "COM activation", "unknown"};
+    for (DWORD i = 0; i < count && i < 16; i++) {
+      const WAITCHAIN_NODE_INFO& node = nodes[i];
+      char part[512];
+      const int type = static_cast<int>(node.ObjectType);
+      const char* type_name = type >= 1 && type <= 10 ? kTypes[type] : "?";
+      if (node.ObjectType == WctThreadType) {
+        snprintf(part, sizeof(part), " -> thread %lu of process %lu (%s, status %d, waiting %lu ms)",
+                 static_cast<unsigned long>(node.ThreadObject.ThreadId),
+                 static_cast<unsigned long>(node.ThreadObject.ProcessId),
+                 ProcessName(node.ThreadObject.ProcessId).c_str(),
+                 static_cast<int>(node.ObjectStatus),
+                 static_cast<unsigned long>(node.ThreadObject.WaitTime));
+      } else {
+        char name[WCT_OBJNAME_LENGTH * 3] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, node.LockObject.ObjectName, -1, name, sizeof(name),
+                            nullptr, nullptr);
+        snprintf(part, sizeof(part), " -> %s '%s' (status %d)", type_name, name,
+                 static_cast<int>(node.ObjectStatus));
+      }
+      line += part;
+    }
+    if (cycle) line += " (a cycle)";
+  } else {
+    char part[64];
+    snprintf(part, sizeof(part), " GetThreadWaitChain failed (%lu)",
+             static_cast<unsigned long>(GetLastError()));
+    line += part;
+  }
+  close(session);
+  fprintf(stderr, "%s%s", line.c_str(), kNewline);
+}
+
 // The process's other threads that are in the IME or the text services
 // (what the window's thread may be waiting for).
 void DumpImeThreads(DWORD skip) {
@@ -150,6 +244,7 @@ void DumpImeThreads(DWORD skip) {
     for (int i = 0; i < n; i++) {
       fprintf(stderr, "gesher-ime:   #%02d %s%s", i, frames[i].c_str(), kNewline);
     }
+    DumpWaitChain(entry.th32ThreadID);
   }
   CloseHandle(snapshot);
   fflush(stderr);
@@ -229,6 +324,7 @@ class ThreadWatch {
       fprintf(stderr, "gesher-ime:   #%02d %s%s", i, Describe(pcs[i]).c_str(), kNewline);
     }
     fflush(stderr);
+    DumpWaitChain(GetThreadId(thread_handle_));
     if (first) DumpImeThreads(GetThreadId(thread_handle_));
   }
 
