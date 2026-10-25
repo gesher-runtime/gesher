@@ -1127,8 +1127,15 @@ public final class WindowSession extends IWindowSession.Stub {
 
     /** The Activity whose token is {@code token} in this process, or null. */
     private static android.app.Activity activity(IBinder token) {
+        if (token == null) return null;
         ActivityThread thread = ActivityThread.currentActivityThread();
-        return thread != null && token != null ? thread.getActivity(token) : null;
+        android.app.Activity a = thread != null ? thread.getActivity(token) : null;
+        if (a == null) {
+            // gesher-app's single process: its driver's Activity is not ActivityThread's.
+            android.app.Activity local = android.app.GesherAppDriver.currentActivity();
+            if (local != null && local.getActivityToken() == token) a = local;
+        }
+        return a;
     }
 
     /** The task of the Activity whose token is {@code token}, or -1. */
@@ -1721,6 +1728,8 @@ public final class WindowSession extends IWindowSession.Stub {
     public int addToDisplayAsUser(IWindow window, WindowManager.LayoutParams attrs,
             int viewVisibility, int layerStackId, int userId, int requestedVisibleTypes,
             InputChannel outInputChannel, WindowRelayoutResult result) {
+        // After a LaunchActivityItem: the Activity's calls go through the hook again.
+        ActivityClientHook.ensure();
         AppWindow w = new AppWindow(window);
         w.attrs.copyFrom(attrs);
         w.requestedVisibleTypes = requestedVisibleTypes;
@@ -1823,6 +1832,7 @@ public final class WindowSession extends IWindowSession.Stub {
         w.requestedHeight = requestedHeight;
         // The task turned for an orientation (or back): the window takes its new shape.
         syncTaskShape(w);
+        ActivityClientHook.ensure();
         WindowRelayoutResult result = outRelayoutResult != null ? outRelayoutResult
                 : new WindowRelayoutResult(new ClientWindowFrames(),
                         new android.util.MergedConfiguration(), new InsetsState(),

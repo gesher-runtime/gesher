@@ -21,6 +21,31 @@ import android.widget.LinearLayout;
 public class PanActivity extends Reporting {
     private String mDrawn;
 
+    /** ViewRootImpl's pan and insets, for the test's log: "scroll 0/0, focus true, ...". */
+    private String panState(View edit) {
+        StringBuilder s = new StringBuilder("focus " + edit.isFocused() + ", mode 0x"
+                + Integer.toHexString(getWindow().getAttributes().softInputMode));
+        try {
+            Object root = edit.getViewRootImpl();
+            for (String f : new String[] {"mScrollY", "mCurScrollY"}) {
+                java.lang.reflect.Field field = root.getClass().getDeclaredField(f);
+                field.setAccessible(true);
+                s.append(", ").append(f).append(' ').append(field.get(root));
+            }
+            java.lang.reflect.Field ai = View.class.getDeclaredField("mAttachInfo");
+            ai.setAccessible(true);
+            Object info = ai.get(edit);
+            for (String f : new String[] {"mVisibleInsets", "mContentInsets"}) {
+                java.lang.reflect.Field field = info.getClass().getDeclaredField(f);
+                field.setAccessible(true);
+                s.append(", ").append(f).append(' ').append(field.get(info));
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            s.append(", ").append(e);
+        }
+        return s.toString();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -38,6 +63,7 @@ public class PanActivity extends Reporting {
         root.addView(edit, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(root);
+        getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
         edit.requestFocus();
         root.getViewTreeObserver().addOnDrawListener(() -> {
             if (root.getWidth() == 0) return;
@@ -45,7 +71,7 @@ public class PanActivity extends Reporting {
             edit.getLocationInWindow(at);
             String where = "edit top " + at[1] + ", edit bottom " + (at[1] + edit.getHeight())
                     + ", content " + root.getWidth() + "x" + root.getHeight() + ", "
-                    + imeInsets();
+                    + imeInsets() + " (" + panState(edit) + ")";
             if (!where.equals(mDrawn)) {
                 mDrawn = where;
                 say("PanActivity drawn: " + where);
