@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An app without INTERNET and ACCESS_NETWORK_STATE (docs/network.md): its sockets,
+     name lookups and ConnectivityManager calls are refused, as on a phone. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.nonetapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application android:label="@string/app_name">
+        <activity
+            android:name=".NoNetActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

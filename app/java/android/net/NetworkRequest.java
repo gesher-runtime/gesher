@@ -4,52 +4,107 @@
  */
 package android.net;
 
-/**
- * A placeholder for the Connectivity module's NetworkRequest, for
- * {@link ConnectivityManager}'s signatures: requests are built and never satisfied.
- */
-public class NetworkRequest {
-    private final NetworkCapabilities mCapabilities;
+import android.os.Parcel;
+import android.os.Parcelable;
 
-    NetworkRequest(NetworkCapabilities capabilities) {
-        mCapabilities = capabilities;
+import java.util.Objects;
+
+/**
+ * The Connectivity module's NetworkRequest (framework.jar compiles against the module's
+ * API and does not contain it), with its public API (docs/network.md): the capabilities
+ * and transports a network must have, as {@link ConnectivityManager} matches Windows'
+ * networks against them. A new Builder asks for NOT_RESTRICTED, TRUSTED and NOT_VPN, as
+ * the module's does.
+ */
+public class NetworkRequest implements Parcelable {
+    /** @hide */
+    public final NetworkCapabilities networkCapabilities;
+
+    /** @hide */
+    public NetworkRequest(NetworkCapabilities capabilities) {
+        networkCapabilities = new NetworkCapabilities(capabilities);
+    }
+
+    public NetworkRequest(NetworkRequest that) {
+        this(that.networkCapabilities);
     }
 
     public boolean hasCapability(int capability) {
-        return mCapabilities.hasCapability(capability);
+        return networkCapabilities.hasCapability(capability);
     }
 
     public boolean hasTransport(int transportType) {
-        return mCapabilities.hasTransport(transportType);
+        return networkCapabilities.hasTransport(transportType);
     }
 
     public int[] getCapabilities() {
-        return mCapabilities.getCapabilities();
+        return networkCapabilities.getCapabilities();
     }
 
     public int[] getTransportTypes() {
-        return mCapabilities.getTransportTypes();
+        return networkCapabilities.getTransportTypes();
     }
 
-    /** As NetworkRequest.Builder: INTERNET, NOT_RESTRICTED, TRUSTED and NOT_VPN by default. */
+    public NetworkSpecifier getNetworkSpecifier() {
+        return networkCapabilities.getNetworkSpecifier();
+    }
+
+    public boolean canBeSatisfiedBy(NetworkCapabilities nc) {
+        return networkCapabilities.satisfiedByNetworkCapabilities(nc);
+    }
+
+    @Override
+    public String toString() {
+        return "NetworkRequest [ " + networkCapabilities + " ]";
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        return o instanceof NetworkRequest
+                && networkCapabilities.equals(((NetworkRequest) o).networkCapabilities);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(networkCapabilities);
+    }
+
+    @Override
+    public int describeContents() {
+        return 0;
+    }
+
+    @Override
+    public void writeToParcel(Parcel dest, int flags) {
+        networkCapabilities.writeToParcel(dest, flags);
+    }
+
+    public static final Creator<NetworkRequest> CREATOR = new Creator<NetworkRequest>() {
+        @Override
+        public NetworkRequest createFromParcel(Parcel in) {
+            return new NetworkRequest(NetworkCapabilities.CREATOR.createFromParcel(in));
+        }
+
+        @Override
+        public NetworkRequest[] newArray(int size) {
+            return new NetworkRequest[size];
+        }
+    };
+
+    /** As NetworkRequest.Builder. */
     public static class Builder {
-        private final NetworkCapabilities mCapabilities = new NetworkCapabilities()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
+        private final NetworkCapabilities mCapabilities;
 
         public Builder() {
+            mCapabilities = new NetworkCapabilities();
         }
 
         public Builder(NetworkRequest request) {
-            clearCapabilities();
-            for (int c : request.getCapabilities()) mCapabilities.addCapability(c);
-            for (int t : request.getTransportTypes()) mCapabilities.addTransportType(t);
+            mCapabilities = new NetworkCapabilities(request.networkCapabilities);
         }
 
         public NetworkRequest build() {
-            return new NetworkRequest(new NetworkCapabilities(mCapabilities));
+            return new NetworkRequest(mCapabilities);
         }
 
         public Builder addCapability(int capability) {
@@ -77,7 +132,32 @@ public class NetworkRequest {
             return this;
         }
 
+        public Builder setNetworkSpecifier(String networkSpecifier) {
+            return setNetworkSpecifier(networkSpecifier == null ? null
+                    : new StringNetworkSpecifier(networkSpecifier));
+        }
+
+        public Builder setNetworkSpecifier(NetworkSpecifier networkSpecifier) {
+            mCapabilities.setNetworkSpecifier(networkSpecifier);
+            return this;
+        }
+
+        public Builder setSignalStrength(int signalStrength) {
+            mCapabilities.setSignalStrength(signalStrength);
+            return this;
+        }
+
         public Builder setIncludeOtherUidNetworks(boolean include) {
+            return this;
+        }
+
+        public Builder setSubscriptionIds(java.util.Set<Integer> subIds) {
+            return this;
+        }
+
+        /** @hide */
+        public Builder setCapabilities(NetworkCapabilities nc) {
+            mCapabilities.set(nc);
             return this;
         }
     }
