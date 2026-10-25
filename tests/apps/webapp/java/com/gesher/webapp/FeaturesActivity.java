@@ -142,6 +142,10 @@ public class FeaturesActivity extends Activity {
                     @Override
                     public void onPageFinished(WebView v, String url) {
                         say("popup onPageFinished: " + url);
+                        v.evaluateJavascript("window.opener ? \"an opener\" : \"no opener\"",
+                                o -> say("popup has " + o));
+                        // The file choosers next, whether or not the popup closes itself.
+                        mHandler.postDelayed(FeaturesActivity.this::clickApp, 3000);
                     }
                 });
                 mPopup.setWebChromeClient(new WebChromeClient() {
@@ -149,7 +153,6 @@ public class FeaturesActivity extends Activity {
                     public void onCloseWindow(WebView window) {
                         say("onCloseWindow: " + (window == mPopup ? "the popup" : "another"));
                         window.destroy();
-                        mHandler.postDelayed(FeaturesActivity.this::clickApp, 500);
                     }
                 });
                 ((WebView.WebViewTransport) resultMsg.obj).setWebView(mPopup);
@@ -292,7 +295,11 @@ public class FeaturesActivity extends Activity {
         mMain.evaluateJavascript("openPopup()", null);
     }
 
+    private boolean mClickedApp;
+
     private void clickApp() {
+        if (mClickedApp) return;
+        mClickedApp = true;
         mMain.evaluateJavascript("place('pickApp')", value -> say("click pickApp at "
                 + inWindow(value)));
     }

@@ -1127,7 +1127,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             return;
         }
         System.arraycopy(now, 0, mPlaced, 0, now.length);
-        if (holes.length != mPlacedHoles.length || mHoleCount != mPlacedHoleCount) {
+        if (!Arrays.equals(holes, mPlacedHoles)) {
             StringBuilder what = new StringBuilder();
             what.append(mHoleCount).append(" view(s) over the WebView cut out of its window");
             for (int i = 0; i + 6 < holes.length; i += 7 + 2 * holes[i + 6]) {
@@ -1135,7 +1135,9 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                         .append(holes[i + 1]).append(',').append(holes[i + 2]).append('-')
                         .append(holes[i + 3]).append(',').append(holes[i + 4]);
             }
-            GesherWebView.log(what.toString());
+            String line = what.toString();
+            if (!line.equals(mPlacedHolesLog)) GesherWebView.log(line);
+            mPlacedHolesLog = line;
         }
         mPlacedHoleCount = mHoleCount;
         mPlacedHoles = holes;
@@ -1197,6 +1199,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     private int mPlacedHoleCount;
+    private String mPlacedHolesLog = "";
 
     private static String shapeName(int kind) {
         switch (kind) {
@@ -1226,6 +1229,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         android.view.ViewOutlineProvider provider = v.getOutlineProvider();
         try {
             if (provider != null && v.getWidth() > 0 && v.getHeight() > 0) {
+                // The background's bounds are set when the view first draws, which may
+                // come after this (pre-draw): as View.drawBackground sets them.
+                android.graphics.drawable.Drawable bg = v.getBackground();
+                if (bg != null && bg.getBounds().isEmpty()) bg.setBounds(0, 0, v.getWidth(), v.getHeight());
                 provider.getOutline(v, mOutline);
             }
         } catch (RuntimeException e) {
