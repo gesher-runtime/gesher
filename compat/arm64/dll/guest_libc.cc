@@ -264,16 +264,78 @@ int64_t GESHER_SYSV GuestSyscall(int64_t nr, int64_t a0, int64_t a1, int64_t a2,
   return DoSyscall(static_cast<uint64_t>(nr), a);
 }
 
-// --- dlsym -----------------------------------------------------------------------
+// --- dlopen / dlsym ----------------------------------------------------------------
+// The shim's dlopen only knows ELF files, but Android code also dlopen()s the
+// platform libraries the shim implements (SDL: libEGL.so, libGLESv2.so;
+// audio: libOpenSLES.so, libaaudio.so). For the guest, such a library is a
+// pseudo handle whose dlsym() is the shim's symbol; and a dlsym() the shim
+// cannot answer (RTLD_DEFAULT "strlen", a libc symbol through a library's
+// handle, as bionic searches its dependencies) falls back to the shim too.
+// The host function pointers this returns are called by the guest directly
+// (the translator's host-pointer path).
+void* g_dlopen = nullptr;
 void* g_dlsym = nullptr;
+void* g_dlerror = nullptr;
+char g_shim_handle_storage;
+void* const kShimHandle = &g_shim_handle_storage;
+
+struct ShimLibrary {
+  const char* soname;
+  const char* probe;  // a symbol the shim must have for the library to "exist"
+};
+const ShimLibrary kShimLibraries[] = {
+    {"libc.so", "malloc"},          {"libm.so", "sin"},
+    {"libdl.so", "dlopen"},         {"liblog.so", "__android_log_print"},
+    {"libEGL.so", "eglGetDisplay"}, {"libGLESv1_CM.so", "glClear"},
+    {"libGLESv2.so", "glClear"},    {"libGLESv3.so", "glClear"},
+    {"libandroid.so", "ANativeWindow_acquire"}, {"libjnigraphics.so", "AndroidBitmap_getInfo"},
+    {"libOpenSLES.so", "slCreateEngine"}, {"libaaudio.so", "AAudio_createStreamBuilder"},
+    {"libz.so", "inflate"},         {"libmediandk.so", "AMediaCodec_createDecoderByType"},
+    {"libvulkan.so", "vkCreateInstance"}, {"libnativewindow.so", "ANativeWindow_acquire"},
+};
+
+void ClearDlerror() {
+  if (g_dlerror != nullptr) reinterpret_cast<const char*(GESHER_SYSV*)()>(g_dlerror)();
+}
+
+void* GESHER_SYSV GuestDlopen(const char* filename, int flags) {
+  void* h = g_dlopen != nullptr
+                ? reinterpret_cast<void*(GESHER_SYSV*)(const char*, int)>(g_dlopen)(filename, flags)
+                : nullptr;
+  if (h != nullptr || filename == nullptr) return h;
+  const char* base = std::strrchr(filename, '/');
+  base = base != nullptr ? base + 1 : filename;
+  for (const ShimLibrary& l : kShimLibraries) {
+    if (std::strcmp(base, l.soname) == 0 && Host(l.probe) != nullptr) {
+      ClearDlerror();
+      return kShimHandle;
+    }
+  }
+  return nullptr;
+}
+
+void* GESHER_SYSV GuestAndroidDlopenExt(const char* filename, int flags, const void* /*info*/) {
+  return GuestDlopen(filename, flags);
+}
 
 void* GESHER_SYSV GuestDlsym(void* handle, const char* name) {
-  if (name != nullptr) {
-    if (void* g = GuestSymbol(name)) return g;
+  if (name == nullptr) return nullptr;
+  if (void* g = GuestSymbol(name)) return g;
+  if (handle == kShimHandle) return Host(name);
+  void* r = g_dlsym != nullptr
+                ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*)>(g_dlsym)(handle, name)
+                : nullptr;
+  if (r == nullptr) {
+    r = Host(name);
+    if (r != nullptr) ClearDlerror();
   }
-  return g_dlsym != nullptr
-             ? reinterpret_cast<void*(GESHER_SYSV*)(void*, const char*)>(g_dlsym)(handle, name)
-             : nullptr;
+  return r;
+}
+
+int GESHER_SYSV GuestDlclose(void* handle) {
+  if (handle == kShimHandle) return 0;
+  static auto close = reinterpret_cast<int(GESHER_SYSV*)(void*)>(Host("dlclose"));
+  return close != nullptr ? close(handle) : 0;
 }
 
 // --- setjmp / longjmp (guest code) -------------------------------------------------
@@ -375,8 +437,15 @@ void InitGuestLibc() {
   for (const SyscallMap& s : kSyscalls) g_syscalls[s.nr] = {Host(s.fn), s.ret};
   Override("syscall", reinterpret_cast<void*>(&GuestSyscall));
 
+  g_dlopen = Host("dlopen");
   g_dlsym = Host("dlsym");
+  g_dlerror = Host("dlerror");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
+  if (g_dlopen) {
+    Override("dlopen", reinterpret_cast<void*>(&GuestDlopen));
+    Override("android_dlopen_ext", reinterpret_cast<void*>(&GuestAndroidDlopenExt));
+    Override("dlclose", reinterpret_cast<void*>(&GuestDlclose));
+  }
 
   void* sj = EmitGuestCode(kSetjmp, sizeof(kSetjmp) / 4);
   void* lj = EmitGuestCode(kLongjmp, sizeof(kLongjmp) / 4);
