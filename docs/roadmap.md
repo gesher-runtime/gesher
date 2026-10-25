@@ -288,3 +288,27 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+
+## Phase 7 checklist (arm64 translation)
+
+See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md).
+
+- [x] Translator chosen and an ADR written: **dynarmic** (0BSD; A64 frontend,
+      x86-64 backend) in a proxy DLL `gesher_arm64.dll`, the guest sharing the
+      host address space, trampolines marshalling AAPCS64 ⇄ the host ABI
+      ([0047](decisions/0047-arm64-translation.md)); Berberis is riscv64-only
+      at the pinned tag, QEMU is GPL
+- [x] `gesher_arm64.dll` builds with llvm-mingw and runs host↔guest round
+      trips (`compat/arm64`, `arm64.yml`, `tracks/47-arm64.ps1`)
+- [ ] ELF loader for arm64-v8a `.so` files (EM_AARCH64, aarch64 relocations,
+      guest code non-executable and registered with the translator); a
+      self-contained `.so` and a libc/pthread one through the shim
+- [ ] `System.loadLibrary` of an app's arm64-v8a NDK library, with JNI calls
+      both ways (guest JNIEnv/JavaVM proxy tables)
+- [ ] arm64 TLS (TPIDR_EL0), the stack protector, and guest-created threads
+- [ ] libandroid, EGL/GLES and NativeActivity for an arm64-v8a `.so`
+- [ ] The installer and PackageManager pick arm64-v8a when an APK has no
+      x86_64 libraries (`NativeLibs.abiFor`); `Build.SUPPORTED_ABIS` lists
+      arm64-v8a after x86_64 (build.prop) — written, not yet exercised by a test
+- [ ] A real arm64-only F-Droid app in the e2e job
+- [ ] Translation overhead measured and recorded (docs/arm64.md)

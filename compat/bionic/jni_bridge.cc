@@ -34,6 +34,7 @@
 #include "jni_bridge.h"
 #include "shim_internal.h"
 
+#include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_dlopen.h>
 #include <gesher/elf_loader.h>
@@ -62,10 +63,17 @@ using gesher::bionic::SysvVaList;
 extern "C" {
 // Assembly, below.
 void gesher_jni_native_entry();
+// The guest (arm64) native entry: like gesher_jni_native_entry but sets the
+// thread's guest mode first (ADR 0047).
+void gesher_jni_native_entry_guest();
 // Called by gesher_jni_native_entry (Microsoft ABI): the JNIEnv* to pass on.
 JNIEnv* gesher_jni_enter(JNIEnv* env);
+// Called by gesher_jni_native_entry_guest: sets guest mode, then as above.
+JNIEnv* gesher_jni_enter_guest(JNIEnv* env);
 // JNI_OnLoad / JNI_OnUnload as ART calls them, plus the .so's function.
 jint gesher_jni_onload_bridge(JavaVM* vm, void* reserved, void* target);
+// The guest JNI_OnLoad bridge: sets guest mode and passes the guest JavaVM.
+jint gesher_jni_onload_bridge_guest(JavaVM* vm, void* reserved, void* target);
 }
 
 namespace {
@@ -91,7 +99,43 @@ std::atomic<JavaVM*> g_real_vm{nullptr};
 thread_local ProxyEnv t_env{g_env_table, nullptr};
 thread_local bool t_thread_ready = false;
 
-JavaVM* ProxyVmPtr() { return reinterpret_cast<JavaVM*>(&g_vm); }
+// --- guest (arm64) proxy tables (ADR 0047) -----------------------------------
+// A guest .so calls through its JNIEnv/JavaVM function tables with AAPCS64, and
+// executes the entries as guest code; so a guest gets tables whose every slot is
+// a guest trampoline (gesher::arm64::BindHostFunction) into the same System V
+// host entries an x86-64 .so calls directly. t_guest_mode selects the guest
+// tables for the proxies handed to loaded code; it is set on a thread that
+// enters a guest native or guest JNI_OnLoad and stays set (such a thread serves
+// guest code). x86-64 libraries never set it, so their path is unchanged.
+void* g_env_table_guest[kEnvSlots];
+void* g_vm_table_guest[kVmSlots];
+ProxyVm g_vm_guest{g_vm_table_guest};
+thread_local bool t_guest_mode = false;
+std::once_flag g_guest_tables_once;
+bool g_guest_tables_ok = false;
+
+void BuildGuestTables() {
+  std::call_once(g_guest_tables_once, [] {
+    if (!gesher::arm64::EnsureLoaded()) return;
+    for (size_t i = 0; i < kEnvSlots; ++i) {
+      g_env_table_guest[i] =
+          g_env_table[i] ? gesher::arm64::BindHostFunction(g_env_table[i]) : nullptr;
+    }
+    for (size_t i = 0; i < kVmSlots; ++i) {
+      g_vm_table_guest[i] =
+          g_vm_table[i] ? gesher::arm64::BindHostFunction(g_vm_table[i]) : nullptr;
+    }
+    g_guest_tables_ok = true;
+  });
+}
+
+JavaVM* ProxyVmPtr() {
+  if (t_guest_mode) {
+    BuildGuestTables();
+    return reinterpret_cast<JavaVM*>(&g_vm_guest);
+  }
+  return reinterpret_cast<JavaVM*>(&g_vm);
+}
 
 JavaVM* RealVm() {
   JavaVM* vm = g_real_vm.load(std::memory_order_acquire);
@@ -115,6 +159,14 @@ void EnsureThread() {
 JNIEnv* Wrap(JNIEnv* real) {
   if (real == nullptr) return nullptr;
   t_env.real = real;
+  // A guest-serving thread gets the guest (trampoline) table, which the guest
+  // can call; a host .so gets the host table.
+  if (t_guest_mode) {
+    BuildGuestTables();
+    t_env.functions = g_guest_tables_ok ? g_env_table_guest : g_env_table;
+  } else {
+    t_env.functions = g_env_table;
+  }
   return reinterpret_cast<JNIEnv*>(&t_env);
 }
 
@@ -154,13 +206,20 @@ void* EmitStubLocked(uint8_t rex, uint8_t op, void* ctx, void* entry) {
   return p;
 }
 
-// The System V entry ART calls for the .so's native `fn`.
+// The System V entry ART calls for the .so's native `fn`. For a guest (arm64)
+// native, the entry sets the thread's guest mode, swaps ART's JNIEnv for the
+// guest proxy, and enters the guest through a host_entry stub (ADR 0047).
 void* NativeEntry(void* fn) {
   if (fn == nullptr) return nullptr;
   std::lock_guard<std::mutex> lock(g_stub_mutex);
   void*& stub = g_native_stubs[fn];
   if (stub == nullptr) {
-    stub = EmitStubLocked(0x49, 0xBB, fn, reinterpret_cast<void*>(&gesher_jni_native_entry));
+    if (gesher::arm64::IsGuestCode(fn)) {
+      void* he = gesher::arm64::HostEntry(fn);
+      stub = EmitStubLocked(0x49, 0xBB, he, reinterpret_cast<void*>(&gesher_jni_native_entry_guest));
+    } else {
+      stub = EmitStubLocked(0x49, 0xBB, fn, reinterpret_cast<void*>(&gesher_jni_native_entry));
+    }
   }
   return stub;
 }
@@ -170,7 +229,13 @@ void* OnLoadEntry(void* fn) {
   std::lock_guard<std::mutex> lock(g_stub_mutex);
   void*& stub = g_onload_stubs[fn];
   if (stub == nullptr) {
-    stub = EmitStubLocked(0x49, 0xB8, fn, reinterpret_cast<void*>(&gesher_jni_onload_bridge));
+    if (gesher::arm64::IsGuestCode(fn)) {
+      void* he = gesher::arm64::HostEntry(fn);
+      stub = EmitStubLocked(0x49, 0xB8, he,
+                            reinterpret_cast<void*>(&gesher_jni_onload_bridge_guest));
+    } else {
+      stub = EmitStubLocked(0x49, 0xB8, fn, reinterpret_cast<void*>(&gesher_jni_onload_bridge));
+    }
   }
   return stub;
 }
@@ -459,6 +524,24 @@ jint gesher_jni_onload_bridge(JavaVM* vm, void* reserved, void* target) {
   return reinterpret_cast<jint(SYSV*)(JavaVM*, void*)>(target)(ProxyVmPtr(), reserved);
 }
 
+// The guest JNI_OnLoad bridge: `target` is a host_entry stub entering the guest
+// JNI_OnLoad; the thread becomes guest-serving and gets the guest JavaVM proxy.
+jint gesher_jni_onload_bridge_guest(JavaVM* vm, void* reserved, void* target) {
+  t_guest_mode = true;
+  BuildGuestTables();
+  g_real_vm.store(vm, std::memory_order_release);
+  EnsureThread();
+  return reinterpret_cast<jint(SYSV*)(JavaVM*, void*)>(target)(ProxyVmPtr(), reserved);
+}
+
+// Sets the thread's guest mode, then enters as usual; the proxy env it returns
+// therefore has the guest (trampoline) table.
+JNIEnv* gesher_jni_enter_guest(JNIEnv* env) {
+  t_guest_mode = true;
+  BuildGuestTables();
+  return gesher_jni_enter(env);
+}
+
 }  // extern "C"
 
 // The variadic entry points: K fixed arguments (env, obj or class, [class,]
@@ -480,48 +563,51 @@ asm(".text\n"
 // JNIEnv*, to the proxy; then the registers are restored and the .so's
 // function is jumped to with the caller's stack arguments where they were.
 // On entry %rsp is 8 mod 16; after the push and 224 bytes it is 16-aligned.
-asm(".text\n"
-    ".globl gesher_jni_native_entry\n"
-    ".p2align 4\n"
-    "gesher_jni_native_entry:\n"
-    "  pushq %rbp\n"
-    "  movq %rsp, %rbp\n"
-    "  subq $224, %rsp\n"
-    "  movq %rdi, 32(%rsp)\n"
-    "  movq %rsi, 40(%rsp)\n"
-    "  movq %rdx, 48(%rsp)\n"
-    "  movq %rcx, 56(%rsp)\n"
-    "  movq %r8, 64(%rsp)\n"
-    "  movq %r9, 72(%rsp)\n"
-    "  movq %r11, 80(%rsp)\n"
-    "  movaps %xmm0, 96(%rsp)\n"
-    "  movaps %xmm1, 112(%rsp)\n"
-    "  movaps %xmm2, 128(%rsp)\n"
-    "  movaps %xmm3, 144(%rsp)\n"
-    "  movaps %xmm4, 160(%rsp)\n"
-    "  movaps %xmm5, 176(%rsp)\n"
-    "  movaps %xmm6, 192(%rsp)\n"
-    "  movaps %xmm7, 208(%rsp)\n"
-    "  movq %rdi, %rcx\n"
-    "  call gesher_jni_enter\n"
-    "  movq %rax, %rdi\n"
-    "  movq 40(%rsp), %rsi\n"
-    "  movq 48(%rsp), %rdx\n"
-    "  movq 56(%rsp), %rcx\n"
-    "  movq 64(%rsp), %r8\n"
-    "  movq 72(%rsp), %r9\n"
-    "  movq 80(%rsp), %r11\n"
-    "  movaps 96(%rsp), %xmm0\n"
-    "  movaps 112(%rsp), %xmm1\n"
-    "  movaps 128(%rsp), %xmm2\n"
-    "  movaps 144(%rsp), %xmm3\n"
-    "  movaps 160(%rsp), %xmm4\n"
-    "  movaps 176(%rsp), %xmm5\n"
-    "  movaps 192(%rsp), %xmm6\n"
-    "  movaps 208(%rsp), %xmm7\n"
-    "  movq %rbp, %rsp\n"
-    "  popq %rbp\n"
-    "  jmpq *%r11\n");
+// The same body for the host entry (calls gesher_jni_enter) and the guest entry
+// (calls gesher_jni_enter_guest, which sets the thread's guest mode).
+#define GESHER_JNI_NATIVE_ENTRY(NAME, ENTER)                   \
+  ".globl " NAME "\n"                                          \
+  ".p2align 4\n" NAME ":\n"                                    \
+  "  pushq %rbp\n"                                             \
+  "  movq %rsp, %rbp\n"                                        \
+  "  subq $224, %rsp\n"                                        \
+  "  movq %rdi, 32(%rsp)\n"                                    \
+  "  movq %rsi, 40(%rsp)\n"                                    \
+  "  movq %rdx, 48(%rsp)\n"                                    \
+  "  movq %rcx, 56(%rsp)\n"                                    \
+  "  movq %r8, 64(%rsp)\n"                                     \
+  "  movq %r9, 72(%rsp)\n"                                     \
+  "  movq %r11, 80(%rsp)\n"                                    \
+  "  movaps %xmm0, 96(%rsp)\n"                                 \
+  "  movaps %xmm1, 112(%rsp)\n"                                \
+  "  movaps %xmm2, 128(%rsp)\n"                                \
+  "  movaps %xmm3, 144(%rsp)\n"                                \
+  "  movaps %xmm4, 160(%rsp)\n"                                \
+  "  movaps %xmm5, 176(%rsp)\n"                                \
+  "  movaps %xmm6, 192(%rsp)\n"                                \
+  "  movaps %xmm7, 208(%rsp)\n"                                \
+  "  movq %rdi, %rcx\n"                                        \
+  "  call " ENTER "\n"                                         \
+  "  movq %rax, %rdi\n"                                        \
+  "  movq 40(%rsp), %rsi\n"                                    \
+  "  movq 48(%rsp), %rdx\n"                                    \
+  "  movq 56(%rsp), %rcx\n"                                    \
+  "  movq 64(%rsp), %r8\n"                                     \
+  "  movq 72(%rsp), %r9\n"                                     \
+  "  movq 80(%rsp), %r11\n"                                    \
+  "  movaps 96(%rsp), %xmm0\n"                                 \
+  "  movaps 112(%rsp), %xmm1\n"                                \
+  "  movaps 128(%rsp), %xmm2\n"                                \
+  "  movaps 144(%rsp), %xmm3\n"                                \
+  "  movaps 160(%rsp), %xmm4\n"                                \
+  "  movaps 176(%rsp), %xmm5\n"                                \
+  "  movaps 192(%rsp), %xmm6\n"                                \
+  "  movaps 208(%rsp), %xmm7\n"                                \
+  "  movq %rbp, %rsp\n"                                        \
+  "  popq %rbp\n"                                              \
+  "  jmpq *%r11\n"
+asm(".text\n" GESHER_JNI_NATIVE_ENTRY("gesher_jni_native_entry", "gesher_jni_enter")
+        GESHER_JNI_NATIVE_ENTRY("gesher_jni_native_entry_guest", "gesher_jni_enter_guest"));
 
 namespace {
 
@@ -673,14 +759,16 @@ const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};
 JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
   if (env == nullptr) return nullptr;
   auto* proxy = reinterpret_cast<ProxyEnv*>(env);
-  return proxy->functions == g_env_table ? proxy->real : env;
+  return (proxy->functions == g_env_table || proxy->functions == g_env_table_guest) ? proxy->real
+                                                                                    : env;
 }
 
 JNIEnv* gesher::bionic::ProxyJniEnv(JNIEnv* real) {
   Install();
   EnsureThread();
   if (real == nullptr) return nullptr;
-  if (reinterpret_cast<ProxyEnv*>(real)->functions == g_env_table) return real;
+  void* const* f = reinterpret_cast<ProxyEnv*>(real)->functions;
+  if (f == g_env_table || f == g_env_table_guest) return real;
   return Wrap(real);
 }
 
