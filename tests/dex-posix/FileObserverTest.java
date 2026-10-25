@@ -17,6 +17,10 @@ public final class FileObserverTest {
   private static final LinkedBlockingQueue<String> events = new LinkedBlockingQueue<>();
 
   public static void main(String[] args) throws Exception {
+    // libandroid_runtime registers the framework's natives when it loads, as
+    // the other framework tests do (tests/dex-natives); gesher-app does this
+    // for apps.
+    System.loadLibrary("android_runtime");
     File dir = new File(args[0]);
     check(dir.isDirectory() || dir.mkdirs(), "directory " + dir);
     int mask = FileObserver.CREATE | FileObserver.MODIFY | FileObserver.CLOSE_WRITE

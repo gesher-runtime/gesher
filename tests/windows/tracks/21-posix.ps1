@@ -59,6 +59,9 @@ function Invoke-ArtGtest([string] $Name, [string[]] $Exclude = @(), [int] $Timeo
   $lines = $text -split "`r?`n"
   $lines | Select-String -Pattern 'Failure|error:|Expected|Which is|Value of|Actual|Check failed' -Context 2, 4 |
     Select-Object -First 80 | Out-Host
+  Write-Host '        ... (its error log lines, known noise left out)'
+  $stderr -split "`r?`n" | Where-Object { $_ -match ' [EF] ' -and $_ -notmatch 'logging\.cc:197|SetCloseOnExec|realpath is unsupported' } |
+    Select-Object -First 40 | Out-Host
   Write-Host '        ... (the end of its standard output)'
   $stdout -split "`r?`n" | Select-Object -Last 25 | Out-Host
   Write-Host '        ... (the end of its standard error)'
