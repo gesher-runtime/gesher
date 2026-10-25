@@ -89,7 +89,10 @@ in a single process and on the Gesher device.
   dimmed to 0x660000, its card white, the app window dimmed to 0x666666).
 - Merged with the locale track (ADR 0049): one configuration mechanism in the
   server (the package's configuration with the task's size override; one diff
-  for a locale change and a resize). Re-verification run: see below.
+  for a locale change and a resize; override configurations carry a growing
+  sequence number). ci run 40197536380 at aba87e2 (phase4/integration bf91649
+  merged): all green on both runners, package and e2e, including 48-lifecycle,
+  49-locale, 39-rtl, 50-services, 34-windows and 36-popups.
 - Next: nothing pending for this track beyond the gaps below.
 
 ## Remaining gaps
