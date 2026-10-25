@@ -80,6 +80,15 @@ Merged so far:
   itself on input; no WebViewCompat (androidx boundary interfaces); web
   content not in Android's accessibility tree; geolocation position not
   verified on the runners.
+- ime: merged (verified at 6b88293, ci 40218916953, which contains baf27c9,
+  so the integration tree after this merge is the CI-verified one). ADR
+  0039. The windows-2022 hang was Windows' own: after a Japanese
+  composition, switching away from the IME waits 180 s on ImeBroker.exe's
+  call into Windows.CloudStore, which never answers on Server 2022; 35-ime.ps1
+  ends ImeBroker.exe there (build < 26100). The test job now has
+  `timeout-minutes: 60`. compat/input/thread_watch.cc reports window-thread
+  hangs (stacks, wait chains). Leftovers: Ctrl+C/V/X use Android's clipboard,
+  not Windows'; no TSF reconversion; the touch keyboard gives no IME insets.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
