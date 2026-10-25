@@ -130,6 +130,12 @@ jint WindowsHost_unregisterAppId(JNIEnv* env, jclass, jstring appId) {
   return static_cast<jint>(dev::UnregisterAppId(Str(env, appId)));
 }
 
+jint WindowsHost_registerActivator(JNIEnv*, jclass, jboolean singleUse) {
+  return static_cast<jint>(dev::RegisterActivator(singleUse == JNI_TRUE));
+}
+
+void WindowsHost_revokeActivator(JNIEnv*, jclass) { dev::RevokeActivator(); }
+
 jstring WindowsHost_fullPath(JNIEnv* env, jclass, jstring path) {
   return JStr(env, dev::FullPath(Str(env, path)));
 }
@@ -161,6 +167,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
      GESHER_JNI(WindowsHost_registerAppId)},
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
+    {"nativeRegisterActivator", "(Z)I", GESHER_JNI(WindowsHost_registerActivator)},
+    {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},
 };
 
 }  // namespace

@@ -79,6 +79,25 @@ function ToastTags {
   return $lines
 }
 
+# Gesher's toast activator (hwsvc2, ADR 0051) as the installer registers it: a local
+# server under HKCU whose command runs the launcher's toast-activated (here a script with
+# this run's environment and runtime, the installer's runs gesher-app.ps1). Registered
+# before the device starts, so the app's AppUserModelID names it as its CustomActivator.
+$activatorClsid = '{C18D9445-A7F0-472E-985F-AC354EBEB660}'
+$activatorKey = "HKCU:\Software\Classes\CLSID\$activatorClsid"
+$activatorLog = Join-Path $deviceLogs 'toast-activated.log'
+$activatorCmd = Join-Path $root 'devsvc-toast-activated.cmd'
+$wrapper = @('@echo off')
+foreach ($e in Get-ChildItem Env: | Where-Object { $_.Name -match '^(ANDROID_|GESHER_)' }) { $wrapper += "set `"$($e.Name)=$($e.Value)`"" }
+$quoted = @($launcher | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } })
+$wrapper += "`"$Dir\dalvikvm.exe`" $($quoted -join ' ') toast-activated %* >> `"$activatorLog`" 2>&1"
+Set-Content -Path $activatorCmd -Value $wrapper -Encoding ascii
+New-Item "$activatorKey\LocalServer32" -Force | Out-Null
+Set-Item $activatorKey -Value 'Gesher toast activator'
+Set-Item "$activatorKey\LocalServer32" -Value "`"$env:SystemRoot\System32\cmd.exe`" /d /c `"$activatorCmd`""
+Remove-Item $activatorLog -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $deviceLogs | Out-Null
+
 # A device of this script's own, its job periods divided by 60 (a periodic job's
 # 15-minute minimum becomes 15 s), with devsvc.apk installed.
 Remove-Item $devsvcLog -ErrorAction SilentlyContinue
@@ -279,8 +298,229 @@ if (-not $got) { $problems += 'the manifest receiver got no TIME_SET' }
 if ($code -ne 0) { $problems += "launch exit $code" }
 DevsvcCheck 'devsvc: clock: WM_TIMECHANGE becomes TIME_SET for registered and manifest receivers' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'alarm:|devsvc:|TIME_SET' | Out-String))
 
+# --- hwsvc2: the vibrator ------------------------------------------------------------
+# A device without a vibrator (ADR 0051): hasVibrator false, no vibrator ids, the null
+# vibrator; vibrate and cancel are accepted.
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'VibrateActivity'
+$out = WaitTimed $t 300
+$code = $LASTEXITCODE
+$null = DevsvcWait $mark @('devsvc: vibrator: vibrate and cancel returned') 30
+$log = DevsvcSince $mark
+$problems = @()
+if ($code -ne 0) { $problems += "launch exit $code" }
+foreach ($e in 'devsvc: vibrator: SystemVibrator hasVibrator=false hasAmplitudeControl=false',
+    'devsvc: vibrator: manager SystemVibratorManager ids=0 default hasVibrator=false vibrator(0)=NullVibrator',
+    'devsvc: vibrator: vibrate and cancel returned') {
+  if (-not $log.Contains($e)) { $problems += "no '$e'" }
+}
+if ($log.Contains('no vibrator manager service')) { $problems += 'the app found no vibrator_manager service' }
+DevsvcCheck 'devsvc: vibrator: getSystemService(VIBRATOR_SERVICE) and VibratorManager as on a device without a vibrator (vibrator_manager: no ids, hasVibrator false, the null vibrator; vibrate and cancel accepted)' $problems ($out + "`n--- package log`n" + $log)
+
+# --- hwsvc2: content URI job triggers ------------------------------------------------
+# A job triggered by changes under the app's provider runs once for two inserts (its
+# update delay batches them) with both URIs; a ContentObserver is told of each.
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'ContentActivity'
+$out = WaitTimed $t 300
+$code = $LASTEXITCODE
+$ok = DevsvcWait $mark @('devsvc: jobs: onStartJob 3 (content) run 1', 'devsvc: jobs: job 3 finished') 60
+Start-Sleep 3
+$log = DevsvcSince $mark
+$problems = @()
+if ($code -ne 0) { $problems += "launch exit $code" }
+if (-not $ok) { $problems += 'the content-triggered job did not run in 60 s' }
+if ($log -notmatch 'content: job scheduled \(1\), pending reason \d+') { $problems += 'schedule did not succeed' }
+if (-not $log.Contains('devsvc: jobs: triggered by [content://com.gesher.devsvc.notes/items/1, content://com.gesher.devsvc.notes/items/2] authorities [com.gesher.devsvc.notes]')) { $problems += 'the job''s JobParameters lack the triggered URIs and authority' }
+if ($log.Contains('onStartJob 3 (content) run 2')) { $problems += 'the job ran twice' }
+foreach ($n in 1, 2) {
+  if (-not $log.Contains("devsvc: content: observer onChange content://com.gesher.devsvc.notes/items/$n")) { $problems += "the observer was not told of items/$n" }
+}
+DevsvcCheck 'devsvc: jobs: a content URI trigger (TriggerContentUri, descendants) runs the job once for a provider''s two notifyChange calls, with the triggered URIs and authority; a ContentObserver gets both changes' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
+
+# --- hwsvc2: sleep and resume ------------------------------------------------------
+# WM_POWERBROADCAST to the device's event window (as Windows sends it): PBT_APMSUSPEND is
+# SCREEN_OFF (not interactive) and holds an RTC alarm that comes due; PBT_APMRESUMEAUTOMATIC
+# is SCREEN_ON and the alarm fires then.
+function EventWindow {
+  $w = [IntPtr]::Zero
+  $all = [regex]::Matches((DevsvcText $serverLog), 'devsvc: Windows events from a hidden window 0x([0-9a-fA-F]+)')
+  if ($all.Count -gt 0) { $w = [IntPtr]::new([Convert]::ToInt64($all[$all.Count - 1].Groups[1].Value, 16)) }
+  return $w
+}
+function SendToEventWindow([int] $Msg, [long] $WParam) {
+  $w = EventWindow
+  if ($w -eq [IntPtr]::Zero) { return $false }
+  $r = [IntPtr]::Zero
+  return [Devsvc.Broadcast]::SendMessageTimeoutW($w, $Msg, [IntPtr]::new($WParam), [IntPtr]::Zero, 2, 5000, [ref] $r) -ne [IntPtr]::Zero
+}
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'SleepActivity'
+$ready = DevsvcWait $mark @('devsvc: sleep: ready, interactive true') 300
+$suspendSent = SendToEventWindow 0x0218 4       # WM_POWERBROADCAST, PBT_APMSUSPEND
+$off = DevsvcWait $mark @('devsvc: sleep: got android.intent.action.SCREEN_OFF, interactive false') 30
+Start-Sleep 8                                     # past the alarm's time (4 s)
+$early = (DevsvcSince $mark).Contains('devsvc: sleep: the RTC alarm fired')
+$resumeSent = SendToEventWindow 0x0218 0x12     # PBT_APMRESUMEAUTOMATIC
+$on = DevsvcWait $mark @('devsvc: sleep: got android.intent.action.SCREEN_ON, interactive true', 'devsvc: sleep: the RTC alarm fired') 30
+$out = WaitTimed $t 120
+$code = $LASTEXITCODE
+$log = DevsvcSince $mark
+$problems = @()
+if (-not $ready) { $problems += 'the activity did not get ready' }
+if (-not ($suspendSent -and $resumeSent)) { $problems += 'WM_POWERBROADCAST was not delivered to the event window' }
+if (-not $off) { $problems += 'no SCREEN_OFF (not interactive) after PBT_APMSUSPEND' }
+if ($early) { $problems += 'the RTC alarm fired while Windows was "asleep"' }
+if (-not $on) { $problems += 'no SCREEN_ON and alarm after PBT_APMRESUMEAUTOMATIC' }
+if ($code -ne 0) { $problems += "launch exit $code" }
+DevsvcCheck 'devsvc: sleep: PBT_APMSUSPEND is SCREEN_OFF (isInteractive false) and holds a due RTC alarm; PBT_APMRESUMEAUTOMATIC is SCREEN_ON and the alarm catches up' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'alarm:|power:' | Out-String))
+
+# --- hwsvc2: a real time zone change -------------------------------------------------
+# Windows' zone set with Set-TimeZone (restored after): the device notices it (its clock
+# watch looks at GetDynamicTimeZoneInformation at least once a minute, besides
+# WM_TIMECHANGE/WM_SETTINGCHANGE, which do not reach its window on the runners) and sends
+# TIMEZONE_CHANGED with the zone's IANA id; app processes reset their default zone.
+$zoneBefore = (Get-TimeZone).Id
+$zoneTo = if ($zoneBefore -ne 'Tokyo Standard Time') { 'Tokyo Standard Time' } else { 'Pacific Standard Time' }
+$iana = ''
+$null = [TimeZoneInfo]::TryConvertWindowsIdToIanaId($zoneTo, [ref] $iana)
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'ZoneActivity'
+$registered = DevsvcWait $mark @('devsvc: zone: receiver registered') 300
+$setError = ''
+try {
+  Set-TimeZone -Id $zoneTo -ErrorAction Stop
+  $got = DevsvcWait $mark @('devsvc: zone: got android.intent.action.TIMEZONE_CHANGED') 150
+} catch {
+  $setError = "$_"
+  $got = $false
+} finally {
+  Set-TimeZone -Id $zoneBefore -ErrorAction SilentlyContinue
+}
+$out = WaitTimed $t 200
+$code = $LASTEXITCODE
+$log = DevsvcSince $mark
+$problems = @()
+if ($setError) { $problems += "Set-TimeZone failed: $setError" }
+if (-not $registered) { $problems += 'the receiver was not registered' }
+if (-not $got) { $problems += 'no TIMEZONE_CHANGED in 150 s' }
+$default = if ($log -match 'zone: got android\.intent\.action\.TIMEZONE_CHANGED time-zone=(\S+) default=(\S+)') { $Matches[2] } else { '' }
+if ($got -and -not $log.Contains("time-zone=$iana ")) { $problems += "TIMEZONE_CHANGED does not name $iana" }
+# The default zone follows Windows' once the runtime reads Windows' zone (the posix
+# track's /etc/timezone, with its tzdata in the build).
+$followsWindows = Test-Path (Join-Path $Dir 'tzdata')
+if ($got -and $followsWindows -and $default -ne $iana) { $problems += "the app's default zone after it is $default, not $iana" }
+if ($code -ne 0) { $problems += "launch exit $code" }
+DevsvcCheck "devsvc: clock: a real time zone change (Set-TimeZone $zoneTo) becomes TIMEZONE_CHANGED ($iana) for a registered receiver; the app's default zone then: $default" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'alarm:' | Out-String))
+
+# --- hwsvc2: toast clicks after the device stopped -----------------------------------
+# What Windows' notification platform does with a click on a toast whose app id names a
+# CustomActivator: if no process serves the class, it runs the activator's LocalServer32
+# command, then calls INotificationActivationCallback.Activate with the app id and the
+# toast's launch (or button) arguments. Here with the device stopped (the launcher COM
+# runs starts it and hands it the click; the stored notification's intent is sent), and
+# again with the device running (its system server serves the activator).
+if (-not ('GesherToastActivation' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+[ComImport, Guid("53E31837-6600-4A81-9395-75CFFE746F94"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface INotificationActivationCallback {
+  void Activate([MarshalAs(UnmanagedType.LPWStr)] string appUserModelId, [MarshalAs(UnmanagedType.LPWStr)] string invokedArgs, IntPtr data, uint count);
+}
+public static class GesherToastActivation {
+  [DllImport("ole32.dll")] static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint ctx, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+  // Activates the class's object (running the local server command when none serves it).
+  public static string Activate(string clsid, string serverCommand, string appId, string args, int seconds) {
+    Guid c = new Guid(clsid);
+    Guid iid = typeof(INotificationActivationCallback).GUID;
+    bool started = false;
+    DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
+    int hr;
+    object o;
+    while (true) {
+      hr = CoCreateInstance(ref c, IntPtr.Zero, 4 /* CLSCTX_LOCAL_SERVER */, ref iid, out o);
+      if (hr == 0) break;
+      if (!started && serverCommand != null) {
+        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/d /s /c \"" + serverCommand + "\"");
+        psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
+        Process.Start(psi);
+        started = true;
+      }
+      if (DateTime.UtcNow > deadline) return String.Format("CoCreateInstance 0x{0:x8}", hr);
+      Thread.Sleep(250);
+    }
+    try { ((INotificationActivationCallback) o).Activate(appId, args, IntPtr.Zero, 0); }
+    catch (Exception e) { return "Activate: " + e.Message; }
+    finally { Marshal.ReleaseComObject(o); }
+    return started ? "ok (local server started)" : "ok (served by a running process)";
+  }
+}
+'@
+}
+$xmlScript = Join-Path $root 'devsvc-toast-xml.ps1'
+Set-Content -Path $xmlScript -Encoding UTF8 -Value @'
+param([string] $AppId, [string] $Tag)
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+foreach ($t in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($AppId)) { if ($t.Tag -eq $Tag) { $t.Content.GetXml() } }
+'@
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'ClickActivity'
+$posted = DevsvcWait $mark @('devsvc: click: posted 21') 300
+$out = WaitTimed $t 120
+Start-Sleep 2
+$customActivator = (Get-ItemProperty "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId" -ErrorAction SilentlyContinue).CustomActivator
+$xml = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $xmlScript -AppId $devsvcAppId -Tag '21' 2>&1 | Out-String
+$launchArgs = if ($xml -match '<toast[^>]* launch="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
+$buttonArgs = if ($xml -match '<action[^>]* arguments="([^"]+)"') { [Net.WebUtility]::HtmlDecode($Matches[1]) } else { '' }
+$stateBefore = DeviceState
+$null = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
+Start-Sleep 2
+$stopped = $stateBefore -and -not (DeviceAlive $stateBefore)
+$kept = (ToastTags).Contains('tag=21 group=android')
+$serverCommand = (Get-Item "$activatorKey\LocalServer32").GetValue('')
+$mark = (DevsvcText $devsvcLog).Length
+$r1 = [GesherToastActivation]::Activate($activatorClsid, $serverCommand, $devsvcAppId, $launchArgs, 120)
+$clicked = DevsvcWait 0 @('devsvc: click: receiver got com.gesher.devsvc.CLICKED from content') 300
+$launched = DevsvcText $activatorLog
+$server1 = DevsvcText $serverLog
+$r2 = [GesherToastActivation]::Activate($activatorClsid, $null, $devsvcAppId, $buttonArgs, 30)
+$acted = DevsvcWait 0 @('devsvc: click: receiver got com.gesher.devsvc.ACTED from button') 120
+$log = DevsvcText $devsvcLog
+$server2 = DevsvcText $serverLog
+$problems = @()
+if (-not $posted) { $problems += 'notification 21 was not posted' }
+if ($customActivator -ne $activatorClsid) { $problems += "the app id's CustomActivator is '$customActivator'" }
+if (-not $launchArgs -or -not $buttonArgs) { $problems += "the toast's XML has no launch or action arguments: $xml" }
+if (-not $stopped) { $problems += 'the device did not stop' }
+if (-not $kept) { $problems += 'the toast left the history when the device stopped' }
+if (-not $r1.StartsWith('ok (local server started)')) { $problems += "activation with the device stopped: $r1" }
+if (-not $launched.Contains('toast activator: the click went to the Gesher device')) { $problems += 'the launcher COM ran did not hand the click to the device' }
+if (-not $server1.Contains("notification 21 of $devsvcPkg (an earlier run's): its toast was clicked")) { $problems += 'the restarted device did not take the stored notification' }
+if (-not $clicked) { $problems += 'the content intent''s receiver did not run' }
+if (-not $r2.StartsWith('ok (served by a running process)')) { $problems += "activation with the device running: $r2" }
+if (-not $server2.Contains('through the toast activator')) { $problems += 'the running system server did not serve the activator' }
+if (-not $acted) { $problems += 'the action button''s receiver did not run' }
+DevsvcCheck "devsvc: notifications: with the Gesher device stopped, activating a toast through Gesher's toast activator ($activatorClsid, the app id's CustomActivator; its LocalServer32 run) starts the device and sends the content intent; with the device running its system server serves the activator and a button sends its action's intent" $problems ("activation 1: $r1; activation 2: $r2; launch '$launchArgs'; button '$buttonArgs'`n--- activator log`n" + $launched + "`n--- package log`n" + $log.Substring([Math]::Min($mark, $log.Length)) + "`n--- system server`n" + (($server2 -split "`n") | Select-String 'notification|toast' | Out-String))
+
+# --- hwsvc2: uninstall removes the app id and its toasts ------------------------------
+$uninstallOut = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'uninstall', $devsvcPkg) 300
+$code = $LASTEXITCODE
+Start-Sleep 2
+$problems = @()
+if ($code -ne 0) { $problems += "uninstall exit $code" }
+if (Test-Path "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId") { $problems += "HKCU\Software\Classes\AppUserModelId\$devsvcAppId is still there" }
+if ((ToastTags).Contains('tag=')) { $problems += "the toast history still has: $((ToastTags).Trim())" }
+if (Test-Path (Join-Path $root "data/system/notifications/$devsvcPkg")) { $problems += 'the stored notifications are still there' }
+if (-not (DevsvcText $serverLog).Contains("notification: $devsvcPkg removed")) { $problems += 'the system server did not remove the package''s notifications' }
+DevsvcCheck "devsvc: notifications: uninstalling the package removes its toasts, its stored notifications and HKCU\Software\Classes\AppUserModelId\$devsvcAppId" $problems ($uninstallOut + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'notification' | Out-String))
+
 # The device stops; the app's toast registration goes.
 $null = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'shutdown') 120
 Remove-Item "HKCU:\Software\Classes\AppUserModelId\$devsvcAppId" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $activatorKey -Recurse -Force -ErrorAction SilentlyContinue
 if ($failed -ne $failedBefore) { DeviceLogs }
 Remove-Item Env:GESHER_APP_WINDOW -ErrorAction SilentlyContinue

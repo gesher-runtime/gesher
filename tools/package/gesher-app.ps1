@@ -21,6 +21,8 @@
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app shutdown                stop the device
+#   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
+#                                      on an app's toast, given to the device (ADR 0051)
 #   gesher-app my.apk --single-process the app alone in this process, with
 #                                      stand-in services (no device)
 #   gesher-app my.apk --system-server  a device of this run only, the app in
@@ -41,7 +43,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $root = Join-Path $env:LOCALAPPDATA 'Gesher'
-$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch'
+$commands = 'install', 'uninstall', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated'
 if ($Arguments.Count -eq 0) {
   Write-Host 'usage: gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--single-process | --system-server]'
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | list | status | start | shutdown'

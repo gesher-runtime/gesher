@@ -26,6 +26,10 @@ public class AlarmReceiver extends BroadcastReceiver {
             }
             return;
         }
+        if (SleepActivity.ACTION_SLEEP_ALARM.equals(action)) {
+            Report.line("sleep: the RTC alarm fired" + Report.pid());
+            return;
+        }
         Report.line("alarms: AlarmReceiver onReceive " + action + " (alarm count " + count + ")"
                 + Report.pid());
     }
