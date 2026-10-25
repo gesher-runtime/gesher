@@ -338,6 +338,30 @@ foreach ($n in 1, 2) {
 }
 DevsvcCheck 'devsvc: jobs: a content URI trigger (TriggerContentUri, descendants) runs the job once for a provider''s two notifyChange calls, with the triggered URIs and authority; a ContentObserver gets both changes' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
 
+# --- hwsvc2: network constraints ---------------------------------------------------
+# Jobs needing any network and an unmetered one run on the runner's Ethernet (as
+# ConnectivityManager describes Windows' networks), with their Network; one needing a
+# cellular network waits for connectivity.
+$mark = (DevsvcText $devsvcLog).Length
+$t = DevsvcLaunch 'NetJobActivity'
+$out = WaitTimed $t 300
+$code = $LASTEXITCODE
+$null = DevsvcWait $mark @('devsvc: netjobs: done') 30
+$log = DevsvcSince $mark
+$problems = @()
+if ($code -ne 0) { $problems += "launch exit $code" }
+foreach ($e in 'devsvc: netjobs: scheduled 4 (network any): 1', 'devsvc: netjobs: scheduled 5 (network unmetered): 1',
+    'devsvc: jobs: onStartJob 4 (network any) run 1', 'devsvc: jobs: onStartJob 5 (network unmetered) run 1') {
+  if (-not $log.Contains($e)) { $problems += "no '$e'" }
+}
+if ($log -notmatch 'jobs: job 4 network 1\d\d') { $problems += 'job 4''s JobParameters have no Windows network' }
+if ($log.Contains('onStartJob 6 ')) { $problems += 'the cellular job ran' }
+if ($log -match 'netjobs: cellular job pending reason (\d+) \(connectivity is (\d+)\)') {
+  if ($Matches[1] -ne $Matches[2]) { $problems += "the cellular job waits for reason $($Matches[1]), not connectivity" }
+} else { $problems += 'no pending reason for the cellular job' }
+$network = if ($log -match 'jobs: job 4 network (\d+)') { $Matches[1] } else { '?' }
+DevsvcCheck "devsvc: jobs: network constraints over ConnectivityManager's networks: NETWORK_TYPE_ANY and UNMETERED jobs run (JobParameters.getNetwork $network), a CELLULAR job waits for connectivity" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
+
 # --- hwsvc2: sleep and resume ------------------------------------------------------
 # WM_POWERBROADCAST to the device's event window (as Windows sends it): PBT_APMSUSPEND is
 # SCREEN_OFF (not interactive) and holds an RTC alarm that comes due; PBT_APMRESUMEAUTOMATIC
