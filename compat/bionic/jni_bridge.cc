@@ -103,20 +103,33 @@ thread_local bool t_thread_ready = false;
 // A guest .so calls through its JNIEnv/JavaVM function tables with AAPCS64, and
 // executes the entries as guest code; so a guest gets tables whose every slot is
 // a guest trampoline (gesher::arm64::BindHostFunction) into the same System V
-// host entries an x86-64 .so calls directly. t_guest_mode selects the guest
-// tables for the proxies handed to loaded code; it is set on a thread that
-// enters a guest native or guest JNI_OnLoad and stays set (such a thread serves
-// guest code). x86-64 libraries never set it, so their path is unchanged.
+// host entries an x86-64 .so calls directly. A guest is handed its own proxies,
+// t_env_guest and g_vm_guest, whose tables are the guest ones; both proxies
+// wrap the same real JNIEnv, so a thread can serve guest and host natives in
+// any nesting. The host entries tell which one called them from the proxy
+// they get (IsGuestEnv / IsGuestVm). x86-64 libraries' path is unchanged.
 void* g_env_table_guest[kEnvSlots];
 void* g_vm_table_guest[kVmSlots];
 ProxyVm g_vm_guest{g_vm_table_guest};
+thread_local ProxyEnv t_env_guest{g_env_table_guest, nullptr};
+// Whether this thread last entered a guest (only for JNI_GetCreatedJavaVMs,
+// which has no proxy argument to tell by).
 thread_local bool t_guest_mode = false;
 std::once_flag g_guest_tables_once;
 bool g_guest_tables_ok = false;
 
+bool IsGuestEnv(JNIEnv* env) {
+  return env != nullptr && reinterpret_cast<ProxyEnv*>(env)->functions == g_env_table_guest;
+}
+bool IsGuestVm(JavaVM* vm) { return vm == reinterpret_cast<JavaVM*>(&g_vm_guest); }
+
+// The JNIEnv slots that take a va_list (below, after GESHER_JNI_TYPES).
+void RegisterVaListSlots();
+
 void BuildGuestTables() {
   std::call_once(g_guest_tables_once, [] {
     if (!gesher::arm64::EnsureLoaded()) return;
+    RegisterVaListSlots();
     for (size_t i = 0; i < kEnvSlots; ++i) {
       g_env_table_guest[i] =
           g_env_table[i] ? gesher::arm64::BindHostFunction(g_env_table[i]) : nullptr;
@@ -129,13 +142,15 @@ void BuildGuestTables() {
   });
 }
 
-JavaVM* ProxyVmPtr() {
-  if (t_guest_mode) {
-    BuildGuestTables();
-    return reinterpret_cast<JavaVM*>(&g_vm_guest);
-  }
-  return reinterpret_cast<JavaVM*>(&g_vm);
+JavaVM* ProxyVmPtr() { return reinterpret_cast<JavaVM*>(&g_vm); }
+
+JavaVM* GuestVmPtr() {
+  BuildGuestTables();
+  return g_guest_tables_ok ? reinterpret_cast<JavaVM*>(&g_vm_guest) : ProxyVmPtr();
 }
+
+// The proxy JavaVM for the side `guest` says.
+JavaVM* VmFor(bool guest) { return guest ? GuestVmPtr() : ProxyVmPtr(); }
 
 JavaVM* RealVm() {
   JavaVM* vm = g_real_vm.load(std::memory_order_acquire);
@@ -159,16 +174,20 @@ void EnsureThread() {
 JNIEnv* Wrap(JNIEnv* real) {
   if (real == nullptr) return nullptr;
   t_env.real = real;
-  // A guest-serving thread gets the guest (trampoline) table, which the guest
-  // can call; a host .so gets the host table.
-  if (t_guest_mode) {
-    BuildGuestTables();
-    t_env.functions = g_guest_tables_ok ? g_env_table_guest : g_env_table;
-  } else {
-    t_env.functions = g_env_table;
-  }
   return reinterpret_cast<JNIEnv*>(&t_env);
 }
+
+// The guest's proxy for `real`: the same real JNIEnv behind the guest table.
+JNIEnv* WrapGuest(JNIEnv* real) {
+  if (real == nullptr) return nullptr;
+  BuildGuestTables();
+  if (!g_guest_tables_ok) return Wrap(real);
+  t_env.real = real;
+  t_env_guest.real = real;
+  return reinterpret_cast<JNIEnv*>(&t_env_guest);
+}
+
+JNIEnv* WrapFor(bool guest, JNIEnv* real) { return guest ? WrapGuest(real) : Wrap(real); }
 
 inline JNIEnv* Real(JNIEnv* env) { return reinterpret_cast<ProxyEnv*>(env)->real; }
 
@@ -391,7 +410,7 @@ jint SYSV GetJavaVMSysv(JNIEnv* env, JavaVM** vm) {
   jint rc = r->functions->GetJavaVM(r, &real);
   if (rc == JNI_OK) {
     g_real_vm.store(real, std::memory_order_release);
-    *vm = ProxyVmPtr();
+    *vm = VmFor(IsGuestEnv(env));
   }
   return rc;
 }
@@ -410,38 +429,41 @@ jint SYSV DestroyJavaVMSysv(JavaVM*) {
   return vm->functions->DestroyJavaVM(vm);
 }
 
-jint SYSV AttachCurrentThreadSysv(JavaVM*, JNIEnv** penv, void* args) {
+jint SYSV AttachCurrentThreadSysv(JavaVM* proxy, JNIEnv** penv, void* args) {
   EnsureThread();
   JavaVM* vm = RealVm();
   JNIEnv* env = nullptr;
   jint rc = vm->functions->AttachCurrentThread(vm, &env, args);
-  if (penv != nullptr) *penv = rc == JNI_OK ? Wrap(env) : nullptr;
+  if (penv != nullptr) *penv = rc == JNI_OK ? WrapFor(IsGuestVm(proxy), env) : nullptr;
   return rc;
 }
 
-jint SYSV AttachCurrentThreadAsDaemonSysv(JavaVM*, JNIEnv** penv, void* args) {
+jint SYSV AttachCurrentThreadAsDaemonSysv(JavaVM* proxy, JNIEnv** penv, void* args) {
   EnsureThread();
   JavaVM* vm = RealVm();
   JNIEnv* env = nullptr;
   jint rc = vm->functions->AttachCurrentThreadAsDaemon(vm, &env, args);
-  if (penv != nullptr) *penv = rc == JNI_OK ? Wrap(env) : nullptr;
+  if (penv != nullptr) *penv = rc == JNI_OK ? WrapFor(IsGuestVm(proxy), env) : nullptr;
   return rc;
 }
 
 jint SYSV DetachCurrentThreadSysv(JavaVM*) {
   JavaVM* vm = RealVm();
   jint rc = vm->functions->DetachCurrentThread(vm);
-  if (rc == JNI_OK) t_env.real = nullptr;
+  if (rc == JNI_OK) {
+    t_env.real = nullptr;
+    t_env_guest.real = nullptr;
+  }
   return rc;
 }
 
-jint SYSV GetEnvSysv(JavaVM*, void** penv, jint version) {
+jint SYSV GetEnvSysv(JavaVM* proxy, void** penv, jint version) {
   JavaVM* vm = RealVm();
   void* env = nullptr;
   jint rc = vm->functions->GetEnv(vm, &env, version);
   // A JNI version gets the proxy; anything else (JVMTI) is passed on as it is.
   if (rc == JNI_OK && (version & 0xffff0000) == 0x00010000) {
-    env = Wrap(static_cast<JNIEnv*>(env));
+    env = WrapFor(IsGuestVm(proxy), static_cast<JNIEnv*>(env));
   }
   if (penv != nullptr) *penv = rc == JNI_OK ? env : nullptr;
   return rc;
@@ -450,7 +472,7 @@ jint SYSV GetEnvSysv(JavaVM*, void** penv, jint version) {
 // JNI_GetCreatedJavaVMs for the .so (libnativehelper's, API 31+).
 jint SYSV GetCreatedJavaVMsSysv(JavaVM** vms, jsize size, jsize* count) {
   bool have = RealVm() != nullptr;
-  if (have && size > 0 && vms != nullptr) vms[0] = ProxyVmPtr();
+  if (have && size > 0 && vms != nullptr) vms[0] = VmFor(t_guest_mode);
   if (count != nullptr) *count = have ? 1 : 0;
   return JNI_OK;
 }
@@ -470,6 +492,25 @@ jint SYSV GetCreatedJavaVMsSysv(JavaVM** vms, jsize size, jsize* count) {
   X(Float, jfloat)          \
   X(Double, jdouble)        \
   X(Void, void)
+
+namespace {
+// The JNIEnv slots that take a va_list (Call*MethodV, NewObjectV) and its
+// argument index: the guest's AAPCS64 va_list is converted when it calls them.
+void RegisterVaListSlots() {
+#define VA_SLOT(name, index)                                                       \
+  gesher::arm64::AddVaListFunction(g_env_table[offsetof(JNINativeInterface, name) / \
+                                               sizeof(void*)],                     \
+                                   index);
+#define VA_SLOTS(Name, T)                   \
+  VA_SLOT(Call##Name##MethodV, 3)           \
+  VA_SLOT(CallNonvirtual##Name##MethodV, 4) \
+  VA_SLOT(CallStatic##Name##MethodV, 3)
+  GESHER_JNI_TYPES(VA_SLOTS)
+  VA_SLOT(NewObjectV, 3)
+#undef VA_SLOTS
+#undef VA_SLOT
+}
+}  // namespace
 
 extern "C" {
 
@@ -506,6 +547,7 @@ void gesher_jni_NewObject();
 
 JNIEnv* gesher_jni_enter(JNIEnv* env) {
   EnsureThread();
+  t_guest_mode = false;
   if (env == nullptr) return env;
   if (t_env.real == env) return reinterpret_cast<JNIEnv*>(&t_env);
   // Is it this thread's JNIEnv? A @CriticalNative method's first argument is not.
@@ -528,18 +570,25 @@ jint gesher_jni_onload_bridge(JavaVM* vm, void* reserved, void* target) {
 // JNI_OnLoad; the thread becomes guest-serving and gets the guest JavaVM proxy.
 jint gesher_jni_onload_bridge_guest(JavaVM* vm, void* reserved, void* target) {
   t_guest_mode = true;
-  BuildGuestTables();
   g_real_vm.store(vm, std::memory_order_release);
   EnsureThread();
-  return reinterpret_cast<jint(SYSV*)(JavaVM*, void*)>(target)(ProxyVmPtr(), reserved);
+  return reinterpret_cast<jint(SYSV*)(JavaVM*, void*)>(target)(GuestVmPtr(), reserved);
 }
 
-// Sets the thread's guest mode, then enters as usual; the proxy env it returns
-// therefore has the guest (trampoline) table.
+// The guest native entry: as gesher_jni_enter, but hands the guest its proxy
+// (the guest table over the same real JNIEnv).
 JNIEnv* gesher_jni_enter_guest(JNIEnv* env) {
+  EnsureThread();
   t_guest_mode = true;
-  BuildGuestTables();
-  return gesher_jni_enter(env);
+  if (env == nullptr) return env;
+  if (t_env.real == env || t_env_guest.real == env) return WrapGuest(env);
+  JavaVM* vm = RealVm();
+  void* current = nullptr;
+  if (vm != nullptr && vm->functions->GetEnv(vm, &current, JNI_VERSION_1_6) == JNI_OK &&
+      current == env) {
+    return WrapGuest(env);
+  }
+  return env;
 }
 
 }  // extern "C"
@@ -766,6 +815,10 @@ JNIEnv* gesher::bionic::RealJniEnv(JNIEnv* env) {
 JNIEnv* gesher::bionic::ProxyJniEnv(JNIEnv* real) {
   Install();
   EnsureThread();
+  // A guest (arm64) .so may be handed this proxy (NativeActivity): its calls
+  // through the host table reach the host entries directly (the translator's
+  // host-pointer path), which must know the va_list ones.
+  if (gesher::arm64::Available()) BuildGuestTables();
   if (real == nullptr) return nullptr;
   void* const* f = reinterpret_cast<ProxyEnv*>(real)->functions;
   if (f == g_env_table || f == g_env_table_guest) return real;

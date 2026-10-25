@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -68,7 +69,7 @@ int g_describe(const void*, const char**, const void**, const char**, const void
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   HMODULE dll = LoadLibraryA(GESHER_ARM64_DLL);
   Check("gesher_arm64.dll loaded", dll != nullptr);
@@ -93,6 +94,23 @@ int main() {
   if (!api) {
     std::printf("\n%d check(s) failed\n", failures);
     return 1;
+  }
+
+  // `arm64_smoke_test crash-segv|crash-ill|crash-jump`: a faulting guest, which
+  // must end the process with an Android-style "Fatal signal" report rather
+  // than hang (tracks/47-arm64.ps1 runs these with a timeout).
+  if (argc > 1) {
+    std::string mode = argv[1];
+    uint32_t segv[] = {MovzX(1, 0), 0xF9400020u /* ldr x0, [x1] */, kRet};
+    uint32_t ill[] = {0x00000000u /* udf #0 */, kRet};
+    uint32_t jump[] = {MovzX(16, 0x40), kBlrX16, kRet};
+    const uint32_t* code = mode == "crash-segv" ? segv : mode == "crash-ill" ? ill : jump;
+    size_t n = mode == "crash-segv" ? 3 : mode == "crash-ill" ? 2 : 3;
+    void* fn = GuestPage(code, n);
+    api->add_code(fn, n * 4, "crash");
+    api->call(fn, nullptr, 0);
+    std::printf("the faulting guest returned (it should not have)\n");
+    return 3;
   }
 
   // 1. host -> guest: a guest function returning 42.
@@ -172,8 +190,14 @@ int main() {
     auto t0 = std::chrono::steady_clock::now();
     uint64_t g = api->call(fn, args, 1);
     auto t1 = std::chrono::steady_clock::now();
-    volatile uint64_t h = 0;
-    for (uint64_t i = 0; i < n; ++i) h += i;
+    // The same loop natively, kept in registers like the guest's (the empty
+    // asm stops the compiler from folding it into a closed form; a volatile
+    // accumulator would add a store per iteration and flatter the guest).
+    uint64_t h = 0;
+    for (uint64_t i = 0; i < n; ++i) {
+      h += i;
+      asm volatile("" : "+r"(h) : "r"(i));
+    }
     auto t2 = std::chrono::steady_clock::now();
     double gms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     double hms = std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -181,6 +205,31 @@ int main() {
     std::printf("INFO  arm64 perf: %llu-iteration loop: guest %.1f ms, native %.1f ms, "
                 "overhead x%.1f\n",
                 static_cast<unsigned long long>(n), gms, hms, hms > 0 ? gms / hms : 0.0);
+  }
+
+  // 7. Atomics: an LL/SC increment loop (ldaxr/stlxr, what outline atomics
+  //    and std::atomic compile to without LSE) on four threads at once. The
+  //    store-exclusive goes through the global monitor and a host CAS.
+  {
+    //   L: ldaxr w2,[x0]; add w2,w2,#1; stlxr w3,w2,[x0]; cbnz w3,L;
+    //      subs x1,x1,#1; b.ne L; ret
+    uint32_t code[] = {0x885FFC02u, 0x11000442u, 0x8803FC02u, 0x35FFFFA3u,
+                       0xF1000421u, 0x54FFFF61u, kRet};
+    void* fn = GuestPage(code, 7);
+    api->add_code(fn, sizeof(code), "atomic_inc");
+    static uint32_t counter = 0;
+    static void* s_fn = fn;
+    static const gesher_arm64_api* s_api = api;
+    auto worker = [](void*) -> DWORD {
+      uint64_t args[2] = {reinterpret_cast<uint64_t>(&counter), 100000};
+      s_api->call(s_fn, args, 2);
+      return 0;
+    };
+    HANDLE th[4];
+    for (HANDLE& h : th) h = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
+    WaitForMultipleObjects(4, th, TRUE, 60000);
+    for (HANDLE h : th) CloseHandle(h);
+    Check("4 threads x 100000 guest LL/SC increments == 400000", counter == 400000);
   }
 
   std::printf("\n");

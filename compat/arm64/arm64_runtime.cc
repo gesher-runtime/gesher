@@ -22,9 +22,12 @@ void* (*g_bind)(void*) = nullptr;
 std::once_flag g_once;
 bool g_ok = false;
 
-// Host callback: resolve a symbol the way the loader does globally (diagnostics
-// and any guest symbol the DLL asks for).
-void* HostResolve(const char* name) { return gesher::elf::LookupGlobal(name); }
+// Host callback: the host (bionic shim) definition of a libc symbol, which the
+// translator wraps or calls (guest_libc.cc); else any loaded object's.
+void* HostResolve(const char* name) {
+  if (void* a = gesher::elf::ResolveBionic(name)) return a;
+  return gesher::elf::LookupGlobal(name);
+}
 
 // Host callback: describe an address for a guest crash report.
 int HostDescribe(const void* addr, const char** object, const void** object_base,
@@ -97,5 +100,22 @@ void AddVaListFunction(const void* fn, int index) {
 }
 
 bool IsGuestCode(const void* addr) { return g_api && g_api->is_guest_code(addr); }
+
+void* GuestSymbol(const char* name) { return g_api ? g_api->guest_symbol(name) : nullptr; }
+
+void* TlsDescStatic() { return g_api ? g_api->tlsdesc_static() : nullptr; }
+
+uint64_t CallIfuncResolver(const void* resolver) {
+  // bionic's arm64 IFUNC resolvers take (hwcap | _IFUNC_ARG_HWCAP, &arg), with
+  // the capabilities the translator implements (getauxval's AT_HWCAP).
+  struct IfuncArg {
+    uint64_t size;
+    uint64_t hwcap;
+    uint64_t hwcap2;
+  };
+  static IfuncArg arg = {sizeof(IfuncArg), kGuestHwcap, 0};
+  uint64_t args[2] = {kGuestHwcap | (1ull << 62), reinterpret_cast<uint64_t>(&arg)};
+  return Call(resolver, args, 2);
+}
 
 }  // namespace gesher::arm64

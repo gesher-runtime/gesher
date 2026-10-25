@@ -48,6 +48,9 @@ using Elf64_Relr = uint64_t;
 #ifndef R_AARCH64_TLS_TPREL64
 #define R_AARCH64_TLS_TPREL64 1030
 #endif
+#ifndef R_AARCH64_TLSDESC
+#define R_AARCH64_TLSDESC 1031
+#endif
 #ifndef R_AARCH64_IRELATIVE
 #define R_AARCH64_IRELATIVE 1032
 #endif
@@ -313,7 +316,7 @@ void* SymbolAddress(const Library* lib, const Elf64_Sym* sym) {
   void* addr = lib->load_bias + sym->st_value;
   if (ELF64_ST_TYPE(sym->st_info) == STT_GNU_IFUNC) {
     if (lib->is_aarch64) {
-      addr = reinterpret_cast<void*>(gesher::arm64::Call(addr, nullptr, 0));
+      addr = reinterpret_cast<void*>(gesher::arm64::CallIfuncResolver(addr));
     } else {
       addr = ResolveIfunc(addr);
     }
@@ -329,10 +332,14 @@ Library* FindLocked(const std::string& name) {
 }
 
 // Looks up `name` as exported by any loaded object. Fills *out_lib/*out_sym.
-void* LookupGlobalLocked(const char* name, const Library** out_lib, const Elf64_Sym** out_sym) {
+// `arch` limits the search to x86-64 (0) or arm64 (1) objects, so a guest
+// object never binds to host code and vice versa (ADR 0047); -1 is any.
+void* LookupGlobalLocked(const char* name, const Library** out_lib, const Elf64_Sym** out_sym,
+                         int arch = -1) {
   uint32_t gh = GnuHash(name), sh = SysvHash(name);
   for (Library* lib : Loaded()) {
     if (lib->is_closed) continue;
+    if (arch >= 0 && lib->is_aarch64 != (arch == 1)) continue;
     const Elf64_Sym* sym = FindDefinedSymbol(lib, name, gh, sh);
     if (sym != nullptr && ELF64_ST_BIND(sym->st_info) != STB_LOCAL) {
       if (out_lib) *out_lib = lib;
@@ -362,6 +369,7 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
     return r;
   }
   for (Library* dep : lib->dependencies) {
+    if (dep->is_aarch64 != lib->is_aarch64) continue;
     const Elf64_Sym* s = FindDefinedSymbol(dep, name, gh, sh);
     if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
       return {SymbolAddress(dep, s), dep, s, true};
@@ -370,7 +378,7 @@ ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
   // Any other loaded object (global scope).
   const Library* gl = nullptr;
   const Elf64_Sym* gs = nullptr;
-  if (void* a = LookupGlobalLocked(name, &gl, &gs)) {
+  if (void* a = LookupGlobalLocked(name, &gl, &gs, lib->is_aarch64 ? 1 : 0)) {
     return {a, gl, gs, true};
   }
   // The bionic shim.
@@ -722,6 +730,15 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
     const char* name = lib->strtab + sym->st_name;
     ResolvedSymbol rs = ResolveForReloc(lib, name);
+    if (!rs.found || rs.lib == nullptr) {
+      // A libc interface whose host (shim) version has an x86-64-specific
+      // layout or numbering (struct stat, epoll_event, syscall, setjmp...):
+      // the translator's guest definition (ADR 0047).
+      if (void* g = gesher::arm64::GuestSymbol(name)) {
+        *out = reinterpret_cast<uint64_t>(g);
+        return true;
+      }
+    }
     if (!rs.found) {
       if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) { *out = 0; return true; }
       if (lib->stub_unresolved) {
@@ -767,19 +784,42 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
     }
     case R_AARCH64_IRELATIVE: {
       // The resolver is guest code; it returns the resolved guest address.
-      uint64_t resolved = gesher::arm64::Call(lib->load_bias + r.r_addend, nullptr, 0);
-      *where = resolved;
+      *where = gesher::arm64::CallIfuncResolver(lib->load_bias + r.r_addend);
       break;
     }
-    case R_AARCH64_TLS_TPREL64: {
-      // Local/initial-exec: offset from the thread pointer (TPIDR_EL0).
-      if (!lib->tls.is_static) {
-        Fail(error, lib->name + ": TLS_TPREL against a module that did not fit the static area");
+    case R_AARCH64_TLS_TPREL64:
+    case R_AARCH64_TLSDESC: {
+      // Initial-exec (TPREL: the offset from the thread pointer, TPIDR_EL0) and
+      // TLSDESC (general dynamic, what -fPIC code uses on arm64): both resolve
+      // to a static offset, since every guest TLS module is in the static
+      // area; a TLSDESC's resolver returns its second word.
+      const Library* def = lib;
+      uint64_t sym_value = 0;
+      if (sym_index != 0) {
+        const Elf64_Sym* sym = &lib->symtab[sym_index];
+        if (sym->st_shndx != SHN_UNDEF) {
+          sym_value = sym->st_value;
+        } else {
+          ResolvedSymbol rs = ResolveForReloc(lib, lib->strtab + sym->st_name);
+          if (!rs.found || rs.lib == nullptr || rs.sym == nullptr) {
+            Fail(error, lib->name + ": unresolved TLS symbol '" + (lib->strtab + sym->st_name) + "'");
+            return false;
+          }
+          def = rs.lib;
+          sym_value = rs.sym->st_value;
+        }
+      }
+      if (!def->tls.present || !def->tls.is_static) {
+        Fail(error, lib->name + ": TLS relocation against a module without static TLS");
         return false;
       }
-      uint64_t sym_value = 0;
-      if (sym_index != 0) sym_value = lib->symtab[sym_index].st_value;
-      *where = static_cast<uint64_t>(lib->tls.tp_offset) + sym_value + r.r_addend;
+      uint64_t offset = static_cast<uint64_t>(def->tls.tp_offset) + sym_value + r.r_addend;
+      if (type == R_AARCH64_TLSDESC) {
+        where[0] = reinterpret_cast<uint64_t>(gesher::arm64::TlsDescStatic());
+        where[1] = offset;
+      } else {
+        *where = offset;
+      }
       break;
     }
     default:
@@ -1102,6 +1142,8 @@ void* LookupGlobal(const char* name) {
   std::lock_guard<std::mutex> lock(g_mutex);
   return LookupGlobalLocked(name, nullptr, nullptr);
 }
+
+void* ResolveBionic(const char* name) { return g_resolver ? g_resolver(name) : nullptr; }
 
 Library* Find(const char* name) {
   std::lock_guard<std::mutex> lock(g_mutex);

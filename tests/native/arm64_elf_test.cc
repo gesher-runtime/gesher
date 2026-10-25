@@ -19,9 +19,12 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+
+#include "arm64_perf_kernel.h"
 
 namespace elf = gesher::elf;
 namespace arm64 = gesher::arm64;
@@ -63,10 +66,28 @@ int main(int argc, char** argv) {
 
   using IntFn = int(__attribute__((sysv_abi))*)();
   using AddFn = int(__attribute__((sysv_abi))*)(int, int);
+  using SelftestFn = int(__attribute__((sysv_abi))*)(const char*);
+  using PerfFn = uint64_t(__attribute__((sysv_abi))*)(uint32_t);
 
-  if (auto selftest = Entry<IntFn>(lib, "gesher_selftest")) {
-    int rc = selftest();
+  if (auto selftest = Entry<SelftestFn>(lib, "gesher_selftest")) {
+    // The first search directory doubles as a scratch directory.
+    int rc = selftest(argc > 2 ? argv[2] : ".");
     Check("gesher_selftest() == 0", rc == 0);
+    if (auto perf = Entry<PerfFn>(lib, "gesher_perf_kernel")) {
+      // The same kernel (arm64_perf_kernel.h) translated and native.
+      constexpr uint32_t kRounds = 100;
+      auto t0 = std::chrono::steady_clock::now();
+      uint64_t g = perf(kRounds);
+      auto t1 = std::chrono::steady_clock::now();
+      uint64_t h = gesher_perf_kernel_impl(kRounds);
+      auto t2 = std::chrono::steady_clock::now();
+      double gms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+      double hms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+      Check("perf kernel: translated result == native result", g == h);
+      std::printf("INFO  arm64 perf: compiled C kernel (sieve, CRC-32, LCG; %u rounds): "
+                  "translated %.1f ms, native %.1f ms, overhead x%.1f\n",
+                  kRounds, gms, hms, hms > 0 ? gms / hms : 0.0);
+    }
   } else {
     auto ctor = Entry<IntFn>(lib, "gesher_ctor_ran");
     auto answer = Entry<IntFn>(lib, "gesher_answer");

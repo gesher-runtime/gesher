@@ -22,6 +22,19 @@ public class Arm64Jni {
     static native boolean onLoadRan();
     // Registered by JNI_OnLoad.
     static native int registeredTwice(int x);
+    static native int vaForms();
+    static native int nativeNest(int n);
+    static native int attachedThread();
+
+    // Java <-> guest nesting: nest(n) calls the guest, which calls nest(n-1).
+    static int nest(int n) {
+        return n <= 0 ? 0 : 1 + nativeNest(n - 1);
+    }
+
+    // Called from a guest pthread attached with AttachCurrentThread.
+    static int fromThread(int x) {
+        return x + 1 + (Thread.currentThread().getName().equals("arm64-guest-thread") ? 100 : 0);
+    }
 
     long base = 1000;
     int counter;
@@ -66,6 +79,11 @@ public class Arm64Jni {
 
         int nativeFailures = callbacks(new Arm64Jni());
         check("native callbacks into ART", nativeFailures == 0);
+        check("Call*MethodV from a guest va_list", vaForms() == 0);
+        check("Java -> guest -> Java nesting, 8 deep", nest(8) == 8);
+        int t = attachedThread();
+        if (t != 121) System.out.println("  attachedThread returned " + t);
+        check("a guest pthread attaches, calls Java, detaches", t == 121);
 
         if (failures == 0) {
             System.out.println("Arm64Jni all passed");

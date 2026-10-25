@@ -48,4 +48,18 @@ void AddVaListFunction(const void* fn, int index);
 // Is `addr` inside a registered guest code region?
 bool IsGuestCode(const void* addr);
 
+// The translator's guest definition of libc symbol `name` (an interface whose
+// shim version is x86-64-specific: struct stat, epoll_event, syscall numbers,
+// setjmp/longjmp, getauxval), or nullptr to use the shim's.
+void* GuestSymbol(const char* name);
+
+// The guest TLSDESC resolver for static TLS (descriptor word 1 = TP offset).
+void* TlsDescStatic();
+
+// The AT_HWCAP the guest sees: FP, ASIMD, AES, PMULL, SHA1, SHA2, CRC32.
+constexpr uint64_t kGuestHwcap = 0xFB;
+
+// Runs a guest IFUNC resolver with bionic's arm64 arguments; returns X0.
+uint64_t CallIfuncResolver(const void* resolver);
+
 }  // namespace gesher::arm64
