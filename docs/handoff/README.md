@@ -65,6 +65,12 @@ Merged so far:
   configuration path in ActivityTaskManagerService (the package's locale
   config plus the task's size override; override configs carry a growing
   seq). Resizing relaunches activities without size configChanges.
+- posix: merged (verified at e76dde3, ci 40211480836, which contains
+  2d88915, so the integration tree after this merge is the CI-verified one;
+  241 PASS lines per runner). ADR 0045. Patches 0450/0451 change the AOSP
+  cache key. Leftovers: `stat` shows no execute bit while `access(X_OK)`
+  holds; no symlink resolution in DexFileLoader; ScopedFlock unsupported;
+  NTFS reports writes late (IN_MODIFY often only at close).
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
