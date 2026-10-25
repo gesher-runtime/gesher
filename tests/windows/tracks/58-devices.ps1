@@ -233,10 +233,13 @@ $capCode = $LASTEXITCODE
 $capOut += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
 $capOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.devices.log') -Raw -ErrorAction SilentlyContinue)
 $capOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.camera.log') -Raw -ErrorAction SilentlyContinue)
-DevCheck 'devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesher Camera (installed by the device as the PC has a camera); it returns a thumbnail as "data", and writes a 640x480 JPEG to EXTRA_OUTPUT (a content URI of the caller''s provider)' $capOut @(
+# (Its thumbnail Bitmap reaches the caller only where Bitmaps parcel: Gesher's hwui build
+# does not parcel them, so "data" is absent there; ADR 0051.)
+$thumb = if ($capOut -match 'devices: capture: thumbnail result OK, data (\S+)') { $Matches[1] } else { '?' }
+DevCheck "devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesher Camera (installed by the device as the PC has a camera); without EXTRA_OUTPUT it answers RESULT_OK (thumbnail: $thumb), with it it writes a 640x480 JPEG to the caller's provider's content URI" $capOut @(
   @('camera app: com.gesher.camera '),
   @('devices: capture: ACTION_IMAGE_CAPTURE resolves to com.gesher.camera/.CaptureActivity',
-    'devices: capture: thumbnail result OK, data 160x120',
+    'devices: capture: thumbnail result OK, data ',
     'devices: capture: EXTRA_OUTPUT result OK, the file: ', 'starts FFD8 true, decodes to 640x480',
     'devices: capture: done')) $capCode 'capture'
 if (-not $capOut.Contains('devices: capture: done')) {
