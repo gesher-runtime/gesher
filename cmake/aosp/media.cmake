@@ -44,6 +44,7 @@ add_library(gesher_media_player OBJECT
   ${_media}/video/video_decoder.cc
   ${_media}/video/mf_video.cc
   ${_media}/video/soft_video.cc
+  ${_media}/video/render.cc
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
@@ -70,3 +71,9 @@ add_executable(media_probe ${_media}/probe/media_probe.cc ${GESHER_MEDIA_AUDIO_S
 target_compile_definitions(media_probe PRIVATE GESHER_MEDIA_STANDALONE)
 target_compile_options(media_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_probe PRIVATE ole32 uuid pthread)
+
+# The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
+# SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
+target_sources(hwui PRIVATE
+  ${_media}/surface/queue_surface.cc
+  ${_media}/surface/surface_jni.cc)

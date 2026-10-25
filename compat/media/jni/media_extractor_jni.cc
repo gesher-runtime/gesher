@@ -8,6 +8,7 @@
 
 #include <jni.h>
 
+#include <media/NdkMediaFormat.h>
 #include <media/NdkMediaFormatPriv.h>
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/AMessage.h>

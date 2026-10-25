@@ -51,14 +51,23 @@ public class VideoActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         // The checks run off the main thread: later ones draw into this window.
+        boolean surfacesOnly = getIntent().getBooleanExtra("surfacesOnly", false);
         new Thread(() -> {
             try {
-                extractor();
-                codecList();
-                for (String[] clip : CLIPS) decodeSync(clip[0], clip[1]);
-                decodeAsync();
-                seek();
-                audioCodec();
+                if (!surfacesOnly) {
+                    extractor();
+                    codecList();
+                    for (String[] clip : CLIPS) decodeSync(clip[0], clip[1]);
+                    decodeAsync();
+                    seek();
+                    audioCodec();
+                }
+                surfaces();
+                if (!surfacesOnly) {
+                    retriever();
+                    player();
+                    videoView();
+                }
                 say("done");
             } catch (Throwable t) {
                 say("failed: " + t);
@@ -404,6 +413,316 @@ public class VideoActivity extends Activity {
         ex.release();
         say("codec h264 seek: before " + got + " frames, extractor at " + (seekedTo / 1000)
                 + " ms, first frame after the flush at " + (firstPts / 1000) + " ms, " + color);
+    }
+
+    // --- Output surfaces: TextureView and SurfaceView --------------------------------------
+
+    /**
+     * Decodes the H.264 clip into `surface`, rendering every frame up to `last` (0-based),
+     * then stops: what the surface shows is that frame's color. Returns the frames rendered.
+     */
+    int decodeToSurface(android.view.Surface surface, int last) throws Exception {
+        MediaExtractor ex = open("video_h264.mp4");
+        int v = track(ex, "video/");
+        MediaFormat f = ex.getTrackFormat(v);
+        ex.selectTrack(v);
+        MediaCodec codec = MediaCodec.createDecoderByType(f.getString(MediaFormat.KEY_MIME));
+        codec.configure(f, surface, null, 0);
+        codec.start();
+        MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        int rendered = 0;
+        boolean nullBuffer = true;
+        long deadline = System.currentTimeMillis() + 20000;
+        while (rendered <= last && System.currentTimeMillis() < deadline) {
+            int i = codec.dequeueInputBuffer(10000);
+            if (i >= 0) {
+                int n = ex.readSampleData(codec.getInputBuffer(i), 0);
+                if (n < 0) {
+                    codec.queueInputBuffer(i, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                } else {
+                    codec.queueInputBuffer(i, 0, n, ex.getSampleTime(), 0);
+                    ex.advance();
+                }
+            }
+            int o = codec.dequeueOutputBuffer(info, 10000);
+            if (o >= 0) {
+                if (info.size > 0) {
+                    nullBuffer &= codec.getOutputBuffer(o) == null;
+                    codec.releaseOutputBuffer(o, true);
+                    rendered++;
+                } else {
+                    codec.releaseOutputBuffer(o, false);
+                }
+                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break;
+            }
+        }
+        codec.stop();
+        codec.release();
+        ex.release();
+        if (!nullBuffer) say("surfaces: an output buffer was not null with a Surface");
+        return rendered;
+    }
+
+    static String rgbName(int argb) {
+        int r = (argb >> 16) & 0xff, g = (argb >> 8) & 0xff, b = argb & 0xff;
+        if (r > 200 && g < 60 && b < 60) return "red";
+        if (r < 60 && g > 200 && b < 60) return "lime";
+        if (r < 60 && g < 60 && b > 200) return "blue";
+        if (r > 200 && g > 200 && b > 200) return "white";
+        return String.format("#%06x", argb & 0xffffff);
+    }
+
+    /**
+     * A TextureView and a SurfaceView, each shown a frame by MediaCodec: the TextureView red
+     * (frame 7), the SurfaceView blue (frame 37). TextureView.getBitmap reads its layer back;
+     * the test reads the window (PrintWindow) while this waits.
+     */
+    void surfaces() throws Exception {
+        final android.graphics.SurfaceTexture[] texture = new android.graphics.SurfaceTexture[1];
+        final android.view.Surface[] holderSurface = new android.view.Surface[1];
+        final android.view.TextureView[] tv = new android.view.TextureView[1];
+        final android.view.SurfaceView[] sv = new android.view.SurfaceView[1];
+        CountDownLatch ready = new CountDownLatch(2);
+        runOnUiThread(() -> {
+            android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+            root.setBackgroundColor(0xff808080);
+            tv[0] = new android.view.TextureView(this);
+            tv[0].setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture s, int w, int h) {
+                    texture[0] = s;
+                    ready.countDown();
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture s, int w, int h) {}
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture s) {
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture s) {}
+            });
+            android.widget.FrameLayout.LayoutParams tlp = new android.widget.FrameLayout.LayoutParams(320, 240);
+            tlp.leftMargin = 40;
+            tlp.topMargin = 60;
+            root.addView(tv[0], tlp);
+            sv[0] = new android.view.SurfaceView(this);
+            sv[0].getHolder().addCallback(new android.view.SurfaceHolder.Callback() {
+                @Override
+                public void surfaceCreated(android.view.SurfaceHolder h) {
+                    holderSurface[0] = h.getSurface();
+                    ready.countDown();
+                }
+
+                @Override
+                public void surfaceChanged(android.view.SurfaceHolder h, int format, int w, int hh) {}
+
+                @Override
+                public void surfaceDestroyed(android.view.SurfaceHolder h) {}
+            });
+            android.widget.FrameLayout.LayoutParams slp = new android.widget.FrameLayout.LayoutParams(320, 240);
+            slp.leftMargin = 40;
+            slp.topMargin = 400;
+            root.addView(sv[0], slp);
+            setContentView(root);
+        });
+        boolean created = ready.await(20, TimeUnit.SECONDS);
+        if (!created) {
+            say("surfaces: texture " + (texture[0] != null) + ", surface view surface "
+                    + (holderSurface[0] != null) + " (not created within 20 s)");
+            return;
+        }
+        android.view.Surface textureSurface = new android.view.Surface(texture[0]);
+        int toTexture = decodeToSurface(textureSurface, 7);
+        int toView = decodeToSurface(holderSurface[0], 37);
+        Thread.sleep(1500);
+        final String[] bitmap = new String[1];
+        final int[][] where = new int[2][];
+        CountDownLatch read = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            android.graphics.Bitmap b = tv[0].getBitmap();
+            bitmap[0] = b == null ? "null" : b.getWidth() + "x" + b.getHeight() + " "
+                    + rgbName(b.getPixel(b.getWidth() / 2, b.getHeight() / 2));
+            where[0] = new int[2];
+            where[1] = new int[2];
+            tv[0].getLocationInWindow(where[0]);
+            sv[0].getLocationInWindow(where[1]);
+            read.countDown();
+        });
+        read.await(10, TimeUnit.SECONDS);
+        say("surfaces: texture view " + toTexture + " frames rendered, getBitmap " + bitmap[0]
+                + "; surface view valid " + holderSurface[0].isValid() + ", " + toView + " frames rendered");
+        // The test reads the window now: the views' centers in window coordinates.
+        say("surfaces ready: texture view center " + (where[0][0] + 160) + "," + (where[0][1] + 120)
+                + ", surface view center " + (where[1][0] + 160) + "," + (where[1][1] + 120));
+        Thread.sleep(10000);
+        textureSurface.release();
+    }
+
+    // --- MediaMetadataRetriever, MediaPlayer with video, VideoView ----------------------------
+
+    java.io.File clipFile() throws Exception {
+        java.io.File out = new java.io.File(getFilesDir(), "video_h264.mp4");
+        if (!out.exists()) {
+            try (java.io.InputStream in = getAssets().open("video_h264.mp4");
+                 java.io.FileOutputStream os = new java.io.FileOutputStream(out)) {
+                in.transferTo(os);
+            }
+        }
+        return out;
+    }
+
+    void retriever() throws Exception {
+        android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+        r.setDataSource(clipFile().getPath());
+        android.graphics.Bitmap closest = r.getFrameAtTime(1250000,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST);
+        android.graphics.Bitmap sync = r.getFrameAtTime(1600000,
+                android.media.MediaMetadataRetriever.OPTION_PREVIOUS_SYNC);
+        android.graphics.Bitmap scaled = r.getScaledFrameAtTime(250000,
+                android.media.MediaMetadataRetriever.OPTION_CLOSEST, 160, 160);
+        String w = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+        String h = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+        String hasVideo = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO);
+        r.release();
+        say("retriever frames: video " + w + "x" + h + " " + hasVideo + ", at 1.25 s closest "
+                + describe(closest) + ", at 1.6 s previous sync " + describe(sync)
+                + ", scaled at 0.25 s " + describe(scaled));
+    }
+
+    static String describe(android.graphics.Bitmap b) {
+        if (b == null) return "null";
+        return b.getWidth() + "x" + b.getHeight() + " " + rgbName(b.getPixel(b.getWidth() / 2, b.getHeight() / 2));
+    }
+
+    /**
+     * MediaPlayer playing the clip (video and its AAC audio) into a TextureView: the video
+     * size, the frames reaching the view, and A/V sync: while it plays, the frame shown
+     * (TextureView.getBitmap's color: which half second) is checked against the audio's
+     * position (getCurrentPosition), away from the color changes.
+     */
+    void player() throws Exception {
+        final android.graphics.SurfaceTexture[] texture = new android.graphics.SurfaceTexture[1];
+        final android.view.TextureView[] tv = new android.view.TextureView[1];
+        final java.util.concurrent.atomic.AtomicInteger updates = new java.util.concurrent.atomic.AtomicInteger();
+        CountDownLatch ready = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+            tv[0] = new android.view.TextureView(this);
+            tv[0].setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture s, int w, int h) {
+                    texture[0] = s;
+                    ready.countDown();
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture s, int w, int h) {}
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture s) {
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture s) {
+                    updates.incrementAndGet();
+                }
+            });
+            root.addView(tv[0], new android.widget.FrameLayout.LayoutParams(320, 240));
+            setContentView(root);
+        });
+        if (!ready.await(20, TimeUnit.SECONDS)) {
+            say("player video: no SurfaceTexture");
+            return;
+        }
+        android.media.MediaPlayer mp = new android.media.MediaPlayer();
+        final int[] size = new int[2];
+        CountDownLatch completed = new CountDownLatch(1);
+        mp.setOnVideoSizeChangedListener((p, w, h) -> {
+            size[0] = w;
+            size[1] = h;
+        });
+        mp.setOnCompletionListener(p -> completed.countDown());
+        android.view.Surface surface = new android.view.Surface(texture[0]);
+        mp.setSurface(surface);
+        mp.setDataSource(clipFile().getPath());
+        mp.prepare();
+        int vw = mp.getVideoWidth(), vh = mp.getVideoHeight(), duration = mp.getDuration();
+        updates.set(0);
+        mp.start();
+        int checked = 0, wrong = 0;
+        StringBuilder misses = new StringBuilder();
+        long end = System.currentTimeMillis() + 2600;
+        while (System.currentTimeMillis() < end && completed.getCount() > 0) {
+            Thread.sleep(90);
+            int pos = mp.getCurrentPosition();
+            final String[] color = new String[1];
+            CountDownLatch read = new CountDownLatch(1);
+            runOnUiThread(() -> {
+                android.graphics.Bitmap b = tv[0].getBitmap();
+                color[0] = b == null ? "null" : rgbName(b.getPixel(b.getWidth() / 2, b.getHeight() / 2));
+                read.countDown();
+            });
+            read.await(2, TimeUnit.SECONDS);
+            int pos2 = mp.getCurrentPosition();
+            int at = (pos + pos2) / 2;
+            int quarter = at / 500, into = at % 500;
+            if (quarter < 4 && into > 120 && into < 380) {
+                checked++;
+                if (!COLOR_NAMES[quarter].equals(color[0])) {
+                    wrong++;
+                    misses.append(" ").append(at).append("ms=").append(color[0]);
+                }
+            }
+        }
+        boolean done = completed.await(5, TimeUnit.SECONDS);
+        int finalPos = mp.getCurrentPosition();
+        mp.release();
+        surface.release();
+        say("player video: size " + vw + "x" + vh + " (listener " + size[0] + "x" + size[1] + "), duration "
+                + (Math.abs(duration - 2000) <= 50 ? "ok" : duration) + ", frames shown "
+                + (updates.get() >= 30 ? "30+" : String.valueOf(updates.get())) + ", completed " + done
+                + ", at the end " + (Math.abs(finalPos - duration) <= 100 ? "ok" : finalPos));
+        say("player sync: " + checked + " checks, " + (checked >= 8 && wrong == 0 ? "in sync"
+                : wrong + " off" + misses));
+    }
+
+    /** VideoView: a path, start, completion. */
+    void videoView() throws Exception {
+        final android.widget.VideoView[] vv = new android.widget.VideoView[1];
+        CountDownLatch prepared = new CountDownLatch(1), completed = new CountDownLatch(1);
+        final boolean[] playing = new boolean[1];
+        final int[] duration = new int[1];
+        final java.io.File file = clipFile();
+        runOnUiThread(() -> {
+            vv[0] = new android.widget.VideoView(this);
+            vv[0].setOnPreparedListener(mpPrepared -> {
+                duration[0] = mpPrepared.getDuration();
+                prepared.countDown();
+            });
+            vv[0].setOnCompletionListener(mpDone -> completed.countDown());
+            android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+            root.addView(vv[0], new android.widget.FrameLayout.LayoutParams(320, 240));
+            setContentView(root);
+            vv[0].setVideoPath(file.getPath());
+            vv[0].start();
+        });
+        boolean p = prepared.await(20, TimeUnit.SECONDS);
+        Thread.sleep(800);
+        CountDownLatch read = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            playing[0] = vv[0].isPlaying();
+            read.countDown();
+        });
+        read.await(5, TimeUnit.SECONDS);
+        boolean c = completed.await(10, TimeUnit.SECONDS);
+        runOnUiThread(() -> vv[0].stopPlayback());
+        say("video view: prepared " + p + ", duration " + (Math.abs(duration[0] - 2000) <= 50 ? "ok" : duration[0])
+                + ", playing " + playing[0] + ", completed " + c);
     }
 
     /** The MP4's AAC track through MediaCodec: PCM of the 1661 Hz tone. */
