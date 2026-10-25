@@ -78,6 +78,9 @@ int NetworkState();
 // --- time zone --------------------------------------------------------------------------
 // The Windows time zone's key name ("Israel Standard Time"); empty if unknown.
 std::u16string TimeZoneKeyName();
+// The IANA id of a Windows time zone (Windows' icu.dll: CLDR windowsZones); empty if
+// unknown or without icu.dll.
+std::u16string IanaZone(const std::u16string& windows_id);
 
 // --- toasts -----------------------------------------------------------------------------
 // Shows the toast `xml` for the AppUserModelID `app_id` with `tag` and `group`

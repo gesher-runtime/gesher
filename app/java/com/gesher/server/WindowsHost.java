@@ -283,6 +283,17 @@ public final class WindowsHost {
             String iconPath);
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
+    /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */
+    public static String ianaZone(String windowsId) {
+        if (!available() || windowsId == null) return null;
+        try {
+            return nativeIanaZone(windowsId);
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
+    private static native String nativeIanaZone(String windowsId);
     private static native int nativeRegisterActivator(boolean singleUse);
     private static native void nativeRevokeActivator();
 }
