@@ -46,7 +46,8 @@ int main(int argc, char** argv) {
   int rc = system("exit 5");
   ok("system runs the shell and returns its status",
      rc != -1 && WIFEXITED(rc) && WEXITSTATUS(rc) == 5, "system exit 5");
-  ok("system(NULL) reports a shell is available", system(NULL) != 0, "system(NULL)");
+  const char* no_command = NULL;  // a variable, so -Wnonnull does not fire
+  ok("system(NULL) reports a shell is available", system(no_command) != 0, "system(NULL)");
 
   // --- popen() ---------------------------------------------------------------
   {
