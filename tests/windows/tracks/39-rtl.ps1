@@ -169,8 +169,9 @@ try {
   if ($de.format -ne 'de-DE' -or ($de.ui -split ',')[0] -ne 'en-US') {
     Write-Host "INFO  locale: not an en-US display with de-DE formats ($($de.ui), $($de.format)); skipped"
   } else {
-    GraphicsDex 'locale from Windows: the regional format de-DE under an en-US display gives en-US-u-fw-mon-hc-h23 (Monday, 24-hour)' `
-      LocaleTest @("en-US-u-fw-mon-hc-h23$((($de.ui -split ',') | Select-Object -Skip 1 | ForEach-Object { ",$_" }) -join '')", '2', 'true')
+    # (and Celsius, -u-mu-: de-DE's metric measurement system; locale track, ADR 0049)
+    GraphicsDex 'locale from Windows: the regional format de-DE under an en-US display gives en-US-u-fw-mon-hc-h23-mu-celsius (Monday, 24-hour, Celsius)' `
+      LocaleTest @("en-US-u-fw-mon-hc-h23-mu-celsius$((($de.ui -split ',') | Select-Object -Skip 1 | ForEach-Object { ",$_" }) -join '')", '2', 'true')
   }
 } finally {
   SetRegionalFormat $original
