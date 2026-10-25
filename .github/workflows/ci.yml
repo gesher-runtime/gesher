@@ -205,7 +205,7 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.

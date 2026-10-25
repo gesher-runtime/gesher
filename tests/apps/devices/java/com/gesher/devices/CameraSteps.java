@@ -78,6 +78,13 @@ final class CameraSteps {
         Report.line("camera: " + ids.length + " cameras" + (ids.length > 0 ? ": "
                 + String.join(", ", ids) : ""));
         legacyAndIntent();
+        if (ids.length > 0) {
+            try {
+                new LegacyCameraSteps().run();
+            } catch (Throwable t) {
+                Report.line("camera: legacy failed: " + t);
+            }
+        }
         if (ids.length == 0) {
             try {
                 mCm.openCamera("0", new CameraDevice.StateCallback() {
@@ -260,6 +267,7 @@ final class CameraSteps {
             android.hardware.Camera legacy = android.hardware.Camera.open();
             Report.line("camera: legacy Camera.open() answers " + (legacy == null ? "null"
                     : "a camera"));
+            if (legacy != null) legacy.release();
         } catch (RuntimeException e) {
             Report.line("camera: legacy Camera.open() throws " + e.getClass().getSimpleName());
         }
