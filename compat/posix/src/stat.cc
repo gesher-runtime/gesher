@@ -73,9 +73,10 @@ int FromHandle(HANDLE h, struct stat* buf) {
 
 }  // namespace
 
-extern "C" {
+namespace {
 
-int stat(const char* path, struct stat* buf) {
+// stat and lstat: `follow` follows a symbolic link at the end of the path.
+int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
   if (path == nullptr || buf == nullptr) return errno = EFAULT, -1;
   if (path[0] == '\0') return errno = ENOENT, -1;
   std::wstring windows;
@@ -85,16 +86,39 @@ int stat(const char* path, struct stat* buf) {
       // needed to read attributes.
       HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                             OPEN_EXISTING,
+                             FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+                             nullptr);
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
       int result = FromHandle(h, buf);
+      if (result == 0 && !follow && gesher::IsSymlinkHandle(h)) {
+        // A symbolic link (or a junction): Linux reports the link, its size
+        // the length of its target.
+        std::string target;
+        buf->st_mode = S_IFLNK | 0777;
+        buf->st_size = gesher::ReadSymlinkHandle(h, &target) ? static_cast<long long>(target.size()) : 0;
+      }
       CloseHandle(h);
       return result;
     }
-    case gesher::PathKind::kCmdline:
+    case gesher::PathKind::kVirtual: {
+      unsigned type = gesher::procfs::Type(windows);
+      if (type == 0) break;
+      if (type == S_IFLNK && follow) {
+        // /proc/self/fd/<n> is the file open as fd n, a pipe or socket too.
+        int fd = gesher::procfs::FdOfLink(windows);
+        if (fd >= 0) return fstat(fd, buf);
+        std::string target;
+        if (depth > 8) return errno = ELOOP, -1;
+        if (!gesher::procfs::ReadLink(windows, &target)) return -1;
+        return StatPath(target.c_str(), buf, true, depth + 1);
+      }
+      // Size 0, like Linux's /proc files.
       Clear(buf);
-      buf->st_mode = S_IFREG | 0444;  // size 0, like Linux's /proc files
+      buf->st_mode = type | (type == S_IFDIR ? 0555 : type == S_IFLNK ? 0777 : 0444);
+      buf->st_dev = 0x16;  // a file system of its own, as procfs is
       return 0;
+    }
     case gesher::PathKind::kNull:
     case gesher::PathKind::kZero:
     case gesher::PathKind::kRandom:
@@ -108,9 +132,13 @@ int stat(const char* path, struct stat* buf) {
   return errno = ENOENT, -1;
 }
 
-// Symbolic links are followed: readlink and symlink do not support them
-// either (unistd.cc).
-int lstat(const char* path, struct stat* buf) { return stat(path, buf); }
+}  // namespace
+
+extern "C" {
+
+int stat(const char* path, struct stat* buf) { return StatPath(path, buf, true); }
+
+int lstat(const char* path, struct stat* buf) { return StatPath(path, buf, false); }
 
 int fstat(int fd, struct stat* buf) {
   if (buf == nullptr) return errno = EFAULT, -1;

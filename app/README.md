@@ -152,7 +152,7 @@ the stub itself, with no Parcel round trip.
 | `window` | `IWindowManager` | `openSession` → `StandInWindowSession` (windows added headless: ADD_OKAY, the display's frames, no surface) or what `WindowManagerService.setSessionFactory` makes; display sizes; no navigation bar; animator scales 1 |
 | `display` | `IDisplayManager` | one display (`DeviceProfile`: 1080×2400, 420 dpi, 60 Hz, on); callbacks accepted and never called; sRGB, default overlay properties |
 | `user` | `IUserManager` | user 0, the system user, running and unlocked |
-| `input_method` | `IInputMethodManager` | no input method; clients accepted (a window's ViewRootImpl needs the service) |
+| `input_method` | `IInputMethodManager` | `InputMethodManagerService`: one input method, Windows text input (docs/input.md "Text input") |
 
 In single-process mode, `ServiceManager` asks `IServiceManager` for any name
 not in its cache. Without a binder driver there is no servicemanager to ask,

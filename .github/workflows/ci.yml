@@ -55,6 +55,8 @@ jobs:
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
           tools/fonts/collect-fonts.sh third_party/aosp dist
+          # Time zone data, for $ANDROID_TZDATA_ROOT (docs/posix.md).
+          compat/libcore/collect-tzdata.sh third_party/aosp dist
           # Android's CA certificates and the networking libraries' licenses (docs/network.md).
           tools/net/collect.sh third_party/aosp dist
           ls -la dist
@@ -84,6 +86,11 @@ jobs:
   # the test job: .github/workflows/libs.yml.
   libs:
     uses: ./.github/workflows/libs.yml
+
+  # ART's own gtests for libartbase and libdexfile (docs/posix.md):
+  # .github/workflows/posix.yml, which also runs on its own.
+  posix:
+    uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
@@ -219,7 +226,8 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe',
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.
@@ -500,12 +508,14 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix]
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
+    # A hung app or check fails the job instead of running for six hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -532,6 +542,11 @@ jobs:
         with:
           name: libs-tests
           path: dist/libs-tests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: art-gtests
+          path: dist/art-gtests
 
       - uses: actions/download-artifact@v4
         with:
