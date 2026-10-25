@@ -101,6 +101,10 @@ void AddVaListFunction(const void* fn, int index) {
 
 bool IsGuestCode(const void* addr) { return g_api && g_api->is_guest_code(addr); }
 
+uint64_t RunProgram(const void* entry, const uint64_t* block, size_t words) {
+  return g_api ? g_api->run_program(entry, block, words) : 0;
+}
+
 void* GuestSymbol(const char* name) { return g_api ? g_api->guest_symbol(name) : nullptr; }
 
 void* TlsDescStatic() { return g_api ? g_api->tlsdesc_static() : nullptr; }

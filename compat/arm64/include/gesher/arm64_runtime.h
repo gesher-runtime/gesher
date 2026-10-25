@@ -59,6 +59,11 @@ void* TlsDescStatic();
 // The AT_HWCAP the guest sees: FP, ASIMD, AES, PMULL, SHA1, SHA2, CRC32.
 constexpr uint64_t kGuestHwcap = 0xFB;
 
+// Runs a guest executable's _start on this thread with the Linux initial
+// stack `block` (argc, argv, envp, auxv; `words` words). Does not return
+// unless _start does.
+uint64_t RunProgram(const void* entry, const uint64_t* block, size_t words);
+
 // Runs a guest IFUNC resolver with bionic's arm64 arguments; returns X0.
 uint64_t CallIfuncResolver(const void* resolver);
 

@@ -34,7 +34,7 @@
 extern "C" {
 #endif
 
-#define GESHER_ARM64_API_VERSION 1
+#define GESHER_ARM64_API_VERSION 2
 
 // What the host gives the translator.
 struct gesher_arm64_host {
@@ -86,6 +86,13 @@ struct gesher_arm64_api {
 
   // Is `addr` inside a registered guest code region?
   int (*is_guest_code)(const void* addr);
+
+  // Runs a guest executable's entry point (_start) on this thread with the
+  // Linux initial stack `block` (argc, argv, envp, auxv: `words` words),
+  // copied to the top of the thread's guest stack; X0 = 0 (no rtld fini).
+  // _start does not return (the program ends with exit()); if it does,
+  // returns X0.
+  uint64_t (*run_program)(const void* entry, const uint64_t* block, size_t words);
 };
 
 // The DLL's one export.

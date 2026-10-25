@@ -97,6 +97,48 @@ Check 'arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV, nest
     (NoDrive (Resolve-Path "$Dir/jni_test_arm64.so").Path))
 } @('JNI_OnLoad ran: ok', 'Arm64Jni all passed')
 
+# arm64-v8a ELF executables (the exec track's launcher, ADR 0035): the exec
+# test program built for arm64 (arm64.yml, $Dir/arm64-exec) runs in
+# gesher-exec, whose loader maps it and its DT_NEEDED library as guest objects
+# and enters its _start through the translator at the Linux stack block; the
+# same checks as tracks/42-exec.ps1.
+$a64exec = Join-Path $a64 'arm64-exec'
+if (Test-Path "$a64exec/libexectest.so") {
+  $env:LD_LIBRARY_PATH = NoDrive $a64exec
+  $env:EXEC_TEST_VAR = 'from the launcher'
+  Check 'arm64: gesher-exec runs an arm64-v8a ELF executable (argv, environ, auxv, DT_NEEDED, init functions, a thread, TLS) through the translator' {
+    A64Run "$a64/gesher-exec.exe" @('--elf', "$a64exec/libexectest.so", 'libexectest.so', 'echo', 'one')
+  } @('argc=3', 'argv[0]=<libexectest.so>', 'argv[2]=<one>', 'getenv=<from the launcher>', 'environ has EXEC_TEST_VAR=1',
+      'pagesz=4096 phdr=set random=set', 'ctor argc=3', 'helper=<hello from libexechelper (constructor ran)>',
+      'thread=100 tls=7', 'echo done')
+  Remove-Item Env:EXEC_TEST_VAR
+  $statusProblems = @()
+  foreach ($case in @(@('exit', '3', 3), @('abort', '', 134), @('segv', '', 139))) {
+    $a = @('--elf', "$a64exec/libexectest.so", 'libexectest.so', $case[0])
+    if ($case[1]) { $a += $case[1] }
+    $o = A64Run "$a64/gesher-exec.exe" $a 120 | Out-String
+    if ($LASTEXITCODE -ne $case[2]) { $statusProblems += "$($case[0]): exit $LASTEXITCODE, not $($case[2]) ($($o.Trim()))" }
+  }
+  Remove-Item Env:LD_LIBRARY_PATH
+  if (-not $statusProblems) {
+    Write-Host 'PASS  arm64: gesher-exec exit statuses of an arm64 program: exit(3) is 3, abort() is 134, a fault is 139'
+  } else {
+    Write-Host "FAIL  arm64: gesher-exec exit statuses of an arm64 program: $($statusProblems -join '; ')"
+    $failed++
+  }
+  # ProcessBuilder / Runtime.exec of the arm64 program (gesher.ExecTest from
+  # the exec artifact, pointed at the arm64 directory).
+  if (Test-Path "$Dir/exec-test.dex") {
+    Check 'arm64: ProcessBuilder runs an arm64-v8a ELF executable (pipes, environment, working dir, exit status, destroy)' {
+      A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+        '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/exec-test.dex"), 'gesher.ExecTest', (NoDrive $a64exec)) 600
+    } @('ExecTest all passed')
+  }
+} else {
+  Write-Host 'FAIL  arm64: the arm64 executable (arm64-exec/libexectest.so) is missing'
+  $failed++
+}
+
 # An arm64-only APK through gesher-app: tests/apps/nativeactivity built with
 # only lib/arm64-v8a (arm64.yml). gesher-app picks arm64-v8a (NativeLibs.abiFor,
 # ApplicationInfo.primaryCpuAbi), NativeActivity loads the guest .so, and its

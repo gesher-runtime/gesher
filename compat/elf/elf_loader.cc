@@ -931,6 +931,7 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
     return nullptr;
   }
 
+
   auto* lib = new Library();
   lib->name = name;
   lib->is_aarch64 = aarch64;
@@ -1143,6 +1144,8 @@ void* LookupGlobal(const char* name) {
   return LookupGlobalLocked(name, nullptr, nullptr);
 }
 
+bool IsAarch64(Library* library) { return library != nullptr && library->is_aarch64; }
+
 void* ResolveBionic(const char* name) { return g_resolver ? g_resolver(name) : nullptr; }
 
 Library* Find(const char* name) {
@@ -1170,6 +1173,7 @@ bool GetExecutableInfo(Library* library, ExecutableInfo* info) {
   info->phnum = library->phnum;
   info->base = library->base;
   info->has_interp = library->has_interp;
+  info->aarch64 = library->is_aarch64;
   return true;
 }
 

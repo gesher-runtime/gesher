@@ -53,6 +53,7 @@ jobs:
             cmake/toolchain-llvm-mingw.cmake
             tests/native
             tests/apps/nativeactivity
+            tests/exec
 
       - name: Cache toolchain
         id: toolchain
@@ -175,7 +176,18 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong \
             -Wl,-soname,libjni_test.so \
             -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
+          # An arm64-v8a ELF executable (the exec track's test program, ADR 0035)
+          # and its DT_NEEDED library, for gesher-exec through the translator:
+          # in a directory of their own (the x86_64 ones have the same names).
+          mkdir -p dist-arm64/arm64-exec
+          cca="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+          "$cca" -shared -fPIC -O2 -fstack-protector-strong \
+            -Wl,-soname,libexechelper.so -o dist-arm64/arm64-exec/libexechelper.so tests/exec/exec_helper.c
+          "$cca" -O2 -fstack-protector-strong -Wall -Werror \
+            -o dist-arm64/arm64-exec/libexectest.so tests/exec/exec_test.c \
+            -Ldist-arm64/arm64-exec -lexechelper
           ro="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          "$ro" -h -l dist-arm64/arm64-exec/libexectest.so | grep -E 'Machine|Type:|Entry|INTERP|TLS' || true
           echo "--- trivial_arm64.so ---"; "$ro" -h dist-arm64/trivial_arm64.so | grep -E 'Machine|Type'
           echo "--- libc_test_arm64.so ---"; "$ro" -d dist-arm64/libc_test_arm64.so | grep -E 'NEEDED|SONAME'
           ls -la dist-arm64
