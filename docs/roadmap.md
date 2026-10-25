@@ -262,6 +262,17 @@ needs: [framework-build.md](framework-build.md).
         them), a notification listener
   - [x] Wake locks as Windows power requests; the battery from
         GetSystemPowerStatus
+- [x] Device hardware APIs backed by Windows (devices track, ADR 0043,
+      [devices.md](devices.md); ci run 40142590418 at f62f1aa, both runners;
+      real cameras and sensors not in CI, see devices.md)
+  - [x] Location: LocationManager over Windows.Devices.Geolocation
+        (gps/network/fused/passive, listeners and PendingIntents, test
+        providers, permissions; no geocoder)
+  - [x] Sensors: SystemSensorManager over Windows.Devices.Sensors (empty on
+        the runners; a test accelerometer and light sensor)
+  - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
+        JPEG ImageReaders, CAMERA permission), checked with a test camera
+        that is a Media Foundation media source
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package

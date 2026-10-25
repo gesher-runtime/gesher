@@ -72,6 +72,8 @@ include(cmake/aosp/graphics.cmake)
 include(cmake/aosp/input.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
+# Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
+include(compat/devices/devices.cmake)
 # android.webkit.WebView on WebView2 (docs/webview.md): libgesher_webview.so, builtin.
 include(cmake/webview.cmake)
 
