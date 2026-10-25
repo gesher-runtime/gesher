@@ -82,7 +82,13 @@ if (Test-Path $artGtests) {
   $env:ANDROID_ROOT = NoDriveP $artHostOut
   $env:TMPDIR = NoDriveP $artTmp
   try {
-    if (-not (Invoke-ArtGtest 'art_libartbase_tests' -TimeoutSec 600)) { $failed++ }
+    if (-not (Invoke-ArtGtest 'art_libartbase_tests' -TimeoutSec 600 -Exclude @(
+        # CommonRuntimeTest starts a runtime on the host's whole boot class path.
+        'FlagsTests*',
+        # Registration is a no-op in Gesher's membarrier (patch 0014).
+        'membarrier.private_expedited', 'membarrier.private_expedited_sync_core',
+        # ART's LockedFile is unsupported under _WIN32.
+        'ScopedFlockTest.TestLocking'))) { $failed++ }
     if (-not (Invoke-ArtGtest 'art_libdexfile_tests' -Exclude @(
         # VerifierDeps is smali, which the build does not assemble.
         'ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile',

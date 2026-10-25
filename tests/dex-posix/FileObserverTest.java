@@ -16,7 +16,19 @@ import java.util.concurrent.TimeUnit;
 public final class FileObserverTest {
   private static final LinkedBlockingQueue<String> events = new LinkedBlockingQueue<>();
 
-  public static void main(String[] args) throws Exception {
+  // FileObserver's ObserverThread is not a daemon and never ends: the test
+  // exits explicitly, also when it fails.
+  public static void main(String[] args) {
+    try {
+      run(args);
+    } catch (Throwable t) {
+      t.printStackTrace();
+      System.exit(1);
+    }
+    System.exit(0);
+  }
+
+  private static void run(String[] args) throws Exception {
     // libandroid_runtime registers the framework's natives when it loads, as
     // the other framework tests do (tests/dex-natives); gesher-app does this
     // for apps.

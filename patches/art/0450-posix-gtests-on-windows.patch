@@ -1,3 +1,16 @@
+diff --git a/libartbase/base/hex_dump_test.cc b/libartbase/base/hex_dump_test.cc
+index bfd5c75..abfe34e 100644
+--- a/libartbase/base/hex_dump_test.cc
++++ b/libartbase/base/hex_dump_test.cc
+@@ -24,7 +24,7 @@
+ 
+ namespace art {
+ 
+-#if defined(__LP64__)
++#if defined(__LP64__) || defined(_WIN64)
+ #define ZEROPREFIX "00000000"
+ #else
+ #define ZEROPREFIX
 diff --git a/libartbase/base/testing.cc b/libartbase/base/testing.cc
 index 6ec207e..3026624 100644
 --- a/libartbase/base/testing.cc
