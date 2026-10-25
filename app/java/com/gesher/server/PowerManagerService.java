@@ -21,9 +21,12 @@ import java.util.Map;
  * {@code powercfg /requests} lists with the holders' packages and tags): a partial wake
  * lock keeps Windows from sleeping, a screen or full one keeps the display on too, until
  * released or their process dies. Battery saver is Windows' (GetSystemPowerStatus's
- * SystemStatusFlag). The screen is on (interactive); there is no device idle (doze).
+ * SystemStatusFlag). The screen is on (interactive) while Windows is awake: when Windows goes
+ * to sleep (WM_POWERBROADCAST PBT_APMSUSPEND) the device is not interactive and registered
+ * receivers get ACTION_SCREEN_OFF, on resume (PBT_APMRESUMEAUTOMATIC/RESUMESUSPEND)
+ * ACTION_SCREEN_ON (hwsvc2, ADR 0051). There is no device idle (doze).
  */
-final class PowerManagerService extends IPowerManager.Default {
+final class PowerManagerService extends IPowerManager.Default implements WindowsHost.Listener {
     /** A held wake lock. */
     private static final class WakeLock implements IBinder.DeathRecipient {
         final IBinder token;
@@ -55,6 +58,38 @@ final class PowerManagerService extends IPowerManager.Default {
 
     private final Map<IBinder, WakeLock> mLocks = new LinkedHashMap<>();  // guarded by this
     private String mApplied = "";  // guarded by this: the request's reason, "" for none
+    private volatile boolean mInteractive = true;
+
+    PowerManagerService() {
+        // Sleep and resume come from the system server's event window.
+        if (WindowsHost.inSystemServer()) WindowsHost.addListener(this);
+    }
+
+    @Override
+    public void onWindowsEvents(int events) {
+        // A resume after a suspend in the same batch: the device is awake again.
+        if ((events & WindowsHost.EVENT_SUSPENDING) != 0) setInteractive(false);
+        if ((events & WindowsHost.EVENT_RESUMED) != 0) setInteractive(true);
+    }
+
+    private void setInteractive(boolean interactive) {
+        if (mInteractive == interactive) return;
+        mInteractive = interactive;
+        SystemServer.log("power: Windows " + (interactive ? "resumed: the screen is on"
+                : "goes to sleep: the screen is off"));
+        Services.Created c = Services.sLast;
+        if (c == null) return;
+        // As PowerManagerService's Notifier: registered receivers only, in the foreground.
+        android.content.Intent i = new android.content.Intent(interactive
+                ? android.content.Intent.ACTION_SCREEN_ON : android.content.Intent.ACTION_SCREEN_OFF);
+        i.addFlags(android.content.Intent.FLAG_RECEIVER_REGISTERED_ONLY
+                | android.content.Intent.FLAG_RECEIVER_FOREGROUND);
+        try {
+            c.am.sendBroadcastFor("android", i, null);
+        } catch (Throwable t) {
+            SystemServer.log("power: " + i.getAction() + " failed: " + t);
+        }
+    }
 
     @Override
     public void acquireWakeLock(IBinder lock, int flags, String tag, String packageName,
@@ -162,12 +197,12 @@ final class PowerManagerService extends IPowerManager.Default {
 
     @Override
     public boolean isInteractive() {
-        return true;
+        return mInteractive;
     }
 
     @Override
     public boolean isDisplayInteractive(int displayId) {
-        return true;
+        return mInteractive;
     }
 
     private static boolean batterySaver() {
