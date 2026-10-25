@@ -224,8 +224,29 @@ package job (the activator's registration, the uninstaller's cleanup).
   new zone fell back to GMT (the runtime's ICU has no windowsZones: now Windows'
   icu.dll answers), and the stored notifications' directory stayed after an uninstall
   (File.delete removes no directory: java.nio now).
-- Next: ci run 40196047045 at 6ebe7a6 (merged integration bf91649, network constraints).
-- Not done: preview into SurfaceView/TextureView (ADR 0051: the graphics stack gives
+- **Verified: ci run 40214264956 at aaa1f90** (merged origin/phase4/integration
+  786e0ec: net, media, locale, lifecycle, posix): every job green on attempt 3;
+  attempts 1-2 of test (windows-2022) failed only on the media track's "mediaapp.apk's
+  sounds reach the output" tone check (a frequency off; the same on wip/ime's runs
+  40217116856 and 40214353637, so not an hwsvc2 effect).
+  On both runners:
+  - `PASS  devsvc: vibrator: getSystemService(VIBRATOR_SERVICE) and VibratorManager as on a device without a vibrator (vibrator_manager: no ids, hasVibrator false, the null vibrator; vibrate and cancel accepted)`
+  - `PASS  devsvc: jobs: a content URI trigger (TriggerContentUri, descendants) runs the job once for a provider's two notifyChange calls, with the triggered URIs and authority; a ContentObserver gets both changes`
+  - `PASS  devsvc: jobs: network constraints over ConnectivityManager's networks: NETWORK_TYPE_ANY and UNMETERED jobs run (JobParameters.getNetwork 114), a CELLULAR job waits for connectivity`
+  - `PASS  devsvc: sleep: PBT_APMSUSPEND is SCREEN_OFF (isInteractive false) and holds a due RTC alarm; PBT_APMRESUMEAUTOMATIC is SCREEN_ON and the alarm catches up`
+  - `PASS  devsvc: clock: a real time zone change (Set-TimeZone Tokyo Standard Time) becomes TIMEZONE_CHANGED (Asia/Tokyo) for a registered receiver; the app's default zone then: Asia/Tokyo`
+  - `PASS  devsvc: notifications: with the Gesher device stopped, activating a toast through Gesher's toast activator ({C18D9445-A7F0-472E-985F-AC354EBEB660}, the app id's CustomActivator; its LocalServer32 run) starts the device and sends the content intent; with the device running its system server serves the activator and a button sends its action's intent`
+  - `PASS  devsvc: notifications: uninstalling the package removes its toasts, its stored notifications and HKCU\Software\Classes\AppUserModelId\Gesher.App.com.gesher.devsvc`
+  - package job: `PASS  installer: Gesher's toast activator is registered (LocalServer32: gesher-app.ps1 toast-activated)`, `PASS  installer: uninstall removes the toast activator and the apps' AppUserModelIDs`
+- Earlier runs: 40196047045 (6ebe7a6: all devsvc checks green; the legacy camera
+  crashed in takePicture, a capture closed under its reader), 40199131093 and
+  40211527138 (Gesher Camera: YuvImage has no natives; a Bitmap result does not
+  parcel), each fixed after.
+- How the activation is tested: per-user (HKCU) LocalServer32 registrations are not
+  launched by COM's SCM (CoCreateInstance answers REGDB_E_CLASSNOTREG, checked
+  locally, not elevated); Windows' notification platform reads the activator's
+  LocalServer32 command and runs it itself, then activates the class the launched
+  process serves. The test does the same (57-devsvc.ps1, GesherToastActivation).- Not done: preview into SurfaceView/TextureView (ADR 0051: the graphics stack gives
   their child surfaces no native window); an actual click on a toast is not automated
   (CI performs the activation as Windows' notification platform does).
 

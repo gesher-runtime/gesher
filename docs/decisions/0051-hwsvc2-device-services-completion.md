@@ -76,7 +76,10 @@ preview into a SurfaceView/TextureView had no surface to go to.
   and to a preview surface with a native window.
 - **Gesher Camera** (`app/gesher-camera`, `gesher-camera.apk` shipped next to
   dalvikvm.exe) resolves ACTION_IMAGE_CAPTURE: a Camera2 preview with take and
-  cancel, the photo written to EXTRA_OUTPUT or returned as a thumbnail. The
+  cancel, the photo written to EXTRA_OUTPUT or returned as a thumbnail (only
+  where Bitmaps parcel: Gesher's hwui build has no Bitmap parcel natives, so
+  across processes the result is RESULT_OK without `data`; preview frames are
+  converted by the app itself, as YuvImage has no natives either). The
   persistent device installs it at its start when there is a camera and removes
   it when there is none (a device without a camera has no camera app).
 - **Geocoder stays absent** (`isPresent()` false, IOException):

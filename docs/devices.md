@@ -149,7 +149,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 ## Status and next steps
 
 ### Done and verified
-- **CI run 40142590418** (ci at f62f1aa, merged with origin/phase4/integration
+- **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,
+  both runners; see docs/services.md "Status and next steps (hwsvc2)"):
+  - `PASS  devices: camera (single process): the legacy android.hardware.Camera over GESHER_CAMERA_TEST's camera: info, parameters, a 320x240 NV21 preview into callback buffers, autoFocus, takePicture (shutter, raw, JPEG), release`
+  - the same on the Gesher device
+  - `PASS  devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesher Camera (installed by the device as the PC has a camera); without EXTRA_OUTPUT it answers RESULT_OK (thumbnail: none), with it it writes a 640x480 JPEG to the caller's provider's content URI`
+  - `PASS  devices: geocoder: Windows.Services.Maps without a map service key answers InvalidCredentials (Geocoder stays absent: isPresent false, IOException)`
+  - Still open: preview into SurfaceView/TextureView (no native window for their
+    child surfaces); the thumbnail Bitmap across processes (Gesher's hwui has no
+    Bitmap parcel natives: graphics track).- **CI run 40142590418** (ci at f62f1aa, merged with origin/phase4/integration
   at 6751717; every job green: test on windows-2022 and windows-2025, package,
   e2e): location, sensors and cameras, single process and on the Gesher device.
   The devices checks, the same on both runners:
@@ -185,8 +193,8 @@ Windows without them (no location service, no Media Foundation) gets clean
 ### Next steps (beyond the brief)
 1. Preview into SurfaceView/TextureView once the graphics stack gives them a
    native window.
-2. A Gesher camera activity for ACTION_IMAGE_CAPTURE; the legacy
-   android.hardware.Camera over the same service.
+2. (Done by hwsvc2: Gesher Camera, the legacy android.hardware.Camera.) Bitmap
+   parcelling in hwui, so Gesher Camera's thumbnail reaches the caller.
 3. A virtual camera (MFCreateVirtualCamera) where Frame Server is available.
 
 ### Open problems, dead ends ruled out
