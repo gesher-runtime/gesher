@@ -51,7 +51,7 @@ add_library(gesher_arm64 SHARED
 set_target_properties(gesher_arm64 PROPERTIES PREFIX "" OUTPUT_NAME "gesher_arm64")
 target_include_directories(gesher_arm64 PRIVATE
   ${CMAKE_CURRENT_LIST_DIR}/../include ${DYNARMIC_DIR}/src)
-target_link_libraries(gesher_arm64 PRIVATE dynarmic)
+target_link_libraries(gesher_arm64 PRIVATE dynarmic synchronization)
 target_compile_options(gesher_arm64 PRIVATE -Wall -Wextra -mcx16)
 # A self-contained DLL: the CRT and libunwind are linked statically, as Gesher's
 # executables are, so it loads next to dalvikvm with no extra runtime files.

@@ -20,7 +20,11 @@
 
 #include "translator.h"
 
+#include <windows.h>
+
+#include <cmath>
 #include <cstdint>
+#include <cwctype>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -373,6 +377,213 @@ const uint32_t kLongjmp[] = {
     0xD65F03C0u,            // ret
 };
 
+// --- fallbacks for what the shim does not (yet) implement ---------------------------
+// Real apps' arm64 libraries (TIC-80's libtic80.so) import libc/libm functions
+// the shim has no entry for; bound only when the shim lacks the name, so the
+// shim's own definitions win as it grows. wchar_t is 32-bit on Android.
+using wchar32 = uint32_t;
+
+double GESHER_SYSV FbAcosh(double x) { return std::acosh(x); }
+double GESHER_SYSV FbAsinh(double x) { return std::asinh(x); }
+double GESHER_SYSV FbAtanh(double x) { return std::atanh(x); }
+double GESHER_SYSV FbErf(double x) { return std::erf(x); }
+double GESHER_SYSV FbErfc(double x) { return std::erfc(x); }
+double GESHER_SYSV FbLgamma(double x) { return std::lgamma(x); }
+double GESHER_SYSV FbTgamma(double x) { return std::tgamma(x); }
+double GESHER_SYSV FbNextafter(double x, double y) { return std::nextafter(x, y); }
+float GESHER_SYSV FbAcoshf(float x) { return std::acosh(x); }
+float GESHER_SYSV FbAsinhf(float x) { return std::asinh(x); }
+float GESHER_SYSV FbAtanhf(float x) { return std::atanh(x); }
+float GESHER_SYSV FbErff(float x) { return std::erf(x); }
+float GESHER_SYSV FbErfcf(float x) { return std::erfc(x); }
+float GESHER_SYSV FbLgammaf(float x) { return std::lgamma(x); }
+float GESHER_SYSV FbTgammaf(float x) { return std::tgamma(x); }
+float GESHER_SYSV FbNextafterf(float x, float y) { return std::nextafter(x, y); }
+// The guest's rounding mode is its FPCR, which the translator does not expose:
+// only the default (FE_TONEAREST = 0) is accepted.
+int GESHER_SYSV FbFesetround(int mode) { return mode == 0 ? 0 : -1; }
+int GESHER_SYSV FbFegetround() { return 0; }
+uint64_t GESHER_SYSV FbDiv(int a, int b) {  // div_t {quot, rem} in X0
+  int q = a / b, r = a % b;
+  return static_cast<uint32_t>(q) | (static_cast<uint64_t>(static_cast<uint32_t>(r)) << 32);
+}
+int GESHER_SYSV FbIsblank(int c) { return c == ' ' || c == '\t'; }
+int GESHER_SYSV FbUtime(const char*, const void*) { return 0; }
+int GESHER_SYSV FbGetrusage(int, void* ru) {
+  if (ru != nullptr) std::memset(ru, 0, 144);
+  return 0;
+}
+size_t GESHER_SYSV FbStrxfrm(char* d, const char* s, size_t n) {
+  size_t len = std::strlen(s);
+  if (n > len) std::memcpy(d, s, len + 1);
+  return len;
+}
+int GESHER_SYSV FbSchedPrio(int) { return 0; }
+int GESHER_SYSV FbGetschedparam(uint64_t, int* policy, int* param) {
+  if (policy) *policy = 0;
+  if (param) *param = 0;
+  return 0;
+}
+int GESHER_SYSV FbSetschedparam(uint64_t, int, const int*) { return 0; }
+
+// POSIX semaphores on bionic's sem_t (its first word is the count).
+int GESHER_SYSV FbSemInit(uint32_t* s, int, unsigned v) {
+  __atomic_store_n(s, v, __ATOMIC_SEQ_CST);
+  return 0;
+}
+int GESHER_SYSV FbSemDestroy(uint32_t*) { return 0; }
+int GESHER_SYSV FbSemPost(uint32_t* s) {
+  __atomic_fetch_add(s, 1, __ATOMIC_SEQ_CST);
+  WakeByAddressSingle(s);
+  return 0;
+}
+bool SemTake(uint32_t* s) {
+  uint32_t v = __atomic_load_n(s, __ATOMIC_SEQ_CST);
+  while (v > 0) {
+    if (__atomic_compare_exchange_n(s, &v, v - 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) return true;
+  }
+  return false;
+}
+int GESHER_SYSV FbSemTrywait(uint32_t* s) {
+  if (SemTake(s)) return 0;
+  SetErrno(11);  // EAGAIN
+  return -1;
+}
+int GESHER_SYSV FbSemWait(uint32_t* s) {
+  for (;;) {
+    if (SemTake(s)) return 0;
+    uint32_t zero = 0;
+    WaitOnAddress(s, &zero, 4, INFINITE);
+  }
+}
+struct Timespec64 {
+  int64_t sec, nsec;
+};
+int GESHER_SYSV FbSemTimedwait(uint32_t* s, const Timespec64* abs) {
+  for (;;) {
+    if (SemTake(s)) return 0;
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    int64_t now100 = (static_cast<int64_t>(ft.dwHighDateTime) << 32 | ft.dwLowDateTime) -
+                     116444736000000000LL;  // since 1970, in 100 ns
+    int64_t until100 = abs->sec * 10000000LL + abs->nsec / 100;
+    if (until100 <= now100) {
+      SetErrno(110);  // ETIMEDOUT
+      return -1;
+    }
+    uint32_t zero = 0;
+    WaitOnAddress(s, &zero, 4, static_cast<DWORD>((until100 - now100) / 10000 + 1));
+  }
+}
+int GESHER_SYSV FbSemGetvalue(uint32_t* s, int* v) {
+  *v = static_cast<int>(__atomic_load_n(s, __ATOMIC_SEQ_CST));
+  return 0;
+}
+
+// Wide characters (32-bit): classification through the host's for the BMP.
+wchar32 Lower(wchar32 c) { return c < 0x10000 ? static_cast<wchar32>(::towlower(static_cast<wchar_t>(c))) : c; }
+wchar32 Upper(wchar32 c) { return c < 0x10000 ? static_cast<wchar32>(::towupper(static_cast<wchar_t>(c))) : c; }
+#define GESHER_ISW(name)                                                              \
+  int GESHER_SYSV Fb_##name(uint32_t c) {                                             \
+    return c < 0x10000 ? (::name(static_cast<wint_t>(c)) != 0) : (#name[3] == 'a' || \
+                                                                  #name[3] == 'p'); \
+  }
+GESHER_ISW(iswalpha) GESHER_ISW(iswdigit) GESHER_ISW(iswxdigit) GESHER_ISW(iswspace)
+GESHER_ISW(iswupper) GESHER_ISW(iswlower) GESHER_ISW(iswcntrl) GESHER_ISW(iswpunct)
+GESHER_ISW(iswprint)
+#undef GESHER_ISW
+int GESHER_SYSV FbIswblank(uint32_t c) { return c == ' ' || c == '\t'; }
+uint32_t GESHER_SYSV FbTowlower(uint32_t c) { return Lower(c); }
+uint32_t GESHER_SYSV FbTowupper(uint32_t c) { return Upper(c); }
+size_t Wlen(const wchar32* s) { size_t n = 0; while (s[n]) ++n; return n; }
+int GESHER_SYSV FbWcscmp(const wchar32* a, const wchar32* b) {
+  while (*a && *a == *b) ++a, ++b;
+  return *a < *b ? -1 : *a > *b ? 1 : 0;
+}
+int GESHER_SYSV FbWcsncmp(const wchar32* a, const wchar32* b, size_t n) {
+  for (; n > 0; --n, ++a, ++b) {
+    if (*a != *b) return *a < *b ? -1 : 1;
+    if (*a == 0) break;
+  }
+  return 0;
+}
+int GESHER_SYSV FbWcsncasecmp(const wchar32* a, const wchar32* b, size_t n) {
+  for (; n > 0; --n, ++a, ++b) {
+    wchar32 x = Lower(*a), y = Lower(*b);
+    if (x != y) return x < y ? -1 : 1;
+    if (x == 0) break;
+  }
+  return 0;
+}
+int GESHER_SYSV FbWcscasecmp(const wchar32* a, const wchar32* b) { return FbWcsncasecmp(a, b, SIZE_MAX); }
+const wchar32* GESHER_SYSV FbWcsstr(const wchar32* h, const wchar32* n) {
+  size_t nl = Wlen(n);
+  if (nl == 0) return h;
+  for (; *h; ++h) {
+    if (FbWcsncmp(h, n, nl) == 0) return h;
+  }
+  return nullptr;
+}
+wchar32* GESHER_SYSV FbWmemcpy(wchar32* d, const wchar32* s, size_t n) { std::memcpy(d, s, n * 4); return d; }
+wchar32* GESHER_SYSV FbWmemmove(wchar32* d, const wchar32* s, size_t n) { std::memmove(d, s, n * 4); return d; }
+wchar32* GESHER_SYSV FbWmemset(wchar32* d, wchar32 c, size_t n) { for (size_t i = 0; i < n; ++i) d[i] = c; return d; }
+wchar32* GESHER_SYSV FbWcsncpy(wchar32* d, const wchar32* s, size_t n) {
+  size_t i = 0;
+  for (; i < n && s[i]; ++i) d[i] = s[i];
+  for (; i < n; ++i) d[i] = 0;
+  return d;
+}
+size_t GESHER_SYSV FbWcslcpy(wchar32* d, const wchar32* s, size_t n) {
+  size_t len = Wlen(s);
+  if (n > 0) {
+    size_t c = len < n - 1 ? len : n - 1;
+    std::memcpy(d, s, c * 4);
+    d[c] = 0;
+  }
+  return len;
+}
+size_t GESHER_SYSV FbWcslcat(wchar32* d, const wchar32* s, size_t n) {
+  size_t dl = 0;
+  while (dl < n && d[dl]) ++dl;
+  if (dl == n) return n + Wlen(s);
+  return dl + FbWcslcpy(d + dl, s, n - dl);
+}
+size_t GESHER_SYSV FbWcsxfrm(wchar32* d, const wchar32* s, size_t n) {
+  size_t len = Wlen(s);
+  if (n > len) std::memcpy(d, s, (len + 1) * 4);
+  return len;
+}
+
+struct Fallback {
+  const char* name;
+  void* fn;
+};
+#define FB(n, f) {n, reinterpret_cast<void*>(&f)}
+const Fallback kFallbacks[] = {
+    FB("acosh", FbAcosh), FB("asinh", FbAsinh), FB("atanh", FbAtanh), FB("erf", FbErf),
+    FB("erfc", FbErfc), FB("lgamma", FbLgamma), FB("tgamma", FbTgamma),
+    FB("nextafter", FbNextafter), FB("acoshf", FbAcoshf), FB("asinhf", FbAsinhf),
+    FB("atanhf", FbAtanhf), FB("erff", FbErff), FB("erfcf", FbErfcf), FB("lgammaf", FbLgammaf),
+    FB("tgammaf", FbTgammaf), FB("nextafterf", FbNextafterf), FB("fesetround", FbFesetround),
+    FB("fegetround", FbFegetround), FB("div", FbDiv), FB("isblank", FbIsblank),
+    FB("utime", FbUtime), FB("getrusage", FbGetrusage), FB("strxfrm", FbStrxfrm),
+    FB("sched_get_priority_min", FbSchedPrio), FB("sched_get_priority_max", FbSchedPrio),
+    FB("pthread_getschedparam", FbGetschedparam), FB("pthread_setschedparam", FbSetschedparam),
+    FB("sem_init", FbSemInit), FB("sem_destroy", FbSemDestroy), FB("sem_post", FbSemPost),
+    FB("sem_wait", FbSemWait), FB("sem_trywait", FbSemTrywait),
+    FB("sem_timedwait", FbSemTimedwait), FB("sem_getvalue", FbSemGetvalue),
+    FB("iswalpha", Fb_iswalpha), FB("iswdigit", Fb_iswdigit), FB("iswxdigit", Fb_iswxdigit),
+    FB("iswspace", Fb_iswspace), FB("iswupper", Fb_iswupper), FB("iswlower", Fb_iswlower),
+    FB("iswcntrl", Fb_iswcntrl), FB("iswpunct", Fb_iswpunct), FB("iswprint", Fb_iswprint),
+    FB("iswblank", FbIswblank), FB("towlower", FbTowlower), FB("towupper", FbTowupper),
+    FB("wcscmp", FbWcscmp), FB("wcsncmp", FbWcsncmp), FB("wcscasecmp", FbWcscasecmp),
+    FB("wcsncasecmp", FbWcsncasecmp), FB("wcscoll", FbWcscmp), FB("wcsstr", FbWcsstr),
+    FB("wmemcpy", FbWmemcpy), FB("wmemmove", FbWmemmove), FB("wmemset", FbWmemset),
+    FB("wcsncpy", FbWcsncpy), FB("wcslcpy", FbWcslcpy), FB("wcslcat", FbWcslcat),
+    FB("wcsxfrm", FbWcsxfrm),
+};
+#undef FB
+
 struct VaFn {
   const char* name;
   int index;
@@ -445,6 +656,10 @@ void InitGuestLibc() {
     Override("dlopen", reinterpret_cast<void*>(&GuestDlopen));
     Override("android_dlopen_ext", reinterpret_cast<void*>(&GuestAndroidDlopenExt));
     Override("dlclose", reinterpret_cast<void*>(&GuestDlclose));
+  }
+
+  for (const Fallback& f : kFallbacks) {
+    if (Host(f.name) == nullptr && g_overrides.find(f.name) == g_overrides.end()) Override(f.name, f.fn);
   }
 
   void* sj = EmitGuestCode(kSetjmp, sizeof(kSetjmp) / 4);
