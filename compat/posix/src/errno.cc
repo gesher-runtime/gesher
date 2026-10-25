@@ -62,16 +62,9 @@ extern "C" int gesher_errno_from_crt(int crt_errno) {
 }
 
 extern "C" int gesher_rmdir(const char* path) {
-  if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
-  switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : gesher::PathKind::kMissing) {
-    case gesher::PathKind::kFile:
-      return RemoveDirectoryW(windows.c_str()) ? 0 : gesher::FailWithLastError();
-    case gesher::PathKind::kMissing:
-      return errno = ENOENT, -1;
-    default:
-      return errno = ENOTDIR, -1;  // a device or /proc file
-  }
+  if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;  // ENOTDIR: a device or /proc file
+  return gesher::PosixDelete(windows, true);
 }
 
 namespace {
