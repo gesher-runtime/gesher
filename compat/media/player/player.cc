@@ -285,6 +285,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
   }
 
   void Run() {
+    RaiseAudioThreadPriority(false);
     if (!Open()) return;
     {
       std::lock_guard<std::mutex> lock(mu_);

@@ -122,6 +122,7 @@ int64_t Now() {
 
 void CallbackLoop(AAudioStream* s) {
   gesher::bionic::EnterLoadedCode();
+  RaiseAudioThreadPriority(true);
   std::vector<uint8_t> buf(static_cast<size_t>(s->burst) * s->frame_size);
   for (;;) {
     {
