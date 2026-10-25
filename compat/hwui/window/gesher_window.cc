@@ -151,7 +151,149 @@ struct StartArgs {
   int width, height;
 };
 
+// The touch keyboard's COM interfaces (shobjidl.h), spelled out under names
+// of their own: not every llvm-mingw shobjidl.h has them, nor their GUIDs.
+struct InputPaneHandlerIface : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Showing(RECT* screen, BOOL ensure_focused_in_view) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Hiding(BOOL ensure_focused_in_view) = 0;
+};
+struct InputPaneIface : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown* window, InputPaneHandlerIface* handler,
+                                           DWORD* cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND hwnd, InputPaneHandlerIface* handler,
+                                                   DWORD* cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Location(RECT* screen) = 0;
+};
+const CLSID kClsidFrameworkInputPane = {0xD5120AA3, 0x46BA, 0x44C5,
+                                        {0x82, 0x2D, 0xCA, 0x80, 0x92, 0xC1, 0xFC, 0x72}};
+const IID kIidFrameworkInputPane = {0x5752238B, 0x24F0, 0x495A,
+                                    {0x82, 0xF1, 0x2F, 0xD5, 0x93, 0x05, 0x67, 0x96}};
+const IID kIidFrameworkInputPaneHandler = {0x226C537B, 0x1E76, 0x4D9E,
+                                           {0xA7, 0x60, 0x33, 0xDB, 0x29, 0x92, 0x2F, 0x18}};
+
+// What the touch keyboard tells a window (on the window's thread, an STA):
+// posted to it as kMsgInputPane, the same message tests post.
+class InputPaneHandler : public InputPaneHandlerIface {
+ public:
+  explicit InputPaneHandler(HWND hwnd) : hwnd_(hwnd) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (out == nullptr) return E_POINTER;
+    if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, kIidFrameworkInputPaneHandler)) {
+      *out = static_cast<InputPaneHandlerIface*>(this);
+      AddRef();
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refs_); }
+  ULONG STDMETHODCALLTYPE Release() override {
+    LONG n = InterlockedDecrement(&refs_);
+    if (n == 0) delete this;
+    return static_cast<ULONG>(n);
+  }
+  HRESULT STDMETHODCALLTYPE Showing(RECT* screen, BOOL) override {
+    if (screen != nullptr) {
+      // Its rows: a docked keyboard spans the screen's width (a floating one
+      // is taken as covering those rows too).
+      PostMessageW(hwnd_, kMsgInputPane, static_cast<WPARAM>(screen->top),
+                   static_cast<LPARAM>(screen->bottom));
+    }
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE Hiding(BOOL) override {
+    PostMessageW(hwnd_, kMsgInputPane, 0, 0);
+    return S_OK;
+  }
+
+ private:
+  HWND hwnd_;
+  LONG refs_ = 1;
+};
+
 }  // namespace
+
+void Window::AdviseInputPane() {
+  if (popup_ || hwnd_ == nullptr) return;
+  InputPaneIface* pane = nullptr;
+  if (FAILED(CoCreateInstance(kClsidFrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER,
+                              kIidFrameworkInputPane, reinterpret_cast<void**>(&pane))) ||
+      pane == nullptr) {
+    return;  // no touch keyboard on this Windows (Server Core, some SKUs)
+  }
+  auto* handler = new InputPaneHandler(static_cast<HWND>(hwnd_));
+  DWORD cookie = 0;
+  if (FAILED(pane->AdviseWithHWND(static_cast<HWND>(hwnd_), handler, &cookie))) {
+    handler->Release();
+    pane->Release();
+    return;
+  }
+  input_pane_ = pane;
+  input_pane_handler_ = handler;
+  input_pane_cookie_ = cookie;
+  // Shown already (another window had it up).
+  RECT r = {};
+  if (SUCCEEDED(pane->Location(&r)) && r.bottom > r.top && r.right > r.left) {
+    OnInputPane(r.left, r.top, r.right, r.bottom);
+  }
+}
+
+void Window::UnadviseInputPane() {
+  auto* pane = static_cast<InputPaneIface*>(input_pane_);
+  if (pane != nullptr) {
+    pane->Unadvise(static_cast<DWORD>(input_pane_cookie_));
+    pane->Release();
+  }
+  if (input_pane_handler_ != nullptr) {
+    static_cast<InputPaneHandler*>(input_pane_handler_)->Release();
+  }
+  input_pane_ = nullptr;
+  input_pane_handler_ = nullptr;
+  input_pane_cookie_ = 0;
+}
+
+void Window::OnInputPane(int left, int top, int right, int bottom) {
+  input_pane_screen_[0] = left;
+  input_pane_screen_[1] = top;
+  input_pane_screen_[2] = right;
+  input_pane_screen_[3] = bottom;
+  UpdateInputPane();
+}
+
+void Window::UpdateInputPane() {
+  HWND hwnd = static_cast<HWND>(hwnd_);
+  const int* k = input_pane_screen_;
+  int covered_top = -1, covered_bottom = 0;
+  RECT client;
+  if (k[2] > k[0] && k[3] > k[1] && GetClientRect(hwnd, &client) && !IsIconic(hwnd)) {
+    POINT origin = {0, 0};
+    ClientToScreen(hwnd, &origin);
+    const int cl = origin.x, ct = origin.y;
+    const int cr = cl + client.right, cb = ct + client.bottom;
+    const int t = k[1] > ct ? k[1] : ct, b = k[3] < cb ? k[3] : cb;
+    const int l = k[0] > cl ? k[0] : cl, r = k[2] < cr ? k[2] : cr;
+    if (b > t && r > l) {
+      covered_top = t - ct;
+      covered_bottom = b - ct;
+    }
+  }
+  if (covered_top == input_pane_top_ && covered_bottom == input_pane_bottom_) return;
+  input_pane_top_ = covered_top;
+  input_pane_bottom_ = covered_bottom;
+  WindowEvent e;
+  e.time_ms = GetMessageTime();
+  e.type = WindowEvent::kInputPane;
+  e.button = covered_top;
+  e.modifiers = covered_bottom;
+  QueueOwn(e);  // the window's own, whatever its input route
+}
+
+void Window::Minimize() {
+  // Not activated, so the window below does not take the focus from another
+  // program; WM_SIZE SIZE_MINIMIZED then reports it (kVisibility).
+  ShowWindowAsync(static_cast<HWND>(hwnd_), SW_SHOWMINNOACTIVE);
+}
 
 int Window::Modifiers() const {
   int m = held_modifiers_;
@@ -235,10 +377,25 @@ void Window::Run(std::wstring title, int width, int height) {
   }
   create_cv_.notify_all();
   if (hwnd != nullptr) {
+    if (SUCCEEDED(com)) AdviseInputPane();
+    // Not GetMessage: once a WebView2 window is a child of this one, its
+    // process's input queue is attached to this thread's, and GetMessage may
+    // sleep with input queued (the wake bits were seen, or taken, by the
+    // other thread: a click waited until something was posted; webview2
+    // track). MWMO_INPUTAVAILABLE wakes for input already in the queue, and
+    // the timeout is a backstop: no input waits longer than it.
     MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
+    bool quit = false;
+    while (!quit) {
+      MsgWaitForMultipleObjectsEx(0, nullptr, 50, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) {
+          quit = true;
+          break;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+      }
     }
   }
   if (SUCCEEDED(com)) CoUninitialize();
@@ -497,8 +654,25 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       DestroyWindow(hwnd);
       return 0;
     case WM_DESTROY:
+      UnadviseInputPane();
       PostQuitMessage(0);
       return 0;
+    case kMsgInputPane: {
+      // The touch keyboard's rows on the screen (0, 0: hidden), across the
+      // virtual screen.
+      const int top = static_cast<int>(wparam), bottom = static_cast<int>(lparam);
+      const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+      const int right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+      if (bottom > top) {
+        OnInputPane(left, top, right, bottom);
+      } else {
+        OnInputPane(0, 0, 0, 0);
+      }
+      return 0;
+    }
+    case WM_MOVE:
+      if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
+      return -1;
     case WM_CLOSE:
       e.type = WindowEvent::kClose;
       Queue(e);
@@ -585,6 +759,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
         e.height = h;
         Queue(e);
       }
+      if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return 0;
     }
     case WM_SETFOCUS:

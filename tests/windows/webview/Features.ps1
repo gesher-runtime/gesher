@@ -212,16 +212,14 @@ function FeaturesCheck {
         if (-not (& $isGreen $beside)) { $problems += "beside the button is #$beside, not green" }
       }
       & $click 330 330 'button'
-      $m = & $waitFor 'Features click corner' 20
-      if (-not $m.Success) {
-        # Seen with runtime 131 (windows-2022): the click waits in the app window's
-        # thread until something wakes it (its input queue is attached to the
-        # WebView2 windows'); a posted WM_NULL does.
-        Write-Host "INFO  features: no click on the button after 20 s (the foreground window is $([GesherWebViewInput]::Foreground())); posting WM_NULL to wake the app window's thread"
-        [void][GesherWin32]::PostMessageW($hwnd, 0x0000 <# WM_NULL #>, [IntPtr]::Zero, [IntPtr]::Zero)
-        $m = & $waitFor 'Features click corner' 70
-      }
-      if (-not $m.Success) { $problems += 'the button did not get the click' } else {
+      # The app window's thread wakes for the click by itself, its input queue attached
+      # to the WebView2 windows' or not (windows3 track: its message loop waits with
+      # MWMO_INPUTAVAILABLE; with runtime 131 on windows-2022 GetMessage slept with the
+      # click queued until something was posted to the thread).
+      $clickedAt = Get-Date
+      $m = & $waitFor 'Features click corner' 30
+      if ($m.Success) { Write-Host ("INFO  features: the button got the click after {0:N1} s (nothing posted to wake the window's thread)" -f ((Get-Date) - $clickedAt).TotalSeconds) }
+      if (-not $m.Success) { $problems += "the button did not get the click within 30 s (the foreground window is $([GesherWebViewInput]::Foreground()))" } else {
         & $click 304 304 'corner'
       }
     }
