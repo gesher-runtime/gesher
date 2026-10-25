@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Gesher popup</title>
+</head>
+<body style="margin: 0; background: #0000ff">
+<script>
+  // Opened by features.html's window.open, in the WebView FeaturesActivity's
+  // onCreateWindow made: the opener is there; then the window closes itself.
+  if (window.opener) window.opener.postMessage('hello opener', '*');
+  setTimeout(function () { window.close(); }, 1000);
+</script>
+</body>
+</html>
