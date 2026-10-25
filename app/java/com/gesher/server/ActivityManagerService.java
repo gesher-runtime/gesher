@@ -182,6 +182,17 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     @Override
+    public boolean isIntentSenderTargetedToPackage(IIntentSender sender) {
+        // As ActivityManagerService's: no intent names both a package and a component.
+        PendingIntents.Record r = mPendingIntents.record(sender);
+        if (r == null) return false;
+        for (Intent intent : r.intents) {
+            if (intent.getPackage() != null && intent.getComponent() != null) return false;
+        }
+        return true;
+    }
+
+    @Override
     public boolean isIntentSenderAnActivity(IIntentSender sender) {
         PendingIntents.Record r = mPendingIntents.record(sender);
         return r != null && r.type == ActivityManager.INTENT_SENDER_ACTIVITY;

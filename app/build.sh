@@ -85,7 +85,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager \
   android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
-  android.app.ISearchManager android.app.ILocaleManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats
+  android.app.ISearchManager android.app.ILocaleManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats android.location.ILocationManager
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
@@ -100,8 +100,35 @@ native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 
-# One dex for both, into a jar.
-( cd "$work" && find classes compat -name '*.class' ) > "$work/dex.txt"
+# framework-location (frameworks/base/location/java: LocationManager, ILocationManager...):
+# on a device its own jar on the boot class path, which framework.jar is compiled against
+# but does not contain. The framework build compiles it (compile-only sources); its
+# classes join gesher-app.jar, already on Gesher's boot class path (docs/devices.md).
+mkdir -p "$work/location"
+loc=$aosp/frameworks/base/location/java
+fwloc=$framework
+if [[ -f $framework && -d $loc ]]; then
+  # A jar of the framework's classes: the location packages out of it.
+  fwloc=$work/fwloc
+  mkdir -p "$fwloc"
+  (cd "$fwloc" && unzip -q -o "$(native "$framework")" 'android/location/*' 'android/location/*/*' 'com/android/internal/location/*' 'com/android/internal/location/*/*' || true)
+fi
+if [[ -d $fwloc && -d $loc ]]; then
+  while IFS= read -r c; do
+    for f in "$fwloc/$c.class" "$fwloc/$c"\$*.class; do
+      if [[ -f $f ]]; then
+        mkdir -p "$work/location/$(dirname "$c")"
+        cp "$f" "$work/location/$(dirname "$c")/"
+        # The real class replaces app/compat-java's placeholder (LocationManager, CountryDetector).
+        rm -f "$work/compat/$(dirname "$c")/$(basename "$f")"
+      fi
+    done
+  done < <(cd "$loc" && find . -name '*.java' -o -name 'I*.aidl' | sed 's|^\./||; s|\.java$||; s|\.aidl$||')
+  echo "framework-location: $(find "$work/location" -name '*.class' | wc -l) classes into gesher-app.jar"
+fi
+
+# One dex for all, into a jar.
+( cd "$work" && find classes compat location -name '*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$out/gesher-app.jar")" @dex.txt)
 cp "$root/app/build.prop" "$out/build.prop"
