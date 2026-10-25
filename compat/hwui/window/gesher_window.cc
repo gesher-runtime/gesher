@@ -174,7 +174,7 @@ const IID kIidFrameworkInputPaneHandler = {0x226C537B, 0x1E76, 0x4D9E,
 
 // What the touch keyboard tells a window (on the window's thread, an STA):
 // posted to it as kMsgInputPane, the same message tests post.
-class InputPaneHandler : public InputPaneHandlerIface {
+class InputPaneHandler final : public InputPaneHandlerIface {
  public:
   explicit InputPaneHandler(HWND hwnd) : hwnd_(hwnd) {}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
