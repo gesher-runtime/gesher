@@ -309,8 +309,12 @@ int* BIONIC_SYSV Errno() { return &errno; }
   std::fflush(stderr);
   std::abort();
 }
-[[noreturn]] void BIONIC_SYSV Exit(int code) { std::exit(code); }
+[[noreturn]] void BIONIC_SYSV Exit(int code) {
+  ExitIfVforkChild(code);  // a vfork/fork child that exits without exec
+  std::exit(code);
+}
 [[noreturn]] void BIONIC_SYSV UnderscoreExit(int code) {
+  ExitIfVforkChild(code);
   std::fflush(stdout);
   std::fflush(stderr);
   ExitProcess(static_cast<UINT>(code));
@@ -455,24 +459,33 @@ int64_t BIONIC_SYSV Time(int64_t* out) {
   if (out) *out = t;
   return t;
 }
+// Sleeps end early, with EINTR, when a signal handler runs on the sleeping
+// thread (signal_bionic.cc), as on Linux.
 int BIONIC_SYSV Nanosleep(const LinuxTimespec* req, LinuxTimespec* rem) {
+  if (req == nullptr || req->tv_nsec < 0 || req->tv_nsec >= 1000000000 || req->tv_sec < 0) {
+    errno = kEINVAL;
+    return -1;
+  }
   int64_t ms = req->tv_sec * 1000 + (req->tv_nsec + 999999) / 1000000;
-  DeliverPendingSignals();
-  Sleep(static_cast<DWORD>(ms));
+  uint32_t left = 0;
+  if (InterruptibleSleep(static_cast<uint32_t>(ms > 0x7ffffffe ? 0x7ffffffe : ms), &left)) {
+    if (rem) *rem = {left / 1000, static_cast<int64_t>(left % 1000) * 1000000};
+    errno = kEINTR;
+    return -1;
+  }
   if (rem) *rem = {0, 0};
-  DeliverPendingSignals();
   return 0;
 }
 int BIONIC_SYSV Usleep(uint32_t us) {
-  DeliverPendingSignals();
-  Sleep((us + 999) / 1000);
-  DeliverPendingSignals();
+  if (InterruptibleSleep((us + 999) / 1000, nullptr)) {
+    errno = kEINTR;
+    return -1;
+  }
   return 0;
 }
 unsigned BIONIC_SYSV SleepSeconds(unsigned s) {
-  DeliverPendingSignals();
-  Sleep(s * 1000);
-  DeliverPendingSignals();
+  uint32_t left = 0;
+  if (InterruptibleSleep(s > 2000000 ? 2000000000u : s * 1000, &left)) return (left + 999) / 1000;
   return 0;
 }
 int64_t BIONIC_SYSV Clock() { return ProcessCpuNanos() / 1000; }  // CLOCKS_PER_SEC 1e6
@@ -974,6 +987,7 @@ SymbolTable& Table() {
     RegisterSocket(*table);
     RegisterSignal(*table);
     RegisterTime(*table);
+    RegisterProcess(*table);  // last: it wraps entries already there
     return table;
   }();
   return *t;
@@ -992,6 +1006,7 @@ void InstallBionicShim() {
   Table();
   gesher::elf::SetBionicResolver([](const char* name) { return LookupBionicSymbol(name); });
   gesher::elf::SetUnresolvedHandler(ReportUnresolved);
+  InstallSignalHook(false);
 }
 
 }  // namespace gesher::bionic

@@ -107,6 +107,7 @@ GetauxvalFn g_shim_getauxval = nullptr;
 // .fini_array) in reverse order, stdio flushed, then the low 8 bits as the
 // process's exit code, as on Linux.
 [[noreturn]] void SYSV Exit(int status) {
+  gesher::bionic::ExitIfVforkChild(status);  // a fork child exiting without exec
   if (!g_exiting.exchange(true)) {
     if (auto finalize = reinterpret_cast<FinalizeFn>(gesher::bionic::LookupBionicSymbol("__cxa_finalize"))) {
       finalize(nullptr);
@@ -117,7 +118,10 @@ GetauxvalFn g_shim_getauxval = nullptr;
 }
 
 // _exit()/_Exit(): no handlers and no stdio flush, as on Linux.
-[[noreturn]] void SYSV UnderscoreExit(int status) { ExitProcess(static_cast<UINT>(status) & 0xff); }
+[[noreturn]] void SYSV UnderscoreExit(int status) {
+  gesher::bionic::ExitIfVforkChild(status);
+  ExitProcess(static_cast<UINT>(status) & 0xff);
+}
 
 uint64_t SYSV Getauxval(uint64_t type) {
   if (g_program != nullptr && type != 0) {
@@ -242,6 +246,10 @@ DWORD WINAPI ProgramThread(void*) {
   if (!elf::SetupThreadTls()) Die(1, "%s: no TLS slot for the program's thread\n", g_name);
 
   gesher::bionic::InstallBionicShim();
+  // The program is the whole process, so the shim owns every signal: a signal
+  // another process sends reaches the program's handlers, and SIG_DFL acts as
+  // Linux's default (docs/exec.md).
+  gesher::bionic::InstallSignalHook(true);
   g_shim_getauxval = reinterpret_cast<GetauxvalFn>(gesher::bionic::LookupBionicSymbol("getauxval"));
   gesher::bionic::AddBionicSymbol("__libc_init", reinterpret_cast<void*>(&LibcInit));
   gesher::bionic::AddBionicSymbol("exit", reinterpret_cast<void*>(&Exit));
@@ -645,8 +653,12 @@ int main() {
   if (!args.empty() && args[0] == "--sh") {
     return RunShell(std::vector<std::string>(args.begin() + 1, args.end()));
   }
+  if (args.size() >= 2 && args[0] == "--tool") {
+    return ex::RunTool(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+  }
   fprintf(stderr,
           "usage: gesher-exec --elf <program> <argv0> [args...]\n"
-          "       gesher-exec --sh [-c <command> | <script> [args...]]\n");
+          "       gesher-exec --sh [-c <command> | <script> [args...]]\n"
+          "       gesher-exec --tool <name> [args...]\n");
   return 2;
 }

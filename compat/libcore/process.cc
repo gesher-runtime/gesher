@@ -38,11 +38,16 @@
 
 #include "exec_spawn.h"
 
+// gesher-base: kill() of another process through its signal mailbox
+// (compat/posix/src/process.cc).
+extern "C" int gesher_kill_other(int pid, int sig);
+
 namespace ex = gesher::exec;
 
 namespace {
 
 constexpr int kSigterm = 15;
+constexpr int kSigkill = 9;
 // Pipe buffer for the child's stdin/stdout/stderr (Linux's is 64 KiB).
 constexpr DWORD kPipeBuffer = 256 * 1024;
 
@@ -216,17 +221,32 @@ jint JNICALL WaitForProcessExit(JNIEnv*, jobject, jint pid) {
   return status;
 }
 
+// Process.destroy(): SIGTERM through gesher-base's signal mailbox
+// (compat/posix/src/process.cc), so a Gesher child runs its own SIGTERM
+// handler (the launched program's, delivered by the bionic shim); a child
+// without a mailbox (a plain Windows program) is terminated with 143 by
+// gesher-base's default action, as before.
 void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_children.find(pid) == g_children.end()) return;
+  }
+  gesher_kill_other(pid, kSigterm);
+}
+
+// Process.destroyForcibly(): SIGKILL (TerminateProcess), the reaper sees
+// 0x80 + 9 = 137.
+void JNICALL DestroyProcessForcibly(JNIEnv*, jclass, jint pid) {
   std::lock_guard<std::mutex> lock(g_mutex);
   auto it = g_children.find(pid);
-  // Linux's SIGTERM: the reaper sees 0x80 + 15.
-  if (it != g_children.end()) TerminateProcess(it->second, 0x80 + kSigterm);
+  if (it != g_children.end()) TerminateProcess(it->second, 0x80 + kSigkill);
 }
 
 void JNICALL InitIDs(JNIEnv*, jclass) {}
 
 const JNINativeMethod kMethods[] = {
     {"destroyProcess", "(I)V", reinterpret_cast<void*>(&DestroyProcess)},
+    {"destroyProcessForcibly", "(I)V", reinterpret_cast<void*>(&DestroyProcessForcibly)},
     {"forkAndExec", "([B[BI[BI[B[IZ)I", reinterpret_cast<void*>(&ForkAndExec)},
     {"waitForProcessExit", "(I)I", reinterpret_cast<void*>(&WaitForProcessExit)},
     {"initIDs", "()V", reinterpret_cast<void*>(&InitIDs)},
