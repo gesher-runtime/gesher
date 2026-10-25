@@ -185,63 +185,44 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
 - Captive portals are not detected.
 
-## Status and next steps (handoff checkpoint, 2026-10-25)
+## Status and next steps (2026-10-25)
 
-**Branch** `wip/net` (worktree C:/work/gesher-net), f8bdfc8 + merges of
-origin/phase4/integration (5561615, then fe79e18 in 57e7385). **No commit is CI-verified green yet.**
+**Branch** `wip/net` (worktree C:/work/gesher-net). **CI-verified green**: ci
+40141520320 (66d71de) and ci 40143168361 (47a4aeb, merged with
+origin/phase4/integration incl. webview, stack, devsvc): build, every reusable
+workflow, both test jobs (windows-2022, windows-2025), package and e2e. Every
+56-net.ps1 check PASSes on both runners; the roadmap's Phase 5 networking box
+cites these runs. The tip merges origin/phase4/integration 6111f0d (devices)
+on top; its ci run is the final one (see the coordinator report).
 
-Done (all written, compiled in CI, run-time untested on Windows): BoringSSL,
-NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle (in core-libart),
-the Windows trust store sync, ConnectivityService + android.net classes +
-callbacks, the INTERNET / ACCESS_NETWORK_STATE gates, tests (tracks/56-net.ps1,
+Done: BoringSSL, NativeBN, Conscrypt natives and Java, OkHttp, BouncyCastle
+(in core-libart), the Windows trust store sync, ConnectivityService +
+android.net classes + callbacks, the INTERNET / ACCESS_NETWORK_STATE gates,
+the network security config in single-process mode, tests (tracks/56-net.ps1,
 tests/dex-net, tests/apps/netapp and nonetapp), installer shipping, ADR 0037.
 
-**CI so far**
+**CI history**
 - net.yml (compile-only, push-triggered on wip/net): runs 40128266078 (b3cca77)
   and 40129516302 (56b94a7) green.
 - ci 40114623277 (ecf8df9): Conscrypt compile errors (fixed b3cca77).
 - ci 40129516691 (56b94a7): duplicate `inet_ntop` / `inet_pton` at the dalvikvm
   link (fixed 44a2e95).
-- ci 40133972018 (44a2e95): build, framework, boot-image, package and e2e green.
-  Both test jobs ended after ~48 min with "The hosted runner lost communication
-  with the server"; no logs survived. Cause (most likely): the connectivity
-  change step ran `New-NetIPAddress 192.0.2.77` on the runner's DHCP adapter,
-  and a static IPv4 address turns the adapter's DHCP off, cutting the runner
-  off. Fixed in f8bdfc8: the test adds 2001:db8::77 (IPv6, SkipAsSource,
-  ActiveStore) and turns DHCPv4 back on should it find it off.
-- ci 40138810234 (cfb2d2e): cancelled while still building, superseded by the
-  run below at a tip that also carries the exec track.
-- ci 40139254526 (430d285, merged with origin/phase4/integration fe79e18):
-  everything green but the two test jobs. 56-net.ps1 ran fully on both runners
-  (no runner loss): DNS, TCP, NIO, HTTP, NativeBN, JCA, TLS, the Windows trust
-  store (add, remove, GESHER_WINDOWS_CERTS=0), internet HTTPS and badssl.com,
-  nonetapp, netapp in an app process with the IPv6 connectivity change: PASS.
-  FAILs: UDP (`setsockopt failed: ENOPROTOOPT`: PlainDatagramSocketImpl sets
+- ci 40133972018 (44a2e95): both test jobs lost their runner after ~48 min: the
+  connectivity-change step put a static IPv4 address on the runner's DHCP
+  adapter. Fixed in f8bdfc8 (an IPv6 address, SkipAsSource, ActiveStore).
+- ci 40138810234 (cfb2d2e): cancelled, superseded.
+- ci 40139254526 (430d285): all green but the test jobs. FAILs: UDP
+  (`setsockopt failed: ENOPROTOOPT`: PlainDatagramSocketImpl sets
   IP_MULTICAST_ALL=0), netapp single-process cleartext allowed (no
   NetworkSecurityConfigProvider outside handleBindApplication), nativeapp's
   tcp/getaddrinfo (EACCES: its manifest lacked INTERNET), 50-services' list
-  of stand-in services (now has `connectivity`). All four fixed in 66d71de.
-- ci **40141520320** (66d71de): running. The 56-net.ps1 time limits
-  add up to ~48 min if every dalvikvm run times out, so a long test job is not
-  by itself a hang; check the job's steps before cancelling it.
+  of stand-in services (now has `connectivity`). All fixed in 66d71de.
+- ci 40141520320 (66d71de) and 40143168361 (47a4aeb): all green.
 
-**Next, exactly**
-1. Read that run's test logs (`gh run view <id> -R
-   gesher-runtime/gesher --log-failed`): the `PASS|FAIL|INFO  net:` lines of
-   tracks/56-net.ps1 and any other track's FAIL (core-libart now carries
-   Conscrypt/OkHttp/BC; Digests.install defers to Conscrypt; `connectivity` is
-   now registered, so ActivityThread's `cm.getDefaultProxy()` path runs;
-   gesher-base refuses inet sockets when GESHER_INET=0).
-2. Fix, push, rerun ci (`gh workflow run ci -R gesher-runtime/gesher --ref
-   wip/net`; watch with `gh run watch <id> --exit-status --interval 120`, no
-   polling loops: the API rate limit is shared by all agents).
-3. When both test jobs and the package job are green: add a Phase 5
-   networking checklist to docs/roadmap.md (sockets/DNS, BoringSSL+NativeBN,
-   Conscrypt+OkHttp+BC, Windows trust store, ConnectivityManager + callbacks,
-   permissions) quoting the run id and PASS lines; update this section.
-4. Optional: Currency (org.billthefarmer.currency, already in
-   tests/e2e/apps.json) now fetches its rates over HTTPS; docs/e2e.md could say
-   so once its log shows it. No new F-Droid pin was added.
+**Next (optional)**
+- Currency (org.billthefarmer.currency, in tests/e2e/apps.json) can now fetch
+  its rates over HTTPS; docs/e2e.md could say so once its log shows it.
+- Gaps (see "Known gaps" above): captive portals, VPN/metered detail, proxies.
 
 **Pitfalls**
 - Never change the runner's IPv4 configuration in a test (no static IPv4
