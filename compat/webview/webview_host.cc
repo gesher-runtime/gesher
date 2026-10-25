@@ -3,6 +3,7 @@
 
 #include "webview_host.h"
 
+#include <shobjidl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -271,7 +272,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   // The container's place (parent client coordinates) and the holes cut out
   // of its window region (SetBounds).
   RECT clip = {0, 0, 0, 0};
-  std::vector<RECT> holes;
+  std::vector<Host::Shape> shapes;
   bool has_region = false;
 
   // An API navigation (Navigate, reload, history) is on its way: its
@@ -279,6 +280,19 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   bool api_navigation = false;
   std::wstring main_document;  // the URL of the main frame's navigation
   std::set<UINT64> cancelled;  // navigations the Listener took
+  // Basic authentication of the main document: WebView2 ends the navigation
+  // (401) while it waits for the answer, and starts it again with the
+  // credentials; to the app it is one page load. The 401's completion is held
+  // until the app answers (reported if it cancels), and the retry's start is
+  // not reported (CompleteBasicAuth).
+  std::wstring auth_pending;  // the URL waiting for the app's answer
+  std::wstring auth_retry;    // the URL about to be loaded again
+  struct Finish {
+    bool held = false;
+    int http = 0;
+    int32_t status = -1;
+    std::wstring url;
+  } auth_finish;
 
   std::wstring document_script_id;
   uint64_t document_script_generation = 0;
@@ -298,7 +312,32 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   std::map<int64_t, Dialog> dialogs;
   int64_t next_dialog = 1;
 
+  // Requests WebView2 waits for (a deferral): permissions, new windows,
+  // authentication, certificates. args: the event's arguments.
+  struct Deferred {
+    Com<IUnknown> args;
+    Com<ICoreWebView2Deferral> deferral;
+  };
+  std::map<int64_t, Deferred> deferred;
+  int64_t next_deferred = 1;
+  int64_t Defer(IUnknown* args, ICoreWebView2Deferral* deferral) {
+    int64_t id = next_deferred++;
+    deferred.emplace(id, Deferred{Com<IUnknown>(args), Com<ICoreWebView2Deferral>(deferral)});
+    return id;
+  }
+  // Takes the request back (false when it is gone).
+  bool Undefer(int64_t id, Deferred* out) {
+    auto it = deferred.find(id);
+    if (it == deferred.end()) return false;
+    *out = std::move(it->second);
+    deferred.erase(it);
+    return true;
+  }
+
+  Com<ICoreWebView2Find> find;
+
   std::vector<Com<ICoreWebView2DevToolsProtocolEventReceiver>> receivers;
+  std::set<std::wstring> listened;  // ListenDevTools' events
   // Run once this (service) host is ready or has failed.
   std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
 
@@ -376,18 +415,54 @@ void ApplyBounds(Impl* impl) {
   impl->controller->put_IsVisible(TRUE);
 }
 
-// The container's window region: its client area less the holes (none: no region).
+// A shape's region, moved by (dx, dy) (parent client to container coordinates).
+HRGN ShapeRegion(const Host::Shape& s, int dx, int dy) {
+  RECT r = {s.rect.left + dx, s.rect.top + dy, s.rect.right + dx, s.rect.bottom + dy};
+  switch (s.kind) {
+    case Host::Shape::kHoleRoundRect:
+    case Host::Shape::kClipRoundRect:
+      // CreateRoundRectRgn's right and bottom are exclusive by one more pixel.
+      return CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, 2 * s.radius,
+                                2 * s.radius);
+    case Host::Shape::kHoleOval:
+    case Host::Shape::kClipOval:
+      return CreateEllipticRgn(r.left, r.top, r.right + 1, r.bottom + 1);
+    case Host::Shape::kHolePolygon:
+    case Host::Shape::kClipPolygon: {
+      if (s.points.size() < 3) return CreateRectRgn(r.left, r.top, r.right, r.bottom);
+      std::vector<POINT> pts = s.points;
+      for (POINT& p : pts) {
+        p.x += dx;
+        p.y += dy;
+      }
+      return CreatePolygonRgn(pts.data(), static_cast<int>(pts.size()), WINDING);
+    }
+    default:
+      return CreateRectRgn(r.left, r.top, r.right, r.bottom);
+  }
+}
+
+// The container's window region: its client area (or the WebView's own
+// outline) less the holes (none of either: no region).
 void ApplyRegion(Impl* impl) {
   if (impl->container == nullptr) return;
   int w = impl->clip.right - impl->clip.left;
   int h = impl->clip.bottom - impl->clip.top;
+  int dx = -impl->clip.left, dy = -impl->clip.top;
   HRGN region = nullptr;
-  for (const RECT& hole : impl->holes) {
-    RECT r = {hole.left - impl->clip.left, hole.top - impl->clip.top,
-              hole.right - impl->clip.left, hole.bottom - impl->clip.top};
+  for (const Host::Shape& s : impl->shapes) {
+    if (s.kind < Host::Shape::kClipRoundRect) continue;
+    if (region == nullptr) region = CreateRectRgn(0, 0, w, h);
+    HRGN keep = ShapeRegion(s, dx, dy);
+    CombineRgn(region, region, keep, RGN_AND);
+    DeleteObject(keep);
+  }
+  for (const Host::Shape& s : impl->shapes) {
+    if (s.kind >= Host::Shape::kClipRoundRect) continue;
+    RECT r = {s.rect.left + dx, s.rect.top + dy, s.rect.right + dx, s.rect.bottom + dy};
     if (r.right <= 0 || r.bottom <= 0 || r.left >= w || r.top >= h) continue;
     if (region == nullptr) region = CreateRectRgn(0, 0, w, h);
-    HRGN cut = CreateRectRgn(r.left, r.top, r.right, r.bottom);
+    HRGN cut = ShapeRegion(s, dx, dy);
     CombineRgn(region, region, cut, RGN_DIFF);
     DeleteObject(cut);
   }
@@ -420,6 +495,34 @@ void ApplySettings(Impl* impl) {
   if (s.As(IID_ICoreWebView2Settings5, &s5)) s5->put_IsPinchZoomEnabled(v.pinch_zoom ? TRUE : FALSE);
   Com<ICoreWebView2Settings6> s6;
   if (s.As(IID_ICoreWebView2Settings6, &s6)) s6->put_IsSwipeNavigationEnabled(FALSE);
+  // WebSettings.setSafeBrowsingEnabled: Microsoft Defender SmartScreen.
+  Com<ICoreWebView2Settings8> s8;
+  if (s.As(IID_ICoreWebView2Settings8, &s8)) {
+    s8->put_IsReputationCheckingRequired(v.reputation_checking ? TRUE : FALSE);
+  }
+}
+
+// A JSON string literal.
+std::wstring JsonString(const std::wstring& s) {
+  std::wstring out = L"\"";
+  for (wchar_t ch : s) {
+    switch (ch) {
+      case L'"': out += L"\\\""; break;
+      case L'\\': out += L"\\\\"; break;
+      case L'\n': out += L"\\n"; break;
+      case L'\r': out += L"\\r"; break;
+      case L'\t': out += L"\\t"; break;
+      default:
+        if (ch < 0x20) {
+          wchar_t buf[8];
+          swprintf(buf, 8, L"\\u%04x", static_cast<unsigned>(ch));
+          out += buf;
+        } else {
+          out += ch;
+        }
+    }
+  }
+  return out + L"\"";
 }
 
 void Fail(Impl* impl, HRESULT hr, const std::wstring& what) {
@@ -597,6 +700,12 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         bool api = impl->api_navigation && !redirect;
                         if (!redirect) impl->api_navigation = false;
                         std::wstring url = uri.str();
+                        if (!impl->auth_retry.empty() && url == impl->auth_retry && !redirect) {
+                          impl->auth_retry.clear();
+                          impl->main_document = url;
+                          return S_OK;
+                        }
+                        impl->auth_retry.clear();
                         if (!api && impl->listener != nullptr &&
                             impl->listener->OnNavigationStarting(url, user != FALSE,
                                                                  redirect != FALSE)) {
@@ -632,6 +741,9 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         args->get_IsSuccess(&ok);
                         COREWEBVIEW2_WEB_ERROR_STATUS status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
                         args->get_WebErrorStatus(&status);
+                        bool auth_wait =
+                            !impl->auth_pending.empty() && !ok &&
+                            status == COREWEBVIEW2_WEB_ERROR_STATUS_VALID_AUTHENTICATION_CREDENTIALS_REQUIRED;
                         int http = 0;
                         Com<ICoreWebView2NavigationCompletedEventArgs2> a2;
                         Com<ICoreWebView2NavigationCompletedEventArgs> a(args);
@@ -642,6 +754,10 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         sender->get_Source(source.Put());
                         std::wstring url = source.str();
                         if (url.empty() || url == L"about:blank") url = impl->main_document;
+                        if (auth_wait) {
+                          impl->auth_finish = {true, http, static_cast<int32_t>(status), url};
+                          return S_OK;
+                        }
                         impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url);
                         return S_OK;
                       })
@@ -768,29 +884,197 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                           -> HRESULT {
                         auto impl = weak.lock();
                         if (!impl) return S_OK;
-                        // No browser window of WebView2's own: the app decides.
+                        // No browser window of WebView2's own: the app decides
+                        // (WebChromeClient.onCreateWindow; CompleteNewWindow).
                         args->put_Handled(TRUE);
+                        if (impl->destroyed) return S_OK;
                         CoString uri;
                         args->get_Uri(uri.Put());
                         BOOL user = FALSE;
                         args->get_IsUserInitiated(&user);
-                        impl->Report(kNewWindow, 0, user ? 1 : 0, uri.str());
+                        bool dialog = false;
+                        Com<ICoreWebView2WindowFeatures> features;
+                        if (SUCCEEDED(args->get_WindowFeatures(features.Put())) && features) {
+                          BOOL size = FALSE, position = FALSE;
+                          features->get_HasSize(&size);
+                          features->get_HasPosition(&position);
+                          dialog = size || position;
+                        }
+                        Com<ICoreWebView2Deferral> deferral;
+                        if (FAILED(args->GetDeferral(deferral.Put()))) return S_OK;
+                        int64_t id = impl->Defer(args, deferral.get());
+                        impl->Report(kNewWindow, id, user ? 1 : 0, uri.str(),
+                                     dialog ? L"dialog" : L"");
                         return S_OK;
                       })
           .get(),
       &token);
 
-  // Permissions are denied, as a WebView whose app does not grant them
-  // (WebChromeClient.onPermissionRequest's default).
-  wv->add_PermissionRequested(
-      GESHER_CALLBACK(ICoreWebView2PermissionRequestedEventHandler,
-                      [](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args)
-                          -> HRESULT {
-                        args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+  wv->add_WindowCloseRequested(
+      GESHER_CALLBACK(ICoreWebView2WindowCloseRequestedEventHandler,
+                      [weak](ICoreWebView2*, IUnknown*) -> HRESULT {
+                        if (auto impl = weak.lock()) impl->Report(kCloseWindow);
                         return S_OK;
                       })
           .get(),
       &token);
+
+  // Permissions go to the app (WebChromeClient.onPermissionRequest,
+  // onGeolocationPermissionsShowPrompt): CompletePermission.
+  wv->add_PermissionRequested(
+      GESHER_CALLBACK(ICoreWebView2PermissionRequestedEventHandler,
+                      [weak](ICoreWebView2*, ICoreWebView2PermissionRequestedEventArgs* args)
+                          -> HRESULT {
+                        auto impl = weak.lock();
+                        Com<ICoreWebView2Deferral> deferral;
+                        if (!impl || impl->destroyed || FAILED(args->GetDeferral(deferral.Put()))) {
+                          args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                          return S_OK;
+                        }
+                        CoString uri;
+                        args->get_Uri(uri.Put());
+                        COREWEBVIEW2_PERMISSION_KIND kind = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+                        args->get_PermissionKind(&kind);
+                        BOOL user = FALSE;
+                        args->get_IsUserInitiated(&user);
+                        int64_t id = impl->Defer(args, deferral.get());
+                        impl->Report(kPermission, id, static_cast<int32_t>(kind), uri.str(),
+                                     user ? L"1" : L"0");
+                        return S_OK;
+                      })
+          .get(),
+      &token);
+
+  // chrome.webview.postMessage from the page (WebMessagePort's page side).
+  wv->add_WebMessageReceived(
+      GESHER_CALLBACK(ICoreWebView2WebMessageReceivedEventHandler,
+                      [weak](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)
+                          -> HRESULT {
+                        auto impl = weak.lock();
+                        if (!impl || impl->destroyed) return S_OK;
+                        CoString json, source;
+                        args->get_WebMessageAsJson(json.Put());
+                        args->get_Source(source.Put());
+                        impl->Report(kWebMessage, 0, 0, json.str(), source.str());
+                        return S_OK;
+                      })
+          .get(),
+      &token);
+
+  Com<ICoreWebView2_5> wv5;
+  if (impl->webview.As(IID_ICoreWebView2_5, &wv5)) {
+    wv5->add_ClientCertificateRequested(
+        GESHER_CALLBACK(
+            ICoreWebView2ClientCertificateRequestedEventHandler,
+            [weak](ICoreWebView2*, ICoreWebView2ClientCertificateRequestedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              Com<ICoreWebView2Deferral> deferral;
+              if (!impl || impl->destroyed || FAILED(args->GetDeferral(deferral.Put()))) {
+                args->put_Cancel(TRUE);
+                return S_OK;
+              }
+              CoString host;
+              args->get_Host(host.Put());
+              INT port = 0;
+              args->get_Port(&port);
+              std::wstring certs = L"[";
+              Com<ICoreWebView2ClientCertificateCollection> list;
+              UINT32 count = 0;
+              if (SUCCEEDED(args->get_MutuallyTrustedCertificates(list.Put())) && list) {
+                list->get_Count(&count);
+              }
+              for (UINT32 i = 0; i < count; ++i) {
+                Com<ICoreWebView2ClientCertificate> c;
+                CoString subject, issuer, name, pem;
+                if (SUCCEEDED(list->GetValueAtIndex(i, c.Put())) && c) {
+                  c->get_Subject(subject.Put());
+                  c->get_Issuer(issuer.Put());
+                  c->get_DisplayName(name.Put());
+                  c->ToPemEncoding(pem.Put());
+                }
+                if (i > 0) certs += L",";
+                certs += L"{\"subject\":" + JsonString(subject.str()) +
+                         L",\"issuer\":" + JsonString(issuer.str()) +
+                         L",\"name\":" + JsonString(name.str()) +
+                         L",\"pem\":" + JsonString(pem.str()) + L"}";
+              }
+              certs += L"]";
+              std::wstring cas = L"[";
+              Com<ICoreWebView2StringCollection> authorities;
+              UINT32 n = 0;
+              if (SUCCEEDED(args->get_AllowedCertificateAuthorities(authorities.Put())) &&
+                  authorities) {
+                authorities->get_Count(&n);
+              }
+              for (UINT32 i = 0; i < n; ++i) {
+                CoString ca;
+                authorities->GetValueAtIndex(i, ca.Put());
+                if (i > 0) cas += L",";
+                cas += JsonString(ca.str());
+              }
+              cas += L"]";
+              int64_t id = impl->Defer(args, deferral.get());
+              impl->Report(kClientCert, id, port, host.str(), certs, cas);
+              return S_OK;
+            })
+            .get(),
+        &token);
+  }
+
+  Com<ICoreWebView2_10> wv10;
+  if (impl->webview.As(IID_ICoreWebView2_10, &wv10)) {
+    wv10->add_BasicAuthenticationRequested(
+        GESHER_CALLBACK(
+            ICoreWebView2BasicAuthenticationRequestedEventHandler,
+            [weak](ICoreWebView2*, ICoreWebView2BasicAuthenticationRequestedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              Com<ICoreWebView2Deferral> deferral;
+              if (!impl || impl->destroyed || FAILED(args->GetDeferral(deferral.Put()))) {
+                args->put_Cancel(TRUE);
+                return S_OK;
+              }
+              CoString uri, challenge;
+              args->get_Uri(uri.Put());
+              args->get_Challenge(challenge.Put());
+              if (uri.str() == impl->main_document) impl->auth_pending = uri.str();
+              int64_t id = impl->Defer(args, deferral.get());
+              impl->Report(kBasicAuth, id, 0, uri.str(), challenge.str());
+              return S_OK;
+            })
+            .get(),
+        &token);
+  }
+
+  Com<ICoreWebView2_14> wv14;
+  if (impl->webview.As(IID_ICoreWebView2_14, &wv14)) {
+    wv14->add_ServerCertificateErrorDetected(
+        GESHER_CALLBACK(
+            ICoreWebView2ServerCertificateErrorDetectedEventHandler,
+            [weak](ICoreWebView2*, ICoreWebView2ServerCertificateErrorDetectedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              Com<ICoreWebView2Deferral> deferral;
+              if (!impl || impl->destroyed || FAILED(args->GetDeferral(deferral.Put()))) {
+                return S_OK;
+              }
+              CoString uri, pem;
+              args->get_RequestUri(uri.Put());
+              COREWEBVIEW2_WEB_ERROR_STATUS status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+              args->get_ErrorStatus(&status);
+              Com<ICoreWebView2Certificate> cert;
+              if (SUCCEEDED(args->get_ServerCertificate(cert.Put())) && cert) {
+                cert->ToPemEncoding(pem.Put());
+              }
+              int64_t id = impl->Defer(args, deferral.get());
+              impl->Report(kServerCertError, id, static_cast<int32_t>(status), uri.str(),
+                           pem.str());
+              return S_OK;
+            })
+            .get(),
+        &token);
+  }
 
   wv->add_ProcessFailed(
       GESHER_CALLBACK(ICoreWebView2ProcessFailedEventHandler,
@@ -1118,6 +1402,21 @@ void Host::Destroy() {
     impl->requests.clear();
     for (auto& d : impl->dialogs) d.second.deferral->Complete();
     impl->dialogs.clear();
+    for (auto& d : impl->deferred) {
+      Com<ICoreWebView2PermissionRequestedEventArgs> permission;
+      Com<ICoreWebView2BasicAuthenticationRequestedEventArgs> auth;
+      Com<ICoreWebView2ClientCertificateRequestedEventArgs> cert;
+      if (d.second.args.As(IID_ICoreWebView2PermissionRequestedEventArgs, &permission)) {
+        permission->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+      } else if (d.second.args.As(IID_ICoreWebView2BasicAuthenticationRequestedEventArgs, &auth)) {
+        auth->put_Cancel(TRUE);
+      } else if (d.second.args.As(IID_ICoreWebView2ClientCertificateRequestedEventArgs, &cert)) {
+        cert->put_Cancel(TRUE);
+      }
+      d.second.deferral->Complete();
+    }
+    impl->deferred.clear();
+    impl->find.Reset();
     g_live.erase(impl.get());
     if (impl->controller) impl->controller->Close();
     impl->receivers.clear();
@@ -1133,17 +1432,25 @@ void Host::Destroy() {
   delete this;
 }
 
-void Host::Navigate(const std::wstring& url, const std::wstring& headers) {
-  Do(impl_, [url, headers](Impl* impl) {
+void Host::Navigate(const std::wstring& url, const std::wstring& headers,
+                    const std::wstring& method, std::vector<uint8_t> body) {
+  Do(impl_, [url, headers, method, body = std::move(body)](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
     Com<ICoreWebView2Environment2> env2;
-    if (!headers.empty() && impl->webview.As(IID_ICoreWebView2_2, &wv2) &&
+    bool get = method.empty() || method == L"GET";
+    if ((!headers.empty() || !get) && impl->webview.As(IID_ICoreWebView2_2, &wv2) &&
         impl->env.As(IID_ICoreWebView2Environment2, &env2)) {
+      Com<IStream> stream;
+      if (!get) {
+        stream = Com<IStream>(SHCreateMemStream(body.empty() ? nullptr : body.data(),
+                                                static_cast<UINT>(body.size())),
+                              /*add_ref=*/false);
+      }
       Com<ICoreWebView2WebResourceRequest> request;
-      hr = env2->CreateWebResourceRequest(url.c_str(), L"GET", nullptr, headers.c_str(),
-                                          request.Put());
+      hr = env2->CreateWebResourceRequest(url.c_str(), get ? L"GET" : method.c_str(),
+                                          stream.get(), headers.c_str(), request.Put());
       if (SUCCEEDED(hr)) hr = wv2->NavigateWithWebResourceRequest(request.get());
     } else {
       hr = impl->webview->Navigate(url.c_str());
@@ -1206,10 +1513,10 @@ void Host::Run(Command command) {
 
 void Host::SetBounds(HWND parent, int x, int y, int width, int height, int clip_x, int clip_y,
                      int clip_width, int clip_height, bool visible,
-                     const std::vector<RECT>& holes) {
+                     const std::vector<Shape>& shapes) {
   std::shared_ptr<Impl> shared = impl_;
   PostToWebViewThread([shared, parent, x, y, width, height, clip_x, clip_y, clip_width,
-                       clip_height, visible, holes] {
+                       clip_height, visible, shapes] {
     Impl* impl = shared.get();
     if (impl->destroyed || impl->container == nullptr) return;
     Reparent(impl, parent);
@@ -1221,7 +1528,7 @@ void Host::SetBounds(HWND parent, int x, int y, int width, int height, int clip_
       ShowWindow(impl->container, SW_HIDE);
     }
     impl->clip = {clip_x, clip_y, clip_x + clip_width, clip_y + clip_height};
-    impl->holes = holes;
+    impl->shapes = shapes;
     ApplyRegion(impl);
     impl->bounds = {x - clip_x, y - clip_y, x - clip_x + width, y - clip_y + height};
     impl->visible = shown;
@@ -1393,6 +1700,309 @@ void Host::CapturePreview(int64_t callback_id) {
                         })
             .get());
     if (FAILED(hr)) impl->Report(kCapture, callback_id, static_cast<int32_t>(hr));
+  });
+}
+
+void Host::PostWebMessage(const std::wstring& json) {
+  Do(impl_, [json](Impl* impl) {
+    HRESULT hr = impl->webview->PostWebMessageAsJson(json.c_str());
+    if (FAILED(hr)) {
+      impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"PostWebMessageAsJson: " + Hex(hr));
+    }
+  });
+}
+
+void Host::CallDevTools(const std::wstring& method, const std::wstring& params_json,
+                        int64_t callback_id) {
+  std::weak_ptr<Impl> weak = impl_;
+  Do(impl_, [method, params_json, callback_id, weak](Impl* impl) {
+    HRESULT hr = impl->webview->CallDevToolsProtocolMethod(
+        method.c_str(), params_json.empty() ? L"{}" : params_json.c_str(),
+        GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                        [weak, callback_id](HRESULT error, LPCWSTR json) -> HRESULT {
+                          if (auto impl = weak.lock()) {
+                            impl->Report(kDevToolsResult, callback_id,
+                                         static_cast<int32_t>(error),
+                                         json != nullptr ? json : L"null");
+                          }
+                          return S_OK;
+                        })
+            .get());
+    if (FAILED(hr)) impl->Report(kDevToolsResult, callback_id, static_cast<int32_t>(hr), L"null");
+  });
+}
+
+void Host::ListenDevTools(const std::wstring& event) {
+  std::weak_ptr<Impl> weak = impl_;
+  Do(impl_, [event, weak](Impl* impl) {
+    if (!impl->listened.insert(event).second) return;
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    if (FAILED(impl->webview->GetDevToolsProtocolEventReceiver(event.c_str(), receiver.Put())) ||
+        !receiver) {
+      return;
+    }
+    EventRegistrationToken token;
+    receiver->add_DevToolsProtocolEventReceived(
+        GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+                        [weak, event](ICoreWebView2*,
+                                      ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args)
+                            -> HRESULT {
+                          auto impl = weak.lock();
+                          if (!impl) return S_OK;
+                          CoString json;
+                          args->get_ParameterObjectAsJson(json.Put());
+                          impl->Report(kDevToolsEvent, 0, 0, event, json.str());
+                          return S_OK;
+                        })
+            .get(),
+        &token);
+    impl->receivers.push_back(std::move(receiver));
+  });
+}
+
+void Host::CompletePermission(int64_t id, int32_t state, bool remember) {
+  std::shared_ptr<Impl> shared = impl_;
+  PostToWebViewThread([shared, id, state, remember] {
+    Impl::Deferred d;
+    if (!shared->Undefer(id, &d)) return;
+    Com<ICoreWebView2PermissionRequestedEventArgs> args;
+    if (d.args.As(IID_ICoreWebView2PermissionRequestedEventArgs, &args)) {
+      Com<ICoreWebView2PermissionRequestedEventArgs3> args3;
+      if (args.As(IID_ICoreWebView2PermissionRequestedEventArgs3, &args3)) {
+        args3->put_SavesInProfile(remember ? TRUE : FALSE);
+      }
+      args->put_State(static_cast<COREWEBVIEW2_PERMISSION_STATE>(state));
+    }
+    d.deferral->Complete();
+  });
+}
+
+void Host::CompleteNewWindow(int64_t id, Host* window) {
+  std::shared_ptr<Impl> opener = impl_;
+  auto finish = [opener, id](ICoreWebView2* wv) {
+    Impl::Deferred d;
+    if (!opener->Undefer(id, &d)) return;
+    Com<ICoreWebView2NewWindowRequestedEventArgs> args;
+    if (wv != nullptr && d.args.As(IID_ICoreWebView2NewWindowRequestedEventArgs, &args)) {
+      HRESULT hr = args->put_NewWindow(wv);
+      if (FAILED(hr)) opener->Report(kFailed, 0, static_cast<int32_t>(hr), L"put_NewWindow: " + Hex(hr));
+    }
+    d.deferral->Complete();
+  };
+  if (window == nullptr || !window->impl_) {
+    PostToWebViewThread([finish] { finish(nullptr); });
+    return;
+  }
+  std::shared_ptr<Impl> target = window->impl_;
+  PostToWebViewThread([target, finish] {
+    if (target->destroyed || target->failed) {
+      finish(nullptr);
+    } else if (target->ready) {
+      finish(target->webview.get());
+    } else {
+      // Once the new WebView's controller exists (and its settings and
+      // document scripts, posted before, are applied).
+      target->pending.push_back([finish](Impl* t) { finish(t->webview.get()); });
+    }
+  });
+}
+
+void Host::CompleteBasicAuth(int64_t id, bool proceed, const std::wstring& user,
+                             const std::wstring& password) {
+  std::shared_ptr<Impl> shared = impl_;
+  PostToWebViewThread([shared, id, proceed, user, password] {
+    Impl::Deferred d;
+    if (!shared->Undefer(id, &d)) return;
+    Com<ICoreWebView2BasicAuthenticationRequestedEventArgs> args;
+    bool main = false;
+    if (d.args.As(IID_ICoreWebView2BasicAuthenticationRequestedEventArgs, &args)) {
+      CoString uri;
+      args->get_Uri(uri.Put());
+      main = !shared->auth_pending.empty() && uri.str() == shared->auth_pending;
+      Com<ICoreWebView2BasicAuthenticationResponse> response;
+      if (proceed && SUCCEEDED(args->get_Response(response.Put())) && response) {
+        response->put_UserName(user.c_str());
+        response->put_Password(password.c_str());
+        if (main) shared->auth_retry = uri.str();
+      } else {
+        args->put_Cancel(TRUE);
+      }
+    }
+    if (main) {
+      shared->auth_pending.clear();
+      Impl::Finish held = shared->auth_finish;
+      shared->auth_finish = {};
+      // Cancelled: the 401 page is what loaded.
+      if (!proceed && held.held) shared->Report(kPageFinished, held.http, held.status, held.url);
+    }
+    d.deferral->Complete();
+  });
+}
+
+void Host::CompleteClientCert(int64_t id, int32_t choice) {
+  std::shared_ptr<Impl> shared = impl_;
+  PostToWebViewThread([shared, id, choice] {
+    Impl::Deferred d;
+    if (!shared->Undefer(id, &d)) return;
+    Com<ICoreWebView2ClientCertificateRequestedEventArgs> args;
+    if (d.args.As(IID_ICoreWebView2ClientCertificateRequestedEventArgs, &args)) {
+      if (choice == -2) {
+        args->put_Cancel(TRUE);
+      } else {
+        Com<ICoreWebView2ClientCertificateCollection> list;
+        Com<ICoreWebView2ClientCertificate> cert;
+        if (choice >= 0 && SUCCEEDED(args->get_MutuallyTrustedCertificates(list.Put())) && list &&
+            SUCCEEDED(list->GetValueAtIndex(static_cast<UINT32>(choice), cert.Put())) && cert) {
+          args->put_SelectedCertificate(cert.get());
+        }
+        args->put_Handled(TRUE);
+      }
+    }
+    d.deferral->Complete();
+  });
+}
+
+void Host::CompleteServerCertError(int64_t id, bool allow) {
+  std::shared_ptr<Impl> shared = impl_;
+  PostToWebViewThread([shared, id, allow] {
+    Impl::Deferred d;
+    if (!shared->Undefer(id, &d)) return;
+    Com<ICoreWebView2ServerCertificateErrorDetectedEventArgs> args;
+    if (d.args.As(IID_ICoreWebView2ServerCertificateErrorDetectedEventArgs, &args)) {
+      args->put_Action(allow ? COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW
+                             : COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_CANCEL);
+    }
+    d.deferral->Complete();
+  });
+}
+
+void Host::Find(int32_t op, const std::wstring& term, bool case_sensitive, bool whole_word) {
+  std::weak_ptr<Impl> weak = impl_;
+  Do(impl_, [op, term, case_sensitive, whole_word, weak](Impl* impl) {
+    auto report = [weak](const wchar_t* what) {
+      auto impl = weak.lock();
+      if (!impl || !impl->find) return;
+      INT32 active = -1, count = 0;
+      impl->find->get_ActiveMatchIndex(&active);
+      impl->find->get_MatchCount(&count);
+      impl->Report(kFind, active, count, what);
+    };
+    if (!impl->find) {
+      Com<ICoreWebView2_28> wv28;
+      if (!impl->webview.As(IID_ICoreWebView2_28, &wv28) ||
+          FAILED(wv28->get_Find(impl->find.Put())) || !impl->find) {
+        impl->find.Reset();
+        impl->Report(kFind, -1, 0, L"unsupported");
+        return;
+      }
+      EventRegistrationToken token;
+      impl->find->add_MatchCountChanged(
+          GESHER_CALLBACK(ICoreWebView2FindMatchCountChangedEventHandler,
+                          [report](ICoreWebView2Find*, IUnknown*) -> HRESULT {
+                            report(L"count");
+                            return S_OK;
+                          })
+              .get(),
+          &token);
+      impl->find->add_ActiveMatchIndexChanged(
+          GESHER_CALLBACK(ICoreWebView2FindActiveMatchIndexChangedEventHandler,
+                          [report](ICoreWebView2Find*, IUnknown*) -> HRESULT {
+                            report(L"active");
+                            return S_OK;
+                          })
+              .get(),
+          &token);
+    }
+    switch (op) {
+      case kFindStart: {
+        Com<ICoreWebView2Environment15> env15;
+        Com<ICoreWebView2FindOptions> options;
+        if (!impl->env.As(IID_ICoreWebView2Environment15, &env15) ||
+            FAILED(env15->CreateFindOptions(options.Put())) || !options) {
+          impl->Report(kFind, -1, 0, L"unsupported");
+          return;
+        }
+        options->put_FindTerm(term.c_str());
+        options->put_IsCaseSensitive(case_sensitive ? TRUE : FALSE);
+        options->put_ShouldMatchWord(whole_word ? TRUE : FALSE);
+        options->put_ShouldHighlightAllMatches(TRUE);
+        options->put_SuppressDefaultFindDialog(TRUE);
+        HRESULT hr = impl->find->Start(
+            options.get(), GESHER_CALLBACK(ICoreWebView2FindStartCompletedHandler,
+                                           [report](HRESULT) -> HRESULT {
+                                             report(L"done");
+                                             return S_OK;
+                                           })
+                               .get());
+        if (FAILED(hr)) impl->Report(kFind, -1, 0, L"unsupported");
+        break;
+      }
+      case kFindNext:
+        impl->find->FindNext();
+        break;
+      case kFindPrevious:
+        impl->find->FindPrevious();
+        break;
+      case kFindStop:
+        impl->find->Stop();
+        break;
+    }
+  });
+}
+
+void Host::ShowFileDialog(int64_t callback_id, bool multiple, const std::wstring& title,
+                          const std::wstring& filters) {
+  std::shared_ptr<Impl> shared = impl_;
+  PostToWebViewThread([shared, callback_id, multiple, title, filters] {
+    Impl* impl = shared.get();
+    if (impl->destroyed) return;
+    HWND owner = impl->container != nullptr ? GetAncestor(impl->container, GA_ROOT) : nullptr;
+    if (owner == g_parking) owner = nullptr;
+    Com<IFileOpenDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                  IID_IFileOpenDialog, reinterpret_cast<void**>(dialog.Put()));
+    std::wstring files;
+    if (SUCCEEDED(hr)) {
+      FILEOPENDIALOGOPTIONS options = 0;
+      dialog->GetOptions(&options);
+      options |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
+      if (multiple) options |= FOS_ALLOWMULTISELECT;
+      dialog->SetOptions(options);
+      if (!title.empty()) dialog->SetTitle(title.c_str());
+      // "Name|*.a;*.b" lines.
+      std::vector<std::wstring> names, specs;
+      size_t start = 0;
+      while (start < filters.size()) {
+        size_t end = filters.find(L'\n', start);
+        if (end == std::wstring::npos) end = filters.size();
+        std::wstring line = filters.substr(start, end - start);
+        size_t bar = line.find(L'|');
+        if (bar != std::wstring::npos) {
+          names.push_back(line.substr(0, bar));
+          specs.push_back(line.substr(bar + 1));
+        }
+        start = end + 1;
+      }
+      std::vector<COMDLG_FILTERSPEC> spec;
+      for (size_t i = 0; i < names.size(); ++i) spec.push_back({names[i].c_str(), specs[i].c_str()});
+      if (!spec.empty()) dialog->SetFileTypes(static_cast<UINT>(spec.size()), spec.data());
+      hr = dialog->Show(owner);
+      Com<IShellItemArray> items;
+      if (SUCCEEDED(hr)) hr = dialog->GetResults(items.Put());
+      DWORD count = 0;
+      if (SUCCEEDED(hr) && items) items->GetCount(&count);
+      for (DWORD i = 0; i < count; ++i) {
+        Com<IShellItem> item;
+        LPWSTR path = nullptr;
+        if (SUCCEEDED(items->GetItemAt(i, item.Put())) && item &&
+            SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path != nullptr) {
+          if (!files.empty()) files += L"\n";
+          files += path;
+          CoTaskMemFree(path);
+        }
+      }
+    }
+    if (!impl->destroyed) impl->Report(kFileDialog, callback_id, static_cast<int32_t>(hr), files);
   });
 }
 

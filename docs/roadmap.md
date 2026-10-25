@@ -374,6 +374,12 @@ needs: [framework-build.md](framework-build.md).
         ci run 40138367211 on windows-2022 and windows-2025)
   - [x] A real app that relies on WebView in the e2e job (Notes 1.41, ci run
         40138367211)
+  - [x] The rest of android.webkit (ADR 0050): WebMessagePorts, file choosers
+        (onShowFileChooser and a Windows file dialog), permissions, onCreateWindow
+        and onCloseWindow, Basic auth, certificate errors and client certificate
+        requests, postUrl bodies, the back/forward list, find, MHTML archives,
+        capturePicture, text-only zoom, UIA of web content, outline-shaped
+        cut-outs with real mouse input (ci run 40216380541, both runners)
 
 ## Phase 6 checklist
 

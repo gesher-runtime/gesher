@@ -524,6 +524,11 @@ final class GesherWebSettings extends WebSettings {
         changed();
     }
 
+    /** WebSettings has no getter for it. */
+    synchronized boolean geolocationEnabled() {
+        return mGeolocationEnabled;
+    }
+
     @Override
     public synchronized boolean getJavaScriptEnabled() {
         return mJavaScriptEnabled;

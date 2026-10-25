@@ -182,8 +182,81 @@ jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong paren
 
 void JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) { Get(h)->Destroy(); }
 
-void JNICALL WebView2Host_navigate(JNIEnv* env, jclass, jlong h, jstring url, jstring headers) {
-  Get(h)->Navigate(Str(env, url), Str(env, headers));
+std::vector<uint8_t> Bytes(JNIEnv* env, jbyteArray a) {
+  std::vector<uint8_t> bytes;
+  if (a != nullptr) {
+    bytes.resize(static_cast<size_t>(env->GetArrayLength(a)));
+    if (!bytes.empty()) {
+      env->GetByteArrayRegion(a, 0, static_cast<jsize>(bytes.size()),
+                              reinterpret_cast<jbyte*>(bytes.data()));
+    }
+  }
+  return bytes;
+}
+
+void JNICALL WebView2Host_navigate(JNIEnv* env, jclass, jlong h, jstring url, jstring headers,
+                                   jstring method, jbyteArray body) {
+  std::wstring m = Str(env, method);
+  Get(h)->Navigate(Str(env, url), Str(env, headers), m.empty() ? L"GET" : m, Bytes(env, body));
+}
+
+void JNICALL WebView2Host_postWebMessage(JNIEnv* env, jclass, jlong h, jstring json) {
+  Get(h)->PostWebMessage(Str(env, json));
+}
+
+void JNICALL WebView2Host_callDevTools(JNIEnv* env, jclass, jlong h, jstring method,
+                                       jstring params, jlong cb) {
+  Get(h)->CallDevTools(Str(env, method), Str(env, params), cb);
+}
+
+void JNICALL WebView2Host_listenDevTools(JNIEnv* env, jclass, jlong h, jstring event) {
+  Get(h)->ListenDevTools(Str(env, event));
+}
+
+void JNICALL WebView2Host_completePermission(JNIEnv*, jclass, jlong h, jlong id, jint state,
+                                             jboolean remember) {
+  Get(h)->CompletePermission(id, state, remember == JNI_TRUE);
+}
+
+void JNICALL WebView2Host_completeNewWindow(JNIEnv*, jclass, jlong h, jlong id, jlong window) {
+  Get(h)->CompleteNewWindow(id, window != 0 ? Get(window) : nullptr);
+}
+
+void JNICALL WebView2Host_completeBasicAuth(JNIEnv* env, jclass, jlong h, jlong id,
+                                            jboolean proceed, jstring user, jstring password) {
+  Get(h)->CompleteBasicAuth(id, proceed == JNI_TRUE, Str(env, user), Str(env, password));
+}
+
+void JNICALL WebView2Host_completeClientCert(JNIEnv*, jclass, jlong h, jlong id, jint choice) {
+  Get(h)->CompleteClientCert(id, choice);
+}
+
+void JNICALL WebView2Host_completeServerCertError(JNIEnv*, jclass, jlong h, jlong id,
+                                                  jboolean allow) {
+  Get(h)->CompleteServerCertError(id, allow == JNI_TRUE);
+}
+
+void JNICALL WebView2Host_find(JNIEnv* env, jclass, jlong h, jint op, jstring term,
+                               jboolean case_sensitive, jboolean whole_word) {
+  Get(h)->Find(op, Str(env, term), case_sensitive == JNI_TRUE, whole_word == JNI_TRUE);
+}
+
+void JNICALL WebView2Host_showFileDialog(JNIEnv* env, jclass, jlong h, jlong cb, jboolean multiple,
+                                         jstring title, jstring filters) {
+  Get(h)->ShowFileDialog(cb, multiple == JNI_TRUE, Str(env, title), Str(env, filters));
+}
+
+// A Java path (drive-less: /a/b is \a\b on the current drive, ADR 0010) as a
+// full Windows path.
+jstring JNICALL WebView2Host_windowsPath(JNIEnv* env, jclass, jstring path) {
+  std::wstring p = Str(env, path);
+  for (wchar_t& ch : p) {
+    if (ch == L'/') ch = L'\\';
+  }
+  wchar_t full[MAX_PATH * 2];
+  DWORD n = GetFullPathNameW(p.c_str(), MAX_PATH * 2, full, nullptr);
+  if (n > 0 && n < MAX_PATH * 2) p.assign(full, n);
+  return JStr(env, p);
 }
 
 void JNICALL WebView2Host_navigateToString(JNIEnv* env, jclass, jlong h, jstring html) {
@@ -197,17 +270,27 @@ void JNICALL WebView2Host_run(JNIEnv*, jclass, jlong h, jint command) {
 void JNICALL WebView2Host_setBounds(JNIEnv* env, jclass, jlong h, jlong parent, jint x, jint y,
                                     jint width, jint height, jint clip_x, jint clip_y,
                                     jint clip_width, jint clip_height, jboolean visible,
-                                    jintArray holes) {
-  // holes: left, top, right, bottom per rectangle.
-  std::vector<RECT> rects;
-  jsize n = holes != nullptr ? env->GetArrayLength(holes) : 0;
-  if (n >= 4) {
+                                    jintArray shapes) {
+  // shapes: kind, left, top, right, bottom, radius, point count, then x, y per
+  // point, for each (Host::Shape; GesherWebViewProvider.findHoles).
+  std::vector<Host::Shape> out;
+  jsize n = shapes != nullptr ? env->GetArrayLength(shapes) : 0;
+  if (n >= 7) {
     std::vector<jint> v(n);
-    env->GetIntArrayRegion(holes, 0, n, v.data());
-    for (jsize i = 0; i + 3 < n; i += 4) rects.push_back({v[i], v[i + 1], v[i + 2], v[i + 3]});
+    env->GetIntArrayRegion(shapes, 0, n, v.data());
+    for (jsize i = 0; i + 6 < n;) {
+      Host::Shape s;
+      s.kind = v[i];
+      s.rect = {v[i + 1], v[i + 2], v[i + 3], v[i + 4]};
+      s.radius = v[i + 5];
+      jint points = v[i + 6];
+      i += 7;
+      for (jint k = 0; k < points && i + 1 < n; ++k, i += 2) s.points.push_back({v[i], v[i + 1]});
+      out.push_back(std::move(s));
+    }
   }
   Get(h)->SetBounds(Hwnd(parent), x, y, width, height, clip_x, clip_y, clip_width, clip_height,
-                    visible == JNI_TRUE, rects);
+                    visible == JNI_TRUE, out);
 }
 
 void JNICALL WebView2Host_park(JNIEnv*, jclass, jlong h, jlong id) { Get(h)->Park(id); }
@@ -215,13 +298,14 @@ void JNICALL WebView2Host_park(JNIEnv*, jclass, jlong h, jlong id) { Get(h)->Par
 void JNICALL WebView2Host_setSettings(JNIEnv* env, jclass, jlong h, jboolean javascript,
                                       jboolean zoom_controls, jboolean pinch_zoom,
                                       jboolean devtools, jboolean intercept_all,
-                                      jstring user_agent) {
+                                      jboolean reputation_checking, jstring user_agent) {
   Host::Settings s;
   s.javascript = javascript == JNI_TRUE;
   s.zoom_controls = zoom_controls == JNI_TRUE;
   s.pinch_zoom = pinch_zoom == JNI_TRUE;
   s.devtools = devtools == JNI_TRUE;
   s.intercept_all = intercept_all == JNI_TRUE;
+  s.reputation_checking = reputation_checking == JNI_TRUE;
   s.user_agent = Str(env, user_agent);
   Get(h)->SetSettings(s);
 }
@@ -298,14 +382,32 @@ const JNINativeMethod kMethods[] = {
     {"nCreate", "(Lcom/gesher/app/webview/WebView2Host;JDI)J",
      reinterpret_cast<void*>(&WebView2Host_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&WebView2Host_destroy)},
-    {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;)V",
+    {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V",
      reinterpret_cast<void*>(&WebView2Host_navigate)},
+    {"nPostWebMessage", "(JLjava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_postWebMessage)},
+    {"nCallDevTools", "(JLjava/lang/String;Ljava/lang/String;J)V",
+     reinterpret_cast<void*>(&WebView2Host_callDevTools)},
+    {"nListenDevTools", "(JLjava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_listenDevTools)},
+    {"nCompletePermission", "(JJIZ)V", reinterpret_cast<void*>(&WebView2Host_completePermission)},
+    {"nCompleteNewWindow", "(JJJ)V", reinterpret_cast<void*>(&WebView2Host_completeNewWindow)},
+    {"nCompleteBasicAuth", "(JJZLjava/lang/String;Ljava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_completeBasicAuth)},
+    {"nCompleteClientCert", "(JJI)V", reinterpret_cast<void*>(&WebView2Host_completeClientCert)},
+    {"nCompleteServerCertError", "(JJZ)V",
+     reinterpret_cast<void*>(&WebView2Host_completeServerCertError)},
+    {"nFind", "(JILjava/lang/String;ZZ)V", reinterpret_cast<void*>(&WebView2Host_find)},
+    {"nShowFileDialog", "(JJZLjava/lang/String;Ljava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_showFileDialog)},
+    {"nWindowsPath", "(Ljava/lang/String;)Ljava/lang/String;",
+     reinterpret_cast<void*>(&WebView2Host_windowsPath)},
     {"nNavigateToString", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_navigateToString)},
     {"nRun", "(JI)V", reinterpret_cast<void*>(&WebView2Host_run)},
     {"nSetBounds", "(JJIIIIIIIIZ[I)V", reinterpret_cast<void*>(&WebView2Host_setBounds)},
     {"nPark", "(JJ)V", reinterpret_cast<void*>(&WebView2Host_park)},
-    {"nSetSettings", "(JZZZZZLjava/lang/String;)V",
+    {"nSetSettings", "(JZZZZZZLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_setSettings)},
     {"nSetZoom", "(JD)V", reinterpret_cast<void*>(&WebView2Host_setZoom)},
     {"nSetBackground", "(JI)V", reinterpret_cast<void*>(&WebView2Host_setBackground)},
