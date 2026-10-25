@@ -142,7 +142,8 @@ process model" box stays open (BoringSSL is the net track's); its inotify and
 process-model parts are noted there.
 
 Then merged origin/phase4/integration 2d88915 (locale, net, media, lifecycle);
-the ci run of that merge is the final check.
+ci 40211480836 at e76dde3 is green too (every job; 241 PASS / 0 FAIL on
+both runners, package and e2e).
 
 **Remaining gaps:** see "Known gaps" above; `X_OK` holds for every file while
 `stat` shows no execute bit; DexFileLoader keeps ART's no-realpath on Windows;
