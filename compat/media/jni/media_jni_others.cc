@@ -202,8 +202,8 @@ int RegisterMediaJniOthers(JNIEnv* env) {
   // Until their stages (phase 8, stages 2 and 3): every native answers zero,
   // false or null.
   RegisterMediaExtractor(env);
-  for (const char* cls : {"android/media/MediaCodec",
-                          "android/media/MediaCodecList", "android/media/MediaMuxer",
+  RegisterMediaCodec(env);
+  for (const char* cls : {"android/media/MediaMuxer",
                           "android/media/MediaRecorder", "android/media/MediaSync",
                           "android/media/MediaHTTPConnection", "android/media/MediaCrypto",
                           "android/media/MediaDrm", "android/media/MediaDescrambler",
