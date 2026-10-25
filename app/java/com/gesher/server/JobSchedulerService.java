@@ -128,9 +128,20 @@ final class JobSchedulerService extends IJobScheduler.Default
         // authorities): taken from the job when it starts (with the scheduler's lock).
         final android.net.Uri[] triggeredUris;
         final String[] triggeredAuthorities;
+        // The network that met its network constraint (JobParameters.getNetwork), or null.
+        final android.net.Network network;
 
         Run(Job job) {
             this.job = job;
+            android.net.Network n = null;
+            if (needsNetwork(job.info)) {
+                try {
+                    n = satisfyingNetwork(job.info);
+                } catch (LinkageError | RuntimeException e) {
+                    // no connectivity classes
+                }
+            }
+            network = n;
             if (job.changedAuthorities.isEmpty()) {
                 triggeredUris = null;
                 triggeredAuthorities = null;
@@ -155,8 +166,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                         job.info.getClipData(), job.info.getClipGrantFlags(),
                         SystemClock.elapsedRealtime() >= job.latest /* deadline expired */,
                         job.info.isExpedited(), job.info.isUserInitiated(),
-                        triggeredUris, triggeredAuthorities,
-                        null /* network: the default one (ConnectivityManager's) */);
+                        triggeredUris, triggeredAuthorities, network);
             }
             try {
                 binder.linkToDeath(this, 0);
@@ -671,8 +681,40 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
+    /**
+     * The network that satisfies the job's NetworkRequest, as ConnectivityManager describes
+     * Windows' networks (the net track's connectivity: capabilities from the snapshot of
+     * Windows' interfaces and the Network List Manager; hwsvc2, ADR 0051): the default
+     * network if it does, else another; null if none does. Throws LinkageError or
+     * RuntimeException when the connectivity classes cannot answer.
+     */
+    private static android.net.Network satisfyingNetwork(JobInfo info) {
+        android.net.NetworkRequest request = info.getRequiredNetwork();
+        com.gesher.net.WindowsNetworks.Snapshot s = com.gesher.net.WindowsNetworks.parse(
+                com.gesher.net.WindowsNetworks.snapshot());
+        com.gesher.net.WindowsNetworks.Net chosen = null;
+        com.gesher.net.WindowsNetworks.Net def = s.defaultNetwork();
+        if (def != null && request.canBeSatisfiedBy(
+                android.net.ConnectivityManager.capabilitiesOf(s, def))) {
+            chosen = def;
+        } else {
+            for (com.gesher.net.WindowsNetworks.Net n : s.networks) {
+                if (request.canBeSatisfiedBy(android.net.ConnectivityManager.capabilitiesOf(s, n))) {
+                    chosen = n;
+                    break;
+                }
+            }
+        }
+        return chosen != null ? new android.net.Network(chosen.netId()) : null;
+    }
+
     /** The job's network constraint against Windows' networks (unknown: met). */
     private static boolean networkOk(JobInfo info) {
+        try {
+            return satisfyingNetwork(info) != null;
+        } catch (LinkageError | RuntimeException e) {
+            // No connectivity classes: the Network List Manager's view, below.
+        }
         int state = WindowsHost.networkState();
         if (state < 0) return true;
         boolean internet = (state & 2) != 0;

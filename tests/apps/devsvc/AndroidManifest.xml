@@ -16,6 +16,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:label="@string/app_name"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
@@ -36,6 +37,7 @@
         <activity android:name=".ContentActivity" android:exported="true" />
         <activity android:name=".SleepActivity" android:exported="true" />
         <activity android:name=".ZoneActivity" android:exported="true" />
+        <activity android:name=".NetJobActivity" android:exported="true" />
         <receiver android:name=".ClickReceiver" android:exported="false" />
         <provider
             android:name=".NotesProvider"
