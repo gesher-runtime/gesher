@@ -500,6 +500,27 @@ std::u16string TimeZoneKeyName() {
   return U16(tz.TimeZoneKeyName);
 }
 
+std::u16string IanaZone(const std::u16string& windows_id) {
+  // Windows' own ICU (icu.dll, Windows 10 1903 and later): CLDR's windowsZones, for the
+  // "001" territory. Looked up at run time; empty without it.
+  typedef int32_t(__cdecl * IdForWindowsId)(const char16_t* winid, int32_t len,
+                                               const char* region, char16_t* id,
+                                               int32_t capacity, int* status);
+  static IdForWindowsId fn = [] {
+    HMODULE m = LoadLibraryExW(L"icu.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return m != nullptr ? reinterpret_cast<IdForWindowsId>(
+                              reinterpret_cast<void*>(
+                                  GetProcAddress(m, "ucal_getTimeZoneIDForWindowsID")))
+                        : nullptr;
+  }();
+  if (fn == nullptr || windows_id.empty()) return std::u16string();
+  char16_t id[128];
+  int status = 0;  // U_ZERO_ERROR; failures are > 0
+  int32_t n = fn(windows_id.c_str(), static_cast<int32_t>(windows_id.size()), nullptr, id,
+                 static_cast<int32_t>(sizeof(id) / sizeof(id[0])), &status);
+  if (status > 0 || n <= 0 || n >= 128) return std::u16string();
+  return std::u16string(id, static_cast<size_t>(n));
+}
 // --- toasts -----------------------------------------------------------------------------
 
 long ShowToast(const std::u16string& app_id, const std::u16string& tag,

@@ -466,6 +466,9 @@ final class AlarmManagerService extends IAlarmManager.Default
             } catch (Throwable t) {
                 // no ICU mapping
             }
+            // The runtime's ICU data may have no windowsZones: Windows' own ICU has.
+            String id = WindowsHost.ianaZone(windows);
+            if (id != null) return id;
         }
         return TimeZone.getDefault().getID();
     }

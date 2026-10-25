@@ -184,7 +184,12 @@ final class NotificationStore {
         if (files != null) {
             for (File f : files) f.delete();
         }
-        d.delete();
+        // Not File.delete: remove(3) removes no directory on Windows' C runtime.
+        try {
+            java.nio.file.Files.deleteIfExists(d.toPath());
+        } catch (java.io.IOException e) {
+            SystemServer.log("notification: " + d + " not removed: " + e);
+        }
     }
 
     /** Sends a stored PendingIntent, made again as its creator would ask for it. */
