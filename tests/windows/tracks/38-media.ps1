@@ -346,11 +346,20 @@ public static class GesherMediaCapture {
   $videoGl = RunVideoApp 'gl' @('--ez', 'surfacesOnly', 'true')
   Write-Host "INFO  media: SkiaGL run: $((($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces: ' } | Select-Object -First 1))"
   CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE): the TextureView red, the SurfaceView blue' $videoGl
-  # The other codecs: decoded where this machine has a decoder (informational until
-  # Gesher's software decoders are in).
-  foreach ($c in 'hevc', 'vp8', 'vp9', 'av1') {
-    $line = ($videoOut -split "`n") | Where-Object { $_ -match "VideoTest codec $c sync: " } | Select-Object -First 1
-    Write-Host "INFO  media: $($line.Trim())"
+  # The other codecs: Gesher's software decoders (compat/media/video/soft_video.cc) where
+  # Media Foundation has none: VP8 and VP9 (libvpx) from WebM (AOSP's MatroskaExtractor),
+  # AV1 (libdav1d) and H.265 (libhevc) from MP4.
+  foreach ($c in @(
+      @{ Name = 'vp8'; What = 'VP8 (libvpx) from a WebM clip (MatroskaExtractor)' },
+      @{ Name = 'vp9'; What = 'VP9 (libvpx) from a WebM clip (MatroskaExtractor)' },
+      @{ Name = 'av1'; What = 'AV1 (libdav1d) from an MP4 clip' },
+      @{ Name = 'hevc'; What = 'H.265 (libhevc, B-frames reordered) from an MP4 clip' })) {
+    $line = ($videoOut -split "`n") | Where-Object { $_ -match "VideoTest codec $($c.Name) sync: " } | Select-Object -First 1
+    Write-Host "INFO  media: $("$line".Trim())"
+    Check "media: MediaCodec in videoapp.apk: $($c.What) decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $videoExit
+      $videoOut
+    } @("VideoTest codec $($c.Name) sync: c2.gesher.$($c.Name).decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red")
   }
 } else {
   Write-Host 'INFO  media: videoapp.apk not in the build output; its checks skipped'
