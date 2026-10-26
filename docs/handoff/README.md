@@ -111,6 +111,9 @@ Merged so far:
   surfaces (graphics); no guest JIT code, guest signal handlers, LSE, HFAs
   by value. The arm64 shim fallbacks (sem_*, wchar, libm, dlopen of
   platform libs) should move into compat/bionic for x86_64 too.
+- 2026-10-26 early morning: the spend limit stopped all seven agents
+  (media, windows3, aot2, exec2, surfaces, native2, web3); each was resumed
+  from its saved state after the reset.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
