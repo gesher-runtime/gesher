@@ -62,14 +62,118 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Authoritative foundation result: ci 40344682373 at
-1e881b508b9a663f6d4cdd6f43ad629b8782a8ea, attempt 2, is fully green.
-The bitmap/font slice is frozen on wip/native3-foundation for integration;
-see that brief for the personally reviewed jobs, PASS lines and scope.
-The coordinator continues the remaining scope on wip/native3. New process
-native, math rounding and later diagnostic changes there are not included
-in the frozen verified code. Historical pending-run notes below are
-superseded by this result and do not close the remaining contracts.
+Verified Unicode/Process stage: full ci 40386670586 at
+6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
+integration 634a273. Every job personally read (22 success/six skipped),
+both zero-failure summaries, complete code-point/locale comparison, both NDK
+ABIs and four APK cases per runner, existing Bitmap/font/Process checks,
+actual installed input/uninstall cleanup and both required Puzzles/TIC-80
+e2e logs (0 unexpected failures). No retry. See native3-unicode.md.
+Current integration cd0b849 adds docs only and is merged. Subsequent tip
+changes must remain docs-only before this merge. Remaining NDK/POSIX scope
+above stays open on wip/native3; this does not close the aggregate. Continue
+missing APIs/ABI/filesystem contracts after this verified stage is merged.
+
+### Earlier CI history
+
+Pending/unverified statements below are historical and superseded only for
+the specific Unicode/Process scope verified above.
+
+ci 40381742392 at 3c9f6cb: production Unicode bridge and host executable
+compile/link, package and both e2e jobs pass. Both Windows suites pass the
+new Unicode boundary/handle/error checks through both NDK ABIs and all four
+APK cases, then abort before the full-code-point comparison: the test job's
+sparse checkout omitted probes/native3/unicode/reference.json. Add that
+directory to the checkout; retain the complete comparison and all suite
+assertions. This is not a full green run or all-code-point parity proof.
+The locked reference itself is fully reviewed at ci 40376822140/7ee6b32:
+all four jobs succeed and all 15 lock/digest/boundary verification PASS
+lines were personally read. This remains separate from Windows parity.
+
+Prepared Unicode production follow-up, not yet CI verified: replace Windows'
+changing ICU/16-bit CRT predicates with an isolated bridge over the pinned
+ICU4C data, matching bionic's ASCII and binary-property/category rules. Plain
+and locale forms share that bridge; add missing iswalnum_l/iswgraph_l and
+wctrans_l/towctrans_l, including invalid-transform EINVAL. A native host
+executable computes all-code-point hashes through actual System V shim
+entries for all 14 plain/locale functions, compared with the independent
+ICU4X oracle. Native2 adds 11 full-width boundary rows through dlsym,
+wctype/wctrans, locale aliases and errors in both ABIs/process modes.
+ICU4C equivalence is a hypothesis to be tested by these hashes, not a claim
+based on the library name. No local AOSP/ICU build ran; PowerShell parses.
+The branch now includes verified oatdump integration 634a273. The earlier
+Process run below remains valuable but does not verify this new source.
+
+Independent Unicode reference verified in ci 40374405950 at c5a9f95:
+all four probe jobs succeed; the pinned bionic ICU4X wrapper and exact
+2.0.0-beta2 crate/data versions produce 14 whole-code-point predicate/case
+digests and 11 boundary rows. The coordinator personally read the reference
+and both 17-case binary128/zero-failure logs. The exact Cargo lock is saved
+from the reference log, checked against its SHA-256, with all eight ICU
+dependencies pinned to beta2. Future fetch/run use --locked. This is not a
+production change or proof of Windows ICU parity; that gap stays open.
+No Rust/AOSP build ran locally and no Actions artifact was downloaded.
+
+Verified Process follow-up: full ci 40367959106 at
+644e7f8c6596b0de10233f947504f2bcf5a5de98, with integration f677944. Every
+job personally read (22 success/six skipped), all five native3/four APK PASS
+lines per runner, both 0 test(s) failed summaries, actual package input/
+uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected
+failures). No retry. New Unicode source and the newer oatdump integration
+were not part of this run; the combined branch needs the next full CI.
+
+ci 40365301342 at 9361064 was cancelled after media3's diagnostic run
+40359757434 exposed four early native/Looper/resource failures: the new
+readProcLines registration lacked its lightweight tests/dex-natives Process
+declaration. That declaration is now included. No green result is claimed.
+
+The same detailed daemon stack exposed missing Process.readProcFile in
+post-GC memory metrics. The follow-up implements readProcFile and
+parseProcLine using android-16.0.0_r4's common field/output-index contract,
+with dynamic file reads capped at the pinned 64 MiB limit. Both natives
+have matching lightweight stub declarations. Native3ProcessTest adds real
+procfs memory pages, long files, signed/full-width integers, floats, quoted
+and parenthesized strings, combined separators, character output, shared
+array indices, truncation, sanitized bytes and argument errors. Its own
+Java sources compile with JDK21; runtime/C++ verification requires CI.
+No AOSP build ran locally. The camera's pacing deficit remains unproven;
+no capture threshold was changed.
+
+New independent fix, pending CI: media3 exposed an UnsatisfiedLinkError for
+android.os.Process.readProcLines in ReferenceQueueDaemon. The explicit
+Process table now registers a parser over gesher-base's real procfs, matching
+the pinned Android numeric-prefix/array/error behavior. Native3ProcessTest
+covers live Threads/VmRSS, 64-bit values, missing fields/files and invalid
+arguments. Java compiles and PowerShell parses locally; no AOSP build was
+run locally. Do not infer that this fixes camera pacing; media3 will retain
+its counters and original capture thresholds.
+
+Prepared shared CI fixes: the finite AAudio output fixture now preloads all
+8820 frames before start, retaining exact frame/frequency/duration checks;
+this is the source-only ac12cbb slice with scoped output proof on both
+runners in ci 40330465222, not a green media3 claim. The completed WinRT
+geocoder probe now flushes its genuine result and terminates only itself
+through Win32, retaining 30/45-second failure bounds. Launcher child logs
+are forwarded as atomic complete UTF-8 byte lines, with truncation/final
+fragment handling and an executed JDK regression in exec.yml. These minimal
+outside-domain changes need the next full combined run; UI assertions and
+recording thresholds are unchanged.
+
+Font/bitmap run 40344682373 at 1e881b5 is fully reviewed and green on attempt
+2 after the permitted failed-job rerun of the known output tone timing
+check. The frozen foundation merged into integration as f677944; the newer
+rounding probe and process implementation do not inherit that full result.
+The expanded binary128 rounding probe is separately verified in ci
+40355164049 at d02ad7c: all 17 checks and zero-failure summaries personally
+read on both Windows versions. This still does not implement libm APIs.
+The frozen report is in [native3-foundation.md](native3-foundation.md).
+The coordinator continues all remaining NDK/POSIX scope on wip/native3;
+the merged foundation does not close those contracts.
+
+### Earlier CI history
+
+Pending-run instructions below are historical and superseded by the
+authoritative results above.
 
 Current full CI: 40333703940 at
 f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
