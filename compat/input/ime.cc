@@ -169,7 +169,8 @@ struct ImeWindow::Impl {
         Emit(std::move(event));
       }, [this] { if (!detached) PostMessageW(hwnd, UpdateMessage(), kOpPump, 0); }, &result);
       attaching_tsf = false;
-      if (detached) return;
+      const TextInputState current = State();
+      if (detached || !current.active || !current.ime || current.editor_epoch != s.editor_epoch) return;
       tsf = std::move(created);
       if (!tsf) {
         fprintf(stderr, "gesher-ime: TSF attach failed 0x%08lx%s",
@@ -539,7 +540,9 @@ struct ImeWindow::Impl {
         if (msg == UpdateMessage()) {
           if (wparam == kOpTestService) {
             auto service = tsf;
-            if (!service) return static_cast<LRESULT>(E_UNEXPECTED);
+            const TextInputState current = State();
+            if (!service || !current.active || !current.ime || tsf_epoch != current.editor_epoch)
+              return static_cast<LRESULT>(E_UNEXPECTED);
             wchar_t path[32768];
             const DWORD length = GetEnvironmentVariableW(L"GESHER_TSF_TEST_SERVICE", path, 32768);
             if (length == 0 || length >= 32768) return static_cast<LRESULT>(E_INVALIDARG);
@@ -559,7 +562,9 @@ struct ImeWindow::Impl {
           if (!key || key->hwnd != hwnd) return 0;
           const bool up = key->message == WM_KEYUP || key->message == WM_SYSKEYUP;
           const bool paired = up && tsf_consumed.erase(key->wParam) != 0;
-          const bool eaten = service && service->Key(key->message, key->wParam, key->lParam);
+          const TextInputState current = State();
+          const bool eaten = service && current.active && current.ime &&
+              current.editor_epoch == tsf_epoch && service->Key(key->message, key->wParam, key->lParam);
           if (!up && eaten) tsf_consumed.insert(key->wParam);
           return eaten || paired;
         }
