@@ -82,6 +82,8 @@ extern int register_com_gesher_app_graphics_GraphicsDebug(JNIEnv* env);
 // compat/hwui/text/text_natives.cc (rtl track).
 extern int register_com_gesher_app_fonts_WindowsFonts(JNIEnv* env);
 extern int register_com_gesher_app_locale_SystemLocale(JNIEnv* env);
+// compat/hwui/surfaces/surfaces_jni.cc (surfaces track).
+extern int register_gesher_surfaces(JNIEnv* env);
 
 namespace {
 
@@ -184,7 +186,8 @@ int register_gesher_graphics(JNIEnv* env) {
       return -1;
     }
   }
-  return 0;
+  // Surfaces track (compat/hwui/surfaces): Bitmap parcels, YuvImage; after hwui's tables.
+  return register_gesher_surfaces(env);
 }
 
 namespace {

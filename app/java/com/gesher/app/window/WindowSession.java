@@ -295,6 +295,26 @@ public final class WindowSession extends IWindowSession.Stub {
         mCloseHandler = handler != null ? handler : WindowSession::finishActivity;
     }
 
+    /** A single-process Activity's finish request takes the same path as closing its window. */
+    public boolean finishLocalActivity(IBinder token) {
+        android.app.Activity activity = android.app.GesherAppDriver.currentActivity();
+        if (activity == null || activity.getActivityToken() != token || activity.isDestroyed()) {
+            return false;
+        }
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (w.attrs.token == token
+                        && w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
+                    IBinder key = mWindows.keyAt(i);
+                    w.handler.post(() -> close(key));
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public void setLifecycleHandler(LifecycleHandler handler) {
         mLifecycleHandler = handler != null ? handler : serverLifecycle();
     }
