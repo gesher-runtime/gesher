@@ -14,6 +14,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -88,6 +89,7 @@ final class Dexopt {
 
     /** The package is uninstalled: its profiles go. */
     static void deleteProfiles(String packageName) {
+        new File(referenceProfile(packageName).getPath() + ".cloud").delete();
         for (File f : new File[] {currentProfile(packageName), referenceProfile(packageName)}) {
             f.delete();
             try {
@@ -152,8 +154,50 @@ final class Dexopt {
         prepareProfiles(packageName);
         String filter = filterFor("install", "speed-profile");
         File ref = referenceProfile(packageName);
-        if (filter.endsWith("-profile") && !hasData(ref)) filter = "verify";
-        return compile(packageName, codePath, filter, "install", hasData(ref) ? ref : null);
+        File metadata = new File(codePath, "base.dm");
+        File profile = metadata.isFile() ? importCloudProfile(packageName, codePath, metadata)
+                : hasData(ref) ? ref : null;
+        if (filter.endsWith("-profile") && profile == null) filter = "verify";
+        return compile(packageName, codePath, filter, "install", profile);
+    }
+
+    /**
+     * ART Service's copy-and-update operation validates every profile dex checksum/type/
+     * method count and rewrites keys to the installed APK. A valid ZIP with missing, empty,
+     * corrupt or mismatched profile data falls back to verify; it never replaces the
+     * reference profile with the rejected output. The installer validates the ZIP first.
+     */
+    private static File importCloudProfile(String packageName, String codePath, File metadata) {
+        File ref = referenceProfile(packageName);
+        File staged = new File(ref.getPath() + ".cloud");
+        staged.delete();
+        String apk = new File(codePath, "base.apk").getPath();
+        List<String> args = new ArrayList<>();
+        args.add("--copy-and-update-profile-key");
+        args.add("--profile-file=" + metadata.getPath());
+        args.add("--reference-profile-file=" + staged.getPath());
+        args.add("--apk=" + apk);
+        args.add("--dex-location=" + apk);
+        int code = run("profman", args);
+        try {
+            // ProfmanResult::CopyAndUpdateResult: only 0 matches all profile dex files.
+            if (code != 0 || !hasData(staged)) {
+                SystemServer.log("dexopt: " + packageName + ": cloud profile rejected (profman "
+                        + code + "); falling back to verify");
+                return null;
+            }
+            Files.move(staged.toPath(), ref.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+            SystemServer.log("dexopt: " + packageName + ": cloud profile accepted from "
+                    + metadata + ", " + ref.length() + " bytes");
+            return ref;
+        } catch (IOException e) {
+            SystemServer.log("dexopt: " + packageName + ": cloud profile not committed: " + e
+                    + "; falling back to verify");
+            return null;
+        } finally {
+            staged.delete();
+        }
     }
 
     /**
