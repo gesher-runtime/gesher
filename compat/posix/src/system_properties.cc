@@ -62,6 +62,7 @@ struct Area {
   std::wstring persistent;
   ~Area() { if (view) UnmapViewOfFile(view); }
 };
+bool Valid(const std::string& name, const std::string& value);
 
 // Deliberately leaked: property callbacks can run during static destruction.
 std::mutex& LocalMutex() { static auto* mutex = new std::mutex; return *mutex; }
@@ -199,7 +200,7 @@ bool Persist(const std::wstring& path, const std::string* name, const Value* val
   if (!Read(path, &data, true) || (!data.empty() && !Decode(data, &values))) return false;
   if (initial) {
     for (const auto& [key, entry] : values) {
-      if (key.rfind("persist.", 0) == 0) (*initial)[key] = entry;
+      if (key.rfind("persist.", 0) == 0 && Valid(key, entry.text)) (*initial)[key] = entry;
     }
   }
   if (!name) return true;
@@ -237,7 +238,8 @@ Snapshot Initial() {
     std::string key = Trim(line.substr(0, equal));
     bool optional = !key.empty() && key.back() == '?';
     if (optional) key = Trim(key.substr(0, key.size() - 1));
-    if (!key.empty() && (!optional || !values.count(key))) values[key] = {Trim(line.substr(equal + 1)), 1};
+    std::string value = Trim(line.substr(equal + 1));
+    if (Valid(key, value) && (!optional || !values.count(key))) values[key] = {std::move(value), 1};
   }
   return values;
 }
@@ -324,9 +326,29 @@ Area* Current() { // LocalMutex is held by every caller.
   RemoveOldAreas(dir, path);
   return result;
 }
+bool Utf8(const std::string& value) {
+  for (size_t at = 0; at < value.size();) {
+    unsigned char lead = static_cast<unsigned char>(value[at++]);
+    if (lead < 0x80) continue;
+    unsigned trailing;
+    uint32_t code, minimum;
+    if (lead >= 0xc2 && lead <= 0xdf) { trailing = 1; code = lead & 0x1f; minimum = 0x80; }
+    else if (lead >= 0xe0 && lead <= 0xef) { trailing = 2; code = lead & 0x0f; minimum = 0x800; }
+    else if (lead >= 0xf0 && lead <= 0xf4) { trailing = 3; code = lead & 7; minimum = 0x10000; }
+    else return false;
+    if (trailing > value.size() - at) return false;
+    while (trailing--) {
+      unsigned char next = static_cast<unsigned char>(value[at++]);
+      if ((next & 0xc0) != 0x80) return false;
+      code = (code << 6) | (next & 0x3f);
+    }
+    if (code < minimum || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return false;
+  }
+  return true;
+}
 bool Valid(const std::string& name, const std::string& value) {
   if (name.empty() || name.size() > 255 || name.front() == '.' || name.back() == '.' ||
-      name.find("..") != std::string::npos || value.find('\0') != std::string::npos) return false;
+      name.find("..") != std::string::npos || value.find('\0') != std::string::npos || !Utf8(value)) return false;
   for (unsigned char c : name) {
     if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
           c == '.' || c == '_' || c == '-' || c == '@' || c == ':')) return false;
