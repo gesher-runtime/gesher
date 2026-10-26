@@ -61,11 +61,11 @@ public final class TaskConfiguration {
         c.densityDpi = dpi;
         c.windowConfiguration.setBounds(bounds);
         c.windowConfiguration.setAppBounds(bounds);
-        if (rotation != Surface.ROTATION_0) {
-            c.windowConfiguration.setRotation(rotation);
-            c.windowConfiguration.setDisplayRotation(rotation);
-            c.windowConfiguration.setMaxBounds(display(rotation));
-        }
+        // Zero is an actual task orientation too: an unfocused portrait task must
+        // not inherit the shared Application display's landscape rotation.
+        c.windowConfiguration.setRotation(rotation);
+        c.windowConfiguration.setDisplayRotation(rotation);
+        c.windowConfiguration.setMaxBounds(display(rotation));
         return c;
     }
 

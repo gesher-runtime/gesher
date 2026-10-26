@@ -34,5 +34,12 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
-Created at the windows3 merge milestone on 2026-10-26. Not started; no code or
-tests added and no CI run. The physical touch keyboard remains unverified.
+Resumed on 2026-10-26 after merging current integration a57c1f8 without a reset.
+WIP: the shared Application Display follows the focused visible task, with
+explicit per-Activity zero/rotated overrides and masked Binder display callbacks.
+ApplicationDisplay/TaskConfiguration compile against saved framework/core
+classes locally; the complete app/framework build and runtime tests await CI.
+No tests or roadmap milestones are complete. Next: actual Display/listener and
+multi-task fixtures, then TSF document/reconversion, real COM-source input-pane
+callbacks/candidate occlusion and old-target adjustResize. ADR 0061 records the
+work. The physical touch keyboard remains unverified.
