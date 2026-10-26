@@ -6,7 +6,9 @@ track's symbol check (tests/native2/native2_test.cpp, ADR 0057).
 
 For each set (a program or an app's libraries), every undefined dynamic
 symbol that no ELF file of the set defines is written as
-"<set> <file> <symbol> <GLOBAL|WEAK>". With --api, every symbol a NDK stub
+"<set> <file> <symbol> <GLOBAL|WEAK|LAUNCHER>". LAUNCHER marks __libc_init
+only in an ELF with PT_INTERP: gesher-exec supplies it at executable startup,
+outside dalvikvm's shared-library symbol table. With --api, every symbol a NDK stub
 library (sysroot/usr/lib/<triple>/<api>/libc.so...) defines: the platform's
 public API, for a coverage figure.
 """
@@ -33,6 +35,12 @@ def dynsyms(readelf, path):
     return defined, undefined
 
 
+def has_interpreter(readelf, path):
+    out = subprocess.run([readelf, '--program-headers', '-W', path],
+                         capture_output=True, text=True, check=True).stdout
+    return any(line.split() and line.split()[0] == 'INTERP' for line in out.splitlines())
+
+
 def main():
     readelf, out_path = sys.argv[1], sys.argv[2]
     lines = []
@@ -55,10 +63,12 @@ def main():
         for f in files:
             d, u = dynsyms(readelf, f)
             defined |= d
-            imports.append((os.path.basename(f), u))
-        for base, u in imports:
+            imports.append((os.path.basename(f), u, has_interpreter(readelf, f)))
+        for base, u, executable in imports:
             for s, bind in sorted(u.items()):
                 if s not in defined:
+                    if s == '__libc_init' and executable:
+                        bind = 'LAUNCHER'
                     lines.append(f'{name} {base} {s} {bind}')
     with open(out_path, 'w') as f:
         f.write('\n'.join(lines) + '\n')

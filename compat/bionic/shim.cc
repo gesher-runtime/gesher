@@ -547,6 +547,10 @@ void* BIONIC_SYSV Mmap(void* addr, size_t len, int prot, int flags, int fd, int6
 }
 int BIONIC_SYSV Munmap(void* addr, size_t len) { return munmap(addr, len); }
 int BIONIC_SYSV Mprotect(void* addr, size_t len, int prot) { return mprotect(addr, len, prot); }
+void* BIONIC_SYSV Mremap(void* addr, size_t old_size, size_t new_size, int flags, void* target) {
+  return (flags & MREMAP_FIXED) != 0 ? mremap(addr, old_size, new_size, flags, target)
+                                   : mremap(addr, old_size, new_size, flags);
+}
 
 // --- C runtime support ------------------------------------------------------
 
@@ -966,6 +970,7 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("mmap64", Mmap);
   ENTRY("munmap", Munmap);
   ENTRY("mprotect", Mprotect);
+  ENTRY("mremap", Mremap);
   // libm (forwarded to the CRT; overloads selected by signature).
   MATH(sin); MATH(cos); MATH(tan); MATH(asin); MATH(acos); MATH(atan);
   MATH(sinh); MATH(cosh); MATH(tanh); MATH(exp); MATH(exp2); MATH(log);

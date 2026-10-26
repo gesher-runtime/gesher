@@ -12,8 +12,9 @@
 //   files:    flock, the execute bit, symbolic links, inotify IN_MODIFY
 //             before close;
 //   symbols:  every symbol named in the `symbols` file (lines
-//             "<set> <library> <symbol> <bind>") through dlsym(RTLD_DEFAULT):
-//             what each set's libraries import that the shim lacks.
+//             "<set> <library> <symbol> <bind>") through dlsym(RTLD_DEFAULT).
+//             Executable-only __libc_init (LAUNCHER) is reported separately;
+//             gesher-exec's real program runs exercise that startup entry.
 // The last line is "native2: all passed" when every check of the first three
 // parts held.
 
@@ -40,10 +41,12 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/random.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/sysinfo.h>
 #include <sys/system_properties.h>
 #include <time.h>
@@ -150,8 +153,12 @@ Part Extras(const std::string& dir) {
   p.Check(wcsncmp(hello, L"Help", 3) == 0 && wcsncmp(hello, L"Help", 4) < 0, "wcsncmp");
   p.Check(wcsstr(hello, L"לו") == hello + 8, "wcsstr");
   p.Check(wcscasecmp(L"ABC", L"abc") == 0, "wcscasecmp");
-  p.Check(towupper(L'a') == L'A' && towlower(L'Α') == L'α', "towupper/towlower");
+  p.Check(towupper(L'a') == L'A' && towlower(L'Α') == L'α' &&
+              towupper(0x10428) == 0x10400 && towlower(0x10400) == 0x10428 &&
+              towlower(WEOF) == WEOF, "towupper/towlower (Greek, supplementary, WEOF)");
   p.Check(iswalpha(L'ש') && !iswdigit(L'x') && iswspace(L' '), "iswalpha/iswdigit/iswspace");
+  p.Check(iswalpha(0x10400) && !iswalpha(0x1f600) && iswprint(0x1f600) &&
+              !iswprint(0x10ffff) && !iswalpha(WEOF), "Unicode supplementary classes");
   p.Check(wcwidth(L'一') == 2 && wcwidth(L'a') == 1, "wcwidth");
   wchar_t buf[32];
   wcslcpy(buf, L"abcdef", 4);
@@ -166,6 +173,80 @@ Part Extras(const std::string& dir) {
   char mb[32];
   p.Check(wcstombs(mb, L"שx", sizeof(mb)) == 3 && strcmp(mb, "\xd7\xa9x") == 0, "wcstombs");
   p.Check(mbstowcs(buf, "\xd7\xa9y", 32) == 2 && buf[0] == 0x5e9, "mbstowcs");
+  p.notes.push_back("Unicode case/classes (BMP and supplementary)");
+
+  int sockets[2] = {-1, -1};
+  p.Check(socketpair(AF_UNIX, SOCK_DGRAM, 0, sockets) == 0, "datagram socketpair");
+  if (sockets[0] >= 0 && sockets[1] >= 0) {
+    char first[] = "one", second[] = "two";
+    iovec tx_iov[] = {{first, 3}, {second, 3}};
+    mmsghdr tx[2]{};
+    for (int i = 0; i < 2; ++i) {
+      tx[i].msg_hdr.msg_iov = &tx_iov[i];
+      tx[i].msg_hdr.msg_iovlen = 1;
+    }
+    p.Check(sendmmsg(sockets[0], tx, 2, 0) == 2 && tx[0].msg_len == 3 && tx[1].msg_len == 3,
+            "sendmmsg two datagrams");
+    char data[2][16]{};
+    iovec rx_iov[] = {{data[0], sizeof(data[0])}, {data[1], sizeof(data[1])}};
+    mmsghdr rx[2]{};
+    for (int i = 0; i < 2; ++i) {
+      rx[i].msg_hdr.msg_iov = &rx_iov[i];
+      rx[i].msg_hdr.msg_iovlen = 1;
+    }
+    timespec timeout{2, 0};
+    p.Check(recvmmsg(sockets[1], rx, 2, 0, &timeout) == 2 &&
+                rx[0].msg_len == 3 && rx[1].msg_len == 3 &&
+                memcmp(data[0], "one", 3) == 0 && memcmp(data[1], "two", 3) == 0,
+            "recvmmsg two datagrams");
+    p.Check(send(sockets[0], first, 3, 0) == 3 &&
+                recvmmsg(sockets[1], rx, 2, MSG_WAITFORONE, nullptr) == 1,
+            "recvmmsg MSG_WAITFORONE returns partial batch");
+    errno = 0;
+    p.Check(recvmmsg(sockets[1], rx, 2, MSG_DONTWAIT, nullptr) == -1 && errno == EAGAIN,
+            "recvmmsg MSG_DONTWAIT empty");
+    timeout = {0, 20000000};
+    p.Check(recvmmsg(sockets[1], rx, 2, 0, &timeout) == 0 &&
+                timeout.tv_sec == 0 && timeout.tv_nsec == 0, "recvmmsg timeout");
+    timeout = {0, 1000000000};
+    p.Check(recvmmsg(sockets[1], rx, 2, 0, &timeout) == -1 && errno == EINVAL,
+            "recvmmsg invalid timeout");
+    close(sockets[0]);
+    close(sockets[1]);
+  }
+  alignas(cmsghdr) char control[2 * CMSG_SPACE(sizeof(int))]{};
+  msghdr msg{};
+  msg.msg_control = control;
+  msg.msg_controllen = sizeof(control);
+  cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+  cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+  auto* next = reinterpret_cast<cmsghdr*>(control + CMSG_SPACE(sizeof(int)));
+  next->cmsg_len = CMSG_LEN(sizeof(int));
+  p.Check(CMSG_NXTHDR(&msg, cmsg) == next && CMSG_NXTHDR(&msg, next) == nullptr,
+          "CMSG_NXTHDR two headers and end");
+  cmsg->cmsg_len = SIZE_MAX;
+  p.Check(CMSG_NXTHDR(&msg, cmsg) == nullptr, "CMSG_NXTHDR rejects overflowing length");
+  p.notes.push_back("datagram batches, timeout and ancillary header bounds");
+
+  size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  void* memory = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  p.Check(memory != MAP_FAILED, "mmap for mremap");
+  if (memory != MAP_FAILED) {
+    memset(memory, 0x5a, page);
+    void* larger = mremap(memory, page, page * 2, MREMAP_MAYMOVE);
+    p.Check(larger != MAP_FAILED, "mremap grows anonymous mapping");
+    if (larger != MAP_FAILED) {
+      auto* bytes = static_cast<unsigned char*>(larger);
+      p.Check(bytes[0] == 0x5a && bytes[page - 1] == 0x5a && bytes[page] == 0,
+              "mremap preserves contents and zeroes new pages");
+      void* smaller = mremap(larger, page * 2, page, 0);
+      p.Check(smaller == larger && bytes[0] == 0x5a, "mremap shrinks in place");
+      munmap(larger, smaller == MAP_FAILED ? page * 2 : page);
+    } else {
+      munmap(memory, page);
+    }
+  }
+  p.notes.push_back("mremap growth, copy and shrink");
 
   // libm.
   p.Check(Near(erf(0.5), 0.5204998778130465), "erf");
@@ -570,11 +651,16 @@ std::vector<std::string> Symbols(const std::string& path) {
   struct Tally {
     std::set<std::string> strong, weak;
     size_t checked = 0;
+    size_t launcher = 0;
   };
   std::map<std::string, Tally> sets;
   std::string set, lib, sym, bind;
   while (f >> set >> lib >> sym >> bind) {
     Tally& t = sets[set];
+    if (bind == "LAUNCHER" && sym == "__libc_init") {
+      ++t.launcher;
+      continue;
+    }
     ++t.checked;
     if (dlsym(RTLD_DEFAULT, sym.c_str()) != nullptr) continue;
     (bind == "WEAK" ? t.weak : t.strong).insert(lib + ":" + sym);
@@ -591,6 +677,8 @@ std::vector<std::string> Symbols(const std::string& path) {
       line += " | weak:";
       for (const std::string& s : t.weak) line += " " + s;
     }
+    if (t.launcher != 0) line += " | executable startup: " + std::to_string(t.launcher) +
+                                " __libc_init (gesher-exec program runs)";
     out.push_back(line);
   }
   return out;
