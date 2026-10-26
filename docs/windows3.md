@@ -101,17 +101,39 @@ MainActivity's task).
 
 ## Status and next steps
 
-- ci run 40238681927 (both runners): webview features pass with no WM_NULL
-  (the click arrives in 0.2-0.3 s, runtime 131 on windows-2022 too); e2e green
-  with Signal Generator on the default display; on the device multi-resume,
-  LandActivity's 800x400 turned window, MainActivity's relaunch turned and back
-  pass; single process clipboard and moveTaskToBack pass. Fixed after it: the
-  single process's Activity was invisible to the window session (no turn),
-  LaunchActivityItem replaced ActivityClient's controller (the device's
-  moveTaskToBack hid the window), the test's line-end regex, and the IME check
-  now expects target SDK 36's edge-to-edge behaviour (the window keeps its size;
-  the app pads by the IME insets) instead of a resize.
+Stopped on the coordinator's order (2026-10-26).
 
+- Last verified: ci run 40258887997 at f03607f (phase4/integration e37846d
+  merged): all green on windows-2022 and windows-2025 (the 2025 test job was
+  rerun after a hang in 58-devices' geocoder step, not this track's), package
+  and e2e. Every 51-windows3 check passed on both runners: single process
+  (setRequestedOrientation relaunch turned and back, IME insets, clipboard,
+  moveTaskToBack, LandActivity 800x400, adjustPan) and the Gesher device
+  (multi-resume, LandActivity in MainActivity's task, the portrait Activity
+  back, turn, IME insets, clipboard, moveTaskToBack). 37-webview's features
+  pass with no WM_NULL (click in 0.2-0.3 s); e2e passes Signal Generator on the
+  default display.
+- In progress when stopped: ci run 40285476400 at a15ade4 (phase4/integration
+  7711d7d merged; nothing of this track changed since f03607f but the roadmap
+  section). Its result was not seen.
+- Earlier runs: 40238681927 (first, fixes listed in git log), 40243661765
+  (pan and IME checks read the first frame; fixed in 2c5f021).
+- Done, verified: everything in the sections above, except as listed in
+  Remaining gaps.
+- Next steps: check run 40285476400 (`gh run view 40285476400 -R
+  gesher-runtime/gesher`); if green, tick the windows3 boxes in
+  docs/roadmap.md with that run id and SHA, set ADR 0053's status to accepted;
+  if integration moved again, merge it and rerun.
+- Pitfalls: LaunchActivityItem resets ActivityClient's controller, so the
+  window session re-installs ActivityClientHook (ActivityClientHook.ensure);
+  the single process's Activity is not in ActivityThread's map
+  (WindowSession.activity falls back to GesherAppDriver.currentActivity);
+  target SDK 36 is edge to edge, so adjustResize does not resize the window on
+  Android 16 either (winapp pads by the IME insets itself); adjustPan animates
+  (wait for the last frames); app-process output on the device can end lines
+  with \r\r\n. "%fs base survives Sleep(1) FAIL" in the test logs is an info
+  table line, not a failed check. Do not write files with .NET relative paths
+  from PowerShell (they resolve against C:\work\gesher-int).
 ## Remaining gaps
 
 - The IFrameworkInputPane path itself is not exercised in CI (no touch
