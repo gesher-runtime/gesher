@@ -168,8 +168,9 @@ carry flags, AH, scalar/vector SSE, per-thread initialization and rejected
 out-of-block/stack-pointer cases. Those checks pass locally with -Werror.
 The NDK API29 executable has explicit FS local-exec integer/SSE assembly and
 checks constructors, initialized data, tbss, alignment and pthread isolation.
-Its loader, ProcessBuilder and device-app runs remain pending CI; local
-instruction replay alone is not proof that the complete ELF startup works.
+Its loader and ProcessBuilder runs pass both runners in CI 40338806524;
+the device-app variant remains pending. Local instruction replay alone was
+not used as proof that the complete ELF startup works.
 
 ## Verification
 
@@ -179,8 +180,9 @@ and status assertions cover quoting, positional/parameter expansion, control
 flow, functions, pipes, subshell isolation, redirects, here-documents, read,
 getopts, background waits, EXIT status/traps and state above 32 KiB. A Java
 ProcessBuilder test covers incremental stdin and a read builtin consuming
-the next input line. These local results establish neither ART integration
-nor real signal delivery.
+the next input line. The expanded 57-case suite and the real ART/mailbox tests
+pass both runners in CI 40338806524; local driver results alone establish
+neither ART integration nor real signal delivery.
 
 CI must run these same tests through the real launcher on both Windows
 runners, with the existing native system/popen/exec checks, package and e2e.

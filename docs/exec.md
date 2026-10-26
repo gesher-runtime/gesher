@@ -94,18 +94,19 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
 - **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
-  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, as a bare name or a
+  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, as a bare name or a
   `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
-  `pm`/`am` currently decline; getprop/setprop now use the shared backend in
-  ADR 0060, whose complete platform ABI and device tests remain pending.
+  getprop/setprop use the shared backend in ADR 0060. Structured logcat and
+  the pm/am Binder client are prepared; the new property ABI, log capture and
+  command/device assertions still need CI proof.
 
 ## Not done / limits
 
 - **ELF TLS in the executable itself** (`__thread` at API 29+): a new
   implementation recognizes linker-resolved negative FS operands using the
   explicitly marked executable's compatible first static PT_TLS block. The
-  own-file instruction probe passes locally, but real NDK/ProcessBuilder/app
-  proof is pending CI. Incompatible layouts, text relocations and unsupported
+  own-file instruction probe and real NDK/ProcessBuilder checks pass on both
+  runners in CI 40338806524; the app variant remains pending. Incompatible layouts, text relocations and unsupported
   instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
   <29) and library ELF TLS retain their existing paths.
 - A real `fork()` that does work other than `exec`/`_exit` in the child is not
