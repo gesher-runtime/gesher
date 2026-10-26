@@ -172,7 +172,7 @@ being investigated, without treating the failure as waived.
 
 IME fixture correction prepared for coordinator review: retain real SendInput,
 hiragana composition, kanji conversion, candidate/caret geometry and Enter,
-but compare final all-kanji editor text exactly to the post-Enter IMM commit
+but compare final all-kanji editor text exactly to the post-Enter Windows commit
 event (with no composing suffix). The prior fixture accepted arbitrary
 two-kanji results, including 二本, but rejected the valid three-kanji 日本語
 result. It now checks actual Windows-to-InputConnection fidelity rather than
@@ -187,3 +187,20 @@ must show zero IME edge insets and an unchanged decor/client size. This tests
 Android's actual floating-candidate behavior without inventing a keyboard-sized
 inset. CI remains pending, as do arbitrary third-party candidate discovery and
 candidate-only content/visible-inset distinctions.
+
+The coordinator reviewed and approved the explicit IME fixture correction at
+0507181: the anchored final text also rejects a composing suffix, and the
+post-Enter mark prevents reusing an old result. Wording now says Windows result
+because the shared commit route can carry TSF as well as IMM32.
+
+40389984421 is superseded by the new combined source (RTL fix, portable TLS
+lifecycle owner and IME fixture follow-ups). The coordinator authorized its
+cancellation as superseded source; package/Windows jobs had just started, so
+it provides no full runtime summary. Its completed builds/media remain
+diagnostic evidence only. Media logs show a silent 19:56:05–20:24:18 gap
+followed by assets timestamped 20:24; no per-command timing proves exactly
+where the wait occurred. The media track's independently CI-exercised slice
+now conditionally skips apt when ffmpeg exists, bounds apt retries/timeouts,
+limits preparation to ten minutes and prints the version. Generators/assets
+and assertions are unchanged. Next: one new combined full CI, not a rerun of
+the same source looking for a different runtime outcome.

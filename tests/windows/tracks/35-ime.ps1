@@ -222,13 +222,13 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
     if ($results.Count -gt 0) { $nativeCommit = $results[$results.Count - 1].Groups[1].Value }
     # Candidate ordering depends on the runner's Microsoft IME dictionary:
     # both two- and three-kanji selections are valid. Require fidelity to the
-    # actual IMM result, all kanji, and no remaining composing region instead
+    # actual Windows result, all kanji, and no remaining composing region instead
     # of assuming a particular dictionary word length.
     $committed = $t -match '^(\\u[4-9][0-9a-f]{3})+$' -and $t -ceq $nativeCommit
     if ($committed) { break }
     Start-Sleep -Milliseconds 200
   } while ((Get-Date) -lt $deadline)
-  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon, as hiragana), converted to kanji, Enter preserves the exact IMM result with no composing region left' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; native result: $nativeCommit; committed: $t" -f $script:imeTsf)
+  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon, as hiragana), converted to kanji, Enter preserves the exact Windows result with no composing region left' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; Windows result: $nativeCommit; committed: $t" -f $script:imeTsf)
   $cand = $windows | Where-Object { $_ -match 'cand' } | Select-Object -First 1
   $inline = -not ($windows | Where-Object { $_ -match 'Composition' })
   if ($cand -and $null -ne $caret) {
