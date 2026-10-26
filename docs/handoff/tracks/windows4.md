@@ -409,3 +409,16 @@ policy before add/relayout, including explicit fit controls and layout flags.
 The next combined source logs actual IME layout attrs, requested/frame/parent
 and native client sizes at source changes. Its existing 500-pixel content
 assertion stays intact while locating the missing propagation.
+
+Standalone **40411795761** at
+`828dc874538ab51ed35e4671776a618278583656` is complete green: the pinned
+llvm-mingw/Werror/no-exceptions build and both Windows fixture jobs succeed.
+Both actual logs were read. Each ACP, production-IME and COM aggregate is
+zero, and there is no raw FAIL. The expected detach interruption is INFO
+with an explicit failed-HRESULT/procedure-restoration assertion. The new
+actual Windows caret epoch test passes on both runners, alongside measured
+geometry, partial composition cursor, initial-size and floating-pane checks.
+This verifies the native fixture scope only; the next full combined run is
+diagnostic for real Android/JNI/IME, Application resources, legacy frames,
+package cleanup and both e2e suites. Legacy/real-IME gaps remain open until
+those actual results are read. Current integration f520fd1 is included.
