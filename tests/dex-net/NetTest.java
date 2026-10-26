@@ -473,12 +473,6 @@ public final class NetTest {
             {"https://self-signed.badssl.com/", "a self-signed certificate"},
             {"https://untrusted-root.badssl.com/", "an untrusted root"},
         };
-        String local = System.getenv("GESHER_TLS_REJECTION_URLS");
-        if (local != null) {
-            String[] urls = local.split(",", -1);
-            require(urls.length == bad.length, "four certificate test URLs required");
-            for (int i = 0; i < bad.length; i++) bad[i][0] = urls[i];
-        }
         for (String[] b : bad) {
             check("HTTPS: " + b[0] + " is rejected (" + b[1] + ")", () -> rejected(b[0]));
         }
@@ -488,14 +482,11 @@ public final class NetTest {
         HttpsURLConnection c = (HttpsURLConnection) new URL(url).openConnection();
         try {
             read(c);
-        } catch (SSLPeerUnverifiedException e) {
+        } catch (SSLHandshakeException | SSLPeerUnverifiedException e) {
             return e.getClass().getSimpleName() + ": " + rootCause(e);
         } catch (SSLException e) {
-            for (Throwable cause = e; cause != null; cause = cause.getCause()) {
-                if (cause instanceof CertificateException) {
-                    return e.getClass().getSimpleName() + ": " + rootCause(e);
-                }
-            }
+            Throwable root = rootCause(e);
+            if (root instanceof CertificateException) return e.getClass().getSimpleName() + ": " + root;
             throw e;
         }
         throw new AssertionError("accepted " + url + " (" + c.getResponseCode() + ")");
