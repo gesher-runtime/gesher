@@ -1,6 +1,12 @@
 name: aot3-probes
 
 on:
+  push:
+    branches: ['wip/aot3']
+    paths:
+      - '.github/workflows/aot3-probes.yml'
+      - 'tests/windows/aot3-startup-probe.ps1'
+      - 'tests/windows/tracks/64-aot3-boot-profile.ps1'
   workflow_dispatch:
     inputs:
       source_run:
@@ -15,6 +21,12 @@ on:
 permissions:
   contents: read
   actions: read
+
+# The first branch-only workflow cannot be dispatched until it exists on main.
+# Push probes explicitly use this completed, recorded runtime build.
+env:
+  SOURCE_RUN: ${{ inputs.source_run || '40403284714' }}
+  SOURCE_SHA: ${{ inputs.source_sha || 'e928eec662f9763d3d102661ab1b11908f5791d4' }}
 
 concurrency:
   group: aot3-probes-${{ github.ref }}
@@ -34,8 +46,6 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ inputs.source_run }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           if ($env:SOURCE_RUN -notmatch '^\d+$' -or $env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Invalid source run/SHA' }
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
@@ -57,63 +67,63 @@ jobs:
           name: windows-x64
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: framework
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: native-libs
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: graphics
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: angle
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: arm64
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: boot-image
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: webview
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - uses: actions/download-artifact@v4
         with:
           name: exec
           path: dist
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ env.SOURCE_RUN }}
 
       - name: Record the actual startup profile through ART and profman
         shell: pwsh

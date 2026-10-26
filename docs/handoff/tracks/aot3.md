@@ -43,6 +43,9 @@ CI build artifacts (exact source SHA and all supplying build jobs checked).
 It reuses the suite's actual helper definitions and track 64, without a
 local runtime/build or unrelated test bodies. Probe results are startup
 evidence only, not a full-CI/merge or performance claim.
+Initial workflow dispatch returned HTTP404 because the new workflow is not
+on the default branch. Its explicit branch/path push trigger uses recorded
+source run 40403284714/e928eec for development; no main change is needed.
 
 Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
 current integration f520fd1; the sole new collector change enables its
