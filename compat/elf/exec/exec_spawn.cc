@@ -57,6 +57,24 @@ bool IsShName(const std::string& name) {
          name == "/vendor/bin/sh";
 }
 
+// The tool name of a bare name or a /system/bin path, or "".
+std::string ToolName(const std::string& name) {
+  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
+                                       "ps",      "pm",      "kill",   "sleep", "toybox"};
+  std::string base = name;
+  for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
+    if (name.rfind(dir, 0) == 0) {
+      base = name.substr(std::strlen(dir));
+      break;
+    }
+  }
+  if (base == name && name.find('/') != std::string::npos) return "";
+  for (const char* t : kTools) {
+    if (base == t) return base;
+  }
+  return "";
+}
+
 // The directories of PATH: ';'-separated on Windows; a Linux-style ':' list
 // is accepted too (a drive letter's colon is not a separator there).
 std::vector<std::wstring> PathDirectories() {
@@ -111,6 +129,9 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
     // ELF64, little-endian, EM_X86_64 or EM_AARCH64 (run by the arm64
     // translator, docs/arm64.md): anything else is not runnable here.
     if (h[4] != 2 || h[5] != 1 || (h[18] != 62 && h[18] != 183) || h[19] != 0) return kENOEXEC;
+    // A static executable (ET_EXEC) makes Linux system calls itself: not
+    // runnable on Windows (ADR 0055).
+    if (h[16] == 2 && h[17] == 0) return kENOEXEC;
     launch->kind = "elf";
     launch->application = LauncherPath();
     launch->command_line.clear();
@@ -309,9 +330,9 @@ std::wstring LauncherPath() {
 
 namespace {
 
-int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch) {
-  if (argv.empty() || argv[0].empty()) return kENOENT;
-  const std::string& prog = argv[0];
+int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv, const std::string& dir,
+                   int depth, bool search, Launch* launch) {
+  if (argv.empty() || prog.empty()) return kENOENT;
   if (IsShName(prog)) {
     launch->kind = "sh";
     launch->application = LauncherPath();
@@ -321,8 +342,20 @@ int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int 
     AppendArgs(&launch->command_line, argv, 1);
     return Finish(launch);
   }
+  std::string tool = ToolName(prog);
+  if (!tool.empty() && (search || prog.find('/') != std::string::npos)) {
+    // Android's /system/bin programs that gesher-exec provides (docs/exec.md).
+    launch->kind = "tool";
+    launch->application = LauncherPath();
+    launch->command_line.clear();
+    AppendQuoted(&launch->command_line, launch->application);
+    launch->command_line += L" --tool ";
+    AppendQuoted(&launch->command_line, Widen(tool));
+    AppendArgs(&launch->command_line, argv, 1);
+    return Finish(launch);
+  }
   std::string head;
-  if (prog.find_first_of("/\\") != std::string::npos) {
+  if (!search || prog.find_first_of("/\\") != std::string::npos) {
     std::wstring path = WindowsPath(prog, dir);
     int r = Probe(path, &head);
     if (r != 0) return r;
@@ -353,10 +386,116 @@ int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int 
   return seen;
 }
 
+int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch) {
+  if (argv.empty()) return kENOENT;
+  return PrepareProgram(argv[0], argv, dir, depth, true, launch);
+}
+
 }  // namespace
 
 int PrepareLaunch(const std::vector<std::string>& argv, const std::string& dir, Launch* launch) {
   return PrepareAt(argv, dir, 0, launch);
+}
+
+int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
+                         const std::string& dir, bool search_path, Launch* launch) {
+  return PrepareProgram(program, argv, dir, 0, search_path, launch);
+}
+
+bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
+
+DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
+                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info) {
+  int count = 3;
+  for (const ChildFd& f : fds) {
+    if (f.fd >= count) count = f.fd + 1;
+  }
+  // The block's size is a WORD: 4 + 9 bytes per fd.
+  if (count > 7000) return ERROR_TOO_MANY_OPEN_FILES;
+  std::vector<HANDLE> by_fd(static_cast<size_t>(count), nullptr);
+  std::vector<HANDLE> owned;  // inheritable duplicates, closed after the call
+  auto inheritable = [&](HANDLE h) -> HANDLE {
+    HANDLE dup = nullptr;
+    if (h == nullptr || h == INVALID_HANDLE_VALUE ||
+        !DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
+      return nullptr;
+    }
+    owned.push_back(dup);
+    return dup;
+  };
+  for (const ChildFd& f : fds) {
+    if (f.fd >= 0 && f.fd < count) by_fd[static_cast<size_t>(f.fd)] = inheritable(f.handle);
+  }
+  for (int i = 0; i < 3; ++i) {
+    if (by_fd[static_cast<size_t>(i)] == nullptr) {
+      SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
+      HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, 0, nullptr);
+      if (nul != INVALID_HANDLE_VALUE) {
+        owned.push_back(nul);
+        by_fd[static_cast<size_t>(i)] = nul;
+      }
+    }
+  }
+  // The UCRT's inherited-fd block: int count, count flag bytes, count handles.
+  constexpr unsigned char kFopen = 0x01, kFpipe = 0x08, kFdev = 0x40;
+  std::vector<unsigned char> block(sizeof(int) + static_cast<size_t>(count) * (1 + sizeof(intptr_t)), 0);
+  std::memcpy(block.data(), &count, sizeof(int));
+  for (int i = 0; i < count; ++i) {
+    HANDLE h = by_fd[static_cast<size_t>(i)];
+    unsigned char flags = 0;
+    intptr_t value = -1;
+    if (h != nullptr) {
+      DWORD type = GetFileType(h);
+      flags = kFopen | (type == FILE_TYPE_PIPE ? kFpipe : 0) | (type == FILE_TYPE_CHAR ? kFdev : 0);
+      value = reinterpret_cast<intptr_t>(h);
+    }
+    block[sizeof(int) + static_cast<size_t>(i)] = flags;
+    std::memcpy(block.data() + sizeof(int) + static_cast<size_t>(count) + static_cast<size_t>(i) * sizeof(intptr_t),
+                &value, sizeof(intptr_t));
+  }
+  std::vector<HANDLE> inherit;
+  for (HANDLE h : by_fd) {
+    if (h != nullptr && std::find(inherit.begin(), inherit.end(), h) == inherit.end()) inherit.push_back(h);
+  }
+  auto close_owned = [&] {
+    for (HANDLE h : owned) CloseHandle(h);
+  };
+  SIZE_T size = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+  std::vector<char> storage(size);
+  auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &size)) {
+    DWORD e = GetLastError();
+    close_owned();
+    return e;
+  }
+  if (!inherit.empty() &&
+      !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit.data(),
+                                 inherit.size() * sizeof(HANDLE), nullptr, nullptr)) {
+    DWORD e = GetLastError();
+    DeleteProcThreadAttributeList(attributes);
+    close_owned();
+    return e;
+  }
+  STARTUPINFOEXW si = {};
+  si.StartupInfo.cb = sizeof(si);
+  si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  si.StartupInfo.hStdInput = by_fd[0];
+  si.StartupInfo.hStdOutput = by_fd[1];
+  si.StartupInfo.hStdError = by_fd[2];
+  si.StartupInfo.cbReserved2 = static_cast<WORD>(block.size());
+  si.StartupInfo.lpReserved2 = block.data();
+  si.lpAttributeList = attributes;
+  std::wstring cmd = launch.command_line;
+  DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
+  BOOL ok = CreateProcessW(launch.application.c_str(), cmd.data(), nullptr, nullptr, inherit.empty() ? FALSE : TRUE,
+                           flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(),
+                           &si.StartupInfo, info);
+  DWORD e = ok ? 0 : GetLastError();
+  DeleteProcThreadAttributeList(attributes);
+  close_owned();
+  return e;
 }
 
 DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring& cwd, HANDLE std_in,
@@ -446,6 +585,12 @@ int ExitStatus(DWORD code) {
     default:
       return static_cast<int>(code);
   }
+}
+
+int WaitStatus(DWORD code) {
+  int status = ExitStatus(code);
+  if (status > 128 && status < 128 + 32) return status - 128;  // WIFSIGNALED, WTERMSIG
+  return (status & 0xff) << 8;                                 // WIFEXITED, WEXITSTATUS
 }
 
 }  // namespace gesher::exec
