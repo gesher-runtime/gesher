@@ -67,8 +67,13 @@ Java test sources compile locally with JDK 21 against the saved framework
 classes; PowerShell parses; the patch applies to the pinned source. No
 AOSP build was run locally; all C++/NDK linking and runtime checks await CI.
 
-The complete ownership inventory is still outstanding. Read ci 40296960603's
-`INFO native2 ... ndk:*` lists (jobs 121487355022 and 121487354891), record
-each remaining symbol's implementation owner, then continue the common-shim
-and filesystem items above. Review logs are available locally in
-C:\work\gesher-ci-review; no artifacts were downloaded.
+The baseline ownership inventory is now recorded in
+`docs/handoff/native-api-coverage.json`, parsed from both runners in ci
+40296960603 (jobs 121487355022 and 121487354891). Its 56 ABI/library/runner
+records contain 1,157 distinct missing export names: 818 assigned to native3,
+313 to media3, 25 to surfaces2 (ADR 0063 reserved on integration) and one to
+exec3. This records baseline symbol presence only, not semantic coverage or
+the status of later branch implementations. Keep each baseline entry open
+until an implementation has its own relevant CI evidence. Continue the
+common-shim and filesystem items above; do not equate the bitmap slice with
+complete NDK coverage. No artifacts were downloaded.
