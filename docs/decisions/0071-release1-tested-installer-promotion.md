@@ -35,8 +35,9 @@ The workflow defaults to a dry run; only the coordinator requests publication.
 
 ## Verification and open gates
 
-Offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
+Twenty-seven offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
 required steps, mismatched artifacts/receipts and safe existing tag/release
-handling. Version selection tests retain normal numbering and reject malformed
+handling, both complete archive downloads/extractions and corruption of either
+archive. Version selection tests retain normal numbering and reject malformed
 release overrides. Full branch CI with the exact 0.1.0 override, successful main
 CI, actual promotion and released-byte verification remain pending.

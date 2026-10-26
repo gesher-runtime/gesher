@@ -1,9 +1,11 @@
 """Exercise publication decisions with an in-memory GitHub; never contact GitHub."""
 import copy
+import hashlib
 import io
 import json
 import sys
 import urllib.error
+import zipfile
 from email.message import Message
 from pathlib import Path
 import unittest
@@ -28,6 +30,7 @@ class FakeGitHub:
         self.bytes = {}
         self.mutations = []
         self.public_links = []
+        self.artifact_archives = {}
         self.corrupt_upload = False
         self.red_after_upload = False
 
@@ -83,6 +86,9 @@ class FakeGitHub:
         return asset
 
     def download(self, path, target, size):
+        if path.startswith("/actions/artifacts/"):
+            Path(target).write_bytes(self.artifact_archives[int(path.split("/")[-2])])
+            return
         identifier = int(path.rsplit("/", 1)[1])
         name = next(a["name"] for a in self.item["assets"] if a["id"] == identifier)
         Path(target).write_bytes(self.bytes[name])
@@ -104,6 +110,43 @@ class PromotionTests(unittest.TestCase):
 
     def promote(self):
         return p.promote(self.client, 123, SHA, self.candidate, self.notes, self.root / "existing")
+
+    def source_archives(self):
+        def build(item, names):
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                for name in names:
+                    archive.writestr(name, (self.candidate / name).read_bytes())
+            value = output.getvalue()
+            self.client.artifact_archives[item["id"]] = value
+            item.update(size_in_bytes=len(value), digest="sha256:" + hashlib.sha256(value).hexdigest())
+        build(self.client.installer, [g.INSTALLER])
+        self.manifest["artifact"]["digest"] = self.client.installer["digest"]
+        self.write_manifest()
+        build(self.client.receipt, [g.MANIFEST, "SHA256SUMS"])
+
+    def test_prepare_consumes_both_exact_archives_and_preserves_installer_bytes(self):
+        self.source_archives()
+        target = self.root / "prepared"
+        run, installer, receipt, assets = p.prepare(self.client, 123, SHA, target)
+        self.assertEqual((run["id"], installer["id"], receipt["id"]), (123, 11, 12))
+        self.assertEqual(set(assets), {g.INSTALLER, g.MANIFEST, "SHA256SUMS"})
+        for name in assets:
+            self.assertEqual((target / name).read_bytes(), (self.candidate / name).read_bytes())
+        self.assertEqual(self.client.mutations, [])
+        self.assertFalse(list(self.root.glob("gesher-release-download-*")))
+
+    def test_prepare_refuses_either_corrupt_archive_and_cleans_only_temporary_files(self):
+        self.source_archives()
+        for identifier in (11, 12):
+            original = self.client.artifact_archives[identifier]
+            self.client.artifact_archives[identifier] = b"X" + original[1:]
+            with self.subTest(artifact=identifier), self.assertRaisesRegex(g.Refused, "archive size/digest"):
+                p.prepare(self.client, 123, SHA, self.root / str(identifier))
+            self.client.artifact_archives[identifier] = original
+            self.assertFalse(list(self.root.glob("gesher-release-download-*")))
+            self.assertTrue((self.candidate / g.INSTALLER).exists())
+        self.assertEqual(self.client.mutations, [])
 
     def test_dry_run_never_mutates(self):
         self.client.allow_write = False

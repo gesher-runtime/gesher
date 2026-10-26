@@ -53,7 +53,7 @@ CI numbering retained, explicit PE metadata, post-smoke manifest/checksum
 receipts, promotion guards and GitHub transport, a dispatch-only main release
 workflow, candidate and released-byte install/run/uninstall verification,
 released-byte real-app e2e on both Windows runners, and release-note source.
-Twenty-five offline test methods (including negative subcases) and the version
+Twenty-seven offline test methods (including negative subcases) and the version
 selection fixture pass. ADR 0071 records the mechanism; [the release
 runbook](../../releases/README.md) gives the coordinator's final commands.
 Remaining: independent review, full branch CI with release_version=0.1.0 after
