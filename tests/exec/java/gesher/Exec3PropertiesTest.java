@@ -49,6 +49,9 @@ public final class Exec3PropertiesTest {
     }
 
     public static void main(String[] args) throws Exception {
+        // Standalone dex runs must register framework natives first. APK runs
+        // already did so through Main.bootstrap in the boot class loader.
+        if (args.length > 1 && args[1].equals("--load-runtime")) System.loadLibrary("android_runtime");
         Class<?> type = Class.forName("android.os.SystemProperties");
         get = type.getMethod("get", String.class);
         set = type.getMethod("set", String.class, String.class);

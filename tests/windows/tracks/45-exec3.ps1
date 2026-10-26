@@ -27,8 +27,8 @@ Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, p
     'Exec3ProcessTest PASS mailbox traps run while stdin is idle and interrupt the read builtin')
 
 Check 'exec3: shared properties through Java, native ELF and tools (read-only, serials, persistence)' {
-  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3PropertiesTest (NoDrive $Dir)
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3PropertiesTest (NoDrive $Dir) --load-runtime
 } @('Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties',
     'Exec3PropertiesTest PASS cached ELF property callbacks and serials observe another process',
     'Exec3PropertiesTest PASS ro properties are write-once and invalid names fail',
