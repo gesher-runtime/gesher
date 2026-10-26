@@ -85,6 +85,12 @@ object with pinned llvm-mingw/-Werror and both NDK library ABIs. Compilation
 and fixture execution are CI-only. The first scoped push has no result yet;
 full CI and dedicated test66 mode assertions remain to be completed.
 
+Scoped run 40419128672 at 9bff75d failed before runtime: the production
+object needed the C++ cstdlib header for std::malloc/free, and GCC rejects
+bionic's Clang-oriented always_inline declaration under -Werror. Both are
+corrected (the reference uses Clang, as bionic does). The NDK compile job
+succeeded; no runtime or full-green verification is claimed.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
