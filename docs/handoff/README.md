@@ -149,6 +149,13 @@ closure, CI, PR description and installer verification gates remain in force.
 The coordinator alone merges integration/main and publishes the release;
 track agents keep their existing branch-only scope.
 
+Local-load follow-up (owner chat, 2026-10-26): C/C++ fixture/compiler
+checks also move to CI. Do not start local C/C++ compilations, even for
+small Gesher-only fixtures; use source inspection/edits and lightweight
+script checks locally. The coordinator and agents checked the process list
+after the report and found no remaining compiler process. The earlier
+local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
 ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
@@ -237,6 +244,16 @@ needed. Unicode classification/case conversion and Process proc parsing are
 scoped closures; wide widths/collation, binary128 libm, other NDK/POSIX and
 native-only font contracts remain on native3.
 
+Install-time cloud profiles are merged as 6dc3f03: full ci 40408733247 at
+05ca072cad7a23d83403a0c039d47d4fec0c07b5, attempt 1. Personally read all
+28 jobs (22 success/six skipped), all 16 aot3 PASS lines per runner, both
+zero-failure summaries, actual installed oatdump/window/input/uninstall
+cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures).
+Frozen wip/aot3-cloud head b085b7d adds docs only; the merged code equals the
+verified tree, so no additional integration CI is needed for this merge.
+See [the report](tracks/aot3-cloud.md). Shared-library contexts, secondary
+dex and the separately prepared startup supplement remain open on aot3.
+
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | Merged as 4d14466. All 13 track PASS lines per runner, both zero-failure summaries, actual package cleanup and both required TIC-80/Puzzles e2e results read. Remaining contracts assigned to aot3/ADR 0065. | ci 40320549410 at ae75766; head 20650a3 docs only. |
@@ -244,13 +261,14 @@ native-only font contracts remain on native3.
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
 | web3 | Agent read ci 40376044459 at 939ec3: all 14 web3 checks pass each runner; 2025 has zero failures, 2022 has only the BOOT profile-vs-speed JIT failure (452/404 ms). Package/both actual e2e and bounded TLS cleanup pass. Earlier 40364697280 timed out in 2025 TLS cleanup and has no zero summary there. | Not mergeable. Root owns repeated boot startup diagnosis; no timing waiver. Remaining WebView contracts belong to web4/ADR 0072 and resolver/socket contracts to net4/ADR 0070. |
-| media3 | Agent read ci 40377453079 at ad00461: both Windows suites have exactly one failure, device Camera2-to-recorder frames (20/27 versus unchanged 30+ in 2 s); package/both ten-app e2e pass. Native timing distinguishes active read/delivery from a demonstrated terminal callback/client-lock cycle. | ci 40386129131 at 6293a20 tests serial oneway callbacks, capture-handle ownership, onClosed ordering and separate native phase timings; pending. No FPS/crash causal claim. Remaining media contracts stay on media4/ADR 0064. |
-| exec3 | Agent read ci 40372171824: builds/package/both e2e pass; three property fixture namespace failures each and 2022 device exits after expected steps with SIGSEGV address -1. Namespace/boot-root regressions are corrected; actual native fault cause remains open. | ci 40385411337 at 80bf394 includes bounded ffmpeg preparation and narrow pre-handler fault diagnostics. Superseded 40382268730 spent 16 minutes in unbounded media preparation without Windows results, then was cancelled. |
+| media3 | Agent read ci 40402212195 at 6c76a90: 35 scoped PASS lines per runner, exactly one camera FPS failure each; actual package and both ten-app e2e pass. JNI trace measures 157-242 ms/CPU0 in ScopedObjectAccess entry, versus 15-19 us in the copy body. Actual ART cancellation/flush race and all onClosed ordering checks pass. | Deeper bounded suspend/flip diagnostics are being prepared in ART 0591/0592; no specific barrier/flip cause is claimed. The unchanged 30+ frames/2 s gate remains open; other media contracts remain on media4/ADR 0064. |
+| exec3 | Agent fully read ci 40405306826 at 87d5ada: all 28 jobs success/skipped, both zero summaries, every exec3 check and actual ART camera-race/device checks, actual package and both e2e pass. This is combined runtime evidence after camera ownership changes, not proof of a specific earlier ntdll fault cause. | Final ci 40410489251 at 51bbfac tests the narrow default-tag liblog follow-up plus f520; pending. Combined integration with cloud profiles must be verified under rule g before a further track merge. |
 | native3 foundation | Merged as f677944; all four dalvikvm and four APK scoped PASS lines per runner, both zero-failure summaries, package cleanup and both required Puzzles/TIC-80 e2e logs personally read. Remaining scope continues on wip/native3. | ci 40344682373 at 1e881b5, attempt 2; frozen head 8b511a8 adds docs only. |
 | native3 continuation | Merged as 117629e after personally reading all jobs, both zero-failure summaries, full-code-point pinned Unicode parity, both ABI/APK modes, package cleanup and both required e2e logs. Remaining native3 contracts stay open. | ci 40386670586 at 6f6ac6f, attempt 1; head 9ba4bff docs only. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
 | aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |
-| aot3 continuation | ci 40389331018 at 31adc99 passes all 11 cloud-profile checks on both runners and compiles framework patch 0650. Each suite fails only the new startup collector's unsupported argument; it is removed. The combined source includes 117629e, bounded TLS cleanup and portable media preparation. | ci 40403284714 at e928eec; pending. Boot performance diagnosis remains open, thresholds unchanged. Shared-library contexts and secondary dex remain open. |
-| windows4 | Agent continues Application-context display/foreground task snapshots, real InputPane COM callbacks and TSF reconversion. First display run 40377891527 has upstream asm fetch HTTP502 and a real display cache nonce failure in both e2e Signal Generator runs; no waiver. | Subsequent COM/TSF/legacy-resize source has only own local fixtures so far; real display cache correction and combined CI remain required. |
+| aot3 continuation | Cloud stage merged as 6dc3f03 after root full verification of ci 40408733247 at 05ca072; frozen b085b7d docs only. Actual startup collection also passes independently on both runners in aot3-probes 40410450314, with exact artifact provenance. | Later wip/aot3 source prepares 1971 observed framework/core boot methods and 177 declaring classes, retaining original size/timing gates. Not yet compiled/verified. Shared-library contexts and secondary dex remain open. |
+| native3 width/CPU | Locked width oracle ci 40404677936 at 581e88f is fully read/green, including the old 14 digests and new full-code-point width digest/33 rows. Independent static reviews of width and later CPU clock source found no additional issue. | Full width ci 40404678100 at 581e88f is pending; frozen wip/native3-width excludes later ART CPU-clock patch 0572/95357af, which still needs CI. Non-current pthread clock selection and descriptor-inheritance diagnostics remain explicitly open on native3. |
+| windows4 | Diagnostic full ci 40396019963 at ed94b87 has 14/12 Windows failures in IME/display; package and both e2e pass. Subsequent COM/ACP/TSF epoch/ownership/geometry regressions are clean in actual fast ci 40411795761 at 828dc87 on both runners, with zero raw FAIL and all three native aggregates zero. | Combined full diagnostic 40413109702 at 74d1346 is pending. Real Android/JNI/IME/legacy resize still require runtime evidence; no full-green claim from standalone native fixtures. |
 | release1 | Exact 0.1.0 installer metadata/receipts and CI-only byte promotion prepared. Independent review reproduced/fixed mutable local receipt trust and candidate/publisher attempt drift; all 34 offline tests pass at reviewed 8073a31. | No tag/release/publication. Full branch installer/release CI waits for verified integration/web3; all final gap gates still apply. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
