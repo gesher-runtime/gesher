@@ -74,6 +74,9 @@ jobs:
         run: |
           llvm="$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64"
           for triple in x86_64-linux-android aarch64-linux-android; do
+            echo "Pinned NDK scalar ABI: $triple"
+            "$llvm/bin/${triple}29-clang++" -dM -E -x c++ /dev/null |
+              grep -E '^#define (__CHAR_UNSIGNED__|__WCHAR_UNSIGNED__|__WCHAR_MAX__|__LONG_MAX__|__SCHAR_MAX__) '
             "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 \
               -fstack-protector-strong -Wall -Werror -Wl,-soname,libnative2.so \
               -o "/tmp/$triple.so" tests/native2/native2_test.cpp \
