@@ -198,6 +198,15 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
+CI 40385411337 verifies the complete shared property and log suites in
+standalone ART and both APK modes, including scratch-root ProcessBuilder,
+explicit Java reports, serial/wait ABI, boot/persist and live logcat clear/follow.
+The complete single-process APK passes. Installed pm stops at an incorrect
+logical-image existence probe, now corrected locally; pm/am runtime proof and
+the post-steps devices SIGSEGV cause remain open. The existing native context
+was captured but hidden by the test helper's path/filter error; a publication-
+only correction is prepared and locally verifies the original fatal exit.
+
 CI 40372171824 passes the 57 shell cases, process/TLS suites, readiness,
 standalone Java/NDK logcat, unchanged windows3 and all build/package/e2e jobs.
 Its complete property/APK/pm-am checks stop at a readonly fixture-name collision,
