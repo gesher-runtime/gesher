@@ -347,6 +347,10 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Merged integration 4f99afd (surfaces, ci 40307919084 attempt 2) before
+  the combined UIA host-id/TLS fixture verification run. Both the surfaces
+  window integration and the diagnostic capture worker remain present.
+  Dispatch pending; no accessibility checkbox is closed yet.
 - ci 40309961504 at e3209d6: package/e2e pass; the two external UIA checks
   still fail on both runners. Its bounded provider trace shows repeated
   embedded-HWND override searches with every Android node reporting no
