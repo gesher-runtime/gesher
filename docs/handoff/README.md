@@ -141,6 +141,18 @@ Merged so far:
 
 ### Lead-engineer continuation (2026-10-26)
 
+Current owner authorization (2026-10-26, explicit chat instruction): the
+owner preauthorized merges to main and made the final deliverable a published
+**0.1.0 release with a working Windows installer**. This supersedes the
+earlier requirement to ask and wait before the final main merge. All gap
+closure, CI, PR description and installer verification gates remain in force.
+The coordinator alone merges integration/main and publishes the release;
+track agents keep their existing branch-only scope.
+
+Release preparation belongs to release1, ADR 0071
+([brief](tracks/release1.md)). No release/tag is published yet. Next free
+ADR is 0072; earlier reservation notes below are historical.
+
 The handover tables below are historical. windows3 is now merged as 80cb28b:
 code verified at a15ade4 (ci 40285476400), branch head 063b051 adds docs only.
 All 17 windows3 checks pass on each Windows runner, both summaries say
@@ -226,8 +238,9 @@ downloaded). No roadmap box was ticked for the new, unverified fixes.
 Current open-track runs include native2/surfaces, but must include the new
 aot2 integration before final verification. The WebView capture fix is now
 merged through aot2 and was also cherry-picked into web3. Do not merge
-any red or partially inspected run. No main merge or final PR is authorized
-until every gap is closed and the owner explicitly approves that PR in chat.
+any red or partially inspected run. The final PR/main merge and release must
+wait for gap closure and full verification; the owner's later explicit
+advance approval above satisfies the chat-approval gate.
 
 The continuation briefs own aot2's shared-library class-loader contexts,
 cloud profiles, secondary dex and oatdump (aot3), and media3's legacy camera
@@ -419,7 +432,9 @@ posix), `compat/posix/src/signal.cc` (stack and posix), `tools/package/*`,
 - **Keep going without asking** until the goal: a complete, ready installer
   with every gap closed.
 - **Honest reports**: tick roadmap boxes only for what CI verified.
-- **Merging to `main` only with the owner's explicit approval**, each time.
+- **Main merges and the final 0.1.0 release are explicitly preauthorized**
+  by the owner in chat on 2026-10-26. Keep all verification gates and the
+  coordinator's sole merge/release responsibility; do not ask again.
 - Never touch `C:\work\gesher-backup-2026-10-23`.
 - A word-based network filter (NetFree) sometimes blocks text or requests:
   rephrase, or write the text to a file.
