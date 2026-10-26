@@ -205,6 +205,13 @@ first agent ran on an older model and was replaced per the all-Opus rule._
 - Running: ci 40311734733 at 8c90ac2, including integration 91c195d/native2.
   Check both shell suites through the real launcher/ART, all existing track
   checks, package and e2e. The implementation below still has open scope.
+- Follow-up prepared while that run is in progress: ExecTest now expects a
+  working pipe instead of the removed shell's unsupported-operation error.
+  Exec3ProcessTest uses the existing NDK signal-loop child to assert that
+  Java destroy runs its SIGTERM handler (43), destroyForcibly returns 137,
+  ps includes its real pid, and the kill tool reaches its handler. Binary cat
+  and elapsed sleep checks are included. Java --release 11 compilation and
+  PowerShell parsing pass locally; these new checks are not CI-verified yet.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
