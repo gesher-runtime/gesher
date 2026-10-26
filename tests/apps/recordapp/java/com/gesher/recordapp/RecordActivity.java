@@ -113,6 +113,12 @@ public class RecordActivity extends Activity {
     // --- Signals -----------------------------------------------------------------------
 
     void mediaSession() throws Exception {
+        try {
+            Class.forName("android.media.MediaCommunicationManager", false, MediaSession.class.getClassLoader());
+            say("session2 manager class present true");
+        } catch (ClassNotFoundException e) {
+            say("session2 manager class present false (legacy sessions must still work)");
+        }
         HandlerThread thread = new HandlerThread("RecordSessionCallbacks");
         thread.start();
         Handler handler = new Handler(thread.getLooper());
