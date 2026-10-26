@@ -32,6 +32,13 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
+// After a successful write to `fd` (fd.cc's write, pwrite): IN_MODIFY for the
+// inotify watches on the file or its directory in this process at once, as
+// Linux reports each write; NTFS tells ReadDirectoryChangesW only when it
+// updates the directory entry, often at close (inotify.cc, ADR 0057). Cheap
+// when no inotify instance exists.
+void InotifyNoteWrite(int fd);
+
 // The bottom of the current thread's stack that Windows keeps for itself:
 // the lowest page, never committed, and the stack guarantee above it (two
 // pages by default on x64, or what SetThreadStackGuarantee set). Touching

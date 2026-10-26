@@ -86,33 +86,48 @@ Excluded by name (gtest filter in `21-posix.ps1`):
   they expect a private barrier to fail with `EPERM` before registration;
   Gesher's `art::membarrier` (patch `0014`, FlushProcessWriteBuffers) treats
   registration as a no-op.
-- `ScopedFlockTest.TestLocking`: ART's `LockedFile` returns "flock is
-  unsupported on Windows" under `_WIN32`, and Gesher keeps that (it takes
-  part in oat and profile file handling).
 
 - `ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile`: reads
   `art-gtest-jars-VerifierDeps.dex`, which is assembled from smali; the build
   has no smali assembler.
-- `ArtDexFileLoaderTest.GetDexCanonicalLocation`: expects the location of a
-  symbolic link to resolve to its target; ART's `DexFileLoader` skips
-  `realpath` under `_WIN32` (`dex_file_loader.cc`), and Gesher keeps that, as
-  changing dex locations would touch oat and boot image matching.
+
+## flock, ScopedFlock and links in dex locations (native2)
+
+The native2 track ([ADR 0057](decisions/0057-native2-shim-and-filesystem.md))
+closed three of this layer's leftovers:
+
+- `flock` (`<sys/file.h>`, `src/system.cc`) over `LockFileEx` on one byte at
+  offset 2^63 - 2, which blocks only other locks (Windows' locks are
+  mandatory: one over the data would block other handles' I/O). A lock
+  belongs to the open file object, shared by `dup`s and dropped with the last
+  handle, like Linux's per open file description; converting a lock drops it
+  first. `patches/art/0571-native2-scoped-flock.patch` turns ART's
+  `LockedFile` (ScopedFlock) on; `ScopedFlockTest.TestLocking` runs.
+- `patches/art/0570-native2-dex-canonical-location-symlinks.patch`:
+  `DexFileLoader::GetDexCanonicalLocation` resolves a location through
+  `realpath` when one of its components is a symbolic link (only then:
+  realpath also normalizes name case and 8.3 names on Windows, which must not
+  move ordinary dex locations); `ArtDexFileLoaderTest.GetDexCanonicalLocation`
+  runs.
+- `stat`'s execute bits and `IN_MODIFY` at the write: below.
 
 ## Known gaps
 
 - NTFS updates a file's directory entry, which `ReadDirectoryChangesW`
-  reports, lazily: `IN_MODIFY` may come only when the writer closes the file,
-  not at each write. `IN_OPEN`, `IN_ACCESS` and `IN_CLOSE_NOWRITE` never come;
-  `IN_MOVE_SELF` only for a watched file; a watched directory moved elsewhere
-  is not reported.
+  reports, lazily, often when the writer closes the file. Writes through this
+  process's `write`/`pwrite` report `IN_MODIFY` at once (native2, ADR 0057);
+  writes by another process still only when NTFS updates the entry.
+  `IN_OPEN`, `IN_ACCESS` and `IN_CLOSE_NOWRITE` never come; `IN_MOVE_SELF`
+  only for a watched file; a watched directory moved elsewhere is not
+  reported.
 - `signal()` is still the CRT's; signal dispositions set with it are not seen
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no
   `[anon:...]` names and its inode/device fields are 0.
-- `stat` reports no execute bit for regular files, yet `access(X_OK)` (so
-  `File.canExecute()`) holds for every existing file: Windows has no execute
-  permission, and apps check `canExecute()` before they start their ELF
-  executables through gesher-exec (docs/exec.md; Puzzles does).
+- Permissions are the read-only attribute only: regular files show
+  `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
+  ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the
+  owner write bit.
 - A change of Windows' zone while a process runs is not seen: libcore caches
   the default zone (Android resets it on `ACTION_TIMEZONE_CHANGED`).
 - `app/build.prop` sets `persist.sys.timezone=UTC`; nothing reads it now (no
@@ -145,9 +160,12 @@ Then merged origin/phase4/integration 2d88915 (locale, net, media, lifecycle);
 ci 40211480836 at e76dde3 is green too (every job; 241 PASS / 0 FAIL on
 both runners, package and e2e).
 
-**Remaining gaps:** see "Known gaps" above; `X_OK` holds for every file while
-`stat` shows no execute bit; DexFileLoader keeps ART's no-realpath on Windows;
-ART's `LockedFile` stays unsupported under `_WIN32`.
+**Remaining gaps:** see "Known gaps" above and the native3 brief. The historical
+execute-bit, symbolic-link dex-location and LockedFile gaps are closed by
+native2 (ci 40296960603, both runners): native file checks pass, as do
+ScopedFlockTest and GetDexCanonicalLocation in ART's 233/120 passing gtests.
+The inotify check proves same-process IN_MODIFY before close; it does not
+close the cross-process notifications gap.
 
 **Pitfalls met:**
 - The Bash tool collapses `\\` to `\` inside commands and heredocs (a `'\\0'`

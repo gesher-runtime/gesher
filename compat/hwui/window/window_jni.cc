@@ -83,6 +83,10 @@ void JNICALL NativeWindow_hide(JNIEnv*, jclass, jlong ptr) {
   Get(ptr)->window()->Hide();
 }
 
+void JNICALL NativeWindow_minimize(JNIEnv*, jclass, jlong ptr) {
+  Get(ptr)->window()->Minimize();
+}
+
 void JNICALL NativeWindow_setTitle(JNIEnv* env, jclass, jlong ptr, jstring title) {
   Get(ptr)->window()->SetTitle(Utf8(env, title));
 }
@@ -287,6 +291,7 @@ const JNINativeMethod kMethods[] = {
     {"nCapture", "(JZ)[I", reinterpret_cast<void*>(&NativeWindow_capture)},
     {"nPresent", "(J)V", reinterpret_cast<void*>(&NativeWindow_present)},
     {"nHide", "(J)V", reinterpret_cast<void*>(&NativeWindow_hide)},
+    {"nMinimize", "(J)V", reinterpret_cast<void*>(&NativeWindow_minimize)},
     {"nSetTitle", "(JLjava/lang/String;)V", reinterpret_cast<void*>(&NativeWindow_setTitle)},
     {"nSetResizable", "(JZ)V", reinterpret_cast<void*>(&NativeWindow_setResizable)},
     {"nSetClientSize", "(JII)V", reinterpret_cast<void*>(&NativeWindow_setClientSize)},
