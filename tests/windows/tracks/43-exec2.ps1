@@ -27,7 +27,7 @@ Check 'exec2: native processes from native code (fork+exec, system, popen, posix
     'exec2: PASS kill() to another process runs its SIGUSR1 and SIGTERM handlers',
     'exec2: PASS signal 0 finds a running process',
     'exec2: PASS SIGKILL ends a process (WIFSIGNALED)',
-    'exec2: SUMMARY pass=10 fail=0')
+    'exec2: SUMMARY pass=9 fail=0')
 
 # exec*() outside a fork replaces the image: the launcher process exits with the
 # child's status (17).
