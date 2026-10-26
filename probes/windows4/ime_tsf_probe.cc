@@ -2,12 +2,32 @@
 #include <windows.h>
 #include <objbase.h>
 #include <cstdio>
+#include <atomic>
+#include <cstdlib>
 #include <functional>
 #include <memory>
+#include <new>
 #include <string>
 #include <vector>
 #include "ime.h"
 #include "text_service.h"
+
+// Observe deletion of one native owner without retaining it or adding a
+// production lifetime callback. All allocations keep the normal malloc/free
+// pairing in this standalone native fixture.
+namespace {
+std::atomic<void*> observed_owner{nullptr};
+std::atomic<int> owner_deletions{0};
+}
+void* operator new(std::size_t size) {
+  if (void* memory = std::malloc(size != 0 ? size : 1)) return memory;
+  throw std::bad_alloc();
+}
+void operator delete(void* memory) noexcept {
+  if (memory != nullptr && memory == observed_owner.load()) ++owner_deletions;
+  std::free(memory);
+}
+void operator delete(void* memory, std::size_t) noexcept { ::operator delete(memory); }
 
 // This fixture exercises TSF, not the key map or the touch keyboard service.
 namespace gesher::input {
@@ -15,6 +35,7 @@ bool KeyEventTypes(int32_t, int32_t, int32_t, uint32_t) { return false; }
 int32_t ShowTouchKeyboard(void*, bool) { return 0; }
 // Friend inspection does not retain the wrapper whose ownership is tested.
 struct TextServiceProbeAccess {
+  static void* Owner(ImeWindow* window) { return window->impl_; }
   static TextStore* Store(TextService* service) { return service->store_; }
   static ITextStoreACPSink* Sink(TextStore* store) { return store->sink_; }
   static bool Focused(TextService* service) {
@@ -223,7 +244,16 @@ int main() {
   Editor(window, 1);
   Check(ime->RunTextServiceTest() == S_OK,
       "a new native connection starts a fresh editor epoch lifecycle");
-  ime.reset(); Drain(); DestroyWindow(window); CoUninitialize();
+  ime.reset(); Drain();
+  Editor(window, 12);
+  observed_owner.store(TextServiceProbeAccess::Owner(ime.get()));
+  owner_deletions.store(0);
+  DestroyWindow(window); Drain();
+  ime.reset();
+  Check(owner_deletions.load() == 1,
+      "DestroyWindow before connection release frees the native owner exactly once after WM_NCDESTROY");
+  observed_owner.store(nullptr);
+  CoUninitialize();
   std::printf("%d windows4 IME TSF check(s) failed\n", failures);
   return failures;
 }

@@ -106,6 +106,7 @@ struct ImeWindow::Impl {
   // The procedure could not be restored (another subclass is on top): pass
   // everything on.
   bool detached = false;
+  std::atomic<bool> window_destroyed{false};
   // The watch on the window's thread (thread_watch.h); null when none.
   std::atomic<ThreadWatch*> watch{nullptr};
 
@@ -562,6 +563,7 @@ struct ImeWindow::Impl {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original_proc));
         RemovePropW(hwnd, kProp);
         detached = true;
+        window_destroyed.store(true);
         ResetTextService();
         return CallWindowProcW(original_proc, hwnd, msg, wparam, lparam);
       }
@@ -642,9 +644,15 @@ ImeWindow::~ImeWindow() {
   // nested COM callback detached the window. Its worker can stop immediately.
   impl_->retired_watch = watch;
   RetireThreadWatch(watch);
+  // WM_NCDESTROY has already removed this procedure/property, or there is no
+  // window left to call it. Active procedure leases still protect any outer
+  // callback; release the connection's owner reference even after HWND reuse.
+  if (impl_->window_destroyed.load() || !IsWindow(hwnd)) {
+    impl_->Release();
+    return;
+  }
   DWORD_PTR result = 0;
-  if (IsWindow(hwnd) &&
-      SendMessageTimeoutW(hwnd, DetachMessage(), 0, reinterpret_cast<LPARAM>(impl_),
+  if (SendMessageTimeoutW(hwnd, DetachMessage(), 0, reinterpret_cast<LPARAM>(impl_),
                           SMTO_NORMAL | SMTO_ABORTIFHUNG, 5000, &result) != 0 &&
       result == 1) {
     impl_->Release();
