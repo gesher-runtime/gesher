@@ -284,6 +284,11 @@ void WideFloatingContracts(Double to_double, Float to_float, Check check) {
   const wchar_t* rounded = L"16777217!";
   check(to_float(rounded, &end) == 16777216.0f && to_double(rounded, &end) == 16777217.0 &&
             end == rounded + 8, "binary32 rounds directly");
+  const wchar_t* above_halfway =
+      L"1.0000000596046447753906250000000000000000000000000000000000000000000000000000000000001!";
+  check(to_float(above_halfway, &end) == 0x1.000002p0f && *end == L'!' &&
+            to_double(above_halfway, &end) == 0x1.000001p0 && *end == L'!',
+        "binary32 conversion avoids double rounding at halfway");
   std::wstring long_float(600, L'0');
   long_float += L"1.25e2!";
   check(to_double(long_float.c_str(), &end) == 125 && end == long_float.c_str() + 606,

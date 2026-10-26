@@ -46,7 +46,9 @@ Parse wide integers directly with fixed 64-bit arithmetic. Preserve bionic's
 base-0/hex/binary rules, unsigned negation, saturation/ERANGE and full-width
 end pointers; long, long long and intmax variants share their LP64 entries.
 Floating parsing uses the pinned wide whitespace/candidate alphabet and an
-unbounded ASCII buffer before binary32/binary64 conversion. Binary128
+unbounded ASCII buffer and explicit host C numeric locale before direct
+binary32/binary64 conversion. A decimal just above a binary32 halfway value
+checks that the float path does not round through double. Binary128
 precision is a separate open contract; the existing narrowed wcstold path
 is not claimed as fixed.
 
