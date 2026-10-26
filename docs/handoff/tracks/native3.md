@@ -75,10 +75,13 @@ are verified by that full CI run.
 The baseline ownership inventory is now recorded in
 `docs/handoff/native-api-coverage.json`, parsed from both runners in ci
 40296960603 (jobs 121487355022 and 121487354891). Its 56 ABI/library/runner
-records contain 1,157 distinct missing export names: 818 assigned to native3,
-313 to media3, 25 to surfaces2 (ADR 0063 reserved on integration) and one to
-exec3. This records baseline symbol presence only, not semantic coverage or
-the status of later branch implementations. Keep each baseline entry open
-until an implementation has its own relevant CI evidence. Continue the
+records contain 1,157 distinct missing export names. Current owners are native3
+(808), media3 (313), surfaces2 (25, ADR 0063), web3 (seven networking exports)
+and exec3 (four log/property/bootstrap exports). The four baseline bitmap
+exports now cite ci 40305973210; the launcher-only __libc_init context cites
+ci 40296960603 without claiming arbitrary-library dlsym availability.
+All other entries remain unverified until they have relevant CI evidence.
+Root coordinates property APIs with exec3 and socket/DNS files with web3;
+do not implement those in parallel here. Continue the
 common-shim and filesystem items above; do not equate the bitmap slice with
 complete NDK coverage. No artifacts were downloaded.

@@ -8,7 +8,7 @@
     }
   },
   "scope": "The NDK symbol lists printed by native2. This is symbol presence, not semantic or complete API verification.",
-  "status": "Baseline inventory only. Later track implementations need their own CI evidence before these entries are closed.",
+  "status": "Baseline export inventory with per-entry subsequent verification where present. A resolved symbol does not establish unrelated formats, hardware or complete library semantics.",
   "cases": [
     {
       "runner": "windows-2022",
@@ -1655,7 +1655,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_getaddrinfofornetwork",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1667,7 +1667,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_res_cancel",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1679,7 +1679,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_res_nquery",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1691,7 +1691,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_res_nresult",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1703,7 +1703,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_res_nsend",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1715,7 +1715,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_setprocnetwork",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1727,7 +1727,7 @@
     {
       "library": "libandroid.so",
       "symbol": "android_setsocknetwork",
-      "owner": "native3",
+      "owner": "web3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2039,14 +2039,20 @@
     {
       "library": "libc.so",
       "symbol": "__libc_init",
-      "owner": "native3",
+      "owner": "exec3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40296960603,
+        "sha": "d380a3e0190f5b418cfa3ee042691db601092e25",
+        "status": "verified-in-launcher-context",
+        "scope": "PT_INTERP executable bootstrap; availability through dlopen/dlsym in an arbitrary library is not claimed."
+      }
     },
     {
       "library": "libc.so",
@@ -2615,7 +2621,7 @@
     {
       "library": "libc.so",
       "symbol": "__system_property_wait",
-      "owner": "native3",
+      "owner": "exec3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2627,7 +2633,7 @@
     {
       "library": "libc.so",
       "symbol": "__system_property_wait_any",
-      "owner": "native3",
+      "owner": "exec3",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -6798,7 +6804,13 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40305973210,
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
+        "status": "verified-software-bitmaps",
+        "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
+      }
     },
     {
       "library": "libjnigraphics.so",
@@ -6810,7 +6822,13 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40305973210,
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
+        "status": "verified-software-bitmaps",
+        "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
+      }
     },
     {
       "library": "libjnigraphics.so",
@@ -6822,7 +6840,13 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40305973210,
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
+        "status": "verified-software-bitmaps",
+        "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
+      }
     },
     {
       "library": "libjnigraphics.so",
@@ -6834,7 +6858,13 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40305973210,
+        "sha": "e94f760a5a56593187fc8bd1bae77fc716f8ac97",
+        "status": "verified-software-bitmaps",
+        "scope": "Symbol presence on both ABIs/runners plus direct RGBA storage, PNG callback/decode, data space and error tests in dalvikvm and APKs in both modes. Hardware storage remains open."
+      }
     },
     {
       "library": "liblog.so",
