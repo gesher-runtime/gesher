@@ -56,7 +56,7 @@ released-byte real-app e2e on both Windows runners, and release-note source.
 Thirty-four offline test methods (including negative subcases) and the version
 selection fixture pass. ADR 0071 records the mechanism; [the release
 runbook](../../releases/README.md) gives the coordinator's final commands.
-Remaining: independent review, full branch CI with release_version=0.1.0 after
+Remaining: full branch CI with release_version=0.1.0 after
 verified web3 integration, successful full main CI, promotion dry run and the
 coordinator's eventual publication/released-byte verification. The publication
 workflow itself has not run. No tag, release or local artifact download has
@@ -82,7 +82,8 @@ transport, API/receipt/member authentication and safe tag/asset idempotence.
 It found no further actionable issue in that reviewed scope. This does not
 replace actual full CI or publication verification; neither has run yet.
 
-Current verified integration cd0b849 (including the AOT3 oatdump foundation)
+Current verified integration 117629e (including the AOT3 oatdump foundation,
+pinned Unicode parity and Process proc natives)
 is merged into the release branch without conflicts. The release input,
 explicit PE versions, early installer upload and post-smoke receipt remain
 present. All 34 offline guards still pass after this integration update.
@@ -91,3 +92,11 @@ tools and runs installed oatdump against the installed speed-profile framework,
 matching the integrated package smoke. The full release branch CI is still
 held until the coordinator merges verified Web3 and the latest integration;
 the promotion workflow remains undispatched and nothing is tagged/published.
+
+Recovery verification at 7257b5a: all 34 offline guard/promotion tests pass
+again (1.536 seconds), and the version-selection fixture passes. Independent
+review of 8073a31 is complete as recorded above; it has not been replaced by
+an actual candidate/publisher CI run. The branch CI is still held while the
+coordinator resolves the separate full-suite boot-profile failure and merges
+verified Web3. No installer, artifact, tag or release was downloaded or
+published locally.
