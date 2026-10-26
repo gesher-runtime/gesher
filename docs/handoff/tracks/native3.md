@@ -62,6 +62,11 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Full ci 40404678100 at 581e88f and locked-reference ci 40404677936 are
+pending. The former must verify actual Windows width parity, both ABI/APK
+paths and all existing package/e2e gates; the latter must reproduce the
+separately frozen oracle. No roadmap-width box is closed by pending runs.
+
 The Unicode/Process stage below is merged as integration 117629e. This
 continuation starts from 7826cbe (the following README-only milestone).
 Next scope: replace approximate wcwidth/wcswidth with the pinned bionic
