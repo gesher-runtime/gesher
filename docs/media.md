@@ -221,8 +221,15 @@ the microphone (looped, from its start each time recording starts);
 
 ### media3 (stage 3) — continuing, 2026-10-26
 - Running: ci 40318189310 at 9158120f957ea01935d071aa9c80b4791ba673f5,
-  the combined callback/xrun fix plus integration 4f99afd. No result from
-  this run is verified yet. See the [source API boundary inventory](media-api-inventory.md)
+  the combined callback/xrun fix plus integration 4f99afd. All builds and
+  package passed; package job 121573829947's actual output confirms the
+  install/run/uninstall and data/association/toast/Start-menu cleanup checks.
+  Both e2e logs are read: windows-2022 job 121575078161 and windows-2025
+  job 121575078317 each PASS Just Player and required TIC-80, each ends
+  `0 unexpected failures`. Only test jobs 121573830018 (2022) and
+  121573829979 (2025) remain running; callback/xrun runtime verification
+  and the full zero-failure result are still pending.
+  See the [source API boundary inventory](media-api-inventory.md)
   for implemented subsets and remaining reflection stand-ins, and the
   [NDK export baseline](handoff/native-api-coverage.json) for all 313
   unresolved media exports assigned to the follow-up track.
