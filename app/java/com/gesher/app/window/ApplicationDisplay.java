@@ -33,6 +33,15 @@ public final class ApplicationDisplay {
     private ApplicationDisplay() {
     }
 
+    /** Before Application code runs, in every client process including headless ones. */
+    public static void installClient() {
+        // Android 16's display cache invalidation needs ApplicationSharedMemory's
+        // native nonce store, which this port does not implement. Read fresh Binder
+        // snapshots instead; listeners and held Display objects still see changes.
+        DisplayManagerGlobal global = DisplayManagerGlobal.getInstance();
+        if (global != null) global.disableLocalDisplayInfoCaches();
+    }
+
     public static DisplayInfo info() {
         DisplayInfo info = DeviceProfile.displayInfo();
         int rotation = sRotation;
@@ -73,7 +82,6 @@ public final class ApplicationDisplay {
             sSequence = sequence;
             if (rotation == sRotation) return;
             sRotation = rotation;
-            DisplayManagerGlobal.invalidateLocalDisplayInfoCaches();
             int count = CALLBACKS.beginBroadcast();
             try {
                 for (int i = 0; i < count; i++) {

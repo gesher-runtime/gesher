@@ -103,3 +103,13 @@ types are in text_document.h; a disconnect clears retained document data and
 owner callbacks before COM teardown. These classes are still not wired into
 the production input method. Next: epoch/revision JNI/Java snapshot/edit
 plumbing and pre-TranslateMessage TSF keystroke routing, preserving IMM32.
+
+First display-stage e2e results: both runners fail Signal Generator on
+`unable to assign nonce handle: system_server/display_info`; the other eight
+apps, including required TIC-80/Puzzles, pass. This is the new display
+invalidation call reaching an unimplemented ApplicationSharedMemory nonce
+store, not an accepted flake. Fixed in the next source: remove invalidation and
+disable the private DisplayManagerGlobal cache before Application code in
+both single-process and device clients, including headless ones. DisplayInfo
+then uses fresh Binder queries and the real callback path. Display/listener
+tests remain unchanged. CI proof of the fix is pending.
