@@ -24,3 +24,29 @@ task_window=compat/hwui/window
   probes/windows4/input_pane_probe.cc "$task_window/gesher_window.cc" \
   "$task_window/gesher_popup.cc" "$task_window/input_pane.cc" \
   -o "$task_output/windows4_input_pane_probe.exe" -lole32 -luuid -lgdi32
+"$task_compiler" "${task_flags[@]}" -Iprobes/windows4/standalone -I"$task_window" \
+  probes/windows4/initial_client_size_probe.cc "$task_window/gesher_window.cc" \
+  "$task_window/gesher_popup.cc" "$task_window/input_pane.cc" \
+  -o "$task_output/windows4_initial_size_probe.exe" -lole32 -luuid -lgdi32
+
+# These are deliberately bad source copies. Canonical fixtures above must pass;
+# each negative copy below must trigger only its declared regression assertions.
+task_negative=out-windows4-counterfactuals
+python3 tools/windows4/prepare-counterfactuals.py --output "$task_negative" --manifest "$task_output/counterfactuals.json"
+mkdir -p "$task_output/counterfactual-sources"
+cp "$task_negative"/*.cc "$task_output/counterfactual-sources/"
+for task_case in lease caret; do
+  "$task_compiler" "${task_flags[@]}" -I"$task_input" \
+    probes/windows4/ime_tsf_probe.cc "$task_negative/$task_case.cc" \
+    "$task_input/text_store.cc" "$task_input/text_service.cc" "$task_input/thread_watch.cc" \
+    -o "$task_output/counterfactual-$task_case.exe" -lole32 -luuid -limm32
+done
+for task_case in geometry composition; do
+  "$task_compiler" "${task_flags[@]}" -I"$task_input" \
+    probes/windows4/text_store_probe.cc "$task_negative/$task_case.cc" "$task_input/text_service.cc" \
+    -o "$task_output/counterfactual-$task_case.exe" -lole32 -luuid
+done
+"$task_compiler" "${task_flags[@]}" -Iprobes/windows4/standalone -I"$task_window" \
+  probes/windows4/initial_client_size_probe.cc "$task_negative/initial-size.cc" \
+  "$task_window/gesher_popup.cc" "$task_window/input_pane.cc" \
+  -o "$task_output/counterfactual-initial-size.exe" -lole32 -luuid -lgdi32

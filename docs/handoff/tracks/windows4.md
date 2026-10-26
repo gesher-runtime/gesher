@@ -422,3 +422,22 @@ This verifies the native fixture scope only; the next full combined run is
 diagnostic for real Android/JNI/IME, Application resources, legacy frames,
 package cleanup and both e2e suites. Legacy/real-IME gaps remain open until
 those actual results are read. Current integration f520fd1 is included.
+
+Full combined diagnostic **40413109702** uses exact source 74d1346 (a
+documentation-only child of native-verified 828dc87). It remains unchanged
+while running. The next final source must include the coordinator's newer
+runtime integration 6dc3f03 (verified AOT/DM/StrictJarFile stage), and any
+subsequent verified integration before final full CI.
+
+The standalone workflow's next source adds explicit CI-only counterfactual
+copies: disabling the Update lease, caret epoch rejection, measured geometry,
+composition transaction kind or initial client-size correction must trigger
+exactly the named regression assertions. These are deliberately changed
+current-source copies, not claims that a historical full tree was rerun.
+Canonical fixtures still require exit/aggregate zero and no raw FAIL. Negative
+copies must return the exact declared nonzero count and labels; their raw
+FAIL lines and generated sources stay visible in CI evidence. Unexpected
+failures, counts, timeouts or source-replacement drift fail the workflow.
+The real Windows service also gains a native partial-composition bridge
+check, and ACP geometry gains actual clipping/missing-character checks.
+All of these new checks await CI; no local compilation/execution is allowed.
