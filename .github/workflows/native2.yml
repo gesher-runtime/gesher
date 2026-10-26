@@ -1,0 +1,182 @@
+name: native2
+
+# The native2 track's test programs (docs/native-libs.md, ADR 0057), built on
+# the Linux runner with the pinned NDK for x86_64 and arm64-v8a and uploaded
+# as the "native2" artifact for the Windows test job
+# (tests/windows/tracks/44-native2.ps1):
+#   - libnative2.so (tests/native2/native2_test.cpp) with libnative2_helper.so
+#     and libc++_shared.so, and gesher.Native2Test's dex, for dalvikvm;
+#   - native2app.apk (x86_64) and native2app-arm64.apk (arm64-v8a only);
+#   - popular NDK libraries' own test programs (build-third-party.sh);
+#   - symbols-<abi>.txt: what those programs, the e2e apps' NDK libraries and
+#     the NDK's public API import (symbols.py).
+# ci.yml calls this workflow.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  R8_VERSION: "9.5.26"
+
+concurrency:
+  group: ${{ github.workflow }}-native2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native2:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/native2
+            tests/apps/native2app
+            tests/e2e
+
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar \
+            "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+
+      - name: Build the test library, its dex and the APKs
+        run: |
+          set -euo pipefail
+          llvm="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
+          for abi in x86_64 arm64-v8a; do
+            case $abi in x86_64) triple=x86_64-linux-android ;; *) triple=aarch64-linux-android ;; esac
+            o=dist/$abi
+            mkdir -p "$o"
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 -fstack-protector-strong -Wall -Werror \
+              -Wl,-soname,libnative2.so -o "$o/libnative2.so" tests/native2/native2_test.cpp \
+              -lz -lEGL -lOpenSLES -laaudio -landroid -llog -ldl
+            "$llvm/bin/${triple}29-clang" -shared -fPIC -O2 -Wl,-soname,libnative2_helper.so \
+              -o "$o/libnative2_helper.so" tests/native2/native2_helper.c
+            cp "$llvm/sysroot/usr/lib/$triple/libc++_shared.so" "$o/"
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
+              -o "$o/libcxx2_test" tests/native2/libcxx2_test.cpp
+            echo "--- $abi libnative2.so: needed"
+            "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
+          done
+          mkdir -p work/classes work/dex
+          javac --release 11 -encoding UTF-8 -d work/classes tests/native2/java/gesher/*.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
+            --output work/dex $(find work/classes -name '*.class')
+          cp work/dex/classes.dex dist/native2-test.dex
+          common=(--ndk "$PWD/$NDK_DIR" --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" --r8 "$PWD/r8.jar")
+          tests/apps/native2app/build.sh dist native2app.apk x86_64 "${common[@]}"
+          tests/apps/native2app/build.sh dist native2app-arm64.apk arm64-v8a "${common[@]}"
+          cp tests/native2/sqlite_test.sql dist/
+
+      - name: Cache the third-party test programs
+        id: tp
+        uses: actions/cache@v4
+        with:
+          path: third-party
+          key: native2-third-party-${{ env.NDK_VERSION }}-${{ hashFiles('tests/native2/build-third-party.sh') }}
+
+      - name: Build the third-party test programs
+        if: steps.tp.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq nasm >/dev/null
+          tests/native2/build-third-party.sh "$PWD/$NDK_DIR" x86_64 third-party/x86_64
+          tests/native2/build-third-party.sh "$PWD/$NDK_DIR" arm64-v8a third-party/arm64-v8a
+
+      - name: Symbol lists
+        run: |
+          set -euo pipefail
+          llvm="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
+          cp -r third-party/x86_64/. dist/x86_64/
+          cp -r third-party/arm64-v8a/. dist/arm64-v8a/
+          # The e2e apps' NDK libraries (tests/e2e/apps.json), pinned by SHA-256.
+          mkdir -p apks
+          python3 - <<'PY'
+          import hashlib, json, os, urllib.request, zipfile
+          d = json.load(open('tests/e2e/apps.json'))
+          for a in d['apps']:
+              url = f"{d['repo']}/{a['package']}_{a['versionCode']}.apk"
+              data = urllib.request.urlopen(url).read()
+              if hashlib.sha256(data).hexdigest() != a['sha256']:
+                  raise SystemExit(f'sha256 mismatch: {url}')
+              z = zipfile.ZipFile(__import__('io').BytesIO(data))
+              libs = [n for n in z.namelist() if n.startswith('lib/') and n.endswith('.so')]
+              for n in libs:
+                  abi = n.split('/')[1]
+                  out = f"apks/{a['package']}/{abi}/{os.path.basename(n)}"
+                  os.makedirs(os.path.dirname(out), exist_ok=True)
+                  open(out, 'wb').write(z.read(n))
+              print(a['package'], len(libs), 'native libraries')
+          PY
+          for abi in x86_64 arm64-v8a; do
+            case $abi in x86_64) triple=x86_64-linux-android ;; *) triple=aarch64-linux-android ;; esac
+            o=dist/$abi
+            stub=$llvm/sysroot/usr/lib/$triple/29
+            sets=()
+            for exe in zlib_example zlib_minigzip pngtest tjunittest sqlite3 openssl; do sets+=("$exe=$o/$exe"); done
+            sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
+            sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
+            sets+=("libc++_shared=$o/libc++_shared.so")
+            for app in apks/*; do
+              if [ -d "$app/$abi" ]; then
+                sets+=("app:$(basename "$app")=$(ls "$app/$abi"/*.so | paste -sd,)")
+              fi
+            done
+            api=()
+            for lib in libc libm libdl liblog libz libandroid libEGL libGLESv3 libOpenSLES libaaudio libmediandk libjnigraphics libnativewindow libvulkan; do
+              [ -f "$stub/$lib.so" ] && api+=("ndk:$lib=$stub/$lib.so")
+            done
+            python3 tests/native2/symbols.py "$llvm/bin/llvm-readelf" "dist/symbols-$abi.txt" "${sets[@]}" --api "${api[@]}"
+          done
+          ls -laR dist | head -80
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native2
+          path: dist/
