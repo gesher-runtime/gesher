@@ -15,6 +15,7 @@
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
+//  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - dlsym: returns these definitions for those names;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
@@ -53,6 +54,26 @@ void SetErrno(int e) {
 
 constexpr int kENOSYS = 38;
 constexpr int kEFAULT = 14;
+
+// --- localeconv: identical LP64 pointers, architecture-specific char values ----
+struct Arm64Lconv {
+  const char* strings[10];
+  uint8_t indicators[14];
+};
+static_assert(sizeof(Arm64Lconv) == 96 && offsetof(Arm64Lconv, indicators) == 80);
+void* g_localeconv = nullptr;
+
+const Arm64Lconv* GESHER_SYSV GuestLocaleconv() {
+  static const Arm64Lconv locale = [] {
+    using Function = const Arm64Lconv*(GESHER_SYSV*)();
+    Arm64Lconv result = *reinterpret_cast<Function>(g_localeconv)();
+    // Both bionic locales use CHAR_MAX for all fourteen monetary indicators.
+    // The host/x86-64 char is signed (127); Android arm64 char is unsigned.
+    std::memset(result.indicators, 0xff, sizeof(result.indicators));
+    return result;
+  }();
+  return &locale;
+}
 
 // --- struct stat ---------------------------------------------------------------
 struct X64Stat {  // bionic x86-64 struct stat
@@ -448,6 +469,9 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
+
+  g_localeconv = Host("localeconv");
+  if (g_localeconv) Override("localeconv", reinterpret_cast<void*>(&GuestLocaleconv));
 
   g_stat = Host("stat");
   g_lstat = Host("lstat");

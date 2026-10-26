@@ -141,6 +141,14 @@ CHAR_MAX sentinel bytes; the shared Windows layout currently uses 127.
 The scoped workflow now prints both target macro sets before its ordinary
 fixture builds. Root was notified before any architecture-specific edit.
 
+Scoped ci 40421702672 at 611f520 confirms the ABI difference: arm64 defines
+__CHAR_UNSIGNED__/__WCHAR_UNSIGNED__, while x86-64 does not; long is 64 bits
+for both. Prepared a localeconv-only guest_libc override (the sole cross-domain
+production edit) returning 255 sentinel bytes while sharing all real pointer
+fields. NDK tests now check all fourteen fields, exact lconv layout and
+import/dlsym identity in both ABIs. Scoped compilation now includes this
+guest object with -Werror; it and the subsequent full runtime run are pending.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.

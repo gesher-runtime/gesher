@@ -8,6 +8,7 @@ on:
       - 'probes/native3/wide/**'
       - 'tests/native2/native3_wide*'
       - 'compat/bionic/locale_bionic.cc'
+      - 'compat/arm64/dll/guest_libc.cc'
       - '.github/workflows/native3-wide.yml'
 
 permissions:
@@ -54,6 +55,9 @@ jobs:
           "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
             -std=c++20 -O2 -Wall -Wextra -Werror \
             -I compat/bionic/include -c compat/bionic/locale_bionic.cc -o /tmp/wide-locale.o
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
+            -std=c++20 -O2 -Wall -Wextra -Werror -mcx16 \
+            -I compat/arm64/include -c compat/arm64/dll/guest_libc.cc -o /tmp/wide-guest-libc.o
 
   ndk:
     runs-on: ubuntu-24.04
