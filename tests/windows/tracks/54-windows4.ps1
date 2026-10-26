@@ -43,7 +43,8 @@ function W4Point([scriptblock] $Read, [string] $Name, [string] $Which) {
   return @([int]$last.Groups[$offset].Value, [int]$last.Groups[$offset + 1].Value)
 }
 
-function W4Run([string] $Mode, [string[]] $Arguments, [scriptblock] $Scenario) {
+function W4Run([string] $Mode, [string[]] $Arguments, [scriptblock] $Scenario,
+               [string] $Title = 'Gesher windows4 display', [string] $Activity = 'DisplayActivity') {
   $script:w4Failed = $false
   $log = Join-Path $env:RUNNER_TEMP "windows4-$(Get-Random).log"
   $quoted = (@($w4Dvm) + $Arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
@@ -52,11 +53,11 @@ function W4Run([string] $Mode, [string[]] $Arguments, [scriptblock] $Scenario) {
   $start.CreateNoWindow = $true
   $process = [Diagnostics.Process]::Start($start)
   $read = { Get-Content -Raw -LiteralPath $log -ErrorAction SilentlyContinue }.GetNewClosure()
-  $window = W3Window $read 0 'Gesher windows4 display' 100
+  $window = W3Window $read 0 $Title 100
   $problems = @()
   try {
-    if ($window -eq [IntPtr]::Zero) { throw 'No first frame of DisplayActivity' }
-    if (-not (W3Wait $read 0 'W4 DisplayActivity buttons turn' 30).Success) { throw 'No first button layout' }
+    if ($window -eq [IntPtr]::Zero) { throw "No first frame of $Activity" }
+    if ($Activity -eq 'DisplayActivity' -and -not (W3Wait $read 0 'W4 DisplayActivity buttons turn' 30).Success) { throw 'No first button layout' }
     & $Scenario $window $read
   } catch { $problems += "scenario: $_ $($_.ScriptStackTrace)" }
   finally {
@@ -67,12 +68,32 @@ function W4Run([string] $Mode, [string[]] $Arguments, [scriptblock] $Scenario) {
     elseif ($process.ExitCode -ne 0) { $problems += "Process exit $($process.ExitCode)" }
   }
   $text = "$(& $read)"
-  if ($text -notmatch 'DisplayActivity onDestroy' -or $text -notmatch 'gesher-app: done') {
+  if ($text -notmatch "$Activity onDestroy" -or $text -notmatch 'gesher-app: done') {
     $problems += 'Missing Activity destruction/launcher completion'
   }
-  W4Check $Mode 'Display fixture draws a real window and exits after WM_CLOSE' $problems
+  W4Check $Mode "$Activity draws a real window and exits after WM_CLOSE" $problems
   if ($script:w4Failed) { Write-Host $text }
   else { $text -split "`r?`n" | Select-String -Pattern 'W4 |onTopResumedActivityChanged' | ForEach-Object { $_.Line } | Select-Object -Last 30 | Out-Host }
+}
+
+function W4Legacy([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
+  $problems = @()
+  $normal = W3Wait $Read 0 'W4 legacy target 28 content 400x800 edit bottom 800 padding 0 ime visible false bottom 0' 40
+  if (-not $normal.Success) { $problems += 'No unpadded target-28 initial content layout' }
+  $client = [GesherW3Win32]::ClientOnScreen($Window)
+  $mark = W3Mark $Read
+  [void][GesherW3Win32]::PostMessageW($Window, $w3Input, [IntPtr]($client[3] - 300), [IntPtr]$client[3])
+  $resize = W3WaitWhere $Read $mark 'W4 legacy target 28 content 400x(\d+) edit bottom (\d+) padding 0 ime visible true bottom 300' {
+    param($groups) [int]$groups[1].Value -eq 500 -and [int]$groups[2].Value -le 500
+  } 40
+  if (-not $resize.Success) { $problems += 'The framework did not resize unpadded content to 500 and keep the editor above the IME' }
+  if ((W3Size $Window) -ne '400x800') { $problems += 'The native client was resized instead of the legacy content' }
+  $mark = W3Mark $Read
+  [void][GesherW3Win32]::PostMessageW($Window, $w3Input, [IntPtr]::Zero, [IntPtr]::Zero)
+  if (-not (W3Wait $Read $mark 'W4 legacy target 28 content 400x800 edit bottom 800 padding 0 ime visible false bottom 0' 40).Success) {
+    $problems += 'Legacy content did not restore after hiding IME occlusion'
+  }
+  W4Check $Mode 'target-28 adjustResize shrinks/restores framework content without app padding or native-window resizing' $problems
 }
 
 W4Run 'single process' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.winapp.DisplayActivity', $w4Apk) {
@@ -87,6 +108,12 @@ W4Run 'single process' @('com.gesher.app.Main', '--window', '--display', '400x80
   [GesherWin32]::Click($window, $at[0], $at[1])
   W4Snapshot 'single process' $read $mark DisplayActivity 0 0 $true 2
 }
+
+$w4LegacyApk = NoDrive "$Dir/winlegacy.apk"
+W4Run 'single process, legacy resize' @('com.gesher.app.Main', '--window', '--display', '400x800@160', $w4LegacyApk) {
+  param($window, $read)
+  W4Legacy 'single process' $window $read
+} -Title 'Gesher windows4 legacy' -Activity LegacyActivity
 
 $w4Data = $env:ANDROID_DATA
 $w4Logs = $env:GESHER_LOGS
@@ -127,6 +154,10 @@ try {
     }
     W4Snapshot device $read $mark DisplayActivity 0 0 $true 4
   }
+  W4Run 'device, legacy resize' @('com.gesher.app.Launcher', 'launch', $w4LegacyApk, '--window') {
+    param($window, $read)
+    W4Legacy device $window $read
+  } -Title 'Gesher windows4 legacy' -Activity LegacyActivity
 } finally {
   $shutdown = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
   foreach ($argument in @($w4Dvm) + @('com.gesher.app.Launcher','shutdown')) { $shutdown.ArgumentList.Add($argument) }

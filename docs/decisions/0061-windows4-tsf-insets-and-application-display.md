@@ -43,6 +43,10 @@ See Microsoft's [IFrameworkInputPane](https://learn.microsoft.com/en-us/windows/
 and [Showing](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iframeworkinputpanehandler-showing)
 contracts for the interface and screen rectangle.
 
-TSF document/reconversion, candidate-window occlusion and old-target
-adjustResize are not implemented.
+TSF document/reconversion and candidate-window discovery are not implemented.
+A target-SDK-28 APK and show/hide resize fixture are added for old-target
+adjustResize, without manual app padding. Its result is not yet verified;
+no production resize change is justified before that observation. The Android
+resize fixture uses the existing keyboard-message seam while the native COM
+probe separately exercises the actual callback/source/window-event boundary.
 Physical touch keyboard behavior requires hardware and remains unverified.
