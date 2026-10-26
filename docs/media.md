@@ -230,8 +230,9 @@ the microphone (looped, from its start each time recording starts);
   queued-capture priority and disconnected stop on the JDK. Its additive
   Windows check makes the next expected media3 count 36; full CI is pending.
   Repair source f8f443f is pushed; integration cd0b849 (README only) is
-  included via fa465c7. A bounded camera-thread ART array-transition trace is
-  prepared for coordinator review, but has not been added to this source.
+  included via fa465c7. Coordinator-approved ART patch 0591 adds a bounded
+  camera-thread array-transition trace (SOA entry/decode/body/exit and wall/CPU,
+  explicit incomplete/error labeling); it is not CI-verified yet.
 - Latest full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
   terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
   Integration 634a273 is included. All 28 job results are read: 20 success,
@@ -335,9 +336,10 @@ the microphone (looped, from its start each time recording starts);
   session/Windows controls and permission/user filtering remain explicit
   follow-ups. services3 owns advanced Camera2 contracts. No broad roadmap
   completion box is ticked; the coordinator transfers the 313 entry owners.
-- Next: separate the slow JNI calls' entry/body/exit with the coordinator,
-  then include the atomic request-selection repair and current integration
-  in full CI. Preserve collection duration and every acceptance threshold.
+- Next: full CI of the approved JNI entry/body/exit trace, atomic
+  request-selection repair and current integration. Preserve collection
+  duration and every acceptance threshold; inspect phase evidence before
+  selecting a runtime fix.
   No integration/main merge or release action here.
 
 ### Done and verified
