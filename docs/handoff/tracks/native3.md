@@ -62,10 +62,13 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Full ci 40404678100 at 581e88f and locked-reference ci 40404677936 are
-pending. The former must verify actual Windows width parity, both ABI/APK
-paths and all existing package/e2e gates; the latter must reproduce the
-separately frozen oracle. No roadmap-width box is closed by pending runs.
+Full ci 40404678100 at 581e88f is pending. Locked-reference ci 40404677936
+at that same source is fully green: every job, all 14 old digests, width
+digest/33 rows/exact lock and both binary128 zero-failure logs personally
+read. Independent static review of the production width/source/ABI tests
+found no additional issue. The full run must still verify actual Windows
+parity, both ABI/APK paths and all package/e2e gates before a width closure.
+Its frozen stage branch wip/native3-width stays code-identical to 581e88f.
 
 The Unicode/Process stage below is merged as integration 117629e. This
 continuation starts from 7826cbe (the following README-only milestone).
@@ -85,9 +88,22 @@ host parity and both-ABI native2/APK checks cover widths, bounded strings,
 NUL termination and invalid inputs. Also import portable bounded TLS cleanup
 and only the verified media-preparation block. Runtime verification pending.
 
-Also retain the observed Windows ART global ThreadCpuNanoTime() unimplemented
-diagnostic as an open native/clock-consumer gap. Thread::GetCpuNanoTime()
-already has a supported thread-clock implementation; these are distinct.
+Prepared CPU-clock follow-up, outside that frozen stage: ART patch 0572
+uses the supported thread/process CPU clock paths in libartbase/time_utils
+on Windows, replacing the global -1/thread and wall-time/process fallbacks.
+Failures return an explicit sentinel without reading an uninitialized time.
+The new own host executable compares actual ART values with independent
+GetThreadTimes/GetProcessTimes brackets, including a busy worker and a
+waiting caller; no AOSP build ran locally. The patch applies to the exact
+pinned source, but compilation/runtime verification is still required.
+This makes no claim about camera FPS or boot-timing causality.
+
+Thread::Current()->GetCpuNanoTime() already uses the current CPU clock;
+the separate pthread_getcpuclockid implementation still ignores a requested
+non-current thread, so cross-thread clock selection remains open here.
+Also retain ziparchive's observed Windows SetCloseOnExec-not-supported
+diagnostic as a descriptor-inheritance contract to audit, not a package
+smoke-test failure or an assumed out-of-memory error.
 
 Verified Unicode/Process stage: full ci 40386670586 at
 6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
