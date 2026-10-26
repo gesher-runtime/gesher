@@ -129,6 +129,11 @@ jobs:
     needs: [framework]
     uses: ./.github/workflows/media.yml
 
+  # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
+  # .github/workflows/surfaces.yml.
+  surfaces:
+    uses: ./.github/workflows/surfaces.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -530,7 +535,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces]
     strategy:
       fail-fast: false
       matrix:
@@ -603,6 +608,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: media
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: surfaces
           path: dist
 
       - name: Run tests
