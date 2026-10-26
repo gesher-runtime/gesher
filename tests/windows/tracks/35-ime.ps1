@@ -192,6 +192,22 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   Start-Sleep -Seconds 1
   $windows = [ImeInput]::ProcessWindows($ProcessId)
   $caret = [ImeInput]::Caret($hwnd)
+  # Android floating IMEs do not create edge insets. Observe the real Microsoft
+  # candidate while it is still visible, without moving focus or committing.
+  $candidateBeforeCommit = $windows | Where-Object { $_ -match 'cand' } | Select-Object -First 1
+  $candidateFloating = $false
+  if ($candidateBeforeCommit -and $null -ne $caret) {
+    $candidateBounds = ($candidateBeforeCommit -split '@')[1] -split ','
+    $client = [GesherWin32]::ClientSize($hwnd)
+    $clientBottom = $caret[5] - $caret[1] + $client[1]
+    $candidateFloating = [int]$candidateBounds[1] + [int]$candidateBounds[3] -lt $clientBottom
+    $insetPattern = "ImeActivity composing IME insets 0,0,0,0 decor $($client[0])x$($client[1])"
+    $beforeInsets = LogCount $ReadLog $insetPattern
+    $noneWhileVisible = WaitCount $ReadLog $insetPattern ($beforeInsets + 1) 5
+    ImeCheck $Mode 'a real floating Microsoft candidate window keeps Android IME edge insets empty and content unresized' ($candidateFloating -and $noneWhileVisible) "candidate $candidateBeforeCommit, native client $($client -join 'x'), new composing inset snapshot $noneWhileVisible"
+  } else {
+    ImeCheck $Mode 'a real floating Microsoft candidate window keeps Android IME edge insets empty and content unresized' $false 'candidate/caret unavailable'
+  }
   $commitMark = "$(& $ReadLog)".Length
   [void][ImeInput]::Keys(0x0D)  # commit
   $t = ''
