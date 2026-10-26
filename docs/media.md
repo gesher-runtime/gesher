@@ -219,6 +219,40 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+### media3 (stage 3) — stopped by the coordinator, 2026-10-26
+- Branch wip/media-soft. Last fully green run: 40258938663 (b57bb74, stage 2 +
+  software decoders). In progress when stopped: **ci 40287172595** (the first
+  build of all the stage 3 code that links; read its test logs first).
+- ci 40262576561 (part 1 leftovers, commit before 0ca7cc2): built and ran; on both
+  runners PASS for the soft-only run (libavc H.264, m4v H.263), H.263, WebM
+  VP9+Opus, MediaPlayer/MediaMetadataRetriever over the software decoders, WebM
+  audio reaching the output. FAILed: MPEG-4 part 2 (csd-0 missing: ESDS not
+  converted; fixed since by `AddCsdFromEsds`, unverified) and the VP8+Vorbis
+  WebM seek line (1003 ms; the app now rounds to 10 ms, unverified).
+  media_probe mf: both runners have Media Foundation's AAC and H.264 encoders,
+  no Opus/VP8/VP9/HEVC encoders.
+- ci 40285626240 (0ca7cc2): everything compiled; link failed on mkvmuxer's
+  MkvWriter (fixed: mkvwriter.cc added; that fix is what 40287172595 builds).
+- Done, not verified: the capture engine (capture.h), AudioRecord, AAudio input,
+  OpenSL ES recorder, RECORD_AUDIO, MediaCodec encoders (MF H.264/AAC, libopus,
+  libavc fallback), input surfaces, MediaMuxer (MP4, WebM), Ogg/ADTS writers,
+  MediaRecorder (audio; Surface; Camera2 through its Surface), decoder output
+  into an ImageReader, recordapp + 59-media3.ps1 (single process and Gesher
+  device), Just Player in tests/e2e/apps.json (sha256 empty: pin it from the
+  e2e log's "sha256 ... (not pinned yet)" line), ADR 0059, the Recording section.
+- Not started: VIDEO_SOURCE_CAMERA (legacy Camera recording), persistent input
+  surfaces, VP8/VP9 encoders, 10-bit output, roadmap boxes for stage 3 (tick
+  only what CI verifies).
+- Next: read 40287172595's 38-media/59-media3 lines on both runners, fix what
+  fails (expected weak spots: Camera2 accepting the recorder's QueueSurface
+  (RGBA) as an output; MF AAC/H.264 MFT setup order; mkvmuxer frame ordering;
+  exact durations in the regexes of 59-media3.ps1), then pin Just Player's SHA,
+  merge origin/phase4/integration, a final run, docs and roadmap.
+- Pitfalls: the Bash tool eats backslashes (write Python edit scripts with the
+  Write tool); NetFree blocks `gh run download` of artifacts (compile-check test
+  apps with javac 17 against gfx-local's framework-classes after rewriting class
+  versions to 61: scratch script downver.py idea).
+
 ### Done and verified
 - **CI run 40129230078** (ci, windows-2022 and windows-2025, 0 failed each;
   package and e2e green; commit da91170): stage 1, part 1 (the engine,
