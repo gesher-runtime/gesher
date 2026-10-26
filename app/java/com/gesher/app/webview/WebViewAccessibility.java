@@ -3,6 +3,7 @@ package com.gesher.app.webview;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 
@@ -10,22 +11,30 @@ import com.gesher.app.accessibility.UiaClient;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * A WebView's page in Android's accessibility tree (ADR 0058): its
  * AccessibilityNodeProvider, whose virtual views are the elements of WebView2's UI
  * Automation tree (Chromium's accessibility of the page), read under the WebView2 window
- * ({@link UiaClient}, a snapshot at most 500 ms old). Control types map to Android's
+ * ({@link UiaClient}, refreshed asynchronously after 500 ms). Control types map to Android's
  * classes (a button is android.widget.Button, an edit box an EditText...), names to text,
  * UIA states to the node's; clicks, focus, text and scrolling act on the elements
  * (Invoke/Toggle, SetFocus, Value.SetValue, ScrollItem).
  */
 final class WebViewAccessibility extends AccessibilityNodeProvider {
     private static final long MAX_AGE_MS = 500;
+    private static final ExecutorService sWorker = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "WebViewAccessibility");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final GesherWebViewProvider mProvider;
     private UiaClient.Snapshot mSnapshot;
     private long mSnapshotAt;
+    private boolean mRefreshing;
 
     WebViewAccessibility(GesherWebViewProvider provider) {
         mProvider = provider;
@@ -33,18 +42,29 @@ final class WebViewAccessibility extends AccessibilityNodeProvider {
 
     private UiaClient.Snapshot snapshot() {
         long now = android.os.SystemClock.uptimeMillis();
-        if (mSnapshot == null || now - mSnapshotAt > MAX_AGE_MS) {
+        if (!mRefreshing && (mSnapshot == null || now - mSnapshotAt > MAX_AGE_MS)) {
             WebView2Host host = mProvider.host();
             long container = host != null ? host.containerHwnd() : 0;
-            UiaClient.Snapshot s = UiaClient.snapshot(container, 1500, 3000);
-            if (s != null) {
-                mSnapshot = s;
-                mSnapshotAt = now;
-                if (GesherWebView.DEBUG) {
-                    GesherWebView.log("accessibility: " + s.elements.size()
-                            + " UI Automation element(s) under the WebView2 window");
-                }
-            }
+            if (container == 0) return mSnapshot;
+            mRefreshing = true;
+            // UIA can query this window's Android provider while locating the
+            // embedded HWND. Keep the UI thread free to answer that query.
+            sWorker.execute(() -> {
+                UiaClient.Snapshot s = UiaClient.snapshot(container, 1500, 3000);
+                mProvider.view().post(() -> {
+                    mRefreshing = false;
+                    mSnapshotAt = android.os.SystemClock.uptimeMillis();
+                    if (s != null) {
+                        mSnapshot = s;
+                        if (GesherWebView.DEBUG) {
+                            GesherWebView.log("accessibility: " + s.elements.size()
+                                    + " UI Automation element(s) under the WebView2 window");
+                        }
+                        mProvider.view().sendAccessibilityEvent(
+                                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+                    }
+                });
+            });
         }
         return mSnapshot;
     }
@@ -143,33 +163,43 @@ final class WebViewAccessibility extends AccessibilityNodeProvider {
         if (virtualViewId == HOST_VIEW_ID) return view.performAccessibilityAction(action, arguments);
         UiaClient.Snapshot s = snapshot();
         if (s == null || s.get(virtualViewId) == null) return false;
-        boolean ok;
+        int command;
+        String text = null;
         switch (action) {
             case AccessibilityNodeInfo.ACTION_CLICK:
-                ok = UiaClient.act(s, virtualViewId, UiaClient.CLICK, null);
+                command = UiaClient.CLICK;
                 break;
             case AccessibilityNodeInfo.ACTION_FOCUS:
-                ok = UiaClient.act(s, virtualViewId, UiaClient.FOCUS, null);
+                command = UiaClient.FOCUS;
                 break;
             case AccessibilityNodeInfo.ACTION_SET_TEXT: {
                 CharSequence t = arguments != null ? arguments.getCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE) : null;
-                ok = UiaClient.act(s, virtualViewId, UiaClient.SET_VALUE,
-                        t != null ? t.toString() : "");
+                command = UiaClient.SET_VALUE;
+                text = t != null ? t.toString() : "";
                 break;
             }
             default:
                 if (action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId()) {
-                    ok = UiaClient.act(s, virtualViewId, UiaClient.SCROLL_INTO_VIEW, null);
+                    command = UiaClient.SCROLL_INTO_VIEW;
                 } else {
-                    ok = false;
+                    return false;
                 }
                 break;
         }
-        GesherWebView.log("accessibility: action " + action + " on the page's element "
-                + virtualViewId + " ('" + s.get(virtualViewId).name + "')" + (ok ? "" : ": not done"));
-        mSnapshot = null;  // the page reacts: read it again
-        return ok;
+        int nativeAction = command;
+        String value = text;
+        sWorker.execute(() -> {
+            boolean ok = UiaClient.act(s, virtualViewId, nativeAction, value);
+            view.post(() -> {
+                GesherWebView.log("accessibility: action " + action + " on the page's element "
+                        + virtualViewId + " ('" + s.get(virtualViewId).name + "')"
+                        + (ok ? "" : ": not done"));
+                mSnapshotAt = 0;
+                snapshot();
+            });
+        });
+        return true;  // Accepted; the page's resulting state arrives asynchronously.
     }
 
     @Override

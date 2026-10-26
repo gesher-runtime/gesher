@@ -347,6 +347,26 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- ci 40292261578 at 63203c4 completed with two accessibility failures on
+  each runner. Geolocation and compat pass; accessibility still has zero
+  page nodes and the external UIA client times out. The new phase diagnostic
+  locates the wait at ElementFromHandleBuildCache. e2e also fails on the
+  first device startup (system server did not get ready); it is not treated
+  as a known flake. Added conditional server-log output to diagnose it.
+- Pending verification: WebViewAccessibility refreshes snapshots and performs
+  accepted page actions asynchronously, leaving the Android UI thread free
+  for UIA's provider callbacks. Accessibility events are raised on a worker
+  for the same reason. The test waits for the initial asynchronous tree,
+  retaining all node/action/DOM checks. The fragment root now implements
+  IRawElementProviderHwndOverride to place each embedded WebView HWND under
+  its Android node. Pattern providers return the requested COM interface.
+  Native snapshots retain two generations per live HWND so refreshing one
+  WebView does not invalidate another's actions. These changes follow the
+  Windows [threading guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading)
+  and [provider repositioning contract](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-serversideprovider#provider-repositioning).
+  A11yActivity/Web3 compile locally against the saved framework classes;
+  full bridge compilation and runtime behavior still require CI.
+
 - Continuation (2026-10-26): read ci 40285810159's windows-2025 log (job
   121453338756), ending with `3 test(s) failed`. Compat/proxy checks pass.
   Geolocation returns both Jerusalem and Tel Aviv, but GeoActivity stringifies
