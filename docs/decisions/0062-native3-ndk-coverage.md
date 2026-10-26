@@ -47,3 +47,16 @@ install/run/uninstall cleanup passes, and e2e has 0 unexpected failures
 All other native3 scope in docs/handoff/tracks/native3.md remains open:
 public NDK export inventory, the other platform libraries, HardwareBuffer,
 ABI/Unicode parity, record locks, inotify, proc metadata and file mremap.
+
+## Native fonts (next slice, pending CI)
+
+NDK font matching reuses the same Minikin collection and font objects as
+Typeface. Itemization and metadata follow the pinned
+[system_fonts.cpp](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/native/android/system_fonts.cpp)
+contracts; a TinyXML2 fallback reads shipped fonts.xml before the Minikin
+font set is registered. Returned metadata owns its strings/axes independently
+of the iterator/matcher. Tests validate actual file headers/collection
+indices, available metadata, mixed-script run bounds and italic selection
+through loaded native code in both ABIs/modes. This does not yet establish
+standalone native-process font initialization or runtime font-install/update
+behavior; those contexts remain open.

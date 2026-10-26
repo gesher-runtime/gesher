@@ -6,6 +6,7 @@ package com.gesher.native2;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Typeface;
 import android.os.Bundle;
 
 /**
@@ -17,6 +18,7 @@ import android.os.Bundle;
 public class Native2Activity extends Activity {
     static native String run(String dir, String symbols);
     static native String bitmap(Bitmap bitmap);
+    static native String fonts();
 
     private String verdict = "not run";
 
@@ -34,8 +36,11 @@ public class Native2Activity extends Activity {
             boolean changed = bitmap.getPixel(0, 0) == 0xff00ff00;
             System.out.println("Native2Activity: native3 Java Bitmap sees native pixels: " + changed);
             bitmap.recycle();
+            Typeface.create("sans-serif", Typeface.NORMAL);
+            String fonts = fonts();
+            System.out.println("Native2Activity: " + fonts);
             verdict = report.contains("native2: all passed") && pixels.startsWith("native2 bitmap: ok")
-                    && changed ? "all passed" : "FAILED";
+                    && changed && fonts.startsWith("native2 fonts: ok") ? "all passed" : "FAILED";
         } catch (Throwable t) {
             verdict = "threw " + t;
             t.printStackTrace(System.out);

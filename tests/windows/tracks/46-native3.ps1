@@ -16,4 +16,9 @@ foreach ($a in @(@{ Abi = 'x86_64'; Tag = 'x86_64' }, @{ Abi = 'arm64-v8a'; Tag 
       '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3BitmapTest',
       (NoDrive "$n2/$($a.Abi)/libnative2.so"))
   } @('native2 bitmap: ok; direct pixels and PNG callback round trip', 'native3 Java Bitmap sees native pixels: true')
+  Check "native3 ($($a.Tag)): NDK fonts enumerate real files and match mixed-script UTF-16 runs through Minikin" {
+    N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+      '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3FontTest',
+      (NoDrive "$n2/$($a.Abi)/libnative2.so"))
+  } @('native2 fonts: ok;', 'mixed-script run(s)', 'shipped font(s)')
 }

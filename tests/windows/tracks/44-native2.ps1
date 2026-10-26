@@ -185,6 +185,7 @@ $apks = @(@{ Apk = 'native2app.apk'; Tag = 'x86_64' }, @{ Apk = 'native2app-arm6
 $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dlopen: ok', 'Native2Activity: native2 files: ok',
   'Native2Activity: native2 bitmap: ok; direct pixels and PNG callback round trip',
   'Native2Activity: native3 Java Bitmap sees native pixels: true',
+  'Native2Activity: native2 fonts: ok',
   'Native2Activity: native2: all passed', 'Native2Activity onResume: all passed', 'gesher-app: done')
 foreach ($a in $apks) {
   Check "native2 ($($a.Tag)): gesher-app runs $($a.Apk) (single process): System.loadLibrary from the APK, the library's checks pass" {

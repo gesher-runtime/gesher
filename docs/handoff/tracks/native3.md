@@ -52,6 +52,17 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Next implementation, not CI-verified: the NDK's AFontMatcher/AFont APIs and
+ASystemFontIterator use Typeface's real Minikin collections and font metadata.
+The iterator prefers the registered font set and falls back to shipped
+fonts.xml through TinyXML2; no Windows font substitutes are introduced.
+Tests enumerate real readable SFNT/TTC files, collection indices, locales
+and available axes, match mixed Latin/Hebrew UTF-16 runs, request italic
+style and retain metadata after the iterator/matcher is destroyed, in both
+ABIs and both APK modes plus framework dalvikvm. Current integration
+8590f4b (surfaces included) is merged. No AOSP code was built locally;
+the Minikin-linked bridge and native tests require CI compilation/runtime.
+
 Verified: ci 40305973210 at e94f760a5a56593187fc8bd1bae77fc716f8ac97,
 including integration 91c195d. Personally read every job (success/skipped),
 both zero-failure Windows summaries, all bitmap dalvikvm and APK checks,
