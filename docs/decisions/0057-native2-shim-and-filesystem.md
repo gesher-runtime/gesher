@@ -86,6 +86,13 @@ are still reported when NTFS updates the entry.
 
 ## Consequences
 
+- Verified at d380a3e (ci 40296960603): every job success/skipped, both
+  Windows summaries zero failures, package and e2e pass. Both ABIs exercise
+  dalvikvm, APKs in both modes, real executable tests and the import gate.
+  The public NDK API coverage figure is broader than that gate and still
+  reports missing functions. native3 (ADR 0062 reserved) owns those gaps,
+  missing platform handles, fcntl record locks, cross-process inotify and
+  the remaining ABI/filesystem limits; see its brief.
 - x86-64 and arm64 libraries see the same libc; the translator DLL no longer
   carries libc code beyond the ABI.
 - The shim has a zlib, so `-lz` libraries (libpng, freetype, engines) run.

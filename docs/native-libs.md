@@ -739,6 +739,25 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 
 _Last updated 2026-10-26 (continuation after handover)._
 
+- **Verified: ci 40296960603 at d380a3e0190f5b418cfa3ee042691db601092e25.**
+  Personally read every job's conclusion (success/skipped), all 26 native2
+  PASS lines per runner, and both `0 test(s) failed` summaries. Both ABIs
+  pass extras (Unicode BMP/supplementary case/classes, datagram batches,
+  timeout/header bounds, mremap growth/copy/shrink), platform dlopen/dlsym,
+  file checks, import gates, seven third-party executable tests and APKs
+  in single-process/device modes. ART gtests pass 233/120 (3/1 exclusions).
+  Package checks install, launch, input and uninstall cleanup; e2e reports
+  `0 unexpected failures` (TIC-80 remains an owned surfaces known failure).
+  No retry was needed. Merged later integration 5fc521a; its diff from the
+  verified tree is docs only.
+- Remaining native/POSIX work is assigned to native3 (ADR 0062 reserved;
+  docs/handoff/tracks/native3.md). In particular the public NDK API report
+  still contains missing functions: a passing real-app import gate does not
+  establish complete NDK coverage. Platform handles absent in this run are
+  libjnigraphics, libmediandk, libcamera2ndk and libvulkan. Windows ICU data
+  version parity, record locks and cross-process inotify are not closed.
+- The run/failure notes below are historical and explain the fixes.
+
 - Read ci 40285714522's windows-2025 job log (121456663287): it ends with
   `12 test(s) failed`. The dalvikvm and APK checks all call the missing
   `android_get_device_api_level` and abort with exit -1073740791; the loader
