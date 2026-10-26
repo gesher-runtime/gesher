@@ -38,7 +38,7 @@ target_link_libraries(dalvikvm PRIVATE gesher_libjnigraphics)
 # NDK font matching shares Typeface's Minikin collections and shipped fonts.
 add_library(gesher_native_fonts OBJECT ${CMAKE_CURRENT_LIST_DIR}/native_fonts.cc)
 target_include_directories(gesher_native_fonts PRIVATE ${CMAKE_CURRENT_LIST_DIR}
-  ${AOSP_DIR}/frameworks/base/libs)
+  ${AOSP_DIR}/frameworks/base/libs/hwui)
 target_link_libraries(gesher_native_fonts PRIVATE gesher_bionic hwui tinyxml2)
 set_target_properties(gesher_native_fonts PROPERTIES CXX_STANDARD 23)
 target_compile_options(gesher_native_fonts PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
