@@ -27,3 +27,12 @@ a base64 log record, allowing the coordinator to audit it without downloading
 an Actions artifact. A successful reference run alone does not
 implement or verify Gesher's Unicode functions; the production bridge and
 both Windows/NDK ABI checks are still required.
+
+Character-width continuation: src/width.rs derives the exact decision order
+from android-16.0.0_r4 libc/bionic/wcwidth.cpp (SHA-256
+401b0bbd9349d3209a990ab25cb23741248a343c543bc99fc7e4bb224a6b74fa),
+retaining its license. It uses the same unmodified wrapper and lock above,
+including signed wchar_t inputs, the U+00A0 boundary, Hangul syllable type,
+default ignorability, format/mark categories and East Asian Width. The
+--width mode emits a whole-code-point digest and 33 boundary rows for initial
+CI review; those values are not yet frozen or a production verification.
