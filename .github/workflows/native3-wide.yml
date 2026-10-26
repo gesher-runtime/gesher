@@ -30,7 +30,7 @@ jobs:
         run: python3 probes/native3/wide/prepare.py /tmp/wide-reference.cpp
       - name: Compile and execute the pinned bionic reference
         run: |
-          g++ -std=c++20 -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
+          clang++ -std=c++20 -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
             -I tests/native2 /tmp/wide-reference.cpp -o /tmp/wide-reference
           /tmp/wide-reference
 

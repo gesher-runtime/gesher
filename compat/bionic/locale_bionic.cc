@@ -27,6 +27,7 @@
 #include <wctype.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <memory>
 #include <string>
 
