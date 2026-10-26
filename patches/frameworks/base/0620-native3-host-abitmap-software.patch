@@ -1,0 +1,20 @@
+diff --git a/libs/hwui/apex/android_bitmap.cpp b/libs/hwui/apex/android_bitmap.cpp
+--- a/libs/hwui/apex/android_bitmap.cpp
++++ b/libs/hwui/apex/android_bitmap.cpp
+@@ -398,10 +398,16 @@ int ABitmap_compressWithGainmap(const AndroidBitmapInfo* info, ADataSpace dataSpace,
+ }
+ 
+ AHardwareBuffer* ABitmap_getHardwareBuffer(ABitmap* bitmapHandle) {
++#ifdef __ANDROID__
+     Bitmap* bitmap = TypeCast::toBitmap(bitmapHandle);
+     AHardwareBuffer* buffer = bitmap->hardwareBuffer();
+     if (buffer) {
+         AHardwareBuffer_acquire(buffer);
+     }
+     return buffer;
++#else
++    // Host Bitmaps use software storage; Bitmap has no hardwareBuffer() there.
++    (void)bitmapHandle;
++    return nullptr;
++#endif
+ }
