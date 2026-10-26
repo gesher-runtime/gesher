@@ -369,10 +369,13 @@ int RegisterAudioSystem(JNIEnv* env) {
 namespace android {
 int register_gesher_media(JNIEnv* env);
 }
+// The surfaces hwui draws (compat/media/surface/surface_jni.cc, built with hwui).
+int register_gesher_media_surfaces(JNIEnv* env);
 
 int android::register_gesher_media(JNIEnv* env) {
   gesher::media::SetVm(env);
   gesher::media::RegisterAudioSystem(env);
   gesher::media::RegisterAudioTrack(env);
+  register_gesher_media_surfaces(env);
   return 0;
 }

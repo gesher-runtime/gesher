@@ -40,6 +40,12 @@ add_library(gesher_media_player OBJECT
   ${_media}/player/decode_file.cc
   ${_media}/player/mf_decoder.cc
   ${_media}/player/player.cc
+  # Video (stage 2, ADR 0051): decoders and MediaCodec.
+  ${_media}/video/video_decoder.cc
+  ${_media}/video/mf_video.cc
+  ${_media}/video/soft_video.cc
+  ${_media}/video/render.cc
+  ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
   ${_media}/jni/media_jni_others.cc
@@ -55,6 +61,13 @@ target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-un
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
   -Wno-deprecated-copy)
 set_target_properties(gesher_media_player PROPERTIES CXX_STANDARD 23)
+# The software video decoders' headers (cmake/aosp/media_video_codecs.cmake), as system
+# headers: -Werror holds for soft_video.cc itself.
+set(_soft_video_isystem)
+foreach(_d ${GESHER_SOFT_VIDEO_INCLUDES})
+  list(APPEND _soft_video_isystem "-isystem${_d}")
+endforeach()
+set_source_files_properties(${_media}/video/soft_video.cc PROPERTIES COMPILE_OPTIONS "${_soft_video_isystem}")
 add_dependencies(media_codecs_all gesher_media_player)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media_player)
@@ -65,3 +78,9 @@ add_executable(media_probe ${_media}/probe/media_probe.cc ${GESHER_MEDIA_AUDIO_S
 target_compile_definitions(media_probe PRIVATE GESHER_MEDIA_STANDALONE)
 target_compile_options(media_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_probe PRIVATE ole32 uuid pthread)
+
+# The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
+# SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
+target_sources(hwui PRIVATE
+  ${_media}/surface/queue_surface.cc
+  ${_media}/surface/surface_jni.cc)
