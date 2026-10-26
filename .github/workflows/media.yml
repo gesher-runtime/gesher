@@ -57,9 +57,13 @@ jobs:
 
       # The test media: a tone per format (tests/apps/mediaapp/gen-media.sh).
       - name: Generate the test media
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -q > /dev/null
-          sudo apt-get install -y --no-install-recommends ffmpeg > /dev/null
+          if ! command -v ffmpeg > /dev/null 2>&1; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q > /dev/null
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg > /dev/null
+          fi
+          ffmpeg -version
           tests/apps/mediaapp/gen-media.sh
           # videoapp's clips (stage 2): a color per half second, one per codec.
           tests/apps/videoapp/gen-media.sh
