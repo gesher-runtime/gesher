@@ -32,7 +32,8 @@ try {
   }
   $validProfile = [IO.File]::ReadAllBytes($cloudProfile)
   Aot3Metadata $cloudDm $validProfile
-  $cloudEnv = @{ GESHER_LOG_EXECUTION = '1'; GESHER_APP_WINDOW = 'headless'; GESHER_APP_EXECUTION = 'interpret' }
+  # Use the production JIT/AOT path; forcing -Xint deliberately interprets AOT methods.
+  $cloudEnv = @{ GESHER_LOG_EXECUTION = '1'; GESHER_APP_WINDOW = 'headless'; GESHER_APP_EXECUTION = 'jit' }
   $cloudPkg = 'com.gesher.lifecycle'
   $cloudServer = Join-Path $root 'logs/system_server.log'
   $cloudPkgLog = Join-Path $root "logs/$cloudPkg.log"
