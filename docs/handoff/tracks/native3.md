@@ -52,11 +52,15 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Running: ci 40305973210 at e94f760, including integration 91c195d. Read
-the bitmap build/link results and all ABI/mode checks, both zero-failure
-Windows summaries, package and e2e before claiming this implementation.
+Verified: ci 40305973210 at e94f760a5a56593187fc8bd1bae77fc716f8ac97,
+including integration 91c195d. Personally read every job (success/skipped),
+both zero-failure Windows summaries, all bitmap dalvikvm and APK checks,
+package install/run/uninstall cleanup and e2e (0 unexpected failures).
+No retry. TIC-80 remains a known failure on this branch without surfaces.
+The bitmap slice is verified; the rest of this track remains open and the
+branch has not been merged. The scoped roadmap row cites this run.
 
-First implementation (not CI-verified): libjnigraphics' six bitmap entry
+Verified implementation: libjnigraphics' six bitmap entry
 points over hwui's real ABitmap storage, with System V entries/JNIEnv
 conversion and a compression callback trampoline. Builds AOSP's existing
 apex/android_bitmap.cpp; patch 0620 handles the host's software-only Bitmap
@@ -65,7 +69,8 @@ getHardwareBuffer path. Tests extend native2app in both modes/ABIs and add
 locked, PNG callback/decode round trip, data space and error paths).
 Java test sources compile locally with JDK 21 against the saved framework
 classes; PowerShell parses; the patch applies to the pinned source. No
-AOSP build was run locally; all C++/NDK linking and runtime checks await CI.
+AOSP build was run locally; C++/NDK linking and the listed runtime checks
+are verified by that full CI run.
 
 The baseline ownership inventory is now recorded in
 `docs/handoff/native-api-coverage.json`, parsed from both runners in ci

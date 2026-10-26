@@ -1,6 +1,7 @@
 # 0062. native3: remaining NDK APIs and bitmap interoperability
 
-Status: proposed (native3 track, 2026-10-26; awaiting CI)
+Status: proposed for the remaining native3 scope; the software Bitmap
+bridge is verified in ci 40305973210 (2026-10-26).
 
 ## Context
 
@@ -37,8 +38,12 @@ with framework.jar and in APKs, single process and on the device.
 ## Consequences
 
 No duplicate pixel buffer or Java-only copy emulates a native lock. The
-cross-ABI compression callback and exact data layouts need CI verification;
-local Java/PowerShell/patch checks do not establish those behaviors.
+cross-ABI compression callback, direct storage aliasing and tested RGBA
+layout are verified in ci 40305973210 at e94f760 on both Windows runners,
+through framework dalvikvm and APKs in both execution modes. Both Windows
+summaries end with 0 test(s) failed; every job is success/skipped, package
+install/run/uninstall cleanup passes, and e2e has 0 unexpected failures
+(TIC-80 remains a known failure on this branch without surfaces).
 All other native3 scope in docs/handoff/tracks/native3.md remains open:
 public NDK export inventory, the other platform libraries, HardwareBuffer,
 ABI/Unicode parity, record locks, inotify, proc metadata and file mremap.
