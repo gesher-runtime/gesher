@@ -746,6 +746,9 @@ _Last updated 2026-10-26 (continuation after handover)._
   reading `ro.build.version.sdk` through the existing property bridge for both
   ABIs. The existing extras check compares it with that property. Not verified
   yet: rerun full CI after merging the current integration branch.
+- Running: ci 40291049581 at e1e99c0 (the API-level fix plus integration
+  a462e9c). Integration has since merged windows3 as 80cb28b; after reading
+  these results, merge the latest integration before the final verification.
 
 - Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
 - **ci 40263281040** (commit before the setjmp fix, both runners): build
