@@ -36,6 +36,11 @@ TEB. This brings the three faster execution modes to Windows. The design is
 - **Oat files are mapped, not copied**: gesher-base's `mmap` fills placeholder
   reservations with views (`MapViewOfFile3`), executable ones included, so an
   oat file's code is a view of the file shared between processes (ADR 0036).
+- **Android's compilation model** (ADR 0054, below): the boot image is
+  compiled `speed-profile` with AOSP's boot image profiles; the Gesher device
+  compiles an app at install (`verify`), runs its processes with the JIT and
+  its profile saver, and compiles it again in the background with its profile
+  (`speed-profile` and an app image).
 
 ## Diagnosis switches
 - `GESHER_ART_INTERPRET_ONLY=1` — the switch interpreter only, explicit checks,
@@ -48,6 +53,13 @@ TEB. This brings the three faster execution modes to Windows. The design is
   they became a view (`an executable view of ...`) or a copy.
 - `GESHER_MMAP_NO_PLACEHOLDERS=1` — plain allocations and views, oat code
   copied, no dual-mapped JIT cache (the configuration before ADR 0036).
+- `GESHER_LOG_EXECUTION=1` also logs, for an app, the oat file its dex file
+  gets (`gesher: app oat: <apk>: <odex> (status, filter, reason, executable)`),
+  its app image (`gesher: app image loaded: <art>: N classes, M methods, K with
+  compiled code`) and, at `System.exit`, how its own methods ran (`gesher: app
+  methods at exit: ... with AOT code, ... entered the interpreter or the JIT`).
+- `GESHER_APP_EXECUTION=interpret` (in the device's environment) — app
+  processes keep the device's interpreter-only options (before ADR 0054).
 
 ## Status
 Verified in CI (`tests/windows/tracks/70-codegen.ps1`, run-tests.ps1 sets
@@ -129,4 +141,56 @@ Verified in ci run 40138006773 (1c158b4, both runners, package, e2e):
 
 Next (not part of this track's goal): an app image for the app's own
 classes; a JIT profile / `speed-profile` for framework.jar to shrink its
-75 MB oat file.
+75 MB oat file. (Done by the aot2 track, below.)
+
+## Apps and the framework as Android compiles them (aot2 track, ADR 0054)
+
+### The boot image with a profile
+`boot-image.yml` fetches AOSP's boot image profiles in text form at the
+pinned tag (`art/build/boot/boot-image-profile.txt`, 14,017 lines, and
+`frameworks/base/boot/boot-image-profile.txt`, 38,909 lines;
+`tools/boot-image/fetch-profiles.ps1`); profman.exe makes one binary boot
+profile of them (`--output-profile-type=boot`, as Soong does); dex2oat
+compiles the primary image and framework.jar `speed-profile`: only the
+profile's hot and startup methods get AOT code, and only its classes go into
+the image. gesher-app.jar, which no AOSP profile covers, stays `speed`.
+
+### Apps
+On the Gesher device (`com.gesher.server.Dexopt`):
+
+| when | what | filter | files |
+|---|---|---|---|
+| install | dex2oat (`pm.dexopt.install`, no profile yet) | `verify` | `<code path>/oat/x86_64/base.{odex,vdex}` |
+| every run | the app process runs nterp and the JIT with `-Xjitsaveprofilinginfo`; ART's profile saver writes the app's profile, at the latest when it exits | | `misc/profiles/cur/0/<package>/primary.prof` |
+| device idle (2 s without an app process) | profman `--force-merge-and-analyze` into the reference profile, then dex2oat (`pm.dexopt.bg-dexopt`) | `speed-profile` | `base.{odex,vdex,art}` (`art`: the app image), `misc/profiles/ref/<package>/primary.prof` |
+
+ART's OatFileAssistant finds the oat file next to the APK; with an app image
+the app's profiled classes are already loaded, linked and initialized when
+it starts, and its startup methods run their AOT code.
+
+## Status and next steps (aot2 track, ADR 0054)
+Verified in CI on windows-2022 and windows-2025 (`tracks/61-aot2.ps1`), plus
+package and e2e:
+
+- [x] **Boot image with AOSP's profiles** (ci 40237467952, 40240540799,
+      40242793689): boot-framework.oat 9.1 MB (was 72.2 MB with `speed`, the
+      same jars compiled by the test), all `.oat` files 16.5 MB (was 96.3 MB),
+      the whole image 74.5 MB (was 162.4 MB); `.art` files 7.1 MB (was 14 MB).
+      dex2oat: primary 1.6 s, framework.jar 3.1 s.
+- [x] **Startup no worse** (61-aot2, median of 3, lifecycle.apk to
+      `Activity.onCreate`, the profile image vs the `speed` image on the same
+      runner, ci 40242793689): interpreter 503 / 499 ms (windows-2022), 618 /
+      648 ms (windows-2025); JIT 366 / 385 ms, 480 / 486 ms.
+- [x] **The installer** ships the smaller image, dex2oat.exe and profman.exe:
+      88.9 MB, was 112.5 MB (ci 40237467952); the installed device compiles
+      lifecycle.apk at install (package job, ci 40240540799).
+- [x] **Install-time dexopt** (verify) on the device and by hand; the app runs
+      from its oat file (`gesher: app oat: ... filter verify, reason install,
+      executable yes`), app processes on the JIT (ci 40240540799).
+- [x] **JIT profiles**: the profile saver writes the app's profile, in one
+      process and on the device (ci 40242793689; file locks on Windows, patch
+      0540).
+- [x] e2e (8 F-Droid apps) and every other device check pass with app
+      processes on nterp and the JIT (ci 40237467952 and later).
+- [ ] Background dexopt (`speed-profile`, app image) and the next launch
+      running from the app image, its compiled methods not interpreted.

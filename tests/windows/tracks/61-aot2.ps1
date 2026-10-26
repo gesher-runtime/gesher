@@ -124,14 +124,14 @@ if ($beforeOk) {
     $failed++
   }
 
-  # Startup, median of 3, alternating: lifecycle.apk to LifecycleActivity.onCreate
+  # Startup, median of 5, alternating: lifecycle.apk to LifecycleActivity.onCreate
   # under the interpreter (60-boot-image.ps1's runs) and with the JIT (the
   # Gesher device's app processes), on each image.
   $images = [ordered]@{ profile = $aotImage; speed = "-Ximage:$(NoDrive $before)/framework/boot.art" }
   $modes = [ordered]@{ interpreter = @('-Xint', '-Xusejit:false'); jit = @('-Xusejit:true') }
   $t = @{}
   $ok = $true
-  for ($i = 0; $i -lt 3; $i++) {
+  for ($i = 0; $i -lt 5; $i++) {
     foreach ($m in $modes.Keys) {
       foreach ($img in $images.Keys) {
         $r = Aot2Startup (@("-Xbootclasspath:$aotBcpApp", $images[$img]) + $modes[$m] + @('com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk"))) 'LifecycleActivity onCreate' @{ GESHER_REQUIRE_BOOT_IMAGE = '1' }
@@ -149,7 +149,7 @@ if ($beforeOk) {
   if ($ok) {
     $md = @{}
     foreach ($k in $t.Keys) { $md[$k] = [int](Aot2Median $t[$k]) }
-    Write-Host ("INFO  aot2: startup, lifecycle.apk to Activity.onCreate (median of 3): interpreter {0} ms with the profile image, {1} ms with the speed image; JIT {2} / {3} ms (to exit: {4} / {5}, {6} / {7} ms)" -f
+    Write-Host ("INFO  aot2: startup, lifecycle.apk to Activity.onCreate (median of 5): interpreter {0} ms with the profile image, {1} ms with the speed image; JIT {2} / {3} ms (to exit: {4} / {5}, {6} / {7} ms)" -f
       $md['interpreter-profile'], $md['interpreter-speed'], $md['jit-profile'], $md['jit-speed'],
       $md['interpreter-profile-total'], $md['interpreter-speed-total'], $md['jit-profile-total'], $md['jit-speed-total'])
     # No worse: within 10% (and 30 ms) of the speed image, for timer noise.
@@ -237,12 +237,12 @@ if ($verifyOk) {
   $hot = ([regex]::Matches($dump.Out, 'hot methods: ([0-9 ,]*)')).Count
   if ($pm.Exit -eq 1 -and (Aot2Size $refProfile) -gt 0) {
     Write-Host ("PASS  aot2: profman merges the JIT profile into the reference profile ({0:N0} bytes) and asks for a compile (exit 1)" -f (Aot2Size $refProfile))
-    ($dump.Out -split "`n" | Select-Object -First 12) | Out-Host
+    ($dump.Out -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 40) | Out-Host
   } else {
     Aot2Fail ("profman merge (exit {0}, reference profile {1} bytes)" -f $pm.Exit, (Aot2Size $refProfile)) ($pm.Out + "`n" + $dump.Out)
   }
   $art = $odex -replace '\.odex$', '.art'
-  $r = Aot2Dex2oat $apk $odex 'speed-profile' @('--compilation-reason=bg-dexopt', "--profile-file=$(NoDrive $refProfile)",
+  $r = Aot2Dex2oat $apk $odex 'speed-profile' @('--compilation-reason=bg-dexopt', "--profile-file=$(NoDrive $refProfile)", '--runtime-arg', '-verbose:compiler',
     "--app-image-file=$(NoDrive $art)", '--image-format=lz4')
   $spOk = $r.Exit -eq 0 -and (Test-Path $art)
   if ($spOk) {
@@ -261,6 +261,8 @@ if ($verifyOk) {
       Write-Host "PASS  aot2: lifecycle.apk runs from its app image and speed-profile code ($(($imageLine -replace '^.*gesher: ', '').Trim()))"
     } else {
       Aot2Fail 'lifecycle.apk from its app image (speed-profile)' $r2.Out
+      # What dex2oat made of the profile's classes (-verbose:compiler).
+      ($r.Out -split "`n" | Where-Object { $_ -match 'image class|Image class|[Pp]run|LoadImageClasses|UpdateImageClasses|InitializeClasses' } | Select-Object -First 60) | Out-Host
     }
     if ($m0 -and $m1 -and $m2) {
       Write-Host ("INFO  aot2: lifecycle.apk's methods that entered the interpreter or the JIT: {0} of {1} from the APK, {2} of {3} with the verify oat file, {4} of {5} with speed-profile code ({6} with AOT code, {7} of those interpreted)" -f
