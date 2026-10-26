@@ -110,3 +110,17 @@ add_executable(profman ${_pm}/profman.cc ${_pm}/boot_image_profile.cc
   ${_pm}/profile_assistant.cc ${_pm}/inline_cache_format_util.cc)
 target_include_directories(profman PRIVATE ${_pm} ${_pm}/include)
 target_link_libraries(profman PRIVATE art_profile)
+
+# --- oatdump ---------------------------------------------------------------
+# The pinned host oatdump uses ART's real disassembler and inspects the same
+# oat/vdex/image formats as this runtime (art/oatdump and disassembler/Android.bp).
+add_library(art_disassembler STATIC
+  ${_art}/disassembler/disassembler.cc ${_art}/disassembler/disassembler_x86.cc)
+
+target_include_directories(art_disassembler PUBLIC ${_art}/disassembler)
+target_compile_definitions(art_disassembler PRIVATE ART_ENABLE_CODEGEN_x86 ART_ENABLE_CODEGEN_x86_64)
+target_link_libraries(art_disassembler PUBLIC art_runtime)
+
+add_executable(oatdump ${_art}/oatdump/oatdump.cc)
+target_link_libraries(oatdump PRIVATE art_compiler art_disassembler)
+target_link_options(oatdump PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/oatdump.map)

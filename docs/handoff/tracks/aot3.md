@@ -37,6 +37,9 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
-Reserved at aot2's ci 40320549410 verification milestone on 2026-10-26.
-Not started; no implementation, branch/worktree or CI run yet. All four
-contracts above remain open.
+First implementation on 2026-10-26: worktree C:\work\gesher-aot3,
+branch wip/aot3, current integration b9f93f0 included. Added real ART
+oatdump/disassembler CMake targets, installer entry/installed-copy check and
+62-aot3's independent oat/app-image checks. No local AOSP build; no CI
+verification yet. All four contracts above remain open. Next: compile and
+execute this first slice in CI before implementing the remaining dexopt work.
