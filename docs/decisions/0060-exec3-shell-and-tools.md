@@ -82,7 +82,8 @@ remain open.
 Property values now reject malformed UTF-8, including overlong encodings,
 surrogates and out-of-range code points; initial build/persistent values use
 the same validation. Native host assertions pass invalid sequences and a valid
-four-byte value. This correction is after active CI 40352529279.
+four-byte value. This correction was introduced after CI 40352529279 and its
+NDK assertions pass CI 40385411337 in all three execution modes.
 
 Java change callbacks retain the existing framework/libutils report path:
 [SystemProperties JNI](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/jni/android_os_SystemProperties.cpp)
@@ -94,7 +95,7 @@ callback path failed CI because pinned libutils/misc.cpp discards its registry
 on Windows. An own host implementation now preserves Android's priority order,
 copies the registry under its lock and invokes callbacks after unlocking.
 The native report/priority/reentrant-registration regression passes locally;
-actual Java callback verification remains pending.
+actual Java report callbacks pass CI 40385411337 in standalone and both APK modes.
 
 Logcat now has prepared real structured records from Java's pinned liblog
 logger and the NDK shim, while stderr keeps its existing human-readable output.
@@ -193,7 +194,9 @@ The NDK API29 executable has explicit FS local-exec integer/SSE assembly and
 checks constructors, initialized data, tbss, alignment and pthread isolation.
 Its loader and ProcessBuilder runs pass both runners in CI 40338806524;
 the same checks also pass inside both APK modes in CI 40352529279 before the
-later callback failure. The complete APK remains open. Local instruction replay alone was
+later callback failure. CI 40385411337 passes the complete single-process APK
+and those checks inside the installed APK before pm's image probe fails.
+Local instruction replay alone was
 not used as proof that the complete ELF startup works.
 
 ## Verification
@@ -238,30 +241,31 @@ enumeration, zero/finite timeout, unrelated writes, same-value wakeups and
 cross-process specific/global/wait_any waits. The same property ABI assertions
 are in the NDK child, with Java coordinating actual cross-process writers and
 checking explicit reportSyspropChanged callbacks. The NDK ABI assertions pass
-CI 40352529279; Java reports await the prepared Win32 registry correction.
+CI 40352529279 and again CI 40385411337, including the real Java report callbacks.
 
 An additional APK runs the nine exec2 native checks through JNI inside the
 app's ART process, with real device services, then repeats the Java shell,
 signal, tool and property suites. The nine JNI checks pass both APK modes on
-both runners in CI 40352529279. The complete APK still fails at the Java report
-assertion and needs a green combined run after that correction.
+both runners in CI 40352529279 and CI 40385411337. The latter also passes the
+complete single-process APK and installed properties/logcat; installed pm/am
+and a green combined run remain open.
 
 ## Remaining work
 
 - umask and actual permission behavior; broader shell conformance.
   Special-builtin prefix persistence and repeated temporary-assignment
   restoration have four added local checks; persistent descriptor scopes
-  have six, also compared with a POSIX shell. Their real-launcher CI remains
-  pending (57 local cases total).
+  have six, also compared with a POSIX shell. All 57 real-launcher cases pass
+  both runners in CI 40385411337.
 - CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
   Process.destroy/destroyForcibly on both runners. Native console interruption
   remains unverified; the changed combined tree still needs a green run.
-- A green combined run after the boot-root and callback corrections, property
-  permissions and Binder report/poke notifications,
-  real logcat capture and pm/am service calls.
+- A green combined run after pm's image resolution and the post-steps devices
+  crashes; property permissions and Binder report/poke notifications. Properties,
+  explicit callbacks and real logcat capture pass CI 40385411337 in all modes.
 - CI 40338806524 verifies the API29 NDK executable local-exec TLS program and
   ProcessBuilder invocation on both runners. The installed APK native-process
-  suite and new broker startup fix still need CI proof; unsupported TLS layouts
-  and opcode forms remain explicit.
+  suite and broker startup fix also pass CI 40385411337; installed pm/am are
+  separate pending checks. Unsupported TLS layouts and opcode forms remain explicit.
 - General fork-before-exec and static executables remain unsupported for the
   architectural reasons reviewed above.
