@@ -75,4 +75,9 @@ The follow-up review's full-green-rerun race is also guarded: pre-execution
 prepare writes an exact source attempt/artifact/member pin to a GitHub job
 output. The publisher's reauthenticated source must match that pin or refuse
 before any write. Both pin emission and an intervening new green attempt have
-offline fixtures; independent re-review remains pending.
+offline fixtures. The exec3 agent independently reviewed 8073a31 on 2026-10-26:
+all 34 offline tests passed in its snapshot (2.473 s), both concrete P1/P2
+reproducers were blocked before writes, and it verified pre-execution pin
+transport, API/receipt/member authentication and safe tag/asset idempotence.
+It found no further actionable issue in that reviewed scope. This does not
+replace actual full CI or publication verification; neither has run yet.
