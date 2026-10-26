@@ -222,6 +222,15 @@ package and e2e:
   e2e. Integration has since merged windows3 (80cb28b), so merge the latest
   integration and run final CI again before merging this track. The
   historical handoff below records the predecessor's state.
+- ci 40290847953 finished with only the known media tone timing failure on
+  windows-2022 (sound26: 1441.3 Hz, expected 1480 Hz). windows-2025, package
+  and e2e passed. Read every 61-aot2 PASS on windows-2022: profile boot image
+  74.6 MB versus 162.5 MB; interpreter startup median 571 versus 593 ms and
+  JIT 449 versus 439 ms; single-process app image 7 classes/16 methods, 7
+  compiled; device app image 2 classes/11 methods, 10 compiled; no AOT app
+  methods interpreted. These confirm the image fix without -AllClasses but
+  do not make this full run green. Merged current integration a98dda9 as
+  4b795a7 before the next full verification.
 
 ### Handoff (2026-10-26, stopped by the coordinator)
 - Branch `wip/aot2`. Last verified: 7de81ac, ci 40263271836. Everything
