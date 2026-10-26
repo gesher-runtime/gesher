@@ -32,6 +32,7 @@ jobs:
         with:
           sparse-checkout: |
             tests/exec
+            app/java/com/gesher/app
 
       - name: Cache the Android NDK
         id: ndk
@@ -91,7 +92,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p work/classes work/dex
-          javac --release 11 -encoding UTF-8 -d work/classes tests/exec/java/gesher/*.java
+          javac --release 11 -encoding UTF-8 -d work/classes tests/exec/java/gesher/*.java \
+            app/java/com/gesher/app/LogLines.java
+          java -cp work/classes gesher.LauncherTailTest
           java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
             --output work/dex $(find work/classes -name '*.class')
           cp work/dex/classes.dex dist-exec/exec-test.dex
