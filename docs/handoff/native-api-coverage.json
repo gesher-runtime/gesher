@@ -858,7 +858,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -870,7 +877,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -882,7 +896,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -894,7 +915,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -906,7 +934,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -918,7 +953,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -930,7 +972,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -942,7 +991,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -954,7 +1010,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -966,7 +1029,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -978,7 +1048,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -990,7 +1067,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1002,7 +1086,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1014,7 +1105,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1026,7 +1124,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1626,7 +1731,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1638,7 +1750,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
@@ -1650,7 +1769,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40344682373,
+        "attempt": 2,
+        "sha": "1e881b508b9a663f6d4cdd6f43ad629b8782a8ea",
+        "status": "verified-framework-font-api-contexts",
+        "scope": "Both ABIs through framework dalvikvm and APKs in both modes: real Minikin/shipped font files, UTF-16 runs, style/variable axes and metadata lifetime. Standalone native bootstrap and runtime font updates remain open."
+      }
     },
     {
       "library": "libandroid.so",
