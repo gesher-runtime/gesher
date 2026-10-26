@@ -338,6 +338,19 @@ needs: [framework-build.md](framework-build.md).
       composed with alpha with the CPU pipeline and SkiaGL (ci run
       40191526766 at 404cd11, both runners, single process and the Gesher
       device; package and e2e green)
+- [ ] Window and activity leftovers (windows3 track; docs/windows3.md, ADR
+      0053; ci run 40258887997 at f03607f)
+  - [ ] Screen orientation per task: screenOrientation and
+        setRequestedOrientation turn the task's display (window, Configuration,
+        Display rotation and size, -land/-port); Signal Generator on the
+        default display in e2e
+  - [ ] Window threads wake for input with WebView2 attached (no WM_NULL)
+  - [ ] Multi-resume and onTopResumedActivityChanged
+  - [ ] Activity.moveTaskToBack minimizes; restoring brings the task back
+  - [ ] The single process relaunches for unhandled configuration changes
+  - [ ] Touch keyboard rows (IFrameworkInputPane) as IME insets; adjustPan,
+        edge-to-edge adjustResize
+  - [ ] Ctrl+C/V/X in EditText with Windows' clipboard
 
 - [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
