@@ -62,6 +62,15 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+ARM width correction is now open: the native3-wide target macro audit found
+unsigned wchar32 on Android arm64, while root's width oracle assumed signed
+on both ABIs. Full ci 40404678100/581e88f verified the signed oracle and the
+old shared test expectations; it does not prove the missing unsigned
+high-bit cases. Width roadmap closure is withdrawn. Root prepares a separate
+unsigned pinned oracle and guest wcwidth/wcswidth overrides; the current
+combined 40418638643 is retained as diagnostic/clock evidence, not mergeable
+proof of the corrected unsigned-width contract. No local compile or run.
+
 Combined full ci 40418638643 at b15ecea is pending. It includes verified
 cloud/exec integration 94ccde1 plus current rule/brief docs, the previously
 verified width implementation and the new real ART CPU-clock host checks.

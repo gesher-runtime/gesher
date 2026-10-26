@@ -473,11 +473,13 @@ needs: [framework-build.md](framework-build.md).
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
       Collation and remaining NDK/POSIX scope stay open.
-- [x] Pinned bionic wcwidth/wcswidth: all code points/four invalid sentinels
+- [ ] Pinned bionic wcwidth/wcswidth: all code points/four invalid sentinels
       match the locked ICU4X width oracle; 33 boundaries and bounded UTF-32
       strings pass both NDK ABIs and APK modes. Full ci 40404678100 at
-      581e88f, both Windows runners and package/e2e. CPU clocks and other
-      wide/POSIX contracts are separate open work.
+      581e88f verified the signed x86_64 oracle and prior shared expectations;
+      the unsigned ARM64 invalid-input distinction needs corrected reference
+      and guest tests before closure. CPU clocks and other wide/POSIX
+      contracts are separate open work.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

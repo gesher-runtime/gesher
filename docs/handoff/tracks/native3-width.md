@@ -1,5 +1,13 @@
 # Native3: verified character-width stage
 
+Correction: the prior shared expectations assumed signed wchar32 for both
+ABIs. The real Android arm64 target uses unsigned wchar32, so the high-bit
+invalid values need different pinned wcwidth/wcswidth outcomes. The signed
+x86_64 full-code-point proof below remains valid; the previous ARM tests do
+not prove that missing distinction. The roadmap closure is withdrawn until
+the independent unsigned oracle and actual guest-path checks pass in CI.
+Root is adding that correction, not changing timing or failure criteria.
+
 Source 581e88f4d63896ab648994772832cbf327e61c55, full ci 40404678100.
 Root personally read every job (22 success/six skipped), both zero-failure
 Windows summaries, actual width/classification/NDK ABI and APK PASS lines,

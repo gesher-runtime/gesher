@@ -30,11 +30,11 @@
 // unmodified pinned ICU4X wrapper and the constants in libc/private/icu4x.h.
 use crate::bionic_icu4x::*;
 
-pub fn width(c: u32) -> i32 {
+pub fn width(c: u32, unsigned_wchar: bool) -> i32 {
     if (0x20..0x7f).contains(&c) { return 1; }
     if c == 0 { return 0; }
-    // Android wchar_t is signed 32-bit, including the invalid input branch.
-    if (c as i32) < 0x20 || (0x7f..=0xa0).contains(&c) { return -1; }
+    // Android x86_64 uses signed wchar32; arm64 uses unsigned wchar32.
+    if c < 0x20 || (!unsigned_wchar && c >= 0x80000000) || (0x7f..=0xa0).contains(&c) { return -1; }
     match __icu4x_bionic_general_category(c) {
         15 => return -1,
         6 | 7 => return 0,
@@ -55,20 +55,21 @@ pub fn width(c: u32) -> i32 {
     }
 }
 
-pub fn print_reference() {
+pub fn print_reference(unsigned_wchar: bool) {
     let mut hash = 0xcbf29ce484222325u64;
     for c in (0..=0x10ffff).chain([0x110000, 0x7fffffff, 0x80000000, 0xffffffff]) {
-        for byte in width(c).to_le_bytes() {
+        for byte in width(c, unsigned_wchar).to_le_bytes() {
             hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
         }
     }
-    println!("WIDTH_REFERENCE wcwidth {hash:016x}");
+    let prefix = if unsigned_wchar { "WIDTH_UNSIGNED" } else { "WIDTH" };
+    println!("{prefix}_REFERENCE wcwidth {hash:016x}");
     for c in [0, 0x1f, 0x20, 0x7f, 0x9f, 0xa0, 0xa1, 0xad, 0x300, 0x345,
               0x34f, 0x378, 0x61c, 0x903, 0x115f, 0x1160, 0x11a8, 0x200d,
               0x3000, 0x3248, 0x4dc0, 0xac00, 0xac01, 0xd800, 0x16fe4,
               0x1d167, 0x1f600, 0x1fae9, 0x10ffff, 0x110000, 0x7fffffff,
               0x80000000, 0xffffffff] {
-        println!("WIDTH_SAMPLE {c:08x} {}", width(c));
+        println!("{prefix}_SAMPLE {c:08x} {}", width(c, unsigned_wchar));
     }
-    println!("WIDTH_REFERENCE ICU4X 2.0.0-beta2: 1114112 code points and four invalid values");
+    println!("{prefix}_REFERENCE ICU4X 2.0.0-beta2: 1114112 code points and four invalid values");
 }
