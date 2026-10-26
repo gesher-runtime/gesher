@@ -700,6 +700,12 @@ see "After that" for what is left._
 
 ## native2 track: shim gaps, platform dlopen, file-system leftovers (ADR 0057)
 
+native3 follows this verified track; its current work is described in
+[ADR 0062](decisions/0062-native3-ndk-coverage.md) and
+[the brief](handoff/tracks/native3.md). The first libjnigraphics/Bitmap
+bridge is implemented with tests but has not been compiled or verified in
+CI yet. Remaining public API coverage and filesystem limits are still open.
+
 Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 `docs/handoff/tracks/native2.md`. Branch `wip/native2`.
 

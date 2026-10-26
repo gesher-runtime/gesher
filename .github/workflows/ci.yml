@@ -30,6 +30,9 @@ jobs:
       - name: Build
         run: |
           ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
+          # Compile the new bridge before the full runtime to expose its
+          # header/ABI errors without waiting for every AOSP object.
+          ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
           ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
