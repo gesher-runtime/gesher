@@ -1,9 +1,10 @@
 # 0065. aot3: compilation contexts, install profiles, secondary dex and oatdump
 
-Status: proposed. Oatdump's four focused checks pass on both runners in
-ci 40352810247, but that full run is red on the old geocoder teardown.
-The next combined verification is ci 40368334642 at 96ef687. No full green
-aot3 result or cloud-profile verification is claimed yet.
+Status: accepted for the oatdump/tool inspection stage, verified in full ci
+40368334642 at 96ef687 (attempt 1). All four new checks and zero-failure
+summaries pass on both runners; installed-copy cleanup and both e2e jobs
+also pass. Shared-library contexts, cloud profiles and secondary dex remain
+proposed/open. See [the frozen report](../handoff/tracks/aot3-oatdump.md).
 
 ADR 0054's app/profile/image model is verified in ci 40320549410 at ae75766.
 Its remaining contracts belong to this track, as listed in
@@ -48,7 +49,7 @@ compilation is left to CI, with no local AOSP build.
 
 ## Remaining contracts
 
-All are open until CI verifies them: oatdump compilation and behavior,
-shared-library loader contexts, validated `.dm` install profiles and
-secondary dex compilation/invalidation. No roadmap checkbox is closed.
+Shared-library loader contexts, validated `.dm` install profiles and
+secondary dex compilation/invalidation remain open. Only the scoped
+oatdump row is closed with its verifying run; the aggregate remains open.
 No local AOSP build was run.
