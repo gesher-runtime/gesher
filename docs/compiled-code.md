@@ -210,6 +210,8 @@ package and e2e:
       device launch reports 11 methods with AOT code, none interpreted.
 
 ### Continuation (2026-10-26)
+- Running: ci 40309659362 at 7373128, with native2 integrated and the
+  duplicate ART lock patch removed. Full combined verification is pending.
 - ci 40297189562 at 0e0262f failed one Windows 2022 WebView pixel check;
   Windows 2025, package and e2e passed. This was an actual rejected navigation
   being loaded: debug PrintWindow on Android's UI Looper waited for the
