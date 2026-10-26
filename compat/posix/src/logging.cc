@@ -100,8 +100,9 @@ bool IsLoggable(int priority, const char* tag, size_t length, int fallback, int 
     property = PropertyPriority("persist.log.tag." + name, "log.tag." + name);
   }
   if (property < 0) property = PropertyPriority("persist.log.tag", "log.tag");
-  int threshold = property >= 0 ? property : minimum != 0 ? minimum : fallback;
-  if (property >= 0 && minimum != 0) threshold = std::min(property, minimum);
+  constexpr int kAndroidLogDefault = 1;  // android_LogPriority's default sentinel
+  int threshold = property >= 0 ? property : minimum != kAndroidLogDefault ? minimum : fallback;
+  if (property >= 0 && minimum != kAndroidLogDefault) threshold = std::min(property, minimum);
   return priority >= threshold;
 }
 void Record(int buffer, int priority, const char* tag, const char* text) {

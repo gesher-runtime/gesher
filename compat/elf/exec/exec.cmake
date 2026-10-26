@@ -27,3 +27,7 @@ add_executable(exec3_binder_ready_probe
 target_include_directories(exec3_binder_ready_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
 target_compile_options(exec3_binder_ready_probe PRIVATE -Wall -Wextra -Werror)
+
+add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
+target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec3_property_host_probe PRIVATE utils)

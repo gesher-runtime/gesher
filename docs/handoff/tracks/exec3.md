@@ -1,18 +1,16 @@
 # Track brief: exec3
 
 Current continuation status (2026-10-26): the full track remains open. CI
-40338806524 passes 57 shell cases, real mailbox/process tools, main-executable
-TLS and basic shared properties on both runners. Build/package and Windows-2022
-e2e pass; Windows-2025 e2e fails before install on APK DNS errors. Both Windows
-suites fail the new device APK harness; Windows-2022 also fails broker startup
-before the RTL app runs. The next prepared tree uses real APK installation,
-adds a bounded broker protocol readiness check, correct property serial/wait
-semantics and structured Java/NDK logcat. Local native/tool checks pass; their
-new ART/APK assertions are running in CI 40352529279 at dc19ee2 after merging
-integration 46bc9e5. See docs/exec.md for exact evidence and open
-pm/am, umask and policy scope. The original brief below remains unchanged.
-The pm/am Binder client and separate installed target APK are prepared after
-that dispatch; only their source checks have passed so far.
+40352529279 at dc19ee2 passes build/package/both e2e jobs (zero unexpected),
+57 shell cases, mailbox/process tools, TLS, broker readiness, JNI's nine process
+checks in both APK modes and NDK property serial/wait ABI assertions on both
+runners. Both Windows suites have seven failed Checks from log DEFAULT handling,
+scratch property-area creation, discarded Win32 callbacks and replaced logger
+capture. Their prepared corrections pass native host/mocked-wrapper checks;
+actual ART/Java proof is pending. The tree now includes integration f677944 and
+prepared pm/am, one-shot readiness, UTF-8/long-value, Launcher framing and
+completed-geocoder fixes. See docs/exec.md for exact evidence and open umask/
+policy scope. The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
 given to the first agent of this track (2026-10-26), kept verbatim. A
