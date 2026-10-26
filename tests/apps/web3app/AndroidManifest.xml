@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- web3app.apk (tests/apps/web3app, ADR 0058): androidx.webkit (WebViewCompat,
+     WebMessageListener, document-start scripts, ProxyController), navigator.geolocation
+     from LocationManager, accessibility (a WebView's AccessibilityNodeProvider and UI
+     Automation of the app's views), and Windows' proxy, CONNECTIVITY_ACTION and
+     PendingIntent network requests. tests/windows/tracks/54-web3.ps1 runs it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.web3app">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <application android:label="@string/app_name" android:usesCleartextTraffic="true"
+        android:theme="@style/Web3Theme">
+        <activity android:name=".CompatActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".GeoActivity" android:exported="true" />
+        <activity android:name=".A11yActivity" android:exported="true" />
+        <activity android:name=".NetActivity" android:exported="true" />
+    </application>
+</manifest>
