@@ -67,6 +67,17 @@ covers supplementary UTF-16 indices, transform/rounding, clipping, missing
 characters with no caret, a newer same-text observation with no bounds and
 composition end. These Java/ART checks await full CI; no local build was run.
 
+Targeted framework **40416561427** at d50084d is now complete green (both
+host-tools and framework jobs). The actual framework job log confirms javac
+exit zero/zero errors and successful graphics-tests.dex, gesher-app and both
+Windows4 test APK builds, establishing the class-graph correction only.
+New full combined diagnostic **40417632512** uses exact
+`cde1c797434401bb94db24f5281a98829d15bddf`, including verified runtime/exec3
+integration 94ccde1 and the missing CursorAnchorInfo publication correction.
+Watch: `C:/work/gesher-ci-review/windows4-40417632512-watch.log`, interval 120.
+It is diagnostic until every required result is read; no threshold or runtime
+assertion was relaxed. The independent old main build was not canceled.
+
 Resumed on 2026-10-26 after merging current integration a57c1f8 without a reset.
 WIP: the shared Application Display follows the focused visible task, with
 explicit per-Activity zero/rotated overrides and masked Binder display callbacks.
