@@ -58,7 +58,7 @@ $out = & "$Dir/media_probe.exe" capture 2>&1 | Out-String
 $code = $LASTEXITCODE
 if ($out -match 'capture: (WASAPI shared mode capture on [^\r\n]+)') {
   Write-Host "PASS  media3: the capture engine records from the default capture endpoint ($($Matches[1].Trim()))"
-} elseif ($code -eq 0 -and $out -match 'capture: (none: [^\r\n]+)' -and $out -match 'read 88200 frames') {
+} elseif ($code -eq 0 -and $out -match 'read 88200 frames' -and $out -match 'capture: (none: [^\r\n]+)') {
   Write-Host "PASS  media3: the capture engine without a capture endpoint records silence, paced by the clock ($($Matches[1].Trim()))"
 } else {
   Write-Host "FAIL  media3: the capture engine without GESHER_AUDIO_SOURCE (exit $code)"
