@@ -189,7 +189,25 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** CI 40405306826 is fully green at
+**Current review:** final CI 40410489251 is fully green at
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01: all 28 jobs completed, 22 success
+and six intentional skips. Actual Windows-2022/2025 logs end in
+`0 test(s) failed`, with all 11 exec3 Checks, 57 shell cases each and the new
+NDK default-tag assertions through standalone ART and both APK modes. The
+property/log, process/signal/tool, TLS, Binder readiness and real installed
+pm/am assertions all pass. The ART camera request-race and original track58
+assertions pass without signal records. Package installation/oatdump/image,
+UI/input and cleanup pass; both nine-app e2e runs and four transport cases have
+zero unexpected failures, Puzzles generators 5052/8876 exit 0.
+
+Only result documentation changes above that tested SHA. The candidate contains
+integration f520fd1; concurrent AOT cloud integration 6dc3f03 is intentionally
+outside it. Root will merge verified slices and run the required combined
+integration CI. The previous ntdll fault did not recur in either green exec3
+run; these results do not establish its precise cause. Compatibility limits in
+ADR0060 remain open. No further local compilers or native fixtures were run.
+
+**Verified foundation:** CI 40405306826 is fully green at
 87d5adadea4008a9c4340b9ee58fbabf9aedb00f: all 28 jobs completed (22 success,
 six intentional skips). Both actual Windows logs end in `0 test(s) failed`.
 Every exec3 Check passes, including shell57, signals/processes/tools, the full
@@ -207,9 +225,9 @@ failures; native Puzzles generators 6156/9424 exit 0. The exec build directly
 passes LauncherTailTest and LauncherCommandLineTest's 13 cases. The later
 97e63e5 default-tag filter/setter regression and integration f520fd1's CI-only
 rules are prepared for final combined CI; no new local compiler will run.
-Final CI 40410489251 runs that candidate at
+Final CI 40410489251 verified that candidate at
 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01. Watch
-C:\work\gesher-ci-review\exec3-watch-40410489251.log at 120 seconds; retain
+C:\work\gesher-ci-review\exec3-watch-40410489251.log completed with exit 0; retain
 87d5ada and its completed logs as the separately verified combined foundation.
 
 **Previous review:** CI 40393019261 completed at
