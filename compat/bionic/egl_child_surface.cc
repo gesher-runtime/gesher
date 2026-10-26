@@ -247,6 +247,11 @@ void ChildSurfaceCreated(EGLSurface surface, ANativeWindow* window, HWND helper)
   c->window = window;
   c->helper = helper;
   WindowSize(window, &c->helper_width, &c->helper_height);
+  std::fprintf(stderr,
+               "gesher EGL: window surface on a %dx%d surface without a window of its own "
+               "(a SurfaceView's or SurfaceTexture's): frames posted at each swap\n",
+               c->helper_width, c->helper_height);
+  std::fflush(stderr);
   std::lock_guard<std::mutex> lock(g_mutex);
   auto it = Threads().find(helper);
   if (it != Threads().end()) {

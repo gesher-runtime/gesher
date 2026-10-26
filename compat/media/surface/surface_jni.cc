@@ -46,6 +46,7 @@
 #include <log/log.h>
 #include <utils/LightRefBase.h>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -451,6 +452,9 @@ struct ViewSurface {
   android::sp<QueueSurface> surface;
   jweak view = nullptr;  // the SurfaceView, invalidated by each frame
   FrameImages images;
+  // Surfaces track: an invalidation is on its way (cleared when the view records its
+  // frame), so a fast producer (EGL at 60 Hz) does not flood the UI thread with them.
+  std::atomic<bool> invalidate_pending{false};
 };
 
 std::mutex gViewMutex;
@@ -470,6 +474,7 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
   vs->surface->SetListener([weak] {
     std::shared_ptr<ViewSurface> v = weak.lock();
     if (v == nullptr) return;
+    if (v->invalidate_pending.exchange(true)) return;
     JNIEnv* env = Env();
     if (env == nullptr) return;
     jobject view;
@@ -523,6 +528,7 @@ void JNICALL SV_drawSurface(JNIEnv* env, jclass, jlong canvas_ptr, jlong blast, 
   auto* canvas = reinterpret_cast<android::Canvas*>(canvas_ptr);
   std::shared_ptr<ViewSurface> vs = ViewSurfaceFor(blast, false);
   if (canvas == nullptr || vs == nullptr) return;
+  vs->invalidate_pending.store(false);  // the next frame invalidates the view again
   {
     std::lock_guard<std::mutex> lock(gViewMutex);
     if (vs->view == nullptr || !env->IsSameObject(vs->view, view)) {
