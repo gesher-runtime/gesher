@@ -11,6 +11,7 @@
 //   libexec2child.so sigloop          install SIGTERM/SIGUSR1 handlers, print
 //                                     "child-ready", then wait; SIGTERM exits
 //                                     42 if a SIGUSR1 arrived first, else 43
+#include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,14 +82,18 @@ int main(int argc, char** argv) {
     return __system_property_set(argv[2], argv[3]) == 0 ? 0 : 1;
   }
   if (strcmp(mode, "property-watch") == 0 && argc > 2) {
+    // serial is a platform libc export, absent from the public NDK header and
+    // stub library. Resolve it as an NDK library querying the platform would.
+    unsigned (*serial)(const prop_info*) = dlsym(RTLD_DEFAULT, "__system_property_serial");
+    if (serial == NULL) return 5;
     const prop_info* property = __system_property_find(argv[2]);
     if (property == NULL) return 2;
-    unsigned previous = __system_property_serial(property);
+    unsigned previous = serial(property);
     printf("property-ready:%u\n", previous);
     fflush(stdout);
     if (getchar() != '\n') return 3;
     __system_property_read_callback(property, property_value, NULL);
-    return __system_property_serial(property) != previous ? 0 : 4;
+    return serial(property) != previous ? 0 : 4;
   }
   if (strcmp(mode, "sigloop") == 0 || strcmp(mode, "sigloop-pid") == 0) {
     struct sigaction sa;

@@ -68,7 +68,7 @@ jobs:
           bin="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           # API 29: posix_spawn and friends (added at API 28) are available.
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
-            -o dist-exec/libexec2child.so tests/exec/exec2_child.c
+            -o dist-exec/libexec2child.so tests/exec/exec2_child.c -ldl
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
             -o dist-exec/libexec2test.so tests/exec/exec2_test.c
           echo "--- libexec2test.so UND imports ---"

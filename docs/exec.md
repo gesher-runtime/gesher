@@ -238,6 +238,11 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   skipped by design). None of the 47 Python cases is claimed CI-verified from
   this run. The corrected harness passes all 47 cases in the small local
   launcher build before the combined follow-up dispatch.
+- Combined CI 40319876518 at ad6f7bb failed its exec artifact build early:
+  __system_property_serial is a platform libc export absent from the public
+  NDK header/stub. The test now resolves that export with dlsym (and links
+  libdl) instead of declaring an unavailable NDK API. Supersede that run with
+  the correction; the shared-property implementation remains unverified in CI.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
