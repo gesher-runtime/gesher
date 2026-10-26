@@ -239,7 +239,7 @@ size_t BIONIC_SYSV Mbrlen(const char* s, size_t n, BionicMbstate* ps) {
 int BIONIC_SYSV Mbtowc(wchar32* pwc, const char* s, size_t n) {
   static BionicMbstate st{};
   if (s == nullptr) {
-    Reset(&st);
+    std::memset(&st, 0, sizeof(st));
     return 0;
   }
   size_t r = Mbrtowc(pwc, s, n, &st);
@@ -405,7 +405,7 @@ size_t BIONIC_SYSV Wcsnrtombs(char* dst, const wchar32** src, size_t nwc, size_t
       return kInvalid;
     }
     if (dst != nullptr) {
-      if (count + r > len) break;
+      if (r > len - count) break;
       std::memcpy(dst + count, buf, r);
     }
     count += r;
@@ -431,7 +431,7 @@ size_t BIONIC_SYSV Wcstombs(char* dst, const wchar32* src, size_t len) {
 int BIONIC_SYSV Wctomb(char* dst, wchar32 c) {
   static BionicMbstate state{};
   if (dst == nullptr) {
-    Reset(&state);
+    std::memset(&state, 0, sizeof(state));
     return 0;
   }
   return static_cast<int>(Wcrtomb(dst, c, &state));

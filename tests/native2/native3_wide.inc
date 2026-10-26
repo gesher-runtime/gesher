@@ -67,6 +67,22 @@ Part Wide() {
           "setlocale unsupported name");
   p.Check(!std::strcmp(localeconv()->decimal_point, ".") && localeconv()->grouping[0] == 0,
           "C locale lconv pointer layout");
+  using DecodeL = size_t (*)(wchar_t*, const char**, size_t, mbstate_t*, locale_t);
+  using EncodeL = size_t (*)(char*, const wchar_t**, size_t, mbstate_t*, locale_t);
+  auto decode_l = reinterpret_cast<DecodeL>(dlsym(RTLD_DEFAULT, "mbsrtowcs_l"));
+  auto encode_l = reinterpret_cast<EncodeL>(dlsym(RTLD_DEFAULT, "wcsrtombs_l"));
+  p.Check(decode_l && encode_l, "restartable conversion locale aliases");
+  if (decode_l && encode_l) {
+    mbstate_t state{};
+    const char* bytes = "\xf0\x9f\x99\x82";
+    const wchar_t* wide = L"\U0001f642";
+    wchar_t decoded[2];
+    char encoded[5];
+    p.Check(decode_l(decoded, &bytes, 2, &state, locale) == 1 && bytes == nullptr &&
+                decoded[0] == 0x1f642 && decoded[1] == 0 &&
+                encode_l(encoded, &wide, sizeof(encoded), &state, locale) == 4 && wide == nullptr &&
+                !std::memcmp(encoded, "\xf0\x9f\x99\x82", 5), "locale conversions use UTF32/state/source ABI");
+  }
 
   const wchar_t* large = L"-9223372036854775808!";
   wchar_t* end = nullptr;
@@ -108,6 +124,8 @@ Part Wide() {
   auto float_l = reinterpret_cast<FloatL>(dlsym(RTLD_DEFAULT, "wcstof_l"));
   p.Check(to_double && to_float && double_l && float_l, "float and double entry points");
   if (to_double && to_float && double_l && float_l) {
+    WideFloatingContracts(to_double, to_float,
+        [&](bool ok, const std::string& what) { p.Check(ok, what); });
     p.Check(to_double(long_float.c_str(), &end) == 125 && end == long_float.c_str() + 606 &&
                 float_l(long_float.c_str(), &end, locale) == 125 && end == long_float.c_str() + 606,
             "float input/end beyond 255 characters");

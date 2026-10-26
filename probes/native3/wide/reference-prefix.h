@@ -37,3 +37,21 @@ int isdigit(int c) { return c >= '0' && c <= '9'; }
 int isalpha(int c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 int isxdigit(int c) { return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 int _tolower(int c) { return c | 0x20; }
+int isalnum(int c) { return isalpha(c) || isdigit(c); }
+
+// The original wcstod/parsefloat bodies use only this finite input stream.
+// Numeric rounding is supplied by host strtod/strtof, so this extension
+// verifies the pinned wide grammar/end handling, not bionic's gdtoa engine.
+struct FILE {
+  int _flags;
+  struct { unsigned char* _base; size_t _size; } _bf;
+  unsigned char* _p;
+  size_t _r;
+  int (*_read)(void*, char*, int);
+};
+struct __sfileext {};
+#define _FILEEXT_SETUP(f, e) static_cast<void>(e)
+#define __SRD 1
+int __srefill(FILE*) { return 1; }
+int ungetc(int c, FILE*) { return c; }
+int iswspace(wchar_t c) { return isspace(c) || c == 0x2003; }

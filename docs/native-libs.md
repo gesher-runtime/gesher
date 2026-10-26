@@ -1,5 +1,11 @@
 # Native x86-64 libraries (Phase 6)
 
+Wide/multibyte continuation: [ADR 0073](decisions/0073-native3-wide-abi.md)
+and [native3-wide status](handoff/tracks/native3-wide.md) document the pinned
+UTF/state, LP64 numeric, C collation and wide-time contracts. The independent
+reference and compilation pass ci 40419402781; production runtime/full CI
+remain pending. Binary128 conversion and wide stdio/scanf stay open.
+
 Many Android apps ship native code as ELF `.so` files built by the NDK for
 Linux, under `lib/x86_64` in the APK. Windows cannot load them (`LoadLibrary`
 wants PE), so Gesher loads them itself: an **ELF loader** maps the shared
