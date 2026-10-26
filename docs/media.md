@@ -220,6 +220,9 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — stopped by the coordinator, 2026-10-26
+- Running: ci 40305909645 at 4a2a28e, including integration 91c195d/native2,
+  the optional MediaCommunicationManager cast guard and missing-boot-class
+  diagnostics. No new runtime result is verified yet.
 - Running: ci 40299212277 at a1a0f43, with integration a98dda9. Verify the
   new session round trip, NDK tones, all existing media checks and Just
   Player's e2e; prior runs are recorded below for diagnosis.
