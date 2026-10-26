@@ -207,6 +207,10 @@ failures; native Puzzles generators 6156/9424 exit 0. The exec build directly
 passes LauncherTailTest and LauncherCommandLineTest's 13 cases. The later
 97e63e5 default-tag filter/setter regression and integration f520fd1's CI-only
 rules are prepared for final combined CI; no new local compiler will run.
+Final CI 40410489251 runs that candidate at
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01. Watch
+C:\work\gesher-ci-review\exec3-watch-40410489251.log at 120 seconds; retain
+87d5ada and its completed logs as the separately verified combined foundation.
 
 **Previous review:** CI 40393019261 completed at
 6a3289d2162359aa4f59d22a39b52d724b61517b. Every exec3 Check passes on both
