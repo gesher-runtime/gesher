@@ -101,6 +101,19 @@ MainActivity's task).
 
 ## Status and next steps
 
+Verified after handover: ci 40285476400 at a15ade4, every job success or
+skipped, test (windows-2022) and test (windows-2025) both end with
+`0 test(s) failed`; package succeeds and e2e reports `0 unexpected failures`.
+All 17 windows3 checks pass on each runner, including orientation and
+single-process relaunch, multi-resume, IME inset delivery/adjustPan, Windows
+clipboard shortcuts, minimizing and restoring. Signal Generator passes e2e
+on the default display. Touch keyboard insets were injected through the
+handler message; the real IFrameworkInputPane callback is not CI-verified.
+
+Merged origin/phase4/integration 59d441c before merge readiness; all differences
+from a15ade4 are documentation only. The remaining gaps below stay open for
+the subsequent track. The following handoff notes record the earlier state.
+
 Stopped on the coordinator's order (2026-10-26).
 
 - Last verified: ci run 40258887997 at f03607f (phase4/integration e37846d
