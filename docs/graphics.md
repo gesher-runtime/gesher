@@ -531,6 +531,10 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 
 Status and next steps (stopped by the coordinator, 2026-10-26):
 
+- ci 40307919084 at b1b59a6: Windows 2022, package and both e2e jobs pass,
+  including now-required TIC-80. Windows 2025 fails only the known
+  wrong.host.badssl.com connection timeout (2 counted failures). Attempt 2
+  reruns that failed job only; its result must be read before merge.
 - Lead-engineer continuation: ci 40297011754 at b8d6752 passed windows-2025,
   package and e2e (windows-2022). windows-2022's only failure is the known
   badssl self-signed endpoint connection timeout (2 counted FAIL lines);
