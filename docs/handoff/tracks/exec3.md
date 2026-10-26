@@ -1,23 +1,35 @@
 # Track brief: exec3
 
-Latest verified slice (2026-10-27): CI 40405306826 is fully green at
+Final verified slice (2026-10-27): CI 40410489251 is fully green at
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01, 22 successful jobs and six intentional
+skips. Both actual Windows logs end in zero failed tests; all 11 exec3 Checks,
+57 shell cases each, default-tag NDK assertions in three ART/APK modes and all
+original/new track58 assertions pass. No signal records. Actual package and
+both nine-app e2e logs were read; all pass, four transport cases and zero
+unexpected failures, Puzzles 5052/8876 exit 0. Only result docs are above the
+tested SHA. The base includes f520fd1; root will combine concurrent 6dc3f03 and
+run integration CI under rule g. Do not merge integration/main or publish.
+The full track remains open for the explicit umask/permission/console and
+architectural limits; neither green run proves the prior ntdll fault's cause.
+
+Previous verified foundation: CI 40405306826 is fully green at
 87d5adadea4008a9c4340b9ee58fbabf9aedb00f, 22 successful jobs and six intentional
 skips. Both actual Windows logs end with zero failed tests. Every exec3 Check,
 the new ART camera request-selection regression and every original track58
 device/single-process assertion pass; no signal records. Actual package and both
 nine-app e2e logs were read, all pass with zero unexpected failures, Puzzles
 6156/9424 exit 0. This verifies the combined ownership correction, without
-establishing the cause of the earlier ntdll fault. Final CI is next for the
-narrow default-tag liblog follow-up 97e63e5 plus integration f520fd1; no local
-compilation. The full track's umask/permissions/console and architectural
+establishing the cause of the earlier ntdll fault. The narrow default-tag liblog
+follow-up 97e63e5 plus integration f520fd1 now passes final CI40410489251; no
+local compilation. The full track's umask/permissions/console and architectural
 limitations remain explicit. Earlier continuation entries below are historical.
-Final combined CI 40410489251 now runs source
+Final combined CI 40410489251 verified source
 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01 (default-tag follow-up plus f520fd1).
-Watch C:\work\gesher-ci-review\exec3-watch-40410489251.log at 120 seconds.
-Do not change runtime code above this candidate while it is being verified;
+Watch C:\work\gesher-ci-review\exec3-watch-40410489251.log completed exit 0.
+Do not change runtime code above this verified candidate;
 preserve the fully green 87d5ada evidence independently.
 
-Current continuation status (2026-10-26): full track remains open. Completed
+Historical continuation status (2026-10-26): full track remains open. Completed
 CI40393019261 at6a3289d passes EVERY exec3 Check on both runners, including the
 actual installed pm/am target/receiver/force-stop assertions. Windows-2022 whole
 suite0 failed;2025 only nine devices Checks from one device-process post-steps

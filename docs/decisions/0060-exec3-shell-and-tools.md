@@ -201,11 +201,20 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
+Final CI 40410489251 at 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01 is fully
+green (22 success, six intentional skips). Both Windows whole suites have zero
+failed tests, all 11 exec3 Checks/57 shell cases each pass, including the
+default-tag setter and null/empty/zero-length filter assertions through the real
+NDK child in standalone ART and both APK modes. All original/new device checks,
+package and both nine-app e2e runs pass; zero unexpected failures and no signal
+records. Only result docs follow this source. Root owns combination with the
+concurrent AOT cloud integration and its required integration CI.
+
 CI 40405306826 at 87d5adadea4008a9c4340b9ee58fbabf9aedb00f is fully green:
 both Windows whole-suite zero summaries, all exec3 and new ART camera-race
 checks, package and both nine-app e2e runs. The prior post-steps fault does not
 recur in this combined tree; its exact cause is not inferred. The later
-default-tag loggability/setter correction awaits final combined CI with f520fd1.
+default-tag loggability/setter correction passes final CI40410489251 with f520fd1.
 
 CI40393019261 passes all exec3 Checks on both runners, including real installed
 pm/am list/path/start/broadcast/force-stop, and the whole Windows-2022 suite.
@@ -278,7 +287,7 @@ verifies installed pm/am, and CI40405306826 verifies the complete combined run.
 - CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
   Process.destroy/destroyForcibly on both runners. Native console interruption
   remains unverified. CI40405306826 verifies the combined runtime tree; the
-  separate default-tag follow-up still needs final combined CI.
+  default-tag follow-up passes final CI40410489251 as well.
 - Property permissions and Binder report/poke notifications. Properties,
   explicit callbacks and real logcat capture pass CI 40385411337 in all modes.
 - CI 40338806524 verifies the API29 NDK executable local-exec TLS program and

@@ -490,17 +490,16 @@ needs: [framework-build.md](framework-build.md).
       processes (`kill` to the target's SIGUSR1/SIGTERM handlers, signal 0,
       SIGKILL); `/system/bin` `ls`, `id`, `getprop`
 - [x] Exec3's verified continuation ([exec.md](exec.md), ADR 0060;
-      ci 40405306826, both Windows whole suites zero failures): actual
+      ci 40405306826/40410489251, both Windows whole suites zero failures): actual
       `Process.destroy()`/`destroyForcibly()`, `ps`, `cat`, `kill`, `sleep`;
       shell57 pipes/redirections/control-flow cases; Java/NDK `logcat` records,
-      filtering, nine formats, clear/follow; shared/boot/persistent `setprop`;
+      filtering/default tags, nine formats, clear/follow; shared/boot/persistent `setprop`;
       executable local-exec TLS; installed-device `pm`/`am` list/path/start,
       broadcast and force-stop, with actual target/receiver process assertions
 - [ ] Exec3 compatibility beyond that verified slice: shell umask and real
       permission behavior, broader shell conformance, native console interruption,
-      property caller policy and Binder report/poke notifications. The separate
-      default-tag log follow-up awaits final CI. General fork-before-exec and
-      static executables remain unsupported (ADR 0055/0060).
+      property caller policy and Binder report/poke notifications. General
+      fork-before-exec and static executables remain unsupported (ADR 0055/0060).
 
 ## Phase 7 checklist (arm64 translation)
 
