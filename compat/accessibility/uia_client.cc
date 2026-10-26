@@ -178,6 +178,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
       UIA_IsTogglePatternAvailablePropertyId, UIA_ToggleToggleStatePropertyId,
       UIA_IsValuePatternAvailablePropertyId, UIA_ValueValuePropertyId,
       UIA_ValueIsReadOnlyPropertyId, UIA_HeadingLevelPropertyId,
+      UIA_AriaRolePropertyId,
       UIA_IsScrollPatternAvailablePropertyId, UIA_SelectionItemIsSelectedPropertyId,
   };
   for (PROPERTYID p : props) cache->AddProperty(p);
@@ -238,7 +239,11 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
     if (!CachedBool(e, UIA_IsOffscreenPropertyId)) flags |= kVisible;
     if (CachedBool(e, UIA_IsScrollPatternAvailablePropertyId)) flags |= kScrollable;
     // HeadingLevel_None is 80050 (not in mingw-w64's header).
-    if (CachedInt(e, UIA_HeadingLevelPropertyId, 80050) != 80050) {
+    // Chromium exposed ARIA heading roles before implementing HeadingLevel
+    // (older WebView2 runtimes, including 131, have no heading-level value).
+    int heading_level = CachedInt(e, UIA_HeadingLevelPropertyId, 80050);
+    if ((heading_level >= 80051 && heading_level <= 80059) ||
+        CachedString(e, UIA_AriaRolePropertyId) == L"heading") {
       flags |= kHeading;
     }
     if (CachedBool(e, UIA_SelectionItemIsSelectedPropertyId)) flags |= kSelected;

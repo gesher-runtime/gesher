@@ -347,6 +347,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- ci 40325234847 at 2de1e15: package/both e2e pass; four test failures
+  per runner. External UIA now traverses both trees and sets/toggles Android
+  edit/check controls; its exact button-name lookup sees the theme's
+  `ANDROID BUTTON`. Disabled all-caps in that fixture, keeping the exact
+  name assertion. The 2022 page's heading needs UIA `AriaRole=heading`
+  when old Chromium has no HeadingLevel; added that semantic fallback.
+  New network kernel-interface/source/DNS/process/HTTP checks pass in
+  both process modes. Native NDK execution was blocked by a relative
+  `dist/web3_network.so` path; the next run uses its absolute path.
 - Running ci 40325234847 at 2de1e15 (the same combined UIA/network/NDK
   tree with the exception-free worker). No runtime gap is closed yet.
 - ci 40324592794 at 5e90b96 failed compiling the new raw-DNS worker:
