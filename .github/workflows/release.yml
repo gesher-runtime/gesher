@@ -1,0 +1,136 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ci_run_id:
+        description: 'Successful complete ci.yml run on main with release_version=0.1.0'
+        required: true
+        type: string
+      expected_sha:
+        description: 'Full main commit SHA verified by that CI run'
+        required: true
+        type: string
+      publish:
+        description: 'Publish after all gates (false only prepares and verifies a dry run)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-v0.1.0
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.repository == 'gesher-runtime/gesher' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE_CI_RUN: ${{ inputs.source_ci_run_id }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/release
+            tools/package
+            tests/release
+            docs/releases
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test promotion guards without network or publication
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests/release -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/release/version.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate full main CI and consume its exact artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release/promote.py prepare --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The tested installer runs in a separate step without an API token.
+      - name: Verify candidate install runtime and uninstall
+        shell: pwsh
+        run: tools/release/verify-installer.ps1 -Directory release-candidate -Phase candidate -Logs release-evidence/candidate
+      - name: Plan or publish only the validated bytes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GESHER_ALLOW_RELEASE_PUBLISH: ${{ inputs.publish && '1' || '0' }}
+        run: |
+          python tools/release/promote.py publish --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          '### Tested installer promotion' >> $env:GITHUB_STEP_SUMMARY
+          Get-Content release-evidence/publish.json >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-promotion-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-evidence/
+
+  verify-released:
+    needs: promote
+    if: inputs.publish && needs.promote.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      SOURCE_CI_RUN: ${{ inputs.source_ci_run_id }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/release
+            tests/e2e
+            tests/windows/graphics
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify published metadata digests and public download links
+        id: fetched
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release/promote.py fetch-release --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory released --evidence release-evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install and run the downloaded release then verify uninstall
+        shell: pwsh
+        run: tools/release/verify-installer.ps1 -Directory released -Phase released -Logs release-evidence/released
+      - name: Run real apps against the publicly downloaded installer
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/test-apks.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup released/gesher-setup-0.1.0.exe -Out e2e-results
+          exit $LASTEXITCODE
+      - name: Remove the e2e install and verify cleanup
+        if: always() && steps.fetched.outcome == 'success'
+        shell: pwsh
+        run: tools/release/verify-installer.ps1 -Directory released -Phase released -Logs release-evidence/e2e-cleanup -UninstallOnly
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: released-byte-verification-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            release-evidence/
+            e2e-results/

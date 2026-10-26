@@ -50,9 +50,14 @@ perform those final actions.
 
 Implemented locally, not yet CI verified: exact 0.1.0 selection with ordinary
 CI numbering retained, explicit PE metadata, post-smoke manifest/checksum
-receipts, and pure promotion guards. Thirteen offline test methods (including
-negative subcases) and the version selection fixture pass. ADR 0071 records
-the mechanism. Remaining: GitHub transport/promotion workflow, candidate and
-released-byte install/run/uninstall verification, final release notes, review
-and full branch CI with release_version=0.1.0 after verified web3 integration.
-No tag, release or local artifact download has occurred.
+receipts, promotion guards and GitHub transport, a dispatch-only main release
+workflow, candidate and released-byte install/run/uninstall verification,
+released-byte real-app e2e on both Windows runners, and release-note source.
+Twenty-five offline test methods (including negative subcases) and the version
+selection fixture pass. ADR 0071 records the mechanism; [the release
+runbook](../../releases/README.md) gives the coordinator's final commands.
+Remaining: independent review, full branch CI with release_version=0.1.0 after
+verified web3 integration, successful full main CI, promotion dry run and the
+coordinator's eventual publication/released-byte verification. The publication
+workflow itself has not run. No tag, release or local artifact download has
+occurred.
