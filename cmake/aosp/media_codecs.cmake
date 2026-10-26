@@ -115,7 +115,8 @@ target_include_directories(extractor_mkv PRIVATE ${AOSP_DIR}/external/libwebm ${
 # libwebm's mkvmuxer: the WebM writer under MediaMuxer and MediaRecorder (media3, ADR 0059).
 add_library(webm_mkvmuxer STATIC
   ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvmuxer.cc
-  ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvmuxerutil.cc)
+  ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvmuxerutil.cc
+  ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvwriter.cc)
 target_include_directories(webm_mkvmuxer PRIVATE ${AOSP_DIR}/external/libwebm)
 target_compile_options(webm_mkvmuxer PRIVATE -w)
 set_target_properties(webm_mkvmuxer PROPERTIES CXX_STANDARD 17)
