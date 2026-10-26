@@ -18,6 +18,9 @@ bridge and the complete roadmap/ADR graphics limits before implementation.
   rendering alone does not establish this path.
 - Child SurfaceControl transactions: alpha/transforms and the remaining
   layering/clipping/ownership limits in the surfaces ADR/status section.
+- YuvImage JPEG_R and the remaining Bitmap parcel storage/ownership limits
+  in ADR 0056; the first stage's heap-copy reader is not evidence of mapped
+  Bitmap storage semantics.
 - Activity UI rendered with SkiaGL: correct composed pixels through
   PrintWindow, including the previously white readback gap and popups where
   their SkiaGL opacity/composition remains open.

@@ -1,36 +1,35 @@
 diff --git a/core/java/android/view/SurfaceView.java b/core/java/android/view/SurfaceView.java
-index 49a7da2..b937d49 100644
+index 49a7da2..9c168a8 100644
 --- a/core/java/android/view/SurfaceView.java
 +++ b/core/java/android/view/SurfaceView.java
-@@ -691,6 +691,9 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
-                 // punch a whole in the view-hierarchy below us
-                 clearSurfaceViewPort(canvas);
-             }
-+        } else if (mDrawFinished && (mPrivateFlags & PFLAG_SKIP_DRAW) == 0) {
-+            // Gesher: a surface above its window, drawn in place.
-+            gesherDrawSurface(canvas, getAlpha());
+@@ -617,6 +617,7 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+         if (viewRoot != null) {
+             viewRoot.removeSurfaceChangedCallback(this);
          }
-         super.draw(canvas);
-     }
-@@ -703,6 +706,9 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
++        gesherRemoveOverlay();
+ 
+         mAttachedToWindow = false;
+         if (mGlobalListenersAdded) {
+@@ -703,6 +704,10 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
                  // punch a whole in the view-hierarchy below us
                  clearSurfaceViewPort(canvas);
              }
-+        } else if (mDrawFinished && (mPrivateFlags & PFLAG_SKIP_DRAW) == PFLAG_SKIP_DRAW) {
-+            // Gesher: a surface above its window, drawn in place.
-+            gesherDrawSurface(canvas, getAlpha());
++        } else if (mDrawFinished) {
++            // Gesher: a surface above its window (setZOrderOnTop) is drawn over every view,
++            // by a drawable in the root view's overlay (gesherUpdateOverlay).
++            gesherUpdateOverlay();
          }
          super.dispatchDraw(canvas);
      }
-@@ -774,8 +780,26 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+@@ -774,6 +779,107 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
          } else {
              canvas.punchHole(0f, 0f, getWidth(), getHeight(), 0f, 0f, alpha);
          }
 +        // Gesher: there is no compositor; the surface's latest frame is drawn into the
 +        // hole (docs/media.md "Video").
 +        gesherDrawSurface(canvas, alpha);
-     }
- 
++    }
++
 +    /**
 +     * Gesher: draws the surface's latest frame into the view (its Surface is a
 +     * QueueSurface, compat/media/surface); each new frame invalidates the view.
@@ -46,6 +45,96 @@ index 49a7da2..b937d49 100644
 +    private static native void nativeGesherDrawSurface(long canvas, long blastBufferQueue,
 +            SurfaceView view, int width, int height, float cornerRadius, float alpha);
 +
++    /**
++     * Gesher (surfaces track, ADR 0056): the frame of a surface above its window, drawn
++     * where the view is after every view of the window (the root view's overlay), as a
++     * compositor puts a setZOrderOnTop layer over the window.
++     */
++    private final class GesherOverlay extends android.graphics.drawable.Drawable {
++        private final int[] mAt = new int[2];
++
++        @Override
++        public void draw(Canvas canvas) {
++            if (!mAttachedToWindow || !isShown()) return;
++            getLocationInWindow(mAt);
++            final int save = canvas.save();
++            canvas.translate(mAt[0], mAt[1]);
++            canvas.clipRect(0, 0, getWidth(), getHeight());
++            gesherDrawSurface(canvas, getAlpha());
++            canvas.restoreToCount(save);
++        }
++
++        @Override
++        public void setAlpha(int alpha) {
++        }
++
++        @Override
++        public void setColorFilter(android.graphics.ColorFilter filter) {
++        }
++
++        @Override
++        public int getOpacity() {
++            return PixelFormat.TRANSLUCENT;
++        }
++    }
++
++    private GesherOverlay mGesherOverlay;
++    private View mGesherOverlayRoot;
++
++    /** Gesher: adds, places or removes the overlay drawable of a surface above its window. */
++    private void gesherUpdateOverlay() {
++        final boolean want = mAttachedToWindow && isAboveParent() && isShown();
++        if (!want) {
++            gesherRemoveOverlay();
++            return;
++        }
++        final View root = getRootView();
++        if (mGesherOverlay == null || mGesherOverlayRoot != root) {
++            gesherRemoveOverlay();
++            mGesherOverlay = new GesherOverlay();
++            mGesherOverlayRoot = root;
++            root.getOverlay().add(mGesherOverlay);
++        }
++        // Redrawn when the view moved or changed size (not on every draw: that would
++        // schedule frames forever); its frames invalidate the SurfaceView itself, whose
++        // region the overlay is drawn over again.
++        getLocationInWindow(mGesherOverlayAt);
++        final int w = root.getWidth(), h = root.getHeight();
++        if (mGesherOverlayAt[0] != mGesherOverlayState[0]
++                || mGesherOverlayAt[1] != mGesherOverlayState[1]
++                || getWidth() != mGesherOverlayState[2] || getHeight() != mGesherOverlayState[3]
++                || w != mGesherOverlayState[4] || h != mGesherOverlayState[5]) {
++            mGesherOverlayState[0] = mGesherOverlayAt[0];
++            mGesherOverlayState[1] = mGesherOverlayAt[1];
++            mGesherOverlayState[2] = getWidth();
++            mGesherOverlayState[3] = getHeight();
++            mGesherOverlayState[4] = w;
++            mGesherOverlayState[5] = h;
++            mGesherOverlay.setBounds(0, 0, w, h);
++            mGesherOverlay.invalidateSelf();
++        }
++    }
++
++    private final int[] mGesherOverlayAt = new int[2];
++    private final int[] mGesherOverlayState = {-1, -1, -1, -1, -1, -1};
++
++    private void gesherRemoveOverlay() {
++        if (mGesherOverlay != null && mGesherOverlayRoot != null) {
++            mGesherOverlayRoot.getOverlay().remove(mGesherOverlay);
++            mGesherOverlayRoot.invalidate();
++        }
++        mGesherOverlay = null;
++        mGesherOverlayRoot = null;
++        java.util.Arrays.fill(mGesherOverlayState, -1);
+     }
+ 
      /**
-      * Sets the corner radius for the SurfaceView. This will round both the corners of the
-      * underlying surface, as well as the corners of the hole created to expose the surface.
+@@ -1263,6 +1369,8 @@ public class SurfaceView extends View implements ViewRootImpl.SurfaceChangedCall
+ 
+     /** @hide */
+     protected void updateSurface() {
++        // Gesher: a surface above its window follows the view (moved, hidden, shown).
++        if (mGesherOverlay != null || mDrawFinished) gesherUpdateOverlay();
+         if (!mHaveFrame) {
+             if (DEBUG) {
+                 Log.d(TAG, System.identityHashCode(this) + " updateSurface: has no frame");
