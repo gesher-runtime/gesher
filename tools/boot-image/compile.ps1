@@ -87,11 +87,9 @@ if ($BootProfiles) {
     $lines += ($content -split "`n").Count - 1
   }
   # -AllClasses: every class of the jars goes into the image too, as with no
-  # profile; the profile still picks the methods that get AOT code. Gesher's
-  # framework.jar is not the one AOSP's profile was made for: some of the
-  # profile's classes reference classes it does not list, and the image left
-  # out classes such as android.app.Activity, which then kept every app class
-  # that extends them out of its app image (ADR 0054).
+  # profile; the profile still picks the methods that get AOT code. The image
+  # then holds what it held before the profile (startup under the interpreter
+  # loads no more classes than before), at 6.6 MB more .art (ADR 0054).
   if ($AllClasses) {
     $classes = [Collections.Generic.HashSet[string]]::new()
     $dump = Join-Path $root 'dexdump.txt'

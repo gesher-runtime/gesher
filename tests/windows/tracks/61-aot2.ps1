@@ -77,7 +77,7 @@ function Aot2Dex2oat([string] $Apk, [string] $Odex, [string] $Filter, [string[]]
   New-Item -ItemType Directory -Force (Split-Path $Odex) | Out-Null
   $a = @("--dex-file=$(NoDrive $Apk)", "--dex-location=$(NoDrive $Apk)", "--oat-file=$(NoDrive $Odex)",
     '--instruction-set=x86_64', "--compiler-filter=$Filter", '--class-loader-context=PCL[]',
-    "--boot-image=$(NoDrive "$root/system")/framework/boot.art",
+    "--boot-image=$(NoDrive "$root/system")/framework/boot.art:$(NoDrive "$root/system")/framework/*",
     '--runtime-arg', "-Xbootclasspath:$aotBcpApp", '--runtime-arg', '-Xms64m', '--runtime-arg', '-Xmx512m',
     '--runtime-arg', '-XX:LargeObjectSpace=map', '--no-watch-dog', '-j4') + $Extra
   Aot2Run "$Dir/dex2oat.exe" $a @{} 600

@@ -182,7 +182,16 @@ final class Dexopt {
         a.add("--compiler-filter=" + filter);
         a.add("--compilation-reason=" + reason);
         a.add("--class-loader-context=PCL[]");
-        a.add("--boot-image=" + vm.image);
+        // The boot image with its extensions (framework.jar, gesher-app.jar): the runtime
+        // finds them next to a lone boot.art (ART patch 0012), dex2oat only with `<dir>/*`;
+        // without them the app's classes that extend framework classes stay out of its
+        // app image.
+        String image = vm.image;
+        int slash = image.lastIndexOf('/');
+        if (image.indexOf(':') < 0 && image.indexOf('*') < 0 && slash >= 0) {
+            image = image + ":" + image.substring(0, slash + 1) + "*";
+        }
+        a.add("--boot-image=" + image);
         a.add("--runtime-arg");
         a.add("-Xbootclasspath:" + vm.bootClassPath);
         for (String r : DEX2OAT_RUNTIME) {
