@@ -50,12 +50,16 @@ records the work. The physical touch keyboard remains unverified.
 
 First full display-stage CI: **40377891527** at
 `dd6e65fe64196542ca8ae99d8953b8fdd39a7f89`; watch log
-`C:/work/gesher-ci-review/windows4-40377891527-watch.log`. Complete build,
-both Windows suites, actual package cleanup and both e2e results are pending.
+`C:/work/gesher-ci-review/windows4-40377891527-watch.log`. Complete red:
+2025 has 20 failures, 2022 has 21; only each runner's initial portrait W4
+snapshot passes before the nonce crash. The actual package install/run/input/
+uninstall cleanup passes. Each e2e has eight passing apps and Signal Generator
+failing on the same display nonce path. Both public badssl/live-internet
+network groups pass; neither suite times out.
 
 The first run's asm-port job failed before its checks on upstream promisor
-fetch HTTP 502/expected-packfile errors (job 121765852176, exit 123). Other jobs
-continue for diagnostics; this run cannot establish a fully green milestone.
+fetch HTTP 502/expected-packfile errors (job 121765852176, exit 123). The run
+has five failed jobs in total and cannot establish a fully green milestone.
 
 Separate WIP after that dispatch: extracted the real IFrameworkInputPane
 subscription into input_pane.cc, retaining the complete callback rectangle.
