@@ -14,10 +14,12 @@ The tree includes integration 634a273 (docs on verified AOT3 oatdump f5ce6f6).
 The additional property root inheritance fix passes ten native host checks;
 matching Java ProcessBuilder assertions compile and await final CI. Keep all
 real assertions and open umask/policy scope. See docs/exec.md for exact evidence.
-CI 40382268730 now runs source 4568c71 with that combined correction/diagnostic;
-watch C:\work\gesher-ci-review\exec3-watch-40382268730.log at 120 seconds.
-The coordinator/media3 ffmpeg preparation-only workflow patch is prepared for
-the next tree; current CI retains its old unconditional apt stage.
+CI 40382268730 at 4568c71 was superseded once on coordinator instruction after
+909 seconds in media generation, before Windows jobs started; build proof is
+retained, without an inferred infrastructure error/cause. Replacement full CI
+40385411337 now runs 80bf394 with the coordinator/media3 ffmpeg preparation-only
+workflow patch. Watch C:\work\gesher-ci-review\exec3-watch-40385411337.log at
+120 seconds. All real assertions and the narrow sentinel diagnosis remain.
 The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
