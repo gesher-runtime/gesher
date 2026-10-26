@@ -177,6 +177,7 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         @Override
         public void finishInput() {
             WindowInput in;
+            int epoch;
             synchronized (this) {
                 active = false;
                 connection = null;
@@ -184,8 +185,9 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
                 documentEpoch++;
                 appliedRevision = 0;
                 in = input;
+                epoch = documentEpoch;
             }
-            if (in != null) in.setTextInput(false, false, 0, documentEpoch);
+            if (in != null) in.setTextInput(false, false, 0, epoch);
         }
 
         @Override

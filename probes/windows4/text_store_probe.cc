@@ -36,7 +36,7 @@ class Sink final : public ITextStoreACPSink {
   }
   HRESULT STDMETHODCALLTYPE OnTextChange(DWORD, const TS_TEXTCHANGE*) override { ++text; if (requesting) ++nested_notifications; return S_OK; }
   HRESULT STDMETHODCALLTYPE OnSelectionChange() override { ++selection; if (requesting) ++nested_notifications; return S_OK; }
-  HRESULT STDMETHODCALLTYPE OnLayoutChange(TsLayoutCode, TsViewCookie) override { ++layout; if (requesting) ++nested_notifications; return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnLayoutChange(TsLayoutCode, TsViewCookie) override { ++layout; if (requesting) ++nested_notifications; if (layout_action) layout_action(); return S_OK; }
   HRESULT STDMETHODCALLTYPE OnStatusChange(DWORD) override { ++status; if (requesting) ++nested_notifications; return S_OK; }
   HRESULT STDMETHODCALLTYPE OnAttrsChange(LONG, LONG, ULONG, const TS_ATTRID*) override { return S_OK; }
   HRESULT STDMETHODCALLTYPE OnLockGranted(DWORD flags) override { ++locks; return action ? action(flags) : S_OK; }
@@ -51,6 +51,7 @@ class Sink final : public ITextStoreACPSink {
   }
   void Clear() { text = selection = layout = status = nested_notifications = 0; }
   std::function<HRESULT(DWORD)> action;
+  std::function<void()> layout_action;
   int text = 0, selection = 0, layout = 0, status = 0, locks = 0, nested_notifications = 0;
   bool requesting = false;
  private:
@@ -77,8 +78,9 @@ int main() {
                                0, 0, 400, 800, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (!window) return 1;
   std::vector<DocumentEdit> edits;
+  std::function<void(const DocumentEdit&)> host_feedback;
   int scheduled = 0;
-  auto* store = new TextStore(window, [&](DocumentEdit edit) { edits.push_back(std::move(edit)); }, [&] { ++scheduled; });
+  auto* store = new TextStore(window, [&](DocumentEdit edit) { edits.push_back(edit); if (host_feedback) host_feedback(edit); }, [&] { ++scheduled; });
   auto* sink = new Sink();
   Check(SUCCEEDED(store->AdviseSink(IID_ITextStoreACPSink, sink, TS_AS_ALL_SINKS)), "real ITextStoreACPSink subscription");
   void* identity = nullptr; void* composition = nullptr; void* identity2 = nullptr;
@@ -151,6 +153,30 @@ int main() {
   store->Pump();
   Check(sink->text == 1 && sink->selection == 1 && sink->layout == 1 && sink->nested_notifications == 0,
         "deferred application text, selection and layout notifications are delivered once");
+  sink->Clear();
+  const size_t before_feedback = edits.size();
+  RECT stable_caret = {20, 20, 21, 42};
+  host_feedback = [&](const DocumentEdit&) { store->Caret(stable_caret); };
+  sink->action = [&](DWORD) -> HRESULT {
+    TS_SELECTION_ACP current; ULONG fetched = 0;
+    HRESULT result = store->GetSelection(TS_DEFAULT_SELECTION, 1, &current, &fetched);
+    return SUCCEEDED(result) && fetched == 1 ? store->SetSelection(1, &current) : E_FAIL;
+  };
+  sink->layout_action = [&] { sink->Lock(store); };
+  store->Caret(stable_caret);
+  for (int attempt = 0; attempt < 5; ++attempt) store->Pump();
+  store->Caret(stable_caret); store->Pump();
+  Check(sink->layout == 1 && edits.size() == before_feedback,
+        "layout/identical-selection/host-caret COM feedback settles after one notification with no redundant edit");
+  sink->layout_action = nullptr; host_feedback = nullptr; sink->action = nullptr;
+  sink->action = [&](DWORD) -> HRESULT {
+    TS_SELECTION_ACP reversed = {0, 4, {TS_AE_START, FALSE}};
+    return store->SetSelection(1, &reversed);
+  };
+  sink->Lock(store); sink->Lock(store); sink->action = nullptr;
+  Check(edits.size() == before_feedback + 1 && edits.back().kind == DocumentEdit::kSelect
+          && edits.back().start == 4 && edits.back().end == 0,
+        "a changed reverse selection emits once while an identical repeated selection is silent");
   TextDocument restricted; restricted.epoch = 2; restricted.text = u"must not leak"; restricted.available = false;
   store->Update(restricted);
   TS_STATUS status; store->GetStatus(&status);

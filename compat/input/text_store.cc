@@ -125,6 +125,7 @@ void TextStore::Apply(TextDocument document) {
   if (status && (sink_mask_ & TS_AS_STATUS_CHANGE) != 0) sink_->OnStatusChange(TS_SD_READONLY);
 }
 void TextStore::Caret(const RECT& screen) {
+  if (EqualRect(&caret_, &screen)) return;
   caret_ = screen;
   pending_layout_ = true; schedule_();
 }
@@ -160,6 +161,8 @@ HRESULT TextStore::SetSelection(ULONG count, const TS_SELECTION_ACP* selection) 
   if (!document_.available) return TS_E_READONLY;
   if (count != 1 || !Range(selection->acpStart, selection->acpEnd) ||
       selection->style.ase < TS_AE_NONE || selection->style.ase > TS_AE_END) return TS_E_INVALIDPOS;
+  if (document_.start == selection->acpStart && document_.end == selection->acpEnd &&
+      document_.reversed == (selection->style.ase == TS_AE_START)) return S_OK;
   if (revision_ == INT_MAX) return E_FAIL;
   document_.start = selection->acpStart; document_.end = selection->acpEnd;
   document_.reversed = selection->style.ase == TS_AE_START;

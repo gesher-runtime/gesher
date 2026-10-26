@@ -142,7 +142,26 @@ int main() {
     if (original != nullptr) original->Release();
     store->Release(); change->Release();
   } else { Check(false, "the update-detach fixture obtains its window-owned TSF context"); }
-  Drain(); DestroyWindow(window); CoUninitialize();
+  Editor(window, 10);
+  TextInputState delayed_finish; delayed_finish.editor_epoch = 9;
+  ime->SetTextInput(delayed_finish); Drain();
+  Check(ime->RunTextServiceTest() == S_OK,
+      "a delayed finish publication cannot disable the newer focused editor");
+  TextInputState newest; newest.active = newest.ime = true; newest.editor_epoch = 11;
+  ime->SetTextInput(newest);
+  TextDocument latest; latest.text = u"before \u05e9\u05dc\u05d5\u05dd";
+  latest.start = 7; latest.end = 11; latest.epoch = 11; latest.available = true;
+  ime->SetDocument(latest);
+  delayed_finish.editor_epoch = 10; ime->SetTextInput(delayed_finish);
+  TextDocument stale = latest; stale.text = u"old"; stale.start = stale.end = 0; stale.epoch = 10;
+  ime->SetDocument(stale); Drain();
+  Check(ime->RunTextServiceTest() == S_OK,
+      "late finish and snapshot publications cannot overwrite a newer document waiting on the window queue");
+  ime.reset();
+  Editor(window, 1);
+  Check(ime->RunTextServiceTest() == S_OK,
+      "a new native connection starts a fresh editor epoch lifecycle");
+  ime.reset(); Drain(); DestroyWindow(window); CoUninitialize();
   std::printf("%d windows4 IME TSF check(s) failed\n", failures);
   return failures;
 }

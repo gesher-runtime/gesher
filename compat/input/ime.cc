@@ -645,6 +645,9 @@ bool ImeWindow::TakeTextEvent(TextEvent* out) {
 void ImeWindow::SetTextInput(const TextInputState& state) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    // Publication happens outside Java's editor lock. A delayed finish or
+    // applyEditor must not disable/replace a newer focused editor.
+    if (state.editor_epoch < impl_->state.editor_epoch) return;
     impl_->state = state;
     if (impl_->document.epoch != state.editor_epoch || !state.active || !state.ime) {
       impl_->document = TextDocument{};
@@ -655,7 +658,15 @@ void ImeWindow::SetTextInput(const TextInputState& state) {
 }
 
 void ImeWindow::SetDocument(TextDocument document) {
-  { std::lock_guard<std::mutex> lock(impl_->mutex); impl_->document = std::move(document); }
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (document.epoch != impl_->state.editor_epoch) return;
+    if (!impl_->state.active || !impl_->state.ime) {
+      document = TextDocument{};
+      document.epoch = impl_->state.editor_epoch;
+    }
+    impl_->document = std::move(document);
+  }
   Post(kOpDocument);
 }
 
