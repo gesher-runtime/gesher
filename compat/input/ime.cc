@@ -177,10 +177,17 @@ struct ImeWindow::Impl {
                 static_cast<unsigned long>(result), kNewline);
       } else {
         tsf_epoch = s.editor_epoch;
-        tsf->Focus(GetFocus() == hwnd);
+        auto service = tsf;
+        service->Focus(GetFocus() == hwnd);
+        if (detached) return;
         Apply(kOpCaret);
       }
-    } else { tsf->Update(std::move(snapshot)); }
+    } else {
+      // Update can notify a COM sink which pumps a nested detach. Retain the
+      // service/store until the whole notification stack has returned.
+      auto service = tsf;
+      service->Update(std::move(snapshot));
+    }
   }
 
   void EmitText(std::u16string text) {
@@ -650,6 +657,10 @@ void ImeWindow::SetTextInput(const TextInputState& state) {
 void ImeWindow::SetDocument(TextDocument document) {
   { std::lock_guard<std::mutex> lock(impl_->mutex); impl_->document = std::move(document); }
   Post(kOpDocument);
+}
+
+std::weak_ptr<TextService> ImeWindow::TextServiceForTest() {
+  return impl_->tsf;
 }
 
 int32_t ImeWindow::RunTextServiceTest() {

@@ -6,17 +6,54 @@
 #include <string>
 #include <vector>
 #include "ime.h"
+#include "text_service.h"
 
 // This fixture exercises TSF, not the key map or the touch keyboard service.
 namespace gesher::input {
 bool KeyEventTypes(int32_t, int32_t, int32_t, uint32_t) { return false; }
 int32_t ShowTouchKeyboard(void*, bool) { return 0; }
+// Friend inspection does not retain the wrapper whose ownership is tested.
+struct TextServiceProbeAccess {
+  static TextStore* Store(TextService* service) { return service->store_; }
+  static ITextStoreACPSink* Sink(TextStore* store) { return store->sink_; }
+};
 }
 using namespace gesher::input;
 namespace {
 int failures = 0;
 bool detach_on_text = false;
 std::unique_ptr<ImeWindow> ime;
+class DetachOnChange final : public ITextStoreACPSink {
+ public:
+  std::weak_ptr<TextService> service;
+  bool called = false, retained = false;
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_ITextStoreACPSink)) {
+      *out = static_cast<ITextStoreACPSink*>(this); AddRef(); return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&references_); }
+  ULONG STDMETHODCALLTYPE Release() override {
+    LONG count = InterlockedDecrement(&references_);
+    if (count == 0) delete this;
+    return static_cast<ULONG>(count);
+  }
+  HRESULT STDMETHODCALLTYPE OnTextChange(DWORD, const TS_TEXTCHANGE*) override {
+    called = true; ime.reset(); retained = !service.expired(); return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE OnSelectionChange() override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnLayoutChange(TsLayoutCode, TsViewCookie) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnStatusChange(DWORD) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnAttrsChange(LONG, LONG, ULONG, const TS_ATTRID*) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnLockGranted(DWORD) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnStartEditTransaction() override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE OnEndEditTransaction() override { return S_OK; }
+ private:
+  LONG references_ = 1;
+};
 void Check(bool okay, const char* what) {
   std::printf("%s windows4 IME TSF: %s\n", okay ? "PASS" : "FAIL", what);
   if (!okay) failures++;
@@ -84,6 +121,27 @@ int main() {
   Check(ime == nullptr, "a nested native text callback can detach the owner during a real COM edit session");
   Check(reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == Procedure,
       "reentrant detach restores the original window procedure");
+  Editor(window, 4);
+  auto weak = ime->TextServiceForTest();
+  auto inspect = weak.lock();
+  if (inspect != nullptr) {
+    TextStore* store = TextServiceProbeAccess::Store(inspect.get());
+    store->AddRef(); // Avoid a crash on the old source: assert wrapper lifetime instead.
+    ITextStoreACPSink* original = TextServiceProbeAccess::Sink(store);
+    if (original != nullptr) original->AddRef();
+    if (original != nullptr) store->UnadviseSink(original);
+    auto* change = new DetachOnChange(); change->service = weak;
+    HRESULT advised = store->AdviseSink(IID_ITextStoreACPSink, change, TS_AS_ALL_SINKS);
+    inspect.reset(); // The callback's weak observer must not hide the regression.
+    TextDocument update; update.text = u"external document edit"; update.epoch = 4;
+    update.start = update.end = static_cast<int32_t>(update.text.size()); update.available = true;
+    ime->SetDocument(update); Drain();
+    Check(SUCCEEDED(advised) && change->called && change->retained && ime == nullptr && weak.expired(),
+        "document Update retains its TSF owner throughout a real OnTextChange COM detach callback, then releases it");
+    store->UnadviseSink(change);
+    if (original != nullptr) original->Release();
+    store->Release(); change->Release();
+  } else { Check(false, "the update-detach fixture obtains its window-owned TSF context"); }
   Drain(); DestroyWindow(window); CoUninitialize();
   std::printf("%d windows4 IME TSF check(s) failed\n", failures);
   return failures;

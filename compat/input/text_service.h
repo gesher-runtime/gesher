@@ -18,6 +18,7 @@ class TextService {
   // retained until the thread manager is deactivated, after all its callbacks.
   HRESULT RunTestService(const wchar_t* path);
  private:
+  friend struct TextServiceProbeAccess;
   TextService() = default;
   HWND window_ = nullptr;
   ITfThreadMgr* manager_ = nullptr;

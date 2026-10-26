@@ -57,6 +57,7 @@ class TextStore final : public ITextStoreACP, public ITfContextOwnerCompositionS
   HRESULT STDMETHODCALLTYPE OnUpdateComposition(ITfCompositionView*, ITfRange*) override;
   HRESULT STDMETHODCALLTYPE OnEndComposition(ITfCompositionView*) override;
  private:
+  friend struct TextServiceProbeAccess;
   ~TextStore();
   bool ReadLock() const;
   bool WriteLock() const;
