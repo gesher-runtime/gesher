@@ -140,6 +140,18 @@ public final class GesherAppDriver {
         }
         data.info = apk;
         sLoadedApk = apk;
+        // The app's code path for the JIT's profile saver, as LoadedApk's
+        // registerAppInfoToArt registers it when it makes its class loader (ADR 0054).
+        if ((appInfo.flags & ApplicationInfo.FLAG_HAS_CODE) != 0) {
+            int user = android.os.UserHandle.myUserId();
+            dalvik.system.VMRuntime.registerAppInfo(appInfo.packageName,
+                    android.content.pm.dex.ArtManager.getCurrentProfilePath(appInfo.packageName,
+                            user, null),
+                    android.content.pm.dex.ArtManager.getReferenceProfilePath(appInfo.packageName,
+                            user, null),
+                    new String[] {appInfo.sourceDir},
+                    dalvik.system.VMRuntime.CODE_PATH_TYPE_PRIMARY_APK);
+        }
 
         // Instrumentation, plain (no instrumentation package): basicInit(thread).
         Instrumentation instrumentation = new Instrumentation();

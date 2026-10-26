@@ -247,7 +247,7 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe',
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe',
                       'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
@@ -302,6 +302,13 @@ jobs:
             throw "gesher-app list does not show the installed lifecycle.apk"
           }
           'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The installed device compiled it at install with the installed dex2oat (ADR 0054).
+          $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
+          if (-not $dexopt) {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log", "$env:LOCALAPPDATA\Gesher\logs\dexopt.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            throw 'The installed Gesher device did not compile lifecycle.apk at install'
+          }
+          "PASS  installer: the installed device compiles lifecycle.apk at install ($(($dexopt.Line -replace '^.*dexopt: ', 'dexopt: ').Trim()))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Installed apps as Windows apps (docs/installer.md): the first launch
           # made the app's Start menu shortcut, and its process set the
           # package's AppUserModelID.
@@ -558,6 +565,7 @@ jobs:
           sparse-checkout: |
             tests
             tools/symbolize.py
+            tools/boot-image
 
       - uses: actions/download-artifact@v4
         with:
