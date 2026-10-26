@@ -209,22 +209,31 @@ def verify_existing_bytes(client, item, assets, directory):
         g.require(g.file_digest(target) == assets[name]["sha256"], "Published bytes differ: " + name)
 
 
-def promote(client, identifier, expected, directory, notes, verify_directory):
+def promote(client, identifier, expected, directory, notes, verify_directory, prepared):
     # Re-fetch all source gates immediately before any write. A new/incomplete
     # CI attempt or changed artifact identity invalidates the prepared receipt.
     run, installer, receipt = source(client, identifier, expected)
     assets = g.candidate(directory, run, installer)
+    g.require(prepared.get("source_run") == identifier and prepared.get("source_sha") == expected and
+              prepared.get("source_attempt") == run["run_attempt"] and prepared.get("assets") == assets,
+              "Prepared source or bytes changed")
+    for key, item in (("installer_artifact", installer), ("receipt_artifact", receipt)):
+        original = prepared.get(key) or {}
+        g.require(all(original.get(field) == item.get(field) for field in ("id", "name", "digest", "size_in_bytes")),
+                  "Prepared artifact identity changed: " + key)
     commit, item = tag_commit(client), release(client)
     plan = g.existing_release(commit, item, expected, assets)
     if item:
         verify_existing_bytes(client, item, assets, verify_directory)
+    body = None
+    if plan["create_draft"]:
+        body = Path(notes).read_text(encoding="utf-8").replace("__SOURCE_SHA__", expected).replace("__CI_RUN__", str(identifier))
+        g.require("__SOURCE_" not in body and "__CI_RUN__" not in body, "Unresolved release-note provenance")
     if not client.allow_write:
         return {"dry_run": True, "plan": plan, "source_run": identifier, "source_sha": expected, "assets": assets}
     if plan["create_tag"]:
         client.json("/git/refs", "POST", {"ref": "refs/tags/" + g.TAG, "sha": expected})
     if plan["create_draft"]:
-        body = Path(notes).read_text(encoding="utf-8").replace("__SOURCE_SHA__", expected).replace("__CI_RUN__", str(identifier))
-        g.require("__SOURCE_" not in body and "__CI_RUN__" not in body, "Unresolved release-note provenance")
         item = client.json("/releases", "POST", {"tag_name": g.TAG, "target_commitish": expected,
                     "name": "Gesher " + g.VERSION, "body": body, "draft": True, "prerelease": False})
     for name in plan["upload"]:
@@ -236,8 +245,9 @@ def promote(client, identifier, expected, directory, notes, verify_directory):
     final_directory = Path(verify_directory).parent / (Path(verify_directory).name + "-uploaded")
     verify_existing_bytes(client, item, assets, final_directory)
     if item.get("draft"):
-        latest_run, latest_installer, _ = source(client, identifier, expected)
-        g.candidate(directory, latest_run, latest_installer)
+        latest_run, latest_installer, latest_receipt = source(client, identifier, expected)
+        g.require(latest_receipt == receipt and latest_installer == installer, "Source artifacts changed before publication")
+        g.require(g.candidate(directory, latest_run, latest_installer) == assets, "Candidate changed before publication")
         client.json(f"/releases/{item['id']}", "PATCH", {"draft": False, "make_latest": "true"})
     item = release(client)
     g.require(item and item.get("draft") is False and item.get("prerelease") is False, "Release is not published")
@@ -269,7 +279,9 @@ def main(argv=None):
         proof = {"source_run": args.source_run, "source_attempt": run["run_attempt"], "source_sha": expected,
                  "installer_artifact": installer, "receipt_artifact": receipt, "assets": assets}
     elif args.mode == "publish":
-        proof = promote(client, args.source_run, expected, directory, args.notes, directory.parent / (directory.name + "-existing"))
+        prepared = json.loads((evidence / "prepare.json").read_text(encoding="utf-8"))
+        proof = promote(client, args.source_run, expected, directory, args.notes,
+                        directory.parent / (directory.name + "-existing"), prepared)
     else:
         reference = directory.parent / (directory.name + "-source-candidate")
         _, _, _, assets = prepare(client, args.source_run, expected, reference)

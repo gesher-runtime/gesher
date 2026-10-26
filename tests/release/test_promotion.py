@@ -107,9 +107,13 @@ class PromotionTests(unittest.TestCase):
         self.notes = self.root / "notes.md"
         self.notes.write_text("Source __SOURCE_SHA__, run __CI_RUN__", encoding="utf-8")
         self.client = FakeGitHub(self.candidate)
+        self.prepared = {"source_run": 123, "source_sha": SHA, "source_attempt": 1,
+                         "installer_artifact": copy.deepcopy(self.client.installer),
+                         "receipt_artifact": copy.deepcopy(self.client.receipt),
+                         "assets": g.candidate(self.candidate, self.client.run, self.client.installer)}
 
     def promote(self):
-        return p.promote(self.client, 123, SHA, self.candidate, self.notes, self.root / "existing")
+        return p.promote(self.client, 123, SHA, self.candidate, self.notes, self.root / "existing", self.prepared)
 
     def source_archives(self):
         def build(item, names):
@@ -171,6 +175,30 @@ class PromotionTests(unittest.TestCase):
             self.promote()
         self.assertEqual(self.client.mutations, [])
 
+    def test_changed_prepared_artifact_or_bytes_never_create_tag(self):
+        for change in ("receipt_artifact", "installer_artifact", "assets", "source_attempt"):
+            original = copy.deepcopy(self.prepared)
+            if change.endswith("artifact"):
+                self.prepared[change]["id"] += 1
+            elif change == "assets":
+                self.prepared[change][g.MANIFEST]["sha256"] = "d" * 64
+            else:
+                self.prepared[change] += 1
+            with self.subTest(change=change), self.assertRaisesRegex(g.Refused, "Prepared"):
+                self.promote()
+            self.assertEqual(self.client.mutations, [])
+            self.prepared = original
+
+    def test_missing_or_unresolved_notes_fail_before_tag_creation(self):
+        self.notes.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.promote()
+        self.assertEqual(self.client.mutations, [])
+        self.notes.write_text("Unresolved __SOURCE_OTHER__", encoding="utf-8")
+        with self.assertRaisesRegex(g.Refused, "release-note"):
+            self.promote()
+        self.assertEqual(self.client.mutations, [])
+
     def test_changed_attempt_before_publish_leaves_draft_unpublished(self):
         self.client.red_after_upload = True
         with self.assertRaises(g.Refused):
@@ -201,7 +229,7 @@ class PromotionTests(unittest.TestCase):
         self.promote()
         self.client.mutations.clear()
         self.promote_again_directory = self.root / "second-existing"
-        proof = p.promote(self.client, 123, SHA, self.candidate, self.notes, self.promote_again_directory)
+        proof = p.promote(self.client, 123, SHA, self.candidate, self.notes, self.promote_again_directory, self.prepared)
         self.assertFalse(proof["dry_run"])
         self.assertEqual(self.client.mutations, [])
         self.assertEqual(len(self.client.public_links), 6)

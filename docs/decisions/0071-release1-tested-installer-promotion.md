@@ -18,7 +18,9 @@ installer SHA-256/size/PE metadata and SHA256SUMS. A red run cannot be promoted.
 Promotion is explicitly dispatched on main at the expected full SHA. Validate
 a fresh complete attempt of ci.yml on main in this repository, every job and
 required test steps, documented skips only, both artifact archive digests,
-receipt provenance, installer bytes and PE metadata. Partial reruns are refused;
+receipt provenance, installer bytes and PE metadata. Compare both artifact
+identities and all prepared asset hashes again before writing; validate release
+notes before creating a tag. Partial reruns are refused;
 run a fresh full main CI with release_version=0.1.0 for the final candidate.
 
 The publishing runner consumes CI artifacts; this machine never downloads
@@ -35,9 +37,10 @@ The workflow defaults to a dry run; only the coordinator requests publication.
 
 ## Verification and open gates
 
-Twenty-seven offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
+Twenty-nine offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
 required steps, mismatched artifacts/receipts and safe existing tag/release
 handling, both complete archive downloads/extractions and corruption of either
-archive. Version selection tests retain normal numbering and reject malformed
+archive, changed prepared artifacts/bytes and missing/unresolved notes before
+any tag write. Version selection tests retain normal numbering and reject malformed
 release overrides. Full branch CI with the exact 0.1.0 override, successful main
 CI, actual promotion and released-byte verification remain pending.
