@@ -31,8 +31,8 @@ import java.util.WeakHashMap;
  * pictures and thumbnails. Preview frames go to the preview callback (NV21 or YV12; with
  * callback buffers when the app adds them) and to a preview surface that has a native
  * window ({@code setPreviewDisplay}: frames drawn as RGBA, as Camera2's are);
- * {@code setPreviewTexture} is accepted (Gesher has no SurfaceTexture frames: nothing is
- * drawn). {@code takePicture} sends the shutter, a null raw image, a postview if asked and
+ * {@code setPreviewTexture}: the same through a Surface over the SurfaceTexture (surfaces
+ * track, ADR 0056). {@code takePicture} sends the shutter, a null raw image, a postview if asked and
  * the JPEG at the picture size, then the preview stops, as on Android; autofocus answers
  * success at once (fixed focus).
  */
@@ -81,6 +81,7 @@ public final class LegacyCamera {
         final Map<String, String> params = new LinkedHashMap<>();
         final ArrayDeque<byte[]> buffers = new ArrayDeque<>();
         Surface previewSurface;
+        Surface textureSurface;  // setPreviewTexture's (released when replaced)
         boolean callback;
         boolean manualBuffers;
         Thread preview;
@@ -276,12 +277,33 @@ public final class LegacyCamera {
     public static void setPreviewSurface(Camera camera, Surface surface) {
         Session s = session(camera);
         synchronized (s) {
+            releaseTextureSurface(s);
             s.previewSurface = surface;
         }
     }
 
+    // Surfaces track (ADR 0056): a SurfaceTexture's producer Surface takes the frames, as
+    // setPreviewDisplay's does (a TextureView shows them).
     public static void setPreviewTexture(Camera camera, Object surfaceTexture) {
-        session(camera);  // accepted: Gesher's SurfaceTextures get no frames
+        Session s = session(camera);
+        synchronized (s) {
+            releaseTextureSurface(s);
+            if (surfaceTexture instanceof android.graphics.SurfaceTexture) {
+                s.textureSurface = new Surface((android.graphics.SurfaceTexture) surfaceTexture);
+                s.previewSurface = s.textureSurface;
+            } else {
+                s.previewSurface = null;
+            }
+        }
+    }
+
+    // With the session's lock held.
+    private static void releaseTextureSurface(Session s) {
+        if (s.textureSurface != null) {
+            if (s.previewSurface == s.textureSurface) s.previewSurface = null;
+            s.textureSurface.release();
+            s.textureSurface = null;
+        }
     }
 
     public static void setHasPreviewCallback(Camera camera, boolean installed, boolean manual) {
