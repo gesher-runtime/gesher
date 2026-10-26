@@ -4,6 +4,10 @@
  */
 package com.gesher.server;
 
+import android.content.pm.dex.DexMetadataHelper;
+import android.content.pm.parsing.result.ParseResult;
+import android.content.pm.parsing.result.ParseTypeImpl;
+
 import com.gesher.app.NativeLibs;
 
 import java.io.BufferedInputStream;
@@ -174,8 +178,18 @@ final class Installer {
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
         String pkg = parsed.packageName;
+        File metadata = dexMetadata(source);
+        if (metadata.isFile()) {
+            ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
+                    ParseTypeImpl.forDefaultParsing(), metadata.getPath(), pkg, parsed.versionCode());
+            if (result.isError()) {
+                throw new IllegalArgumentException("INSTALL_FAILED_BAD_DEX_METADATA: "
+                        + result.getErrorMessage(), result.getException());
+            }
+        }
         Entry old = mEntries.get(pkg);
         if (old != null && sameContent(source, new File(old.codePath, "base.apk"))
+                && sameMetadata(metadata, new File(old.codePath, "base.dm"))
                 && mPm.get(pkg) != null) {
             SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                     + old.codePath + ")");
@@ -201,6 +215,7 @@ final class Installer {
         code.mkdirs();
         File base = new File(code, "base.apk");
         copy(source, base);
+        if (metadata.isFile()) copy(metadata, new File(code, "base.dm"));
         int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
                 + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
         // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
@@ -238,6 +253,16 @@ final class Installer {
         if (notifications != null) notifications.packageRemoved(packageName);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;
+    }
+
+    private static File dexMetadata(File apk) {
+        String path = apk.getPath();
+        return new File(path.endsWith(".apk") ? DexMetadataHelper.buildDexMetadataPathForApk(path)
+                : path + ".dm");
+    }
+
+    private static boolean sameMetadata(File source, File installed) throws IOException {
+        return source.isFile() ? sameContent(source, installed) : !installed.exists();
     }
 
     private static boolean sameContent(File a, File b) throws IOException {
