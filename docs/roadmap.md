@@ -463,6 +463,11 @@ needs: [framework-build.md](framework-build.md).
       and owned metadata lifetime; x86_64/arm64 through framework dalvikvm
       and APKs in both modes (native3 foundation, ci 40344682373 attempt 2,
       both Windows runners). Standalone native bootstrap/font updates stay open.
+- [x] Full-width wide classification/simple case mapping and locale aliases
+      match pinned bionic ICU4X over every code point and invalid sentinels;
+      NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
+      at 6f6ac6f (both Windows suites, package and required e2e green).
+      Widths, collation and remaining NDK/POSIX scope stay open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
