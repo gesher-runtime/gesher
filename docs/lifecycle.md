@@ -97,12 +97,7 @@ in a single process and on the Gesher device.
 
 ## Remaining gaps
 
-- One resumed activity at a time (no multi-resume): another task's activity
-  is paused, visible, until its window is activated (shown windows) or
-  restored.
-- An app's own `Activity.moveTaskToBack` hides its task's windows instead of
-  minimizing them.
-- The single process does not relaunch its Activity for configuration changes
-  it does not handle (it says so on stdout).
+- Multi-resume, `moveTaskToBack` minimizing, the single process's relaunch and
+  screen orientation: the windows3 track (docs/windows3.md, ADR 0053).
 - Under SkiaGL a translucent popup costs a read-back per frame; the dim layer
   dims the whole app window below all its popups.

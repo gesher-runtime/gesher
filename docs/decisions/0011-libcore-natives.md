@@ -78,6 +78,14 @@ with `dlopen` and calls each one's `JNI_OnLoad`; failing that is fatal
   to wait for it (gesher-base's `signal.cc`).
 
 ## Known gaps
+
+Historical at this decision's date: NativeBN, EPoll, LinuxWatchService,
+UNIXProcess and tzdata below were subsequently implemented (ADRs 0035,
+0037, 0045 and 0055). ci 40285476400 verifies NativeBN/BigInteger,
+EPoll over a pipe, the POSIX process/procfs/inotify probe, WatchService,
+FileObserver and time zones on both Windows runners. These entries no longer
+represent missing implementations. The LLP64 value audit remains open.
+
 - The libraries above, and every native that needs them, until BoringSSL,
   epoll and inotify equivalents and a process model are there.
 - Time zone data: `ANDROID_TZDATA_ROOT` has no `tzdata` yet, so ICU uses

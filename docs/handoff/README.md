@@ -139,6 +139,48 @@ Merged so far:
 
 ## Stopped at handover (2026-10-26)
 
+### Lead-engineer continuation (2026-10-26)
+
+The handover tables below are historical. windows3 is now merged as 80cb28b:
+code verified at a15ade4 (ci 40285476400), branch head 063b051 adds docs only.
+All 17 windows3 checks pass on each Windows runner, both summaries say
+0 test(s) failed, package install/run/uninstall cleanup passes, and e2e says
+0 unexpected failures (Signal Generator on the default display). The merged
+tree differs from the verified SHA only in docs; no integration rerun is
+needed for this merge. Main has not been changed.
+
+Remaining windows3/input gaps are assigned to windows4 (ADR 0061 reserved;
+[brief](tracks/windows4.md)): TSF reconversion/document access, candidate
+insets, real IFrameworkInputPane callback coverage, old-target adjustResize
+and Application-context Display rotation. Physical keyboard coverage remains
+explicitly unverified. Next free ADR: 0062.
+
+| Track | Result read / change | New verification |
+|---|---|---|
+| aot2 | ci 40285423159 at ad9d360: every job success/skipped; both Windows jobs end with 0 test(s) failed; e2e 0 unexpected failures. App images hold app classes (single: 7 classes/16 methods, 7 compiled; device: 2 classes/11 methods, 10 compiled). Merged a462e9c and removed diagnostic -AllClasses. | ci 40290847953 at 19014a2; must verify the smaller image, startup, app images and all jobs before merge. |
+| windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
+| native2 | windows-2025 job 121456663287 of 40285714522 ends with 12 test(s) failed: all dalvikvm/APK paths abort on unresolved android_get_device_api_level. Added it to the common shim through ro.build.version.sdk; local g++ syntax-only check passed. Merged a462e9c. | ci 40291049581 at e1e99c0; not verified yet. |
+| surfaces | windows-2025 job 121451383191 of 40285764214 ends with 1 test(s) failed: surfacegl single-process finish. SIGQUIT shows an idle main looper; the server rejects the driver's unregistered token. Routed local finish requests to the existing window close handler. Merged a462e9c. TIC-80 passes e2e at 800x400 (job 121452091155), but needs confirmation on both runners before removing knownFailure. | ci 40291437446 at 025fda1; not verified yet. |
+| web3 | windows-2025 job 121453338756 of 40285810159 ends with 3 test(s) failed. Geo watch double encoding fixed at 3852225. Removed a provider cache lock across Java callbacks (UIA reentrancy) and added snapshot timeout phases; accessibility remains unverified. Merged a462e9c. | ci 40292261578 at 63203c4; must read accessibility results before closing anything. |
+| media3 | Read windows-2022 job 121463451415 of 40287172595: MPEG-4 part 2 returns 0 frames; tests then abort before stage 3 (59-media3 dereferences a regex capture overwritten by another match). Read e2e job 121464252568: Just Player launcher exit 1; 1 unexpected failure. Added VOL sample prefix/reset on flush, fixed the regex capture, pinned Just Player SHA and enabled its diagnostic log; test exceptions now print script/line/stack. Merged integration 7d6a82e. | ci 40292991000 at fc99140; stage 3 still unverified. |
+| exec3 | No changes since handover; the shell still has no executor or builtins. | No run. |
+
+Watches use gh run watch with --exit-status --interval 120. Review logs are
+saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
+downloaded). No roadmap box was ticked for the new, unverified fixes.
+
+The open tracks do not cover every ADR limit: aot2's ADR 0054 also lists
+shared-library class-loader contexts, cloud profiles, secondary dex and oatdump;
+media3 lists legacy camera recording, persistent input surfaces and VP8/VP9
+encoding. Include these in the subsequent gap audit along with every other
+remaining item; green track tests alone do not close the overall goal.
+
+Roadmap audit: the old aggregate Phase 1 NativeBN/epoll/inotify/process-model
+box was still unticked despite implementations being merged. Closed using
+40285476400's PASS lines on both runners (NativeBN/BigInteger, EPoll,
+posix probe, WatchService, FileObserver); clarified the superseded parts of
+ADR 0011 without closing its outstanding LLP64 value audit.
+
 The owner stopped all track agents on 2026-10-26 to hand the project to a
 new team. Each open track committed and pushed its work and updated its
 "Status and next steps" section; continue from there. None of these tracks
