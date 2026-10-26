@@ -49,3 +49,15 @@ target_compile_options(windows4_tsf_service PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(windows4_tsf_service PRIVATE user32 ole32 uuid)
 set_target_properties(windows4_tsf_service PROPERTIES PREFIX "" OUTPUT_NAME windows4_tsf_service EXCLUDE_FROM_ALL ON)
 add_dependencies(windows4_text_store_probe windows4_tsf_service)
+
+add_executable(windows4_ime_tsf_probe
+  ${CMAKE_SOURCE_DIR}/probes/windows4/ime_tsf_probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/input/ime.cc
+  ${CMAKE_SOURCE_DIR}/compat/input/text_store.cc
+  ${CMAKE_SOURCE_DIR}/compat/input/text_service.cc
+  ${CMAKE_SOURCE_DIR}/compat/input/thread_watch.cc)
+target_include_directories(windows4_ime_tsf_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/input)
+target_compile_options(windows4_ime_tsf_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(windows4_ime_tsf_probe PRIVATE user32 imm32 ole32 uuid)
+set_target_properties(windows4_ime_tsf_probe PROPERTIES EXCLUDE_FROM_ALL ON)
+add_dependencies(windows4_ime_tsf_probe windows4_tsf_service)

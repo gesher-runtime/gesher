@@ -57,6 +57,14 @@ void Connection::SetTextInput(const TextInputState& state) {
   if (ime_) ime_->SetTextInput(state);
 }
 
+void Connection::SetDocument(TextDocument document) {
+  if (ime_) ime_->SetDocument(std::move(document));
+}
+
+int32_t Connection::RunTextServiceTest() {
+  return ime_ ? ime_->RunTextServiceTest() : -1;
+}
+
 void Connection::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height) {
   if (ime_) ime_->SetCaret(x, y, width, height);
 }

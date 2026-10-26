@@ -306,6 +306,13 @@ void Window::Run(std::wstring title, int width, int height) {
           quit = true;
           break;
         }
+        // TSF must see a key before TranslateMessage queues its WM_CHAR. Only
+        // our own subclass receives the synchronous stack-local MSG pointer.
+        if (msg.hwnd == hwnd && GetPropW(hwnd, L"GesherImeWindow") != nullptr &&
+            (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP ||
+             msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP) &&
+            SendMessageW(hwnd, RegisterWindowMessageW(L"GesherImeFilterKey"), 0,
+                         reinterpret_cast<LPARAM>(&msg)) != 0) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }

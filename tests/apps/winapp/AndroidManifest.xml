@@ -45,5 +45,7 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:screenOrientation="landscape" android:taskAffinity="com.gesher.winapp.displayland"
             android:exported="true" />
+        <activity android:name=".TsfActivity" android:label="Gesher windows4 TSF"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden" android:exported="true" />
     </application>
 </manifest>

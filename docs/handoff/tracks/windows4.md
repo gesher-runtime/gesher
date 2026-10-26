@@ -113,3 +113,21 @@ disable the private DisplayManagerGlobal cache before Application code in
 both single-process and device clients, including headless ones. DisplayInfo
 then uses fresh Binder queries and the real callback path. Display/listener
 tests remain unchanged. CI proof of the fix is pending.
+
+Next WIP connects the TSF adapter to the real InputConnection through portable
+epoch/revision snapshots and exact range-edit events over JNI. Full
+ExtractedText replies use relative selections plus startOffset, per the
+[Android API contract](https://developer.android.com/reference/android/view/inputmethod/ExtractedText).
+Old-editor replies cannot replace the active document; password/number editors
+destroy the TSF context and clear retained document data. Key filtering runs
+before TranslateMessage; the existing IMM32/text/action path remains present.
+Reentrant COM detach now retains active native procedures and retired watch
+state until they return. A native fixture links the actual production IME
+adapter and real TSF DLL: exact reconversion events, restricted-editor teardown,
+and nested owner destruction all pass locally (zero failures, g++ Werror).
+WindowInput/WindowsInputMethod and the new real EditText TsfActivity compile
+against the saved framework/core classes. Both single/device CI scenarios now
+exercise reconversion, composition completion, password/number exclusion and
+normal-editor reconnection. These Android runtime scenarios are not yet CI
+verified. Candidate-window occlusion, richer geometry/formatting and physical
+IME behavior remain open; no milestone or roadmap row is ticked.
