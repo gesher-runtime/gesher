@@ -17,7 +17,7 @@ of native-libs.md, posix.md, arm64.md, plus ADRs 0011, 0014 and 0057 first.
   bridges and handles, by soname and system path. Existing AndroidBitmap
   implementations should be reachable through libjnigraphics as well.
 - Own libc/libm/libdl/libz API and ABI gaps: the API lists include wide
-  locale-suffixed functions, resolver APIs, stdio extensions, binary128
+  locale-suffixed functions, stdio extensions, binary128
   long-double functions and zlib stream/header/reset APIs. Include the old
   LLP64 value/layout audit (ADR 0011); passing symbol lookup is insufficient.
   Windows ICU's Unicode data version and property predicates can differ from
@@ -37,7 +37,9 @@ of native-libs.md, posix.md, arm64.md, plus ADRs 0011, 0014 and 0057 first.
   Close the file-backed/shared-mapping limit without losing shared writes.
 - ADR 0009 epoll/poll limits: edge-trigger behavior, nested epolls, readiness
   when polling an epoll fd, concurrent waiters and pipe polling. Coordinate
-  socket/legacy resolver gaps with web3; binder readiness belongs to binder2.
+  socket/legacy resolver gaps with net4 (ADR 0070); binder readiness belongs
+  to binder2. The 84 remaining libc network/resolver entries are assigned
+  to net4 in the baseline inventory, not implemented concurrently here.
 - ADR 0017: System V JVMTI environment/callback tables for ELF agents and
   linker namespace isolation. Verify actual agents and isolated dependency
   lookup; a JNI-only library test does not cover either contract.
