@@ -2,8 +2,12 @@
 
 This CI-only reference uses Android's ICU4X 2.0.0-beta2 property and simple
 case-mapping crates. Every ICU dependency, including its data, is pinned to
-that prerelease. Cargo.lock must also be recorded before this reference is
-used to verify production behavior.
+that prerelease. Cargo.lock was recovered from the successful reference job's
+log in ci 40374405950 at c5a9f95, with SHA-256
+327e35387c66cc9c3e44f873ecc124cf21888ad602ce668e697fd0415618a392.
+All eight ICU crates/data dependencies are exactly 2.0.0-beta2. reference.json
+records that run's 14 digests and 11 boundary rows; it is reference output,
+not evidence that the current Windows backend matches it.
 
 src/bionic_icu4x.rs is unmodified from
 https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/bionic/icu4x.rs
@@ -18,9 +22,8 @@ little-endian bytes. Boundary rows include ASCII vertical tab versus U+001C,
 combining U+0345, Roman numeral U+2160, supplementary letters, Unicode 16
 additions, surrogates and WEOF. This reference does not use Windows' ICU.
 
-The current workflow bootstraps the dependency lock and prints its exact
-bytes in a base64 log record, allowing the coordinator to save the lock
-without downloading an Actions artifact. After that bootstrap, dependency
-resolution must use --locked. A successful reference run alone does not
+The workflow uses --locked and prints the dependency lock's exact bytes in
+a base64 log record, allowing the coordinator to audit it without downloading
+an Actions artifact. A successful reference run alone does not
 implement or verify Gesher's Unicode functions; the production bridge and
 both Windows/NDK ABI checks are still required.

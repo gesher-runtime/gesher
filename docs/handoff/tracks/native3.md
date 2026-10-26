@@ -62,13 +62,15 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Independent Unicode reference prepared for CI, not a production change:
-native3-probes adds the unmodified pinned bionic ICU4X wrapper and exact
-2.0.0-beta2 crate/data versions. It computes 14 whole-code-point predicate/
-case-map digests with pinned wctype.cpp's ASCII/category rules and boundary
-samples. The dependency lock is bootstrapped in CI logs and must be saved
-before using the reference for production verification. No Rust/AOSP build
-ran locally, and Windows ICU parity is still open.
+Independent Unicode reference verified in ci 40374405950 at c5a9f95:
+all four probe jobs succeed; the pinned bionic ICU4X wrapper and exact
+2.0.0-beta2 crate/data versions produce 14 whole-code-point predicate/case
+digests and 11 boundary rows. The coordinator personally read the reference
+and both 17-case binary128/zero-failure logs. The exact Cargo lock is saved
+from the reference log, checked against its SHA-256, with all eight ICU
+dependencies pinned to beta2. Future fetch/run use --locked. This is not a
+production change or proof of Windows ICU parity; that gap stays open.
+No Rust/AOSP build ran locally and no Actions artifact was downloaded.
 
 Current full CI: 40367959106 at 644e7f8, including integration f677944.
 Watching with --exit-status --interval 120. This combined proc-native/stub
