@@ -50,12 +50,18 @@ See Microsoft's [IFrameworkInputPane](https://learn.microsoft.com/en-us/windows/
 and [Showing](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iframeworkinputpanehandler-showing)
 contracts for the interface and screen rectangle.
 
-TSF text-store source is work in progress and not wired into the runtime.
-The draft implements ITextStoreACP locking/UTF-16 access, selection and edit
-events, composition-sink events and revision/epoch protection against stale
-InputConnection snapshots. A restricted/unavailable document is cleared.
-Native COM sink/service tests, thread-manager activation and Java plumbing are
-still required. Only caret geometry is defined; other range geometry returns
+TSF text-store source is work in progress, now connected to InputConnection
+through complete ExtractedText snapshots and ordered range edits over JNI.
+It implements ITextStoreACP locking/UTF-16 access, selection and edit events,
+composition-sink events and revision/epoch protection against stale replies.
+A restricted/unavailable document is cleared and its thread manager detached.
+Native COM sink/service tests, actual thread-manager activation and a real
+service DLL pass locally, including the production IME adapter and reentrant
+owner teardown. A real EditText fixture exercises both process modes in the
+next CI; Java syntax passes against saved framework/core classes. TSF key
+filtering runs before TranslateMessage queues character messages; existing
+IMM32, password/number, caret and action paths still need full regression CI.
+Only caret geometry is defined; other range geometry returns
 TS_E_NOLAYOUT, and rich formatting/embedded objects are explicitly unsupported.
 See [RequestLock](https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-requestlock)
 for notification/reentrancy requirements. No TSF behavior is CI verified.
