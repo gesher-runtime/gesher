@@ -45,3 +45,15 @@ oatdump/disassembler CMake targets, installer entry/installed-copy check and
 No local AOSP build and no CI verification yet. All four contracts above
 remain open. Next: compile and
 execute this first slice in CI before implementing the remaining dexopt work.
+
+ci 40334251458 built oatdump and package successfully. Windows2022 e2e
+failed before any app was installed: all nine F-Droid downloads immediately
+returned `No such host is known`, producing 10 unexpected failures.
+This is not a green run. Added hash-checked atomic APK caching and a mirror
+listed by F-Droid, with own-byte transport/cache/error tests; no pins or
+app assertions change. Full verification of this out-of-domain CI fix is
+pending, along with both full Windows oatdump test results.
+Also fixed 58-devices' known unbounded geocoder probe: it ignored a false
+30-second Wait and then blocked on Result. It now checks completion first
+and bounds the whole child process to 45 seconds using DevRun. A timeout
+still fails the probe; no synthetic status or weakened assertion is used.
