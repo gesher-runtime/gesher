@@ -60,6 +60,11 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Current full CI: 40333703940 at
+f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
+integration b9f93f0. Watching with interval 120; no result is claimed yet.
+Superseded failing 40332803102 was cancelled after this run was dispatched.
+
 Diagnostic CI: 40328565752 at
 9c4d3803722eba83475ebe2475b7457ded394f21, with surfaces/integration 8590f4b.
 Native test compilation passed; the main build failed before Windows tests:
@@ -108,7 +113,8 @@ The baseline ownership inventory is now recorded in
 `docs/handoff/native-api-coverage.json`, parsed from both runners in ci
 40296960603 (jobs 121487355022 and 121487354891). Its 56 ABI/library/runner
 records contain 1,157 distinct missing export names. Current owners are native3
-(808), media3 (313), surfaces2 (25, ADR 0063), web3 (seven networking exports)
+(724), media3 (313), surfaces2 (25, ADR 0063), web3 (seven networking exports),
+net4 (84 remaining libc resolver/network entries, ADR 0070)
 and exec3 (four log/property/bootstrap exports). The four baseline bitmap
 exports now cite ci 40305973210; the launcher-only __libc_init context cites
 ci 40296960603 without claiming arbitrary-library dlsym availability.
