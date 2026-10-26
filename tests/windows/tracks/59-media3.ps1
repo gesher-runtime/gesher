@@ -46,7 +46,7 @@ function LineCheck([string] $Name, [string] $Out, [string[]] $Patterns, [int] $C
   $script:failed++
   if ($Tag -and -not $script:m3Printed[$Tag]) {
     $script:m3Printed[$Tag] = $true
-    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED| at ' } |
+    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED|\s+at ' } |
       Select-Object -First 200) | Out-Host
   }
 }
