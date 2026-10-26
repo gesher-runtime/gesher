@@ -210,8 +210,17 @@ package and e2e:
       device launch reports 11 methods with AOT code, none interpreted.
 
 ### Continuation (2026-10-26)
-- Running: ci 40297189562 at 0e0262f, including integration a98dda9. Every
-  job and both zero-failure summaries must be checked before merge.
+- ci 40297189562 at 0e0262f failed one Windows 2022 WebView pixel check;
+  Windows 2025, package and e2e passed. This was an actual rejected navigation
+  being loaded: debug PrintWindow on Android's UI Looper waited for the
+  WebView2 thread, which was waiting for shouldOverrideUrlLoading on that
+  Looper. After five seconds the callback timed out and allowed navigation.
+  WindowSession now captures on a daemon worker; native capture pins an open
+  surface while running so a concurrent window close is safe. The WebView
+  test also requires the native cancellation and forbids the rejected page's
+  onPageStarted. These three files are a minimal fix outside the aot2 domain.
+- Merged integration 91c195d (including native2). The capture fix and the
+  combined tree need a new full CI run before this track can merge.
 - Verified ci 40285423159 personally from every job's conclusion and logs:
   both Windows test jobs end with `0 test(s) failed`, package succeeds and
   e2e reports `0 unexpected failures`.
