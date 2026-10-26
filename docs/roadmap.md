@@ -315,9 +315,11 @@ needs: [framework-build.md](framework-build.md).
   - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
-- [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
+- [x] Device services below completed (hwsvc2 track, ADR 0051, docs/services.md
       "Status and next steps (hwsvc2)", docs/devices.md; ci runs 40214264956 at
-      aaa1f90 and 40235213023 at 85f49eb; all but the last sub-item)
+      aaa1f90 and 40235213023 at 85f49eb; final camera preview in ci
+      40307919084 attempt 2, all sub-items rechecked in ci 40320549410).
+      Additional service/device contracts remain open in services3, ADR 0069.
   - [x] Toast clicks after the device stopped (Gesher's COM toast activator,
         registered by the installer); uninstalling removes the app's toasts
         and AppUserModelID
@@ -369,10 +371,12 @@ needs: [framework-build.md](framework-build.md).
         window remain unverified (docs/windows3.md).
   - [x] Ctrl+C/V/X in EditText with Windows' clipboard (ci 40285476400)
 
-- [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
+- [x] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
       input changes the window, close ends the process; the `.apk`
-      association's command and a Start menu shortcut)
+      association's command and a Start menu shortcut; ci 40320549410,
+      both e2e runners: all required apps including TIC-80/Puzzles pass,
+      0 unexpected failures)
   - [x] RPN calculator, Editor, Currency, NoNonsense Notes and Unit
         Converter Ultimate pass; the `.apk` association and Start menu
         shortcut start RPN (ci run 40077182991)
