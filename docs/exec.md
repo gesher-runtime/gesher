@@ -18,8 +18,9 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   `Redirect.INHERIT` and file redirects pass the fd's handle; the environment
   block and working directory are the child's. The pid is the Windows process
   id. `waitForProcessExit` returns the status as Linux's `waitpid` gives it to
-  Java (the exit code; 0x80 + signal for a crash), `destroyProcess` terminates
-  with 0x80 + SIGTERM (143). Errors are `IOException`s with Linux's
+  Java (the exit code; 0x80 + signal for a crash), `destroyProcess` sends
+  SIGTERM through the signal mailbox so a native handler runs; its default
+  action exits 143. Errors are `IOException`s with Linux's
   `error=<errno>, <text>`.
 - **Finding and starting programs** (`compat/elf/exec/exec_spawn.{h,cc}`,
   library `gesher_exec_spawn`): a name with a `/` is a path (relative to the
@@ -54,13 +55,13 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     handles in binary mode. `abort()` ends with 134, a fault with 128 + the
     signal (139 for an access violation) after gesher-base's crash report; a
     program that cannot be linked prints `CANNOT LINK EXECUTABLE` and exits 1.
-  - `--sh [-c <cmd> | <script> [args]]` is a minimal `/system/bin/sh`: words
-    with `'`/`"`/`\` quoting, `$NAME`/`${NAME}`/`$?`/`$1` expansion, `;`,
-    `&&`, `||`, the builtins `echo`, `exit`, `true`, `false`, `:`, `cd`,
-    `pwd`, `export`, `exec` and `NAME=value` prefixes; other commands run as
-    programs (above) with the shell's stdio, `not found` is 127. Commands come
-    from `-c`, a script file or stdin. Pipes, redirection, subshells,
-    command substitution and control structures are refused with status 2.
+  - `--sh [-c <cmd> | <script> [args]]` uses the shell in ADR 0060: quoting,
+    variables and positional/parameter/arithmetic expansion, pipes, ordered
+    redirections/here-documents, command substitution, subshells, functions
+    and control flow, with common builtins and external programs (above).
+    A missing command is 127. Commands come from -c, a script or incremental
+    stdin. The status section distinguishes CI-verified cases from pending
+    conformance fixes; this is not a claim of complete mksh compatibility.
 - **Loader additions** (`gesher/elf_loader.h`, additive): `GetExecutableInfo`
   (entry point, program headers, `PT_INTERP`), `SetInitArguments` (what init
   functions are called with; dalvikvm never sets it, so `.so` files there get
@@ -95,8 +96,8 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
   `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, as a bare name or a
   `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
-  `pm`/`am` decline (no binder from a bare process), `setprop` cannot persist
-  (no shared property store).
+  `pm`/`am` currently decline; getprop/setprop now use the shared backend in
+  ADR 0060, whose complete platform ABI and device tests remain pending.
 
 ## Not done / limits
 
@@ -187,6 +188,19 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
+**Current review:** code through 5b5411b is prepared, including integration
+8590f4b. Active CI 40320290754 tests 1189dc4. Build, package and both e2e jobs
+pass with zero unexpected failures, required TIC-80 and Puzzles' generator
+exiting 0. Windows-2025 passes the 47-case real-shell suite, ART incremental
+stdin and native-handler Java destroy/tool checks; its only failure is the
+property test missing framework jars. That bootstrap is corrected in the
+prepared tree. Windows-2022 is still running. The 57-case conformance tree,
+idle/read trap checks and JNI-on-device APK are prepared but not CI-verified.
+The shared property's complete serial/wait/readonly-pointer ABI, logcat,
+pm/am and executable TLS remain open. No whole-track completion is claimed.
+
+Continuation history and exact evidence:
+
 - Current continuation (2026-10-26): the shell executor, builtin dispatch and
   RunShell entry are now linked into gesher-exec, replacing the minimal shell.
   Subshells/pipeline stages/command substitutions use child processes and
@@ -201,8 +215,9 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   ProcessBuilder, including read from the still-open stdin. The local driver
   has no Gesher signal mailbox, so it does not verify signal delivery or ART.
   CI checks are in 45-exec3 and exec.yml's existing Java-source glob builds
-  Exec3Test. No AOSP build was run locally. No exec3 work is CI-verified yet.
-- Running: ci 40311734733 at 8c90ac2, including integration 91c195d/native2.
+  Exec3Test. No AOSP build was run locally. No exec3 work was CI-verified at
+  that first dispatch; later evidence is recorded above and below.
+- Initial CI 40311734733 at 8c90ac2, including integration 91c195d/native2.
   Check both shell suites through the real launcher/ART, all existing track
   checks, package and e2e. The implementation below still has open scope.
 - Follow-up prepared while that run is in progress: ExecTest now expects a
