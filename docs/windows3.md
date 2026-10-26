@@ -101,7 +101,16 @@ MainActivity's task).
 
 ## Status and next steps
 
-- First implementation pushed; CI not yet run on it.
+- ci run 40238681927 (both runners): webview features pass with no WM_NULL
+  (the click arrives in 0.2-0.3 s, runtime 131 on windows-2022 too); e2e green
+  with Signal Generator on the default display; on the device multi-resume,
+  LandActivity's 800x400 turned window, MainActivity's relaunch turned and back
+  pass; single process clipboard and moveTaskToBack pass. Fixed after it: the
+  single process's Activity was invisible to the window session (no turn),
+  LaunchActivityItem replaced ActivityClient's controller (the device's
+  moveTaskToBack hid the window), the test's line-end regex, and the IME check
+  now expects target SDK 36's edge-to-edge behaviour (the window keeps its size;
+  the app pads by the IME insets) instead of a resize.
 
 ## Remaining gaps
 
