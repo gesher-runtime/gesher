@@ -9,12 +9,15 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <algorithm>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "services_zygote.h"
+#include "../posix/src/binder_wire.h"
 
 namespace gesher {
 namespace zygote {
@@ -238,6 +241,75 @@ bool SignalEvent(const std::u16string& name) {
   BOOL ok = SetEvent(e);
   CloseHandle(e);
   return ok != FALSE;
+}
+
+bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms) {
+  if (device.empty() || broker_pid <= 0 || timeout_ms < 0) return false;
+  struct ScopedHandle {
+    HANDLE value;
+    ~ScopedHandle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+  };
+  ScopedHandle broker{OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, broker_pid)};
+  if (!broker.value) return false;
+  uint64_t deadline = GetTickCount64() + static_cast<uint64_t>(timeout_ms);
+  auto remaining = [&]() -> DWORD {
+    uint64_t now = GetTickCount64();
+    return now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+  };
+  std::wstring name = binder_wire::kPipePrefix;
+  name.append(reinterpret_cast<const wchar_t*>(device.data()), device.size());
+  ScopedHandle pipe{INVALID_HANDLE_VALUE};
+  for (;;) {
+    if (WaitForSingleObject(broker.value, 0) != WAIT_TIMEOUT) return false;
+    pipe.value = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                             OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    if (pipe.value != INVALID_HANDLE_VALUE) break;
+    DWORD error = GetLastError(), left = remaining();
+    if (!left || (error != ERROR_FILE_NOT_FOUND && error != ERROR_PIPE_BUSY)) return false;
+    if (error == ERROR_PIPE_BUSY) WaitNamedPipeW(name.c_str(), std::min<DWORD>(left, 20));
+    else if (WaitForSingleObject(broker.value, std::min<DWORD>(left, 10)) != WAIT_TIMEOUT) return false;
+  }
+  ULONG server_pid = 0;
+  if (!GetNamedPipeServerProcessId(pipe.value, &server_pid) || server_pid != static_cast<ULONG>(broker_pid)) return false;
+  ScopedHandle event{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  if (!event.value) return false;
+  auto transfer = [&](void* bytes, DWORD size, bool write) {
+    auto* cursor = static_cast<unsigned char*>(bytes);
+    while (size) {
+      OVERLAPPED operation{};
+      operation.hEvent = event.value;
+      ResetEvent(event.value);
+      DWORD count = 0;
+      BOOL done = write ? WriteFile(pipe.value, cursor, size, &count, &operation)
+                        : ReadFile(pipe.value, cursor, size, &count, &operation);
+      if (!done) {
+        if (GetLastError() != ERROR_IO_PENDING) return false;
+        HANDLE waits[]{broker.value, event.value};
+        DWORD result = WaitForMultipleObjects(2, waits, FALSE, remaining());
+        if (result != WAIT_OBJECT_0 + 1) {
+          CancelIoEx(pipe.value, &operation);
+          GetOverlappedResult(pipe.value, &operation, &count, TRUE);
+          return false;
+        }
+        if (!GetOverlappedResult(pipe.value, &operation, &count, FALSE)) return false;
+      }
+      if (!count) return false;
+      size -= count;
+      cursor += count;
+    }
+    return true;
+  };
+  uint32_t hello[]{5 * sizeof(uint32_t), binder_wire::kHelloProc, binder_wire::kMagic,
+                    binder_wire::kVersion, GetCurrentProcessId(), 10000};
+  uint32_t length = 0;
+  unsigned char reply[16]{};
+  if (!transfer(hello, sizeof(hello), true) || !transfer(&length, sizeof(length), false) ||
+      length != sizeof(reply) || !transfer(reply, sizeof(reply), false)) return false;
+  int32_t status;
+  uint32_t process;
+  std::memcpy(&status, reply, sizeof(status));
+  std::memcpy(&process, reply + 4, sizeof(process));
+  return status == 0 && process != 0 && WaitForSingleObject(broker.value, 0) == WAIT_TIMEOUT;
 }
 
 std::u16string CommandLine() {

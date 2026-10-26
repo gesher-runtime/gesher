@@ -329,6 +329,12 @@ public final class ActivityManagerService extends IActivityManager.Default {
     }
 
     @Override
+    public void forceStopPackage(String packageName, int userId) {
+        if (userId != 0) throw new IllegalArgumentException("only user 0 is available");
+        mAtm.forceStopPackage(packageName);
+    }
+
+    @Override
     public int broadcastIntentWithFeature(IApplicationThread caller, String callingFeatureId,
             Intent intent, String resolvedType, IIntentReceiver resultTo, int resultCode,
             String resultData, Bundle map, String[] requiredPermissions,

@@ -219,7 +219,7 @@ public class ExecTest {
     r = run(new ProcessBuilder("sh", "-c", "no-such-command-gesher"));
     check("sh: a missing command is status 127", r.status == 127 && r.err.contains("not found"), r.toString());
     r = run(new ProcessBuilder("sh", "-c", "echo a | cat"));
-    check("sh: a pipe is refused with status 2", r.status == 2 && r.err.contains("not supported"), r.toString());
+    check("sh: a pipe carries output to cat", r.status == 0 && r.out.equals("a\n") && r.err.isEmpty(), r.toString());
     {
       Process p = new ProcessBuilder("sh").start();
       Drain out = new Drain(p.getInputStream());

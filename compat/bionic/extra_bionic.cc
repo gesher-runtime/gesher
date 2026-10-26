@@ -19,6 +19,7 @@
 #include "unicode_bionic.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/system_properties.h>
 
 #include <windows.h>
 
@@ -1432,62 +1433,13 @@ char* BIONIC_SYSV StrptimeL(const char* s, const char* fmt, BionicTm* tm, void*)
 std::mutex g_prop_mutex;
 PropertyGetter g_prop_get = nullptr;
 PropertySetter g_prop_set = nullptr;
-// The fallback store: $ANDROID_ROOT/build.prop and a few defaults, plus what
-// __system_property_set wrote.
-std::map<std::string, std::string>* g_props = nullptr;
 
 struct PropInfo {
   std::string name;
-  uint32_t serial = 0;
+  std::string immutable_value;
+  uint32_t immutable_serial = 0;
 };
 std::map<std::string, std::unique_ptr<PropInfo>>* g_prop_infos = nullptr;
-
-std::string Trim(const std::string& s) {
-  size_t a = s.find_first_not_of(" \t\r\n");
-  if (a == std::string::npos) return "";
-  size_t b = s.find_last_not_of(" \t\r\n");
-  return s.substr(a, b - a + 1);
-}
-
-std::map<std::string, std::string>& Props() {
-  if (g_props != nullptr) return *g_props;
-  g_props = new std::map<std::string, std::string>{
-      {"ro.build.version.sdk", "36"},
-      {"ro.build.version.release", "16"},
-      {"ro.build.version.codename", "REL"},
-      {"ro.product.cpu.abi", "x86_64"},
-      {"ro.product.cpu.abilist", "x86_64,arm64-v8a"},
-      {"ro.product.cpu.abilist64", "x86_64,arm64-v8a"},
-      {"ro.product.manufacturer", "gesher"},
-      {"ro.product.model", "Gesher"},
-      {"ro.product.brand", "gesher"},
-      {"ro.hardware", "gesher"},
-      {"ro.debuggable", "0"},
-  };
-  if (const char* root = std::getenv("ANDROID_ROOT")) {
-    int fd = open((std::string(root) + "/build.prop").c_str(), O_RDONLY);
-    if (fd >= 0) {
-      std::string text;
-      char buf[4096];
-      int n;
-      while ((n = read(fd, buf, sizeof(buf))) > 0) text.append(buf, static_cast<size_t>(n));
-      close(fd);
-      size_t pos = 0;
-      while (pos < text.size()) {
-        size_t nl = text.find('\n', pos);
-        std::string line = Trim(text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos));
-        pos = nl == std::string::npos ? text.size() : nl + 1;
-        if (line.empty() || line[0] == '#') continue;
-        size_t eq = line.find('=');
-        if (eq == 0 || eq == std::string::npos) continue;
-        std::string key = Trim(line.substr(0, eq));
-        if (!key.empty() && key.back() == '?') key = Trim(key.substr(0, key.size() - 1));
-        (*g_props)[key] = Trim(line.substr(eq + 1));
-      }
-    }
-  }
-  return *g_props;
-}
 
 bool GetProp(const char* name, std::string* value) {
   if (name == nullptr) return false;
@@ -1496,34 +1448,33 @@ bool GetProp(const char* name, std::string* value) {
     std::lock_guard<std::mutex> lock(g_prop_mutex);
     get = g_prop_get;
   }
-  if (get != nullptr && get(name, value) && !value->empty()) return true;
-  std::lock_guard<std::mutex> lock(g_prop_mutex);
-  auto& props = Props();
-  auto it = props.find(name);
-  if (it == props.end() || it->second.empty()) return false;
-  *value = it->second;
-  return true;
+  if (get != nullptr && get(name, value)) return true;
+  return properties::Get(name, value);
 }
 
 int BIONIC_SYSV SystemPropertyGet(const char* name, char* value) { return SystemPropertyGetValue(name, value); }
 int BIONIC_SYSV SystemPropertySet(const char* name, const char* value) {
-  if (name == nullptr || value == nullptr) return -1;
+  if (name == nullptr) return -1;
+  if (value == nullptr) value = "";
   PropertySetter set;
   {
     std::lock_guard<std::mutex> lock(g_prop_mutex);
     set = g_prop_set;
-    Props()[name] = value;
   }
-  if (set != nullptr) set(name, value);
-  return 0;
+  return (set != nullptr ? set(name, value) : properties::Set(name, value)) ? 0 : -1;
 }
 PropInfo* Info(const std::string& name) {
+  std::string value;
+  uint32_t serial = 0;
+  properties::Get(name, &value, &serial);
   std::lock_guard<std::mutex> lock(g_prop_mutex);
   if (g_prop_infos == nullptr) g_prop_infos = new std::map<std::string, std::unique_ptr<PropInfo>>();
   auto& slot = (*g_prop_infos)[name];
   if (!slot) {
     slot = std::make_unique<PropInfo>();
     slot->name = name;
+    slot->immutable_value = std::move(value);
+    slot->immutable_serial = serial;
   }
   return slot.get();
 }
@@ -1545,31 +1496,46 @@ void BIONIC_SYSV SystemPropertyReadCallback(const PropInfo* pi,
                                             void (BIONIC_SYSV* cb)(void*, const char*, const char*, uint32_t),
                                             void* cookie) {
   if (pi == nullptr || cb == nullptr) return;
+  if (pi->name.rfind("ro.", 0) == 0) {
+    cb(cookie, pi->name.c_str(), pi->immutable_value.c_str(), pi->immutable_serial);
+    return;
+  }
   std::string v;
-  GetProp(pi->name.c_str(), &v);
-  cb(cookie, pi->name.c_str(), v.c_str(), pi->serial);
+  uint32_t serial = 0;
+  properties::Get(pi->name, &v, &serial);
+  cb(cookie, pi->name.c_str(), v.c_str(), serial);
 }
 int BIONIC_SYSV SystemPropertyForeach(void (BIONIC_SYSV* cb)(const PropInfo*, void*), void* cookie) {
+  if (cb == nullptr) return -1;
   std::vector<std::string> names;
-  {
-    std::lock_guard<std::mutex> lock(g_prop_mutex);
-    for (auto& [k, v] : Props()) names.push_back(k);
-  }
+  for (const auto& [name, value] : properties::List()) names.push_back(name);
   for (const std::string& n : names) cb(Info(n), cookie);
   return 0;
 }
-uint32_t BIONIC_SYSV SystemPropertySerial(const PropInfo* pi) { return pi != nullptr ? pi->serial : 0; }
-uint32_t BIONIC_SYSV SystemPropertyAreaSerial() { return 1; }
+uint32_t BIONIC_SYSV SystemPropertySerial(const PropInfo* pi) {
+  uint32_t serial = 0;
+  if (pi) properties::Get(pi->name, nullptr, &serial);
+  return serial;
+}
+uint32_t BIONIC_SYSV SystemPropertyAreaSerial() { return properties::AreaSerial(); }
+bool BIONIC_SYSV SystemPropertyWait(const PropInfo* pi, uint32_t old_serial, uint32_t* new_serial,
+                                  const LinuxTimespec* timeout) {
+  properties::WaitTimeout relative{};
+  if (timeout) relative = {timeout->tv_sec, timeout->tv_nsec};
+  return properties::Wait(pi ? &pi->name : nullptr, old_serial, new_serial, timeout ? &relative : nullptr);
+}
+uint32_t BIONIC_SYSV SystemPropertyWaitAny(uint32_t old_serial) {
+  uint32_t serial = old_serial;
+  properties::Wait(nullptr, old_serial, &serial, nullptr);
+  return serial;
+}
 const PropInfo* BIONIC_SYSV SystemPropertyFindNth(unsigned n) {
   std::string name;
-  {
-    std::lock_guard<std::mutex> lock(g_prop_mutex);
-    auto& props = Props();
-    if (n >= props.size()) return nullptr;
-    auto it = props.begin();
-    std::advance(it, n);
-    name = it->first;
-  }
+  auto props = properties::List();
+  if (n >= props.size()) return nullptr;
+  auto it = props.begin();
+  std::advance(it, n);
+  name = it->first;
   return Info(name);
 }
 // Android's device API level and the application's target SDK are distinct.
@@ -1709,6 +1675,7 @@ void SetPropertyAccessors(PropertyGetter get, PropertySetter set) {
 int SystemPropertyGetValue(const char* name, char* value) {
   std::string v;
   if (!GetProp(name, &v)) v.clear();
+  if (name && std::strncmp(name, "ro.", 3) == 0 && v.size() >= 92) v = properties::kLongLegacyError;
   if (v.size() > 91) v.resize(91);  // PROP_VALUE_MAX - 1
   if (value != nullptr) std::memcpy(value, v.c_str(), v.size() + 1);
   return static_cast<int>(v.size());
@@ -2010,6 +1977,8 @@ void RegisterExtra(SymbolTable& t) {
   E("__system_property_foreach", SystemPropertyForeach);
   E("__system_property_serial", SystemPropertySerial);
   E("__system_property_area_serial", SystemPropertyAreaSerial);
+  E("__system_property_wait", SystemPropertyWait);
+  E("__system_property_wait_any", SystemPropertyWaitAny);
   E("__system_property_find_nth", SystemPropertyFindNth);
   E("android_get_device_api_level", GetDeviceApiLevel);
   E("android_get_application_target_sdk_version", GetTargetSdk);
