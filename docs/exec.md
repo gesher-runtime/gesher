@@ -223,6 +223,13 @@ above the verified f5ce6f6 AOT3 oatdump stage). It is retained for the final
 combined CI; the current diagnostic run is still at the SHA stated above.
 The current run's main build and package job have completed successfully;
 the package log confirms actual install, Hello, device UI/input and uninstall.
+One additional post-dispatch property regression is corrected: a child started
+while ART temporarily changes ANDROID_DATA now inherits the boot's original
+property root, bound to its session. A new session still chooses its own root.
+The bounded native child assertion failed before the correction (missing value
+and a nonempty scratch directory) and now passes with ten host assertions and
+zero failures. This source and the updated CI expectation need the final run;
+the active diagnostic still contains the earlier nine-assertion probe.
 The full track, pm/am and umask remain open until actual completed evidence.
 Applied the coordinator's complete four-file Process follow-up (source 644e7f8):
 readProcLines/readProcFile/parseProcLine, matching lightweight JNI declarations,

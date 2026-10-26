@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 namespace android {
@@ -21,8 +22,37 @@ void First() {
 }
 void Second() { observed.push_back(20); }
 void Third() { observed.push_back(10); }
+bool ChildReadsBootValue(const std::string& name) {
+  std::vector<wchar_t> path(32768);
+  DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  if (!length || length >= path.size()) return false;
+  std::wstring command = L"\"" + std::wstring(path.data(), length) + L"\" --child ";
+  command.append(name.begin(), name.end());  // the generated property name is ASCII
+  std::vector<wchar_t> writable(command.begin(), command.end());
+  writable.push_back(0);
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(path.data(), writable.data(), nullptr, nullptr, FALSE, 0,
+                      nullptr, nullptr, &startup, &process)) return false;
+  DWORD status = 1;
+  bool complete = WaitForSingleObject(process.hProcess, 10000) == WAIT_OBJECT_0;
+  if (complete) GetExitCodeProcess(process.hProcess, &status);
+  else {
+    TerminateProcess(process.hProcess, 1);
+    WaitForSingleObject(process.hProcess, 5000);
+  }
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return complete && status == 0;
 }
-int main() {
+}
+int main(int argc, char** argv) {
+  if (argc == 3 && std::strcmp(argv[1], "--child") == 0) {
+    std::string value;
+    return gesher::properties::Initialize() && gesher::properties::Get(argv[2], &value) &&
+                   value == "boot-value" ? 0 : 1;
+  }
   unsigned failed = 0, checks = 0;
   auto check = [&](const char* label, bool result) {
     ++checks;
@@ -39,6 +69,7 @@ int main() {
   _putenv_s("ANDROID_DATA", scratch.c_str());
   std::string value;
   check("scratch data does not switch property service", gesher::properties::Get(name, &value) && value == "boot-value");
+  check("child inherits boot area despite scratch data", ChildReadsBootValue(name));
   check("log default 1 preserves INFO fallback", !gesher::logging::IsLoggable(2, name.c_str(), name.size(), 4, 1) &&
         gesher::logging::IsLoggable(4, name.c_str(), name.size(), 4, 1));
   _putenv_s("ANDROID_DATA", original.c_str());

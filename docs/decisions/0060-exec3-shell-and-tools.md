@@ -53,7 +53,10 @@ The property implementation now has one Win32 mapped area shared by libbase
 (including Java SystemProperties), loaded ELF bionic and the command-line
 tools. Its namespace combines ANDROID_DATA with the unique GESHER_BINDER boot
 name. Single-process execution publishes an inherited GESHER_PROPERTY_SESSION
-before children copy their environment. A named mutex serializes changes and
+before children copy their environment. The original data root is inherited
+with its session binding, so a temporary ART scratch ANDROID_DATA cannot give
+a child a different property service in the same boot. A new session ignores
+the previous root binding. A named mutex serializes changes and
 the area contains both per-property and global serials. Readers refresh cached
 values when the generation changes; prop_info identities remain stable in a
 process and callbacks retrieve the latest value. build.prop and platform

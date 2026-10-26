@@ -59,7 +59,7 @@ struct Area {
   void* view = nullptr;
   uint32_t cached_generation = 0;
   Snapshot values;
-  std::wstring persistent;
+  std::wstring root, persistent;
   ~Area() { if (view) UnmapViewOfFile(view); }
 };
 bool Valid(const std::string& name, const std::string& value);
@@ -120,6 +120,12 @@ std::wstring Session() {
     if (_wputenv_s(L"GESHER_PROPERTY_SESSION", session.c_str()) != 0) return {};
   }
   return L"single-" + session;
+}
+bool InheritRoot(const std::wstring& session, const std::wstring& root) {
+  if (Environment(L"GESHER_PROPERTY_ROOT_SESSION") == session &&
+      Environment(L"GESHER_PROPERTY_ROOT") == root) return true;
+  return _wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str()) == 0 &&
+         _wputenv_s(L"GESHER_PROPERTY_ROOT_SESSION", session.c_str()) == 0;
 }
 
 void Put32(std::string* data, uint32_t value) {
@@ -288,11 +294,19 @@ Area* Current() { // LocalMutex is held by every caller.
   if (session.empty()) return nullptr;
   auto& cached = Areas();
   auto existing = cached.find(session);
-  if (existing != cached.end()) return existing->second.get();
+  if (existing != cached.end()) {
+    Area* area = existing->second.get();
+    return InheritRoot(session, area->root) ? area : nullptr;
+  }
   // A boot's mapping keeps its original data root, as Android's property area
   // does. ART tests temporarily replace ANDROID_DATA for scratch directories;
   // ordinary log/property reads must not create a new service in each scratch.
-  std::wstring data = Environment(L"ANDROID_DATA");
+  // Children must inherit this same boot root even when ART has temporarily
+  // changed ANDROID_DATA before spawning them. A different session starts a
+  // new boot and deliberately ignores the previous root's inherited binding.
+  std::wstring data = Environment(L"GESHER_PROPERTY_ROOT_SESSION") == session
+                          ? Environment(L"GESHER_PROPERTY_ROOT") : std::wstring{};
+  if (data.empty()) data = Environment(L"ANDROID_DATA");
   if (data.empty()) {
     data = Environment(L"LOCALAPPDATA");
     if (data.empty()) data = Environment(L"TEMP");
@@ -305,6 +319,7 @@ Area* Current() { // LocalMutex is held by every caller.
   std::wstring path = dir + L"\\" + Key(session) + L".area";
   if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
   auto area = std::make_unique<Area>();
+  area->root = data;
   area->persistent = data + L"\\property\\persistent_properties";
   area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
   MutexLock lock(area->mutex.value);
@@ -324,7 +339,7 @@ Area* Current() { // LocalMutex is held by every caller.
     for (auto& [name, value] : initial) value.serial = Serial(name, value.text);
     if (!Publish(area.get(), std::move(initial))) return nullptr;
   }
-  if (!Refresh(area.get())) return nullptr;
+  if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
   Area* result = area.get();
   cached.emplace(session, std::move(area));
   RemoveOldAreas(dir, path);

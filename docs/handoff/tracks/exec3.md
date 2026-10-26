@@ -13,6 +13,8 @@ prepared pm/am, one-shot readiness, UTF-8/long-value, Launcher framing and
 completed-geocoder fixes. After dispatch, merge 2ba2375 incorporates integration
 634a273 (docs on verified AOT3 oatdump f5ce6f6); that combined tree still needs
 final CI. The active run's build/package pass; Windows and e2e remain running.
+The prepared property root inheritance regression passes ten native host checks
+locally; the active diagnostic still has the earlier nine-check probe.
 See docs/exec.md for exact evidence and open umask/
 policy scope. The original brief below remains unchanged.
 
