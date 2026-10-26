@@ -360,6 +360,10 @@ drawing in a window that is covered or off the desktop;
   stderr to locate any remaining UIA stall in the next run. This is a
   reentrancy fix; the CI result must establish whether it resolves the
   observed accessibility failures.
+- Running: ci 40292261578 at 63203c4 (geolocation array, provider lock fix,
+  snapshot diagnostics, integration a462e9c). Read both accessibility checks
+  and the timeout phase. Integration has since merged windows3 as 80cb28b;
+  merge it before final verification. No accessibility checkbox is closed.
 
 - Branch wip/web3 (worktree C:\work\gesher-webview).
 - ci 40261113581: web3app's build.sh was not executable (fixed).
