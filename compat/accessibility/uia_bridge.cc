@@ -227,6 +227,7 @@ BSTR Bstr(const std::wstring& s) { return SysAllocStringLen(s.data(), static_cas
 class Element final : public IRawElementProviderSimple,
                       public IRawElementProviderFragment,
                       public IRawElementProviderFragmentRoot,
+                      public IRawElementProviderHwndOverride,
                       public IInvokeProvider,
                       public IValueProvider,
                       public IToggleProvider {
@@ -245,6 +246,8 @@ class Element final : public IRawElementProviderSimple,
       *out = static_cast<IRawElementProviderFragment*>(this);
     } else if (IsEqualIID(riid, __uuidof(IRawElementProviderFragmentRoot)) && id_ == kRoot) {
       *out = static_cast<IRawElementProviderFragmentRoot*>(this);
+    } else if (IsEqualIID(riid, __uuidof(IRawElementProviderHwndOverride)) && id_ == kRoot) {
+      *out = static_cast<IRawElementProviderHwndOverride*>(this);
     } else if (IsEqualIID(riid, __uuidof(IInvokeProvider))) {
       *out = static_cast<IInvokeProvider*>(this);
     } else if (IsEqualIID(riid, __uuidof(IValueProvider))) {
@@ -285,7 +288,9 @@ class Element final : public IRawElementProviderSimple,
       want = (n.flags & kCheckable) != 0;
     }
     if (want) {
-      *out = static_cast<IRawElementProviderSimple*>(this);
+      if (pattern == UIA_InvokePatternId) *out = static_cast<IInvokeProvider*>(this);
+      else if (pattern == UIA_ValuePatternId) *out = static_cast<IValueProvider*>(this);
+      else *out = static_cast<IToggleProvider*>(this);
       AddRef();
     }
     return S_OK;
@@ -375,6 +380,23 @@ class Element final : public IRawElementProviderSimple,
     if (id_ == kRoot) return UiaHostProviderFromHwnd(hwnd_, out);
     Node n = Get();
     if (n.ok && n.hosted != nullptr && IsWindow(n.hosted)) return UiaHostProviderFromHwnd(n.hosted, out);
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE GetOverrideProviderForHwnd(HWND hosted,
+                                                       IRawElementProviderSimple** out) override {
+    if (out == nullptr) return E_POINTER;
+    *out = nullptr;
+    std::vector<int64_t> pending{kRoot};
+    for (size_t i = 0; i < pending.size() && i < 2000; ++i) {
+      Node n = GetNode(hwnd_, pending[i]);
+      if (!n.ok) continue;
+      if (n.hosted == hosted) {
+        *out = static_cast<IRawElementProviderSimple*>(Make(hwnd_, pending[i]));
+        return S_OK;
+      }
+      if (n.hosted == nullptr) pending.insert(pending.end(), n.children.begin(), n.children.end());
+    }
     return S_OK;
   }
 
@@ -643,6 +665,7 @@ jboolean UiaBridge_nativeClientsListening(JNIEnv*, jclass) {
 void UiaBridge_nativeRaise(JNIEnv* env, jclass, jlong hwnd_value, jlong id, jint kind, jstring text) {
   HWND hwnd = reinterpret_cast<HWND>(static_cast<intptr_t>(hwnd_value));
   if (!IsWindow(hwnd) || !UiaClientsAreListening()) return;
+  HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   Element* e = Element::Make(hwnd, id == 0 ? kRoot : id);
   std::wstring t = Str(env, text);
   switch (kind) {
@@ -686,6 +709,7 @@ void UiaBridge_nativeRaise(JNIEnv* env, jclass, jlong hwnd_value, jlong id, jint
       break;
   }
   e->Release();
+  if (SUCCEEDED(com)) CoUninitialize();
 }
 
 const JNINativeMethod kMethods[] = {

@@ -37,6 +37,7 @@ public class A11yActivity extends Activity {
     private boolean mTextSet;
     private boolean mToggled;
     private WebView mWeb;
+    private long mProviderUntil;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -102,6 +103,7 @@ public class A11yActivity extends Activity {
 
     /** The page through the WebView's AccessibilityNodeProvider. */
     private void provider() {
+        if (mProviderUntil == 0) mProviderUntil = android.os.SystemClock.uptimeMillis() + 15_000;
         AccessibilityNodeProvider p = mWeb.getAccessibilityNodeProvider();
         if (p == null) {
             Web3.log("a11y provider: none");
@@ -121,6 +123,11 @@ public class A11yActivity extends Activity {
             if (n.isHeading() && s.contains("Web content") && heading == null) heading = n;
             CharSequence hint = n.getHintText();
             if (n.isEditable() && hint != null && hint.toString().contains("Web field")) field = n;
+        }
+        if ((press == null || heading == null || field == null)
+                && android.os.SystemClock.uptimeMillis() < mProviderUntil) {
+            mHandler.postDelayed(this::provider, 100);
+            return;
         }
         Web3.log("a11y provider: " + nodes.size() + " nodes; heading "
                 + (heading != null ? "'" + heading.getText() + "'" : "none") + "; button "

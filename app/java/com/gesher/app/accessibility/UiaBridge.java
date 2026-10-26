@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Android's views for Windows' UI Automation (ADR 0058): the Java half of
@@ -50,6 +52,11 @@ public final class UiaBridge {
     static final long ROOT = -1;
 
     private static Boolean sLoaded;
+    private static final ExecutorService sEvents = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "AccessibilityEvents");
+        t.setDaemon(true);
+        return t;
+    });
 
     static synchronized boolean load() {
         if (sLoaded == null) {
@@ -79,6 +86,12 @@ public final class UiaBridge {
     private static native boolean nativeClientsListening();
 
     private static native void nativeRaise(long hwnd, long id, int kind, String text);
+
+    private static void raise(long hwnd, long id, int kind, String text) {
+        // UIA may query a provider synchronously as an event is raised. Its
+        // Android node lookup needs the UI thread, which must remain free.
+        sEvents.execute(() -> nativeRaise(hwnd, id, kind, text));
+    }
 
     // ---- Windows ----
 
@@ -357,17 +370,17 @@ public final class UiaBridge {
         switch (e.getEventType()) {
             case AccessibilityEvent.TYPE_VIEW_FOCUSED:
             case AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED:
-                nativeRaise(hwnd, id, 1, null);
+                raise(hwnd, id, 1, null);
                 break;
             case AccessibilityEvent.TYPE_ANNOUNCEMENT:
                 AccessibilityService.log("announcement for UI Automation: " + text);
-                nativeRaise(hwnd, id, 3, text.toString());
+                raise(hwnd, id, 3, text.toString());
                 break;
             case AccessibilityEvent.TYPE_VIEW_CLICKED:
-                nativeRaise(hwnd, id, 4, null);
+                raise(hwnd, id, 4, null);
                 break;
             case AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED:
-                nativeRaise(hwnd, id, 5, text.toString());
+                raise(hwnd, id, 5, text.toString());
                 break;
             case AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED:
             case AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED: {
@@ -375,7 +388,7 @@ public final class UiaBridge {
                 Long last = sLastStructure.get(hwnd);
                 if (last != null && now - last < 250) break;
                 sLastStructure.put(hwnd, now);
-                nativeRaise(hwnd, 0, 2, null);
+                raise(hwnd, 0, 2, null);
                 break;
             }
             default:

@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -89,13 +90,29 @@ bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms) {
 
 // --- Snapshots --------------------------------------------------------------------
 
-// The last snapshot's elements (the UIA thread's), for actions on them.
-std::vector<IUIAutomationElement*> g_elements;
+// Keep the current and previous snapshot of each live window: another WebView
+// or a refresh must not invalidate an action queued against a displayed node.
+struct Elements {
+  HWND hwnd = nullptr;
+  std::vector<IUIAutomationElement*> nodes;
+};
+std::map<int, Elements> g_elements;
 int g_generation = 0;
 
-void ReleaseElements() {
-  for (IUIAutomationElement* e : g_elements) e->Release();
-  g_elements.clear();
+void ReleaseElements(HWND refreshing) {
+  int newest = 0;
+  for (auto it = g_elements.rbegin(); it != g_elements.rend(); ++it) {
+    if (it->second.hwnd == refreshing) { newest = it->first; break; }
+  }
+  for (auto it = g_elements.begin(); it != g_elements.end();) {
+    if (!IsWindow(it->second.hwnd) ||
+        (it->second.hwnd == refreshing && it->first != newest)) {
+      for (IUIAutomationElement* e : it->second.nodes) e->Release();
+      it = g_elements.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 std::wstring Clean(BSTR b) {
@@ -144,8 +161,11 @@ enum : uint32_t {
 // (screen coordinates; parent -1 for the top level).
 std::wstring Snapshot(HWND hwnd, int max_nodes) {
   g_phase.store("snapshot setup");
-  ReleaseElements();
+  ReleaseElements(hwnd);
   g_generation++;
+  Elements& snapshot = g_elements[g_generation];
+  snapshot.hwnd = hwnd;
+  auto& elements = snapshot.nodes;
   std::wstring out = L"gen\t" + std::to_wstring(g_generation) + L"\n";
   if (g_uia == nullptr) return out;
   IUIAutomationCacheRequest* cache = nullptr;
@@ -190,13 +210,13 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
   }
   for (auto it = top.rbegin(); it != top.rend(); ++it) stack.push_back({*it, -1, 0});
   root->Release();
-  while (!stack.empty() && static_cast<int>(g_elements.size()) < max_nodes) {
+  while (!stack.empty() && static_cast<int>(elements.size()) < max_nodes) {
     g_phase.store("element properties");
     Item item = stack.back();
     stack.pop_back();
     IUIAutomationElement* e = item.element;
-    int id = static_cast<int>(g_elements.size());
-    g_elements.push_back(e);
+    int id = static_cast<int>(elements.size());
+    elements.push_back(e);
     BSTR name = nullptr;
     e->get_CachedName(&name);
     RECT r = {0, 0, 0, 0};
@@ -253,8 +273,10 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
 // action: 1 click (Invoke, else Toggle, else SelectionItem.Select, else the
 // legacy default action), 2 focus, 3 set the value, 5 scroll into view.
 bool Act(int generation, int id, int action, const std::wstring& text) {
-  if (generation != g_generation || id < 0 || id >= static_cast<int>(g_elements.size())) return false;
-  IUIAutomationElement* e = g_elements[static_cast<size_t>(id)];
+  auto snapshot = g_elements.find(generation);
+  if (snapshot == g_elements.end() || !IsWindow(snapshot->second.hwnd) || id < 0 ||
+      id >= static_cast<int>(snapshot->second.nodes.size())) return false;
+  IUIAutomationElement* e = snapshot->second.nodes[static_cast<size_t>(id)];
   switch (action) {
     case 1: {
       IUIAutomationInvokePattern* invoke = nullptr;
