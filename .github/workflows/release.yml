@@ -26,12 +26,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote:
+  candidate:
     if: github.repository == 'gesher-runtime/gesher' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
       actions: read
     env:
       SOURCE_CI_RUN: ${{ inputs.source_ci_run_id }}
@@ -62,10 +62,48 @@ jobs:
         run: |
           python tools/release/promote.py prepare --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # The tested installer runs in a separate step without an API token.
+      # This entire job has read-only permissions. No runner that executes an
+      # installer is reused for a job with publication credentials.
       - name: Verify candidate install runtime and uninstall
         shell: pwsh
         run: tools/release/verify-installer.ps1 -Directory release-candidate -Phase candidate -Logs release-evidence/candidate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-candidate-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-evidence/
+
+  promote:
+    needs: candidate
+    if: github.repository == 'gesher-runtime/gesher' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && needs.candidate.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE_CI_RUN: ${{ inputs.source_ci_run_id }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/release
+            docs/releases
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Fresh runner and checkout: candidate execution cannot modify this code,
+      # evidence or process state. Fetch the original source artifacts again;
+      # no executable from the package is run on this write-capable runner.
+      - name: Reauthenticate the original tested candidate on a fresh runner
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release/promote.py prepare --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Plan or publish only the validated bytes
         shell: pwsh
         env:

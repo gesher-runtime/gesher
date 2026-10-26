@@ -107,6 +107,7 @@ class PromotionTests(unittest.TestCase):
         self.notes = self.root / "notes.md"
         self.notes.write_text("Source __SOURCE_SHA__, run __CI_RUN__", encoding="utf-8")
         self.client = FakeGitHub(self.candidate)
+        self.source_archives()
         self.prepared = {"source_run": 123, "source_sha": SHA, "source_attempt": 1,
                          "installer_artifact": copy.deepcopy(self.client.installer),
                          "receipt_artifact": copy.deepcopy(self.client.receipt),
@@ -188,6 +189,34 @@ class PromotionTests(unittest.TestCase):
                 self.promote()
             self.assertEqual(self.client.mutations, [])
             self.prepared = original
+
+    def test_mutable_candidate_receipts_and_prepare_cannot_override_source_bytes(self):
+        target = self.root / "prepared"
+        run, installer, receipt, assets = p.prepare(self.client, 123, SHA, target)
+        original = (target / g.INSTALLER).read_bytes()
+        changed = original[:-1] + bytes([original[-1] ^ 1])
+        (target / g.INSTALLER).write_bytes(changed)
+        manifest = json.loads((target / g.MANIFEST).read_text(encoding="utf-8"))
+        manifest["installer"]["sha256"] = hashlib.sha256(changed).hexdigest()
+        (target / g.MANIFEST).write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+        (target / "SHA256SUMS").write_text(
+            f"{g.file_digest(target / g.INSTALLER)}  {g.INSTALLER}\n"
+            f"{g.file_digest(target / g.MANIFEST)}  {g.MANIFEST}\n", encoding="utf-8")
+        forged_prepare = copy.deepcopy(self.prepared)
+        forged_prepare["assets"] = g.candidate(target, run, installer)
+        with self.assertRaisesRegex(g.Refused, "authenticated source"):
+            p.promote(self.client, 123, SHA, target, self.notes, self.root / "existing", forged_prepare)
+        self.assertEqual(self.client.mutations, [])
+        self.assertIsNone(self.client.tag)
+        self.assertFalse(list(self.root.glob("gesher-release-receipt-*")))
+
+    def test_reauthentication_refuses_corrupt_source_receipt_before_tag(self):
+        identifier = self.client.receipt["id"]
+        original = self.client.artifact_archives[identifier]
+        self.client.artifact_archives[identifier] = b"X" + original[1:]
+        with self.assertRaisesRegex(g.Refused, "Source receipt archive"):
+            self.promote()
+        self.assertEqual(self.client.mutations, [])
 
     def test_missing_or_unresolved_notes_fail_before_tag_creation(self):
         self.notes.unlink()

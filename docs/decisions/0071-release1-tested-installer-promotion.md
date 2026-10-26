@@ -20,7 +20,12 @@ a fresh complete attempt of ci.yml on main in this repository, every job and
 required test steps, documented skips only, both artifact archive digests,
 receipt provenance, installer bytes and PE metadata. Compare both artifact
 identities and all prepared asset hashes again before writing; validate release
-notes before creating a tag. Partial reruns are refused;
+notes before creating a tag. Prepared workspace data is only advisory: fetch and
+hash the source receipt ZIP again before any write, retain its authenticated
+members as immutable in-process bytes, and derive expected installer/member
+hashes from them. Candidate installer execution has read-only job permissions;
+publication runs on a fresh runner/checkout, consumes the original artifacts
+again and never executes the installer. Partial reruns are refused;
 run a fresh full main CI with release_version=0.1.0 for the final candidate.
 
 The publishing runner consumes CI artifacts; this machine never downloads
@@ -37,10 +42,13 @@ The workflow defaults to a dry run; only the coordinator requests publication.
 
 ## Verification and open gates
 
-Twenty-nine offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
+Thirty-one offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
 required steps, mismatched artifacts/receipts and safe existing tag/release
 handling, both complete archive downloads/extractions and corruption of either
 archive, changed prepared artifacts/bytes and missing/unresolved notes before
-any tag write. Version selection tests retain normal numbering and reject malformed
+any tag write. A complete mutation of installer, local manifest/checksums and
+prepare evidence cannot override the original API-authenticated receipt; a
+corrupt re-fetched receipt also refuses publication. Version selection tests
+retain normal numbering and reject malformed
 release overrides. Full branch CI with the exact 0.1.0 override, successful main
 CI, actual promotion and released-byte verification remain pending.

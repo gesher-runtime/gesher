@@ -53,7 +53,7 @@ CI numbering retained, explicit PE metadata, post-smoke manifest/checksum
 receipts, promotion guards and GitHub transport, a dispatch-only main release
 workflow, candidate and released-byte install/run/uninstall verification,
 released-byte real-app e2e on both Windows runners, and release-note source.
-Twenty-nine offline test methods (including negative subcases) and the version
+Thirty-one offline test methods (including negative subcases) and the version
 selection fixture pass. ADR 0071 records the mechanism; [the release
 runbook](../../releases/README.md) gives the coordinator's final commands.
 Remaining: independent review, full branch CI with release_version=0.1.0 after
@@ -61,3 +61,12 @@ verified web3 integration, successful full main CI, promotion dry run and the
 coordinator's eventual publication/released-byte verification. The publication
 workflow itself has not run. No tag, release or local artifact download has
 occurred.
+
+Independent review found that mutable local candidate and prepare evidence
+could be changed together after preparation. Fixed before CI: publication now
+downloads/hashes the source receipt again before any write, keeps authenticated
+members in memory and derives expected asset hashes from those bytes. The full
+own-byte reproducer now refuses before tag creation. Candidate execution and
+write-capable publication also use separate runners/checkouts and permissions;
+the publication runner never executes an installer. Re-review and actual CI
+remain pending.

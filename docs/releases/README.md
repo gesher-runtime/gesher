@@ -43,9 +43,14 @@ asset. Local artifact downloads are not part of this procedure.
    gh run watch <release-run-id> -R gesher-runtime/gesher --exit-status --interval 120
    ```
 
-   The workflow verifies source provenance, all job conclusions/critical
+   Candidate execution has read-only job permissions. Publication uses a fresh
+   runner/checkout, downloads the original artifacts again and runs no installer
+   with write credentials. The workflow verifies source provenance, all job conclusions/critical
    steps, both artifact ZIP digests, the manifest/checksums, installer PE
-   metadata and candidate install/runtime/cleanup. It creates `v0.1.0` at the
+   metadata and candidate install/runtime/cleanup. Immediately before any write
+   it re-fetches/hashes the source receipt ZIP and derives expected hashes from
+   its authenticated in-memory members, without trusting mutable prepare data.
+   It creates `v0.1.0` at the
    expected commit, uploads the original bytes to a draft, downloads and
    hashes each asset, rechecks source CI and only then publishes. An existing
    matching tag/draft can resume; a different tag or asset fails without being

@@ -209,11 +209,29 @@ def verify_existing_bytes(client, item, assets, directory):
         g.require(g.file_digest(target) == assets[name]["sha256"], "Published bytes differ: " + name)
 
 
+def authenticate_receipt(client, item, parent):
+    # Candidate execution can write the workspace, including prepare.json and the
+    # extracted manifest. Fetch the original receipt again using fresh API metadata.
+    # Its authenticated members remain immutable Python bytes for the whole promotion.
+    temporary = Path(tempfile.mkdtemp(prefix="gesher-release-receipt-", dir=str(parent))).resolve()
+    g.require(temporary.parent == Path(parent).resolve(), "Unexpected receipt directory")
+    archive = temporary / "receipt.zip"
+    try:
+        g.require(0 < item["size_in_bytes"] <= 1024 * 1024, "Unexpected source receipt archive size")
+        client.download(f"/actions/artifacts/{item['id']}/zip", archive, item["size_in_bytes"])
+        return g.receipt_members(archive, item)
+    finally:
+        if archive.exists():
+            archive.unlink()
+        temporary.rmdir()
+
+
 def promote(client, identifier, expected, directory, notes, verify_directory, prepared):
     # Re-fetch all source gates immediately before any write. A new/incomplete
     # CI attempt or changed artifact identity invalidates the prepared receipt.
     run, installer, receipt = source(client, identifier, expected)
-    assets = g.candidate(directory, run, installer)
+    trusted_receipt = authenticate_receipt(client, receipt, Path(directory).resolve().parent)
+    assets = g.candidate(directory, run, installer, trusted_receipt)
     g.require(prepared.get("source_run") == identifier and prepared.get("source_sha") == expected and
               prepared.get("source_attempt") == run["run_attempt"] and prepared.get("assets") == assets,
               "Prepared source or bytes changed")
@@ -247,7 +265,8 @@ def promote(client, identifier, expected, directory, notes, verify_directory, pr
     if item.get("draft"):
         latest_run, latest_installer, latest_receipt = source(client, identifier, expected)
         g.require(latest_receipt == receipt and latest_installer == installer, "Source artifacts changed before publication")
-        g.require(g.candidate(directory, latest_run, latest_installer) == assets, "Candidate changed before publication")
+        g.require(g.candidate(directory, latest_run, latest_installer, trusted_receipt) == assets,
+                  "Candidate changed before publication")
         client.json(f"/releases/{item['id']}", "PATCH", {"draft": False, "make_latest": "true"})
     item = release(client)
     g.require(item and item.get("draft") is False and item.get("prerelease") is False, "Release is not published")

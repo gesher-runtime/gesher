@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import zipfile
@@ -149,11 +150,33 @@ def archive(path, item, allowed, output):
                     destination.write(block)
 
 
-def candidate(directory, run, installer_artifact):
+def receipt_members(path, item):
+    """Authenticate the small source receipt once, then keep its members in memory."""
+    require(0 < item["size_in_bytes"] <= 1024 * 1024, "Unexpected source receipt archive size")
+    raw = Path(path).read_bytes()
+    require(len(raw) == item["size_in_bytes"] and hashlib.sha256(raw).hexdigest() == digest(item["digest"]),
+            "Source receipt archive size/digest mismatch")
+    with zipfile.ZipFile(io.BytesIO(raw)) as zipped:
+        entries = zipped.infolist()
+        require(len(entries) == 2 and {entry.filename for entry in entries} == {MANIFEST, "SHA256SUMS"},
+                "Unexpected/duplicate source receipt members")
+        require(all(not entry.is_dir() and entry.file_size <= 65536 and
+                    ((entry.external_attr >> 16) & 0o170000) != 0o120000 for entry in entries),
+                "Invalid source receipt entry")
+        return {entry.filename: zipped.read(entry) for entry in entries}
+
+
+def candidate(directory, run, installer_artifact, trusted_receipt=None):
     directory = Path(directory)
     require({entry.name for entry in directory.iterdir()} == {INSTALLER, MANIFEST, "SHA256SUMS"},
             "Candidate must contain exactly the installer and two receipts")
-    data = json.loads((directory / MANIFEST).read_text(encoding="utf-8-sig"))
+    manifest = (directory / MANIFEST).read_bytes()
+    sums = (directory / "SHA256SUMS").read_bytes()
+    if trusted_receipt is not None:
+        require(manifest == trusted_receipt[MANIFEST] and sums == trusted_receipt["SHA256SUMS"],
+                "Candidate receipt bytes differ from the authenticated source artifact")
+        manifest, sums = trusted_receipt[MANIFEST], trusted_receipt["SHA256SUMS"]
+    data = json.loads(manifest.decode("utf-8-sig"))
     require(data.get("schema") == 1 and data.get("product") == "Gesher" and data.get("version") == VERSION and
             data.get("version_selection") == "release", "Not the explicit 0.1.0 release candidate")
     origin = data.get("source") or {}
@@ -174,10 +197,14 @@ def candidate(directory, run, installer_artifact):
     require(installer.get("product_name") == "Gesher", "Wrong installer product")
     for key in ("product_version", "file_version"):
         require(installer.get(key) in (VERSION, VERSION + ".0"), "Wrong installer PE metadata")
-    expected_sums = f"{file_digest(path)}  {INSTALLER}\n{file_digest(directory / MANIFEST)}  {MANIFEST}\n"
-    require((directory / "SHA256SUMS").read_text(encoding="utf-8") == expected_sums, "Checksum receipt differs")
-    return {name: {"sha256": file_digest(directory / name), "size": (directory / name).stat().st_size}
-            for name in (INSTALLER, MANIFEST, "SHA256SUMS")}
+    manifest_hash = hashlib.sha256(manifest).hexdigest()
+    expected_sums = f"{installer['sha256']}  {INSTALLER}\n{manifest_hash}  {MANIFEST}\n"
+    require(sums.decode("utf-8").replace("\r\n", "\n") == expected_sums, "Checksum receipt differs")
+    # The promotion caller supplies API-authenticated member bytes. Derive expected
+    # hashes from those bytes, never by rereading mutable workspace receipts.
+    return {INSTALLER: {"sha256": installer["sha256"], "size": installer["size"]},
+            MANIFEST: {"sha256": manifest_hash, "size": len(manifest)},
+            "SHA256SUMS": {"sha256": hashlib.sha256(sums).hexdigest(), "size": len(sums)}}
 
 
 def existing_release(tag_commit, release, expected_sha, assets):
