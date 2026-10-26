@@ -24,6 +24,7 @@
 #include <SLES/OpenSLES.h>
 #include <aaudio/AAudio.h>
 #include <android/api-level.h>
+#include <android/bitmap.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -56,6 +57,7 @@
 #include <zlib.h>
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -441,7 +443,7 @@ Part Dlopen() {
       {"libnativewindow.so", "ANativeWindow_acquire", true}, {"libEGL.so", "eglGetDisplay", true},
       {"libGLESv1_CM.so", "glClear", true}, {"libGLESv2.so", "glDrawArrays", true},
       {"libGLESv3.so", "glDrawArraysInstanced", true}, {"libOpenSLES.so", "slCreateEngine", true},
-      {"libaaudio.so", "AAudio_createStreamBuilder", true}, {"libjnigraphics.so", "AndroidBitmap_getInfo", false},
+      {"libaaudio.so", "AAudio_createStreamBuilder", true}, {"libjnigraphics.so", "AndroidBitmap_getInfo", true},
       {"libmediandk.so", "AMediaCodec_createDecoderByType", false},
       {"libcamera2ndk.so", "ACameraManager_create", false}, {"libvulkan.so", "vkCreateInstance", false},
   };
@@ -714,6 +716,100 @@ jstring JNICALL NativeRun(JNIEnv* env, jclass, jstring dir, jstring symbols) {
   return env->NewStringUTF(Run(Str(env, dir), Str(env, symbols)).c_str());
 }
 
+bool PngWrite(void* context, const void* data, size_t size) {
+  auto* bytes = static_cast<std::vector<uint8_t>*>(context);
+  const auto* begin = static_cast<const uint8_t*>(data);
+  bytes->insert(bytes->end(), begin, begin + size);
+  return true;
+}
+
+bool PngAbort(void* context, const void*, size_t) {
+  ++*static_cast<int*>(context);
+  return false;
+}
+
+jstring JNICALL NativeBitmap(JNIEnv* env, jclass, jobject bitmap) {
+  Part p{"bitmap"};
+  void* library = dlopen("libjnigraphics.so", RTLD_NOW);
+  p.Check(library != nullptr, "dlopen libjnigraphics");
+  using Info = int (*)(JNIEnv*, jobject, AndroidBitmapInfo*);
+  using Lock = int (*)(JNIEnv*, jobject, void**);
+  using Unlock = int (*)(JNIEnv*, jobject);
+  using Space = int32_t (*)(JNIEnv*, jobject);
+  using Hardware = int (*)(JNIEnv*, jobject, void**);
+  using Compress = int (*)(const AndroidBitmapInfo*, int32_t, const void*, int32_t, int32_t,
+                           void*, bool (*)(void*, const void*, size_t));
+  auto info = reinterpret_cast<Info>(dlsym(library, "AndroidBitmap_getInfo"));
+  auto lock = reinterpret_cast<Lock>(dlsym(library, "AndroidBitmap_lockPixels"));
+  auto unlock = reinterpret_cast<Unlock>(dlsym(library, "AndroidBitmap_unlockPixels"));
+  auto space = reinterpret_cast<Space>(dlsym(library, "AndroidBitmap_getDataSpace"));
+  auto hardware = reinterpret_cast<Hardware>(dlsym(library, "AndroidBitmap_getHardwareBuffer"));
+  auto compress = reinterpret_cast<Compress>(dlsym(library, "AndroidBitmap_compress"));
+  p.Check(info && lock && unlock && space && hardware && compress, "all six bitmap entry points");
+  if (info && lock && unlock && space && hardware && compress) {
+    AndroidBitmapInfo details{};
+    p.Check(info(env, bitmap, &details) == 0 && details.width == 4 && details.height == 3 &&
+                details.stride >= 16 && details.format == ANDROID_BITMAP_FORMAT_RGBA_8888,
+            "width/height/stride/RGBA");
+    p.Check(info(env, nullptr, &details) == ANDROID_BITMAP_RESULT_BAD_PARAMETER &&
+                lock(nullptr, bitmap, nullptr) == ANDROID_BITMAP_RESULT_BAD_PARAMETER,
+            "null bitmap/env rejected");
+    int32_t data_space = space(env, bitmap);
+    p.Check(data_space == 0x08810000, "sRGB data space");
+    void* hardware_buffer = reinterpret_cast<void*>(1);
+    p.Check(hardware(env, bitmap, &hardware_buffer) == ANDROID_BITMAP_RESULT_BAD_PARAMETER &&
+                hardware_buffer == nullptr, "software bitmap has no hardware buffer");
+    void* pixels = nullptr;
+    bool locked = lock(env, bitmap, &pixels) == 0 && pixels != nullptr;
+    p.Check(locked, "lock real pixels");
+    if (locked) {
+      auto* rgba = static_cast<uint8_t*>(pixels);
+      p.Check(rgba[0] == 255 && rgba[1] == 0 && rgba[2] == 0 && rgba[3] == 255,
+              "Java red pixel is RGBA");
+      rgba[0] = 0;
+      rgba[1] = 255;
+      jclass bitmap_class = env->GetObjectClass(bitmap);
+      jmethodID pixel = env->GetMethodID(bitmap_class, "getPixel", "(II)I");
+      p.Check(env->CallIntMethod(bitmap, pixel, 0, 0) == static_cast<jint>(0xff00ff00),
+              "native pixels alias Java Bitmap while locked");
+      std::vector<uint8_t> png;
+      p.Check(compress(&details, data_space, pixels, 1, 100, &png, PngWrite) == 0 &&
+                  png.size() > 40 && memcmp(png.data(), "\x89PNG\r\n\x1a\n", 8) == 0,
+              "PNG compression calls native writer");
+      int aborted = 0;
+      p.Check(compress(&details, data_space, pixels, 1, 100, &aborted, PngAbort) != 0 && aborted > 0,
+              "writer failure stops compression");
+      p.Check(compress(&details, data_space, pixels, 1, 101, &png, PngWrite) ==
+                  ANDROID_BITMAP_RESULT_BAD_PARAMETER, "invalid compression quality");
+      p.Check(unlock(env, bitmap) == 0, "unlock pixels");
+      if (!png.empty()) {
+        jbyteArray bytes = env->NewByteArray(static_cast<jsize>(png.size()));
+        env->SetByteArrayRegion(bytes, 0, static_cast<jsize>(png.size()),
+                                reinterpret_cast<const jbyte*>(png.data()));
+        jclass factory = env->FindClass("android/graphics/BitmapFactory");
+        jmethodID decode = env->GetStaticMethodID(factory, "decodeByteArray", "([BII)Landroid/graphics/Bitmap;");
+        jobject decoded = env->CallStaticObjectMethod(factory, decode, bytes, 0, static_cast<jint>(png.size()));
+        p.Check(decoded != nullptr && env->CallIntMethod(decoded, pixel, 0, 0) == static_cast<jint>(0xff00ff00),
+                "PNG decoded by Java keeps native green pixel");
+        if (decoded != nullptr) env->DeleteLocalRef(decoded);
+        env->DeleteLocalRef(factory);
+        env->DeleteLocalRef(bytes);
+      }
+      env->DeleteLocalRef(bitmap_class);
+    }
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    p.Check(false, "unexpected JNI exception");
+  }
+  if (library != nullptr) dlclose(library);
+  p.notes.push_back("direct pixels and PNG callback round trip");
+  return env->NewStringUTF(p.Line().c_str());
+}
+
+#include "native3_fonts.inc"
+
 }  // namespace
 
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
@@ -729,6 +825,31 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
       continue;
     }
     registered |= env->RegisterNatives(c, methods, 1) == JNI_OK;
+    env->DeleteLocalRef(c);
+  }
+  // The original dalvikvm checks intentionally use only the core boot jars.
+  // Register bitmap methods only when this process has the framework too.
+  jclass bitmap_class = env->FindClass("android/graphics/Bitmap");
+  if (bitmap_class == nullptr) {
+    env->ExceptionClear();
+    return registered ? JNI_VERSION_1_6 : JNI_ERR;
+  }
+  env->DeleteLocalRef(bitmap_class);
+  static const JNINativeMethod bitmap_method = {
+      "bitmap", "(Landroid/graphics/Bitmap;)Ljava/lang/String;", reinterpret_cast<void*>(&NativeBitmap)};
+  for (const char* cls : {"gesher/Native3BitmapTest", "com/gesher/native2/Native2Activity"}) {
+    jclass c = env->FindClass(cls);
+    if (c == nullptr) { env->ExceptionClear(); continue; }
+    registered |= env->RegisterNatives(c, &bitmap_method, 1) == JNI_OK;
+    env->DeleteLocalRef(c);
+  }
+  static const JNINativeMethod font_method = {
+      "fonts", "()Ljava/lang/String;", reinterpret_cast<void*>(&NativeFonts)};
+  for (const char* cls : {"gesher/Native3FontTest", "com/gesher/native2/Native2Activity"}) {
+    jclass c = env->FindClass(cls);
+    if (c == nullptr) { env->ExceptionClear(); continue; }
+    registered |= env->RegisterNatives(c, &font_method, 1) == JNI_OK;
+    env->DeleteLocalRef(c);
   }
   return registered ? JNI_VERSION_1_6 : JNI_ERR;
 }
