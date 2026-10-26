@@ -93,6 +93,14 @@ class Recorder {
   std::atomic<int> amplitude_{0};
   std::atomic<int64_t> samples_written_{0};
   int64_t last_video_us_ = -1;
+  // Diagnostic counters: callback-side fields use mu_; encoder-side fields
+  // are read only after the video thread joins. They do not alter collection.
+  uint64_t video_callbacks_ = 0, video_accepted_ = 0, video_rejected_ = 0, video_queue_drops_ = 0;
+  uint64_t video_encode_inputs_ = 0, video_encode_failures_ = 0;
+  uint64_t video_encode_packets_ = 0, video_drain_packets_ = 0, video_muxed_packets_ = 0;
+  bool video_drain_ok_ = false;
+  int64_t video_first_source_ns_ = -1, video_last_source_ns_ = -1;
+  int64_t video_first_pts_us_ = -1, video_last_encode_input_us_ = -1;
 };
 
 }  // namespace gesher::media

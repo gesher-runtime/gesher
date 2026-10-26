@@ -552,6 +552,11 @@ uint32_t CaptureStream::overrun_count() const {
   return overrun_count_;
 }
 
+CaptureStats CaptureStream::stats() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return {written_, read_, overruns_, overrun_count_, last_ns_};
+}
+
 int CaptureStream::SetMarker(uint32_t frame) {
   std::lock_guard<std::mutex> lock(mu_);
   marker_ = frame;

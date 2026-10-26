@@ -132,6 +132,11 @@ $recordChecks = @(
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
+  foreach ($trace in @($Out -split "`n" | Where-Object {
+      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:'
+    } | Select-Object -Unique)) {
+    Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
+  }
   foreach ($c in $recordChecks) {
     LineCheck "media3 ($Mode): $($c.Name)" $Out ($c.P + @("^${t}done")) $Code "record-$Mode"
   }
@@ -141,6 +146,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   $bcpRec = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
   $dvmRec = @("-Xbootclasspath:$bcpRec", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
   $env:GESHER_CAMERA_TEST = '1'
+  $env:GESHER_MEDIA_TRACE_RECORD = '1'
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-single'
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   # Single process.
@@ -160,7 +166,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   $devOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.recordapp.log') -Raw -ErrorAction SilentlyContinue)
   RecordChecks 'Gesher device' $devOut $devCode
   $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
-  Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE -ErrorAction SilentlyContinue
+  Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
 } else {
   Write-Host 'INFO  media3: recordapp.apk not in the build output; its checks skipped'
 }

@@ -52,6 +52,12 @@ struct CaptureEvents {
 
 class CaptureEngine;
 
+struct CaptureStats {
+  uint64_t captured_frames = 0, read_frames = 0;
+  uint32_t lost_frames = 0, overruns = 0;
+  int64_t timestamp_ns = 0;
+};
+
 class CaptureStream {
  public:
   ~CaptureStream();
@@ -82,6 +88,8 @@ class CaptureStream {
   uint32_t overrun_frames() const;
   // Cumulative transitions into overrun, distinct from the frames discarded.
   uint32_t overrun_count() const;
+  // A coherent diagnostic snapshot; collection and buffering are unchanged.
+  CaptureStats stats() const;
   size_t capacity_frames() const { return params_.capacity_frames; }
 
   int SetMarker(uint32_t frame);
