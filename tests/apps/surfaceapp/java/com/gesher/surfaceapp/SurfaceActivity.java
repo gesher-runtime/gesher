@@ -105,7 +105,7 @@ public class SurfaceActivity extends Activity {
         say(what + ": drew " + w + "x" + h);
     }
 
-    final class Callbacks implements SurfaceHolder.Callback {
+    class Callbacks implements SurfaceHolder.Callback {
         final String mName;
         final int mColor;
 

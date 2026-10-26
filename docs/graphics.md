@@ -503,6 +503,42 @@ with `tests/apps/popupapp` (built by framework.yml next to uiapp).
   dropdown; `ACTION_OUTSIDE` from the input translator; a shown-window
   (desktop) check of activation and z-order.
 
+### Surfaces (surfaces track): status and next steps
+
+Branch `wip/surfaces`, ADR 0056, tests `tests/windows/tracks/52-surfaces.ps1` with
+`tests/apps/surfaceapp` (Java, built by framework.yml) and `tests/apps/surfacegl` (an NDK
+library, built by `.github/workflows/surfaces.yml`, artifact `surfaces`).
+
+How child surfaces work (built on the media track's no-compositor path, ADR 0052,
+`compat/media/surface`, which this track now owns):
+
+- **SurfaceView**: its BLASTBufferQueue's Surface is a QueueSurface; each frame queued
+  invalidates the view and hwui draws the latest frame into the hole it punches
+  (frameworks/base patch 0300), scaled to the view (setFixedSize). Holder callbacks,
+  position, size, scrolling and clipping follow the view tree. `setZOrderOnTop`: the
+  frame is drawn by a drawable in the root view's overlay, over every view (patch 0300,
+  `GesherOverlay`).
+- **EGL/GLES into it** (SDL, games): an ANativeWindow without an HWND gets a hidden
+  helper window for ANGLE's swap chain; before each eglSwapBuffers the frame is read
+  back and posted to the ANativeWindow, paced at 60 Hz (`compat/bionic/egl_child_surface.cc`).
+- **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
+  natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
+- **Cameras**: Camera2 and the legacy Camera write RGBA into any surface with a native
+  window, so SurfaceViews and TextureViews get frames; the legacy `setPreviewTexture`
+  now goes through a Surface over the SurfaceTexture (LegacyCamera).
+- **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
+  (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+
+Status: see the CI runs below (updated with every push).
+
+- ci 40258941022 (first push: Bitmap parcels, YuvImage, EGL child surfaces): the
+  build passed; cancelled for the merge of phase4/integration (media stage 2).
+- ci 40262416059 (91f4dca): first run with surfaceapp and surfacegl.
+
+Not done yet / gaps: GLES producers into a SurfaceTexture sampled as
+GL_TEXTURE_EXTERNAL_OES (`updateTexImage` latches the frame's time only; no EGL14/GLES20
+Java natives, so GLSurfaceView has no EGL either); TIC-80 in e2e (pending CI).
+
 ### Open problems and dead ends
 
 - AOSP android-16 no longer builds libhwui or layoutlib_jni for Windows
