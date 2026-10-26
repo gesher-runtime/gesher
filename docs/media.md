@@ -221,6 +221,13 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — source-flow diagnosis, 2026-10-26
+- Running combined full CI: **40368511782** at exact SHA
+  **43cfe4e1d59032ae493836f8c32571617950069a**, after merging current
+  integration d68ec79. Includes the complete Process parser/stub/regression
+  patch, verified native3 foundation, completed-only geocoder probe and
+  the three new media acceptance checks (33 expected). Original camera
+  diagnostics, 2-second collection and 30+ frame/picture/duration thresholds
+  stay unchanged. Watch interval 120; no new result is verified yet.
 - Latest diagnostic: **40359757434**, attempt 1, exact SHA
   **20b1d3863e10ff01c10e0db18b74a32955b69abc**. All job metadata and both
   runtime logs are read: 20 success, six skipped and two failed jobs.
@@ -245,8 +252,8 @@ the microphone (looped, from its start each time recording starts);
   ActivityThread$4.run (8209) -> VMRuntime.onPostCleanup (1115) ->
   ReferenceQueueDaemon.runInternal (275). This is post-GC metrics, not a
   media finalizer stack. Its causal relationship to camera throughput is
-  unproven. Framework/process parser and regression work remain with the
-  coordinator; no new dispatch until that complete patch is ready.
+  unproven. The coordinator's complete parser/stub/regression follow-up is
+  included in the new combined run, as detailed below.
 - Prepared acceptance safeguards for the next CI: clear recordapp's own
   package log after shutdown; explicitly check Java RECORD_AUDIO denial
   from the existing full device videoapp run; require RecordTest completion
@@ -372,8 +379,10 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: run the prepared Process/foundation/geocoder tree and verify camera throughput on
-  both runners before final acceptance. No integration/main merge here.
+- Next: read both runner logs, the direct Process regression, all 33 media3
+  and 12 part-1 device checks, camera source/encoder/drain counters, native3
+  font/Bitmap checks, package cleanup and both e2es before final acceptance.
+  No integration/main merge here.
 
 ### Done and verified
 - **CI run 40129230078** (ci, windows-2022 and windows-2025, 0 failed each;
