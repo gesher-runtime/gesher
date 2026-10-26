@@ -220,8 +220,8 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
-- Running full CI **40402212195** at
+### media3 (stage 3) — camera throughput gate remains open, 2026-10-27
+- Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
   **121853665655** passes in 52 seconds: ffmpeg was absent, canonical HTTPS
@@ -229,8 +229,33 @@ the microphone (looped, from its start each time recording starts);
   same 6.1.1-3ubuntu5 version, ran all three unchanged generators and built
   all three APKs. Package **121854114264** passes installed oatdump,
   window/input and full uninstall cleanup. Windows **121854138856** (2022)
-  / **121854139106** (2025) and both e2e jobs are active; no runtime or
-  internal JNI result is claimed yet.
+  / **121854139106** (2025) each have 35 media3 PASS lines and exactly
+  `1 test(s) failed`, the device camera gate: 16/17 encoded/decoded frames
+  versus 61 each in single process. Every accepted frame is encoded/muxed,
+  with zero queue drops/encode loss. The new actual ART 1,000-race check
+  passes on both runners; all four terminal onClosed checks pass. All 28
+  job conclusions are read (20 success, six skipped, two failed). E2e **121855091568**
+  (2022) / **121855091598** (2025) each pass four transport fixtures, all ten
+  apps including Just Player/TIC-80/Puzzles, association/shortcut launch and
+  `0 unexpected failures`. Boot profile-vs-speed still passes unchanged:
+  2022 JIT 474/449 ms, 2025 511/489 ms. The full source is not mergeable.
+- The internal array diagnostic isolates the delay in **SOA entry**:
+  2022 camera tid 6612 has eight slow SetArrayRegion calls, entry total
+  1,676,933 us, range 179,406..241,853 us; their bodies take 15..19 us and
+  CPU totals zero. One ReleaseArrayElements entry takes 214,651 us (body
+  2 us). 2025 tid 6920 has nine slow SetArrayRegion calls, entry total
+  1,526,758 us, range 156,994..186,583 us; bodies 16..19 us, CPU zero.
+  MF work totals only 306/302 ms. This proves entry waiting, not memcpy or
+  exit work; it does not yet distinguish suspend request, barrier or flip.
+- Prepared after that run: 0591 records initial thread state and atomic
+  ReadFlag observations; 0592 observes SuspendAll-to-ResumeAll causes and
+  ThreadFlip resume/tail intervals. Logs occur after ART locks are released,
+  with env opt-in, at most 64 pause events over 20 ms and the existing
+  bounded camera-array records. GC/suspend lines already emitted by the
+  app are retained by 59-media3 instead of silently filtered. No scheduling
+  or suspension state is changed. Apply/source/PowerShell checks pass;
+  C++ compilation and native/Java fixtures are CI-only under the owner's
+  local-load rule (integration f520fd1). These additions need full CI.
 - Diagnostic full CI **40398992353** at
   **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
   117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase

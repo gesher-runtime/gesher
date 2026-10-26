@@ -1,16 +1,18 @@
 diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
 --- a/runtime/jni/jni_internal.cc
 +++ b/runtime/jni/jni_internal.cc
-@@ -19,6 +19,8 @@
+@@ -18,7 +18,10 @@
+ 
  #include <log/log.h>
  
++#include <atomic>
  #include <cstdarg>
 +#include <cstdio>
 +#include <cstdlib>
  #include <memory>
  #include <utility>
  
-@@ -33,6 +35,7 @@
+@@ -33,6 +36,7 @@
  #include "base/pointer_size.h"
  #include "base/safe_map.h"
  #include "base/stl_util.h"
@@ -18,7 +20,7 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
  #include "class_linker-inl.h"
  #include "class_root-inl.h"
  #include "dex/dex_file-inl.h"
-@@ -74,6 +77,72 @@
+@@ -74,6 +78,87 @@
  namespace art HIDDEN {
  
  namespace {
@@ -32,7 +34,15 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
 +      : api_(api), active_(component_size == 1 && Active()) {
 +    if (active_) {
 +      start_ = NanoTime();
-+      cpu_start_ = Thread::Current()->GetCpuNanoTime();
++      Thread* self = Thread::Current();
++      cpu_start_ = self->GetCpuNanoTime();
++      initial_state_ = static_cast<unsigned>(self->GetState());
++      suspend_ = self->ReadFlag(ThreadFlag::kSuspendRequest, std::memory_order_relaxed);
++      barrier_ = self->ReadFlag(ThreadFlag::kActiveSuspendBarrier, std::memory_order_relaxed);
++      pending_flip_ = self->ReadFlag(ThreadFlag::kPendingFlipFunction, std::memory_order_relaxed);
++      running_flip_ = self->ReadFlag(ThreadFlag::kRunningFlipFunction, std::memory_order_relaxed);
++      checkpoint_ = self->ReadFlag(ThreadFlag::kCheckpointRequest, std::memory_order_relaxed);
++      empty_checkpoint_ = self->ReadFlag(ThreadFlag::kEmptyCheckpointRequest, std::memory_order_relaxed);
 +    }
 +  }
 +  void Entered() { if (active_) entered_ = NanoTime(); }
@@ -59,13 +69,17 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
 +    const uint64_t decoded = decoded_ != 0 ? decoded_ : entered;
 +    const uint64_t body = body_ != 0 ? body_ : end;
 +    fprintf(stderr, "camera JNI array trace: %s, tid %d, wall/cpu us %lld/%lld; "
-+            "entry %lld, decode %lld, body %lld, exit %lld\n", api_,
++            "entry %lld, decode %lld, body %lld, exit %lld; initial state %u, "
++            "flags suspend/barrier/pending-flip/running-flip/checkpoint/empty %d/%d/%d/%d/%d/%d; "
++            "begin/end ns %llu/%llu\n", api_,
 +            static_cast<int>(Thread::Current()->GetTid()),
 +            static_cast<long long>((end - start_) / 1000), static_cast<long long>(cpu),
 +            static_cast<long long>((entered - start_) / 1000),
 +            static_cast<long long>((decoded - entered) / 1000),
 +            static_cast<long long>((body - decoded) / 1000),
-+            static_cast<long long>((end - body) / 1000));
++            static_cast<long long>((end - body) / 1000), initial_state_,
++            suspend_, barrier_, pending_flip_, running_flip_, checkpoint_, empty_checkpoint_,
++            static_cast<unsigned long long>(start_), static_cast<unsigned long long>(end));
 +    fflush(stderr);
 +  }
 + private:
@@ -86,12 +100,15 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
 +  const char* api_;
 +  const bool active_;
 +  uint64_t start_ = 0, entered_ = 0, decoded_ = 0, body_ = 0, cpu_start_ = 0;
++  unsigned initial_state_ = 0;
++  bool suspend_ = false, barrier_ = false, pending_flip_ = false, running_flip_ = false;
++  bool checkpoint_ = false, empty_checkpoint_ = false;
 +};
 +#endif
  
  // Frees the given va_list upon destruction.
  // This also guards the returns from inside of the CHECK_NON_NULL_ARGUMENTs.
-@@ -3069,13 +3138,25 @@
+@@ -3069,13 +3154,25 @@
    template <typename ArrayT, typename ElementT, typename ArtArrayT>
    static void ReleasePrimitiveArray(JNIEnv* env, ArrayT java_array, ElementT* elements, jint mode) {
      CHECK_NON_NULL_ARGUMENT_RETURN_VOID(java_array);
@@ -118,7 +135,7 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
    }
  
    static void ReleasePrimitiveArray(ScopedObjectAccess& soa,
-@@ -3142,9 +3223,18 @@
+@@ -3142,9 +3239,18 @@
    static void SetPrimitiveArrayRegion(JNIEnv* env, JArrayT java_array,
                                        jsize start, jsize length, const ElementT* buf) {
      CHECK_NON_NULL_ARGUMENT_RETURN_VOID(java_array);
@@ -138,7 +155,7 @@ diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
      if (array != nullptr) {
        if (start < 0 || length < 0 || length > array->GetLength() - start) {
          ThrowAIOOBE(soa, array, start, length, "dst");
-@@ -3154,6 +3244,9 @@
+@@ -3154,6 +3260,9 @@
          memcpy(data + start, buf, length * sizeof(ElementT));
        }
      }
