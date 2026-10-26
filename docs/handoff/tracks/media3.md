@@ -23,16 +23,17 @@ but 38-media.ps1 reports them only as INFO lines, not checks. Its
 docs/media.md claims verification by ci 40244779791, which FAILED; its
 docs/roadmap.md predates stage 2's merge.
 
-GOAL, part 1 (deliver first, as its own verified SHA):
-- Merge origin/phase4/integration (it has stage 2; resolve docs/roadmap.md
-  by keeping stage 2's boxes).
-- Turn the software decoders' INFO lines into PASS checks (MediaCodec sync
-  and async, MediaPlayer into a TextureView, MediaMetadataRetriever) for
-  VP8, VP9, AV1, HEVC; WebM (MediaExtractor over .webm with VP9+Opus and
-  VP8+Vorbis) as PASS lines; fix the docs to name the run that really
-  verified them; tick only verified boxes.
-- When its CI run is green on every job, send the coordinator a message
-  (SendMessage to "main") with the verified SHA and run id, then go on.
+Update (coordinator, same day, before this agent started): the helper did
+report: 38-media.ps1 checks the four codecs (PASS lines on both runners in
+ci 40258938663), and b57bb74 is merged into phase4/integration with the
+roadmap box ticked. Part 1 is therefore reduced to its leftovers:
+- Merge origin/phase4/integration into wip/media-soft first.
+- WebM audio (VP9+Opus, VP8+Vorbis clips through MediaExtractor and
+  MediaPlayer), MatroskaExtractor seeking, the software decoders through
+  MediaPlayer and MediaMetadataRetriever as PASS lines; libavc / MPEG-4 /
+  H.263 software fallbacks where the runners' Media Foundation lacks them;
+  fix docs/media-soft-video.md's claim of verification by ci 40244779791
+  (it failed overall) by folding it into docs/media.md.
 GOAL, part 2 (stage 3; ADR docs/decisions/0059-media3-recording-and-encoders.md,
 0059 is reserved for you):
 - Audio input: AudioRecord (WASAPI capture; the runners have no
