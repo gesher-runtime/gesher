@@ -149,6 +149,13 @@ closure, CI, PR description and installer verification gates remain in force.
 The coordinator alone merges integration/main and publishes the release;
 track agents keep their existing branch-only scope.
 
+Local-load follow-up (owner chat, 2026-10-26): C/C++ fixture/compiler
+checks also move to CI. Do not start local C/C++ compilations, even for
+small Gesher-only fixtures; use source inspection/edits and lightweight
+script checks locally. The coordinator and agents checked the process list
+after the report and found no remaining compiler process. The earlier
+local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
 ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
@@ -226,6 +233,17 @@ and the merged tree differs from the verified SHA only in docs, so no new
 integration run is needed for this merge. Remaining NDK/POSIX scope stays
 open on native3; this is not a complete API-coverage claim.
 
+Native3's Process/Unicode continuation is now merged as 117629e, verified at
+6f6ac6fa9519207797ee5b997e0ae1e5b9e77049 in ci 40386670586, attempt 1.
+Personally read all 28 jobs (22 success/six skipped), both zero-failure
+summaries, the full-code-point pinned ICU4X parity checks and both ABI/APK
+modes, package install/input/uninstall cleanup, and both required
+Puzzles/TIC-80 e2e logs (0 unexpected failures). Head 9ba4bff adds docs only;
+the merged code is the verified tree, so no additional integration CI is
+needed. Unicode classification/case conversion and Process proc parsing are
+scoped closures; wide widths/collation, binary128 libm, other NDK/POSIX and
+native-only font contracts remain on native3.
+
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | Merged as 4d14466. All 13 track PASS lines per runner, both zero-failure summaries, actual package cleanup and both required TIC-80/Puzzles e2e results read. Remaining contracts assigned to aot3/ADR 0065. | ci 40320549410 at ae75766; head 20650a3 docs only. |
@@ -236,9 +254,9 @@ open on native3; this is not a complete API-coverage claim.
 | media3 | Agent read ci 40377453079 at ad00461: both Windows suites have exactly one failure, device Camera2-to-recorder frames (20/27 versus unchanged 30+ in 2 s); package/both ten-app e2e pass. Native timing distinguishes active read/delivery from a demonstrated terminal callback/client-lock cycle. | ci 40386129131 at 6293a20 tests serial oneway callbacks, capture-handle ownership, onClosed ordering and separate native phase timings; pending. No FPS/crash causal claim. Remaining media contracts stay on media4/ADR 0064. |
 | exec3 | Agent read ci 40372171824: builds/package/both e2e pass; three property fixture namespace failures each and 2022 device exits after expected steps with SIGSEGV address -1. Namespace/boot-root regressions are corrected; actual native fault cause remains open. | ci 40385411337 at 80bf394 includes bounded ffmpeg preparation and narrow pre-handler fault diagnostics. Superseded 40382268730 spent 16 minutes in unbounded media preparation without Windows results, then was cancelled. |
 | native3 foundation | Merged as f677944; all four dalvikvm and four APK scoped PASS lines per runner, both zero-failure summaries, package cleanup and both required Puzzles/TIC-80 e2e logs personally read. Remaining scope continues on wip/native3. | ci 40344682373 at 1e881b5, attempt 2; frozen head 8b511a8 adds docs only. |
-| native3 continuation | Process follow-up fully green in ci 40367959106 at 644e7f8: personally read all jobs, five native3/four APK PASS lines per runner, both zero-failure summaries, package cleanup and both required e2e logs. It predates the oatdump integration. New Unicode boundaries pass both ABIs/modes, but 40381742392 stops on an omitted sparse-checkout reference fixture. | ci 40386670586 at 6f6ac6f includes current integration and the reference checkout fix; full Unicode parity still pending. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
+| native3 continuation | Merged as 117629e after personally reading all jobs, both zero-failure summaries, full-code-point pinned Unicode parity, both ABI/APK modes, package cleanup and both required e2e logs. Remaining native3 contracts stay open. | ci 40386670586 at 6f6ac6f, attempt 1; head 9ba4bff docs only. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
 | aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |
-| aot3 continuation | ci 40375696804 validates/copies matching DM and inspects selected compiled code on both runners, but has two fixture/constructor failures each. The new source corrects forced interpretation, closes StrictJarFile's failed-open descriptor leak (framework patch 0650), and learns real startup methods using ART boot/AOT profiling. | ci 40385898668 at 9831182; pending. Timing thresholds unchanged. Shared-library contexts and secondary dex remain open. |
+| aot3 continuation | ci 40389331018 at 31adc99 passes all 11 cloud-profile checks on both runners and compiles framework patch 0650. Each suite fails only the new startup collector's unsupported argument; it is removed. The combined source includes 117629e, bounded TLS cleanup and portable media preparation. | ci 40403284714 at e928eec; pending. Boot performance diagnosis remains open, thresholds unchanged. Shared-library contexts and secondary dex remain open. |
 | windows4 | Agent continues Application-context display/foreground task snapshots, real InputPane COM callbacks and TSF reconversion. First display run 40377891527 has upstream asm fetch HTTP502 and a real display cache nonce failure in both e2e Signal Generator runs; no waiver. | Subsequent COM/TSF/legacy-resize source has only own local fixtures so far; real display cache correction and combined CI remain required. |
 | release1 | Exact 0.1.0 installer metadata/receipts and CI-only byte promotion prepared. Independent review reproduced/fixed mutable local receipt trust and candidate/publisher attempt drift; all 34 offline tests pass at reviewed 8073a31. | No tag/release/publication. Full branch installer/release CI waits for verified integration/web3; all final gap gates still apply. |
 
