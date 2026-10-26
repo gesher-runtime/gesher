@@ -47,6 +47,7 @@ Check 'exec3: shared properties through Java, native ELF and tools (read-only, s
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3PropertiesTest (NoDrive $Dir) --load-runtime
 } @('Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties',
+    'Exec3PropertiesTest PASS ProcessBuilder tools and ELF children retain the boot property root with scratch ANDROID_DATA',
     'Exec3PropertiesTest PASS cached ELF property callbacks and serials observe another process',
     'Exec3PropertiesTest PASS ro properties are write-once and invalid names fail',
     'Exec3PropertiesTest PASS ELF serial ABI, stable ro callbacks, long legacy values, foreach and cross-process wait/wait_any',
