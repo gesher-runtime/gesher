@@ -20,9 +20,11 @@ of native-libs.md, posix.md, arm64.md, plus ADRs 0011, 0014 and 0057 first.
   locale-suffixed functions, resolver APIs, stdio extensions, binary128
   long-double functions and zlib stream/header/reset APIs. Include the old
   LLP64 value/layout audit (ADR 0011); passing symbol lookup is insufficient.
-  Windows ICU's Unicode data version can differ from AOSP ICU 76: establish
-  matching wide-character behavior at the pinned baseline, including new
-  characters and the fallback on supported Windows versions.
+  Windows ICU's Unicode data version and property predicates can differ from
+  the pinned bionic implementation (ICU4X 2.0.0-beta2 at android-16.0.0_r4):
+  establish matching wide-character behavior, including combining marks,
+  supplementary/new characters and supported Windows versions. AOSP's ICU4C
+  is available but equivalence to bionic's ICU4X must be verified.
 - Implement fcntl byte-range record locks (currently always granted),
   with conflict, blocking, unlock, close and cross-process tests; preserve
   flock's independent open-file-description behavior.
@@ -51,6 +53,13 @@ green on both runners; package and e2e too. CI only for AOSP. Before final
 CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
+
+Running diagnostic CI: 40328565752 at
+9c4d3803722eba83475ebe2475b7457ded394f21, with surfaces/integration 8590f4b.
+Native test compilation has passed; main runtime/font compilation and the
+Windows executions are pending. Current integration 1d49642, including
+verified aot2, is now merged locally; the combined tree needs a subsequent
+full CI before merge. Do not treat this in-progress run as verification.
 
 Next implementation, not CI-verified: the NDK's AFontMatcher/AFont APIs and
 ASystemFontIterator use Typeface's real Minikin collections and font metadata.
