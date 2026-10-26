@@ -209,7 +209,10 @@ serial/wait/readonly-pointer corrections pass native host checks; their new
 ART/NDK assertions remain pending. Real Java/NDK structured logcat plumbing is
 prepared with local backend/tool checks passing; actual ART capture is pending.
 The coordinator's timeout and pinned APK transport guards are also prepared.
-No replacement CI is dispatched yet. The full track, pm/am and umask remain open.
+Combined CI 40352529279 is running at dc19ee29190961bb6238081d1978d0882ab77f44,
+after merging integration 46bc9e5 (docs only). Watch log:
+C:\work\gesher-ci-review\exec3-watch-40352529279.log, 120-second interval.
+The full track, pm/am and umask remain open.
 
 Continuation history and exact evidence:
 
