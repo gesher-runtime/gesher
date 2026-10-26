@@ -1,7 +1,8 @@
 # 0062. native3: remaining NDK APIs and bitmap interoperability
 
-Status: proposed for the remaining native3 scope; the software Bitmap
-bridge is verified in ci 40305973210 (2026-10-26).
+Status: accepted for the software Bitmap and Minikin font foundation,
+verified in ci 40344682373 at 1e881b5, attempt 2 (2026-10-26).
+The remaining native3 NDK/POSIX scope stays open/proposed.
 
 ## Context
 
@@ -48,7 +49,7 @@ All other native3 scope in docs/handoff/tracks/native3.md remains open:
 public NDK export inventory, the other platform libraries, HardwareBuffer,
 ABI/Unicode parity, record locks, inotify, proc metadata and file mremap.
 
-## Native fonts (next slice, pending CI)
+## Native fonts (verified foundation)
 
 NDK font matching reuses the same Minikin collection and font objects as
 Typeface. Itemization and metadata follow the pinned
@@ -60,3 +61,11 @@ indices, available metadata, mixed-script run bounds and italic selection
 through loaded native code in both ABIs/modes. This does not yet establish
 standalone native-process font initialization or runtime font-install/update
 behavior; those contexts remain open.
+
+The combined foundation run verifies all 18 entries, real files, meaningful
+variable-axis values, matching and lifetime on both ABIs through framework
+dalvikvm and APKs in both modes. All 28 jobs are success/skipped, both
+Windows summaries say 0 test(s) failed, package cleanup passes and both
+required TIC-80/Puzzles e2e jobs say 0 unexpected failures. Attempt 1 failed
+only the known output-tone timing check; the permitted failed-job rerun
+passed. See the frozen stage report in handoff/tracks/native3-foundation.md.

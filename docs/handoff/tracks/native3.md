@@ -89,6 +89,14 @@ rounding probe and process implementation do not inherit that full result.
 The expanded binary128 rounding probe is separately verified in ci
 40355164049 at d02ad7c: all 17 checks and zero-failure summaries personally
 read on both Windows versions. This still does not implement libm APIs.
+The frozen report is in [native3-foundation.md](native3-foundation.md).
+The coordinator continues all remaining NDK/POSIX scope on wip/native3;
+the merged foundation does not close those contracts.
+
+### Earlier CI history
+
+Pending-run instructions below are historical and superseded by the
+authoritative results above.
 
 Current full CI: 40333703940 at
 f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
