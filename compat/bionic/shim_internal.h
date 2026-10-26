@@ -92,6 +92,23 @@ void RegisterPosix(SymbolTable& table);    // posix_bionic.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
+// Last: fork/exec/spawn/wait, and the vfork-style child's view of fds, the
+// environment and the working directory over the entries already there.
+void RegisterProcess(SymbolTable& table);  // process_bionic.cc
+
+// kill() of another pid: the shim's own children (also those that exited
+// before exec), else gesher-base's mailbox (process_bionic.cc).
+int KillOtherProcess(int pid, int sig);
+
+// A signal from outside the program's threads: another process (through
+// gesher-base's mailbox) or a child's exit (SIGCHLD, `code` CLD_*, `status`
+// si_status). `owned`: SIG_DFL is the shim's to act on; else such a signal
+// is left to gesher-base (returns false). signal_bionic.cc.
+bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool owned);
+
+// Sleeps `ms`, or less if a signal this thread does not block arrives (its
+// handler has run then); returns true if interrupted, with what was left.
+bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms);
 
 // Runs the handlers of signals sent to this thread that it no longer blocks
 // (signal_bionic.cc). Called where Linux would deliver them: blocking waits

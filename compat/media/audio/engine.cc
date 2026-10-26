@@ -693,6 +693,18 @@ uint32_t Track::LatencyMs() const {
   return sink_ms + buffer_ms;
 }
 
+bool Track::WaitForRoom(size_t frames, int timeout_ms) {
+  std::unique_lock<std::mutex> lock(mu_);
+  auto fits = [&] {
+    if (released_ || params_.is_static) return true;
+    size_t limit = std::min(buffer_frames_, params_.capacity_frames);
+    size_t queued = static_cast<size_t>(written_ - read_);
+    return queued + std::min(frames, limit) <= limit;
+  };
+  room_.wait_for(lock, std::chrono::milliseconds(timeout_ms), fits);
+  return fits();
+}
+
 size_t Track::Queued() const {
   std::lock_guard<std::mutex> lock(mu_);
   return params_.is_static ? 0 : static_cast<size_t>(written_ - read_);

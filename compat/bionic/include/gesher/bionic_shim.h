@@ -18,4 +18,17 @@ void* LookupBionicSymbol(const char* name);
 // imports it is loaded.
 void AddBionicSymbol(const char* name, void* address);
 
+// Lets signals other processes send (gesher-base's signal mailbox) reach the
+// .so's handlers. `authoritative`: the shim owns every signal, so SIG_DFL
+// acts as Linux's default (gesher-exec, whose program has the shim as its
+// libc); otherwise only signals the .so set an action for (dalvikvm, where
+// the rest are ART's). InstallBionicShim installs it non-authoritative.
+void InstallSignalHook(bool authoritative);
+
+// exit()/_exit() on a thread that is a vfork-style child (fork() returned 0
+// and exec*() has not run yet; docs/exec.md): fork() returns again in the
+// parent, the child reported as exited with `status`. Returns only when the
+// calling thread is not such a child.
+void ExitIfVforkChild(int status);
+
 }  // namespace gesher::bionic
