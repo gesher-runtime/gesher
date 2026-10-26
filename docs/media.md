@@ -221,12 +221,23 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
-- Running **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
+- Diagnostic CI **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
   atomic request-selection repair, 1,000-race regression and the approved
-  ART array entry/decode/body/exit diagnostic. Expected media3 count is 36;
-  all recording, picture, permission and boot-timing gates are unchanged.
-  No build/runtime result is claimed yet. The final acceptance run must
-  also include the coordinator's next verified integration source.
+  ART array entry/decode/body/exit diagnostic compile successfully (main
+  **121826632633**, framework **121826759951**); actual jni_internal.cc is
+  compiled and dalvikvm/oatdump link. Media **121829207075** times out in
+  generation after ten minutes, before any executed ffmpeg-version output.
+  Of 26 instantiated jobs, 16 succeed, nine skip and only media fails;
+  runtime/package/e2e do not run, so there is no new JNI or acceptance proof.
+  The Ubuntu image matches the previous fast successful media job. The
+  exact blocked command is unknown; the run printed the script, not shell
+  execution. Preparation now traces commands and bounds apt locks, apt
+  operations, ffmpeg version and each unchanged generator separately,
+  with a process/wait-channel snapshot on failure. YAML/Bash syntax and
+  successful, missing-tool and failing-version control-flow fixtures pass
+  locally; the failure fixture retains exit 42 and runs no generators.
+  Expected media3 count remains 36, with all recording, picture, permission
+  and boot-timing gates unchanged. Full CI of this follow-up is pending.
 - Prepared after source 6293a20 (not part of CI 40386129131): request
   availability, selection and frame numbering now share one mLock section.
   Previously cancelRequest/flush could clear mRepeating between the two lock
@@ -236,7 +247,9 @@ the microphone (looped, from its start each time recording starts);
   queued-capture priority and disconnected stop on the JDK. Its additive
   Windows check makes the next expected media3 count 36; full CI is pending.
   Repair source f8f443f is pushed; integration cd0b849 (README only) is
-  included via fa465c7. Coordinator-approved ART patch 0591 adds a bounded
+  included via fa465c7; current integration 117629e is included via c9b1412,
+  preserving its complete Process regression and verified Unicode checks.
+  Coordinator-approved ART patch 0591 adds a bounded
   camera-thread array-transition trace (SOA entry/decode/body/exit and wall/CPU,
   explicit incomplete/error labeling); it is not CI-verified yet.
 - Latest full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
