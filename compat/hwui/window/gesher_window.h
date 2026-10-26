@@ -48,6 +48,11 @@ struct WindowEvent {
     // mouse, else the touch's.
     kVisibility = 16,
     kOutside = 17,
+    // windows3 track (docs/windows3.md): the part of the client area the
+    // Windows touch keyboard (IFrameworkInputPane) covers: rows button (top)
+    // to modifiers (bottom) of the client area; button -1 when it covers
+    // nothing (hidden, or beside the window). Android's IME insets.
+    kInputPane = 30,
   };
   int32_t type = 0;
   float x = 0, y = 0;
@@ -69,6 +74,10 @@ struct WindowEvent {
 constexpr unsigned kMsgPresentLayered = 0x8000 + 0x40;  // WM_APP + 0x40: UpdateLayeredWindow
 constexpr unsigned kMsgActivate = 0x8000 + 0x41;        // bring the window to the front
 constexpr unsigned kMsgApplyStyle = 0x8000 + 0x42;      // set the popup's extended style
+// The touch keyboard covers screen rows wparam to lparam (0, 0: hidden), as
+// IFrameworkInputPane reports it: what the window's input pane handler posts,
+// and what tests post to stand for a keyboard (windows3 track).
+constexpr unsigned kMsgInputPane = 0x8000 + 0x43;
 
 class Window {
  public:
@@ -80,6 +89,10 @@ class Window {
 
   void Show();
   void Hide();
+  // Minimizes the window without activating anything (an app's
+  // Activity.moveTaskToBack: its taskbar button stays, restoring it brings
+  // the task back; windows3 track).
+  void Minimize();
   // Shows the window off the desktop (left of the virtual screen, no taskbar
   // button, not activated), for tests that read it back with PrintWindow. It
   // stays there whatever resizes it (WM_WINDOWPOSCHANGING): a window partly
@@ -204,6 +217,15 @@ class Window {
   const uint8_t* DimmedPixels();
   void Paint(void* hdc);
   void ResizeBuffer(int width, int height);  // with mutex_ held
+  // The window's thread: has the touch keyboard's IFrameworkInputPane report
+  // to the window (top-level windows), and stops it.
+  void AdviseInputPane();
+  void UnadviseInputPane();
+  // The touch keyboard is at this screen rectangle (empty: hidden): queues a
+  // kInputPane event when the part of the client area it covers changed.
+  void OnInputPane(int left, int top, int right, int bottom);
+  // The window moved or was resized: what the keyboard covers again.
+  void UpdateInputPane();
   int Modifiers() const;  // the window's thread
 
   void* hwnd_ = nullptr;
@@ -241,6 +263,15 @@ class Window {
   // injected by other programs) do not change the thread's key state.
   int held_modifiers_ = 0;
   std::atomic<int> min_client_width_{0}, min_client_height_{0};
+  // The touch keyboard (AdviseInputPane, the window's thread): the
+  // IFrameworkInputPane, its handler and cookie; where the keyboard is on the
+  // screen (left, top, right, bottom; empty: hidden) and the rows of the
+  // client area it covered when that was last reported.
+  void* input_pane_ = nullptr;
+  void* input_pane_handler_ = nullptr;
+  unsigned long input_pane_cookie_ = 0;
+  int input_pane_screen_[4] = {0, 0, 0, 0};
+  int input_pane_top_ = -2, input_pane_bottom_ = -2;
 
   // Popups (gesher_popup.cc). The anchor, anchored popups and routes are
   // guarded by the popup registry's mutex.
