@@ -529,16 +529,69 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
 
-Status: see the CI runs below (updated with every push).
+Status and next steps (stopped by the coordinator, 2026-10-26):
 
-- ci 40258941022 (first push: Bitmap parcels, YuvImage, EGL child surfaces): the
-  build passed; cancelled for the merge of phase4/integration (media stage 2).
-- ci 40262416059 (91f4dca): first run with surfaceapp and surfacegl.
+- Last fully read run: **ci 40265921060 at bbff936** (both runners). 31 surfaces PASS
+  lines on each runner; the only surfaces FAIL was surfacegl's single-process
+  shutdown (below). Unrelated: net's badssl.com TLS check timed out on windows-2022.
+  Verified there (single process and Gesher device unless noted):
+  - `PASS  surfaces: Bitmap parcels`: a small Bitmap in place, a large one through
+    SharedMemory, read back pixel for pixel.
+  - `PASS  surfaces: YuvImage`: NV21 to JPEG, decoded back with its colors.
+  - `PASS  surfaces: SurfaceTexture`: Surface.lockCanvas into it, onFrameAvailable, release.
+  - `PASS  surfaces: SurfaceView`: callbacks with the view's size, lockCanvas frames behind
+    the window (a View over it covers it); setZOrderOnTop over a later View;
+    setFixedSize(50, 25) scaled; moved/resized by layout; hidden and shown;
+    window minimized (surfaceDestroyed) and restored (created and drawn again).
+  - `PASS  surfaces: TextureView`: a Canvas frame into its SurfaceTexture, getBitmap;
+    TextureView.lockCanvas / unlockCanvasAndPost.
+  - `PASS  surfaces: SurfaceView ...: EGL/GLES 2 from native code into its surface`
+    (surfacegl.apk, both modes) and `setFixedSize(100, 100) under EGL ... surfaceDestroyed
+    stops the renderer` (Gesher device only).
+  - Camera previews (legacy setPreviewDisplay, legacy setPreviewTexture, Camera2 into a
+    SurfaceView and a TextureView at once) drew camera frames (~58000 of 66000 pixels not
+    white: the test camera's frame has white); the checks were at 60000 and failed, lowered
+    to 40000 in bbff936 (that run passed them? not read: see the next run).
+  - The devices check now expects Gesher Camera's thumbnail across processes
+    (`data 160x120`); its result in 40265921060 was not read.
+- **In progress, not read: ci 40285764214 at 2e67a15** (SIGQUIT thread dump of a hung
+  test app; TIC-80 on an 800x400 display).
+- Not verified / open:
+  1. surfacegl in a single process: after `finish()` ("surfacegl: finishing") nothing
+     more is logged (no onPause, no surfaceDestroyed) and the process is killed 120 s
+     later; on the Gesher device the same app shuts down cleanly. Run 40285764214 dumps
+     its threads (SIGQUIT) into the test output: read it. Suspects: the main looper
+     starved by SurfaceView invalidations from the 60 Hz GL producer (they are coalesced
+     to one per recorded frame since bbff936), or a lock between finish's window removal
+     and the GL thread's swap (egl_child_surface.cc posts with ANativeWindow_lock).
+  2. TIC-80 (e2e, still knownFailure): its window opens, a SurfaceSyncGroup thread shows
+     the SurfaceView surface was created, but no "gesher EGL" line ever appears, so SDL's
+     main thread never started. Hypothesis tried in 2e67a15: SDL skips surfaceChanged when
+     the surface is portrait and the activity wants landscape, so TIC-80 now runs on an
+     800x400 display (click at 400,200). SDL's Java logs are Log.v and do not reach
+     Gesher's logs; if it is not orientation, check focus (SDL needs
+     onWindowFocusChanged(true) and onResume before handleNativeState starts its thread).
+     Remove `knownFailure` only when it passes on both runners.
+  3. GLES producers into a SurfaceTexture sampled as GL_TEXTURE_EXTERNAL_OES
+     (`updateTexImage` latches the time only); no android.opengl (EGL14/GLES20) Java
+     natives, so GLSurfaceView cannot draw. Not started.
+  4. A child SurfaceControl's own alpha/transform set by app transactions is not modelled
+     (ADR 0056).
+- Next steps: read 40285764214 (surfaces lines, the SIGQUIT dump, TIC-80 diagnoseLog
+  lines); fix (1) and (2); merge origin/phase4/integration; final CI; tick the roadmap
+  boxes (Camera preview into SurfaceView/TextureView, hwsvc2's SurfaceView box, arm64's
+  TIC-80 box only if TIC-80 passes); update docs/devices.md, docs/arm64.md.
+- Pitfalls: CI artifact downloads are blocked by NetFree here (HTTP 418): read job logs
+  through `gh api repos/gesher-runtime/gesher/actions/jobs/<id>/logs`. .NET file APIs in
+  the PowerShell tool resolve relative paths against another worktree's directory: use
+  absolute paths (one such write hit C:\work\gesher-int and was reverted at once).
 
-Not done yet / gaps: GLES producers into a SurfaceTexture sampled as
-GL_TEXTURE_EXTERNAL_OES (`updateTexImage` latches the frame's time only; no EGL14/GLES20
-Java natives, so GLSurfaceView has no EGL either); TIC-80 in e2e (pending CI).
-
+Edits outside the track's domain (minimal): compat/bionic/egl_gles.cc and
+ndk_graphics.cmake (child surface hooks, swap entry points), app/java/com/gesher/server/
+LegacyCamera.java (setPreviewTexture frames), app/gesher-camera CaptureActivity comment,
+tests/windows/tracks/58-devices.ps1 (thumbnail expected), tests/e2e/apps.json (TIC-80
+display, diagnoseLog, click), .github/workflows/ci.yml (surfaces job + artifact),
+framework.yml (surfaceapp), compat/hwui/graphics_runtime.cc, cmake/aosp/hwui.cmake.
 ### Open problems and dead ends
 
 - AOSP android-16 no longer builds libhwui or layoutlib_jni for Windows
