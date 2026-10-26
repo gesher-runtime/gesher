@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_usr1;
@@ -26,6 +27,12 @@ static void on_usr1(int sig) {
 static void on_term(int sig) {
   (void)sig;
   _exit(g_usr1 ? 42 : 43);
+}
+
+static void property_value(void* cookie, const char* name, const char* value, unsigned serial) {
+  (void)cookie;
+  (void)name;
+  printf("property-value:%s:%u\n", value, serial);
 }
 
 int main(int argc, char** argv) {
@@ -63,6 +70,25 @@ int main(int argc, char** argv) {
   }
   if (strcmp(mode, "exit") == 0 && argc > 2) {
     return atoi(argv[2]);
+  }
+  if (strcmp(mode, "property-get") == 0 && argc > 2) {
+    char value[PROP_VALUE_MAX];
+    __system_property_get(argv[2], value);
+    printf("%s\n", value);
+    return 0;
+  }
+  if (strcmp(mode, "property-set") == 0 && argc > 3) {
+    return __system_property_set(argv[2], argv[3]) == 0 ? 0 : 1;
+  }
+  if (strcmp(mode, "property-watch") == 0 && argc > 2) {
+    const prop_info* property = __system_property_find(argv[2]);
+    if (property == NULL) return 2;
+    unsigned previous = __system_property_serial(property);
+    printf("property-ready:%u\n", previous);
+    fflush(stdout);
+    if (getchar() != '\n') return 3;
+    __system_property_read_callback(property, property_value, NULL);
+    return __system_property_serial(property) != previous ? 0 : 4;
   }
   if (strcmp(mode, "sigloop") == 0 || strcmp(mode, "sigloop-pid") == 0) {
     struct sigaction sa;

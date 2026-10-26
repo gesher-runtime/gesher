@@ -212,6 +212,15 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   ps includes its real pid, and the kill tool reaches its handler. Binary cat
   and elapsed sleep checks are included. Java --release 11 compilation and
   PowerShell parsing pass locally; these new checks are not CI-verified yet.
+- A shared-property implementation now routes libbase/Java, ELF bionic and
+  getprop/setprop through one Win32 mapped area per data directory and device
+  boot, or an inherited session in single-process mode. It includes build.prop
+  initialization, write-once ro.*, persisted persist.*, enumeration and shared
+  property serials. Own-file C++ builds pass with -Werror; a native-only local
+  driver passes cross-process, boot-isolation and 32-writer checks. The shell's
+  47 local regression cases still pass. Exec3PropertiesTest covers the real
+  Java/tool/NDK paths for CI; no property roadmap box is checked. The backend
+  has no Android SELinux property permissions or change-wait notifications.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,

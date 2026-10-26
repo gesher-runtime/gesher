@@ -7,6 +7,8 @@
 
 #include "exec_spawn.h"
 
+#include <gesher/system_properties.h>
+
 #include <windows.h>
 #include <tlhelp32.h>
 
@@ -159,32 +161,7 @@ int Ps(const std::vector<std::string>&) {
 
 // --- getprop / setprop ---------------------------------------------------------
 //
-// Properties live in $ANDROID_ROOT/build.prop (BuildProps on the Java side);
-// getprop reads them, plus the environment's $GESHER_PROP_<name>. There is no
-// shared property store across processes on Windows, so setprop cannot persist;
-// it reports that and succeeds, as a device without write access would.
-
-std::string PropFromFile(const std::string& name) {
-  std::string root = EnvOr("ANDROID_ROOT", "/system");
-  FILE* f = _wfopen(WindowsPath(root + "/build.prop").c_str(), L"rb");
-  if (f == nullptr) return "";
-  char line[1024];
-  std::string value;
-  while (std::fgets(line, sizeof(line), f) != nullptr) {
-    std::string s = line;
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-    size_t b = s.find_first_not_of(" \t");
-    if (b == std::string::npos || s[b] == '#') continue;
-    size_t eq = s.find('=', b);
-    if (eq == std::string::npos) continue;
-    std::string key = s.substr(b, eq - b);
-    while (!key.empty() && key.back() == '?') key.pop_back();
-    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
-    if (key == name) value = s.substr(eq + 1);
-  }
-  std::fclose(f);
-  return value;
-}
+// The same boot-scoped area as Java SystemProperties and ELF bionic.
 
 int Getprop(const std::vector<std::string>& args) {
   std::vector<std::string> names;
@@ -192,24 +169,30 @@ int Getprop(const std::vector<std::string>& args) {
     if (a.empty() || a[0] != '-') names.push_back(a);
   }
   if (names.empty()) {
-    std::fprintf(stderr, "getprop: listing all properties is not supported\n");
+    if (!properties::Initialize()) return 1;
+    for (const auto& [name, value] : properties::List()) {
+      std::fprintf(stdout, "[%s]: [%s]\n", name.c_str(), value.text.c_str());
+    }
+    std::fflush(stdout);
     return 0;
   }
-  std::string value = PropFromFile(names[0]);
-  if (value.empty()) value = EnvOr(("GESHER_PROP_" + names[0]).c_str(), names.size() > 1 ? names[1].c_str() : "");
+  if (!properties::Initialize()) return 1;
+  std::string value;
+  properties::Get(names[0], &value);
+  if (value.empty() && names.size() > 1) value = names[1];
   std::fprintf(stdout, "%s\n", value.c_str());
   std::fflush(stdout);
   return 0;
 }
 
 int Setprop(const std::vector<std::string>& args) {
-  if (args.size() < 2) {
+  if (args.size() != 2) {
     std::fprintf(stderr, "usage: setprop NAME VALUE\n");
     return 1;
   }
-  std::fprintf(stderr, "setprop: %s: not stored (Gesher has no shared property store)\n",
-               args[0].c_str());
-  return 0;
+  if (properties::Set(args[0], args[1])) return 0;
+  std::fprintf(stderr, "setprop: %s: property is read-only, invalid, or the store is unavailable\n", args[0].c_str());
+  return 1;
 }
 
 // --- logcat --------------------------------------------------------------------

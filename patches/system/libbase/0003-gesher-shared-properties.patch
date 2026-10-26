@@ -1,0 +1,11 @@
+--- a/properties.cpp
++++ b/properties.cpp
+@@ -31,7 +31,7 @@
+ #include <android-base/strings.h>
+ #include <android-base/thread_annotations.h>
+ 
+-#if !defined(__BIONIC__)
++#if !defined(__BIONIC__) && !defined(GESHER)
+ 
+ // Here lies a rudimentary implementation of system properties for non-Bionic
+ // platforms. We are using weak symbols here because we want to allow
