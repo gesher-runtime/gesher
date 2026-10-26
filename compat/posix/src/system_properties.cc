@@ -284,6 +284,14 @@ void RemoveOldAreas(const std::wstring& directory, const std::wstring& current) 
   FindClose(find);
 }
 Area* Current() { // LocalMutex is held by every caller.
+  std::wstring session = Session();
+  if (session.empty()) return nullptr;
+  auto& cached = Areas();
+  auto existing = cached.find(session);
+  if (existing != cached.end()) return existing->second.get();
+  // A boot's mapping keeps its original data root, as Android's property area
+  // does. ART tests temporarily replace ANDROID_DATA for scratch directories;
+  // ordinary log/property reads must not create a new service in each scratch.
   std::wstring data = Environment(L"ANDROID_DATA");
   if (data.empty()) {
     data = Environment(L"LOCALAPPDATA");
@@ -292,13 +300,9 @@ Area* Current() { // LocalMutex is held by every caller.
     data += L"\\Gesher\\data";
   }
   data = FullPath(data);
-  std::wstring session = Session();
-  if (data.empty() || session.empty()) return nullptr;
+  if (data.empty()) return nullptr;
   std::wstring dir = data + L"\\system\\gesher-properties";
   std::wstring path = dir + L"\\" + Key(session) + L".area";
-  auto& cached = Areas();
-  auto existing = cached.find(path);
-  if (existing != cached.end()) return existing->second.get();
   if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
   auto area = std::make_unique<Area>();
   area->persistent = data + L"\\property\\persistent_properties";
@@ -322,7 +326,7 @@ Area* Current() { // LocalMutex is held by every caller.
   }
   if (!Refresh(area.get())) return nullptr;
   Area* result = area.get();
-  cached.emplace(path, std::move(area));
+  cached.emplace(session, std::move(area));
   RemoveOldAreas(dir, path);
   return result;
 }

@@ -12,6 +12,7 @@
 //                                     "child-ready", then wait; SIGTERM exits
 //                                     42 if a SIGUSR1 arrived first, else 43
 #include <dlfcn.h>
+#include <android/log.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -160,7 +161,7 @@ static int log_abi(const char* tag) {
   snprintf(key, sizeof(key), "log.tag.%s", tag);
   snprintf(full_tag, sizeof(full_tag), "%s.extra", tag);
   snprintf(full_key, sizeof(full_key), "log.tag.%s", full_tag);
-  int previous = set_minimum(0);
+  int previous = set_minimum(ANDROID_LOG_DEFAULT);
   int failed = 0;
   if (__system_property_set(key, "E") || __system_property_set(full_key, "V")) failed = 1;
   if (loggable(3, tag, 2) || !loggable(6, tag, 2)) failed = 1;
@@ -168,7 +169,7 @@ static int log_abi(const char* tag) {
   set_minimum(5);
   if (get_minimum() != 5 || loggable(3, tag, 2) || !loggable(5, tag, 2)) failed = 1;
   if (__system_property_set(key, "")) failed = 1;
-  set_minimum(0);
+  set_minimum(ANDROID_LOG_DEFAULT);
   if (!loggable(3, tag, 2) || loggable(3, tag, 6)) failed = 1;
   set_minimum(previous);
   if (failed) return 6;

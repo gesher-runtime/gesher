@@ -69,7 +69,11 @@ process-lifetime allocation. Specific-property and area waits release locks
 between observations, use a monotonic relative timeout and leave the output
 serial untouched on timeout. wait_any waits indefinitely for an area change.
 Polling currently bounds notification latency to approximately ten milliseconds.
-These ABI corrections pass native host checks; the ELF/ART tests remain pending.
+These ABI assertions pass on both runners in CI 40352529279, in standalone ART
+and both APK modes. The boot mapping now retains its initial data root when
+ART temporarily changes ANDROID_DATA for scratch files; log startup initializes
+that mapping before fixtures can change the environment. A native regression
+checks that the scratch directory remains empty and removable.
 Caller-specific permissions and the device's report/poke notification path
 remain open.
 Property values now reject malformed UTF-8, including overlong encodings,
@@ -83,7 +87,11 @@ registers callbacks with libutils and reports them on reportSyspropChanged;
 [SystemPropPoker](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java)
 uses Binder's SYSPROPS_TRANSACTION to notify services. Ordinary property
 writes do not replace that report/poke API. Verification of this existing
-callback path is still pending, separately from native serial waits.
+callback path failed CI because pinned libutils/misc.cpp discards its registry
+on Windows. An own host implementation now preserves Android's priority order,
+copies the registry under its lock and invokes callbacks after unlocking.
+The native report/priority/reentrant-registration regression passes locally;
+actual Java callback verification remains pending.
 
 Logcat now has prepared real structured records from Java's pinned liblog
 logger and the NDK shim, while stderr keeps its existing human-readable output.
@@ -95,7 +103,11 @@ process, tag, thread, raw, time, threadtime, long and epoch formats. Shared
 properties and liblog's process minimum priority control loggability, including
 length-limited NDK tags. Binary event decoding, logd sockets and other logcat
 options are outside this text-log implementation. Local backend/tool checks
-pass; actual Java/NDK capture and both APK modes await CI.
+pass. CI 40352529279 captured NDK records but missed Java records because ART
+replaced the constructor's logger. The prepared setter interposer now records
+around whichever logger the runtime selects, preserving its forwarding behavior.
+It also uses the actual DEFAULT priority sentinel (1). An own mock-call contract
+checks replacement and forwarding; actual combined Java/NDK capture awaits CI.
 
 CI exposed a real broker startup race in Launcher: servicemanager could open
 /dev/binder before binderd created its first endpoint. Launcher now waits for
@@ -177,7 +189,8 @@ out-of-block/stack-pointer cases. Those checks pass locally with -Werror.
 The NDK API29 executable has explicit FS local-exec integer/SSE assembly and
 checks constructors, initialized data, tbss, alignment and pthread isolation.
 Its loader and ProcessBuilder runs pass both runners in CI 40338806524;
-the device-app variant remains pending. Local instruction replay alone was
+the same checks also pass inside both APK modes in CI 40352529279 before the
+later callback failure. The complete APK remains open. Local instruction replay alone was
 not used as proof that the complete ELF startup works.
 
 ## Verification
@@ -204,12 +217,14 @@ serials, stable readonly callback pointers, long-value legacy reads, reentrant
 enumeration, zero/finite timeout, unrelated writes, same-value wakeups and
 cross-process specific/global/wait_any waits. The same property ABI assertions
 are in the NDK child, with Java coordinating actual cross-process writers and
-checking explicit reportSyspropChanged callbacks. These remain pending CI.
+checking explicit reportSyspropChanged callbacks. The NDK ABI assertions pass
+CI 40352529279; Java reports await the prepared Win32 registry correction.
 
 An additional APK runs the nine exec2 native checks through JNI inside the
 app's ART process, with real device services, then repeats the Java shell,
-signal, tool and property suites. This is prepared but not yet CI-verified;
-its Java/package/script checks alone do not establish on-device behavior.
+signal, tool and property suites. The nine JNI checks pass both APK modes on
+both runners in CI 40352529279. The complete APK still fails at the Java report
+assertion and needs a green combined run after that correction.
 
 ## Remaining work
 
@@ -221,8 +236,8 @@ its Java/package/script checks alone do not establish on-device behavior.
 - CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
   Process.destroy/destroyForcibly on both runners. Native console interruption
   remains unverified; the changed combined tree still needs a green run.
-- Shared-property ART/NDK CI proof for the prepared serial/wait/readonly-pointer
-  ABI corrections, property permissions and Binder report/poke notifications,
+- A green combined run after the boot-root and callback corrections, property
+  permissions and Binder report/poke notifications,
   real logcat capture and pm/am service calls.
 - CI 40338806524 verifies the API29 NDK executable local-exec TLS program and
   ProcessBuilder invocation on both runners. The installed APK native-process

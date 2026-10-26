@@ -189,34 +189,33 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** completed CI 40338806524 at
-983907652ea9ff6fd85c392d562e868b7161a7b5 includes integration ac50d412.
-Both Windows runners pass all 57 exact shell cases, incremental ART stdin,
-real mailbox traps during idle input/read, ProcessBuilder native signals and
-tools, the API29 main-executable TLS probe and the basic cross-process property
-suite. Existing exec/exec2/arm64 process checks pass. Build/package pass;
-Windows-2022 e2e has zero unexpected failures, required TIC-80 and Puzzles'
-generator pid 1436 exiting 0. Windows-2025 e2e failed all nine APK downloads
-with DNS errors before installation. Windows-2025 has one failed Check, the
-new APK device harness; Windows-2022 has that failure plus an ar-EG device
-startup failure (servicemanager opened the driver before binderd was ready).
-Neither Windows job has zero failed Checks.
+**Current review:** completed CI 40352529279 at
+dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
+All build jobs, package and both e2e jobs pass; both e2e summaries have zero
+unexpected failures, required TIC-80 and Puzzles generator pids 5244/8604
+exiting 0. Both Windows suites retain 57 shell cases with zero failures,
+incremental ART stdin, real idle/read signal traps, native Java process tools
+and API29 executable TLS passes. The ten-case broker readiness probe passes,
+and JNI's nine native-process checks pass in both single-process and installed
+device APKs. NDK serial/readonly-pointer/long-value/foreach/wait/wait_any
+assertions pass in standalone ART and both APK modes.
 
-The next prepared tree installs the APK through Launcher (raw SystemServer
-APK scanning had not extracted JNI), repeats it in single-process mode, and
-waits for a bounded successful broker protocol connection before starting
-servicemanager. A ten-case native readiness probe passes locally. Property
-serial/wait/readonly-pointer corrections pass native host checks; their new
-ART/NDK assertions remain pending. Real Java/NDK structured logcat plumbing is
-prepared with local backend/tool checks passing; actual ART capture is pending.
-The coordinator's timeout and pinned APK transport guards are also prepared.
-Combined CI 40352529279 is running at dc19ee29190961bb6238081d1978d0882ab77f44,
-after merging integration 46bc9e5 (docs only). Watch log:
-C:\work\gesher-ci-review\exec3-watch-40352529279.log, 120-second interval.
-Main build passes in 42m05s, boot-image compilation in 33s; both Windows suites
-are now running (jobs 121700775159 and 121700775178). No new runtime assertion
-is marked verified before their completed logs are read.
-The full track, pm/am and umask remain open.
+Each Windows suite has seven failed Checks: the framework loggability canary,
+libartbase/libdexfile scratch cleanup, explicit Java property callbacks,
+Java log capture and the two complete APK suites blocked by the callback.
+Their exact causes are fixed in the prepared tree: ANDROID_LOG_DEFAULT is 1,
+not 0; the boot property mapping must survive scratch ANDROID_DATA changes;
+Win32 libutils had discarded callbacks; and ART replaces liblog's logger
+after constructor registration. The logger setter now keeps structured capture
+around the selected destination. Nine native host assertions pass the data-root
+and callback regression; an own mock upstream-call contract passes logger
+replacement/capture forwarding. These local results do not replace the next
+actual ART/Java/e2e run. Both completed Windows logs are retained under
+C:\work\gesher-ci-review\exec3-40352529279-windows-*.log.
+
+The prepared tree also merges verified native3 integration f677944 (merge
+333b1d6). Its separate green CI does not verify this combination. No replacement
+CI has been dispatched yet; the full track, pm/am and umask remain open.
 
 Prepared after this dispatch: pm/am now invoke a boot-classpath Binder client
 for actual package list/path, activity start, force-stop and asynchronous

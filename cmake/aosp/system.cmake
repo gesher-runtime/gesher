@@ -21,7 +21,7 @@ target_compile_options(base PRIVATE -Wall -Wextra)
 set(_l "${AOSP_DIR}/system/logging/liblog")
 add_library(log STATIC
   ${_l}/log_event_list.cpp ${_l}/log_event_write.cpp ${_l}/logger_name.cpp
-  ${_l}/logger_read.cpp ${_l}/logger_write.cpp ${_l}/logprint.cpp
+  ${_l}/logger_read.cpp ${CMAKE_SOURCE_DIR}/compat/posix/src/android_log_write.cc ${_l}/logprint.cpp
   ${CMAKE_SOURCE_DIR}/compat/posix/src/android_log.cc)
 target_include_directories(log PUBLIC ${_l}/include)
 target_include_directories(log PRIVATE ${_l} ${_b}/include ${_core}/libcutils/include)
@@ -106,7 +106,7 @@ add_library(utils STATIC
   ${_ut}/FileMap.cpp ${_ut}/JenkinsHash.cpp ${_ut}/LightRefBase.cpp
   ${_ut}/NativeHandle.cpp ${_ut}/Printer.cpp ${_ut}/StopWatch.cpp
   ${_ut}/SystemClock.cpp ${_ut}/Threads.cpp ${_ut}/Timers.cpp ${_ut}/Tokenizer.cpp
-  ${_ut}/misc.cpp
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/sysprop_callbacks.cc
   # android
   ${_ut}/Trace.cpp
   # linux
