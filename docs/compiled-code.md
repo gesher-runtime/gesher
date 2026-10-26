@@ -198,12 +198,28 @@ package and e2e:
       run their AOT code and none of them entered the interpreter (8 of 16
       methods with AOT code, 0 interpreted, was 8 interpreted with verify;
       ci 40244966896, 40263271836, both runners).
-- [ ] **The app image holding the app's classes** (not verified): until
+- [x] **The app image holding the app's classes** (ci 40285423159 at
+      ad9d360, both runners, package and e2e): until
       ad9d360 the app images loaded but held only the `R` classes;
       LifecycleActivity and LifecycleApplication were "unsuitable" because
       dex2oat compiled the app against the primary boot image only (patch
       0012's lone-location expansion to `<dir>/*` is runtime-only). ad9d360
       passes `--boot-image=<dir>/boot.art:<dir>/*` (Dexopt and 61-aot2).
+      The single-process image holds 7 classes and 16 methods (7 compiled);
+      the device image holds 2 classes and 11 methods (10 compiled). The next
+      device launch reports 11 methods with AOT code, none interpreted.
+
+### Continuation (2026-10-26)
+- Verified ci 40285423159 personally from every job's conclusion and logs:
+  both Windows test jobs end with `0 test(s) failed`, package succeeds and
+  e2e reports `0 unexpected failures`.
+- Merged origin/phase4/integration a462e9c, including exec2, before the next
+  full run. Removed the diagnostic `-AllClasses` boot-image option: the app
+  image fix is the explicit boot-image extension list, not extra boot classes.
+  The smaller image, startup and app-image checks need fresh CI verification.
+- Next: dispatch ci.yml on wip/aot2, read all 61-aot2 PASS lines and both test
+  summaries, package and e2e before marking the track ready to merge. The
+  historical handoff below records the predecessor's state.
 
 ### Handoff (2026-10-26, stopped by the coordinator)
 - Branch `wip/aot2`. Last verified: 7de81ac, ci 40263271836. Everything
