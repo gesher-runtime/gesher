@@ -57,6 +57,16 @@ read actual Android IME/composition, Application Resources and legacy layout
 traces. Those gaps, candidate discovery and physical touch keyboard verification
 remain open; no roadmap milestone or ADR acceptance is claimed.
 
+Further source audit found a Java geometry publication gap: CursorAnchorInfo
+with neither an insertion marker nor its fallback character returned before
+replacing the old measured range. The source now publishes its explicit
+current character measurements (including missing entries) before any caret
+fallback can return. A small independent mapping helper keeps that path out of
+the server class graph. A real-framework CursorAnchorInfo/Matrix dex fixture
+covers supplementary UTF-16 indices, transform/rounding, clipping, missing
+characters with no caret, a newer same-text observation with no bounds and
+composition end. These Java/ART checks await full CI; no local build was run.
+
 Resumed on 2026-10-26 after merging current integration a57c1f8 without a reset.
 WIP: the shared Application Display follows the focused visible task, with
 explicit per-Activity zero/rotated overrides and masked Binder display callbacks.

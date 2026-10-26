@@ -537,7 +537,20 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
 
     /** The editor's cursor as the window's caret (on the window's thread). */
     private void applyCursorAnchorInfo(Window w, CursorAnchorInfo info, int epoch) {
-        synchronized (w) { if (w.documentEpoch != epoch) return; }
+        WindowInput in;
+        synchronized (w) {
+            if (w.documentEpoch != epoch) return;
+            in = w.input;
+        }
+        if (in == null) return;
+        int[] origin = windowOrigin(w);
+        CharSequence composingText = info.getComposingText();
+        int compositionStart = info.getComposingTextStart();
+        // A newer observation with no caret or character measurements must still
+        // replace the previous range geometry. Native publication checks the epoch.
+        in.setTextGeometry(epoch, Math.max(0, compositionStart),
+                composingText != null && compositionStart >= 0 ? composingText.toString() : "",
+                CursorAnchorGeometry.characters(info, origin[0], origin[1]));
         float x = info.getInsertionMarkerHorizontal();
         float top = info.getInsertionMarkerTop();
         float bottom = info.getInsertionMarkerBottom();
@@ -555,13 +568,12 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         float[] pts = {x, top, x, bottom};
         Matrix m = info.getMatrix();
         if (m != null) m.mapPoints(pts);
+        for (float coordinate : pts) { if (!Float.isFinite(coordinate)) return; }
         // The matrix maps to the display; the Win32 window's client area is the Android
         // window's frame.
-        int[] origin = windowOrigin(w);
         int cx = Math.round(pts[0]) - origin[0];
         int cy = Math.round(pts[1]) - origin[1];
         int height = Math.max(1, Math.round(pts[3] - pts[1]));
-        WindowInput in;
         boolean changed;
         synchronized (w) {
             if (w.documentEpoch != epoch) return;
@@ -572,32 +584,6 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         }
         if (in == null) return;
         in.setCaret(cx, cy, 2, height, epoch);
-        CharSequence composingText = info.getComposingText();
-        int compositionStart = info.getComposingTextStart();
-        if (composingText != null && compositionStart >= 0
-                && composingText.length() <= Integer.MAX_VALUE / 6) {
-            int[] rectangles = new int[composingText.length() * 6];
-            for (int i = 0; i < composingText.length(); i++) {
-                int at = i * 6;
-                rectangles[at] = -1;
-                RectF bounds = info.getCharacterBounds(compositionStart + i);
-                if (bounds == null) continue;
-                RectF mapped = new RectF(bounds);
-                if (m != null) m.mapRect(mapped);
-                if (!Float.isFinite(mapped.left) || !Float.isFinite(mapped.top)
-                        || !Float.isFinite(mapped.right) || !Float.isFinite(mapped.bottom)) continue;
-                rectangles[at] = compositionStart + i;
-                rectangles[at + 1] = (int) Math.floor(mapped.left) - origin[0];
-                rectangles[at + 2] = (int) Math.floor(mapped.top) - origin[1];
-                rectangles[at + 3] = (int) Math.ceil(mapped.right) - origin[0];
-                rectangles[at + 4] = (int) Math.ceil(mapped.bottom) - origin[1];
-                rectangles[at + 5] = (info.getCharacterBoundsFlags(compositionStart + i)
-                        & CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION) != 0 ? 1 : 0;
-            }
-            in.setTextGeometry(epoch, compositionStart, composingText.toString(), rectangles);
-        } else {
-            in.setTextGeometry(epoch, 0, "", new int[0]);
-        }
         if (changed) {
             log("caret in window \"" + w.title + "\" at " + cx + "," + cy + " height " + height);
         }
