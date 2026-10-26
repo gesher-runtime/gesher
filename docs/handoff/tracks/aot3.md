@@ -37,6 +37,20 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Verified oatdump stage: full ci 40368334642 at
+96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. The coordinator
+personally read every job (22 success/six skipped), all four aot3 and all
+14 aot2 PASS lines per runner, both zero-failure summaries, the actual
+installed-copy/cleanup checks and both required Puzzles/TIC-80 e2e logs
+(0 unexpected failures). The frozen stage report is aot3-oatdump.md.
+Shared-library contexts, install-time .dm profiles and secondary dex remain
+open. The later unverified cloud-profile follow-up stays on wip/aot3 and
+is not part of this frozen stage.
+
+### Earlier CI history
+
+Pending-run statements below are historical and superseded by this result.
+
 ci 40352810247 at f949321: all four aot3 checks pass on both Windows
 versions, including actual nonempty compiled code and app-image loading.
 The only failure on each runner is the completed WinRT geocoder probe's
