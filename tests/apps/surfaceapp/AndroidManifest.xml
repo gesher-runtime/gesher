@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The surfaces track's test app (docs/graphics.md "Surfaces", ADR 0056): SurfaceViews
+     (below the window with a hole, on top, a fixed buffer size, moved and resized,
+     hidden and shown), a TextureView, SurfaceTexture, Bitmap parcels, YuvImage and camera
+     previews into a SurfaceView and a TextureView. SurfaceActivity steps through phases
+     and logs "surfaces: ..." lines; tests/windows/tracks/52-surfaces.ps1 reads its window
+     back at each "surfaces: phase N ready" line. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.surfaceapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/SurfaceTheme">
+        <activity
+            android:name=".SurfaceActivity"
+            android:label="@string/app_name"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

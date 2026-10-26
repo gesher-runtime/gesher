@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EGL/GLES into a SurfaceView from an NDK library (surfaces track, ADR 0056). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.surfacegl"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:label="@string/app_name"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity
+            android:name=".GlActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
