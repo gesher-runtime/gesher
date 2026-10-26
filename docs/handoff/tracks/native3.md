@@ -65,6 +65,13 @@ f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
 integration b9f93f0. Watching with interval 120; no result is claimed yet.
 Superseded failing 40332803102 was cancelled after this run was dispatched.
 
+Independent next-step feasibility probe: native3-probes.yml cross-compiles
+an own-file binary128 arithmetic/MS-to-System-V ABI executable with the
+pinned llvm-mingw and runs it on both Windows versions. It uses no AOSP
+build and no local compilation. This does not implement or verify the
+remaining long-double/complex NDK math APIs; its result is pending and
+the current full font CI remains unchanged.
+
 Diagnostic CI: 40328565752 at
 9c4d3803722eba83475ebe2475b7457ded394f21, with surfaces/integration 8590f4b.
 Native test compilation passed; the main build failed before Windows tests:

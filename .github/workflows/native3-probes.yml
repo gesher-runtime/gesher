@@ -1,0 +1,65 @@
+name: native3-probes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/native3']
+    paths:
+      - 'probes/native3/**'
+      - '.github/workflows/native3-probes.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native3-probes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch llvm-mingw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" | tar -xJ -C ~/toolchain
+      - name: Compile binary128 arithmetic and ABI probe
+        run: |
+          mkdir -p probe-out
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang" \
+            -std=c11 -O2 -Wall -Wextra -Werror -mlong-double-128 \
+            probes/native3/binary128.c -o probe-out/native3-binary128.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native3-probes
+          path: probe-out/
+
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native3-probes
+          path: probe-out
+      - name: Verify binary128 bits across both calling conventions
+        shell: pwsh
+        run: |
+          & ./probe-out/native3-binary128.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
