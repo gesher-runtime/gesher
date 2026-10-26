@@ -1,7 +1,7 @@
 # 0060 — Windows shell execution and Android process tools
 
-**Status:** proposed (exec3 track). The first shell implementation is ready
-for CI; the complete track remains open.
+**Status:** proposed (exec3 track). Shell, process and compatible executable
+TLS checks pass CI; the combined tree and complete track remain open.
 
 ## Context
 
@@ -80,6 +80,25 @@ registers callbacks with libutils and reports them on reportSyspropChanged;
 uses Binder's SYSPROPS_TRANSACTION to notify services. Ordinary property
 writes do not replace that report/poke API. Verification of this existing
 callback path is still pending, separately from native serial waits.
+
+Logcat now has prepared real structured records from Java's pinned liblog
+logger and the NDK shim, while stderr keeps its existing human-readable output.
+SystemServer passes each app a separate GESHER_LOG_FILE sidecar; single-process
+Main sets one before starting the APK. A named mutex protects whole records,
+reads and actual clear operations. Storage rolls over at 16 MiB. The tool dumps
+or follows these records, applies tag/priority filters and renders brief,
+process, tag, thread, raw, time, threadtime, long and epoch formats. Shared
+properties and liblog's process minimum priority control loggability, including
+length-limited NDK tags. Binary event decoding, logd sockets and other logcat
+options are outside this text-log implementation. Local backend/tool checks
+pass; actual Java/NDK capture and both APK modes await CI.
+
+CI exposed a real broker startup race in Launcher: servicemanager could open
+/dev/binder before binderd created its first endpoint. Launcher now waits for
+a connection to the expected broker pid and a valid HelloProc response, using
+overlapped I/O bounded by a monotonic deadline and broker lifetime. Only then
+does it start servicemanager. The ten-case native probe includes delayed,
+malformed, stalled, exited and wrong-pid brokers. RTL assertions stay intact.
 
 ## Fork and static-executable feasibility review
 
@@ -170,13 +189,15 @@ its Java/package/script checks alone do not establish on-device behavior.
   restoration have four added local checks; persistent descriptor scopes
   have six, also compared with a POSIX shell. Their real-launcher CI remains
   pending (57 local cases total).
-- Real mailbox CI for idle pipe input and interrupted read, plus
-  Process.destroy/destroyForcibly verification. Native console interruption
-  remains unverified.
+- CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
+  Process.destroy/destroyForcibly on both runners. Native console interruption
+  remains unverified; the changed combined tree still needs a green run.
 - Shared-property ART/NDK CI proof for the prepared serial/wait/readonly-pointer
-  ABI corrections, property permissions and Binder report/poke notifications, logcat
-  formats/filter/clear and real pm/am service calls.
-- Real NDK executable local-exec TLS and the on-device native-process suite
-  still require CI proof; unsupported TLS layouts/opcode forms remain explicit.
+  ABI corrections, property permissions and Binder report/poke notifications,
+  real logcat capture and pm/am service calls.
+- CI 40338806524 verifies the API29 NDK executable local-exec TLS program and
+  ProcessBuilder invocation on both runners. The installed APK native-process
+  suite and new broker startup fix still need CI proof; unsupported TLS layouts
+  and opcode forms remain explicit.
 - General fork-before-exec and static executables remain unsupported for the
   architectural reasons reviewed above.

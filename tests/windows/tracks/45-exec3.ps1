@@ -1,6 +1,10 @@
 # The real launcher's shell, not a shell mock. Each case has an exact output
 # and status assertion; pipelines exceed a pipe buffer, subshells preserve
 # state without inheriting mutations, and serialized state exceeds 32 KiB.
+Check 'exec3: binder startup waits for a protocol connection with bounded failure' {
+  & "$Dir/exec3_binder_ready_probe.exe"
+} @('exec3 binder readiness: 10 checks, 0 failed')
+
 Check 'exec3: local-exec FS rewrite preserves registers, flags, SIMD and thread isolation' {
   & "$Dir/exec3_tls_probe.exe"
 } @('exec3 TLS probe: 0 failed')
@@ -41,7 +45,22 @@ Check 'exec3: shared properties through Java, native ELF and tools (read-only, s
 } @('Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties',
     'Exec3PropertiesTest PASS cached ELF property callbacks and serials observe another process',
     'Exec3PropertiesTest PASS ro properties are write-once and invalid names fail',
+    'Exec3PropertiesTest PASS ELF serial ABI, stable ro callbacks, long legacy values, foreach and cross-process wait/wait_any',
+    'Exec3PropertiesTest PASS framework reportSyspropChanged invokes registered Java callbacks',
     'Exec3PropertiesTest PASS a new device boot clears volatile properties and loads persist properties')
+
+$exec3SavedLogFile = $env:GESHER_LOG_FILE
+$env:GESHER_LOG_FILE = "$root/exec3-standalone.logcat"
+try {
+  Check 'exec3: Java/NDK logcat records, filters, formats, clear and follow' {
+    & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+      -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3LogTest (NoDrive $Dir) --load-runtime
+  } @('Exec3LogTest PASS actual Java/NDK records, tags, priority filters, nine formats and live loggability properties',
+      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
+} finally {
+  if ($null -eq $exec3SavedLogFile) { Remove-Item Env:GESHER_LOG_FILE -ErrorAction SilentlyContinue }
+  else { $env:GESHER_LOG_FILE = $exec3SavedLogFile }
+}
 
 # Run those same native and Java operations from an installed APK attached to
 # the real system server. This does not substitute a host-only dalvikvm for an
@@ -58,8 +77,9 @@ function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240) {
   $stderr = $process.StandardError.ReadToEndAsync()
   $timedOut = -not $process.WaitForExit($Seconds * 1000)
   if ($timedOut) { $process.Kill($true); $process.WaitForExit() }
-  $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $text = $stdout.Result + $stderr.Result
+  $text = ''
+  if ($stdout.Wait(10000)) { $text += $stdout.Result } else { $timedOut = $true; $text += '(stdout did not close)' }
+  if ($stderr.Wait(10000)) { $text += $stderr.Result } else { $timedOut = $true; $text += '(stderr did not close)' }
   if ($timedOut) { $text += "`n(exec3 app timed out after $Seconds seconds)" }
   return @{ Code = $(if ($timedOut) { -1 } else { $process.ExitCode }); Text = $text }
 }
@@ -69,27 +89,34 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
   $failed++
 } else {
   Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
-  $exec3PreviousBinder = $env:GESHER_BINDER
-  $env:GESHER_BINDER = "exec3-app-$PID-$(Get-Random)"
+  Check 'exec3: native processes and Java suites from a single-process APK' {
+    & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+      -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/exec3.apk")
+  } @('exec2: SUMMARY pass=9 fail=0',
+      'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
+      'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device',
+      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
+  $exec3SavedEnvironment = @{}
+  foreach ($exec3Name in 'ANDROID_DATA', 'GESHER_BINDER', 'GESHER_LOGS', 'GESHER_SHORTCUTS') {
+    $exec3SavedEnvironment[$exec3Name] = [Environment]::GetEnvironmentVariable($exec3Name)
+  }
   $exec3Logs = Join-Path $root 'exec3-device-logs'
   New-Item -ItemType Directory -Force $exec3Logs | Out-Null
-  $exec3Binderd = $null
-  $exec3Manager = $null
-  $exec3Server = $null
+  $env:ANDROID_DATA = NoDrive "$root/data-exec3"
+  $env:GESHER_LOGS = NoDrive $exec3Logs
+  $env:GESHER_SHORTCUTS = '0'
+  Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force "$root/data-exec3" | Out-Null
+  $exec3DeviceVm = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false')
   try {
-    $exec3Binderd = Start-Process "$Dir/binderd.exe" -ArgumentList $env:GESHER_BINDER -PassThru -WindowStyle Hidden `
-      -RedirectStandardOutput "$exec3Logs/binderd.out" -RedirectStandardError "$exec3Logs/binderd.err"
-    $exec3Manager = Start-Process "$Dir/servicemanager.exe" -PassThru -WindowStyle Hidden `
-      -RedirectStandardOutput "$exec3Logs/servicemanager.out" -RedirectStandardError "$exec3Logs/servicemanager.err"
-    $exec3DeviceVm = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
-      '-Xint', '-Xusejit:false')
-    $exec3Server = Start-Process "$Dir/dalvikvm.exe" -PassThru -WindowStyle Hidden `
-      -ArgumentList ($exec3DeviceVm + 'com.gesher.server.SystemServer', (NoDrive "$Dir/exec3.apk")) `
-      -RedirectStandardOutput "$exec3Logs/system_server.out" -RedirectStandardError "$exec3Logs/system_server.err"
-    $exec3App = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Main', '--system-server', (NoDrive "$Dir/exec3.apk"))
+    # Launcher installs and extracts the APK before starting its real app process.
+    $exec3App = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless')
     $exec3Wanted = @(
       'exec2: SUMMARY pass=9 fail=0',
+      'gesher-app: app process for com.gesher.exec3',
       'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
+      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device')
     $exec3Missing = $exec3Wanted | Where-Object { -not $exec3App.Text.Contains($_) }
     if ($exec3App.Code -eq 0 -and -not $exec3Missing -and -not $exec3App.Text.Contains('Exec3DeviceTest FAIL')) {
@@ -97,15 +124,17 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     } else {
       Write-Host "FAIL  exec3: on-device process suite (exit $($exec3App.Code); missing: $($exec3Missing -join ', '))"
       Write-Host $exec3App.Text
-      Get-Content "$exec3Logs/system_server.out", "$exec3Logs/system_server.err" -ErrorAction SilentlyContinue |
-        Select-Object -Last 100 | Out-Host
+      Get-ChildItem -LiteralPath $exec3Logs -Filter '*.log' | ForEach-Object {
+        Get-Content -LiteralPath $_.FullName -Tail 100 -ErrorAction SilentlyContinue | Out-Host
+      }
       $failed++
     }
   } finally {
-    foreach ($exec3Process in $exec3Server, $exec3Manager, $exec3Binderd) {
-      if ($exec3Process -and -not $exec3Process.HasExited) { $exec3Process.Kill($true) }
+    $exec3Shutdown = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'shutdown') 60
+    if ($exec3Shutdown.Code -ne 0) { Write-Host "INFO  exec3: device shutdown: $($exec3Shutdown.Text)" }
+    foreach ($exec3Name in $exec3SavedEnvironment.Keys) {
+      if ($null -eq $exec3SavedEnvironment[$exec3Name]) { Remove-Item "Env:$exec3Name" -ErrorAction SilentlyContinue }
+      else { Set-Item "Env:$exec3Name" $exec3SavedEnvironment[$exec3Name] }
     }
-    if ($null -eq $exec3PreviousBinder) { Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue }
-    else { $env:GESHER_BINDER = $exec3PreviousBinder }
   }
 }

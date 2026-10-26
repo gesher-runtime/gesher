@@ -188,30 +188,28 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** the prepared tree includes integration ac50d412 (merge
-9839076, including verified AOT code). Completed CI 40320290754 at 1189dc4 predates the AOT merge and later
-exec3 fixes. Build/package and both e2e jobs pass with zero unexpected
-failures, required TIC-80 and Puzzles' generator exiting 0. Both Windows jobs
-pass the 47-case real-shell suite, ART incremental stdin, native-handler Java
-destroy/tool checks and existing exec/exec2/arm64 process suites. The property
-test had no framework jars and ran no assertions; that bootstrap is fixed.
-Windows-2022 also had a media sound-count failure and reached the job limit
-after its last devsvc output; no zero-failure claim is made for that job.
-The prepared 57-case tree, idle/read traps, JNI-on-device APK and executable
-local-exec TLS are not CI-verified. Property serial/wait/readonly-pointer ABI
-corrections now pass native host checks; their ART/NDK tests, logcat and pm/am
-remain open. The whole track is open.
-
-**Running now:** combined CI 40338806524 at 983907652ea9ff6fd85c392d562e868b7161a7b5.
-It includes the property bootstrap fix, 57 shell cases, idle/read mailbox
-tests, JNI device APK and executable TLS. Watch with the prescribed 120-second
-interval; log C:\work\gesher-ci-review\exec3-watch-40338806524.log. Do not infer
-NDK startup, real mailbox delivery or device behavior from the local checks.
-Build, package and the exec artifact build pass. The completed Windows-2022
-e2e job passes with zero unexpected failures, required TIC-80 and Puzzles'
+**Current review:** completed CI 40338806524 at
+983907652ea9ff6fd85c392d562e868b7161a7b5 includes integration ac50d412.
+Both Windows runners pass all 57 exact shell cases, incremental ART stdin,
+real mailbox traps during idle input/read, ProcessBuilder native signals and
+tools, the API29 main-executable TLS probe and the basic cross-process property
+suite. Existing exec/exec2/arm64 process checks pass. Build/package pass;
+Windows-2022 e2e has zero unexpected failures, required TIC-80 and Puzzles'
 generator pid 1436 exiting 0. Windows-2025 e2e failed all nine APK downloads
-with DNS errors before installation. Both Windows check jobs remain running;
-the new serial/wait corrections and reliability guards are absent from this run.
+with DNS errors before installation. Windows-2025 has one failed Check, the
+new APK device harness; Windows-2022 has that failure plus an ar-EG device
+startup failure (servicemanager opened the driver before binderd was ready).
+Neither Windows job has zero failed Checks.
+
+The next prepared tree installs the APK through Launcher (raw SystemServer
+APK scanning had not extracted JNI), repeats it in single-process mode, and
+waits for a bounded successful broker protocol connection before starting
+servicemanager. A ten-case native readiness probe passes locally. Property
+serial/wait/readonly-pointer corrections pass native host checks; their new
+ART/NDK assertions remain pending. Real Java/NDK structured logcat plumbing is
+prepared with local backend/tool checks passing; actual ART capture is pending.
+The coordinator's timeout and pinned APK transport guards are also prepared.
+No replacement CI is dispatched yet. The full track, pm/am and umask remain open.
 
 Continuation history and exact evidence:
 

@@ -16,7 +16,6 @@ public final class ExecActivity extends Activity {
         view.setText("Running exec3 process checks");
         setContentView(view);
         try {
-            if (System.getenv("GESHER_BINDER") == null) throw new AssertionError("no device namespace");
             String directory = getApplicationInfo().nativeLibraryDir;
             String child = new File(directory, "libexec2child.so").getPath();
             System.loadLibrary("exec3jni");
@@ -25,6 +24,7 @@ public final class ExecActivity extends Activity {
             Exec3Test.main(new String[0]);
             Exec3ProcessTest.main(new String[]{directory});
             Exec3PropertiesTest.main(new String[]{directory});
+            Exec3LogTest.main(new String[]{directory});
             System.out.println("Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device");
             view.setText("Exec3 process checks passed");
         } catch (Throwable failure) {

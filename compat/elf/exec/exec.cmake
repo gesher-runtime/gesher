@@ -20,3 +20,10 @@ add_executable(exec3_tls_probe ${CMAKE_SOURCE_DIR}/tests/exec/fs-local-exec-prob
 target_include_directories(exec3_tls_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
 target_compile_options(exec3_tls_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(exec3_tls_probe PRIVATE gesher_elf)
+
+add_executable(exec3_binder_ready_probe
+  ${CMAKE_SOURCE_DIR}/tests/exec/binder-ready-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc)
+target_include_directories(exec3_binder_ready_probe PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
+target_compile_options(exec3_binder_ready_probe PRIVATE -Wall -Wextra -Werror)

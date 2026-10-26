@@ -16,6 +16,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/internal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/libcap.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/links.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/logging.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/memalign.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc

@@ -268,6 +268,14 @@ public final class Launcher {
         int binderd = Zygote.spawn(Zygote.quote(dir + "binderd.exe") + " " + name, env,
                 new File(logs, "binderd.log").getPath(), true);
         record(state, Device.BINDERD, binderd);
+        if (!Zygote.waitForBinder(name, binderd, 30_000)) {
+            int code = Zygote.exitCode(binderd);
+            Zygote.kill(binderd);
+            printTail(new File(logs, "binderd.log"), 40);
+            throw new IllegalStateException("the binder endpoint of the Gesher device "
+                    + name + " did not complete its connection handshake (binderd exit " + code + ")");
+        }
+        log("binder endpoint accepted a protocol connection: " + name + " (pid " + binderd + ")");
         int servicemanager = Zygote.spawn(Zygote.quote(dir + "servicemanager.exe"), env,
                 new File(logs, "servicemanager.log").getPath(), true);
         record(state, Device.SERVICEMANAGER, servicemanager);

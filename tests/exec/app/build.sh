@@ -25,7 +25,8 @@ cp "$out/libexec3jni.so" "$out/libexec2child.so" "$out/libexec3tls.so" "$work/ap
   --manifest "$app/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 28
 javac --release 11 -encoding UTF-8 -cp "$android_jar" -d "$work/classes" \
   "$app/java/gesher/ExecActivity.java" "$app/../java/gesher/Exec3Test.java" \
-  "$app/../java/gesher/Exec3ProcessTest.java" "$app/../java/gesher/Exec3PropertiesTest.java"
+  "$app/../java/gesher/Exec3ProcessTest.java" "$app/../java/gesher/Exec3PropertiesTest.java" \
+  "$app/../java/gesher/Exec3LogTest.java"
 java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 --lib "$android_jar" \
   --output "$work/dex" $(find "$work/classes" -name '*.class')
 (cd "$work/dex" && zip -q "$work/unaligned.apk" classes.dex)
