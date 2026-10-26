@@ -37,6 +37,18 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+ci 40389331018 at 31adc99: all 11 cloud-profile checks pass on both Windows
+versions, including first app-image/AOT execution, failed-archive descriptor
+cleanup, corrupt/mismatched/missing-profile fallback, identical-APK metadata
+replacement and uninstall. Framework patch 0650 compiles in CI. All other
+jobs pass/skip, but each Windows suite has one failure in the new startup
+profile collector: the runtime rejects save-resolved-classes-delayed-ms:0.
+That spelling appears in parsed_options help but not the actual pinned
+ProfileSaverOptions parser; the actual delay/hot-sampling options are
+deprecated no-ops. Remove both unnecessary arguments, retaining supported
+boot/AOT profiling and save settings. No performance criterion changes,
+and no full green/cloud roadmap claim until the corrected combined run.
+
 ci 40385898668 at 9831182 failed before framework compilation: patch 0650's
 Java source was absent from aosp.lock's sparse fetch. Add exactly
 core/java/android/util/jar/StrictJarFile.java to frameworks/base's existing

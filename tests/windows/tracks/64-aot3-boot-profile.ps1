@@ -12,7 +12,6 @@ try {
   $learnEnv = @{ ANDROID_DATA = (NoDrive $learnData); GESHER_APP_EXECUTION = 'jit' }
   $learnArgs = @("-Xbootclasspath:$aotBcpApp", $aotImage, '-Xusejit:true', '-Xjitsaveprofilinginfo',
     '-Xps-profile-boot-class-path', '-Xps-profile-aot-code', '-Xps-min-first-save-ms:0',
-    '-Xps-save-resolved-classes-delayed-ms:0', '-Xps-hot-startup-method-samples:1',
     '-Xps-min-methods-to-save:1', '-Xps-min-classes-to-save:1',
     'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk"))
   $learn = Aot2Run "$Dir/dalvikvm.exe" $learnArgs $learnEnv 300
