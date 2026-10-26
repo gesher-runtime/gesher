@@ -262,6 +262,7 @@ DWORD WINAPI ProgramThread(void*) {
   elf::SetInitArguments(argc, p.argv.data(), p.envp.data());
 
   elf::LoadOptions options;
+  options.main_executable = true;
   for (const std::string& e : p.env) {
     if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) options.search_paths = LibraryPath(e.substr(16));
   }

@@ -44,6 +44,18 @@ public final class Exec3ProcessTest {
     }
 
     public static void main(String[] args) throws Exception {
+        Process tls = new ProcessBuilder(new File(args[0], "libexec3tls.so").getPath()).start();
+        try {
+            tls.getOutputStream().close();
+            String output = line(tls.getInputStream());
+            status(tls, 0);
+            if (!"exec3 TLS executable: PASS constructor, initialized data, tbss, alignment, integer/SSE local-exec and pthread isolation".equals(output)) {
+                throw new AssertionError("executable TLS: " + output);
+            }
+            System.out.println("Exec3ProcessTest PASS ProcessBuilder runs an API29 executable with local-exec TLS");
+        } finally {
+            tls.destroyForcibly();
+        }
         String program = new File(args[0], "libexec2child.so").getPath();
         Process process = child(program);
         try {

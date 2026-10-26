@@ -1,6 +1,14 @@
 # The real launcher's shell, not a shell mock. Each case has an exact output
 # and status assertion; pipelines exceed a pipe buffer, subshells preserve
 # state without inheriting mutations, and serialized state exceeds 32 KiB.
+Check 'exec3: local-exec FS rewrite preserves registers, flags, SIMD and thread isolation' {
+  & "$Dir/exec3_tls_probe.exe"
+} @('exec3 TLS probe: 0 failed')
+
+Check 'exec3: executable ELF TLS at API29 (constructor, initialized data, tbss, alignment, integer/SSE, pthread)' {
+  & "$Dir/gesher-exec.exe" --elf "$Dir/libexec3tls.so" 'libexec3tls.so'
+} @('exec3 TLS executable: PASS constructor, initialized data, tbss, alignment, integer/SSE local-exec and pthread isolation')
+
 $exec3ShellLog = & python "$PSScriptRoot/../../exec/shell-smoke.py" "$Dir/gesher-exec.exe" 2>&1
 $exec3ShellCode = $LASTEXITCODE
 $exec3ShellLog | ForEach-Object { Write-Host $_ }
@@ -19,7 +27,8 @@ Check 'exec3: ProcessBuilder shell with an open stdin (incremental output, read 
 Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, ps, kill, cat, sleep)' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3ProcessTest (NoDrive $Dir)
-} @('Exec3ProcessTest PASS destroy runs the native SIGTERM handler and ps lists its pid',
+} @('Exec3ProcessTest PASS ProcessBuilder runs an API29 executable with local-exec TLS',
+    'Exec3ProcessTest PASS destroy runs the native SIGTERM handler and ps lists its pid',
     'Exec3ProcessTest PASS destroyForcibly kills with status 137',
     'Exec3ProcessTest PASS kill sends SIGTERM through the native signal mailbox',
     'Exec3ProcessTest PASS cat preserves binary stdin and stdout',

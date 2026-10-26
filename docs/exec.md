@@ -101,13 +101,13 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 
 ## Not done / limits
 
-- **ELF TLS in the executable itself** (`__thread` at API 29+): still
-  unsupported. The linker resolves an executable's own thread-locals as
-  local-exec offsets from the thread pointer (`%fs:-N`), filled by
-  `R_X86_64_TPOFF` relocations; the loader's `%fs` rewrite runs before
-  relocations, so it cannot tell a local-exec site from a thread-pointer access,
-  and such forms trap. Emulated TLS (API < 29), and ELF TLS in the libraries the
-  executable loads, work.
+- **ELF TLS in the executable itself** (`__thread` at API 29+): a new
+  implementation recognizes linker-resolved negative FS operands using the
+  explicitly marked executable's compatible first static PT_TLS block. The
+  own-file instruction probe passes locally, but real NDK/ProcessBuilder/app
+  proof is pending CI. Incompatible layouts, text relocations and unsupported
+  instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
+  <29) and library ELF TLS retain their existing paths.
 - A real `fork()` that does work other than `exec`/`_exit` in the child is not
   supported (vfork-style only, ADR 0055).
 - Exit-status convention: a child that dies of a signal carries a Windows
@@ -188,17 +188,18 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** exec3 code through 5b5411b and integration 1d49642 are
-prepared (merged in e86aae). Active CI 40320290754 tests 1189dc4 and predates
-the AOT integration merge. Build, package and both e2e jobs
-pass with zero unexpected failures, required TIC-80 and Puzzles' generator
-exiting 0. Windows-2025 passes the 47-case real-shell suite, ART incremental
-stdin and native-handler Java destroy/tool checks; its only failure is the
-property test missing framework jars. That bootstrap is corrected in the
-prepared tree. Windows-2022 is still running. The 57-case conformance tree,
-idle/read trap checks and JNI-on-device APK are prepared but not CI-verified.
-The shared property's complete serial/wait/readonly-pointer ABI, logcat,
-pm/am and executable TLS remain open. No whole-track completion is claimed.
+**Current review:** the prepared tree includes integration 1d49642 (merge
+e86aae). Completed CI 40320290754 at 1189dc4 predates the AOT merge and later
+exec3 fixes. Build/package and both e2e jobs pass with zero unexpected
+failures, required TIC-80 and Puzzles' generator exiting 0. Both Windows jobs
+pass the 47-case real-shell suite, ART incremental stdin, native-handler Java
+destroy/tool checks and existing exec/exec2/arm64 process suites. The property
+test had no framework jars and ran no assertions; that bootstrap is fixed.
+Windows-2022 also had a media sound-count failure and reached the job limit
+after its last devsvc output; no zero-failure claim is made for that job.
+The prepared 57-case tree, idle/read traps, JNI-on-device APK and executable
+local-exec TLS are not CI-verified. Complete property serial/wait/readonly-
+pointer semantics, logcat and pm/am remain open. The whole track is open.
 
 Continuation history and exact evidence:
 
@@ -313,6 +314,22 @@ Continuation history and exact evidence:
   the boot-image/CI artifacts, test 61, app/window/service changes and the
   existing libbase ScopedFlock work. Next combined CI must verify this tree;
   AOT's separate green run does not verify it together with exec3 changes.
+- Completed current-run review: Windows-2022's log also has
+  `exec3 shell: 47 cases, 0 failed` and the native-handler Java destroy/tool
+  PASS, plus the existing exec, exec2 and arm64 ProcessBuilder checks. Its
+  property test has the same pre-assertion ClassNotFoundException. A separate
+  media check reported 29 sounds instead of 28; the job ended cancelled at its
+  60-minute limit after the final devsvc output. These outside-domain findings
+  were sent to the coordinator with the full job log; they are not hidden by
+  the exec3 passes.
+- Executable TLS is now prepared independently: an explicit main-executable
+  option reserves a compatible first static PT_TLS block and enables negative
+  absolute FS replay only within it. Eleven own-file native Windows assertions
+  pass for integer/SSE operations, flags/registers, thread initialization and
+  rejected forms. The API29 NDK program uses explicit local-exec assembly and
+  is checked through the real launcher, ProcessBuilder and the device APK in
+  the next CI. Its full ELF startup is not locally verified. No AOSP build was
+  run locally; loader syntax checking used a host-only pread declaration.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,

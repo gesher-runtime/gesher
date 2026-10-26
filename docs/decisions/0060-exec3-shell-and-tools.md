@@ -91,6 +91,34 @@ and allowing its first kernel operation to execute incorrectly. Static PIE
 and non-NDK runtime compatibility are not established by the dynamic NDK
 executable tests.
 
+## Executable local-exec TLS
+
+The launcher now marks the initial dynamic executable explicitly in
+LoadOptions. The loader clears this option for dependencies and reserves the
+executable's compatible variant-II TLS block before rewriting its code. It
+must occupy the first static block, fit the static reserve, have alignment at
+most a page and no alignment skew or text relocations. Incompatible layouts
+fail explicitly. A linker-resolved negative absolute FS displacement is
+eligible only within that executable block; the normal thread-pointer and
+stack-guard rewrites retain their existing meaning.
+
+Absolute local-exec instructions use a preserved scratch GPR to load the
+thread pointer from its GS slot, then replay the original memory operation
+without FS and return. Scratch storage stays below the System V red zone;
+the setup/teardown preserves flags and legacy high-byte register encodings.
+Integer, scalar SSE, SIMD moves and x87 memory operations have supported
+replay paths. VEX/EVEX instructions, stack-pointer operands and unsupported
+control-flow/opcode forms retain explicit traps. This does not extend static
+executable support or the arm64 translator's separate TLS model.
+
+An own-file Windows probe executes eleven assertions, including registers,
+carry flags, AH, scalar/vector SSE, per-thread initialization and rejected
+out-of-block/stack-pointer cases. Those checks pass locally with -Werror.
+The NDK API29 executable has explicit FS local-exec integer/SSE assembly and
+checks constructors, initialized data, tbss, alignment and pthread isolation.
+Its loader, ProcessBuilder and device-app runs remain pending CI; local
+instruction replay alone is not proof that the complete ELF startup works.
+
 ## Verification
 
 Local checks compile/link only Gesher's own C++ with -Werror, using a small
@@ -130,6 +158,7 @@ its Java/package/script checks alone do not establish on-device behavior.
 - Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,
   property permissions/notifications, logcat
   formats/filter/clear and real pm/am service calls.
-- Executable local-exec TLS and the on-device native-process suite.
+- Real NDK executable local-exec TLS and the on-device native-process suite
+  still require CI proof; unsupported TLS layouts/opcode forms remain explicit.
 - General fork-before-exec and static executables remain unsupported for the
   architectural reasons reviewed above.

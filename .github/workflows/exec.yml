@@ -73,6 +73,9 @@ jobs:
             -o dist-exec/libexec2test.so tests/exec/exec2_test.c
           "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -Wl,-soname,libexec3jni.so -o dist-exec/libexec3jni.so tests/exec/app/jni/exec3_jni.c
+          "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/libexec3tls.so tests/exec/exec3_tls.c
+          "$bin/llvm-readelf" -l -W dist-exec/libexec3tls.so | grep ' TLS '
           echo "--- libexec2test.so UND imports ---"
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexec2test.so | awk '$7 == "UND" && $8 != "" {print $8}' | sort -u
 
