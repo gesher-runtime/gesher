@@ -119,6 +119,7 @@ struct ImeWindow::Impl {
 
   // The window's thread only.
   std::unordered_set<WPARAM> consumed;  // keys whose WM_KEYDOWN the input method took
+  std::unordered_set<WPARAM> tsf_consumed;
   std::deque<uint32_t> own_chars;       // WM_CHARs to come whose keys' KeyEvents type them
   wchar_t high_surrogate = 0;
   bool composing = false;
@@ -555,10 +556,12 @@ struct ImeWindow::Impl {
         if (msg == FilterKeyMessage()) {
           auto service = tsf;
           auto* key = reinterpret_cast<const MSG*>(lparam);
-          if (service && key && key->hwnd == hwnd && service->Key(key->message, key->wParam, key->lParam)) {
-            return 1;
-          }
-          return 0;
+          if (!key || key->hwnd != hwnd) return 0;
+          const bool up = key->message == WM_KEYUP || key->message == WM_SYSKEYUP;
+          const bool paired = up && tsf_consumed.erase(key->wParam) != 0;
+          const bool eaten = service && service->Key(key->message, key->wParam, key->lParam);
+          if (!up && eaten) tsf_consumed.insert(key->wParam);
+          return eaten || paired;
         }
         break;
     }
