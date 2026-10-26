@@ -1,6 +1,7 @@
 # 0061. Text services, IME occlusion and the shared Application display
 
-Status: proposed (windows4). No CI verification yet.
+Status: proposed (windows4). Native fixture scope verified in standalone CI
+40414421254 at a827d5c; current Android/JNI and full-suite verification is pending.
 
 ## Context
 
@@ -40,7 +41,10 @@ process modes; their runtime result is pending. The new display helper and TaskC
 framework/core classes locally; that is syntax evidence only. No runtime
 behavior or roadmap milestone is claimed.
 
-The COM-source IFrameworkInputPane test is implemented but not CI verified.
+The COM-source IFrameworkInputPane test passes standalone CI 40414421254 on
+Windows 2022 and 2025. That fixture uses the real production HWND, COM source
+and condition-variable queue; real gesher-base/eventfd and Android delivery
+remain a separate full-CI requirement.
 It exercises the same subscription/handler as real windows, including an
 actual window's queued events, full rectangle geometry and reference/cookie
 lifetime. Apps keep the OS COM source; only a native probe supplies a factory.
@@ -56,9 +60,10 @@ It implements ITextStoreACP locking/UTF-16 access, selection and edit events,
 composition-sink events and revision/epoch protection against stale replies.
 A restricted/unavailable document is cleared and its thread manager detached.
 Native COM sink/service tests, actual thread-manager activation and a real
-service DLL pass locally, including the production IME adapter and reentrant
-owner teardown. A real EditText fixture exercises both process modes in the
-next CI; Java syntax passes against saved framework/core classes. TSF key
+service DLL pass standalone CI 40414421254, including the production native
+IME adapter, reentrant owner teardown, epochs, range geometry and partial
+compositions. A real EditText fixture exercises both process modes in the
+next combined CI. TSF key
 filtering runs before TranslateMessage queues character messages; existing
 IMM32, password/number, caret and action paths still need full regression CI.
 Caret geometry and actual CursorAnchorInfo composing-character bounds are
@@ -66,7 +71,8 @@ defined. Measured ranges are accepted only for matching editor epoch/text,
 with screen mapping, clipping and hit testing; missing/stale measurements
 return TS_E_NOLAYOUT. Rich formatting/embedded objects are unsupported.
 See [RequestLock](https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-requestlock)
-for notification/reentrancy requirements. No TSF behavior is CI verified.
+for notification/reentrancy requirements. Current Java/JNI composing spans
+and real Microsoft candidate positioning are not established by native-only CI.
 Candidate-window discovery remains unimplemented.
 The actual Microsoft candidate HWND already observed by the SendInput IME
 fixture is now checked while visible: a floating candidate must leave Android
