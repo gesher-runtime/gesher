@@ -46,6 +46,7 @@ public class A11yActivity extends Activity {
         layout.setOrientation(LinearLayout.VERTICAL);
         Button button = new Button(this);
         button.setText("Android button");
+        button.setAllCaps(false);  // Keep its visible/UIA name independent of theme transforms.
         button.setOnClickListener(v -> {
             mClicks++;
             Web3.log("a11y Android button clicked " + mClicks);
