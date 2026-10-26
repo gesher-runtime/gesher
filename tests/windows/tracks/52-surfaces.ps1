@@ -1,0 +1,177 @@
+# Child surfaces (surfaces track; docs/graphics.md "Surfaces", ADR 0056): SurfaceView,
+# TextureView and SurfaceTexture, Bitmap parcels, YuvImage, camera previews into views.
+# Dot-sourced by run-tests.ps1 (Check, NoDrive, $Dir, $root, $failed).
+#
+# surfaceapp.apk (tests/apps/surfaceapp) steps through phases with a hidden window,
+# logging "surfaces: phase N ready" when each is drawn; this reads the window back with
+# PrintWindow at each and checks where each surface's frame is. Twice: in a single
+# process (gesher-app --hidden-window) and on the Gesher device (its own app process),
+# both with GESHER_CAMERA_TEST's camera for the preview phases.
+. "$PSScriptRoot/../graphics/WindowChecks.ps1"
+
+$bcpSurfaces = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+$dvmSurfaces = @("-Xbootclasspath:$bcpSurfaces", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+
+# Pixels of [x0,x1) x [y0,y1) that are not white (a camera's frames are anything but).
+function NotWhite($px, [int] $x0, [int] $y0, [int] $x1, [int] $y1) {
+  $area = ($x1 - $x0) * ($y1 - $y0)
+  return $area - [GesherWin32]::Count($px, $x0, $y0, $x1, $y1, 0xffffff, 12)
+}
+
+# One check: PASS when $problems is empty, else FAIL with them.
+function SurfaceCheck([string] $Name, $problems) {
+  $problems = @($problems | Where-Object { $_ })
+  if (-not $problems) { Write-Host "PASS  surfaces: $Name" }
+  else { Write-Host "FAIL  surfaces: $Name ($($problems -join '; '))"; $script:failed++ }
+}
+
+# Lines of $text that must be there, in order.
+function InOrder([string] $text, [string[]] $lines) {
+  $at = 0
+  $missing = @()
+  foreach ($l in $lines) {
+    $i = $text.IndexOf($l, $at)
+    if ($i -lt 0) { $missing += "missing '$l'" } else { $at = $i + $l.Length }
+  }
+  return $missing
+}
+
+# Runs surfaceapp with $Arguments; returns @{ Text; Shots = @{ phase -> pixels } }.
+function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs) {
+  $log = Join-Path $env:RUNNER_TEMP "surfaces-$Tag-$(Get-Random).log"
+  $quoted = (@($dvmSurfaces) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
+  $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
+  $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
+  $psi.Environment['GESHER_CAMERA_TEST'] = '1'
+  $psi.UseShellExecute = $false
+  $p = [Diagnostics.Process]::Start($psi)
+  $read = {
+    $t = Get-Content -Raw $log -ErrorAction SilentlyContinue
+    foreach ($f in $AppLogs) { $t += "`n" + (Get-Content -Raw $f -ErrorAction SilentlyContinue) }
+    "$t"
+  }.GetNewClosure()
+  $shots = @{}
+  $hwnd = [IntPtr]::Zero
+  $deadline = (Get-Date).AddSeconds(500)
+  $phase = 1
+  while ((Get-Date) -lt $deadline -and $phase -le 7) {
+    $text = & $read
+    if ($hwnd -eq [IntPtr]::Zero) {
+      $m = [regex]::Match($text, 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
+      if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16) }
+    }
+    if ($text.Contains('surfaces: done') -or $p.HasExited) { break }
+    if ($hwnd -ne [IntPtr]::Zero -and $text.Contains("surfaces: phase $phase ready")) {
+      Start-Sleep -Milliseconds 1500  # the frames after the step land
+      $shots[$phase] = [GesherWin32]::Capture($hwnd)
+      $phase++
+      continue
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $p.WaitForExit(120000)) { $p.Kill($true); $p.WaitForExit() }
+  $text = & $read
+  return @{ Text = $text; Shots = $shots; Hwnd = $hwnd; Exit = $p.ExitCode }
+}
+
+function SurfaceChecks([string] $Mode, $r) {
+  $t = $r.Text
+  $s = $r.Shots
+  $none = { param($n) if ($null -eq $s[$n]) { "no read-back at phase $n" } }
+  # Window-free checks.
+  SurfaceCheck "Bitmap parcels ($Mode): a small Bitmap in place, a large one through shared memory (a memfd's descriptor), read back pixel for pixel" @(
+    InOrder $t @('surfaces: bitmap parcel 16x8: parcel holds the pixels, read back 16x8 ARGB_8888 mutable true, 0 pixels differ',
+                 'surfaces: bitmap parcel 400x300: parcel holds a descriptor, read back 400x300 ARGB_8888 mutable false, 0 pixels differ'))
+  $yuv = [regex]::Match($t, 'surfaces: YuvImage NV21 compressToJpeg true, \d+ bytes, starts FFD8 true, decodes to 64x32, left (\d+),(\d+),(\d+), right (\d+),(\d+),(\d+)')
+  $yp = @()
+  if (-not $yuv.Success) { $yp += 'no YuvImage line: ' + ([regex]::Match($t, 'surfaces: YuvImage[^\r\n]*').Value) }
+  else {
+    # NV21 Y 90/Cb 170/Cr 110 is a gray blue (about 74,93,169); Y 170/Cb 60/Cr 190 an orange (about 240,165,26).
+    $g = $yuv.Groups
+    if (-not ([int]$g[3].Value -gt [int]$g[1].Value + 40)) { $yp += "left $($g[1]),$($g[2]),$($g[3]) is not blue" }
+    if (-not ([int]$g[4].Value -gt [int]$g[6].Value + 100)) { $yp += "right $($g[4]),$($g[5]),$($g[6]) is not orange" }
+  }
+  SurfaceCheck "YuvImage ($Mode): NV21 to JPEG (libjpeg-turbo), decoded back with its colors" $yp
+  SurfaceCheck "SurfaceTexture ($Mode): a Surface over it, a Canvas frame through lockCanvas, onFrameAvailable, release" @(
+    InOrder $t @('surfaces: SurfaceTexture: Surface.lockCanvas 64x32, onFrameAvailable true', 'surfaces: SurfaceTexture: released true'))
+
+  # Phase 1: SurfaceView below its window, a View over it; one on top; a TextureView.
+  SurfaceCheck "SurfaceView ($Mode): surfaceCreated/surfaceChanged with the view's size, lockCanvas frames shown where the view is, behind the window (a View over it covers it)" @(
+    (& $none 1)
+    InOrder $t @('surfaces: A surfaceCreated, valid true', 'surfaces: A surfaceChanged format ', ' 200x200', 'surfaces: A: drew 200x200')
+    if ($s[1]) { Regions $s[1] @(@('A red', 10, 10, 140, 140, 0xff0000), @('green View over A', 160, 160, 240, 240, 0x00ff00), @('white beside A', 260, 10, 390, 140, 0xffffff)) })
+  SurfaceCheck "SurfaceView ($Mode): setZOrderOnTop draws over the window's views (a later yellow View under it)" @(
+    (& $none 1)
+    InOrder $t @('surfaces: B surfaceCreated, valid true', 'surfaces: B: drew 200x200')
+    if ($s[1]) { Regions $s[1] @(@('B blue', 10, 260, 140, 390, 0x0000ff), @('B over yellow', 160, 410, 195, 445, 0x0000ff), @('yellow below B', 160, 455, 240, 495, 0xffff00)) })
+  SurfaceCheck "TextureView ($Mode): onSurfaceTextureAvailable, a Canvas frame into its SurfaceTexture drawn in the view, getBitmap" @(
+    (& $none 1)
+    InOrder $t @('surfaces: T onSurfaceTextureAvailable 150x150', 'surfaces: T: drew cyan', 'surfaces: T getBitmap 150x150 center ff00ffff')
+    if ($s[1]) { Regions $s[1] @(,@('T cyan', 260, 260, 390, 390, 0x00ffff)) })
+  # Phase 2: setFixedSize.
+  SurfaceCheck "SurfaceView ($Mode): setFixedSize(50, 25): surfaceChanged 50x25, the buffer scaled to the view" @(
+    (& $none 2)
+    InOrder $t @('surfaces: A surfaceChanged format ', ' 50x25', 'surfaces: A: drew 50x25')
+    if ($s[2]) { Regions $s[2] @(@('A left red', 10, 10, 90, 140, 0xff0000), @('A right green', 110, 10, 190, 140, 0x00ff00)) })
+  # Phase 3: moved and resized by layout.
+  SurfaceCheck "SurfaceView ($Mode): moved and resized by its layout: surfaceChanged 300x100, its frames follow the view" @(
+    (& $none 3)
+    InOrder $t @('surfaces: A surfaceChanged format ', ' 300x100', 'surfaces: A: drew 300x100')
+    if ($s[3]) { Regions $s[3] @(@('A red at its new place', 60, 560, 340, 640, 0xff0000), @('white where A was', 10, 10, 140, 140, 0xffffff)) })
+  # Phase 4: hidden and shown.
+  SurfaceCheck "SurfaceView ($Mode): hidden (surfaceDestroyed) and shown again (surfaceCreated, surfaceChanged, drawn)" @(
+    (& $none 4)
+    InOrder $t @('surfaces: A surfaceDestroyed', 'surfaces: A surfaceCreated, valid true', 'surfaces: A: drew 300x100', 'surfaces: phase 4 ready')
+    if ($s[4]) { Regions $s[4] @(,@('A red again', 60, 560, 340, 640, 0xff0000)) })
+  # Phases 5-7: cameras.
+  $cam = @()
+  if ($t -match 'no camera: phases 5 to 7 skipped') { $cam += 'no camera (GESHER_CAMERA_TEST)' }
+  SurfaceCheck "camera ($Mode): the legacy Camera's preview into a SurfaceView (setPreviewDisplay)" @(
+    $cam; (& $none 5)
+    InOrder $t @('surfaces: legacy camera: preview into SurfaceView C started', 'surfaces: phase 5 ready')
+    if ($s[5]) { $n = NotWhite $s[5] 10 10 310 230; Write-Host "INFO  C: $n of 66000 pixels not white"; if ($n -lt 60000) { "C shows $n camera pixels of 66000" } })
+  SurfaceCheck "camera ($Mode): the legacy Camera's preview into a TextureView (setPreviewTexture), getBitmap" @(
+    $cam; (& $none 6)
+    InOrder $t @('surfaces: legacy camera: preview into TextureView U started', 'surfaces: U getBitmap 320x240 center ')
+    if ($s[6]) { $n = NotWhite $s[6] 10 310 310 530; Write-Host "INFO  U: $n of 66000 pixels not white"; if ($n -lt 60000) { "U shows $n camera pixels of 66000" } })
+  SurfaceCheck "camera ($Mode): Camera2's repeating preview into a SurfaceView and a TextureView at once" @(
+    $cam; (& $none 7)
+    InOrder $t @('surfaces: Camera2: repeating preview into C and U', 'surfaces: phase 7 ready', 'surfaces: done')
+    if ($s[7]) { foreach ($q in @(@('C', 10, 10, 310, 230), @('U', 10, 310, 310, 530))) { $n = NotWhite $s[7] $q[1] $q[2] $q[3] $q[4]; if ($n -lt 60000) { "$($q[0]) shows $n camera pixels of 66000" } } })
+  if ($script:failed -gt $script:surfacesFailedBefore) {
+    ("$t" -split "`n" | Where-Object { $_ -match 'surfaces|Surface|Texture|Exception|FATAL|Error| at ' } | Select-Object -First 150) | Out-Host
+  }
+}
+
+if (-not (Test-Path "$Dir/surfaceapp.apk")) {
+  Write-Host 'FAIL  surfaces: surfaceapp.apk is missing'
+  $failed++
+} else {
+  Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
+  Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
+  # 1. A single process.
+  $script:surfacesFailedBefore = $failed
+  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @()
+  SurfaceChecks 'single process' $r
+
+  # 2. The Gesher device: surfaceapp's own app process, started by the system server.
+  $savedData = $env:ANDROID_DATA
+  $savedLogs = $env:GESHER_LOGS
+  $env:ANDROID_DATA = NoDrive "$root/data-surfaces"
+  $env:GESHER_LOGS = NoDrive "$root/logs-surfaces"
+  New-Item -ItemType Directory -Force "$root/data-surfaces", "$root/logs-surfaces" | Out-Null
+  $env:GESHER_SHORTCUTS = '0'
+  $env:GESHER_CAMERA_TEST = '1'  # the device's processes inherit it
+  try {
+    $script:surfacesFailedBefore = $failed
+    $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--hidden-window') 'device' @("$root/logs-surfaces/com.gesher.surfaceapp.log")
+    SurfaceChecks 'Gesher device' $r
+  } finally {
+    $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmSurfaces) + 'com.gesher.app.Launcher', 'shutdown') `
+      -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/surfaces-shutdown.log" -RedirectStandardError "$env:RUNNER_TEMP/surfaces-shutdown.err"
+    if (-not $sd.WaitForExit(120000)) { $sd.Kill($true) }
+    $env:ANDROID_DATA = $savedData
+    if ($savedLogs) { $env:GESHER_LOGS = $savedLogs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
+    Remove-Item Env:GESHER_SHORTCUTS, Env:GESHER_CAMERA_TEST -ErrorAction SilentlyContinue
+  }
+}
