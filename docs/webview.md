@@ -347,6 +347,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Continuation (2026-10-26): read ci 40285810159's windows-2025 log (job
+  121453338756), ending with `3 test(s) failed`. Compat/proxy checks pass.
+  Geolocation returns both Jerusalem and Tel Aviv, but GeoActivity stringifies
+  the watch array before evaluateJavascript serializes it again; the test
+  expects an array. Evaluate the array itself so its JSON has the expected
+  shape, retaining both location assertions. The two accessibility checks
+  remain real failures: the page provider has zero nodes, and the external
+  UI Automation client times out. Do not mark accessibility verified.
+
 - Branch wip/web3 (worktree C:\work\gesher-webview).
 - ci 40261113581: web3app's build.sh was not executable (fixed).
 - ci 40262184075 (b44730c): everything built (glue, UIA bridge, proxy natives); NetActivity
