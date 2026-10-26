@@ -350,12 +350,25 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Running full ci **40364697280**, exact source
+Completed diagnostic ci **40364697280**, exact source
 `eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
-`C:/work/gesher-ci-review/web3-40364697280-watch.log`. This includes the
-verified native3 foundation, native probe exit and executable log-framing
-regression below. No full-stage milestone is closed pending its complete
-Windows/package/e2e results.
+`C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. All 14 web3
+checks pass on both runners. Windows 2022 ends with `0 test(s) failed`;
+package actual cleanup and both nine-app e2e jobs pass with required
+TIC-80/Puzzles and zero unexpected failures. Windows 2025 reaches its
+60-minute limit without a final zero-failure summary. Its last PASS is
+56-net's complete internet/TLS/negative-certificate group at 17:26:36 UTC;
+the log is silent until cancellation at 18:08:55. This run is not mergeable.
+
+Current work merges verified AOT3 foundation f5ce6f6 and replaces the local
+TLS test servers' unbounded ThreadJob teardown with owned accepted sockets,
+cancellable handshakes/reads and bounded joins. An own Windows fixture passes
+idle accept, incomplete TLS handshake and accepted idle HTTP-read cleanup.
+Precise before/after cleanup markers distinguish server stop, ROOT-store
+removal and certificate disposal in the next CI. The old log identifies the
+cleanup interval, not which exact call blocked; no runtime assertion is waived.
+No full-stage milestone is closed before a complete new Windows/package/e2e
+run on this combined source.
 
 Next combined CI is ready with verified native3 foundation f677944f merged,
 native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes
