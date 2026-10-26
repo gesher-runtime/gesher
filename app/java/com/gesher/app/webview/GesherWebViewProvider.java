@@ -265,13 +265,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     /** A JavaScriptReplyProxy's message to the page's object {@code name}. */
     void postToListener(String name, String data) {
+        postToListener(name, new WebMessage(data));
+    }
+
+    void postToListener(String name, WebMessage message) {
         WebView2Host host = mHost;
         if (host == null) return;
         try {
             JSONObject m = new JSONObject();
             m.put("gesher", "listener");
             m.put("name", name);
-            m.put("data", data != null ? data : "");
+            WebMessagePayload.write(m, message);
             host.postWebMessage(m.toString());
         } catch (org.json.JSONException e) {
             throw new IllegalStateException(e);
@@ -1098,7 +1102,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             JSONObject m = new JSONObject();
             m.put("gesher", "post");
-            m.put("data", message.getData() != null ? message.getData() : "");
+            WebMessagePayload.write(m, message);
             m.put("origin", origin);
             m.put("ports", transfer(message.getPorts()));
             mHost.postWebMessage(m.toString());
@@ -1138,7 +1142,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             JSONObject m = new JSONObject();
             m.put("gesher", "port");
             m.put("id", port.mId);
-            m.put("data", message.getData() != null ? message.getData() : "");
+            WebMessagePayload.write(m, message);
             m.put("ports", transfer(message.getPorts()));
             host.postWebMessage(m.toString());
         } catch (org.json.JSONException e) {
@@ -2108,12 +2112,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             String listener = m.optString("gesherListener", null);
             if (listener != null) {
                 MessageListener l = mMessageListeners.get(listener);
-                if (l != null) SupportLib.deliver(this, l, m.optString("data"), source);
+                if (l != null) SupportLib.deliver(this, l, WebMessagePayload.read(m), source);
                 return;
             }
             String id = m.optString("gesherPort", null);
             GesherWebMessagePort port = id != null ? mPagePorts.get(id) : null;
-            if (port != null) port.fromPage(m.optString("data"));
+            if (port != null) port.fromPage(WebMessagePayload.read(m));
         } catch (Exception e) {
             // not a port's message
         }

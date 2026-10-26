@@ -49,7 +49,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
   $psi.Environment['GESHER_UIA_TRACE'] = '1'
   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
-  $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive "$Dir/web3_network.so"
+  $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive ([IO.Path]::GetFullPath((Join-Path $Dir 'web3_network.so')))
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $read = { if (Test-Path $log) { "$(Get-Content -Raw $log -ErrorAction SilentlyContinue)" } else { '' } }
@@ -99,6 +99,11 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
 
 # --- androidx.webkit ------------------------------------------------------------
 $compatExpect = @(
+  'WEB_MESSAGE_ARRAY_BUFFER=true',
+  'Web3 compat ArrayBuffer listener: 70000 bytes intact true',
+  'Web3 compat ArrayBuffer page-to-app port bytes intact true',
+  'Web3 compat ArrayBuffer main-frame, reply, app-to-page port, empty buffer true',
+  'Web3 compat ArrayBuffer callbacks intact true',
   'gesher-webview: androidx.webkit: the support library glue is Gesher''s',
   'Web3 compat all features supported true',
   "Web3 compat proxy override set to 127.0.0.1:$web3Proxy",
