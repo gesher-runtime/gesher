@@ -355,6 +355,11 @@ drawing in a window that is covered or off the desktop;
   shape, retaining both location assertions. The two accessibility checks
   remain real failures: the page provider has zero nodes, and the external
   UI Automation client times out. Do not mark accessibility verified.
+- Removed the UIA provider cache lock across its Java callback (a Java
+  accessibility event can reenter UIA). Added a snapshot timeout phase to
+  stderr to locate any remaining UIA stall in the next run. This is a
+  reentrancy fix; the CI result must establish whether it resolves the
+  observed accessibility failures.
 
 - Branch wip/web3 (worktree C:\work\gesher-webview).
 - ci 40261113581: web3app's build.sh was not executable (fixed).
