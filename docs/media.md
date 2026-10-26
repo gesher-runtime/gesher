@@ -220,6 +220,34 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — stopped by the coordinator, 2026-10-26
+- Lead-engineer continuation: ci 40292991000 at fc99140 completed with
+  4 failures on windows-2022 and 5 on windows-2025; package passed, e2e
+  had 1 unexpected failure. The recording/mux/recorder/ImageReader paths
+  reached their checks. Both modes/runners fail the NDK read/recorder tones
+  and count 61 encoded H.264 buffers instead of 60 pictures (one is codec
+  configuration; decoding correctly returns all 60 pictures). windows-2025
+  also found no WebM output tones; investigate that separately.
+- Pending verification: AAudio now drains each capture burst when a read
+  exceeds ring capacity, instead of waiting for the whole request and
+  overflowing. CaptureEngine remembers an idle stop/start transition even
+  when the next stream starts before its thread wakes, and discards a stale
+  pull at that transition. The H.264 test counts data buffers separately
+  from configuration while retaining the exact decoded frame/color checks.
+- Just Player's diagnostic log identifies the launch failure: the platform
+  MediaServiceManager was never initialized. Bootstrap now installs it and
+  Services provides a Binder media_session service, generated owner/controller
+  stubs, metadata/state/queue/extras, controller transport/callbacks, active
+  tokens and owner-death cleanup. recordapp checks this in both modes.
+  Local Gesher C++ syntax checks pass in standalone logging mode, and the
+  test app compiles with JDK 21 against the saved framework classes. That
+  saved class set lacks AudioAttributes, so the service's full local compile
+  is unavailable (JDK 17 also rejected its version-65 class files); CI must
+  compile and execute it. Shared edits: app/build.sh, Main.bootstrap,
+  Services.java and 50-services.ps1's expected service lists.
+- Session work still open: Windows system media transport controls, media-key
+  receiver fallback, Session2/media communication, listener permission/user
+  filtering and external audio-volume change notifications. The new session
+  service is not claimed complete or verified.
 - Continuation: read ci 40287172595's windows-2022 job 121463451415 and
   e2e job 121464252568. The MPEG-4 part 2 decoder produces no frames (1x1
   output); prepend csd-0's VOL to its first sample as well as setting the

@@ -209,6 +209,9 @@ class CaptureEngine {
   // A stream started or stopped: the source runs while any stream is started.
   void Wake() {
     std::lock_guard<std::mutex> lock(mu_);
+    // Remember the idle transition even if the next stream starts before
+    // Run wakes. File sources restart at that boundary, just as after a wait.
+    if (Started().empty()) restart_ = true;
     if (!thread_.joinable()) thread_ = std::thread([this] { Run(); });
     cv_.notify_all();
   }
@@ -283,6 +286,11 @@ class CaptureEngine {
     std::unique_lock<std::mutex> lock(mu_);
     bool running = false;
     for (;;) {
+      if (restart_) {
+        if (running && source_ != nullptr) source_->Stop();
+        running = false;
+        restart_ = false;
+      }
       if (Started().empty()) {
         if (running && source_ != nullptr) source_->Stop();
         running = false;
@@ -306,6 +314,9 @@ class CaptureEngine {
       const bool ok = source_->Pull(&buf);
       const int64_t now = MonotonicNs();
       lock.lock();
+      // Stop/start may have happened during Pull. Do not give a new stream
+      // samples left over from the recording that just stopped.
+      if (restart_) continue;
       if (!ok) {
         MEDIA_LOGW("capture: %s is gone; silence", source_->Describe().c_str());
         source_ = std::make_unique<SilentSource>("the input was removed");
@@ -332,6 +343,7 @@ class CaptureEngine {
   std::unique_ptr<CaptureSource> source_;
   InputInfo info_;
   bool info_known_ = false;
+  bool restart_ = false;
 };
 
 void CaptureEngine::CoInitializeMta() { CaptureComInit(); }

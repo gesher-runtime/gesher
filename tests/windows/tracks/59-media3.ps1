@@ -96,6 +96,8 @@ if ($problems) {
 # GESHER_CAMERA_TEST's; the app's sounds (none) go to a capture file.
 $t = 'RecordTest '
 $recordChecks = @(
+  @{ Name = 'MediaSession over the session service: info, metadata, playback state, queue, extras, controller transport and update callbacks, active sessions and release'
+     P = @("${t}media session: info, metadata, state, queue, extras, play/pause/seek callbacks, active sessions and release") },
   @{ Name = 'AudioManager lists the input device (GESHER_AUDIO_SOURCE''s, as a built-in microphone)'
      P = @("${t}devices: 1 input\(s\) \[type 15, source true, name Gesher audio source\]") },
   @{ Name = 'AudioRecord: 16-bit mono 44100 Hz (getMinBufferSize, states, blocking reads, getTimestamp, a marker, periodic notifications, the routed device) and float stereo 48000 Hz through the Builder; what it read is the microphone''s tones at their level'

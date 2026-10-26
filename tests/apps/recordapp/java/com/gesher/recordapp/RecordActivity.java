@@ -26,8 +26,14 @@ import android.media.MediaCodecList;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
+import android.media.MediaDescription;
+import android.media.MediaMetadata;
 import android.media.MediaMuxer;
 import android.media.MediaRecorder;
+import android.media.session.MediaController;
+import android.media.session.MediaSession;
+import android.media.session.MediaSessionManager;
+import android.media.session.PlaybackState;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -72,12 +78,13 @@ public class RecordActivity extends Activity {
         // The steps run here, in onCreate (callbacks come on threads of their own); then the
         // activity finishes, which ends the run in both modes (single process, the device).
         {
-            String[] steps = {"devices", "audiorecord", "ndk", "codeclist", "aac", "opus", "h264",
+            String[] steps = {"session", "devices", "audiorecord", "ndk", "codeclist", "aac", "opus", "h264",
                 "h264surface", "muxboth", "recorder", "recordersurface", "recordercamera",
                 "imagereader"};
             for (String step : steps) {
                 try {
                     switch (step) {
+                        case "session": mediaSession(); break;
                         case "devices": devices(); break;
                         case "audiorecord": audioRecord(); break;
                         case "ndk": ndk(); break;
@@ -104,6 +111,78 @@ public class RecordActivity extends Activity {
     }
 
     // --- Signals -----------------------------------------------------------------------
+
+    void mediaSession() throws Exception {
+        HandlerThread thread = new HandlerThread("RecordSessionCallbacks");
+        thread.start();
+        Handler handler = new Handler(thread.getLooper());
+        Bundle info = new Bundle();
+        info.putString("origin", "recordapp");
+        MediaSession session = new MediaSession(this, "record-session", info);
+        MediaController controller = new MediaController(this, session.getSessionToken());
+        CountDownLatch transport = new CountDownLatch(3), updates = new CountDownLatch(3);
+        CountDownLatch released = new CountDownLatch(1);
+        AtomicInteger commands = new AtomicInteger();
+        MediaController.Callback observer = new MediaController.Callback() {
+            @Override public void onMetadataChanged(MediaMetadata m) { updates.countDown(); }
+            @Override public void onPlaybackStateChanged(PlaybackState s) { updates.countDown(); }
+            @Override public void onQueueChanged(List<MediaSession.QueueItem> q) { updates.countDown(); }
+            @Override public void onSessionDestroyed() { released.countDown(); }
+        };
+        try {
+            session.setCallback(new MediaSession.Callback() {
+                @Override public void onPlay() { commands.addAndGet(1); transport.countDown(); }
+                @Override public void onPause() { commands.addAndGet(2); transport.countDown(); }
+                @Override public void onSeekTo(long position) {
+                    if (position == 1234) commands.addAndGet(4);
+                    transport.countDown();
+                }
+            }, handler);
+            controller.registerCallback(observer, handler);
+            session.setMetadata(new MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, "Gesher session")
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, 5000).build());
+            session.setPlaybackState(new PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_SEEK_TO)
+                    .setState(PlaybackState.STATE_PAUSED, 100, 1.0f).build());
+            session.setQueue(java.util.Arrays.asList(new MediaSession.QueueItem(
+                    new MediaDescription.Builder().setMediaId("one").setTitle("Track one").build(), 17)));
+            session.setQueueTitle("Gesher queue");
+            Bundle extras = new Bundle();
+            extras.putString("test", "roundtrip");
+            session.setExtras(extras);
+            session.setActive(true);
+            MediaSessionManager manager = getSystemService(MediaSessionManager.class);
+            boolean active = manager.getActiveSessions(null).stream()
+                    .anyMatch(c -> c.getSessionToken().equals(session.getSessionToken()));
+            boolean state = controller.getMetadata().getString(MediaMetadata.METADATA_KEY_TITLE).equals("Gesher session")
+                    && controller.getPlaybackState().getState() == PlaybackState.STATE_PAUSED
+                    && controller.getPlaybackState().getPosition() == 100
+                    && controller.getQueue().size() == 1 && controller.getQueue().get(0).getQueueId() == 17
+                    && "Gesher queue".contentEquals(controller.getQueueTitle())
+                    && "roundtrip".equals(controller.getExtras().getString("test"))
+                    && "recordapp".equals(controller.getSessionInfo().getString("origin"));
+            controller.getTransportControls().play();
+            controller.getTransportControls().pause();
+            controller.getTransportControls().seekTo(1234);
+            boolean called = transport.await(10, TimeUnit.SECONDS) && commands.get() == 7;
+            boolean updated = updates.await(10, TimeUnit.SECONDS);
+            session.release();
+            boolean ended = released.await(10, TimeUnit.SECONDS)
+                    && manager.getActiveSessions(null).stream()
+                            .noneMatch(c -> c.getSessionToken().equals(session.getSessionToken()));
+            if (!active || !state || !called || !updated || !ended) {
+                throw new IllegalStateException("active=" + active + " state=" + state + " transport="
+                        + called + " updates=" + updated + " released=" + ended);
+            }
+            say("media session: info, metadata, state, queue, extras, play/pause/seek callbacks, active sessions and release");
+        } finally {
+            controller.unregisterCallback(observer);
+            session.release();
+            thread.quitSafely();
+            thread.join(10000);
+        }
+    }
 
     /** Upward zero crossings (with hysteresis) per second of mono samples in [a, b) s. */
     static double hz(float[] s, int n, int rate, double a, double b) {
@@ -618,7 +697,9 @@ public class RecordActivity extends Activity {
         mux(file, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4, e);
         Video v = decodeVideo(file, null, -1, -1);
         say("encoder h264 (buffers and images): " + e.codec + ", csd-0 SPS " + spsOk + ", csd-1 PPS " + ppsOk
-                + ", config buffers " + e.config + ", " + e.data.size() + " frames, key frames "
+                + ", config buffers " + e.config + ", "
+                + e.infos.stream().filter(i -> (i.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0).count()
+                + " frames, key frames "
                 + (e.keys >= 2 ? "2+" : String.valueOf(e.keys)) + "; MPEG-4 by MediaMuxer: " + tracks(file)
                 + "; decoded " + v.frames + " frames, ordered " + v.ordered + ", colors " + v.runs);
     }
