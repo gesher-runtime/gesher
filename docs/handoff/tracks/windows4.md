@@ -34,6 +34,29 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
+and exec3), merged at 9d1445c. The media conflict preserves the integration's
+canonical HTTPS mirrors and 240-second install bound alongside command tracing.
+No local C/C++ build or native fixture execution is allowed.
+
+Standalone **40415866523** at exact
+`d50084d731be343bc6c8cb30756a5cc713d89c14` is complete green: llvm-mingw/Werror
+build plus Windows 2022 and 2025. Both actual Windows logs were read. All four
+canonical aggregates are zero with no raw FAIL. Held-COM unavailable/Disconnect
+layout denial and fresh-epoch geometry recovery pass on both; the five changed
+source copies fail exactly their declared 1/1/4/4/1 assertions. Negative raw FAIL
+lines remain visible and separate from canonical results. This is native-only
+evidence, not Android/JNI, real base/eventfd, package or e2e verification.
+
+Full diagnostic 40413109702 at 74d1346 cannot reach Android because its framework
+job failed on the graphics-dex server dependency described below; its independent
+main native build continues. Targeted framework diagnostic **40416561427** at
+d50084d checks the dispatcher dependency correction without canceling that build.
+The next full combined run must use the merged runtime integration above and
+read actual Android IME/composition, Application Resources and legacy layout
+traces. Those gaps, candidate discovery and physical touch keyboard verification
+remain open; no roadmap milestone or ADR acceptance is claimed.
+
 Resumed on 2026-10-26 after merging current integration a57c1f8 without a reset.
 WIP: the shared Application Display follows the focused visible task, with
 explicit per-Activity zero/rotated overrides and masked Binder display callbacks.
