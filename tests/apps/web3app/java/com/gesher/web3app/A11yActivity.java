@@ -134,6 +134,8 @@ public class A11yActivity extends Activity {
                 + (press != null ? "'" + press.getText() + "' " + press.getClassName()
                         + " clickable " + press.isClickable() : "none")
                 + "; edit " + (field != null ? field.getClassName() : "none"));
+        Web3.log("a11y host: " + (host != null ? host.getClassName() + " virtual "
+                + AccessibilityNodeInfo.getVirtualDescendantId(host.getSourceNodeId()) : "none"));
         if (press == null) {
             waitForUia();
             return;

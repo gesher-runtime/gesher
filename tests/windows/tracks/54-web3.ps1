@@ -150,7 +150,9 @@ $uiaClient = {
     try {
       Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes -ErrorAction Stop
       $A = [System.Windows.Automation.AutomationElement]
+      Write-Output 'phase: AutomationElement.FromHandle'
       $root = $A::FromHandle([IntPtr]$h)
+      Write-Output 'phase: read control tree'
       $find = {
         param($name)
         $cond = [System.Windows.Automation.PropertyCondition]::new($A::NameProperty, $name)
@@ -175,24 +177,28 @@ $uiaClient = {
       }
       & $visit $root 0
       $out.Add("tree: " + ($dump -join ' | '))
+      Write-Output 'phase: find and invoke Android button'
       $button = & $find 'Android button'
       if ($button) {
         $out.Add("button: " + $button.Current.ControlType.ProgrammaticName + " (" + $button.Current.FrameworkId + ")")
         $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         $out.Add('invoked')
       } else { $out.Add('no Android button') }
+      Write-Output 'phase: find and set Android edit text'
       $edit = & $find 'Your name'
       if ($edit) {
         $out.Add("edit: " + $edit.Current.ControlType.ProgrammaticName)
         $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Narrator')
         $out.Add('value set')
       } else { $out.Add('no edit text') }
+      Write-Output 'phase: find and toggle Android check box'
       $check = & $find 'Remember me'
       if ($check) {
         $out.Add("check box: " + $check.Current.ControlType.ProgrammaticName)
         $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
         $out.Add('toggled')
       } else { $out.Add('no check box') }
+      Write-Output 'phase: find WebView page button'
       $press = & $find 'Press me'
       if ($press) { $out.Add("web button: " + $press.Current.ControlType.ProgrammaticName + " (" + $press.Current.FrameworkId + ")") }
       else { $out.Add('no web button') }
@@ -202,7 +208,8 @@ $uiaClient = {
     return $out
   }
   $results = @()
-  if (Wait-Job $job -Timeout 150) { $results = @(Receive-Job $job) } else { $results = @('UI Automation timed out') }
+  if (Wait-Job $job -Timeout 150) { $results = @(Receive-Job $job) }
+  else { $results = @(Receive-Job $job) + 'UI Automation timed out' }
   Remove-Job $job -Force
   $results | ForEach-Object { Write-Host "INFO  web3 UI Automation: $_" }
   $problems = @()
@@ -214,6 +221,7 @@ $uiaClient = {
   return $problems
 }
 $a11yExpect = @(
+  'Web3 a11y host: android.webkit.WebView virtual -1',
   "button 'Press me' android.widget.Button clickable true",
   "heading 'Web content'",
   'Web3 a11y provider click true: title "pressed 1"',

@@ -414,6 +414,7 @@ class Element final : public IRawElementProviderSimple,
       Node n = GetNode(hwnd_, pending[i]);
       if (!n.ok) continue;
       if (n.hosted == hosted) {
+        Trace("override child %p: Android node %lld", hosted, static_cast<long long>(pending[i]));
         *out = static_cast<IRawElementProviderSimple*>(Make(hwnd_, pending[i]));
         return S_OK;
       }

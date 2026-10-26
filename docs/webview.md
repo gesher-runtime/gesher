@@ -347,8 +347,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-- Current run: ci 40309961504 at e3209d6. Its complete UIA diagnostics must
-  be read before the next dispatch. Pending test fix: 56-net now serves the
+- ci 40309961504 at e3209d6: package/e2e pass; the two external UIA checks
+  still fail on both runners. Its bounded provider trace shows repeated
+  embedded-HWND override searches with every Android node reporting no
+  hosted window. Root cause: `webViewOf` compared the virtual descendant id
+  with `UNDEFINED_ITEM_ID` (2147483647), but a real view's host id is
+  `AccessibilityNodeProvider.HOST_VIEW_ID` (-1). Corrected that marker;
+  added a host-id regression assertion, successful override trace, and
+  client phase output retained even after a timeout. Pending CI.
+- Pending test fix: 56-net now serves the
   four certificate rejection cases locally, retaining live internet tests
   and requiring actual certificate/hostname failures. See network.md.
 - ci 40300418334 at f87d5b8: package/e2e pass; both runners fail the two
