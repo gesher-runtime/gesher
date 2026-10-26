@@ -350,6 +350,13 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+Running full ci **40364697280**, exact source
+`eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
+`C:/work/gesher-ci-review/web3-40364697280-watch.log`. This includes the
+verified native3 foundation, native probe exit and executable log-framing
+regression below. No full-stage milestone is closed pending its complete
+Windows/package/e2e results.
+
 Next combined CI is ready with verified native3 foundation f677944f merged,
 native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes
 8eac61c/d2a5f7b. The native3 merge retained the newer native probe exit when
