@@ -36,13 +36,14 @@ $micWav = Join-Path $m3Tmp 'mic.wav'
 WriteMicWav $micWav
 
 # Each regex must match a line of $Out (multi-line).
-function LineCheck([string] $Name, [string] $Out, [string[]] $Patterns, [int] $Code = 0, [string] $Tag = '') {
+function LineCheck([string] $Name, [string] $Out, [string[]] $Patterns, [int] $Code = 0, [string] $Tag = '', [string[]] $Forbidden = @()) {
   $missing = @($Patterns | Where-Object { -not [regex]::IsMatch($Out, $_, 'Multiline') })
-  if ($Code -eq 0 -and $missing.Count -eq 0) {
+  $unexpected = @($Forbidden | Where-Object { [regex]::IsMatch($Out, $_, 'Multiline') })
+  if ($Code -eq 0 -and $missing.Count -eq 0 -and $unexpected.Count -eq 0) {
     Write-Host "PASS  $Name"
     return
   }
-  Write-Host "FAIL  $Name (exit $Code; missing: $($missing -join ' | '))"
+  Write-Host "FAIL  $Name (exit $Code; missing: $($missing -join ' | '); unexpected: $($unexpected -join ' | '))"
   $script:failed++
   if ($Tag -and -not $script:m3Printed[$Tag]) {
     $script:m3Printed[$Tag] = $true
@@ -137,6 +138,10 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }
+  # A completed test must not hide a crashed daemon behind successful media
+  # round trips (post-GC metrics previously killed ReferenceQueueDaemon).
+  LineCheck "media3 ($Mode): recordapp completes without uncaught app or daemon thread exceptions" $Out @("^${t}done") $Code "record-$Mode" @(
+    'Uncaught exception in system thread|Exception in thread "')
   foreach ($c in $recordChecks) {
     LineCheck "media3 ($Mode): $($c.Name)" $Out ($c.P + @("^${t}done")) $Code "record-$Mode"
   }
@@ -161,9 +166,11 @@ if (Test-Path "$Dir/recordapp.apk") {
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   $launcherRec = $dvmRec + 'com.gesher.app.Launcher'
   $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+  $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+  if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
   $devOut = & "$Dir/dalvikvm.exe" @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String
   $devCode = $LASTEXITCODE
-  $devOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.recordapp.log') -Raw -ErrorAction SilentlyContinue)
+  $devOut += "`n" + (Get-Content -LiteralPath $recordDeviceLog -Raw -ErrorAction SilentlyContinue)
   RecordChecks 'Gesher device' $devOut $devCode
   $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
@@ -175,7 +182,13 @@ Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 # videoapp.apk asks for no RECORD_AUDIO (38-media.ps1 ran it): recording is refused.
 if ($null -ne $videoOut) {
   Check 'media3: without RECORD_AUDIO recording is refused (videoapp.apk): the AudioRecord stays uninitialized, startRecording throws, MediaRecorder.setAudioSource throws' {
-    $global:LASTEXITCODE = 0
+    $global:LASTEXITCODE = $videoExit
     $videoOut
+  } @('VideoTest record without RECORD_AUDIO: AudioRecord state 0, startRecording IllegalStateException, MediaRecorder.setAudioSource RuntimeException')
+}
+if ($null -ne $videoDevice) {
+  Check 'media3 (Gesher device): without RECORD_AUDIO recording is refused (videoapp.apk): the AudioRecord stays uninitialized, startRecording throws, MediaRecorder.setAudioSource throws' {
+    $global:LASTEXITCODE = $videoDevice.Exit
+    $videoDevice.Out
   } @('VideoTest record without RECORD_AUDIO: AudioRecord state 0, startRecording IllegalStateException, MediaRecorder.setAudioSource RuntimeException')
 }

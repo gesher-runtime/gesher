@@ -247,6 +247,13 @@ the microphone (looped, from its start each time recording starts);
   media finalizer stack. Its causal relationship to camera throughput is
   unproven. Framework/process parser and regression work remain with the
   coordinator; no new dispatch until that complete patch is ready.
+- Prepared acceptance safeguards for the next CI: clear recordapp's own
+  package log after shutdown; explicitly check Java RECORD_AUDIO denial
+  from the existing full device videoapp run; require RecordTest completion
+  without an uncaught app/daemon-thread exception in each recording mode.
+  These reuse existing output and add three checks (33 media3 checks total),
+  with no extra app run or recording behavior change. The PowerShell parser
+  and local positive/negative guard controls pass; runtime proof is pending.
 - The videoapp uninstall fixture fix is verified: install/list and uninstall
   in 50-services pass on both runners, with exact package-count assertions
   unchanged. Output sound 26 is 1480.0 Hz on each; all original tone checks,
@@ -305,8 +312,8 @@ the microphone (looped, from its start each time recording starts);
   The only imported file is compat/framework/android_runtime.cc: explicit
   readProcLines registration and pinned numeric-prefix/procfs/array/null/
   missing-file semantics. Its separate native3 Java/PowerShell regression
-  passed local checks; compilation/runtime and any camera effect remain
-  checked by that diagnostic above. No other native3 or integration changes
+  passed local checks. Compilation succeeds in CI; registration and post-GC/
+  camera runtime failures are recorded above. No other native3 or integration changes
   were included in its tested SHA.
 - Pending source changes: 38-media now uninstalls its own videoapp after
   each device run, checks the cleanup result and then shuts down. The log's
