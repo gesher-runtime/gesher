@@ -107,6 +107,10 @@ try {
     $pathValue = [Environment]::GetEnvironmentVariable('Path','User')
     if ($pathValue -split ';' -contains $app) { throw 'Uninstall left the user PATH entry' }
     if (Test-Path -LiteralPath 'HKCU:/Software/Classes/Gesher.Apk') { throw 'Uninstall left the APK ProgID' }
+    $apk = Get-ItemProperty -LiteralPath 'HKCU:/Software/Classes/.apk' -ErrorAction SilentlyContinue
+    if ($apk.'(default)' -eq 'Gesher.Apk') { throw 'Uninstall left the APK default association' }
+    $openWith = Get-ItemProperty -LiteralPath 'HKCU:/Software/Classes/.apk/OpenWithProgids' -ErrorAction SilentlyContinue
+    if ($null -ne $openWith.'Gesher.Apk') { throw 'Uninstall left the APK OpenWith registration' }
     if (Test-Path -LiteralPath 'HKCU:/Software/Classes/CLSID/{C18D9445-A7F0-472E-985F-AC354EBEB660}') { throw 'Uninstall left the toast activator' }
     $identities = @(Get-ChildItem 'HKCU:/Software/Classes/AppUserModelId' -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
     if ($identities) { throw 'Uninstall left app identities' }
