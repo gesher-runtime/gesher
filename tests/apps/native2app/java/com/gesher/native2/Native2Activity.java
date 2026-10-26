@@ -5,6 +5,8 @@
 package com.gesher.native2;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Typeface;
 import android.os.Bundle;
 
 /**
@@ -15,6 +17,8 @@ import android.os.Bundle;
  */
 public class Native2Activity extends Activity {
     static native String run(String dir, String symbols);
+    static native String bitmap(Bitmap bitmap);
+    static native String fonts();
 
     private String verdict = "not run";
 
@@ -25,7 +29,18 @@ public class Native2Activity extends Activity {
             System.loadLibrary("native2");
             String report = run(getFilesDir().getAbsolutePath(), "");
             for (String line : report.split("\n")) System.out.println("Native2Activity: " + line);
-            verdict = report.contains("native2: all passed") ? "all passed" : "FAILED";
+            Bitmap bitmap = Bitmap.createBitmap(4, 3, Bitmap.Config.ARGB_8888);
+            bitmap.eraseColor(0xffff0000);
+            String pixels = bitmap(bitmap);
+            System.out.println("Native2Activity: " + pixels);
+            boolean changed = bitmap.getPixel(0, 0) == 0xff00ff00;
+            System.out.println("Native2Activity: native3 Java Bitmap sees native pixels: " + changed);
+            bitmap.recycle();
+            Typeface.create("sans-serif", Typeface.NORMAL);
+            String fonts = fonts();
+            System.out.println("Native2Activity: " + fonts);
+            verdict = report.contains("native2: all passed") && pixels.startsWith("native2 bitmap: ok")
+                    && changed && fonts.startsWith("native2 fonts: ok") ? "all passed" : "FAILED";
         } catch (Throwable t) {
             verdict = "threw " + t;
             t.printStackTrace(System.out);

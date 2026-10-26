@@ -175,12 +175,14 @@ $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
 [Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
 try {
   $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @([Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)))
-  $null = $t.Wait(30000)
+  if (-not $t.Wait(30000)) { throw 'MapLocationFinder did not complete within 30 seconds' }
   'status: ' + $t.Result.Status
 } catch { 'error: ' + $_.Exception.Message }
 '@
-$geo = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $geoScript 2>&1 | Out-String).Trim()
-if ($geo -match 'status: ([A-Za-z]+)') {
+# Bound activation/COM startup as well as the asynchronous wait. Reading Result
+# after a false Wait used to block until the entire test job timed out.
+$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript) 45).Trim()
+if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   Write-Host "PASS  devices: geocoder: Windows.Services.Maps without a map service key answers $($Matches[1]) (Geocoder stays absent: isPresent false, IOException)"
 } else {
   Write-Host "FAIL  devices: geocoder: Windows.Services.Maps did not answer: $geo"
