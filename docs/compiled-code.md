@@ -325,3 +325,22 @@ package and e2e:
   Windows. These are mandatory locks: every user takes the lock before it
   reads or writes. That covers what the profile saver and profman need, and
   nothing else.
+
+## Status and next steps (aot3 track, ADR 0065)
+
+Pinned oatdump is built and packaged; its framework/app code/image/negative
+checks all pass on both runners in ci 40352810247 at f949321. That full run
+is red only on the old completed WinRT probe teardown. Combined verification
+40368334642 at 96ef687 includes the latest native foundation and focused
+probe/log-framing/audio-fixture fixes; no full green result is claimed yet.
+
+Prepared after that dispatch, pending CI: install-time .dm validation and
+copying, profman's checksum/type/method validation and installed-path key
+rewrite, atomic reference-profile replacement, immediate speed-profile/app
+image compilation, and verify fallback for invalid profile data. Malformed
+ZIP metadata rejects an update before changing the installed package. An
+identical APK with changed metadata is reprocessed. 63-aot3-cloud exercises
+actual tools/installer/app execution and preservation/fallback/cleanup paths.
+The pinned framework helper validates ZIP structure, not the stale comment's
+manifest.json fields. No new checkbox is ticked. Shared-library contexts
+and secondary dex compilation/invalidation remain open in the aot3 brief.

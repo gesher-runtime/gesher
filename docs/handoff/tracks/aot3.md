@@ -37,6 +37,26 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Current full CI: 40368334642 at 96ef68790fc59098758ddead6b5f58be9eb5d648,
+with foundation f677944 and the shared reliability fixes below. Watching at
+interval 120; Windows jobs are still pending, so no full green claim.
+
+Prepared follow-up, not part of that run: install-time paired .dm archive
+validation through pinned DexMetadataHelper, copied base.dm, unchanged-APK
+metadata comparison and profman's real checksum/type/method-key validation.
+Only successful staged profiles commit atomically; invalid profile data
+falls back to verify without failing installation, while invalid ZIP
+metadata rejects an update before replacing the current package. New
+63-aot3-cloud covers actual selected-code inspection and app-image execution,
+corrupt/mismatched/missing-profile fallback, valid-metadata replacement with
+identical APK bytes, preservation after malformed metadata and uninstall
+cleanup including interrupted import files. PowerShell parses locally;
+actual app compilation and runtime checks require the next CI. The local
+own-Java compile attempt failed because saved dependencies lack generated
+app classes/android.system/dalvik classes; it is not a passing compile.
+No local AOSP build was attempted. Shared-library contexts and secondary
+dex remain open and are not silently covered by this profile implementation.
+
 ci 40352810247 at f949321: all four aot3 checks pass on both Windows
 versions, including actual nonempty compiled code and app-image loading.
 The only failure on each runner is the completed WinRT geocoder probe's
