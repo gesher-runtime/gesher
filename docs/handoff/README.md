@@ -153,13 +153,25 @@ Remaining windows3/input gaps are assigned to windows4 (ADR 0061 reserved;
 [brief](tracks/windows4.md)): TSF reconversion/document access, candidate
 insets, real IFrameworkInputPane callback coverage, old-target adjustResize
 and Application-context Display rotation. Physical keyboard coverage remains
-explicitly unverified. Next free ADR: 0062.
+explicitly unverified. native3 reserves ADR 0062; next free ADR: 0063.
+
+native2 is merged as 4459570: verified at
+d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
+adds docs only. Every job is success/skipped; both Windows jobs end with
+0 test(s) failed and 26 native2 PASS lines each (both ABIs, dalvikvm, APKs
+in both modes, third-party executables). Package install/run/uninstall
+cleanup passes; e2e says 0 unexpected failures (TIC-80 still a surfaces
+known failure). No retry. The merged tree differs from the verified tree
+only in docs, so this merge needs no integration rerun. Remaining native
+and POSIX work is assigned to [native3](tracks/native3.md), ADR 0062;
+complete public NDK API coverage is not claimed. Open tracks must include
+this new integration code before their final verification/merge.
 
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | ci 40290847953 at 19014a2: only windows-2022 media tone timing failed (1441.3 Hz vs 1480 Hz); windows-2025/package/e2e pass. Read all aot2 PASS: image 74.6 vs 162.5 MB, startup medians comparable, app classes/compiled methods present without -AllClasses, AOT methods not interpreted. Merged integration a98dda9. | ci 40297189562 at 0e0262f; every job and both zero-failure summaries still required. |
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
-| native2 | ci 40291049581: API-level abort fixed; both runners have 8 failures (Unicode casing and import gate). Added Unicode ICU case/classes, mremap/socket batch/ancillary entries and behavior checks. __libc_init is launcher-owned only for PT_INTERP executables, reported separately; real executable runs check startup. Local own-file syntax checks pass. Merged integration a98dda9. | ci 40296960603 at d380a3e; not verified yet. |
+| native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | ci 40291437446 at 025fda1: windows-2022/package/e2e pass; windows-2025 has only a locale resend/shutdown race, with restored callback and values present. 49-locale now accepts that completed broadcast while retaining state assertions. Merged integration a98dda9, keeping both surfaceapp/winapp build lines. TIC-80 still needs both-runner confirmation. | ci 40297011754 at b8d6752; not verified yet. |
 | web3 | ci 40292261578: two accessibility failures per runner; timeout at ElementFromHandleBuildCache. Geolocation/compat pass; e2e first server startup fails. Added async WebView snapshots/actions and UIA events, embedded HWND override, correct pattern interface pointers and per-window snapshot generations; added server startup log diagnostics. Merged integration a98dda9. | ci 40300418334 at f87d5b8; accessibility and e2e remain unverified. |
 | media3 | ci 40292991000: 4 failures on 2022, 5 on 2025; package pass, e2e 1 unexpected failure. Fixed AAudio waits larger than the ring, capture idle transition loss and config-buffer frame counting. Just Player log exposes missing MediaServiceManager; added bootstrap, Binder media_session and controller round-trip tests. New session limits remain explicit in docs/media.md/ADR 0059. Merged integration a98dda9. | ci 40299212277 at a1a0f43; recording/session changes unverified; 2025 WebM output failure also requires diagnosis. |
