@@ -53,6 +53,80 @@ final class PageScripts {
             + "})();\n";
 
     /**
+     * Android's allowed origin rules (androidx.webkit's WebMessageListener and document-start
+     * scripts, ADR 0058): {@code window.__gesherOriginAllowed(rules)} is true when the
+     * document's origin matches one: "*", or scheme://host[:port] with an optional "*." host
+     * prefix (subdomains). Pages loaded from file: URLs (FileUrls' origin) are file://.
+     */
+    static final String ORIGINS = "(function(){\n"
+            + "if (window.__gesherOriginAllowed) return;\n"
+            + "var fileOrigin = " + JSONObject.quote(FileUrls.toWebView2("file:///")
+                    .replaceAll("/+$", "")) + ";\n"
+            + "var defaults = {'http': '80', 'https': '443'};\n"
+            + "function allowed(rules) {\n"
+            + "  var scheme, host, port;\n"
+            + "  if (location.origin === fileOrigin) { scheme = 'file'; host = ''; port = ''; }\n"
+            + "  else { scheme = location.protocol.replace(/:$/, ''); host = location.hostname;"
+            + " port = location.port || defaults[scheme] || ''; }\n"
+            + "  for (var i = 0; i < rules.length; i++) {\n"
+            + "    var r = rules[i];\n"
+            + "    if (r === '*') return true;\n"
+            + "    var m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/(\\*\\.)?([^:\\/]*)(?::(\\d+))?\\/?$/.exec(r);\n"
+            + "    if (!m || m[1].toLowerCase() !== scheme) continue;\n"
+            + "    var h = m[3].toLowerCase();\n"
+            + "    if (m[2] ? !(host === h || host.endsWith('.' + h)) : host !== h) continue;\n"
+            + "    if ((m[4] || defaults[scheme] || '') !== port) continue;\n"
+            + "    return true;\n"
+            + "  }\n"
+            + "  return false;\n"
+            + "}\n"
+            + "Object.defineProperty(window, '__gesherOriginAllowed', {value: allowed});\n"
+            + "})();\n";
+
+    /**
+     * The page side of an androidx.webkit WebMessageListener (ADR 0058):
+     * {@code window[name]} with postMessage, onmessage and add/removeEventListener, in main
+     * frames whose origin a rule allows. The page's messages go to the app as
+     * chrome.webview.postMessage({gesherListener: name, data}); the app's replies
+     * (JavaScriptReplyProxy) come as {gesher: "listener", name, data} message events.
+     */
+    static String messageListener(String name, String[] rules) {
+        return "(function(name, rules){\n"
+                + "if (window.top !== window || !window.chrome || !chrome.webview"
+                + " || !window.__gesherOriginAllowed(rules)) return;\n"
+                + "var listeners = [], obj = {onmessage: null};\n"
+                + "obj.postMessage = function(data) {\n"
+                + "  if (arguments.length < 1) throw new TypeError('postMessage: 1 argument required');\n"
+                + "  chrome.webview.postMessage({gesherListener: name, data: String(data)});\n"
+                + "};\n"
+                + "obj.addEventListener = function(type, f) {"
+                + " if (type === 'message' && typeof f === 'function' && listeners.indexOf(f) < 0)"
+                + " listeners.push(f); };\n"
+                + "obj.removeEventListener = function(type, f) {"
+                + " var i = listeners.indexOf(f); if (type === 'message' && i >= 0) listeners.splice(i, 1); };\n"
+                + "Object.defineProperty(window, name, {value: obj, configurable: true});\n"
+                + "chrome.webview.addEventListener('message', function(e) {\n"
+                + "  var m = e.data;\n"
+                + "  if (!m || typeof m !== 'object' || m.gesher !== 'listener' || m.name !== name) return;\n"
+                + "  var ev = new MessageEvent('message', {data: m.data});\n"
+                + "  if (typeof obj.onmessage === 'function') obj.onmessage(ev);\n"
+                + "  listeners.slice().forEach(function(f) { f(ev); });\n"
+                + "});\n"
+                + "})(" + JSONObject.quote(name) + ", " + new org.json.JSONArray(
+                        java.util.Arrays.asList(rules)) + ");\n";
+    }
+
+    /**
+     * An app's document-start script (androidx.webkit's addDocumentStartJavaScript), run
+     * where a rule allows the origin. A block, not a function: its var and function
+     * declarations stay global, as the app's script run on its own.
+     */
+    static String documentStartScript(String script, String[] rules) {
+        return "if (window.__gesherOriginAllowed(" + new org.json.JSONArray(
+                java.util.Arrays.asList(rules)) + ")) {\n" + script + "\n}\n";
+    }
+
+    /**
      * Text zoom (WebSettings.setTextZoom): every element's font size times the factor, the
      * layout's other lengths as they are (Android's text zoom, unlike WebView2's page zoom).
      * The elements' own font sizes are read once with the factor undone, then set as

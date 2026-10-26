@@ -170,6 +170,9 @@ public final class Services {
         ServiceManager.initServiceCache(new TreeMap<>(all));
         // Devices (docs/devices.md): media.camera, in the app's process in every mode.
         CameraService.installInProcess();
+        // Accessibility over UI Automation and Windows' proxy (web3 track, ADR 0058).
+        com.gesher.app.accessibility.AccessibilityService.installInProcess();
+        com.gesher.net.WindowsProxy.installInProcess();
     }
 
     /** servicemanager in a single process: the services above, and nothing else. */

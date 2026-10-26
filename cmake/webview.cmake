@@ -29,3 +29,14 @@ endif()
 
 target_sources(dalvikvm PRIVATE $<TARGET_OBJECTS:gesher_webview>)
 target_link_libraries(dalvikvm PRIVATE ${_wv_libs})
+
+# web3 track (ADR 0058): accessibility over UI Automation (libgesher_a11y.so:
+# Android's views for UIA clients, WebView2's UIA tree for a WebView's
+# AccessibilityNodeProvider) and Windows' proxy settings
+# (libgesher_proxy.so), builtin libraries of dalvikvm.
+add_library(gesher_web3 OBJECT ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_bridge.cc
+  ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_client.cc ${CMAKE_SOURCE_DIR}/compat/net/windows_proxy.cc)
+target_link_libraries(gesher_web3 PRIVATE nativehelper gesher_posix)
+target_compile_options(gesher_web3 PRIVATE -Wall -Werror -Wno-unused-parameter)
+target_sources(dalvikvm PRIVATE $<TARGET_OBJECTS:gesher_web3>)
+target_link_libraries(dalvikvm PRIVATE uiautomationcore oleaut32 ole32 winhttp user32 advapi32)
