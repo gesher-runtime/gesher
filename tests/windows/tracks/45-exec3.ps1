@@ -24,3 +24,11 @@ Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, p
     'Exec3ProcessTest PASS kill sends SIGTERM through the native signal mailbox',
     'Exec3ProcessTest PASS cat preserves binary stdin and stdout',
     'Exec3ProcessTest PASS sleep delays for the requested duration')
+
+Check 'exec3: shared properties through Java, native ELF and tools (read-only, serials, persistence)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3PropertiesTest (NoDrive $Dir)
+} @('Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties',
+    'Exec3PropertiesTest PASS cached ELF property callbacks and serials observe another process',
+    'Exec3PropertiesTest PASS ro properties are write-once and invalid names fail',
+    'Exec3PropertiesTest PASS a new device boot clears volatile properties and loads persist properties')

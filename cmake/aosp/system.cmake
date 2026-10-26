@@ -11,7 +11,8 @@ add_library(base STATIC
   ${_b}/result.cpp ${_b}/stringprintf.cpp ${_b}/strings.cpp ${_b}/threads.cpp
   ${_b}/test_utils.cpp
   # windows-only
-  ${_b}/errors_windows.cpp ${_b}/utf8.cpp)
+  ${_b}/errors_windows.cpp ${_b}/utf8.cpp
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/base_properties.cc)
 target_include_directories(base PUBLIC ${_b}/include)
 target_link_libraries(base PUBLIC fmtlib log pthread)
 target_compile_options(base PRIVATE -Wall -Wextra)

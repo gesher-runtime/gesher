@@ -23,6 +23,7 @@
 #include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/system_properties.h>
 
 #include <fcntl.h>
 #include <io.h>
@@ -358,6 +359,8 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
 }  // namespace
 
 int main() {
+  // Publish the inherited property session before the shell copies its env.
+  gesher::properties::Initialize();
   // Bytes in and out unchanged, as on Linux; no Windows error dialogs.
   _setmode(0, _O_BINARY);
   _setmode(1, _O_BINARY);
