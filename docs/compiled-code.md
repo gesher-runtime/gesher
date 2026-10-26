@@ -221,6 +221,12 @@ package and e2e:
   onPageStarted. These three files are a minimal fix outside the aot2 domain.
 - Merged integration 91c195d (including native2). The capture fix and the
   combined tree need a new full CI run before this track can merge.
+- ci 40307691668 at 061a67c stopped at patch application: 0540's private
+  scoped_flock implementation conflicts with integrated native2 patch 0571.
+  Removed that redundant file diff from 0540; 0571 now provides LockedFile's
+  existing POSIX flock path, backed by gesher-base's verified LockFileEx
+  implementation, including ReleaseLock. The app-image/profile parts of 0540
+  are retained. Patch application and the combined runtime need fresh CI.
 - Verified ci 40285423159 personally from every job's conclusion and logs:
   both Windows test jobs end with `0 test(s) failed`, package succeeds and
   e2e reports `0 unexpected failures`.

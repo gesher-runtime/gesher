@@ -67,6 +67,10 @@ frameworks/base/boot.
     (`gesher: app methods at exit: ...`: with AOT code; entered the
     interpreter or the JIT, by their hotness counters and the JIT code cache).
 - **profman.exe** is built with dex2oat (cmake/aosp/dex2oat.cmake).
+- **Profile locks** use native2's ART patch 0571 and gesher-base's flock
+  implementation (ADR 0057), including unlock. The earlier private
+  LockFileEx copy in patch 0540 was removed when integrating native2; it
+  changed the same LockedFile branches and prevented patch application.
 - **The boot image with AOSP's profiles**: boot-image.yml fetches
   art/build/boot/boot-image-profile.txt and frameworks/base/boot/
   boot-image-profile.txt at aosp.lock's tag (tools/boot-image/fetch-profiles.ps1),
