@@ -226,6 +226,11 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- Running combined ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66
+  after the absolute NDK path and verified aot2 integration. Read the NDK
+  runtime PASS line in both process modes on each runner before closing the
+  seven exported networking API items.
+
 - ci 40325234847 at 2de1e15: package and both e2e jobs pass. Both test
   runners pass the new selected-interface DNS, kernel binding, server-observed
   source address, process binding/unbinding and bound HTTP assertions in both
@@ -295,8 +300,11 @@ an open-file description. `recvmsg` drops ancillary data and output flags;
 length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
 unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
 Legacy host/service/protocol resolver functions have no Gesher implementation
-(the separate thread-local `h_errno` does exist); their Windows-vs-Linux
-structure layouts require an ABI/symbol audit before exposing them safely.
+(the separate thread-local `h_errno` does exist). The existing bionic exports
+forward directly to the Windows imports. A small probe using Gesher headers
+confirmed the ABI defect: Windows' 16-bit hostent fields are read as Linux's
+32-bit fields (`h_addrtype=262146,h_length=0` for native `2,4`). A neutral
+structure translation and correct resolver error state are required.
 These socket/resolver items remain assigned to web3 or an explicit successor.
 
 The coordinator assigns epoll edge/nesting/poll-on-epoll/multiwaiter behavior
