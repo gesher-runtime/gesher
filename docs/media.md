@@ -229,11 +229,35 @@ the microphone (looped, from its start each time recording starts);
   class passes 1,000 contended cancel/flush selections, ordered frame numbers,
   queued-capture priority and disconnected stop on the JDK. Its additive
   Windows check makes the next expected media3 count 36; full CI is pending.
-- Running **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
+- Latest full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
   terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
-  Current integration 634a273 is already included. This source has no runtime
-  result yet; expected 35 media3 checks, with original recording gates intact.
-- Latest full CI **40377453079**, attempt 1, exact source SHA
+  Integration 634a273 is included. All 28 job results are read: 20 success,
+  six skipped and two failed runtime jobs (2022 **121797816741**, 2025
+  **121797816842**). Each runner has 34 media3 PASS lines and exactly
+  `1 test(s) failed`, the original device camera recording gate: **21/29
+  encoded and independently decoded frames**, versus 61/60 in single process.
+  Every accepted frame is encoded/muxed with zero queue drops or encode loss.
+- Both new `Camera2 close delivers onClosed exactly once before its callback
+  thread quits` checks pass on each runner. The terminal five-second lock
+  cycle is removed: capture loops now end near collection completion, and
+  started/result callback phase maxima are below 272 us in both modes.
+  This terminal repair does not close the active throughput failure.
+- Native phase evidence now locates the device slowdown in JNI array access,
+  rather than MF: 2022 SetByteArrayRegion totals/maxes **1,594,570/153,561 us**
+  across 22 reads, while MF capture totals 375,362 us (ReadSample 19,055 us).
+  2025 has **958,136/104,695 us** across 30 reads, while MF totals 411,861 us
+  (ReadSample 29,525 us). Single-process copies total only 480/357 us.
+  Delivery also spends 157,450/436,574 us in ReleaseByteArrayElements
+  (JNI_ABORT). Pinned ART source uses ScopedObjectAccess, array validation
+  and memcpy/free here; entry, body and exit waits are not yet separated.
+  No GC, JIT, scheduler or native crash cause is claimed from these totals.
+- Current package **121797816925** passes installed oatdump, app window/input
+  and uninstall cleanup. E2e **121798915469** (2022) and **121798915169** (2025)
+  each pass all four pinned transport fixtures, ten apps including Just Player,
+  TIC-80 and Puzzles, association/shortcut launch and `0 unexpected failures`.
+  Boot profile-vs-speed criteria pass (2022 JIT 421/436 ms, 2025 467/473 ms).
+  This is a red full run, not a mergeable source or broader API claim.
+- Previous full CI **40377453079**, attempt 1, exact source SHA
   **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, includes integration
   634a273 (README-only above verified oatdump integration f5ce6f64). All
   28 job conclusions and both runtime logs are read: 20 success, six skipped,
@@ -259,14 +283,14 @@ the microphone (looped, from its start each time recording starts);
 - A separate terminal lock cycle is established by the pinned framework's
   bytecode: CameraDeviceImpl.close holds mInterfaceLock across disconnect;
   its local started/result callbacks acquire that lock; CameraDeviceUser
-  joins the capture thread for 5 s inside disconnect. Prepared fix queues
+  joins the capture thread for 5 s inside disconnect. Fix 6722364 queues
   callbacks serially, as the interface's FLAG_ONEWAY proxy does, retaining
   arguments/order and logging target errors. It drains that queue without
   joining the callback executor; the capture thread alone closes its native
   handle after its last read. The fixture now waits for exactly one onClosed
   before quitting/joining its callback HandlerThread, with a separate PASS
-  assertion in each mode (35 media3 checks expected). These new changes need
-  full CI; they are not yet proved to improve active frame throughput.
+  assertion in each mode. Those terminal checks pass in 40386129131; the
+  separate active frame-throughput gate remains open.
 - Own six Java service sources and RecordActivity compile with release 11;
   a focused real-dispatcher lock/order/error/lifetime check passes on the JDK,
   59-media3 parses, and the portable native trace header passes C++17
@@ -308,8 +332,9 @@ the microphone (looped, from its start each time recording starts);
   session/Windows controls and permission/user filtering remain explicit
   follow-ups. services3 owns advanced Camera2 contracts. No broad roadmap
   completion box is ticked; the coordinator transfers the 313 entry owners.
-- Next: full CI of the separate terminal fix and native source/delivery
-  diagnostics; inspect actual phase evidence before changing collection.
+- Next: separate the slow JNI calls' entry/body/exit with the coordinator,
+  then include the atomic request-selection repair and current integration
+  in full CI. Preserve collection duration and every acceptance threshold.
   No integration/main merge or release action here.
 
 ### Done and verified
