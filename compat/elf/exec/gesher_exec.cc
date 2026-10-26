@@ -25,6 +25,7 @@
 // libcore's process natives (compat/libcore/process.cc) start this for
 // ProcessBuilder / Runtime.exec of an ELF file or of sh.
 
+#include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
@@ -319,6 +320,12 @@ DWORD WINAPI ProgramThread(void*) {
   for (char* e : p.envp) block[w++] = reinterpret_cast<uint64_t>(e);
   for (uint64_t a : p.auxv) block[w++] = a;
   fflush(nullptr);
+  if (info.aarch64) {
+    // An arm64-v8a program: its _start runs through the translator with this
+    // block as its stack (docs/arm64.md); it ends with exit() like any other.
+    gesher::arm64::RunProgram(info.entry, block, words);
+    Die(1, "%s: the program's _start returned\n", g_name);
+  }
   gesher_exec_enter(info.entry, block);
 }
 
