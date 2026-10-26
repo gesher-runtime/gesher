@@ -1,6 +1,7 @@
 # 0053. Orientation per task, multi-resume, minimized tasks, IME insets
 
-Status: proposed (windows3 track, Phase 4). The coordinator may renumber.
+Status: accepted (windows3 track, Phase 4; ci 40285476400 at a15ade4,
+both Windows runners, package and e2e). The coordinator may renumber.
 
 ## Context
 
