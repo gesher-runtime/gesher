@@ -228,6 +228,14 @@ the microphone (looped, from its start each time recording starts);
   the three new media acceptance checks (33 expected). Original camera
   diagnostics, 2-second collection and 30+ frame/picture/duration thresholds
   stay unchanged. Watch interval 120; no new result is verified yet.
+- Completed build/package results from that run are now read: main build
+  121732623396 compiles native_fonts and the complete Process source and
+  links dalvikvm; media 121736854606 builds all three media APKs; package
+  121737427680 passes actual installed-window/input and device/data/
+  association/toast/Start-menu uninstall cleanup. Runtime and e2e remain
+  pending. The follow-up brief explicitly separates unverified multi-track
+  WebM muxing from absent encoders, and lists Java MediaCrypto/DRM alongside
+  the preserved native-export gaps.
 - Latest diagnostic: **40359757434**, attempt 1, exact SHA
   **20b1d3863e10ff01c10e0db18b74a32955b69abc**. All job metadata and both
   runtime logs are read: 20 success, six skipped and two failed jobs.

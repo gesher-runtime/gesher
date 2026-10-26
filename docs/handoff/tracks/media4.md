@@ -46,8 +46,11 @@ subsequent verification rather than overwriting missing with a broad claim.
 
 ## Verified boundary
 
-media3 implements file-fed audio input, AAC/H.264/Opus encoding, MP4/WebM
-muxing, audio/Surface/Camera2 MediaRecorder and ImageReader decoder output.
+media3 implements file-fed audio input, AAC/H.264/Opus encoding, container
+writers, audio/Surface/Camera2 MediaRecorder and ImageReader decoder output.
+Verified mux round trips cover H.264/AAC MP4 and Opus-only WebM, not WebM
+video/audio interleaving. The current device camera throughput failure
+also remains a media3 acceptance gate.
 The exact verified runs and remaining failed checks are in docs/media.md. CI uses
 a known WAV microphone source and GESHER_CAMERA_TEST; it does not establish
 physical microphone, loopback or Windows hardware interoperability.
@@ -90,6 +93,18 @@ legacy use; they do not implement that module.
   ci 40330465222's 2022 log records MF I420 input rejection and actual libavc
   fallback. That fallback evidence does not replace a forced-soft check.
 
+## Container validation still required
+
+- Verify MediaMuxer's VP8/Vorbis and VP9/Opus WebM video/audio tracks and
+  timestamp interleaving on both runners/modes. The source writer contains
+  these paths, while media3's WebM mux proof is Opus audio only. Remux the
+  existing encoded test clips to exercise the muxer independently of the
+  still-absent VP8/VP9 encoders; read tracks/samples/timestamps back and
+  independently decode the expected frames/colors and audio tones.
+- Verify unequal track lengths, pending-sample flush at stop, ordering,
+  seeking/cues and invalid-format/lifecycle/timestamp behavior. Preserve
+  the distinction between implemented writer paths and tested contracts.
+
 ## Deliberate feature gaps requiring separate implementation
 
 - Legacy MediaRecorder VIDEO_SOURCE_CAMERA/setCamera recording (Camera2
@@ -98,6 +113,12 @@ legacy use; they do not implement that module.
 - Encoders beyond AAC, Opus and H.264: AMR, Vorbis, VP8/VP9/HEVC and any
   advertised format must be implemented before being listed as available.
 - Hardware DXVA/D3D11 decode/encode, encoder B-frames and 10-bit output.
+- Java MediaCrypto, MediaDrm and MediaDescrambler, encrypted extractor
+  samples and secure codec paths. These native families currently use
+  reflection stand-ins; the protected-media NDK exports are also missing.
+  Implement explicit capability/failure behavior and supported key/session/
+  buffer lifecycles with independent negative and release tests before
+  claiming protected playback or hardware integration.
 - Input audio effects (AEC/AGC/noise suppression), output effects/offload,
   MediaProfiles/CamcorderProfile and a real MediaStore provider.
 
