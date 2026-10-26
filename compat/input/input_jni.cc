@@ -265,8 +265,8 @@ jint JNICALL WindowInput_runTextServiceTest(JNIEnv*, jclass, jlong ptr) {
 }
 
 void JNICALL WindowInput_setCaret(JNIEnv*, jclass, jlong ptr, jint x, jint y, jint width,
-                                  jint height) {
-  ConnectionOf(ptr)->SetCaret(x, y, width, height);
+                                  jint height, jint epoch) {
+  ConnectionOf(ptr)->SetCaret(x, y, width, height, epoch);
 }
 
 void JNICALL WindowInput_completeComposition(JNIEnv*, jclass, jlong ptr, jboolean cancel) {
@@ -317,7 +317,7 @@ const JNINativeMethod kWindowInputMethods[] = {
     {"nSetDocument", "(JLjava/lang/String;IIIIIZ)V", reinterpret_cast<void*>(&WindowInput_setDocument)},
     {"nSetGeometry", "(JIILjava/lang/String;[I)V", reinterpret_cast<void*>(&WindowInput_setGeometry)},
     {"nRunTextServiceTest", "(J)I", reinterpret_cast<void*>(&WindowInput_runTextServiceTest)},
-    {"nSetCaret", "(JIIII)V", reinterpret_cast<void*>(&WindowInput_setCaret)},
+    {"nSetCaret", "(JIIIII)V", reinterpret_cast<void*>(&WindowInput_setCaret)},
     {"nCompleteComposition", "(JZ)V", reinterpret_cast<void*>(&WindowInput_completeComposition)},
     {"nFinishTextEvent", "(JI)V", reinterpret_cast<void*>(&WindowInput_finishTextEvent)},
     {"nShowTouchKeyboard", "(JZ)I", reinterpret_cast<void*>(&WindowInput_showTouchKeyboard)},

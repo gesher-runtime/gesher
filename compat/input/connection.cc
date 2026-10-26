@@ -68,8 +68,8 @@ int32_t Connection::RunTextServiceTest() {
   return ime_ ? ime_->RunTextServiceTest() : -1;
 }
 
-void Connection::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height) {
-  if (ime_) ime_->SetCaret(x, y, width, height);
+void Connection::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height, int32_t epoch) {
+  if (ime_) ime_->SetCaret(x, y, width, height, epoch);
 }
 
 void Connection::CompleteComposition(bool cancel) {

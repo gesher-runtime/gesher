@@ -64,7 +64,7 @@ class Connection {
   void SetDocument(TextDocument document);
   void SetGeometry(TextGeometry geometry);
   int32_t RunTextServiceTest();
-  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height);
+  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height, int32_t epoch);
   void CompleteComposition(bool cancel);
   int32_t ShowTouchKeyboard(bool show);
   // The text event `seq` (on_text_event) is applied: what follows it may go.

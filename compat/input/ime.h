@@ -61,7 +61,7 @@ class ImeWindow {
   // The editor's caret in client pixels: the system caret (screen readers,
   // magnifiers, IMEs use it), the composition and candidate windows'
   // position, IMR_QUERYCHARPOSITION's answer. Applied on the window's thread.
-  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height);
+  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height, int32_t epoch);
   // Ends the IME's composition: its string becomes the result (complete) or
   // goes (cancel). Applied on the window's thread.
   void CompleteComposition(bool cancel);

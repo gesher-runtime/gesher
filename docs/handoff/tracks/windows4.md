@@ -390,3 +390,22 @@ edits only [1,2] to X and ends without a helper SetSelection. The editor must
 finish as aXcd with caret 2, and both normal reconversion and the partial case
 must expose actual live composing spans before completion. These new Android
 assertions and the fixture service extension have not run in full CI yet.
+
+Standalone 40410640598 at 20672b1 built successfully but both Windows jobs
+failed before running any fixture: the strengthened PowerShell condition
+placed a continuation operator at the next line's start. That authoring
+error is corrected and both PowerShell wrappers parse again. It supplies
+no runtime result for the new negative-case/service fixture behavior.
+
+Further review found that caret publication still lacked its editor epoch.
+SetCaret now carries the epoch through Java/JNI/native, rejects stale input
+under the shared state lock and clears old caret state when the editor
+changes. A real GetCaretPos fixture publishes a new-editor caret followed
+by a delayed old one and requires the new position to survive. CI is pending.
+
+Legacy adjustResize still needs diagnosis, rather than an unconditional
+fitInsets override: the pinned ViewRootImpl already applies the compatibility
+policy before add/relayout, including explicit fit controls and layout flags.
+The next combined source logs actual IME layout attrs, requested/frame/parent
+and native client sizes at source changes. Its existing 500-pixel content
+assertion stays intact while locating the missing propagation.
