@@ -8,12 +8,12 @@ Java callbacks, scratch-root inheritance, serial/wait/wait_any and boot/persist
 are now actual ART proof. The installed APK stops at pm's logical-image file
 check before Binder; an ISA-layout correction and five native launch-contract
 checks are prepared, but real pm/am remain pending. Windows-2025 has ten failed
-Checks;2022 fourteen. Other failures follow post-steps devices crashes at -1
+Checks; 2022 fourteen. Other failures follow post-steps devices crashes at -1
 (device both, single2022). Trace capture did trigger; a helper path/filter
 mistake hid it. The prepared publication-only correction passes an actual native
 fatal-child/PowerShell contract with 300 preceding lines and preserved exit7.
 No native cause is claimed. media3_next separately owns camera callbacks work.
-The tree includes integration634a273; root reports cd0b849 is docs-only above it.
+The tree includes integration 634a273; root reports cd0b849 is docs-only above it.
 Before final CI merge current integration. Keep every real assertion and open
 umask/policy scope. See docs/exec.md for complete evidence and earlier runs.
 The original brief below remains unchanged.
