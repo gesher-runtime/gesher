@@ -69,9 +69,14 @@ jobs:
           bin="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
           # API 29: posix_spawn and friends (added at API 28) are available.
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
-            -o dist-exec/libexec2child.so tests/exec/exec2_child.c
+            -o dist-exec/libexec2child.so tests/exec/exec2_child.c -ldl
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
             -o dist-exec/libexec2test.so tests/exec/exec2_test.c
+          "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -Wl,-soname,libexec3jni.so -o dist-exec/libexec3jni.so tests/exec/app/jni/exec3_jni.c
+          "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/libexec3tls.so tests/exec/exec3_tls.c
+          "$bin/llvm-readelf" -l -W dist-exec/libexec3tls.so | grep ' TLS '
           echo "--- libexec2test.so UND imports ---"
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexec2test.so | awk '$7 == "UND" && $8 != "" {print $8}' | sort -u
 
@@ -93,12 +98,38 @@ jobs:
           set -euo pipefail
           mkdir -p work/classes work/dex
           javac --release 11 -encoding UTF-8 -d work/classes tests/exec/java/gesher/*.java \
-            app/java/com/gesher/app/LogLines.java
+            app/java/com/gesher/app/LogLines.java app/java/com/gesher/app/VmCommandLine.java
           java -cp work/classes gesher.LauncherTailTest
+          java -cp work/classes gesher.LauncherCommandLineTest
           java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
             --output work/dex $(find work/classes -name '*.class')
           cp work/dex/classes.dex dist-exec/exec-test.dex
           ls -la dist-exec
+
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+
+      - name: Build the on-device native process APK
+        run: |
+          bash tests/exec/app/build.sh dist-exec --android-jar "$PWD/sdk/android.jar" \
+            --build-tools "$PWD/sdk/build-tools" --r8 "$PWD/r8.jar"
 
       - uses: actions/upload-artifact@v4
         with:

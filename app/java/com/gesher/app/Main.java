@@ -227,6 +227,11 @@ public final class Main {
                     + String.join(", ", ServiceManager.listServices()));
         }
         launch.applicationInfo = appInfo;
+        if (System.getenv("GESHER_LOG_FILE") == null) {
+            File logFile = com.gesher.server.Device.packageLog(appInfo.packageName);
+            logFile.getParentFile().mkdirs();
+            android.system.Os.setenv("GESHER_LOG_FILE", logFile.getPath() + ".logcat", true);
+        }
         if (window) {
             // The app's windows are Win32 windows drawn in this process (WindowSession).
             WindowMode.install(showWindow);
