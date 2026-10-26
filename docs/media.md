@@ -221,6 +221,13 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-27
+- Diagnostic full CI **40416959340** is running at **fe137c8** after merging
+  verified integration 94ccde1 (AOT cloud and Exec3, including the independently
+  verified camera ownership/race correction). It adds the initial atomic
+  suspend/barrier/flip/checkpoint observations and bounded ART suspension
+  causes described below. Source patch application and PowerShell parsing
+  pass; compilation and runtime evidence are pending in CI. All original
+  36 media3, two-second/30-frame and boot-timing criteria are retained.
 - Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
