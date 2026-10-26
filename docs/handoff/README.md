@@ -161,6 +161,12 @@ Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
 - `web3` (C:\work\gesher-webview): WebViewCompat, web accessibility,
   geolocation, system proxy and the net leftovers, a local https check.
   ADR 0058, 54-web3.ps1.
+- `media3` (C:\work\gesher-media-soft, branch wip/media-soft): finish the
+  stopped helper's software decoders (VP8/VP9/AV1/HEVC, WebM) as PASS
+  checks, then stage 3: audio input, encoders, MediaMuxer, MediaRecorder,
+  ImageReader output, a video app in e2e. ADR 0059.
+- The surfaces track owns compat/media/surface and frameworks/base patch
+  0300 (media stage 2's TextureView/SurfaceView output) from now on.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.

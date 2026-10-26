@@ -1,0 +1,62 @@
+# Track brief: media3
+
+Media leftovers after stage 2 (ADR 0052): the software decoders left on
+wip/media-soft by a helper agent that stopped, and stage 3. The original
+brief given to the first agent of this track (2026-10-26), kept verbatim. A
+successor reads it together with the "Status and next steps" section in
+docs/media.md on its branch.
+
+You are the "media3" track agent of the gesher project. Your worktree is
+C:\work\gesher-media-soft on branch wip/media-soft (it holds a helper
+agent's work, now yours). Work only there, with absolute paths under
+C:\work\gesher-media-soft (check `pwd` before editing).
+
+FIRST read docs/handoff/track-rules.md and follow it exactly: it is binding.
+Then read docs/media.md (stage 1 and the "Video" section), ADR 0042 and ADR
+0052, tests/windows/tracks/38-media.ps1, and `git log` of wip/media-soft
+against origin/phase4/integration.
+
+State you inherit: wip/media-soft at b57bb74 (ci 40258938663, all jobs
+green) builds libvpx, libdav1d, libhevc and a Matroska/WebM extractor; the
+VP8, VP9, AV1 and HEVC clips decode (60 frames, ordered, the right colors)
+but 38-media.ps1 reports them only as INFO lines, not checks. Its
+docs/media.md claims verification by ci 40244779791, which FAILED; its
+docs/roadmap.md predates stage 2's merge.
+
+GOAL, part 1 (deliver first, as its own verified SHA):
+- Merge origin/phase4/integration (it has stage 2; resolve docs/roadmap.md
+  by keeping stage 2's boxes).
+- Turn the software decoders' INFO lines into PASS checks (MediaCodec sync
+  and async, MediaPlayer into a TextureView, MediaMetadataRetriever) for
+  VP8, VP9, AV1, HEVC; WebM (MediaExtractor over .webm with VP9+Opus and
+  VP8+Vorbis) as PASS lines; fix the docs to name the run that really
+  verified them; tick only verified boxes.
+- When its CI run is green on every job, send the coordinator a message
+  (SendMessage to "main") with the verified SHA and run id, then go on.
+GOAL, part 2 (stage 3; ADR docs/decisions/0059-media3-recording-and-encoders.md,
+0059 is reserved for you):
+- Audio input: AudioRecord (WASAPI capture; the runners have no
+  microphone: use a loopback or a virtual capture source CI can feed, and
+  record the extent), AAudio/OpenSL ES input, the RECORD_AUDIO permission.
+- Encoders: MediaCodec encoders (AAC; H.264 through Media Foundation's
+  encoder, software fallback if the runners lack it; Opus) and MediaMuxer
+  (MP4, WebM); MediaRecorder for audio and for video from the camera
+  (GESHER_CAMERA_TEST's camera on the runners) and from a Surface input.
+- MediaCodec output into an ImageReader's surface, and an F-Droid video
+  app (or a video-player app) in e2e, pinned by SHA.
+Tests in 38-media.ps1 (or a new tests/windows/tracks/59-media3.ps1), both
+runners, single process and on the Gesher device; e2e must stay green. Your
+file domain: compat/media (except compat/media/surface, which the surfaces
+track owns now), the media natives and Java services, media test apps
+(framework.yml: one line per test app), 38-media.ps1 / 59-media3.ps1,
+docs/media.md, ADR 0059, the media roadmap boxes.
+
+Coordinator notes: CI first; NEVER build AOSP locally. Other tracks run in
+parallel on the shared CI (windows3, aot2, exec2, surfaces, native2, web3):
+trigger CI only when code is ready, cancel superseded runs. Watch with `gh
+run watch <id> -R gesher-runtime/gesher --exit-status --interval 120`; on
+HTTP 403 back off ~10 minutes. Keep a "Status and next steps" section
+updated with every meaningful push. Before each final CI run, merge
+origin/phase4/integration into your branch. Final message = the report
+track-rules.md asks for (run ids, PASS lines, remaining gaps, edits outside
+your domain, the verified SHA).
