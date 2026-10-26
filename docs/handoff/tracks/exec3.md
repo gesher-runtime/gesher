@@ -13,8 +13,11 @@ Checks; 2022 fourteen. Other failures follow post-steps devices crashes at -1
 mistake hid it. The prepared publication-only correction passes an actual native
 fatal-child/PowerShell contract with 300 preceding lines and preserved exit7.
 No native cause is claimed. media3_next separately owns camera callbacks work.
-The tree includes integration 634a273; root reports cd0b849 is docs-only above it.
-Before final CI merge current integration. Keep every real assertion and open
+Merge 6a3289d incorporates docs-only integration cd0b849. CI 40393019261 now runs
+that SHA with the pm image-layout and existing-context publication corrections;
+watch C:\work\gesher-ci-review\exec3-watch-40393019261.log at 120 seconds.
+No camera callback patch or new native diagnostic was imported. Before final
+CI merge any later integration. Keep every real assertion and open
 umask/policy scope. See docs/exec.md for complete evidence and earlier runs.
 The original brief below remains unchanged.
 

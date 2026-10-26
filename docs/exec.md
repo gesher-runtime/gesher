@@ -224,6 +224,12 @@ context before the category/200-line filter. An own fatal-child probe verifies
 publication beyond 300 preceding lines, symbolizer invocation and original
 exit7 preservation. No new native diagnostic or runtime cause is claimed.
 The camera callback work remains separately owned/coordinated by media3_next.
+CI 40393019261 is now running at 6a3289d2162359aa4f59d22a39b52d724b61517b
+(prepared code e064969 plus docs-only integration cd0b849). It tests the actual
+pm/am correction and visibility of the already captured sentinel context,
+without importing the separate camera callback patch or changing native signal
+diagnostics. Watch C:\work\gesher-ci-review\exec3-watch-40393019261.log at
+120-second intervals. No green final tree or shutdown root cause is claimed.
 
 **Previous review:** CI 40372171824 completed at
 7ae515fdd4a7dd84af4a65f15e19392d6517a437. All build/package and both e2e jobs
