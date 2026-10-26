@@ -232,6 +232,9 @@ function WebAppCheck([string] $Name, [string[]] $Arguments, [string[]] $Expect, 
   if (-not $p.WaitForExit(120000)) { $p.Kill($true); $p.WaitForExit(); $problems += 'did not exit after WM_CLOSE' }
   elseif ($p.ExitCode -ne 0) { $problems += ('exit 0x{0:X8}' -f $p.ExitCode) }
   $text = & $read
+  if ("$text".Contains('WebActivity onPageStarted: https://gesher.invalid/blocked')) {
+    $problems += 'a navigation rejected by shouldOverrideUrlLoading was loaded'
+  }
   foreach ($want in $Expect) {
     if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
   }
@@ -260,6 +263,7 @@ $webAppExpect = @(
   'WebActivity shouldInterceptRequest: https://intercepted.example/data.json',
   'WebActivity bridge report: intercepted 42',
   'WebActivity shouldOverrideUrlLoading: https://gesher.invalid/blocked',
+  'gesher-webview: shouldOverrideUrlLoading took https://gesher.invalid/blocked',
   'WebActivity evaluateJavascript: "Gesher WebView test|42|42"',
   'WebActivity onPageFinished: https://example.com/',
   # (Its title is example.com's; Cloudflare's "Rate Limited" page now and then.)

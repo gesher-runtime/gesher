@@ -136,7 +136,17 @@ final class Installer {
     /** The installer of the system server's package manager (after loadInstalled). */
     static Installer create(PackageManagerService pm, ActivityTaskManagerService atm)
             throws IOException {
-        return new Installer(pm, atm, readRegistry());
+        Installer installer = new Installer(pm, atm, readRegistry());
+        // Background dexopt with the apps' JIT profiles, while the device is idle (ADR 0054).
+        Dexopt.startBackground(installer::codePaths, atm::idleSince);
+        return installer;
+    }
+
+    /** The installed packages' code paths, by package. */
+    synchronized Map<String, String> codePaths() {
+        Map<String, String> paths = new LinkedHashMap<>();
+        for (Entry e : mEntries.values()) paths.put(e.packageName, e.codePath);
+        return paths;
     }
 
     private static ApkPackage open(Entry e) throws Exception {
@@ -169,6 +179,10 @@ final class Installer {
                 && mPm.get(pkg) != null) {
             SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                     + old.codePath + ")");
+            // Installed before it was compiled at install (or its code was removed).
+            if (!new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+                Dexopt.onInstall(pkg, old.codePath);
+            }
             return new String[] {pkg, "unchanged", old.codePath,
                     String.valueOf(parsed.versionCode())};
         }
@@ -189,6 +203,8 @@ final class Installer {
         copy(source, base);
         int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
                 + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
+        // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
+        Dexopt.onInstall(pkg, code.getPath());
         long now = System.currentTimeMillis();
         Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                 now);
@@ -216,6 +232,7 @@ final class Installer {
         writeRegistry();
         delete(new File(e.codePath));
         delete(new File(Device.dataDir(), "data/" + packageName));
+        Dexopt.deleteProfiles(packageName);
         // Its toasts and its AppUserModelID's registration go too (hwsvc2, ADR 0051).
         NotificationManagerService notifications = NotificationManagerService.sLast;
         if (notifications != null) notifications.packageRemoved(packageName);

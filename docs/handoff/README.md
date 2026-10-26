@@ -157,7 +157,9 @@ explicitly unverified. native3 reserves ADR 0062. The remaining GL/graphics
 scope is assigned to [surfaces2](tracks/surfaces2.md), ADR 0063 reserved;
 unstarted until the first surfaces stage merges. Next free ADR: 0064.
 media4 reserves ADR 0064 for the remaining media service/native contracts
-([brief](tracks/media4.md)); next free ADR is now 0065.
+([brief](tracks/media4.md)). aot3 reserves ADR 0065 for shared-library
+class-loader contexts, cloud profiles, secondary dex and oatdump
+([brief](tracks/aot3.md)); next free ADR is now 0066.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
@@ -191,7 +193,7 @@ still open and its code is not merged yet.
 
 | Track | Result read / change | New verification |
 |---|---|---|
-| aot2 | ci 40297189562 failed one real WebView navigation/capture race on 2022; 2025/package/e2e pass. Merged integration 91c195d/native2 and moved debug PrintWindow off the Android UI Looper. ci 40307691668 then exposed a patch collision: removed 0540's duplicate scoped_flock diff in favor of integrated 0571. | ci 40309659362 at 7373128; full combined verification pending. |
+| aot2 | Full combined CI green after integration 8590f4b/native2/surfaces. Read all 13 aot2 PASS lines per runner, both zero-failure summaries, actual package install/run/input/uninstall cleanup and both required TIC-80/Puzzles e2e results. Balanced startup ordering passes the unchanged limit. Remaining contracts assigned to aot3/ADR 0065. | ci 40320549410 at ae75766; final report/docs only above it, ready to merge. |
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
