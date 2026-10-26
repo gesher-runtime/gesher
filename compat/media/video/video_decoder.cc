@@ -3,6 +3,7 @@
 #include "video_decoder.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 
@@ -24,7 +25,12 @@ void VideoFrame::Allocate(int w, int h) {
 
 const std::vector<VideoCodecInfo>& VideoDecoder::Available() {
   static const std::vector<VideoCodecInfo> codecs = [] {
-    std::vector<VideoCodecInfo> all = MfVideoCodecs();
+    // GESHER_VIDEO_DECODERS=soft: the software decoders only (as on a Windows
+    // edition without Media Foundation's decoders; the tests' way to check them).
+    const char* only = getenv("GESHER_VIDEO_DECODERS");
+    const bool soft_only = only != nullptr && std::string(only) == "soft";
+    std::vector<VideoCodecInfo> all;
+    if (!soft_only) all = MfVideoCodecs();
     for (const VideoCodecInfo& s : SoftVideoCodecs()) {
       bool have = std::any_of(all.begin(), all.end(),
                               [&](const VideoCodecInfo& c) { return c.mime == s.mime; });

@@ -381,6 +381,80 @@ public static class GesherMediaCapture {
       $videoOut
     } @("VideoTest codec $($c.Name) sync: c2.gesher.$($c.Name).decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red")
   }
+
+  # --- media3 (ADR 0059): part 1's leftovers -------------------------------------------
+  # MPEG-4 part 2 and H.263: Media Foundation's decoders where the machine has them, the
+  # m4v_h263 software decoder otherwise (the soft-only run below checks that one).
+  $m4vLines = @{
+    mpeg4 = @('VideoTest codec mpeg4 sync: c2.gesher.mpeg4.decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red')
+    h263 = @('VideoTest codec h263 sync: c2.gesher.h263.decoder, 352x288 color 19, ', ' frames, ordered true, colors [red, lime, blue, white], image 35 352x288 3 planes red')
+  }
+  function CheckM4v([string] $mode, [string] $out, [int] $exit) {
+    Check "media: MediaCodec in videoapp.apk ($mode): MPEG-4 part 2 from an MP4 clip decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $exit
+      $out
+    } $m4vLines.mpeg4
+    Check "media: MediaCodec in videoapp.apk ($mode): H.263 (352x288) from a 3GP clip decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $exit
+      $out
+    } $m4vLines.h263
+  }
+  CheckM4v 'the machine''s decoders' $videoOut $videoExit
+  # WebM with audio: MatroskaExtractor's tracks and seeking, the audio through MediaCodec.
+  Check 'media: WebM with audio in videoapp.apk (MatroskaExtractor): VP9 + Opus and VP8 + Vorbis tracks, the duration, a seek to the previous sync sample, the Opus and Vorbis tracks decoded by MediaCodec (each tone''s frequency and length)' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest webm vp9_opus: tracks [video/x-vnd.on2.vp9 320x240, audio/opus 48000 Hz 2 ch], duration ok; seek to 1.1 s: previous sync at 1000 ms (sync true), back to 0 ms; audio 48000 Hz 2 ch, 2 s, 880 Hz',
+      'VideoTest webm vp8_vorbis: tracks [video/x-vnd.on2.vp8 320x240, audio/vorbis 44100 Hz 2 ch], duration ok; seek to 1.1 s: previous sync at 1000 ms (sync true), back to 0 ms; audio 44100 Hz 2 ch, 2 s, 660 Hz')
+  Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest webm \w+ \(info\)' } | ForEach-Object { $_.Trim() }) -join '; ')"
+  # The software decoders through MediaPlayer (into a TextureView; WebM's audio with
+  # them) and MediaMetadataRetriever.
+  Check 'media: MediaPlayer in videoapp.apk plays the software decoders'' clips into a TextureView: VP9 + Opus and VP8 + Vorbis WebM, VP8, AV1, H.265; the size, 30+ frames shown, the frame at 1.25 s blue, completion' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest player vp9_opus: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+      'VideoTest player vp8_vorbis: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+      'VideoTest player vp8: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+      'VideoTest player av1: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+      'VideoTest player hevc: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)')
+  Check 'media: MediaMetadataRetriever in videoapp.apk over the software decoders'' clips: the video size, the audio track, the frame at 1.25 s (VP9/Opus and VP8/Vorbis WebM, VP8, AV1, H.265)' {
+    $global:LASTEXITCODE = $videoExit
+    $videoOut
+  } @('VideoTest retriever vp9_opus: video 320x240, audio yes, at 1.25 s closest 320x240 blue',
+      'VideoTest retriever vp8_vorbis: video 320x240, audio yes, at 1.25 s closest 320x240 blue',
+      'VideoTest retriever vp8: video 320x240, audio null, at 1.25 s closest 320x240 blue',
+      'VideoTest retriever av1: video 320x240, audio null, at 1.25 s closest 320x240 blue',
+      'VideoTest retriever hevc: video 320x240, audio null, at 1.25 s closest 320x240 blue')
+  # WebM's audio reaches the output through MediaPlayer: the 880 Hz (Opus) and the 660 Hz
+  # (Vorbis) tones, 2 s each, in the run's capture.
+  $videoWav = Get-ChildItem (Join-Path $mediaTmp 'video-cpu') -Filter 'audio-*.wav' -ErrorAction SilentlyContinue |
+    Sort-Object Length | Select-Object -Last 1
+  $webmSounds = if ($null -ne $videoWav) { MediaSounds $videoWav.FullName } else { @{ Text = 'no capture'; Sounds = @() } }
+  $found = @(foreach ($want in 880, 660) {
+    $webmSounds.Sounds | Where-Object { [math]::Abs($_.Hz - $want) -le $want * 0.02 -and [math]::Abs($_.Duration - 2.0) -le 0.1 } | Select-Object -First 1
+  })
+  if ($found.Count -eq 2) {
+    Write-Host "PASS  media: MediaPlayer's WebM audio reaches the output (the capture has the Opus clip's 880 Hz and the Vorbis clip's 660 Hz tones, 2 s each)"
+  } else {
+    Write-Host "FAIL  media: MediaPlayer's WebM audio reaches the output (880 Hz and 660 Hz tones of 2 s; found $($found.Count))"
+    Write-Host $webmSounds.Text
+    $failed++
+  }
+  # The software decoders alone (GESHER_VIDEO_DECODERS=soft: as on a Windows edition
+  # without Media Foundation's): libavc for H.264, m4v_h263 for MPEG-4 part 2 and H.263.
+  $env:GESHER_VIDEO_DECODERS = 'soft'
+  $soft = RunVideoApp 'soft' @('--ez', 'codecsOnly', 'true')
+  Remove-Item Env:GESHER_VIDEO_DECODERS
+  Write-Host "INFO  media: soft-only run: $((($soft.Out -split "`n") | Where-Object { $_ -match 'GesherMedia.*video decoders' } | Select-Object -First 1))"
+  Check 'media: GESHER_VIDEO_DECODERS=soft lists the software decoders only (libavc H.264, m4v_h263 MPEG-4 part 2 and H.263, libvpx, libdav1d, libhevc)' {
+    $global:LASTEXITCODE = $soft.Exit
+    $soft.Out
+  } @('video decoders: video/x-vnd.on2.vp8 (soft), video/x-vnd.on2.vp9 (soft), video/av01 (soft), video/hevc (soft), video/avc (soft), video/mp4v-es (soft), video/3gpp (soft)', 'VideoTest done')
+  Check 'media: MediaCodec in videoapp.apk (software only): H.264 through libavc (B-frames reordered), every frame in order, each quarter''s color' {
+    $global:LASTEXITCODE = $soft.Exit
+    $soft.Out
+  } @('VideoTest codec h264 sync: c2.gesher.avc.decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red')
+  CheckM4v 'software only' $soft.Out $soft.Exit
 } else {
   Write-Host 'INFO  media: videoapp.apk not in the build output; its checks skipped'
 }

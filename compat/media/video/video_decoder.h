@@ -84,6 +84,11 @@ std::vector<VideoCodecInfo> MfVideoCodecs();
 // AOSP's software decoders (soft_video.cc).
 std::unique_ptr<VideoDecoder> CreateSoftVideoDecoder(const Format& track, std::string* error);
 std::vector<VideoCodecInfo> SoftVideoCodecs();
+// libavc's H.264 decoder (soft_video_avc.cc); MPEG-4 part 2 (`mpeg4`) or H.263
+// through the m4v_h263 decoder (soft_video_m4v.cc).
+std::unique_ptr<VideoDecoder> CreateSoftAvcDecoder(const Format& track, std::string* error);
+std::unique_ptr<VideoDecoder> CreateSoftM4vDecoder(const Format& track, bool mpeg4,
+                                                   std::string* error);
 
 // I420 to RGBA_8888 (R in the low byte), BT.601 limited range, the visible
 // part of `f` scaled (nearest, or as given) to dst_w x dst_h.

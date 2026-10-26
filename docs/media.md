@@ -90,9 +90,10 @@ the app's ELF code) or players.
 - **Decoders** (`compat/media/video`): `VideoDecoder` gives I420 frames in
   presentation order. `mf_video.cc`: Media Foundation's synchronous decoder
   MFTs (H.264, and H.265/VP8/VP9/AV1/MPEG-4/H.263 where the machine has them),
-  NV12 output converted to I420; `soft_video.cc`: AOSP's software decoders for
-  the rest (being ported on wip/media-soft). `VideoDecoder::Available()` is
-  what MediaCodecList lists. `render.cc`: a frame into any Surface's
+  NV12 output converted to I420; `soft_video*.cc`: AOSP's software decoders for
+  the rest ("Software video decoders" below). `VideoDecoder::Available()` is
+  what MediaCodecList lists (Media Foundation's first; `GESHER_VIDEO_DECODERS=soft`
+  lists the software ones only). `render.cc`: a frame into any Surface's
   ANativeWindow (RGBA, BT.601 limited range).
 - **MediaCodec / MediaCodecList** (`jni/media_codec_jni.cc`): 8 input and 8
   output slots per codec as direct ByteBuffers, a worker thread, synchronous
@@ -119,6 +120,57 @@ the app's ELF code) or players.
   after a seek at once; MEDIA_SET_VIDEO_SIZE, `getVideoWidth/Height`,
   `setSurface`/`setDisplay`. **MediaMetadataRetriever.getFrameAtTime** and
   `getScaledFrameAtTime` decode the frame at (or the sync frame around) a time.
+
+### Software video decoders and the Matroska/WebM extractor
+Media Foundation on the CI runners decodes H.264 and MPEG-4 part 2 only; the
+other codecs apps meet come from AOSP's software decoders, built for Windows
+(`cmake/aosp/media_video_codecs.cmake`; source lists from their Android.bp
+files, third-party warnings silenced):
+
+| Codec | MIME | Decoder (built from) | Test clip |
+|---|---|---|---|
+| VP8 | `video/x-vnd.on2.vp8` | libvpx (`external/libvpx`, generic C config) | WebM (and VP8 + Vorbis) |
+| VP9 | `video/x-vnd.on2.vp9` | libvpx | WebM (and VP9 + Opus) |
+| AV1 | `video/av01` | libdav1d (`external/libdav1d`, C only, 8 and 16-bit templates) | MP4 |
+| H.265 | `video/hevc` | libhevcdec (`external/libhevc`, SSSE3/SSE4.2 intrinsics) | MP4 |
+| H.264 | `video/avc` | libavcdec (`external/libavc`; media3) | MP4 (software-only run) |
+| MPEG-4 part 2 | `video/mp4v-es` | m4v_h263 (frameworks/av `media/module/codecs/m4v_h263/dec`; media3) | MP4 |
+| H.263 | `video/3gpp` | m4v_h263 (media3) | 3GP, 352x288 |
+
+- `cmake/aosp/media_codecs.cmake`: `gesher_media_extractor(mkv ...)`, AOSP's
+  MatroskaExtractor with libwebm's mkvparser, libstagefright_flacdec
+  (FLACDecoder.cpp, over libFLAC) and ColorUtils_ndk.cpp built in;
+  `compat/media/player/extractor.cc` lists `GesherExtractorDef_mkv`. WebM's
+  Vorbis and Opus tracks go to the existing audio decoders.
+- `compat/media/video/soft_video.cc` (libvpx, dav1d, libhevc),
+  `soft_video_avc.cc` (libavc: its `common/ivd.h` is libhevc's name too, so a
+  file of its own; libavc's `ithread_*` are renamed at compile time, as
+  libhevc defines the same functions), `soft_video_m4v.cc` (m4v_h263). Each
+  decoder gives 8-bit I420 frames in presentation order (deeper samples
+  shifted down, 4:2:2/4:4:4 chroma subsampled, 4:0:0 gray chroma):
+  - libvpx: one `vpx_codec_decode` per sample, the frames it shows carry the
+    sample's time; Drain/Flush decode a null buffer.
+  - dav1d: `max_frame_delay` 1, the picture's `m.timestamp`; Flush is
+    `dav1d_flush`.
+  - libhevc and libavc: the parameter sets (`AnnexBParameterSets`) go in front
+    of the first access unit (libavc: in a call of their own); header decode,
+    then frame decode (as C2SoftHevcDec/C2SoftAvcDec); the decoder reorders for
+    display and returns each picture's `u4_ts` marker, mapped back to its time.
+    Drain/Flush: flush mode until no picture is left, then a reset (parameter
+    sets sent again).
+  - m4v_h263: `PVInitVideoDecoder` with the VOL header (csd-0; none for H.263),
+    then `PVDecodeVopHeader`/`PVDecodeVopBody` per sample into two frame
+    buffers that take turns as the reference (as C2SoftMpeg4Dec); no B-frames.
+- MediaCodecList names them `c2.gesher.<vp8|vp9|av1|hevc|avc|mpeg4|h263>.decoder`.
+  Their capabilities use 8x8 blocks for H.265/VP9/AV1 (MediaCodecInfo scales
+  the block counts by the codec's block size against the level limits').
+- Verified (VP8, VP9, AV1, H.265 and the WebM extractor): ci run 40258938663
+  (commit b57bb74, every job green), both Windows runners:
+  `PASS  media: MediaCodec in videoapp.apk: VP8 (libvpx) from a WebM clip (MatroskaExtractor) decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color`
+  and the same for VP9 (libvpx), AV1 (libdav1d) and H.265 (libhevc, B-frames
+  reordered). (An earlier write-up named ci 40244779791: that run failed, a
+  media check among its failures on both runners, the SkiaGL TextureView read
+  back white, so it verifies nothing.)
 
 ### Stage 2 verified: ci run 40258833980 (commit 6aff13d)
 Both runners, 0 failed; e2e 0 unexpected failures; origin/phase4/integration
