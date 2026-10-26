@@ -37,6 +37,11 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
+current integration f520fd1; the sole new collector change enables its
+required log and records actual size/marker diagnostics. All native
+compilation and fixture execution now goes to CI.
+
 ci 40403284714 at e928eec: all 11 cloud checks and four oatdump checks
 pass on both runners; both original boot performance gates pass (JIT
 411/430 ms on 2022, 469/478 ms on 2025). All other jobs pass/skip, actual
