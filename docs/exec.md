@@ -223,6 +223,12 @@ narrow sentinel trace. Watch log:
 C:\work\gesher-ci-review\exec3-watch-40382268730.log (120-second interval).
 It is diagnostic evidence pending review, not a waiver for the shutdown fault;
 a final combined run must follow the actual fixes and latest integration.
+While that run is retained, the coordinator/media3 source-only workflow patch
+from 1361200 is prepared for the next tree: media generation reuses an installed
+ffmpeg, otherwise bounds apt retries/timeouts, prints the actual version and
+has a ten-minute step limit. Fixtures and their assertions are unchanged. The
+same source has actual media-job proof in media3 CI; this branch's YAML/Bash
+parsing passes, but its active run still uses the unconditional apt stage.
 
 **Previous review:** completed CI 40352529279 at
 dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
