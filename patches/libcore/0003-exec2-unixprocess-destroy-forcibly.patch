@@ -1,0 +1,39 @@
+diff --git a/ojluni/src/main/java/java/lang/UNIXProcess.java b/ojluni/src/main/java/java/lang/UNIXProcess.java
+--- a/ojluni/src/main/java/java/lang/UNIXProcess.java
++++ b/ojluni/src/main/java/java/lang/UNIXProcess.java
+@@ -219,20 +219,35 @@
+ 
+     private static native void destroyProcess(int pid);
++    private static native void destroyProcessForcibly(int pid);
+     public void destroy() {
+         // There is a risk that pid will be recycled, causing us to
+         // kill the wrong process!  So we only terminate processes
+         // that appear to still be running.  Even with this check,
+         // there is an unavoidable race condition here, but the window
+         // is very small, and OSes try hard to not recycle pids too
+         // soon, so this is quite safe.
+         synchronized (this) {
+             if (!hasExited)
+                 destroyProcess(pid);
+         }
+         try { stdin.close();  } catch (IOException ignored) {}
+         try { stdout.close(); } catch (IOException ignored) {}
+         try { stderr.close(); } catch (IOException ignored) {}
+     }
+ 
++    // Gesher (docs/exec.md): destroy() sends SIGTERM (the program's handler
++    // runs); destroyForcibly() terminates the process (SIGKILL).
++    @Override
++    public Process destroyForcibly() {
++        synchronized (this) {
++            if (!hasExited)
++                destroyProcessForcibly(pid);
++        }
++        try { stdin.close();  } catch (IOException ignored) {}
++        try { stdout.close(); } catch (IOException ignored) {}
++        try { stderr.close(); } catch (IOException ignored) {}
++        return this;
++    }
++
+     @Override
+     public String toString() {
