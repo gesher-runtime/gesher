@@ -221,6 +221,12 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
+- Running full CI **40398992353** at
+  **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
+  117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase
+  diagnostics and traced/bounded media preparation. Expected media3 count
+  is 36; all original recording and boot criteria remain in force. No
+  runtime result is claimed yet.
 - Diagnostic CI **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
   atomic request-selection repair, 1,000-race regression and the approved
   ART array entry/decode/body/exit diagnostic compile successfully (main
