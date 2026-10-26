@@ -153,17 +153,29 @@ Remaining windows3/input gaps are assigned to windows4 (ADR 0061 reserved;
 [brief](tracks/windows4.md)): TSF reconversion/document access, candidate
 insets, real IFrameworkInputPane callback coverage, old-target adjustResize
 and Application-context Display rotation. Physical keyboard coverage remains
-explicitly unverified. Next free ADR: 0062.
+explicitly unverified. native3 reserves ADR 0062; next free ADR: 0063.
+
+native2 is merged as 4459570: verified at
+d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
+adds docs only. Every job is success/skipped; both Windows jobs end with
+0 test(s) failed and 26 native2 PASS lines each (both ABIs, dalvikvm, APKs
+in both modes, third-party executables). Package install/run/uninstall
+cleanup passes; e2e says 0 unexpected failures (TIC-80 still a surfaces
+known failure). No retry. The merged tree differs from the verified tree
+only in docs, so this merge needs no integration rerun. Remaining native
+and POSIX work is assigned to [native3](tracks/native3.md), ADR 0062;
+complete public NDK API coverage is not claimed. Open tracks must include
+this new integration code before their final verification/merge.
 
 | Track | Result read / change | New verification |
 |---|---|---|
-| aot2 | ci 40285423159 at ad9d360: every job success/skipped; both Windows jobs end with 0 test(s) failed; e2e 0 unexpected failures. App images hold app classes (single: 7 classes/16 methods, 7 compiled; device: 2 classes/11 methods, 10 compiled). Merged a462e9c and removed diagnostic -AllClasses. | ci 40290847953 at 19014a2; must verify the smaller image, startup, app images and all jobs before merge. |
+| aot2 | ci 40290847953 at 19014a2: only windows-2022 media tone timing failed (1441.3 Hz vs 1480 Hz); windows-2025/package/e2e pass. Read all aot2 PASS: image 74.6 vs 162.5 MB, startup medians comparable, app classes/compiled methods present without -AllClasses, AOT methods not interpreted. Merged integration a98dda9. | ci 40297189562 at 0e0262f; every job and both zero-failure summaries still required. |
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
-| native2 | windows-2025 job 121456663287 of 40285714522 ends with 12 test(s) failed: all dalvikvm/APK paths abort on unresolved android_get_device_api_level. Added it to the common shim through ro.build.version.sdk; local g++ syntax-only check passed. Merged a462e9c. | ci 40291049581 at e1e99c0; not verified yet. |
-| surfaces | windows-2025 job 121451383191 of 40285764214 ends with 1 test(s) failed: surfacegl single-process finish. SIGQUIT shows an idle main looper; the server rejects the driver's unregistered token. Routed local finish requests to the existing window close handler. Merged a462e9c. TIC-80 passes e2e at 800x400 (job 121452091155), but needs confirmation on both runners before removing knownFailure. | ci 40291437446 at 025fda1; not verified yet. |
-| web3 | windows-2025 job 121453338756 of 40285810159 ends with 3 test(s) failed. Geo watch double encoding fixed at 3852225. Removed a provider cache lock across Java callbacks (UIA reentrancy) and added snapshot timeout phases; accessibility remains unverified. Merged a462e9c. | ci 40292261578 at 63203c4; must read accessibility results before closing anything. |
-| media3 | Read windows-2022 job 121463451415 of 40287172595: MPEG-4 part 2 returns 0 frames; tests then abort before stage 3 (59-media3 dereferences a regex capture overwritten by another match). Read e2e job 121464252568: Just Player launcher exit 1; 1 unexpected failure. Added VOL sample prefix/reset on flush, fixed the regex capture, pinned Just Player SHA and enabled its diagnostic log; test exceptions now print script/line/stack. Merged integration 7d6a82e. | ci 40292991000 at fc99140; stage 3 still unverified. |
-| exec3 | No changes since handover; the shell still has no executor or builtins. | No run. |
+| native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
+| surfaces | ci 40291437446 at 025fda1: windows-2022/package/e2e pass; windows-2025 has only a locale resend/shutdown race, with restored callback and values present. 49-locale now accepts that completed broadcast while retaining state assertions. Merged integration a98dda9, keeping both surfaceapp/winapp build lines. TIC-80 still needs both-runner confirmation. | ci 40297011754 at b8d6752; not verified yet. |
+| web3 | ci 40292261578: two accessibility failures per runner; timeout at ElementFromHandleBuildCache. Geolocation/compat pass; e2e first server startup fails. Added async WebView snapshots/actions and UIA events, embedded HWND override, correct pattern interface pointers and per-window snapshot generations; added server startup log diagnostics. Merged integration a98dda9. | ci 40300418334 at f87d5b8; accessibility and e2e remain unverified. |
+| media3 | ci 40292991000: 4 failures on 2022, 5 on 2025; package pass, e2e 1 unexpected failure. Fixed AAudio waits larger than the ring, capture idle transition loss and config-buffer frame counting. Just Player log exposes missing MediaServiceManager; added bootstrap, Binder media_session and controller round-trip tests. New session limits remain explicit in docs/media.md/ADR 0059. Merged integration a98dda9. | ci 40299212277 at a1a0f43; recording/session changes unverified; 2025 WebM output failure also requires diagnosis. |
+| exec3 | WIP 21bfdcf: nested quote/substitution/incomplete-input and expansion fixes; shell_execute.inc drafts process-isolated pipelines/subshells, redirections and helpers. Not included in build; Simple/Builtin/RunShell still missing. Status doc records that earlier syntax-only results did not establish correctness. | No run; current WIP is not compiled or linked. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
