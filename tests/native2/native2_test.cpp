@@ -57,6 +57,7 @@
 #include <zlib.h>
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -807,6 +808,8 @@ jstring JNICALL NativeBitmap(JNIEnv* env, jclass, jobject bitmap) {
   return env->NewStringUTF(p.Line().c_str());
 }
 
+#include "native3_fonts.inc"
+
 }  // namespace
 
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
@@ -838,6 +841,14 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     jclass c = env->FindClass(cls);
     if (c == nullptr) { env->ExceptionClear(); continue; }
     registered |= env->RegisterNatives(c, &bitmap_method, 1) == JNI_OK;
+    env->DeleteLocalRef(c);
+  }
+  static const JNINativeMethod font_method = {
+      "fonts", "()Ljava/lang/String;", reinterpret_cast<void*>(&NativeFonts)};
+  for (const char* cls : {"gesher/Native3FontTest", "com/gesher/native2/Native2Activity"}) {
+    jclass c = env->FindClass(cls);
+    if (c == nullptr) { env->ExceptionClear(); continue; }
+    registered |= env->RegisterNatives(c, &font_method, 1) == JNI_OK;
     env->DeleteLocalRef(c);
   }
   return registered ? JNI_VERSION_1_6 : JNI_ERR;
