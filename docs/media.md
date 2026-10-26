@@ -220,10 +220,12 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — output-test continuation, 2026-10-26
-- Running: ci 40329138943 at ac12cbb5b4866595d64dd1023944dc3c530cae77,
-  the output-tone test fixes below. Current integration was fetched before
-  dispatch and is already included (8590f4b; documentation only beyond
-  4f99afd). There are no runtime-source changes after 9158120. New runtime
+- Running: ci 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
+  the output-tone test fixes below plus current integration 4d144663
+  (verified AOT2). Diagnostic ci 40329138943 at ac12cbb was superseded and
+  cancelled after this combined run was confirmed. There are no media
+  runtime-source changes after 9158120; the verified AOT2 changes are new
+  to this combined tree. New runtime
   results are pending; the changed VideoActivity compiles with JDK 21 and
   38-media parses locally. NDK C is compiled only in CI.
 - Latest completed full run: ci 40318189310, attempt 1, exact code SHA
