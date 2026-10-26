@@ -43,6 +43,11 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
+Current source also includes verified exec3 integration 94ccde1, merged without
+conflicts at f47a22f. The release-version branch CI remains held for verified
+Web3 and the coordinator's combined source; this merge supplies no new release
+verification and does not authorize this agent to publish.
+
 Preparation is owned by the web3 agent in this separate worktree. The root
 coordinator alone merges integration/main, creates tags and publishes; do not
 interpret the broad completion gates above as authorization for this agent to
