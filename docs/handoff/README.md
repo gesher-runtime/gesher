@@ -159,7 +159,9 @@ the first surfaces stage is now merged and this continuation is unstarted.
 media4 reserves ADR 0064 for the remaining media service/native contracts
 ([brief](tracks/media4.md)). aot3 reserves ADR 0065 for shared-library
 class-loader contexts, cloud profiles, secondary dex and oatdump
-([brief](tracks/aot3.md)); next free ADR is now 0066.
+([brief](tracks/aot3.md)). The post-aot2 audit also reserves locale2/0066,
+arm64-2/0067, binder2/0068 and services3/0069 (briefs in tracks/).
+Next free ADR is now 0070. These are open work, not completion claims.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
