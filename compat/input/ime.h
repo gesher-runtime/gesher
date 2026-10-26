@@ -30,6 +30,7 @@
 #include <memory>
 
 #include "text_input.h"
+#include "text_document.h"
 
 namespace gesher {
 namespace input {
@@ -49,6 +50,8 @@ class ImeWindow {
   bool TakeTextEvent(TextEvent* out);
   // What the focused editor takes; applied on the window's thread.
   void SetTextInput(const TextInputState& state);
+  void SetDocument(TextDocument document);
+  int32_t RunTextServiceTest();
   // The editor's caret in client pixels: the system caret (screen readers,
   // magnifiers, IMEs use it), the composition and candidate windows'
   // position, IMR_QUERYCHARPOSITION's answer. Applied on the window's thread.

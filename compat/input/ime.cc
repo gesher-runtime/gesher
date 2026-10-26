@@ -16,6 +16,7 @@
 #include "ime.h"
 #include "thread_watch.h"
 #include "touch_keyboard.h"
+#include "text_service.h"
 
 namespace gesher {
 namespace input {
@@ -34,10 +35,15 @@ UINT DetachMessage() {
   static const UINT message = RegisterWindowMessageW(L"GesherImeDetach");
   return message;
 }
+UINT FilterKeyMessage() {
+  static const UINT message = RegisterWindowMessageW(L"GesherImeFilterKey");
+  return message;
+}
 
 enum Op : int {
   kOpState = 1, kOpCaret = 2, kOpComplete = 3, kOpCancel = 4, kOpShowKeyboard = 5,
   kOpHideKeyboard = 6,
+  kOpDocument = 7, kOpPump = 8, kOpTestService = 9,
 };
 
 LRESULT CALLBACK ImeProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -83,6 +89,18 @@ struct SlowWatch {
 }  // namespace
 
 struct ImeWindow::Impl {
+  // COM calls can dispatch a nested detach while an outer procedure is using
+  // this object. The owner and every active procedure each retain one lease.
+  std::atomic<int> references{1};
+  void Retain() { references.fetch_add(1); }
+  void Release() { if (references.fetch_sub(1) == 1) delete this; }
+  struct Lease {
+    Impl* impl;
+    explicit Lease(Impl* value) : impl(value) { impl->Retain(); }
+    ~Lease() { impl->Release(); }
+  };
+  ThreadWatch* retired_watch = nullptr;
+  ~Impl() { StopThreadWatch(retired_watch); }
   HWND hwnd = nullptr;
   WNDPROC original = nullptr;
   // The procedure could not be restored (another subclass is on top): pass
@@ -95,6 +113,7 @@ struct ImeWindow::Impl {
   std::mutex mutex;
   std::deque<TextEvent> events;
   TextInputState state;
+  TextDocument document;
   int32_t caret[4] = {0, 0, 0, 0};
   bool has_caret = false;
 
@@ -106,6 +125,9 @@ struct ImeWindow::Impl {
   bool associated = true;  // the window has the thread's default input context
   bool caret_created = false;
   int32_t caret_size[2] = {0, 0};
+  std::shared_ptr<TextService> tsf;
+  int32_t tsf_epoch = -1;
+  bool attaching_tsf = false;
 
   LRESULT CallOriginal(UINT msg, WPARAM wparam, LPARAM lparam) {
     return CallWindowProcW(original, hwnd, msg, wparam, lparam);
@@ -118,11 +140,45 @@ struct ImeWindow::Impl {
 
   // Queues `event` and hands the window's procedure its marker.
   void Emit(TextEvent event) {
+    if (detached) return;
     {
       std::lock_guard<std::mutex> lock(mutex);
       events.push_back(std::move(event));
     }
     CallOriginal(WM_CHAR, kTextEventMarker, 1);
+  }
+
+  void ApplyDocument() {
+    if (detached || attaching_tsf) return;
+    const TextInputState s = State();
+    if (!s.active || !s.ime) { tsf.reset(); tsf_epoch = -1; return; }
+    TextDocument snapshot;
+    { std::lock_guard<std::mutex> lock(mutex); snapshot = document; }
+    if (snapshot.epoch != s.editor_epoch) return;
+    if (tsf && tsf_epoch != snapshot.epoch) tsf.reset();
+    if (!snapshot.available) { tsf.reset(); tsf_epoch = -1; return; }
+    if (!tsf) {
+      HRESULT result = E_FAIL;
+      attaching_tsf = true;
+      auto created = TextService::Attach(hwnd, std::move(snapshot), [this](DocumentEdit edit) {
+        TextEvent event;
+        event.kind = TextEvent::kDocumentReplace + static_cast<int32_t>(edit.kind);
+        event.text = std::move(edit.text); event.epoch = edit.epoch;
+        event.revision = edit.revision; event.start = edit.start; event.end = edit.end;
+        Emit(std::move(event));
+      }, [this] { if (!detached) PostMessageW(hwnd, UpdateMessage(), kOpPump, 0); }, &result);
+      attaching_tsf = false;
+      if (detached) return;
+      tsf = std::move(created);
+      if (!tsf) {
+        fprintf(stderr, "gesher-ime: TSF attach failed 0x%08lx%s",
+                static_cast<unsigned long>(result), kNewline);
+      } else {
+        tsf_epoch = s.editor_epoch;
+        tsf->Focus(GetFocus() == hwnd);
+        Apply(kOpCaret);
+      }
+    } else { tsf->Update(std::move(snapshot)); }
   }
 
   void EmitText(std::u16string text) {
@@ -299,6 +355,9 @@ struct ImeWindow::Impl {
     const TextInputState s = State();
     switch (op) {
       case kOpState: {
+        if (tsf_epoch != s.editor_epoch || !s.active || !s.ime) {
+          tsf.reset(); tsf_epoch = -1;
+        }
         const bool want = s.active && s.ime;
         if (want != associated) {
           if (!want && composing) {
@@ -318,6 +377,7 @@ struct ImeWindow::Impl {
           caret_created = false;
         }
         if (s.active) Apply(kOpCaret);
+        ApplyDocument();
         break;
       }
       case kOpCaret: {
@@ -336,6 +396,11 @@ struct ImeWindow::Impl {
           caret_size[1] = h;
         }
         if (caret_created) SetCaretPos(c[0], c[1]);
+        if (auto service = tsf) {
+          POINT point{c[0], c[1]};
+          ClientToScreen(hwnd, &point);
+          service->Caret(RECT{point.x, point.y, point.x + w, point.y + h});
+        }
         if (HIMC imc = ImmGetContext(hwnd)) {
           COMPOSITIONFORM composition = {};
           composition.dwStyle = CFS_POINT;
@@ -361,6 +426,8 @@ struct ImeWindow::Impl {
           }
         }
         break;
+      case kOpDocument: ApplyDocument(); break;
+      case kOpPump: if (auto service = tsf) service->Pump(); break;
       default:
         break;
     }
@@ -368,6 +435,8 @@ struct ImeWindow::Impl {
 
   // On the window's thread: 1 when the procedure is the window's own again.
   LRESULT Detach() {
+    detached = true;
+    tsf.reset();
     if (caret_created) {
       DestroyCaret();
       caret_created = false;
@@ -382,6 +451,7 @@ struct ImeWindow::Impl {
   }
 
   LRESULT Handle(UINT msg, WPARAM wparam, LPARAM lparam) {
+    Lease lease(this);
     if (detached) return CallOriginal(msg, wparam, lparam);
     ThreadWatch* w = watch.load();
     if (ThreadWatchMessage(w, msg)) return 0;
@@ -398,6 +468,10 @@ struct ImeWindow::Impl {
 
   LRESULT Dispatch(UINT msg, WPARAM wparam, LPARAM lparam) {
     switch (msg) {
+      case WM_SETFOCUS:
+      case WM_KILLFOCUS:
+        if (auto service = tsf) service->Focus(msg == WM_SETFOCUS);
+        break;
       case WM_KEYDOWN:
       case WM_SYSKEYDOWN:
         return KeyDown(msg, wparam, lparam);
@@ -457,10 +531,19 @@ struct ImeWindow::Impl {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original_proc));
         RemovePropW(hwnd, kProp);
         detached = true;
+        tsf.reset();
         return CallWindowProcW(original_proc, hwnd, msg, wparam, lparam);
       }
       default:
         if (msg == UpdateMessage()) {
+          if (wparam == kOpTestService) {
+            auto service = tsf;
+            if (!service) return static_cast<LRESULT>(E_UNEXPECTED);
+            wchar_t path[32768];
+            const DWORD length = GetEnvironmentVariableW(L"GESHER_TSF_TEST_SERVICE", path, 32768);
+            if (length == 0 || length >= 32768) return static_cast<LRESULT>(E_INVALIDARG);
+            return static_cast<LRESULT>(service->RunTestService(path));
+          }
           if (wparam == kOpShowKeyboard || wparam == kOpHideKeyboard) {
             const bool show = wparam == kOpShowKeyboard;
             return static_cast<LRESULT>(input::ShowTouchKeyboard(hwnd, show));
@@ -469,6 +552,14 @@ struct ImeWindow::Impl {
           return 0;
         }
         if (msg == DetachMessage() && reinterpret_cast<Impl*>(lparam) == this) return Detach();
+        if (msg == FilterKeyMessage()) {
+          auto service = tsf;
+          auto* key = reinterpret_cast<const MSG*>(lparam);
+          if (service && key && key->hwnd == hwnd && service->Key(key->message, key->wParam, key->lParam)) {
+            return 1;
+          }
+          return 0;
+        }
         break;
     }
     return CallOriginal(msg, wparam, lparam);
@@ -510,15 +601,18 @@ std::unique_ptr<ImeWindow> ImeWindow::Attach(void* hwnd_ptr) {
 ImeWindow::~ImeWindow() {
   HWND hwnd = static_cast<HWND>(hwnd_);
   ThreadWatch* watch = impl_->watch.exchange(nullptr);
+  // Keep its state alive for any outer procedure that captured it before a
+  // nested COM callback detached the window. Its worker can stop immediately.
+  impl_->retired_watch = watch;
+  RetireThreadWatch(watch);
   DWORD_PTR result = 0;
   if (IsWindow(hwnd) &&
       SendMessageTimeoutW(hwnd, DetachMessage(), 0, reinterpret_cast<LPARAM>(impl_),
                           SMTO_NORMAL | SMTO_ABORTIFHUNG, 5000, &result) != 0 &&
       result == 1) {
-    delete impl_;
+    impl_->Release();
   }
   // Otherwise the Impl stays: the window's thread may still call into it.
-  StopThreadWatch(watch);
 }
 
 void ImeWindow::Post(int op) {
@@ -537,8 +631,26 @@ void ImeWindow::SetTextInput(const TextInputState& state) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     impl_->state = state;
+    if (impl_->document.epoch != state.editor_epoch || !state.active || !state.ime) {
+      impl_->document = TextDocument{};
+      impl_->document.epoch = state.editor_epoch;
+    }
   }
   Post(kOpState);
+}
+
+void ImeWindow::SetDocument(TextDocument document) {
+  { std::lock_guard<std::mutex> lock(impl_->mutex); impl_->document = std::move(document); }
+  Post(kOpDocument);
+}
+
+int32_t ImeWindow::RunTextServiceTest() {
+  DWORD_PTR result = 0;
+  if (!SendMessageTimeoutW(static_cast<HWND>(hwnd_), UpdateMessage(), kOpTestService, 0,
+                           SMTO_NORMAL | SMTO_ABORTIFHUNG, 10000, &result)) {
+    return static_cast<int32_t>(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+  }
+  return static_cast<int32_t>(result);
 }
 
 void ImeWindow::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height) {

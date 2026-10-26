@@ -20,6 +20,7 @@
 #include <stdio.h>
 
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -68,6 +69,7 @@ const JNINativeMethod kVirtualKeyboardMethods[] = {
 
 jmethodID gOnWindowEvent;
 jmethodID gOnTextEvent;
+jmethodID gOnDocumentEdit;
 
 struct JavaConnection {
   std::unique_ptr<Connection> connection;
@@ -129,8 +131,13 @@ jlong JNICALL WindowInput_attach(JNIEnv* env, jclass, jobject self, jlong hwnd, 
     }
     jstring text = tenv->NewString(reinterpret_cast<const jchar*>(e.text.data()),
                                    static_cast<jsize>(e.text.size()));
-    tenv->CallVoidMethod(target, gOnTextEvent, static_cast<jint>(seq), e.kind, text, e.cursor,
-                         e.target_start, e.target_end);
+    if (e.kind >= gesher::input::TextEvent::kDocumentReplace) {
+      tenv->CallVoidMethod(target, gOnDocumentEdit, static_cast<jint>(seq), e.kind, text,
+                           e.epoch, e.revision, e.start, e.end);
+    } else {
+      tenv->CallVoidMethod(target, gOnTextEvent, static_cast<jint>(seq), e.kind, text, e.cursor,
+                           e.target_start, e.target_end);
+    }
     if (tenv->ExceptionCheck()) {
       ALOGE("WindowInput.onTextEvent threw");
       tenv->ExceptionDescribe();
@@ -205,12 +212,32 @@ Connection* ConnectionOf(jlong ptr) {
 }
 
 void JNICALL WindowInput_setTextInput(JNIEnv*, jclass, jlong ptr, jboolean active, jboolean ime,
-                                      jint enterAction) {
+                                      jint enterAction, jint epoch) {
   gesher::input::TextInputState state;
   state.active = active;
   state.ime = ime;
   state.enter_action = enterAction;
+  state.editor_epoch = epoch;
   ConnectionOf(ptr)->SetTextInput(state);
+}
+
+void JNICALL WindowInput_setDocument(JNIEnv* env, jclass, jlong ptr, jstring text,
+    jint start, jint end, jint offset, jint epoch, jint revision, jboolean available) {
+  gesher::input::TextDocument document;
+  if (text != nullptr) {
+    const jchar* chars = env->GetStringChars(text, nullptr);
+    if (chars == nullptr) return;
+    document.text.assign(reinterpret_cast<const char16_t*>(chars), env->GetStringLength(text));
+    env->ReleaseStringChars(text, chars);
+  }
+  document.start = std::min(start, end); document.end = std::max(start, end);
+  document.reversed = start > end; document.offset = offset;
+  document.epoch = epoch; document.applied_revision = revision; document.available = available;
+  ConnectionOf(ptr)->SetDocument(std::move(document));
+}
+
+jint JNICALL WindowInput_runTextServiceTest(JNIEnv*, jclass, jlong ptr) {
+  return ConnectionOf(ptr)->RunTextServiceTest();
 }
 
 void JNICALL WindowInput_setCaret(JNIEnv*, jclass, jlong ptr, jint x, jint y, jint width,
@@ -262,7 +289,9 @@ const JNINativeMethod kWindowInputMethods[] = {
     {"nStats", "(J)[J", reinterpret_cast<void*>(&WindowInput_stats)},
     {"nPostMessage", "(JIJJ)Z", reinterpret_cast<void*>(&WindowInput_postMessage)},
     {"nClientToScreen", "(JII)J", reinterpret_cast<void*>(&WindowInput_clientToScreen)},
-    {"nSetTextInput", "(JZZI)V", reinterpret_cast<void*>(&WindowInput_setTextInput)},
+    {"nSetTextInput", "(JZZII)V", reinterpret_cast<void*>(&WindowInput_setTextInput)},
+    {"nSetDocument", "(JLjava/lang/String;IIIIIZ)V", reinterpret_cast<void*>(&WindowInput_setDocument)},
+    {"nRunTextServiceTest", "(J)I", reinterpret_cast<void*>(&WindowInput_runTextServiceTest)},
     {"nSetCaret", "(JIIII)V", reinterpret_cast<void*>(&WindowInput_setCaret)},
     {"nCompleteComposition", "(JZ)V", reinterpret_cast<void*>(&WindowInput_completeComposition)},
     {"nFinishTextEvent", "(JI)V", reinterpret_cast<void*>(&WindowInput_finishTextEvent)},
@@ -276,8 +305,9 @@ int RegisterWindowInput(JNIEnv* env) {
   jclass clazz = env->FindClass("com/gesher/app/input/WindowInput");
   gOnWindowEvent = env->GetMethodID(clazz, "onWindowEvent", "(III)V");
   gOnTextEvent = env->GetMethodID(clazz, "onTextEvent", "(IILjava/lang/String;III)V");
+  gOnDocumentEdit = env->GetMethodID(clazz, "onDocumentEdit", "(IILjava/lang/String;IIII)V");
   env->DeleteLocalRef(clazz);
-  if (gOnWindowEvent == nullptr || gOnTextEvent == nullptr) return -1;
+  if (gOnWindowEvent == nullptr || gOnTextEvent == nullptr || gOnDocumentEdit == nullptr) return -1;
   return jniRegisterNativeMethods(env, "com/gesher/app/input/WindowInput", kWindowInputMethods,
                                   sizeof(kWindowInputMethods) / sizeof(kWindowInputMethods[0]));
 }

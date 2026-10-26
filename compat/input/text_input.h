@@ -21,12 +21,15 @@ struct TextEvent {
     kCompose = 2,       // `text` is the composition so far (setComposingText)
     kComposeEnd = 3,    // the composition ended (finishComposingText)
     kEditorAction = 4,  // Enter: the editor's IME action (performEditorAction)
+    kDocumentReplace = 5, kDocumentSelect = 6,
+    kDocumentCompositionRange = 7, kDocumentCompositionEnd = 8,
   };
   int32_t kind = kCommit;
   std::u16string text;
   int32_t cursor = 0;         // kCompose: the caret in `text`, in UTF-16 units
   int32_t target_start = -1;  // kCompose: the clause being converted, or -1
   int32_t target_end = -1;
+  int32_t epoch = 0, revision = 0, start = 0, end = 0;
 };
 
 // What the focused editor takes (WindowInput.setTextInput).
@@ -34,6 +37,7 @@ struct TextInputState {
   bool active = false;       // an editor with an InputConnection has the focus
   bool ime = false;          // compositions are allowed (not a password or number field)
   int32_t enter_action = 0;  // EditorInfo.IME_ACTION_* Enter performs; 0: Enter is a key
+  int32_t editor_epoch = 0;
 };
 
 // The WM_CHAR value the IME side hands the window's own procedure, in place

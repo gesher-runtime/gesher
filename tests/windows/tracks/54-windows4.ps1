@@ -26,6 +26,7 @@ function W4NativeProbe([string] $Executable, [string] $Pattern, [string] $Descri
 }
 W4NativeProbe windows4_input_pane_probe.exe '0 windows4 COM input pane check\(s\) failed' 'actual IFrameworkInputPane COM source callbacks, window events, geometry and lifetime'
 W4NativeProbe windows4_text_store_probe.exe '0 windows4 TSF store check\(s\) failed' 'TSF ACP locks, document/revision protection and an actual Windows text-service reconversion session'
+W4NativeProbe windows4_ime_tsf_probe.exe '0 windows4 IME TSF check\(s\) failed' 'production native IME TSF event bridge, restricted editor teardown and reentrant COM detach'
 $w4Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w4Apk = NoDrive "$Dir/winapp.apk"
@@ -113,6 +114,26 @@ function W4Legacy([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
   W4Check $Mode 'target-28 adjustResize shrinks/restores framework content without app padding or native-window resizing' $problems
 }
 
+function W4Tsf([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
+  $buttons = W3Wait $Read 0 'W4 TSF buttons reconvert (\d+),(\d+) password (\d+),(\d+) number (\d+),(\d+) normal (\d+),(\d+)' 40
+  if (-not $buttons.Success) { throw 'No TSF fixture buttons' }
+  $problems = @()
+  foreach ($step in @(@('reconvert', 1), @('password', 3), @('number', 5), @('normal', 7), @('reconvert', 1))) {
+    $mark = W3Mark $Read
+    $group = [int]$step[1]
+    [GesherWin32]::Click($Window, [int]$buttons.Groups[$group].Value, [int]$buttons.Groups[$group + 1].Value)
+    $pattern = switch ($step[0]) {
+      reconvert { 'W4 TSF actual EditText Japanese true composition ended true selection 9-9' }
+      password { 'W4 TSF restricted password HRESULT 8000ffff unchanged true' }
+      number { 'W4 TSF restricted number HRESULT 8000ffff unchanged true' }
+      normal { 'W4 TSF normal selected Hebrew 7-11' }
+    }
+    if (-not (W3Wait $Read $mark $pattern 25).Success) { $problems += "Missing $($step[0]) result: $pattern" }
+  }
+  if ("$(& $Read)" -notmatch 'W4 TSF service HRESULT 0') { $problems += 'No successful actual Windows text-service edit session' }
+  W4Check $Mode 'real TSF service reconverts existing EditText selection, completes composition, blocks password/number, and reconnects normal editor' $problems
+}
+
 W4Run 'single process' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.winapp.DisplayActivity', $w4Apk) {
   param($window, $read)
   W4Snapshot 'single process' $read 0 DisplayActivity 0 0 $true
@@ -127,6 +148,17 @@ W4Run 'single process' @('com.gesher.app.Main', '--window', '--display', '400x80
 }
 
 $w4LegacyApk = NoDrive "$Dir/winlegacy.apk"
+$w4PreviousService = $env:GESHER_TSF_TEST_SERVICE
+$env:GESHER_TSF_TEST_SERVICE = [IO.Path]::GetFullPath("$Dir/windows4_tsf_service.dll")
+try {
+  W4Run 'single process, TSF' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.winapp.TsfActivity', $w4Apk) {
+    param($window, $read)
+    W4Tsf 'single process' $window $read
+  } -Title 'Gesher windows4 TSF' -Activity TsfActivity
+} finally {
+  if ($w4PreviousService) { $env:GESHER_TSF_TEST_SERVICE = $w4PreviousService }
+  else { Remove-Item Env:GESHER_TSF_TEST_SERVICE -ErrorAction SilentlyContinue }
+}
 W4Run 'single process, legacy resize' @('com.gesher.app.Main', '--window', '--display', '400x800@160', $w4LegacyApk) {
   param($window, $read)
   W4Legacy 'single process' $window $read
@@ -140,6 +172,11 @@ $env:GESHER_LOGS = NoDrive "$root/logs-windows4"
 $env:GESHER_SHORTCUTS = '0'
 New-Item -ItemType Directory -Force "$root/data-windows4" | Out-Null
 try {
+  $env:GESHER_TSF_TEST_SERVICE = [IO.Path]::GetFullPath("$Dir/windows4_tsf_service.dll")
+  W4Run 'device, TSF' @('com.gesher.app.Launcher', 'launch', $w4Apk, '--window', '--activity', 'com.gesher.winapp.TsfActivity') {
+    param($window, $read)
+    W4Tsf device $window $read
+  } -Title 'Gesher windows4 TSF' -Activity TsfActivity
   W4Run 'device, two visible tasks' @('com.gesher.app.Launcher', 'launch', $w4Apk, '--window', '--activity', 'com.gesher.winapp.DisplayActivity') {
     param($window, $read)
     W4Snapshot device $read 0 DisplayActivity 0 0 $true
@@ -176,6 +213,8 @@ try {
     W4Legacy device $window $read
   } -Title 'Gesher windows4 legacy' -Activity LegacyActivity
 } finally {
+  if ($w4PreviousService) { $env:GESHER_TSF_TEST_SERVICE = $w4PreviousService }
+  else { Remove-Item Env:GESHER_TSF_TEST_SERVICE -ErrorAction SilentlyContinue }
   $shutdown = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
   foreach ($argument in @($w4Dvm) + @('com.gesher.app.Launcher','shutdown')) { $shutdown.ArgumentList.Add($argument) }
   $shutdown.UseShellExecute = $false
