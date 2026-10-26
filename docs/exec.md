@@ -282,6 +282,16 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   incremental-stdin test pass. Real mailbox delivery and this test's on-device
   variant remain pending CI. Native console input is not covered by the pipe
   polling path. Active CI 40320290754 predates this change.
+- CI 40320290754 Windows-2025 job 121578589424: the real launcher passes all
+  47 exact shell cases, ART incremental stdin, and the Java signal/tool suite
+  (destroy executes the native SIGTERM handler, destroyForcibly kills, ps/kill/
+  cat/sleep pass). Its sole failing Check is the property test's bootstrap:
+  $bcp contained only core jars, so android.os.SystemProperties was absent.
+  The test now uses $bcpApp and explicitly loads android_runtime when run as
+  standalone dex; the APK already bootstraps that library in its normal app
+  startup. No property assertion ran in that failed Check. Both e2e runners
+  have zero unexpected failures, including required TIC-80 and Puzzles with
+  generator status 0; package passed. Windows-2022 is still pending.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
