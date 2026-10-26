@@ -52,6 +52,8 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * The window session of an app process on Windows (docs/graphics.md, "An app's window"):
@@ -108,6 +110,11 @@ import java.util.List;
  */
 public final class WindowSession extends IWindowSession.Stub {
     private static final String TAG = "gesher-app";
+    private static final ExecutorService sDebugCapture = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "window-debug-capture");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     /** What closing a window does. Runs on the thread that added the window. */
     public interface CloseHandler {
@@ -848,7 +855,14 @@ public final class WindowSession extends IWindowSession.Stub {
                     if (w.nativeWindow == null) return;
                     log("window debug: back buffer " + grid(w.nativeWindow.readBackBuffer())
                             + ", " + w.nativeWindow.getFramesPresented() + " presented");
-                    log("window debug: PrintWindow " + grid(w.nativeWindow.capture()));
+                    final NativeWindow nw = w.nativeWindow;
+                    sDebugCapture.execute(() -> {
+                        try {
+                            log("window debug: PrintWindow " + grid(nw.capture()));
+                        } catch (RuntimeException e) {
+                            log("window debug: " + e);
+                        }
+                    });
                 }, delay);
             }
         }
@@ -1971,15 +1985,22 @@ public final class WindowSession extends IWindowSession.Stub {
                     + (mShow ? "shown" : "hidden") + ", hwnd 0x"
                     + Long.toHexString(w.nativeWindow.getHwnd()));
             if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
-                // Debugging: what the window shows (PrintWindow in this process) and its back
-                // buffer, a second later.
+                // PrintWindow sends messages to child windows, including WebView2, whose
+                // navigation callback can be waiting for this Looper. Keep it off the UI thread.
                 final NativeWindow nw = w.nativeWindow;
                 new android.os.Handler(Looper.myLooper()).postDelayed(() -> {
                     try {
-                        int[] printed = nw.capture();
                         int[] back = nw.readBackBuffer();
-                        log("window debug: PrintWindow " + sample(printed) + ", back buffer "
-                                + sample(back) + ", " + nw.getFramesPresented() + " presented");
+                        long frames = nw.getFramesPresented();
+                        sDebugCapture.execute(() -> {
+                            try {
+                                log("window debug: PrintWindow " + sample(nw.capture())
+                                        + ", back buffer " + sample(back) + ", " + frames
+                                        + " presented");
+                            } catch (RuntimeException e) {
+                                log("window debug: " + e);
+                            }
+                        });
                     } catch (RuntimeException e) {
                         log("window debug: " + e);
                     }

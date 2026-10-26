@@ -135,7 +135,17 @@ Each phase ends with something demonstrable, built and tested in CI.
       the switch interpreter. `StackOverflowError` under every mode, compiled
       JNI stubs, AOT for the extensions and a dual-mapped (W^X) JIT cache
       ([0036](decisions/0036-stack-overflow-jni-stubs-mappings.md), ci
-      40138006773). Remaining: an app image.
+      40138006773).
+- [x] App images containing the app's classes and compiled methods,
+      install-time dexopt, JIT profile saving and idle `speed-profile` dexopt,
+      in one process and on the device (aot2, ADR 0054, ci 40320549410,
+      both Windows runners; ART logs verify image loading and execution).
+- [x] Profile-guided framework/boot image shipped by the installer:
+      framework oat 9.1 MB versus 72.2 MB, whole image 74.7 MB versus 162.6 MB;
+      startup passes the unchanged 10%/30 ms comparison on both runners
+      (aot2, ci 40320549410; package install/run/uninstall and both e2e pass).
+- [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
+      dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
