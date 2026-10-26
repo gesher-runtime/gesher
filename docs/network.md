@@ -226,6 +226,13 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- Pending next final CI: build `web3_network_arm64.so` with the NDK arm64
+  compiler and run its same seven-API regression in both single-process and
+  device modes, asserting the compiled ABI in the native success message.
+  Current ci 40333695614 contains x86_64 execution only. Remaining resolver,
+  socket semantics and hardware/network completeness belong to the explicit
+  net4 follow-up (ADR 0070), coordinated separately from these seven exports.
+
 - Running combined ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66
   after the absolute NDK path and verified aot2 integration. Read the NDK
   runtime PASS line in both process modes on each runner before closing the

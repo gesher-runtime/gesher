@@ -35,7 +35,8 @@ Write-Host "INFO  web3: test proxy on 127.0.0.1:$web3Proxy, HTTP server on 127.0
 # with the window's HWND and the log reader once $Ready is in the log, closes what is left,
 # and checks $Expect. $During returns problems (strings).
 function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [string] $Done,
-                 [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400) {
+                 [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400,
+                 [string] $NativeLibrary = 'web3_network.so') {
   if (-not (Test-Path "$Dir/web3app.apk")) {
     Write-Host "FAIL  web3: $Name (web3app.apk is missing)"
     $script:failed++
@@ -49,7 +50,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
   $psi.Environment['GESHER_UIA_TRACE'] = '1'
   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
-  $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive ([IO.Path]::GetFullPath((Join-Path $Dir 'web3_network.so')))
+  $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive ([IO.Path]::GetFullPath((Join-Path $Dir $NativeLibrary)))
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $read = { if (Test-Path $log) { "$(Get-Content -Raw $log -ErrorAction SilentlyContinue)" } else { '' } }
@@ -257,7 +258,8 @@ $bindingExpect = @(
   'Web3 net process socket and DNS binding, invalid network preservation, unbind true',
   'Web3 net missing-network DNS refused fallback true',
   'Web3 net NDK: PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors')
-$null = Web3Run 'selected Network: real socket/process routing and DNS, bound HTTP, NDK raw DNS completion and cancellation (single process)' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.BindingActivity', (NoDrive "$Dir/web3app.apk")) ($bindingExpect + 'Web3 net done') 'Web3 net done'
+$null = Web3Run 'selected Network: real socket/process routing and DNS, bound HTTP, NDK raw DNS completion and cancellation (single process)' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.BindingActivity', (NoDrive "$Dir/web3app.apk")) ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=x86_64' + 'Web3 net done') 'Web3 net done'
+$null = Web3Run 'arm64 NDK selected Network: socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (single process)' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.BindingActivity', (NoDrive "$Dir/web3app.apk")) ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 $savedData = $env:ANDROID_DATA
 $savedLogs = $env:GESHER_LOGS
 $env:ANDROID_DATA = NoDrive "$root/data-web3"
@@ -271,6 +273,9 @@ try {
   $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
+
+  $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
+  $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 
   Web3ScreenReader $true
   try {

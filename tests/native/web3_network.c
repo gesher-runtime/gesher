@@ -12,6 +12,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#if defined(__aarch64__)
+#define WEB3_ABI "arm64"
+#elif defined(__x86_64__)
+#define WEB3_ABI "x86_64"
+#else
+#error Unsupported web3 test architecture
+#endif
+
 static int connected_source(net_handle_t network, const char* host, int port, int explicit) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return 0;
@@ -110,7 +118,7 @@ done:
   android_setprocnetwork(NETWORK_UNSPECIFIED);
   (*env)->ReleaseStringUTFChars(env, address, host);
   char message[256];
-  if (ok) snprintf(message, sizeof(message), "PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors");
+  if (ok) snprintf(message, sizeof(message), "PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors abi=" WEB3_ABI);
   else snprintf(message, sizeof(message), "FAIL %s (errno %d)", stage, failure_errno);
   return (*env)->NewStringUTF(env, message);
 }
