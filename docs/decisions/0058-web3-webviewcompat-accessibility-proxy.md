@@ -93,7 +93,10 @@ ever enabled and nothing read an app's views.
 
 - androidx.webkit apps work with the features above; others report unsupported, as with
   an old WebView APK. WebMessageListener and document-start scripts reach main frames only
-  (chrome.webview); messages are strings (no WEB_MESSAGE_ARRAY_BUFFER).
+  (chrome.webview). `WEB_MESSAGE_ARRAY_BUFFER` carries typed byte payloads
+  through listeners, reply proxies, main-frame posting and ports using a base64
+  envelope; the page receives an actual ArrayBuffer. A 70,000-byte/empty-buffer
+  regression and local payload/script checks exist; full CI remains pending.
 - Narrator and UIA tools read and operate Android views; nodes' scale/rotation are not
   applied to bounds, and the tree is read on demand (no cache invalidation beyond 200 ms).
 - PendingIntent requests live in the app process (they end with it), unlike Android's.

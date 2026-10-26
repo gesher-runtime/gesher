@@ -59,7 +59,7 @@ public final class SupportLib {
         "POST_WEB_MESSAGE", "WEB_MESSAGE_CALLBACK_ON_MESSAGE", "GET_WEB_VIEW_CLIENT",
         "GET_WEB_CHROME_CLIENT", "WEB_MESSAGE_LISTENER", "DOCUMENT_START_SCRIPT",
         "DOCUMENT_START_SCRIPT:1", "PROXY_OVERRIDE", "PROXY_OVERRIDE:3",
-        "MULTI_PROCESS_QUERY", "GET_VARIATIONS_HEADER",
+        "MULTI_PROCESS_QUERY", "GET_VARIATIONS_HEADER", "WEB_MESSAGE_ARRAY_BUFFER",
     };
 
     /** What androidx.webkit's WebViewGlueCommunicator gets (SupportLibReflectionUtil). */
@@ -243,9 +243,8 @@ public final class SupportLib {
         }
     }
 
-    /** The app's WebMessageBoundaryInterface as a framework WebMessage (strings). */
+    /** The app's typed boundary payload as an internal framework message. */
     static WebMessage frameworkMessage(InvocationHandler message) {
-        String data = (String) call(message, "WebMessageBoundaryInterface", "getData", NONE);
         InvocationHandler[] ports = (InvocationHandler[]) call(message,
                 "WebMessageBoundaryInterface", "getPorts", NONE);
         List<WebMessagePort> list = new ArrayList<>();
@@ -258,25 +257,41 @@ public final class SupportLib {
                 }
             }
         }
-        return new WebMessage(data, list.isEmpty() ? null : list.toArray(new WebMessagePort[0]));
+        WebMessagePort[] frameworkPorts = list.isEmpty() ? null : list.toArray(new WebMessagePort[0]);
+        String[] supported = (String[]) call(message, "WebMessageBoundaryInterface", "getSupportedFeatures", NONE);
+        if (supported != null && java.util.Arrays.asList(supported).contains("WEB_MESSAGE_ARRAY_BUFFER")) {
+            InvocationHandler payload = (InvocationHandler) call(message, "WebMessageBoundaryInterface",
+                    "getMessagePayload", NONE);
+            int type = (Integer) call(payload, "WebMessagePayloadBoundaryInterface", "getType", NONE);
+            if (type == 1) return new WebMessagePayload((byte[]) call(payload,
+                    "WebMessagePayloadBoundaryInterface", "getAsArrayBuffer", NONE), frameworkPorts);
+            if (type != 0) throw new IllegalArgumentException("Unknown web message payload " + type);
+            return new WebMessage((String) call(payload, "WebMessagePayloadBoundaryInterface", "getAsString", NONE), frameworkPorts);
+        }
+        return new WebMessage((String) call(message, "WebMessageBoundaryInterface", "getData", NONE), frameworkPorts);
     }
 
     /** A message from the page or a port, for the app (WebMessageBoundaryInterface). */
     public static final class Message {
-        private final String mData;
+        private final WebMessage mMessage;
         private final InvocationHandler[] mPorts;
 
         Message(String data, InvocationHandler[] ports) {
-            mData = data;
+            this(new WebMessage(data), ports);
+        }
+
+        Message(WebMessage message, InvocationHandler[] ports) {
+            mMessage = message;
             mPorts = ports != null ? ports : new InvocationHandler[0];
         }
 
         public String getData() {
-            return mData;
+            if (WebMessagePayload.binary(mMessage)) throw new IllegalStateException("ArrayBuffer message");
+            return mMessage.getData();
         }
 
         public InvocationHandler getMessagePayload() {
-            return Boundary.of(new Payload(mData));
+            return Boundary.of(new Payload(mMessage));
         }
 
         public InvocationHandler[] getPorts() {
@@ -284,28 +299,31 @@ public final class SupportLib {
         }
 
         public String[] getSupportedFeatures() {
-            return new String[0];
+            return new String[] {"WEB_MESSAGE_ARRAY_BUFFER"};
         }
     }
 
-    /** WebMessagePayloadBoundaryInterface: a string. */
+    /** WebMessagePayloadBoundaryInterface: a string or ArrayBuffer. */
     public static final class Payload {
-        private final String mData;
+        private final WebMessage mMessage;
 
-        Payload(String data) {
-            mData = data;
+        Payload(WebMessage message) {
+            mMessage = message;
         }
 
         public int getType() {
-            return 0;  // WebMessagePayloadType.TYPE_STRING
+            return WebMessagePayload.binary(mMessage) ? 1 : 0;
         }
 
         public String getAsString() {
-            return mData;
+            if (getType() != 0) throw new IllegalStateException("Expected string payload");
+            return mMessage.getData();
         }
 
         public byte[] getAsArrayBuffer() {
-            throw new IllegalStateException("Expected 1, but type is 0");
+            byte[] bytes = WebMessagePayload.bytes(mMessage);
+            if (bytes == null) throw new IllegalStateException("Expected ArrayBuffer payload");
+            return bytes;
         }
 
         public String[] getSupportedFeatures() {
@@ -349,7 +367,7 @@ public final class SupportLib {
                             call(callback, "WebMessageCallbackBoundaryInterface", "onMessage",
                                     new Class<?>[] {InvocationHandler.class, InvocationHandler.class},
                                     Boundary.of(Port.this),
-                                    Boundary.of(new Message(message.getData(), ports)));
+                                    Boundary.of(new Message(message, ports)));
                         }
                     };
             mPort.setWebMessageCallback(cb, handler);
@@ -363,7 +381,7 @@ public final class SupportLib {
      * WebView's Looper, with the reply proxy of the page (one per document, as Chromium's).
      */
     static void deliver(GesherWebViewProvider provider, GesherWebViewProvider.MessageListener l,
-            String data, String source) {
+            WebMessage message, String source) {
         String origin = GesherWebViewProvider.originOf(source != null ? source
                 : provider.currentUrl());
         if (origin.endsWith("/")) origin = origin.substring(0, origin.length() - 1);
@@ -373,7 +391,7 @@ public final class SupportLib {
             call(l.listener, "WebMessageListenerBoundaryInterface", "onPostMessage",
                     new Class<?>[] {WebView.class, InvocationHandler.class, Uri.class,
                             boolean.class, InvocationHandler.class},
-                    provider.view(), Boundary.of(new Message(data, null)), Uri.parse(origin),
+                    provider.view(), Boundary.of(new Message(message, null)), Uri.parse(origin),
                     true, reply);
         } catch (RuntimeException e) {
             Log.e(TAG, "WebMessageListener.onPostMessage", e);
@@ -398,9 +416,14 @@ public final class SupportLib {
 
         public void postMessageWithPayload(InvocationHandler payload) {
             int type = (Integer) call(payload, "WebMessagePayloadBoundaryInterface", "getType", NONE);
-            if (type != 0) throw new UnsupportedOperationException("ArrayBuffer messages");
-            mProvider.postToListener(mName, (String) call(payload,
-                    "WebMessagePayloadBoundaryInterface", "getAsString", NONE));
+            if (type == 1) {
+                mProvider.postToListener(mName, new WebMessagePayload((byte[]) call(payload,
+                        "WebMessagePayloadBoundaryInterface", "getAsArrayBuffer", NONE), null));
+            } else if (type == 0) {
+                postMessage((String) call(payload, "WebMessagePayloadBoundaryInterface", "getAsString", NONE));
+            } else {
+                throw new IllegalArgumentException("Unknown web message payload " + type);
+            }
         }
 
         /** IsomorphicObjectBoundaryInterface: one androidx peer for this proxy. */

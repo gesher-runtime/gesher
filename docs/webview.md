@@ -149,7 +149,7 @@ Pages see the https origin: same-origin requests between assets work without
 | Geolocation | navigator.geolocation in main frames from LocationManager (`GeolocationShim`, ADR 0058): the WebChromeClient decides per origin, positions are Windows' location service's or the app's test providers |
 | Permissions | `PermissionRequested` with a deferral: iframes' geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
 | File chooser | DevTools `Page.setInterceptFileChooserDialog`: `<input type=file>` calls `onShowFileChooser` (`FileChooserParams` from the input); the Uris go in with `DOM.setFileInputFiles` (content: copied to the cache). Not handled by the app: a Windows file dialog (`IFileOpenDialog`, owned by the app's window, filters from `accept`) |
-| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings only; ports end with the page |
+| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings and typed ArrayBuffer payloads through the support-library boundary; ports end with the page (ArrayBuffer CI pending) |
 | `copyBackForwardList`, `goBackOrForward(n)`, `clearHistory` | DevTools `Page.getNavigationHistory` (read after each history change), `Page.navigateToHistoryEntry`, `Page.resetNavigationHistory` |
 | `findAllAsync`, `findNext`, `clearMatches`, `findAll` | `ICoreWebView2Find` when the runtime has it (its 1-based index is Android's 0-based ordinal), else a script (`PageScripts.find`, CSS Custom Highlights); `findAll` (synchronous) uses the script |
 | `saveWebArchive` | DevTools `Page.captureSnapshot` (MHTML) |
@@ -310,7 +310,7 @@ drawing in a window that is covered or off the desktop;
 ### web3 track (ADR 0058)
 
 - androidx.webkit: Gesher's support library glue (`SupportLib`, `org.chromium.support_lib_glue.SupportLibReflectionUtil`):
-  WebMessageListener (main frames, strings), document-start scripts, ProxyController (applies
+  WebMessageListener (main frames, strings and ArrayBuffer payloads), document-start scripts, ProxyController (applies
   to the process's WebView2 environment when set before it starts), multi-process query and
   the framework-backed features. Test: web3app.apk (androidx.webkit 1.18.0 from Maven) in
   54-web3.ps1.
@@ -329,15 +329,15 @@ drawing in a window that is covered or off the desktop;
   a WebView show the app's surface; a view drawn over the WebView by a
   parent's `onDrawForeground`/`dispatchDraw` (not a child view) is not
   found.
-- `WebMessagePort`s carry strings only (no `ArrayBuffer` payloads, no ports
-  from the page to the app inside a port's message); `WebViewCompat`
-  (androidx.webkit boundary interfaces) is not implemented.
+- Page-to-app port messages cannot transfer additional ports. Typed `ArrayBuffer`
+  support through `WebViewCompat`, listeners, reply proxies and ports is implemented
+  with CI verification pending; framework `WebMessage` remains its Android string API.
 - Client certificates: only certificates in Windows' store can be sent;
   `proceed()` with any other key goes on without one. Tested: the request
   callback and `ignore()`.
 - `onSafeBrowsingHit` is never called (SmartScreen has no callback).
-- Accessibility: web content is WebView2's UI Automation tree only, not in
-  Android's `AccessibilityNodeProvider`.
+- Accessibility: Android page nodes and the external UIA tree are implemented;
+  complete cross-runtime action verification remains pending in the web3 status below.
 - `capturePicture` is what is shown, not the whole page; text zoom does not
   reach cross-origin iframes or closed shadow roots; multi-step
   `goBackOrForward` may ask `shouldOverrideUrlLoading`.
@@ -346,6 +346,15 @@ drawing in a window that is covered or off the desktop;
   apps that return false get the Windows dialog.
 
 ### Status and next steps (web3)
+
+- Next combined run includes typed `WEB_MESSAGE_ARRAY_BUFFER` payloads for
+  main-frame posting, WebMessageListener/replies and message ports. Payloads
+  preserve byte arrays through a base64 JSON envelope; injected JavaScript
+  reconstructs an actual ArrayBuffer, including empty buffers and cross-realm
+  input. The regression checks a 70,000-byte pattern in both directions plus
+  binary replies and empty buffers. Local Java compilation/payload checks and
+  the actual injected port script pass; Maven-boundary/runtime verification
+  remains for CI. No ArrayBuffer milestone is closed yet.
 
 - ci 40325234847 at 2de1e15: package/both e2e pass; four test failures
   per runner. External UIA now traverses both trees and sets/toggles Android
@@ -356,8 +365,9 @@ drawing in a window that is covered or off the desktop;
   New network kernel-interface/source/DNS/process/HTTP checks pass in
   both process modes. Native NDK execution was blocked by a relative
   `dist/web3_network.so` path; the next run uses its absolute path.
-- Running ci 40325234847 at 2de1e15 (the same combined UIA/network/NDK
-  tree with the exception-free worker). No runtime gap is closed yet.
+- ci 40325234847 completed; the next dispatch will include the fixture and
+  old-Chromium heading fixes above, the absolute NDK path, ArrayBuffer coverage
+  and the latest verified integration. No new runtime gap is closed yet.
 - ci 40324592794 at 5e90b96 failed compiling the new raw-DNS worker:
   the project disables C++ exceptions. The NDK ELF library compiled.
   Replaced try/catch and std::thread with the existing native CreateThread

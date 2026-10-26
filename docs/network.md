@@ -226,7 +226,12 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
-- Running ci 40325234847 at 2de1e15 with the exception-free raw-DNS worker.
+- ci 40325234847 at 2de1e15: package and both e2e jobs pass. Both test
+  runners pass the new selected-interface DNS, kernel binding, server-observed
+  source address, process binding/unbinding and bound HTTP assertions in both
+  modes. Four tests fail per runner: accessibility fixture/runtime semantics
+  and a relative `System.load` path prevented NDK execution. The next run
+  uses an absolute path. Raw resolver/NDK runtime verification remains pending.
 - ci 40324592794 at 5e90b96 compiled the NDK test ELF, but the native
   build failed because raw-DNS used try/catch with exceptions disabled.
   Corrected to a native CreateThread worker; local syntax now checks
@@ -248,7 +253,8 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   library exercises all seven functions, real source addresses, A-record
   results, raw packet IDs, NXDOMAIN, cancellation and invalid arguments in
   single-process and device modes. C++ `-Werror` syntax checks pass; full
-  NDK compilation/runtime remains for CI. Additional shared edits are one
+  NDK runtime remains for CI (ELF compilation passed in 40324592794 and
+  40325234847). Additional shared edits are one
   source entry in `compat/posix/posix.cmake` and one test-library compile
   line in `.github/workflows/native-libs.yml`.
 - Continuation (2026-10-26), pending CI: interface-specific socket/process
@@ -263,8 +269,9 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   the real SysV JNI build and Android runtime. New 54-web3 checks require
   the HTTP server to observe the selected adapter's source address and
   reject DNS on a missing network. No adapter configuration was changed.
-  Next: the seven native networking exports assigned from native3's API
-  inventory, including pollable raw DNS results and cancellation.
+  The seven native networking exports assigned from native3's API inventory
+  are implemented, including pollable raw DNS results and cancellation; their
+  runtime checks are pending the absolute-path correction above.
 - Additional file ownership approved by the coordinator: minimal edits in
   `compat/posix/{src/socket.cc,src/winsock.cc,src/netdb.cc,src/socket_internal.h,
   include/gesher/inet.h}` and related bionic wrappers; the original web3
@@ -277,6 +284,27 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   Java compilation, PowerShell parsing and fixture key/date/SAN/custom-root
   chain checks pass. No Windows ROOT store was changed locally. Runtime
   Conscrypt validation still requires a new full CI run.
+
+
+### ADR 0009 socket gap audit (2026-10-26)
+
+The binding work does not close these pre-existing gaps. Duplicated socket
+descriptors still store independent `O_NONBLOCK` metadata rather than sharing
+an open-file description. `recvmsg` drops ancillary data and output flags;
+`sendmsg` has no ancillary transport. `SCM_RIGHTS`, `IP_PKTINFO`, full datagram
+length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
+unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
+Legacy host/service/protocol resolver functions have no Gesher implementation
+(the separate thread-local `h_errno` does exist); their Windows-vs-Linux
+structure layouts require an ABI/symbol audit before exposing them safely.
+These socket/resolver items remain assigned to web3 or an explicit successor.
+
+The coordinator assigns epoll edge/nesting/poll-on-epoll/multiwaiter behavior
+and pipe polling to native3, and cross-process InputChannel/socket descriptor
+transport to binder2. Those tracks must coordinate any descriptor-sharing
+changes. Receive-timeout stream behavior and Windows WSAPoll platform limits
+also remain documented in ADR 0009. Real Wi-Fi, VPN, captive-portal transitions
+and disconnected-adapter selection are not verified by the hosted runner.
 
 **Branch** `wip/net` (worktree C:/work/gesher-net). **CI-verified green**: ci
 40141520320 (66d71de) and ci 40143168361 (47a4aeb, merged with
