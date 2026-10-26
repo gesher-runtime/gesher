@@ -106,6 +106,11 @@ public final class NativeWindow implements AutoCloseable {
     nHide(ptr());
   }
 
+  /** Minimizes the window, not activated (its taskbar button stays; windows3 track). */
+  public void minimize() {
+    nMinimize(ptr());
+  }
+
   /**
    * Shows the window off the desktop (no taskbar button, not activated): drawn like a shown
    * window, so PrintWindow reads it back, which it does not for a hidden one.
@@ -257,6 +262,7 @@ public final class NativeWindow implements AutoCloseable {
   private static native void nPresent(long ptr);
   private static native int[] nCapture(long ptr, boolean print);
   private static native void nHide(long ptr);
+  private static native void nMinimize(long ptr);
   private static native void nShowOffscreen(long ptr);
   private static native void nSetTitle(long ptr, String title);
   private static native void nSetResizable(long ptr, boolean resizable);
