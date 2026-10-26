@@ -211,6 +211,7 @@ using HandleP = std::shared_ptr<OwnedHandle>;
 struct Io {
   HANDLE fd[10] = {};
   HandleP owned[10];
+  uint64_t persistent_generation[10] = {};
   Io() {}
   void set(int n, HANDLE h, HandleP keep = nullptr) {
     fd[n] = h;
@@ -238,7 +239,12 @@ struct Shell {
   int cond_depth = 0;  // inside a condition: set -e does not apply
   bool is_subshell = false;
   // `exec N>file`: redirections that outlast the command.
-  std::map<int, HandleP> persistent_fd;
+  struct PersistentFd {
+    HandleP handle;
+    uint64_t generation;
+  };
+  std::map<int, PersistentFd> persistent_fd;
+  uint64_t fd_generation = 0;
   std::string name = "sh";
   DWORD shell_pid = GetCurrentProcessId();
   size_t getopts_offset = 1;

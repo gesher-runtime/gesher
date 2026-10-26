@@ -266,6 +266,13 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   other commands unwind repeated names in reverse order. All 51 exact local
   cases pass with an own-file -Werror build. This follow-up also awaits the
   next CI; the active run contains the earlier 47-case suite.
+- The nested persistent-descriptor issue is also fixed for the next run:
+  command I/O tracks the persistent generation it inherited, so temporary
+  group/function redirects take precedence; leaving a redirected compound
+  command restores the descriptors it scoped, including nested exec changes.
+  Six added exact cases cover groups, functions, pipelines, extra descriptors
+  and close/restore. All 57 local cases pass, and those six outputs/statuses
+  also match Bash in POSIX mode. Real-launcher CI for these fixes is pending.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
