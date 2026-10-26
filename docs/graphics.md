@@ -541,6 +541,8 @@ Status and next steps (stopped by the coordinator, 2026-10-26):
   The native2/surfaces combination and the expanded e2e matrix need a fresh
   full run. GLES SurfaceTexture/external-OES, Java EGL/GLES/GLSurfaceView and
   child SurfaceControl alpha/transforms remain open; do not tick them.
+- Running: ci 40302030881 at e73be53 (native2 integrated, e2e on both
+  Windows runners). Read both TIC-80 results before removing knownFailure.
 
 - Continuation: read ci 40285764214's windows-2025 log (job 121451383191):
   `1 test(s) failed`, surfacegl's single-process shutdown only. The SIGQUIT
