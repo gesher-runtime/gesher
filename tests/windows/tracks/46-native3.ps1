@@ -10,6 +10,11 @@ if (-not (Test-Path "$n2/native2-test.dex")) {
 }
 $n3Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
   ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'native3: Process.readProcLines uses real procfs, full-width values and Android argument/error contracts' {
+  N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3ProcessTest',
+    (NoDrive "$root/native3-proc-lines.txt"))
+} @('real thread/RSS counters', '64-bit decimal parsing', 'missing file preserves', 'native3 process: all passed')
 foreach ($a in @(@{ Abi = 'x86_64'; Tag = 'x86_64' }, @{ Abi = 'arm64-v8a'; Tag = 'arm64' })) {
   Check "native3 ($($a.Tag)): libjnigraphics direct Bitmap pixels, data space, PNG callback round trip and errors through dalvikvm" {
     N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
