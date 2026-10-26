@@ -221,7 +221,7 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
-- Prepared after source 6293a20 (not part of its running CI): request
+- Prepared after source 6293a20 (not part of CI 40386129131): request
   availability, selection and frame numbering now share one mLock section.
   Previously cancelRequest/flush could clear mRepeating between the two lock
   sections and cause a NullPointerException. A concurrent actual-class
@@ -229,6 +229,9 @@ the microphone (looped, from its start each time recording starts);
   class passes 1,000 contended cancel/flush selections, ordered frame numbers,
   queued-capture priority and disconnected stop on the JDK. Its additive
   Windows check makes the next expected media3 count 36; full CI is pending.
+  Repair source f8f443f is pushed; integration cd0b849 (README only) is
+  included via fa465c7. A bounded camera-thread ART array-transition trace is
+  prepared for coordinator review, but has not been added to this source.
 - Latest full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
   terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
   Integration 634a273 is included. All 28 job results are read: 20 success,
