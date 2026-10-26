@@ -198,14 +198,20 @@ test had no framework jars and ran no assertions; that bootstrap is fixed.
 Windows-2022 also had a media sound-count failure and reached the job limit
 after its last devsvc output; no zero-failure claim is made for that job.
 The prepared 57-case tree, idle/read traps, JNI-on-device APK and executable
-local-exec TLS are not CI-verified. Complete property serial/wait/readonly-
-pointer semantics, logcat and pm/am remain open. The whole track is open.
+local-exec TLS are not CI-verified. Property serial/wait/readonly-pointer ABI
+corrections now pass native host checks; their ART/NDK tests, logcat and pm/am
+remain open. The whole track is open.
 
 **Running now:** combined CI 40338806524 at 983907652ea9ff6fd85c392d562e868b7161a7b5.
 It includes the property bootstrap fix, 57 shell cases, idle/read mailbox
 tests, JNI device APK and executable TLS. Watch with the prescribed 120-second
 interval; log C:\work\gesher-ci-review\exec3-watch-40338806524.log. Do not infer
 NDK startup, real mailbox delivery or device behavior from the local checks.
+Build, package and the exec artifact build pass. The completed Windows-2022
+e2e job passes with zero unexpected failures, required TIC-80 and Puzzles'
+generator pid 1436 exiting 0. Windows-2025 e2e failed all nine APK downloads
+with DNS errors before installation. Both Windows check jobs remain running;
+the new serial/wait corrections and reliability guards are absent from this run.
 
 Continuation history and exact evidence:
 

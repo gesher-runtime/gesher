@@ -61,11 +61,17 @@ defaults seed each new area. ro.* values are write-once; persist.* changes also
 use a locked, flushed replacement file and reload on a new boot. Closed areas
 from old boots are removed when a new area opens; live mappings deny deletion.
 This is a shared property service backend, without Android SELinux property
-contexts or caller-specific write permissions. Those permissions and property
-wait/change-notification APIs remain outside the current implementation. The
-first draft's shared serials are monotonic counters; the complete bionic
-length-byte/clean-dirty-bit serial representation still needs implementing
-and checking with the wait APIs.
+contexts or caller-specific write permissions. Per-property serials now encode
+the value length and an even revision incremented by two on every update,
+including a same-value write. Long ro values retain the bionic long flag and
+legacy error value; read_callback returns the complete immutable value from a
+process-lifetime allocation. Specific-property and area waits release locks
+between observations, use a monotonic relative timeout and leave the output
+serial untouched on timeout. wait_any waits indefinitely for an area change.
+Polling currently bounds notification latency to approximately ten milliseconds.
+These ABI corrections pass native host checks; the ELF/ART tests remain pending.
+Caller-specific permissions and the device's report/poke notification path
+remain open.
 
 Java change callbacks retain the existing framework/libutils report path:
 [SystemProperties JNI](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/jni/android_os_SystemProperties.cpp)
@@ -145,8 +151,12 @@ No new roadmap box is checked before that evidence exists.
 The property backend passes a native-only local driver: build.prop defaults,
 separate-process writes/reads, callbacks and changing serials, empty and long
 read-only values, write-once/invalid-name rejection, boot isolation, persistent
-reload and 32 concurrent persistent writers. The real ART/NDK tests are added
-to 45-exec3 and remain pending CI.
+reload and 32 concurrent persistent writers. Further host checks pass encoded
+serials, stable readonly callback pointers, long-value legacy reads, reentrant
+enumeration, zero/finite timeout, unrelated writes, same-value wakeups and
+cross-process specific/global/wait_any waits. The same property ABI assertions
+are in the NDK child, with Java coordinating actual cross-process writers and
+checking explicit reportSyspropChanged callbacks. These remain pending CI.
 
 An additional APK runs the nine exec2 native checks through JNI inside the
 app's ART process, with real device services, then repeats the Java shell,
@@ -163,8 +173,8 @@ its Java/package/script checks alone do not establish on-device behavior.
 - Real mailbox CI for idle pipe input and interrupted read, plus
   Process.destroy/destroyForcibly verification. Native console interruption
   remains unverified.
-- Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,
-  property permissions/notifications, logcat
+- Shared-property ART/NDK CI proof for the prepared serial/wait/readonly-pointer
+  ABI corrections, property permissions and Binder report/poke notifications, logcat
   formats/filter/clear and real pm/am service calls.
 - Real NDK executable local-exec TLS and the on-device native-process suite
   still require CI proof; unsupported TLS layouts/opcode forms remain explicit.

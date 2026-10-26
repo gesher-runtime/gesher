@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class Exec3PropertiesTest {
     private static Method get;
@@ -23,14 +24,20 @@ public final class Exec3PropertiesTest {
         Process process = builder.redirectErrorStream(true).start();
         try {
             process.getOutputStream().close();
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = process.getInputStream().read(buffer)) >= 0) output.write(buffer, 0, count);
+            FutureTask<String> output = new FutureTask<>(() -> {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = process.getInputStream().read(buffer)) >= 0) bytes.write(buffer, 0, count);
+                return bytes.toString("UTF-8").replace("\r\n", "\n");
+            });
+            Thread reader = new Thread(output, "property-command-output");
+            reader.setDaemon(true);
+            reader.start();
             if (!process.waitFor(20, TimeUnit.SECONDS) || process.exitValue() != wanted) {
-                throw new AssertionError(builder.command() + ": " + output.toString("UTF-8"));
+                throw new AssertionError(builder.command() + ": unexpected exit or timeout");
             }
-            return output.toString("UTF-8").replace("\r\n", "\n");
+            return output.get(5, TimeUnit.SECONDS);
         } finally {
             process.destroyForcibly();
         }
@@ -46,6 +53,39 @@ public final class Exec3PropertiesTest {
         thread.setDaemon(true);
         thread.start();
         return task.get(20, TimeUnit.SECONDS);
+    }
+
+    private static long readySerial(String line) {
+        if (line == null || !line.startsWith("property-ready:")) throw new AssertionError("missing property readiness: " + line);
+        return Long.parseLong(line.substring("property-ready:".length()));
+    }
+
+    private static void waitForChange(String child, String mode, String name, String unrelated) throws Exception {
+        Process process = new ProcessBuilder(child, mode, name).redirectErrorStream(true).start();
+        try {
+            process.getOutputStream().close();
+            BufferedReader input = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+            long previous = readySerial(line(input));
+            boolean specific = mode.equals("property-wait") || mode.equals("property-wait-timeout");
+            command(new ProcessBuilder("setprop", unrelated, "unrelated"), 0);
+            if (specific && !mode.equals("property-wait-timeout")) {
+                if (process.waitFor(150, TimeUnit.MILLISECONDS)) throw new AssertionError("an unrelated property woke a specific waiter");
+                // Writing the same value must still change the serial and wake.
+                command(new ProcessBuilder("setprop", name, property(name)), 0);
+            }
+            String result = line(input);
+            if (mode.equals("property-wait-timeout")) {
+                equal("property-timeout:PASS", result);
+            } else {
+                if (result == null || !result.startsWith("property-woke:") ||
+                        Long.parseLong(result.substring("property-woke:".length())) == previous) {
+                    throw new AssertionError("wait did not report a new serial: " + result);
+                }
+            }
+            if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) throw new AssertionError(mode + " failed");
+        } finally {
+            process.destroyForcibly();
+        }
     }
 
     public static void main(String[] args) throws Exception {
@@ -70,11 +110,12 @@ public final class Exec3PropertiesTest {
         Process watch = new ProcessBuilder(child, "property-watch", name).start();
         try {
             BufferedReader input = new BufferedReader(new InputStreamReader(watch.getInputStream(), StandardCharsets.UTF_8));
-            equal("property-ready:3", line(input));
+            long previous = readySerial(line(input));
+            if (previous != ((12L << 24) | 4)) throw new AssertionError("incorrect Android serial: " + previous);
             command(new ProcessBuilder("setprop", name, "changed after find"), 0);
             watch.getOutputStream().write('\n');
             watch.getOutputStream().close();
-            equal("property-value:changed after find:4", line(input));
+            equal("property-value:changed after find:" + ((18L << 24) | 6), line(input));
             if (!watch.waitFor(20, TimeUnit.SECONDS) || watch.exitValue() != 0) {
                 throw new AssertionError("cached ELF property serial did not change");
             }
@@ -99,6 +140,29 @@ public final class Exec3PropertiesTest {
         equal("fallback\n", command(new ProcessBuilder("getprop", name, "fallback"), 0));
         command(new ProcessBuilder("setprop", "bad..name", "value"), 1);
         System.out.println("Exec3PropertiesTest PASS ro properties are write-once and invalid names fail");
+
+        equal("property-abi:PASS serial, zero timeout, stable ro pointers, long values and reentrant foreach\n",
+                command(new ProcessBuilder(child, "property-abi", "exec3." + suffix), 0));
+        String unrelated = name + ".other";
+        waitForChange(child, "property-wait-timeout", name, unrelated);
+        waitForChange(child, "property-wait", name, unrelated);
+        waitForChange(child, "property-wait-global", name, unrelated);
+        waitForChange(child, "property-wait-any", name, unrelated);
+        System.out.println("Exec3PropertiesTest PASS ELF serial ABI, stable ro callbacks, long legacy values, foreach and cross-process wait/wait_any");
+
+        AtomicInteger reports = new AtomicInteger();
+        Runnable callback = reports::incrementAndGet;
+        type.getMethod("addChangeCallback", Runnable.class).invoke(null, callback);
+        try {
+            type.getMethod("reportSyspropChanged").invoke(null);
+            if (reports.get() != 1) throw new AssertionError("explicit sysprop report did not invoke the Java callback");
+            set.invoke(null, unrelated, "before report");
+            type.getMethod("reportSyspropChanged").invoke(null);
+            if (reports.get() != 2) throw new AssertionError("second sysprop report did not invoke the Java callback");
+        } finally {
+            type.getMethod("removeChangeCallback", Runnable.class).invoke(null, callback);
+        }
+        System.out.println("Exec3PropertiesTest PASS framework reportSyspropChanged invokes registered Java callbacks");
 
         String bootOne = "exec3-test-" + suffix + "-one";
         String bootTwo = "exec3-test-" + suffix + "-two";

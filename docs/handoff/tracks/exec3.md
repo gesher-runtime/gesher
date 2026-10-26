@@ -1,5 +1,14 @@
 # Track brief: exec3
 
+Current continuation status (2026-10-26): the full track remains open. The
+shared property backend now has prepared Android serial encoding, wait and
+wait_any, stable readonly callbacks and long-value legacy behavior, with local
+native checks passing and actual ART/NDK tests pending. CI 40338806524 predates
+those ABI corrections: build/package and Windows-2022 e2e pass; Windows-2025
+e2e fails before install on APK DNS errors; both Windows suites are still
+running. See docs/exec.md for the exact evidence and remaining scope. The
+original brief below remains unchanged.
+
 Native process leftovers reported by the exec2 track. The original brief
 given to the first agent of this track (2026-10-26), kept verbatim. A
 successor reads it together with the "Status and next steps" section in

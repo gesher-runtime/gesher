@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,15 @@ namespace {
 
 constexpr DWORD kCapacity = 4 * 1024 * 1024;
 constexpr uint32_t kMagic = 0x47535052; // GSPR
+constexpr uint32_t kVersion = 2;
+uint32_t Serial(const std::string& name, const std::string& text, uint32_t previous = 0,
+                bool update = false) {
+  if (name.rfind("ro.", 0) == 0 && text.size() >= 92) {
+    return (static_cast<uint32_t>(sizeof(kLongLegacyError) - 1) << 24) | (1U << 16);
+  }
+  return (static_cast<uint32_t>(text.size()) << 24) |
+         (update ? (previous + 2) & 0x00fffffeU : 0);
+}
 struct Header {
   uint32_t magic;
   uint32_t version;
@@ -233,7 +243,7 @@ Snapshot Initial() {
 }
 bool Refresh(Area* area) {
   const auto* header = static_cast<Header*>(area->view);
-  if (header->magic != kMagic || header->version != 1 || header->used > kCapacity - sizeof(Header)) return false;
+  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
   if (header->generation == area->cached_generation) return true;
   std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
   if (!Decode(data, &area->values)) return false;
@@ -247,7 +257,7 @@ bool Publish(Area* area, Snapshot values) {
   uint32_t generation = header->generation + 1;
   if (!generation) generation = 1;
   std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
-  *header = {kMagic, 1, generation, static_cast<uint32_t>(data.size())};
+  *header = {kMagic, kVersion, generation, static_cast<uint32_t>(data.size())};
   area->values = std::move(values);
   area->cached_generation = generation;
   return true;
@@ -304,7 +314,9 @@ Area* Current() { // LocalMutex is held by every caller.
   auto* header = static_cast<Header*>(area->view);
   if (!header->magic) {
     Snapshot initial = Initial();
-    if (!Persist(area->persistent, nullptr, nullptr, &initial) || !Publish(area.get(), std::move(initial))) return nullptr;
+    if (!Persist(area->persistent, nullptr, nullptr, &initial)) return nullptr;
+    for (auto& [name, value] : initial) value.serial = Serial(name, value.text);
+    if (!Publish(area.get(), std::move(initial))) return nullptr;
   }
   if (!Refresh(area.get())) return nullptr;
   Area* result = area.get();
@@ -349,8 +361,8 @@ bool Set(const std::string& name, const std::string& value) {
   if (!lock.held || !Refresh(area)) return false;
   auto found = area->values.find(name);
   if (name.rfind("ro.", 0) == 0 && found != area->values.end()) return false;
-  Value next{value, found == area->values.end() ? 1 : found->second.serial + 1};
-  if (!next.serial) next.serial = 1;
+  Value next{value, Serial(name, value, found == area->values.end() ? 0 : found->second.serial,
+                           found != area->values.end())};
   Snapshot values = area->values;
   values[name] = next;
   if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
@@ -370,6 +382,50 @@ uint32_t AreaSerial() {
   if (!area) return 0;
   MutexLock lock(area->mutex.value);
   return lock.held && Refresh(area) ? area->cached_generation : 0;
+}
+bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+          const WaitTimeout* timeout) {
+  using Clock = std::chrono::steady_clock;
+  if (timeout && (timeout->seconds < 0 || timeout->nanoseconds < 0 || timeout->nanoseconds >= 1000000000)) {
+    return false;
+  }
+  auto deadline = Clock::time_point::max();
+  if (timeout) {
+    auto now = Clock::now();
+    auto maximum = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - now).count();
+    int64_t requested = maximum;
+    if (timeout->seconds <= (maximum - timeout->nanoseconds) / 1000000000) {
+      requested = timeout->seconds * 1000000000 + timeout->nanoseconds;
+    }
+    deadline = now + std::chrono::nanoseconds(requested);
+  }
+  Area* area;
+  {
+    std::lock_guard local(LocalMutex());
+    area = Current();
+  }
+  if (!area) return false;
+  for (;;) {
+    {
+      std::lock_guard local(LocalMutex());
+      MutexLock lock(area->mutex.value);
+      if (!lock.held || !Refresh(area)) return false;
+      uint32_t current = area->cached_generation;
+      if (name) {
+        auto found = area->values.find(*name);
+        if (found == area->values.end()) return false;
+        current = found->second.serial;
+      }
+      if (current != old_serial) {
+        if (new_serial) *new_serial = current;
+        return true;
+      }
+    }
+    auto now = Clock::now();
+    if (now >= deadline) return false;
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+    Sleep(static_cast<DWORD>(std::min<int64_t>(10, std::max<int64_t>(1, remaining))));
+  }
 }
 
 } // namespace gesher::properties
