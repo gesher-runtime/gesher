@@ -66,3 +66,12 @@ by the native probe; apps continue activating Windows' source. Module and probe
 compile with local g++ -Wall -Wextra -Werror (syntax only). CMake/graphics.yml
 build and collect the probe; actual CI runtime verification is still pending.
 Candidate-window discovery, TSF and old-target resize remain open.
+
+The next source also builds a separate target-SDK-28 winlegacy.apk and runs
+its unpadded content through IME show/hide in both process modes, checking
+framework content height, editor bounds and unchanged native client size.
+It uses the existing keyboard-message injection for the Android resize path;
+the separate COM probe verifies the real source/handler/window-event path.
+The legacy fixture compiles locally against saved framework classes and the
+PowerShell parses, but no runtime behavior is claimed yet. No production
+resize workaround has been added without a failing runtime observation.
