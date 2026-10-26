@@ -223,7 +223,9 @@ the microphone (looped, from its start each time recording starts);
 - Running: ci 40318189310 at 9158120f957ea01935d071aa9c80b4791ba673f5,
   the combined callback/xrun fix plus integration 4f99afd. No result from
   this run is verified yet. See the [source API boundary inventory](media-api-inventory.md)
-  for implemented subsets and remaining reflection stand-ins.
+  for implemented subsets and remaining reflection stand-ins, and the
+  [NDK export baseline](handoff/native-api-coverage.json) for all 313
+  unresolved media exports assigned to the follow-up track.
 - Branch wip/media-soft, integration 4f99afd included (surfaces and required
   TIC-80 e2e matrix; native2 also included). Most recent completed
   full run: ci 40305909645 at 4a2a28ecb4e04467b72fa642cc05e67b6d82fa1f.
