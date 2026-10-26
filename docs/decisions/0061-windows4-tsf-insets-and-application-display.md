@@ -37,11 +37,12 @@ updates it in the system server with the top-resumed task.
 
 54-windows4.ps1 has executable cases for existing Display objects and registered
 listeners, multiple visible portrait/landscape tasks, focus changes and both
-process modes; their runtime result is pending. The new display helper and TaskConfiguration compile against saved
-framework/core classes locally; that is syntax evidence only. No runtime
-behavior or roadmap milestone is claimed.
+process modes; their corrected-source runtime result is pending. The display
+helper, TaskConfiguration and actual graphics-dex assertions build in targeted
+framework CI 40416561427 at d50084d. That is build evidence only; no current
+Android behavior or roadmap milestone is claimed.
 
-The COM-source IFrameworkInputPane test passes standalone CI 40414421254 on
+The COM-source IFrameworkInputPane test passes standalone CI 40415866523 on
 Windows 2022 and 2025. That fixture uses the real production HWND, COM source
 and condition-variable queue; real gesher-base/eventfd and Android delivery
 remain a separate full-CI requirement.
@@ -60,7 +61,7 @@ It implements ITextStoreACP locking/UTF-16 access, selection and edit events,
 composition-sink events and revision/epoch protection against stale replies.
 A restricted/unavailable document is cleared and its thread manager detached.
 Native COM sink/service tests, actual thread-manager activation and a real
-service DLL pass standalone CI 40414421254, including the production native
+service DLL pass standalone CI 40415866523, including the production native
 IME adapter, reentrant owner teardown, epochs, range geometry and partial
 compositions. A real EditText fixture exercises both process modes in the
 next combined CI. TSF key
@@ -92,5 +93,5 @@ The source geometry preserves a visible floating pane separately from edge
 occlusion: a rectangle must span the client's complete bottom edge to become
 bottom rows; a floating overlap has an empty visible IME source frame. The
 real COM probe covers middle/narrow floating rectangles and redocking, while
-the old-target APK checks visible-with-zero-insets content behavior. Native
-local proof does not replace the pending Android/runtime CI verification.
+the old-target APK checks visible-with-zero-insets content behavior. Standalone
+native CI does not replace the pending Android/runtime CI verification.
