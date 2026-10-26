@@ -70,6 +70,7 @@ public class RecordActivity extends Activity {
 
     static native String aaudioInputCallback();
     static native String aaudioInputRead();
+    static native String aaudioInputOverruns();
     static native String openslRecorder();
 
     @Override
@@ -316,6 +317,7 @@ public class RecordActivity extends Activity {
     void ndk() {
         say("ndk aaudio input callback: " + aaudioInputCallback());
         say("ndk aaudio input read: " + aaudioInputRead());
+        say("ndk aaudio input overruns: " + aaudioInputOverruns());
         say("ndk opensl recorder: " + openslRecorder());
     }
 

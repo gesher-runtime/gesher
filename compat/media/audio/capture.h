@@ -80,6 +80,8 @@ class CaptureStream {
   // The frame captured last and the CLOCK_MONOTONIC time it was captured at.
   bool Timestamp(int64_t* frames, int64_t* time_ns) const;
   uint32_t overrun_frames() const;
+  // Cumulative transitions into overrun, distinct from the frames discarded.
+  uint32_t overrun_count() const;
   size_t capacity_frames() const { return params_.capacity_frames; }
 
   int SetMarker(uint32_t frame);
@@ -110,6 +112,8 @@ class CaptureStream {
   std::vector<uint8_t> ring_;
   uint64_t written_ = 0, read_ = 0;  // frames
   uint32_t overruns_ = 0;
+  uint32_t overrun_count_ = 0;
+  bool was_overrun_ = false;
   int64_t last_ns_ = 0;
   // The resampler's state: the fractional source position and the last frame.
   double phase_ = 0;

@@ -375,6 +375,7 @@ int CaptureStream::Start() {
     read_ = written_;
     primed_ = false;
     phase_ = 0;
+    was_overrun_ = false;
   }
   engine_->Wake();
   return kOk;
@@ -400,6 +401,7 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
   std::vector<std::function<void()>> calls;
   {
     std::lock_guard<std::mutex> lock(mu_);
+    if (!started_ || released_) return;
     const uint32_t ch = params_.channels;
     // Linear interpolation from src_rate to the stream's rate; channels: mono
     // sources are copied to every channel, otherwise channel c takes c (or the
@@ -448,7 +450,13 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
     const size_t cap = params_.capacity_frames;
     size_t room = cap - static_cast<size_t>(written_ - read_);
     size_t take = std::min(n, room);
-    if (take < n) overruns_ += static_cast<uint32_t>(n - take);
+    if (take < n) {
+      overruns_ += static_cast<uint32_t>(n - take);
+      if (!was_overrun_) ++overrun_count_;
+      was_overrun_ = true;
+    } else {
+      was_overrun_ = false;
+    }
     std::vector<uint8_t> pcm(take * frame_size_);
     FloatToPcm(out.data(), take * ch, params_.format, pcm.data());
     for (size_t k = 0; k < take; k++) {
@@ -537,6 +545,11 @@ bool CaptureStream::Timestamp(int64_t* frames, int64_t* time_ns) const {
 uint32_t CaptureStream::overrun_frames() const {
   std::lock_guard<std::mutex> lock(mu_);
   return overruns_;
+}
+
+uint32_t CaptureStream::overrun_count() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return overrun_count_;
 }
 
 int CaptureStream::SetMarker(uint32_t frame) {

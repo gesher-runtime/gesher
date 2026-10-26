@@ -219,113 +219,58 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — stopped by the coordinator, 2026-10-26
-- Running: ci 40305909645 at 4a2a28e, including integration 91c195d/native2,
-  the optional MediaCommunicationManager cast guard and missing-boot-class
-  diagnostics. No new runtime result is verified yet.
-- Running: ci 40299212277 at a1a0f43, with integration a98dda9. Verify the
-  new session round trip, NDK tones, all existing media checks and Just
-  Player's e2e; prior runs are recorded below for diagnosis.
-- That run's build/package pass, but e2e still has 1 unexpected failure:
-  Just Player now reaches a preallocated NoClassDefFoundError with no
-  descriptor/stack. Windows test jobs are still running. Added opt-in ART
-  patch 0590 to log missing android/com.android boot descriptors, enabled
-  only by GESHER_TRACE_MISSING_BOOT_CLASSES in the e2e job, and included
-  those lines in Just Player diagnostics. `git apply --check` against the
-  saved ART source passes; this diagnostic patch is not compiled/CI-verified.
-  Read both current test logs before the next dispatch, then merge current
-  integration (native2, 8b1b09d or later) and fix/diagnose the actual missing
-  dependency. Do not count package success as app/session verification.
-- Windows results are now read: 5 failures on 2022 (badssl timeouts plus
-  the two session checks), 3 on 2025 (known audio timing plus the two
-  session checks). NDK read/recorder tones and H.264 picture counts now
-  pass in both modes/runners. Session creation is the common remaining
-  NoClassDefFoundError, also seen by Just Player. The pinned constructor
-  unconditionally casts a null media_communication service to the optional
-  mainline MediaCommunicationManager, whose runtime class is not shipped.
-  Framework patch 0591 guards that cast when the service is absent; the
-  test logs whether that optional class is present and still requires the
-  complete legacy-session round trip. This is pending CI, not proof that
-  the missing Session2/media module is implemented. Added its source path
-  to aosp.lock for patch application.
-- Lead-engineer continuation: ci 40292991000 at fc99140 completed with
-  4 failures on windows-2022 and 5 on windows-2025; package passed, e2e
-  had 1 unexpected failure. The recording/mux/recorder/ImageReader paths
-  reached their checks. Both modes/runners fail the NDK read/recorder tones
-  and count 61 encoded H.264 buffers instead of 60 pictures (one is codec
-  configuration; decoding correctly returns all 60 pictures). windows-2025
-  also found no WebM output tones; investigate that separately.
-- Pending verification: AAudio now drains each capture burst when a read
-  exceeds ring capacity, instead of waiting for the whole request and
-  overflowing. CaptureEngine remembers an idle stop/start transition even
-  when the next stream starts before its thread wakes, and discards a stale
-  pull at that transition. The H.264 test counts data buffers separately
-  from configuration while retaining the exact decoded frame/color checks.
-- Just Player's diagnostic log identifies the launch failure: the platform
-  MediaServiceManager was never initialized. Bootstrap now installs it and
-  Services provides a Binder media_session service, generated owner/controller
-  stubs, metadata/state/queue/extras, controller transport/callbacks, active
-  tokens and owner-death cleanup. recordapp checks this in both modes.
-  Local Gesher C++ syntax checks pass in standalone logging mode, and the
-  test app compiles with JDK 21 against the saved framework classes. That
-  saved class set lacks AudioAttributes, so the service's full local compile
-  is unavailable (JDK 17 also rejected its version-65 class files); CI must
-  compile and execute it. Shared edits: app/build.sh, Main.bootstrap,
-  Services.java and 50-services.ps1's expected service lists.
-- Session work still open: Windows system media transport controls, media-key
-  receiver fallback, Session2/media communication, listener permission/user
-  filtering and external audio-volume change notifications. The new session
-  service is not claimed complete or verified.
-- Continuation: read ci 40287172595's windows-2022 job 121463451415 and
-  e2e job 121464252568. The MPEG-4 part 2 decoder produces no frames (1x1
-  output); prepend csd-0's VOL to its first sample as well as setting the
-  sequence-header attribute, and resend configuration after flush. Unverified.
-- The test job stops before any media3 checks with a null-valued-expression
-  error: 59-media3's no-endpoint branch overwrites PowerShell's $Matches with
-  a second regex, then dereferences the discarded capture. Preserve the
-  capture by ordering that regex last. Added track/line/stack diagnostics to
-  the test dispatcher so future script exceptions remain visible in job logs.
-- Just Player fails to reach its first frame (launcher exit 1); e2e has
-  `1 unexpected failures`. Pinned its SHA-256 from that log and enabled its
-  diagnostic log output: the first exception shown is a missing positions
-  file, which alone does not establish the launch failure's cause. Stage 3
-  remains unverified and needs a new full run after integration is merged.
-- Running: ci 40292991000 at fc99140, after integration 7d6a82e (windows3).
-  Read 38-media and 59-media3 on both runners, confirm that the test scripts
-  reach their zero-failure summaries, and read Just Player's diagnostic lines
-  in e2e. Do not infer stage 3 coverage from a successful build alone.
-- Branch wip/media-soft. Last fully green run: 40258938663 (b57bb74, stage 2 +
-  software decoders). In progress when stopped: **ci 40287172595** (the first
-  build of all the stage 3 code that links; read its test logs first).
-- ci 40262576561 (part 1 leftovers, commit before 0ca7cc2): built and ran; on both
-  runners PASS for the soft-only run (libavc H.264, m4v H.263), H.263, WebM
-  VP9+Opus, MediaPlayer/MediaMetadataRetriever over the software decoders, WebM
-  audio reaching the output. FAILed: MPEG-4 part 2 (csd-0 missing: ESDS not
-  converted; fixed since by `AddCsdFromEsds`, unverified) and the VP8+Vorbis
-  WebM seek line (1003 ms; the app now rounds to 10 ms, unverified).
-  media_probe mf: both runners have Media Foundation's AAC and H.264 encoders,
-  no Opus/VP8/VP9/HEVC encoders.
-- ci 40285626240 (0ca7cc2): everything compiled; link failed on mkvmuxer's
-  MkvWriter (fixed: mkvwriter.cc added; that fix is what 40287172595 builds).
-- Done, not verified: the capture engine (capture.h), AudioRecord, AAudio input,
-  OpenSL ES recorder, RECORD_AUDIO, MediaCodec encoders (MF H.264/AAC, libopus,
-  libavc fallback), input surfaces, MediaMuxer (MP4, WebM), Ogg/ADTS writers,
-  MediaRecorder (audio; Surface; Camera2 through its Surface), decoder output
-  into an ImageReader, recordapp + 59-media3.ps1 (single process and Gesher
-  device), Just Player in tests/e2e/apps.json (sha256 empty: pin it from the
-  e2e log's "sha256 ... (not pinned yet)" line), ADR 0059, the Recording section.
-- Not started: VIDEO_SOURCE_CAMERA (legacy Camera recording), persistent input
-  surfaces, VP8/VP9 encoders, 10-bit output, roadmap boxes for stage 3 (tick
-  only what CI verifies).
-- Next: read 40287172595's 38-media/59-media3 lines on both runners, fix what
-  fails (expected weak spots: Camera2 accepting the recorder's QueueSurface
-  (RGBA) as an output; MF AAC/H.264 MFT setup order; mkvmuxer frame ordering;
-  exact durations in the regexes of 59-media3.ps1), then pin Just Player's SHA,
-  merge origin/phase4/integration, a final run, docs and roadmap.
-- Pitfalls: the Bash tool eats backslashes (write Python edit scripts with the
-  Write tool); NetFree blocks `gh run download` of artifacts (compile-check test
-  apps with javac 17 against gfx-local's framework-classes after rewriting class
-  versions to 61: scratch script downver.py idea).
+### media3 (stage 3) — continuing, 2026-10-26
+- Branch wip/media-soft, integration 91c195d/native2 included. Most recent
+  full run: ci 40305909645 at 4a2a28ecb4e04467b72fa642cc05e67b6d82fa1f.
+  All required builds, package and e2e passed; windows-2025 job 121531293918
+  ended `0 test(s) failed`; windows-2022 job 121531293975 ended
+  `1 test(s) failed`. All job metadata and both Windows logs were read.
+- The sole failure is the windows-2022 single-process NDK AAudio callback
+  tone check: 48000 frames, 50+ callbacks and all frames read, but 640.0 Hz
+  then 963.3 Hz instead of 750/1250 Hz. The blocking AAudio read and OpenSL
+  recorder pass both modes/runners. The old callback test did not log
+  overruns; scheduler preemption overflowing its 80 ms ring is a hypothesis,
+  not yet proven. No threshold is relaxed.
+- Pending CI: the lossless callback tone test requests a 1-second ring and
+  requires zero xruns as well as the same exact frames and tone checks.
+  Its callback sample count and OpenSL's are C11 atomics. Capture Push
+  ignores stopped/released targets. AAudio and AudioTrack report cumulative
+  overrun/underrun incidents rather than booleans or lost-frame counts.
+  A new AAudio regression check requires three cumulative overrun events
+  across unread-ring stop/start cycles, in both modes/runners.
+- Verified by ci 40305909645 in both modes/runners: AudioRecord's formats,
+  timestamps, markers and periods; encoder listings; AAC/Opus MediaCodec
+  encode/mux/decode; H.264 ByteBuffer, Image and input-Surface encoding;
+  MPEG-4 A/V mux; audio MediaRecorder (MP4, ADTS, Ogg, WebM), Surface A/V
+  MediaRecorder and Camera2-to-recorder test-camera recording; decoder
+  output into an ImageReader; RECORD_AUDIO refusal. The runners have no
+  physical audio endpoint: input verification uses GESHER_AUDIO_SOURCE's
+  WAV file and the camera uses GESHER_CAMERA_TEST.
+- Both session-service round trips PASS, including metadata/state/queue/
+  extras, controller commands and updates, active tokens and release.
+  e2e prints `PASS  e2e: com.brouken.player 0.217 (Just Player) installs,
+  draws its first frame (not blank), reacts to input, closes and its process
+  ends`, and `0 unexpected failures`. Its SHA-256 is pinned in apps.json.
+  Framework patch 0591 guards a null media_communication manager cast so
+  legacy sessions work without the optional module; Session2 is still absent.
+  ART patch 0590 is opt-in missing-boot-class diagnostics, enabled only in
+  CI e2e by GESHER_TRACE_MISSING_BOOT_CLASSES.
+- Before the final CI: merge current origin/phase4/integration, push this
+  fix, dispatch ci.yml, then read both test logs and package/e2e conclusions.
+  Tick roadmap boxes only from actual CI evidence. Do not infer that every
+  Android media API is implemented from these scoped end-to-end checks.
+- Explicit remaining contracts and acceptance checks are in
+  [the media4 follow-up brief](handoff/tracks/media4.md): Windows system
+  media transport controls, media-key receiver fallback, Session2/media
+  communication, listener permission/user filtering and external volume
+  notifications; recorder lifecycle/limits/pause coverage and physical
+  endpoint verification; unsupported encoders, persistent input surfaces,
+  legacy Camera recording and hardware encoding. These are open work.
+- Historical diagnosis: 40292991000 exposed oversized blocking reads,
+  capture stop/start source reset and codec-config-vs-picture accounting;
+  40299212277 isolated the missing optional session module. Those runs were
+  not green. The last fully green media branch run remains 40258938663 at
+  b57bb74 (stage 2 + software decoders), until this continuation is verified.
 
 ### Done and verified
 - **CI run 40129230078** (ci, windows-2022 and windows-2025, 0 failed each;

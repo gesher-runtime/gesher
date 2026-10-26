@@ -104,9 +104,11 @@ $recordChecks = @(
      P = @("${t}audiorecord 16-bit mono 44100: min buffer ok, state 1, recording 3, read 44100 frames, 750 Hz then 1250 Hz, level ok, timestamp true, marker true, periodic 8\+, routed to type 15",
            "${t}audiorecord float stereo 48000 \(builder\): channels 2, read 48000 frames, 750 Hz then 1250 Hz") },
   @{ Name = 'AAudio input (a data callback stream, a blocking read) and an OpenSL ES recorder (an Android simple buffer queue) from an app''s NDK library: the microphone''s tones'
-     P = @("${t}ndk aaudio input callback: direction input, rate 48000, 48000 frames, callbacks 50\+, frames read all, 750 Hz then 1250 Hz",
+     P = @("${t}ndk aaudio input callback: direction input, rate 48000, 48000 frames, callbacks 50\+, frames read all, xruns 0, 750 Hz then 1250 Hz",
            "${t}ndk aaudio input read: stereo 16-bit 44100, read 44100 frames, 750 Hz then 1250 Hz",
            "${t}ndk opensl recorder: state recording, 16000 frames, 10 buffers, position 1 s, 750 Hz then 1250 Hz") },
+  @{ Name = 'AAudio input overrun count is cumulative across three stop/start cycles with an unread capture ring'
+     P = @("${t}ndk aaudio input overruns: 3 stop/start cycles, cumulative overruns 3\+") },
   @{ Name = 'MediaCodecList lists the encoders (H.264, AAC, Opus)'
      P = @("${t}codec list: avc encoder c2\.gesher\.avc\.encoder, aac encoder c2\.gesher\.aac\.encoder, opus encoder c2\.gesher\.opus\.encoder") },
   @{ Name = 'MediaCodec encoders and MediaMuxer: AAC into MPEG-4, Opus into WebM (the codec-config buffers, csd-0), read back by MediaExtractor and decoded to the tone'
