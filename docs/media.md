@@ -228,9 +228,17 @@ the microphone (looped, from its start each time recording starts);
   causes described below. Source patch application and PowerShell parsing
   pass. Main **121901592754** succeeds in 3m39s: both changed ART objects
   (jni_internal.cc and thread_list.cc) compile with -Werror and dalvikvm /
-  oatdump link. Host tools **121901593406** succeed in 20m24s and graphics
-  succeed in 16m17s; framework/runtime evidence is pending. All original
-  36 media3, two-second/30-frame and boot-timing criteria are retained.
+  oatdump link. Host tools **121901593406** succeed in 20m24s, graphics in
+  16m17s and framework **121909747843** in 8m44s (javac no errors and
+  services-tests.dex generated). Media **121913106190** succeeds in 1m5s;
+  ffmpeg was already installed and all three unchanged generators/APKs run.
+  Package **121913530737** passes actual installed oatdump, image/fonts,
+  install/dexopt, shortcut/association, window/input and complete uninstall
+  cleanup. E2e **121914371093** (2022) / **121914371153** (2025) each pass
+  four transport fixtures, all ten apps including Just Player/TIC-80/Puzzles,
+  association/shortcut launch and `0 unexpected failures`. Both complete
+  Windows runtime jobs are still pending. All original 36 media3,
+  two-second/30-frame and boot-timing criteria are retained.
 - Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
