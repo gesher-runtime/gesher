@@ -81,7 +81,6 @@ public class ConnectivityManager {
     public static final int MULTIPATH_PREFERENCE_UNMETERED = MULTIPATH_PREFERENCE_HANDOVER
             | MULTIPATH_PREFERENCE_RELIABILITY | MULTIPATH_PREFERENCE_PERFORMANCE;
 
-    private static volatile Network sProcessNetwork;
 
     private final Context mContext;
 
@@ -212,7 +211,8 @@ public class ConnectivityManager {
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN, !vpn)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET,
                         !n.gateways.isEmpty() || n.isDefault || vpn)
-                .setCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED, n.internet)
+                .setCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED, n.internet && !n.captivePortal)
+                .setCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL, n.captivePortal)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED, !n.metered)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING, !n.roaming)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED, !n.congested);
@@ -395,23 +395,22 @@ public class ConnectivityManager {
     }
 
     public boolean bindProcessToNetwork(Network network) {
-        sProcessNetwork = network;
-        return true;
+        return setProcessDefaultNetwork(network);
     }
 
     public Network getBoundNetworkForProcess() {
-        return sProcessNetwork;
+        return getProcessDefaultNetwork();
     }
 
     @Deprecated
     public static boolean setProcessDefaultNetwork(Network network) {
-        sProcessNetwork = network;
-        return true;
+        return WindowsNetworks.bindProcess(network == null ? 0 : network.netId);
     }
 
     @Deprecated
     public static Network getProcessDefaultNetwork() {
-        return sProcessNetwork;
+        int netId = WindowsNetworks.processNetwork();
+        return netId == 0 ? null : new Network(netId);
     }
 
     // --- callbacks ---------------------------------------------------------------

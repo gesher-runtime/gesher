@@ -5,6 +5,8 @@
 #include <iphlpapi.h>
 #include <mstcpip.h>
 #include <mswsock.h>
+#include <netioapi.h>
+#include <windns.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -12,12 +14,15 @@
 #include <string.h>
 
 #include <mutex>
+#include <atomic>
 
 #include "internal.h"
 #include "socket_internal.h"
 
 namespace gesher::ws {
 namespace {
+
+std::atomic<uint32_t> g_process_interface{0};
 
 // gesher-base defines bind, connect, ... itself, with Linux's types
 // (socket.cc, netdb.cc). Linking Winsock's functions of the same names would
@@ -221,7 +226,7 @@ bool Startup() {
   return true;
 }
 
-Socket Open(Family family, Type type, int protocol) {
+Socket Open(Family family, Type type, int protocol, bool process_binding) {
   int win_family = ToWinFamily(family);
   int win_type = ToWinType(type);
   if (win_family < 0) return errno = EAFNOSUPPORT, kInvalidSocket;
@@ -243,7 +248,92 @@ Socket Open(Family family, Type type, int protocol) {
     DWORD bytes;
     WSAIoctl(s, SIO_UDP_CONNRESET, &report, sizeof(report), nullptr, 0, &bytes, nullptr, nullptr);
   }
+  uint32_t ifindex = ProcessInterface();
+  if (process_binding && (win_family == AF_INET || win_family == AF_INET6) && ifindex != 0 &&
+      BindInterface(static_cast<Socket>(s), ifindex) != 0) {
+    int saved = errno;
+    closesocket(s);
+    errno = saved;
+    return kInvalidSocket;
+  }
   return static_cast<Socket>(s);
+}
+
+int ValidateInterface(uint32_t ifindex) {
+  if (ifindex == 0) return 0;
+  MIB_IF_ROW2 row{};
+  row.InterfaceIndex = ifindex;
+  if (GetIfEntry2(&row) != NO_ERROR) return errno = ENONET, -1;
+  if (row.OperStatus != IfOperStatusUp) return errno = ENETDOWN, -1;
+  return 0;
+}
+
+int SetProcessInterface(uint32_t ifindex) {
+  if (ValidateInterface(ifindex) != 0) return -1;
+  g_process_interface.store(ifindex);
+  return 0;
+}
+
+uint32_t ProcessInterface() { return g_process_interface.load(); }
+
+int SocketFamily(Socket s) {
+  WSAPROTOCOL_INFOW info{};
+  int length = sizeof(info);
+  if (Api().getsockopt(s, SOL_SOCKET, SO_PROTOCOL_INFOW,
+                       reinterpret_cast<char*>(&info), &length) != 0) return Fail();
+  return info.iAddressFamily;
+}
+
+int BoundInterface(Socket s, uint32_t* ifindex) {
+  int family = SocketFamily(s);
+  if (family < 0) return -1;
+  DWORD value = 0;
+  int length = sizeof(value);
+  int level = family == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP;
+  int option = family == AF_INET6 ? IPV6_UNICAST_IF : IP_UNICAST_IF;
+  if (family != AF_INET && family != AF_INET6) return errno = EAFNOSUPPORT, -1;
+  if (Api().getsockopt(s, level, option, reinterpret_cast<char*>(&value), &length) != 0) return Fail();
+  // Both getters return host byte order, including IP_UNICAST_IF.
+  *ifindex = value;
+  return 0;
+}
+
+int BindInterface(Socket s, uint32_t ifindex) {
+  if (ValidateInterface(ifindex) != 0) return -1;
+  int family = SocketFamily(s);
+  if (family < 0) return -1;
+  if (family != AF_INET && family != AF_INET6) return errno = EAFNOSUPPORT, -1;
+  sockaddr_storage peer{};
+  int peer_length = sizeof(peer);
+  if (Api().getpeername(s, reinterpret_cast<sockaddr*>(&peer), &peer_length) == 0) {
+    return errno = EISCONN, -1;
+  }
+  if (WSAGetLastError() != WSAENOTCONN && WSAGetLastError() != WSAEINVAL) return Fail();
+  DWORD v6only = 1;
+  int length = sizeof(v6only);
+  if (family == AF_INET6 && Api().getsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY,
+      reinterpret_cast<char*>(&v6only), &length) != 0) return Fail();
+  // Dual-stack sockets need both options. IPv4's index is in network byte
+  // order; IPv6's is in host byte order (Microsoft's UNICAST_IF contract).
+  DWORD previous4 = 0;
+  bool ipv4 = family == AF_INET || v6only == 0;
+  if (ipv4) {
+    length = sizeof(previous4);
+    if (Api().getsockopt(s, IPPROTO_IP, IP_UNICAST_IF,
+        reinterpret_cast<char*>(&previous4), &length) != 0) return Fail();
+    DWORD index4 = htonl(ifindex);
+    if (Api().setsockopt(s, IPPROTO_IP, IP_UNICAST_IF,
+        reinterpret_cast<const char*>(&index4), sizeof(index4)) != 0) return Fail();
+  }
+  if (family == AF_INET6 && Api().setsockopt(s, IPPROTO_IPV6, IPV6_UNICAST_IF,
+      reinterpret_cast<const char*>(&ifindex), sizeof(ifindex)) != 0) {
+    int saved = ErrnoFromWsa(WSAGetLastError());
+    previous4 = htonl(previous4);
+    if (ipv4) Api().setsockopt(s, IPPROTO_IP, IP_UNICAST_IF,
+        reinterpret_cast<const char*>(&previous4), sizeof(previous4));
+    return errno = saved, -1;
+  }
+  return 0;
 }
 
 int Close(Socket s) { return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail(); }
@@ -576,8 +666,8 @@ bool NarrowInto(const wchar_t* utf16, char* out, size_t out_len) {
 
 }  // namespace
 
-GaiError Resolve(const char* node, const char* service, const AddrInfo* hints,
-                     std::vector<AddrInfo>* results) {
+GaiError ResolveDefault(const char* node, const char* service, const AddrInfo* hints,
+                       std::vector<AddrInfo>* results) {
   if (!Startup()) return GaiError::kSystem;
   ADDRINFOW win_hints = {};
   if (hints != nullptr) {
@@ -611,6 +701,75 @@ GaiError Resolve(const char* node, const char* service, const AddrInfo* hints,
   }
   FreeAddrInfoW(list);
   return results->empty() ? GaiError::kNoData : GaiError::kOk;
+}
+
+// mingw-w64 has DNS_QUERY_RESULT but omits DNS_QUERY_REQUEST/DnsQueryEx.
+// This is Windows' version-1 request layout, with synchronous completion.
+struct InterfaceDnsRequest {
+  ULONG version;
+  PCWSTR name;
+  WORD type;
+  ULONG64 options;
+  void* servers;
+  ULONG ifindex;
+  PDNS_QUERY_COMPLETION_ROUTINE completion;
+  void* context;
+};
+
+GaiError Resolve(const char* node, const char* service, const AddrInfo* hints,
+                 std::vector<AddrInfo>* results, uint32_t ifindex) {
+  if (ifindex == UINT32_MAX) ifindex = ProcessInterface();
+  if (ifindex != 0 && ValidateInterface(ifindex) != 0) return GaiError::kSystem;
+  unsigned char numeric[16];
+  if (ifindex == 0 || node == nullptr || (hints != nullptr && (hints->flags & kAiNumericHost)) ||
+      Pton(Family::kInet, node, numeric) == 1 || Pton(Family::kInet6, node, numeric) == 1) {
+    return ResolveDefault(node, service, hints, results);
+  }
+  using Query = DNS_STATUS (WINAPI*)(InterfaceDnsRequest*, PDNS_QUERY_RESULT, void*);
+  struct DnsApi {
+    Query query;
+    decltype(&DnsFree) release;
+  };
+  static const DnsApi dns = [] {
+    HMODULE module = LoadLibraryExW(L"dnsapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    DnsApi api{};
+    LoadProc(module, "DnsQueryEx", &api.query);
+    LoadProc(module, "DnsFree", &api.release);
+    return api;
+  }();
+  std::wstring name = Widen(node);
+  Family family = hints != nullptr ? hints->family : Family::kUnspec;
+  if (family != Family::kUnspec && family != Family::kInet && family != Family::kInet6) {
+    return GaiError::kFamily;
+  }
+  bool mapped = hints != nullptr && (hints->flags & kAiV4Mapped);
+  const WORD types[] = {DNS_TYPE_AAAA, DNS_TYPE_A};
+  for (WORD type : types) {
+    if (type == DNS_TYPE_AAAA && family == Family::kInet) continue;
+    if (type == DNS_TYPE_A && family == Family::kInet6 && !mapped) continue;
+    if (type == DNS_TYPE_A && family == Family::kInet6 && !results->empty() &&
+        !(hints->flags & kAiAll)) continue;
+    InterfaceDnsRequest request{DNS_QUERY_REQUEST_VERSION1, name.c_str(), type,
+                               DNS_QUERY_BYPASS_CACHE, nullptr, ifindex, nullptr, nullptr};
+    DNS_QUERY_RESULT answer{};
+    answer.Version = DNS_QUERY_RESULTS_VERSION1;
+    DNS_STATUS status = dns.query(&request, &answer, nullptr);
+    if (status == ERROR_SUCCESS) {
+      for (auto* record = answer.pQueryRecords; record != nullptr; record = record->pNext) {
+        if (record->wType != type) continue;
+        char address[64];
+        const void* bytes = type == DNS_TYPE_A ? static_cast<const void*>(&record->Data.A.IpAddress)
+                                              : static_cast<const void*>(&record->Data.AAAA.Ip6Address);
+        if (!Ntop(type == DNS_TYPE_A ? Family::kInet : Family::kInet6, bytes,
+                  address, sizeof(address))) continue;
+        AddrInfo numeric_hints = hints != nullptr ? *hints : AddrInfo();
+        numeric_hints.flags |= kAiNumericHost;
+        ResolveDefault(address, service, &numeric_hints, results);
+      }
+    }
+    if (answer.pQueryRecords != nullptr) dns.release(answer.pQueryRecords, DnsFreeRecordList);
+  }
+  return results->empty() ? GaiError::kNoName : GaiError::kOk;
 }
 
 GaiError ReverseResolve(const Address& address, char* host, size_t host_len, char* serv,

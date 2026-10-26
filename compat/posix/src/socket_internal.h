@@ -69,7 +69,7 @@ struct PollEntry {
 // Starts Winsock once; false (errno set) if it cannot.
 bool Startup();
 
-Socket Open(Family family, Type type, int protocol);
+Socket Open(Family family, Type type, int protocol, bool process_binding = true);
 int Close(Socket s);
 Socket Duplicate(Socket s);  // a second socket for the same endpoint
 int SetNonBlocking(Socket s, bool on);
@@ -81,6 +81,11 @@ int GetSockName(Socket s, Address* address);
 int GetPeerName(Socket s, Address* address);
 int Shutdown(Socket s, bool read, bool write);
 int Available(Socket s, int* bytes);  // FIONREAD
+int BindInterface(Socket s, uint32_t ifindex);
+int BoundInterface(Socket s, uint32_t* ifindex);
+int SetProcessInterface(uint32_t ifindex);
+uint32_t ProcessInterface();
+int ValidateInterface(uint32_t ifindex);
 
 // Gather/scatter I/O; `to`/`from` may be null.
 ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to);
@@ -124,7 +129,7 @@ struct AddrInfo {
 };
 
 GaiError Resolve(const char* node, const char* service, const AddrInfo* hints,
-                     std::vector<AddrInfo>* results);
+                 std::vector<AddrInfo>* results, uint32_t ifindex = UINT32_MAX);
 
 inline constexpr int kNiNumericHost = 1;
 inline constexpr int kNiNumericServ = 2;

@@ -22,6 +22,13 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.InetAddress;
+import java.net.Inet4Address;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.DatagramSocket;
+import java.net.Proxy;
+import java.io.FileDescriptor;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -86,6 +93,7 @@ public class NetActivity extends Activity {
                 Web3.log("net PendingIntent request: " + (network.await(20, TimeUnit.SECONDS)
                         ? got.get() : "not sent"));
                 cm.releaseNetworkRequest(pi);
+                if (!pac) binding(cm);
                 String host = pac ? "pac-proxied.test" : "web3-proxied.test";
                 Web3.log("net http://" + host + "/net: " + get("http://" + host + "/net"));
                 if (pac) {
@@ -99,6 +107,82 @@ public class NetActivity extends Activity {
             runOnUiThread(this::finish);
         }, "web3-net");
         io.start();
+    }
+
+    private static int socketInterface(Socket socket) throws Exception {
+        FileDescriptor fd = (FileDescriptor) Socket.class.getMethod("getFileDescriptor$").invoke(socket);
+        return (Integer) Class.forName("com.gesher.net.WindowsNetworks")
+                .getMethod("socketInterface", FileDescriptor.class).invoke(null, fd);
+    }
+
+    private static void require(boolean success, String message) {
+        if (!success) throw new AssertionError(message);
+    }
+
+    private static void binding(ConnectivityManager cm) throws Exception {
+        Network chosen = cm.getActiveNetwork();
+        require(chosen != null, "no active network");
+        int index = (int) (chosen.getNetworkHandle() >>> 32) - 100;
+        InetAddress local = null;
+        for (android.net.LinkAddress address : cm.getLinkProperties(chosen).getLinkAddresses()) {
+            if (address.getAddress() instanceof Inet4Address) { local = address.getAddress(); break; }
+        }
+        require(local != null, "no IPv4 address on active network");
+        InetAddress[] dns = chosen.getAllByName("example.com");
+        require(dns.length > 0, "interface DNS returned no addresses");
+        Web3.log("net per-network DNS resolved example.com true");
+        int port = Web3.port(1);
+        try (Socket socket = chosen.getSocketFactory().createSocket()) {
+            require(socketInterface(socket) == index, "socket factory did not bind the kernel interface");
+            socket.connect(new InetSocketAddress(local, port), 10_000);
+            require(socket.getLocalAddress().equals(local), "bound socket used a different source address");
+        }
+        Web3.log("net bound SocketFactory kernel interface and source address true");
+        try (Socket socket = new Socket(Proxy.NO_PROXY)) {
+            chosen.bindSocket(socket);
+            require(socketInterface(socket) == index, "explicit socket did not bind");
+        }
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            chosen.bindSocket(socket);
+            FileDescriptor fd = (FileDescriptor) DatagramSocket.class.getMethod("getFileDescriptor$").invoke(socket);
+            int bound = (Integer) Class.forName("com.gesher.net.WindowsNetworks")
+                    .getMethod("socketInterface", FileDescriptor.class).invoke(null, fd);
+            require(bound == index, "datagram socket did not bind");
+        }
+        Web3.log("net explicit TCP and UDP socket binding true");
+        HttpURLConnection connection = (HttpURLConnection) chosen.openConnection(
+                new URL("http://" + local.getHostAddress() + ":" + port + "/network-binding"), Proxy.NO_PROXY);
+        connection.setConnectTimeout(10_000);
+        connection.setReadTimeout(10_000);
+        try (InputStream input = connection.getInputStream()) {
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            byte[] bytes = new byte[128];
+            for (int count; (count = input.read(bytes)) > 0;) body.write(bytes, 0, count);
+            require(body.toString("UTF-8").trim().equals(local.getHostAddress()),
+                    "Network.openConnection reached the server from another interface");
+        } finally { connection.disconnect(); }
+        Web3.log("net Network.openConnection server observed the selected source address true");
+        Network missing = Network.fromNetworkHandle((0x7fffffffL << 32) | 0xcafed00dL);
+        require(cm.bindProcessToNetwork(chosen), "process network binding failed");
+        try {
+            require(chosen.equals(cm.getBoundNetworkForProcess()), "process binding getter disagrees");
+            try (Socket socket = new Socket(Proxy.NO_PROXY)) {
+                socket.getReuseAddress();
+                require(socketInterface(socket) == index, "new socket did not inherit process binding");
+                socket.connect(new InetSocketAddress(local, port), 10_000);
+                require(socket.getLocalAddress().equals(local), "process-bound socket used another source");
+            }
+            require(InetAddress.getAllByName("example.com").length > 0, "process-bound DNS failed");
+            require(!cm.bindProcessToNetwork(missing), "invalid network was accepted");
+            require(chosen.equals(cm.getBoundNetworkForProcess()), "failed binding changed the process network");
+        } finally { require(cm.bindProcessToNetwork(null), "process unbind failed"); }
+        require(cm.getBoundNetworkForProcess() == null, "process remained bound");
+        Web3.log("net process socket and DNS binding, invalid network preservation, unbind true");
+        boolean rejected = false;
+        try { missing.getAllByName("example.com"); }
+        catch (java.net.UnknownHostException expected) { rejected = true; }
+        require(rejected, "DNS on a missing network fell back to another interface");
+        Web3.log("net missing-network DNS refused fallback true");
     }
 
     static String get(String url) {
