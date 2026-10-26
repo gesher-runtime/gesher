@@ -148,6 +148,14 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 ## Status and next steps
 
+- Surfaces continuation verified: ci 40307919084 attempt 2 at b1b59a6,
+  both Windows summaries `0 test(s) failed`, package and both e2e jobs green.
+  Legacy and Camera2 previews into SurfaceView/TextureView and the cross-
+  process Gesher Camera Bitmap thumbnail pass. Attempt 1's only failure was
+  the known wrong.host.badssl.com timeout on Windows 2025. Later GL/hardware
+  contracts belong to surfaces2 (ADR 0063); real camera hardware is untested.
+- The following continuation notes record earlier runs, superseded by that
+  full combined verification.
 - Continuation (2026-10-26): ci 40291437446 at 025fda1 passed windows-2022,
   package and e2e. windows-2025 ended with one locale test failure: the restored
   locale and HandlesActivity callback #2 are present, but Set-Culture's own

@@ -1,6 +1,8 @@
 # ADR 0056: Child surfaces and textures (surfaces track)
 
-Status: accepted (surfaces track, wip/surfaces)
+Status: accepted for the verified child-surface stage (surfaces track,
+ci 40307919084 attempt 2 at b1b59a6; both runners, package and both e2e jobs).
+The remaining contracts below are assigned to surfaces2, ADR 0063 reserved.
 
 ## Context
 
@@ -50,3 +52,5 @@ frame hwui draws where the view is.
   transforms by SurfaceControl transactions an app makes itself) is not modelled
   beyond what the view draws.
 - Bitmaps read from a parcel are heap Bitmaps, never shared memory mappings.
+- These remaining layer/storage contracts, JPEG_R, external-OES and Java
+  EGL/GLES/GLSurfaceView are open in docs/handoff/tracks/surfaces2.md.

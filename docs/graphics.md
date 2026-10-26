@@ -529,97 +529,33 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
 
-Status and next steps (stopped by the coordinator, 2026-10-26):
+Status and next steps (2026-10-26):
 
-- ci 40307919084 at b1b59a6: Windows 2022, package and both e2e jobs pass,
-  including now-required TIC-80. Windows 2025 fails only the known
-  wrong.host.badssl.com connection timeout (2 counted failures). Attempt 2
-  reruns that failed job only; its result must be read before merge.
-- Lead-engineer continuation: ci 40297011754 at b8d6752 passed windows-2025,
-  package and e2e (windows-2022). windows-2022's only failure is the known
-  badssl self-signed endpoint connection timeout (2 counted FAIL lines);
-  the surfaces checks pass. The locale restore race fix passes.
-  Merged integration 8b1b09d (native2), keeping both artifact downloads and
-  needs entries. e2e now has both Windows runners with unique result artifact
-  names, to establish TIC-80 coverage before removing its knownFailure.
-  The native2/surfaces combination and the expanded e2e matrix need a fresh
-  full run. GLES SurfaceTexture/external-OES, Java EGL/GLES/GLSurfaceView and
-  child SurfaceControl alpha/transforms remain open; do not tick them.
-- ci 40302030881 at e73be53: Windows 2022 ends with `0 test(s) failed`;
-  Windows 2025's only failures are the known badssl self-signed connection
-  timeout (2 counted failures). Both runners pass the surfaces checks.
-  Both e2e jobs pass TIC-80 (title `TIC-80 tiny computer 1.1.2737 (b743434)`)
-  and end with `0 unexpected failures`. Removed its obsolete knownFailure;
-  a fresh full run must verify this now-required e2e result before merge.
-
-- Continuation: read ci 40285764214's windows-2025 log (job 121451383191):
-  `1 test(s) failed`, surfacegl's single-process shutdown only. The SIGQUIT
-  dump shows the main thread idle in MessageQueue.nativePollOnce, not blocked
-  on GL. ActivityClientController rejected finishActivity because the
-  single-process driver's token has no server ActivityRecord. Route that token's
-  finish request to the window session's existing close handler, posted to the
-  window's handler so Activity.finish returns before lifecycle destruction.
-  The existing surfacegl check exercises the app-request path. Not CI-verified
-  yet; windows3's ActivityClientHook also leaves finishActivity to this controller.
-- Running: ci 40291437446 at 025fda1 (finish fix, integration a462e9c).
-  Integration has since merged windows3 as 80cb28b: merge it before final CI,
-  keeping both ActivityClientController/WindowSession changes. TIC-80 passed
-  the previous e2e run at 800x400, but still needs checks on both runners.
-
-- Last fully read run: **ci 40265921060 at bbff936** (both runners). 31 surfaces PASS
-  lines on each runner; the only surfaces FAIL was surfacegl's single-process
-  shutdown (below). Unrelated: net's badssl.com TLS check timed out on windows-2022.
-  Verified there (single process and Gesher device unless noted):
-  - `PASS  surfaces: Bitmap parcels`: a small Bitmap in place, a large one through
-    SharedMemory, read back pixel for pixel.
-  - `PASS  surfaces: YuvImage`: NV21 to JPEG, decoded back with its colors.
-  - `PASS  surfaces: SurfaceTexture`: Surface.lockCanvas into it, onFrameAvailable, release.
-  - `PASS  surfaces: SurfaceView`: callbacks with the view's size, lockCanvas frames behind
-    the window (a View over it covers it); setZOrderOnTop over a later View;
-    setFixedSize(50, 25) scaled; moved/resized by layout; hidden and shown;
-    window minimized (surfaceDestroyed) and restored (created and drawn again).
-  - `PASS  surfaces: TextureView`: a Canvas frame into its SurfaceTexture, getBitmap;
-    TextureView.lockCanvas / unlockCanvasAndPost.
-  - `PASS  surfaces: SurfaceView ...: EGL/GLES 2 from native code into its surface`
-    (surfacegl.apk, both modes) and `setFixedSize(100, 100) under EGL ... surfaceDestroyed
-    stops the renderer` (Gesher device only).
-  - Camera previews (legacy setPreviewDisplay, legacy setPreviewTexture, Camera2 into a
-    SurfaceView and a TextureView at once) drew camera frames (~58000 of 66000 pixels not
-    white: the test camera's frame has white); the checks were at 60000 and failed, lowered
-    to 40000 in bbff936 (that run passed them? not read: see the next run).
-  - The devices check now expects Gesher Camera's thumbnail across processes
-    (`data 160x120`); its result in 40265921060 was not read.
-- **In progress, not read: ci 40285764214 at 2e67a15** (SIGQUIT thread dump of a hung
-  test app; TIC-80 on an 800x400 display).
-- Not verified / open:
-  1. surfacegl in a single process: after `finish()` ("surfacegl: finishing") nothing
-     more is logged (no onPause, no surfaceDestroyed) and the process is killed 120 s
-     later; on the Gesher device the same app shuts down cleanly. Run 40285764214 dumps
-     its threads (SIGQUIT) into the test output: read it. Suspects: the main looper
-     starved by SurfaceView invalidations from the 60 Hz GL producer (they are coalesced
-     to one per recorded frame since bbff936), or a lock between finish's window removal
-     and the GL thread's swap (egl_child_surface.cc posts with ANativeWindow_lock).
-  2. TIC-80 (e2e, still knownFailure): its window opens, a SurfaceSyncGroup thread shows
-     the SurfaceView surface was created, but no "gesher EGL" line ever appears, so SDL's
-     main thread never started. Hypothesis tried in 2e67a15: SDL skips surfaceChanged when
-     the surface is portrait and the activity wants landscape, so TIC-80 now runs on an
-     800x400 display (click at 400,200). SDL's Java logs are Log.v and do not reach
-     Gesher's logs; if it is not orientation, check focus (SDL needs
-     onWindowFocusChanged(true) and onResume before handleNativeState starts its thread).
-     Remove `knownFailure` only when it passes on both runners.
-  3. GLES producers into a SurfaceTexture sampled as GL_TEXTURE_EXTERNAL_OES
-     (`updateTexImage` latches the time only); no android.opengl (EGL14/GLES20) Java
-     natives, so GLSurfaceView cannot draw. Not started.
-  4. A child SurfaceControl's own alpha/transform set by app transactions is not modelled
-     (ADR 0056).
-- Next steps: read 40285764214 (surfaces lines, the SIGQUIT dump, TIC-80 diagnoseLog
-  lines); fix (1) and (2); merge origin/phase4/integration; final CI; tick the roadmap
-  boxes (Camera preview into SurfaceView/TextureView, hwsvc2's SurfaceView box, arm64's
-  TIC-80 box only if TIC-80 passes); update docs/devices.md, docs/arm64.md.
-- Pitfalls: CI artifact downloads are blocked by NetFree here (HTTP 418): read job logs
-  through `gh api repos/gesher-runtime/gesher/actions/jobs/<id>/logs`. .NET file APIs in
-  the PowerShell tool resolve relative paths against another worktree's directory: use
-  absolute paths (one such write hit C:\work\gesher-int and was reverted at once).
+- Verified at b1b59a65d30eef81bdc7208a4c88dbfdeab5e35c, ci 40307919084,
+  attempt 2. All 28 jobs are success/skipped (22 success, 6 skipped); both
+  Windows test summaries end with `0 test(s) failed`. Attempt 1 failed only
+  the known wrong.host.badssl.com connection timeout on Windows 2025 (two
+  counted failures); that failed job passed on rerun. No surfaces check was
+  relaxed. The subsequent integration merge and verification report add docs
+  only; code and test inputs remain the verified tree.
+- Personally read all 32 surfaces PASS lines on each runner: Bitmap parcels
+  (small and shared-memory transport), NV21 YuvImage JPEG, Canvas producer
+  SurfaceTexture callbacks, SurfaceView lifecycle/size/position/z-order and
+  TextureView Canvas/getBitmap, all three camera-preview paths, and EGL/GLES
+  rendering plus fixed-size/lifecycle shutdown in both execution modes.
+  surfacegl's single-process finish and the locale restore/resend race now
+  pass. Gesher Camera's cross-process thumbnail is covered by 58-devices.
+- Package install/run/input/uninstall cleanup passes. Both required e2e jobs
+  pass TIC-80: installation, nonblank first frame, input response, closing and
+  process termination. Each ends with `0 unexpected failures`. Its obsolete
+  knownFailure has been removed.
+- Remaining scope is assigned to [surfaces2](handoff/tracks/surfaces2.md),
+  ADR 0063 reserved: GLES SurfaceTexture/external-OES consumption, Java
+  EGL14/GLES20/GLSurfaceView, child SurfaceControl alpha/corner radius and
+  transforms, SkiaGL Activity readback/composition, hardware buffers,
+  YuvImage JPEG_R and the parcel/storage limits in ADR 0056. These features
+  are open; the verified stage does not claim them or real-camera hardware
+  coverage on the CI runners.
 
 Edits outside the track's domain (minimal): compat/bionic/egl_gles.cc and
 ndk_graphics.cmake (child surface hooks, swap entry points), app/java/com/gesher/server/
