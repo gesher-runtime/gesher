@@ -161,7 +161,10 @@ media4 reserves ADR 0064 for the remaining media service/native contracts
 class-loader contexts, cloud profiles, secondary dex and oatdump
 ([brief](tracks/aot3.md)). The post-aot2 audit also reserves locale2/0066,
 arm64-2/0067, binder2/0068 and services3/0069 (briefs in tracks/).
-Next free ADR is now 0070. These are open work, not completion claims.
+net4 reserves ADR 0070 for the legacy resolver ABI, remaining socket/DNS
+contracts and network details ([brief](tracks/net4.md)); its 84 libc
+inventory entries move from native3 to net4. Next free ADR is now 0071.
+These are open work, not completion claims.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
@@ -199,7 +202,8 @@ The baseline NDK ownership inventory is in
 [native-api-coverage.json](native-api-coverage.json), with later verification
 attached per entry. It records symbol presence, not complete API semantics.
 Property APIs belong to exec3; Android socket/process binding, resolver and
-per-network DNS APIs belong to web3. The four baseline bitmap exports are
+per-network DNS APIs belong to web3, with remaining libc resolver/socket
+contracts assigned to net4. The four baseline bitmap exports are
 verified in native3 ci 40305973210, but that branch's remaining scope is
 still open and its code is not merged yet.
 
