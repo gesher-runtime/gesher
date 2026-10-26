@@ -34,6 +34,10 @@ fd duplication, background jobs/wait, common builtins and getopts. Exit traps
 run with the original status. Caught mailbox signals are queued without
 calling the parser from the mailbox thread and dispatched between commands.
 Default signals are forwarded to foreground children before shell exit.
+Persistent descriptors carry a generation in command I/O: an inherited exec
+redirect does not override a newer temporary group/function redirect. Scoped
+redirections restore their descriptors after the command, including nested
+exec changes, while changes to other descriptors remain in the shell.
 The exec builtin starts a child, waits and exits with its status; it preserves
 the launcher architecture's process behavior but changes the program's pid.
 
@@ -111,10 +115,11 @@ its Java/package/script checks alone do not establish on-device behavior.
 
 ## Remaining work
 
-- umask and actual permission behavior; broader shell conformance and
-  persistent-descriptor nesting. Special-builtin prefix persistence and
-  repeated temporary-assignment restoration have four added local checks;
-  their real-launcher CI remains pending.
+- umask and actual permission behavior; broader shell conformance.
+  Special-builtin prefix persistence and repeated temporary-assignment
+  restoration have four added local checks; persistent descriptor scopes
+  have six, also compared with a POSIX shell. Their real-launcher CI remains
+  pending (57 local cases total).
 - Signal interruption while blocked reading input, real mailbox traps and
   Process.destroy/destroyForcibly verification.
 - Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,

@@ -513,17 +513,33 @@ bool IsSpecialBuiltin(const std::string& name) {
 }
 
 int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io);
-int Simple(Shell* sh, const NodeP& node, Io io);
+int Simple(Shell* sh, const NodeP& node, Io io, bool* retain_redirs);
 void RunPendingSignals(Shell* sh, Io io);
 
 int ExecNode(Shell* sh, const NodeP& node, Io io) {
   if (!node || sh->exiting || sh->returning || sh->breaking || sh->continuing)
     return sh->status;
   if (node->kind == Node::List && node->children.empty()) return sh->status;
-  for (const auto& [fd, owned] : sh->persistent_fd) io.set(fd, owned->h, owned);
+  for (const auto& [fd, persistent] : sh->persistent_fd) {
+    if (io.persistent_generation[fd] != persistent.generation) {
+      io.set(fd, persistent.handle->h, persistent.handle);
+      io.persistent_generation[fd] = persistent.generation;
+    }
+  }
+  // An enclosing temporary redirection is restored after its command even
+  // when a nested exec changes that same descriptor. Other exec descriptors
+  // continue to affect the shell after the enclosing command completes.
+  std::map<int, std::optional<Shell::PersistentFd>> scoped_fds;
+  for (const auto& redir : node->redirs) {
+    auto found = sh->persistent_fd.find(redir.fd);
+    scoped_fds.emplace(redir.fd, found == sh->persistent_fd.end()
+                                    ? std::nullopt
+                                    : std::optional<Shell::PersistentFd>(found->second));
+  }
   Io saved = sh->io;
   sh->io = io;
   int status = 0;
+  bool retain_redirs = false;
   bool redirected = Redirect(sh, node->redirs, &io);
   sh->io = io;
   if (!redirected)
@@ -531,7 +547,7 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
   else
     switch (node->kind) {
       case Node::Simple:
-        status = Simple(sh, node, io);
+        status = Simple(sh, node, io, &retain_redirs);
         break;
       case Node::Group:
         status = ExecNode(sh, node->body, io);
@@ -682,6 +698,17 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
         break;
       }
     }
+  if (!retain_redirs) {
+    for (const auto& [fd, before] : scoped_fds) {
+      auto current = sh->persistent_fd.find(fd);
+      if (before) {
+        if (current == sh->persistent_fd.end() || current->second.generation != before->generation)
+          sh->persistent_fd[fd] = {before->handle, ++sh->fd_generation};
+      } else {
+        sh->persistent_fd.erase(fd);
+      }
+    }
+  }
   sh->io = saved;
   sh->status = status;
   RunPendingSignals(sh, io);

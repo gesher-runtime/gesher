@@ -474,7 +474,7 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
   return fail("not implemented");
 }
 
-int Simple(Shell* sh, const NodeP& node, Io io) {
+int Simple(Shell* sh, const NodeP& node, Io io, bool* retain_redirs) {
   sh->substitution_status.reset();
   std::vector<std::string> args;
   for (const auto& word : node->words) ExpandWord(sh, word, &args);
@@ -525,6 +525,7 @@ int Simple(Shell* sh, const NodeP& node, Io io) {
   else
     status = External(sh, args, io);
   if (args[0] == "exec" && args.size() == 1) {
+    *retain_redirs = true;
     for (const auto& redir : node->redirs) {
       HANDLE copy = nullptr;
       HANDLE handle = io.fd[redir.fd];
@@ -532,7 +533,7 @@ int Simple(Shell* sh, const NodeP& node, Io io) {
           !DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(),
                            &copy, 0, FALSE, DUPLICATE_SAME_ACCESS))
         return 1;
-      sh->persistent_fd[redir.fd] = std::make_shared<OwnedHandle>(copy);
+      sh->persistent_fd[redir.fd] = {std::make_shared<OwnedHandle>(copy), ++sh->fd_generation};
     }
   }
   // Prefixes of special builtins change the shell's own environment. Other
