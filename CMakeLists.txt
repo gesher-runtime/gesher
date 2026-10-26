@@ -121,6 +121,11 @@ add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
 
+# All-code-point comparison with the independent pinned ICU4X reference.
+add_executable(native3_unicode_test tests/native/native3_unicode_test.cc)
+target_compile_options(native3_unicode_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native3_unicode_test PRIVATE gesher_bionic gesher_elf icuuc)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
