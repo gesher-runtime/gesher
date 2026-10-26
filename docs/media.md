@@ -219,72 +219,74 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — output-test continuation, 2026-10-26
-- Running: ci 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
-  the output-tone test fixes below plus current integration 4d144663
-  (verified AOT2). Diagnostic ci 40329138943 at ac12cbb was superseded and
-  cancelled after this combined run was confirmed. There are no media
-  runtime-source changes after 9158120; the verified AOT2 changes are new
-  to this combined tree. New runtime
-  results are pending; the changed VideoActivity compiles with JDK 21 and
-  38-media parses locally. NDK C is compiled only in CI.
-- Latest completed full run: ci 40318189310, attempt 1, exact code SHA
-  9158120f957ea01935d071aa9c80b4791ba673f5, with integration 4f99afd
-  (surfaces, native2 and the required TIC-80 e2e matrix). Subsequent branch
-  changes through d698f09 are documentation only; integration's 8590f4b
-  documentation baseline is also merged. All job metadata and both test
-  logs were read. windows-2025 job 121573829979 ends `0 test(s) failed`;
-  windows-2022 job 121573830018 ends `2 test(s) failed`.
-- All **30 media3 checks PASS on each runner**, in single-process and
-  Gesher-device modes: input callback/read/OpenSL tones, the new cumulative
-  AAudio input-overrun count across three stop/start cycles; AudioRecord,
-  session-service round trips, AAC/Opus encode/mux/decode, H.264 ByteBuffer/
-  Image/input-Surface encoding, A/V mux, audio/Surface/Camera2 MediaRecorder,
-  ImageReader output and RECORD_AUDIO refusal. The callback check retains
-  exact 48000 frames, the original 750/1250 Hz checks and requires zero
-  xruns. The test uses a one-second ring; counters report incidents rather
-  than booleans/lost frames. C11 atomic callback counts compile in CI.
-- Both e2e logs are read: windows-2022 job 121575078161 and windows-2025
-  job 121575078317 each PASS pinned Just Player 0.217 and required TIC-80
-  1.01.00, each ends `0 unexpected failures`. Package job 121573829947
-  passes install/run/uninstall and actual data, association, toast and
-  Start-menu cleanup checks. These results do not make the full run green.
-- The two windows-2022 failures are existing output measurements in
-  38-media: sound 26 (AAudio timed write) is 1436 Hz instead of 1480 Hz;
-  the WebM output check finds zero matching separate tones. Its WAV report
-  actually contains one 4.050-second sound at 761.5 Hz: the consecutive
-  880/660 Hz clips merged because the test supplies no silent separator.
-- Pending CI: place 300 ms of silence before each playClip measurement, so
-  its separate WebM tones can be measured independently with unchanged
-  frequency/duration tolerances. Prefill the entire finite AAudio write tone
-  before starting, with requested capacity for all 8820 frames; require
-  prefill, exact written frames and full readback, retain WAV checks, and
-  report final xruns. The old 40 ms ring depended on timely writer wakes;
-  the old log does not prove an underrun. Final xruns are diagnostic because
-  a finite stream can starve at its end before the polling thread stops it.
-  The drain wait is now bounded. No tone threshold is relaxed.
-- Next: read the new combined full CI's completed Windows test logs.
-  Read both test logs and package/e2e logs, and tick only scoped roadmap
-  items supported by actual checks. No broad API completion claim.
-- The runners have no physical microphone: input checks use the known WAV
-  source and camera checks use GESHER_CAMERA_TEST. Physical WASAPI capture,
-  routing/removal, software H.264 encoder forcing and recorder lifecycle/
-  limits need independent evidence. Session2 remains absent; patch 0591
-  guards its null manager for legacy sessions, and opt-in ART patch 0590
-  diagnoses missing boot classes in CI e2e.
-- [Source API boundary inventory](media-api-inventory.md) lists implemented
-  native subsets, ignored operations and reflection stand-ins. The
-  [NDK export baseline](handoff/native-api-coverage.json) preserves all
-  313 unresolved media exports. The [media4 brief](handoff/tracks/media4.md),
-  ADR 0064 reserved, carries those exports and every remaining session,
-  recorder, hardware, codec, MediaStore and unsupported API contract.
-- Earlier ci 40305909645 at 4a2a28e had one 2022 input callback tone
-  failure; 2025/package/e2e passed. Its unlogged-overrun cause remains a
-  hypothesis; the corrected lossless test now passes on both runners.
-  Runs 40292991000/40299212277 diagnosed capture waits/restarts, config vs
-  picture counts and the optional session module. The last fully green
-  media branch run remains 40258938663 at b57bb74 until this continuation
-  finishes with a full green run.
+### media3 (stage 3) — device coverage and diagnostic continuation, 2026-10-26
+- Latest full CI: 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
+  including integration 4d144663/AOT2. All metadata and both test logs are
+  read: windows-2025 job 121604055608 ends `0 test(s) failed`;
+  windows-2022 job 121604055556 ends `2 test(s) failed`. No full green claim.
+  Each runner has 32 surfaces and 13 AOT2 PASS checks; media3 has 30 PASS
+  on 2025 and 28 on 2022. All NDK callback/xrun and session checks pass.
+- The prior output failures are fixed in both runners: the prefilled finite
+  AAudio write tone passes the original 1480 Hz/frame checks, and WebM's
+  880/660 Hz output tones are independently measured after the explicit
+  silent separator. No frequency/duration/level threshold was relaxed.
+- New 2022 failures: single-process AudioRecord 44100 reads all frames but
+  measures 750 Hz then 900 Hz; the device camera recorder gives 22 ordered
+  correct-pattern frames over 1.8 s (30+ required). Single-process camera
+  passes 30+ over 1.9 s; both 2025 camera cases pass. The 200 ms AudioRecord
+  ring and scheduling/encoder pressure are hypotheses, not proven causes.
+  No AudioRecord capacity, 2-second camera collection duration, queue
+  capacity or acceptance threshold has been changed.
+- Pending CI: GESHER_MEDIA_TRACE_RECORD=1 (set only by 59-media3) records
+  coherent captured/read/lost/overrun/timestamp snapshots after AudioRecord
+  reads and stops. Recorder traces show backend, surface submissions,
+  callback/accepted/rejected/queue-drop counts, encode inputs/failures,
+  encoded/drained/muxed packet counts and source/start/stop/drain timestamps.
+  The camera test separately reports started/completed/failed/buffer-lost
+  callbacks and sensor/frame/collection timestamps, with unchanged capture.
+  These distinguish source starvation, encoder pressure and stop/drain loss
+  before choosing any collection change.
+- Required part-1 device coverage is now prepared in 38-media: repeat the
+  exact MPEG-4/H.263, WebM tracks/seeking/audio decode, software MediaPlayer/
+  retriever, output tones and forced libavc/MPEG-4/H.263 checks through fresh
+  Launcher devices. App logs are cleared after shutdown, the app's own WAV
+  is selected by its logged path, and process exit/completion are asserted.
+  Both modes reuse the original 33 VideoTest/decoder expectation strings;
+  local negative checks prove missing results/WAVs still increment failures.
+- Local verification: JDK 21 RecordActivity compile, 38/59 PowerShell parse,
+  capture/AudioRecord C++ syntax and Recorder header checks pass. Recorder
+  implementation compilation needs the CI NDK headers. New tests/traces
+  remain unverified until the next full CI. No new AOSP local build.
+- Included at the coordinator's request: six-file CI reliability patch
+  ci-reliability-50f16a9, with the CI workflow adapted to retain the opt-in
+  missing-class trace and Just Player entry. Geocoder false Wait now fails
+  within bounded time; APK caching/mirror fallback retains exact SHA pins.
+  Four own-byte transport fixture checks pass locally; no APK was downloaded.
+  The new helpers still need full CI. No additional integration merge.
+- Package job 121604055505 passes install/run/uninstall and actual data,
+  association, toast and Start-menu cleanup checks. Both e2e logs are read:
+  121605443676 (2022) and 121605443727 (2025) each PASS pinned Just Player
+  0.217 and required TIC-80 1.01.00, each ends `0 unexpected failures`.
+- Camera recording uses the real GESHER_CAMERA_TEST -> Camera2 repeating
+  request -> recorder Surface -> H.264 MP4 -> decoded test-picture pipeline.
+  Legacy setCamera/VIDEO_SOURCE_CAMERA is unsupported; source/frame-rate
+  pressure in the latest device run is still being diagnosed. MF H.264
+  rejects I420 in that log and actually falls back to libavc; the ordinary
+  software fallback is exercised, distinct from forced-soft coverage.
+- The runners have no physical microphone: audio checks use a known WAV.
+  See [source API boundaries](media-api-inventory.md), the preserved
+  [313 unresolved NDK exports](handoff/native-api-coverage.json), and
+  [media4](handoff/tracks/media4.md) (ADR 0064 reserved) for all open contracts.
+  Opus audio is the current WebM mux proof; video/audio WebM interleaving
+  remains open. Session2, transport controls, permission/user filtering,
+  external volume notifications, recorder lifecycle/limits, physical routes,
+  persistent surfaces, legacy Camera, DRM and hardware remain explicit gaps.
+- Next: commit/push this reviewed device-coverage/diagnostic tree and run full
+  CI. Read both runner logs, trace counters, package/e2e and the new device
+  PASS cases. Tick scoped roadmap items only from proof; no broad API claim.
+  ci 40318189310 passed all 30 media3 checks but failed two output checks;
+  ci 40329138943 was cancelled when superseded by the AOT2 combined tree.
+  The last fully green media branch run remains 40258938663 at b57bb74.
 
 ### Done and verified
 - **CI run 40129230078** (ci, windows-2022 and windows-2025, 0 failed each;

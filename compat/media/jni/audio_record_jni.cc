@@ -12,6 +12,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -187,6 +188,18 @@ jint JNICALL AR_start(JNIEnv* env, jobject thiz, jint, jint) {
   return s->Start() == kOk ? kJavaSuccess : kJavaInvalidOperation;
 }
 
+void TraceRecord(const std::shared_ptr<CaptureStream>& s, const char* point, size_t requested, ssize_t returned) {
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (trace == nullptr || trace[0] != '1') return;
+  const auto stats = s->stats();
+  MEDIA_LOGI("AudioRecord %s trace: %u Hz, capacity %zu, requested %zu bytes, returned %lld bytes, "
+             "captured %llu, read %llu, lost %u, overruns %u, timestamp %llu frames at %lld ns",
+             point, s->params().sample_rate, s->capacity_frames(), requested, static_cast<long long>(returned),
+             static_cast<unsigned long long>(stats.captured_frames), static_cast<unsigned long long>(stats.read_frames),
+             stats.lost_frames, stats.overruns, static_cast<unsigned long long>(stats.captured_frames),
+             static_cast<long long>(stats.timestamp_ns));
+}
+
 void JNICALL AR_stop(JNIEnv* env, jobject thiz) {
   auto s = GetStream(env, thiz);
   if (s == nullptr) {
@@ -194,6 +207,7 @@ void JNICALL AR_stop(JNIEnv* env, jobject thiz) {
     return;
   }
   s->Stop();
+  TraceRecord(s, "stop", 0, 0);
 }
 
 // Reads `bytes` into `dst`; the Java answer (bytes read, or an error).
@@ -201,6 +215,7 @@ jint ReadInto(JNIEnv* env, jobject thiz, void* dst, size_t bytes, bool blocking)
   auto s = GetStream(env, thiz);
   if (s == nullptr) return kJavaInvalidOperation;
   ssize_t n = s->Read(dst, bytes, blocking);
+  TraceRecord(s, "read", bytes, n);
   return n < 0 ? kJavaError : static_cast<jint>(n);
 }
 

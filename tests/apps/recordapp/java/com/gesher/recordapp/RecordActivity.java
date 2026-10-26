@@ -10,7 +10,9 @@ import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.media.AudioDeviceInfo;
@@ -47,6 +49,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Recording the way apps do it (media3, docs/media.md "Recording"). The microphone is
@@ -968,15 +971,54 @@ public class RecordActivity extends Activity {
         }
         CaptureRequest.Builder b = device[0].createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
         b.addTarget(surface);
+        AtomicInteger captureStarted = new AtomicInteger(), captureCompleted = new AtomicInteger();
+        AtomicInteger captureFailed = new AtomicInteger(), buffersLost = new AtomicInteger();
+        AtomicLong firstSourceNs = new AtomicLong(), lastSourceNs = new AtomicLong();
+        AtomicLong firstFrame = new AtomicLong(-1), lastFrame = new AtomicLong(-1);
         r.start();
-        session[0].setRepeatingRequest(b.build(), null, h);
+        long collectStartNs = System.nanoTime();
+        int requestId = session[0].setRepeatingRequest(b.build(), new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureStarted(CameraCaptureSession s, CaptureRequest request, long timestamp, long frameNumber) {
+                captureStarted.incrementAndGet();
+                firstSourceNs.compareAndSet(0, timestamp);
+                lastSourceNs.set(timestamp);
+                firstFrame.compareAndSet(-1, frameNumber);
+                lastFrame.set(frameNumber);
+            }
+
+            @Override
+            public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request, TotalCaptureResult result) {
+                captureCompleted.incrementAndGet();
+            }
+
+            @Override
+            public void onCaptureFailed(CameraCaptureSession s, CaptureRequest request, CaptureFailure failure) {
+                captureFailed.incrementAndGet();
+            }
+
+            @Override
+            public void onCaptureBufferLost(CameraCaptureSession s, CaptureRequest request, Surface target, long frameNumber) {
+                buffersLost.incrementAndGet();
+            }
+        }, h);
         Thread.sleep(2000);
+        long collectStopNs = System.nanoTime();
         session[0].stopRepeating();
         session[0].close();
+        long drainStartNs = System.nanoTime();
         r.stop();
+        long drainStopNs = System.nanoTime();
         r.release();
         device[0].close();
         ht.quitSafely();
+        ht.join(2000);
+        say("recorder camera trace: request " + requestId + ", started " + captureStarted.get()
+                + ", completed " + captureCompleted.get() + ", failed " + captureFailed.get()
+                + ", buffers lost " + buffersLost.get() + ", source ns " + firstSourceNs.get() + ".." + lastSourceNs.get()
+                + ", source frame numbers " + firstFrame.get() + ".." + lastFrame.get()
+                + ", collection ns " + collectStartNs + ".." + collectStopNs
+                + ", stop/drain ns " + drainStartNs + ".." + drainStopNs);
         // The test camera's picture: Y = x + y (at its own size: the recorder's 320x240 takes
         // every other pixel of 640x480, so Y = 2 (x + y)), gray chroma, away from the square.
         Video v = decodeVideo(file, null, 60, 40);

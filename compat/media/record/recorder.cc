@@ -223,7 +223,10 @@ bool Recorder::Write(int track, const std::vector<EncodedPacket>& packets, int64
       MEDIA_LOGE("MediaRecorder: %s", error.c_str());
       return false;
     }
-    if (!p.config) samples_written_++;
+    if (!p.config) {
+      samples_written_++;
+      if (track == video_track_) ++video_muxed_packets_;
+    }
   }
   if (config_.max_file_size > 0 && muxer_->BytesWritten() >= config_.max_file_size) Finish(kInfoMaxFileSize);
   return true;
@@ -279,15 +282,29 @@ void Recorder::OnFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns) {
   int64_t ts = ts_ns > 0 ? ts_ns / 1000 : now;
   if (ts > now + 10000000 || ts < now - 10000000) ts = now;  // another clock: the arrival time
   std::lock_guard<std::mutex> lock(mu_);
-  if (!running_ || paused_ || finished_) return;
+  ++video_callbacks_;
+  if (video_first_source_ns_ < 0) video_first_source_ns_ = ts_ns;
+  video_last_source_ns_ = ts_ns;
+  if (!running_ || paused_ || finished_) {
+    ++video_rejected_;
+    return;
+  }
   const int64_t pts = ts - start_us_ - paused_total_us_;
-  if (pts < 0) return;
+  if (pts < 0) {
+    ++video_rejected_;
+    return;
+  }
+  ++video_accepted_;
+  if (video_first_pts_us_ < 0) video_first_pts_us_ = pts;
   auto f = std::make_shared<VideoFrame>();
   f->Allocate(video_params_.width, video_params_.height);
   RgbaToI420(rgba, w, h, f.get());
   f->time_us = std::max(pts, last_video_us_ + 1);
   last_video_us_ = f->time_us;
-  while (frames_.size() >= 8) frames_.pop_front();
+  while (frames_.size() >= 8) {
+    frames_.pop_front();
+    ++video_queue_drops_;
+  }
   frames_.push_back(std::move(f));
   cv_.notify_all();
 }
@@ -305,17 +322,22 @@ void Recorder::VideoLoop() {
       frames_.pop_front();
     }
     std::vector<EncodedPacket> packets;
+    ++video_encode_inputs_;
+    video_last_encode_input_us_ = f->time_us;
     if (!video_enc_->Encode(*f, first, &packets)) {
+      ++video_encode_failures_;
       MEDIA_LOGE("MediaRecorder: the video encoder failed");
       if (listener_) listener_(1, 1);
       break;
     }
+    for (const auto& p : packets) if (!p.config) ++video_encode_packets_;
     first = false;
     Write(video_track_, packets, &last_us);
     if (config_.max_duration_ms > 0 && f->time_us / 1000 >= config_.max_duration_ms) Finish(kInfoMaxDuration);
   }
   std::vector<EncodedPacket> packets;
-  video_enc_->Drain(&packets);
+  video_drain_ok_ = video_enc_->Drain(&packets);
+  for (const auto& p : packets) if (!p.config) ++video_drain_packets_;
   Write(video_track_, packets, &last_us);
 }
 
@@ -324,9 +346,12 @@ bool Recorder::Stop(std::string* error) {
     *error = "stop() before start()";
     return false;
   }
+  size_t pending_at_stop;
+  const int64_t stop_requested_us = NowUs();
   {
     std::lock_guard<std::mutex> lock(mu_);
     running_ = false;
+    pending_at_stop = frames_.size();
   }
   cv_.notify_all();
   if (capture_ != nullptr) capture_->Stop();
@@ -342,6 +367,24 @@ bool Recorder::Stop(std::string* error) {
   }
   MEDIA_LOGI("MediaRecorder: stopped: %lld samples, %lld bytes", static_cast<long long>(samples_written_.load()),
              static_cast<long long>(muxer_->BytesWritten()));
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (video_enc_ != nullptr && trace != nullptr && trace[0] == '1') {
+    std::lock_guard<std::mutex> lock(mu_);
+    MEDIA_LOGI("MediaRecorder video trace: backend %s, surface %llu, callbacks %llu, accepted %llu, rejected %llu, "
+               "queue drops %llu, pending at stop %zu, encode inputs %llu, encode failures %llu, "
+               "encode packets %llu, drained packets %llu (ok %d), muxed packets %llu; source ns %lld..%lld; "
+               "first accepted/last encode input us %lld..%lld; start/stop/drained us %lld..%lld..%lld",
+               video_enc_->Name().c_str(), static_cast<unsigned long long>(input_surface_->frames()),
+               static_cast<unsigned long long>(video_callbacks_), static_cast<unsigned long long>(video_accepted_),
+               static_cast<unsigned long long>(video_rejected_), static_cast<unsigned long long>(video_queue_drops_),
+               pending_at_stop, static_cast<unsigned long long>(video_encode_inputs_),
+               static_cast<unsigned long long>(video_encode_failures_), static_cast<unsigned long long>(video_encode_packets_),
+               static_cast<unsigned long long>(video_drain_packets_), static_cast<int>(video_drain_ok_),
+               static_cast<unsigned long long>(video_muxed_packets_),
+               static_cast<long long>(video_first_source_ns_), static_cast<long long>(video_last_source_ns_),
+               static_cast<long long>(video_first_pts_us_), static_cast<long long>(video_last_encode_input_us_),
+               static_cast<long long>(start_us_), static_cast<long long>(stop_requested_us), static_cast<long long>(NowUs()));
+  }
   if (ok && samples_written_ == 0) {
     *error = "stop failed: nothing was recorded";
     return false;
@@ -372,6 +415,12 @@ void Recorder::Reset() {
   samples_written_ = 0;
   paused_total_us_ = 0;
   last_video_us_ = -1;
+  video_callbacks_ = video_accepted_ = video_rejected_ = video_queue_drops_ = 0;
+  video_encode_inputs_ = video_encode_failures_ = 0;
+  video_encode_packets_ = video_drain_packets_ = video_muxed_packets_ = 0;
+  video_drain_ok_ = false;
+  video_first_source_ns_ = video_last_source_ns_ = -1;
+  video_first_pts_us_ = video_last_encode_input_us_ = -1;
 }
 
 }  // namespace gesher::media
