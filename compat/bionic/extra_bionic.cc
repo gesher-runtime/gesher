@@ -722,7 +722,6 @@ uint64_t BIONIC_SYSV StrtoulL(const char* s, char** e, int base, void*) { return
 
 // --- wide characters (bionic's wchar_t is 32-bit) ----------------------------------
 
-bool InBmp(uint32_t c) { return c < 0x10000; }
 #define WCLASS(name, property)                                                \
   int BIONIC_SYSV W_##name(uint32_t c) {                                       \
     return UnicodeValue(c, UnicodeProperty::property);                        \
@@ -780,25 +779,7 @@ uint32_t BIONIC_SYSV Towctrans(uint32_t c, const void* t) {
 }
 const void* BIONIC_SYSV WctransL(const char* name, void*) { return Wctrans(name); }
 uint32_t BIONIC_SYSV TowctransL(uint32_t c, const void* t, void*) { return Towctrans(c, t); }
-// wcwidth: 0 for NUL and combining marks, -1 for controls, 2 for East Asian wide.
-bool Wide(uint32_t c) {
-  return (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0x303e) || (c >= 0x3041 && c <= 0x33ff) ||
-         (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xa000 && c <= 0xa4cf) ||
-         (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) ||
-         (c >= 0xff00 && c <= 0xff60) || (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1f64f) ||
-         (c >= 0x1f900 && c <= 0x1f9ff) || (c >= 0x20000 && c <= 0x3fffd);
-}
-int BIONIC_SYSV Wcwidth(uint32_t c) {
-  if (c == 0) return 0;
-  if (c < 32 || (c >= 0x7f && c < 0xa0)) return -1;
-  if (InBmp(c)) {
-    wchar_t w = static_cast<wchar_t>(c);
-    WORD type = 0;
-    if (GetStringTypeW(CT_CTYPE3, &w, 1, &type) && (type & C3_NONSPACING) != 0) return 0;
-  }
-  if (c == 0x200b) return 0;
-  return Wide(c) ? 2 : 1;
-}
+int BIONIC_SYSV Wcwidth(uint32_t c) { return UnicodeWidth(c); }
 int BIONIC_SYSV Wcswidth(const wchar32* s, size_t n) {
   int total = 0;
   for (size_t i = 0; i < n && s[i] != 0; ++i) {

@@ -1,6 +1,8 @@
 # gesher: the bionic shim, the libc/libm/libdl/liblog/pthread symbols an
 # Android x86-64 .so imports, for the ELF loader (compat/elf). Phase 6.
-add_library(gesher_bionic_unicode STATIC ${CMAKE_CURRENT_LIST_DIR}/unicode_bionic.cc)
+add_library(gesher_bionic_unicode STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/unicode_bionic.cc
+  ${CMAKE_CURRENT_LIST_DIR}/unicode_width.cc)
 target_link_libraries(gesher_bionic_unicode PRIVATE icuuc base log gesher_posix)
 target_compile_options(gesher_bionic_unicode PRIVATE -Wall -Wextra -Werror)
 

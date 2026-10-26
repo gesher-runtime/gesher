@@ -34,5 +34,9 @@ from android-16.0.0_r4 libc/bionic/wcwidth.cpp (SHA-256
 retaining its license. It uses the same unmodified wrapper and lock above,
 including signed wchar_t inputs, the U+00A0 boundary, Hangul syllable type,
 default ignorability, format/mark categories and East Asian Width. The
---width mode emits a whole-code-point digest and 33 boundary rows for initial
-CI review; those values are not yet frozen or a production verification.
+--width mode emits a whole-code-point digest and 33 boundary rows. The initial
+reference was reviewed in ci 40403945297 at f8871df (all four jobs success,
+old 14 digests unchanged); width-reference.json separately records its
+provenance and digest 566ac5b76f65a70b. verify-width.py checks that frozen
+output and the exact lock. This remains separate from production Windows
+parity, which requires the complete runtime/NDK CI.
