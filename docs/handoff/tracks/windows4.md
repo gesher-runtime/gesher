@@ -75,3 +75,13 @@ the separate COM probe verifies the real source/handler/window-event path.
 The legacy fixture compiles locally against saved framework classes and the
 PowerShell parses, but no runtime behavior is claimed yet. No production
 resize workaround has been added without a failing runtime observation.
+
+TSF foundation WIP: text_store.h/.cc implements the native ITextStoreACP and
+composition-sink document contract over UTF-16 snapshots, with read/write
+locks, deferred lock upgrades/notifications, selection/edit events and
+epoch/revision checks for asynchronous replies. It compiles with local g++
+-Wall -Wextra -Werror. It is intentionally not wired into the runtime/CMake
+yet; no TSF capability is advertised or claimed. Next: native COM sink/service
+fixtures, then thread-manager and InputConnection plumbing. Non-caret text
+geometry, rich formatting/embedded objects and physical IME behavior are not
+established by this WIP.

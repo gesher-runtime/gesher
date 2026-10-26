@@ -43,7 +43,16 @@ See Microsoft's [IFrameworkInputPane](https://learn.microsoft.com/en-us/windows/
 and [Showing](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iframeworkinputpanehandler-showing)
 contracts for the interface and screen rectangle.
 
-TSF document/reconversion and candidate-window discovery are not implemented.
+TSF text-store source is work in progress and not wired into the runtime.
+The draft implements ITextStoreACP locking/UTF-16 access, selection and edit
+events, composition-sink events and revision/epoch protection against stale
+InputConnection snapshots. A restricted/unavailable document is cleared.
+Native COM sink/service tests, thread-manager activation and Java plumbing are
+still required. Only caret geometry is defined; other range geometry returns
+TS_E_NOLAYOUT, and rich formatting/embedded objects are explicitly unsupported.
+See [RequestLock](https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-requestlock)
+for notification/reentrancy requirements. No TSF behavior is CI verified.
+Candidate-window discovery remains unimplemented.
 A target-SDK-28 APK and show/hide resize fixture are added for old-target
 adjustResize, without manual app padding. Its result is not yet verified;
 no production resize change is justified before that observation. The Android
