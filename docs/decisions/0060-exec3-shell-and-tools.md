@@ -67,6 +67,14 @@ first draft's shared serials are monotonic counters; the complete bionic
 length-byte/clean-dirty-bit serial representation still needs implementing
 and checking with the wait APIs.
 
+Java change callbacks retain the existing framework/libutils report path:
+[SystemProperties JNI](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/jni/android_os_SystemProperties.cpp)
+registers callbacks with libutils and reports them on reportSyspropChanged;
+[SystemPropPoker](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/packages/SettingsLib/src/com/android/settingslib/development/SystemPropPoker.java)
+uses Binder's SYSPROPS_TRANSACTION to notify services. Ordinary property
+writes do not replace that report/poke API. Verification of this existing
+callback path is still pending, separately from native serial waits.
+
 ## Fork and static-executable feasibility review
 
 The native fork trampoline saves the calling thread's register/stack return

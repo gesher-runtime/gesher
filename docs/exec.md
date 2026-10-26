@@ -336,6 +336,12 @@ Continuation history and exact evidence:
   is checked through the real launcher, ProcessBuilder and the device APK in
   the next CI. Its full ELF startup is not locally verified. No AOSP build was
   run locally; loader syntax checking used a host-only pread declaration.
+- Applied the coordinator's source-only CI reliability patch 50f16a9 for the
+  next run: the devices geocoder wait now has completion and parent-process
+  limits, and e2e APK downloads use pinned atomic cache files plus an official
+  mirror fallback. Its four own-byte transport fixture checks pass locally.
+  These changes preserve failures on timeout/hash mismatch; the active run
+  40338806524 predates them. No APK or CI artifact was downloaded locally.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
