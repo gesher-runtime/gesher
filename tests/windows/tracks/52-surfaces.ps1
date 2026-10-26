@@ -14,6 +14,29 @@ using System;
 using System.Runtime.InteropServices;
 public static class GesherSurfWin32 {
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int cmd);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr OpenFileMappingW(uint access, bool inherit, string name);
+  [DllImport("kernel32.dll")] static extern IntPtr MapViewOfFile(IntPtr section, uint access, uint hi, uint lo, UIntPtr size);
+  [DllImport("kernel32.dll")] static extern bool UnmapViewOfFile(IntPtr view);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr OpenEventW(uint access, bool inherit, string name);
+  [DllImport("kernel32.dll")] static extern bool SetEvent(IntPtr e);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  // SIGQUIT to a Gesher process (gesher-base's signal mailbox, compat/posix/src/process.cc):
+  // ART's signal catcher dumps every thread's stack.
+  public static bool SigQuit(int pid) {
+    IntPtr section = OpenFileMappingW(0xF001F, false, "Local\\gesher-signals-" + pid);
+    if (section == IntPtr.Zero) return false;
+    IntPtr view = MapViewOfFile(section, 0xF001F, 0, 0, (UIntPtr)8);
+    bool ok = false;
+    if (view != IntPtr.Zero) {
+      long bits = Marshal.ReadInt64(view);
+      Marshal.WriteInt64(view, bits | (1L << 2));  // SIGQUIT (3)
+      UnmapViewOfFile(view);
+      IntPtr e = OpenEventW(0x1F0003, false, "Local\\gesher-signal-" + pid);
+      if (e != IntPtr.Zero) { ok = SetEvent(e); CloseHandle(e); }
+    }
+    CloseHandle(section);
+    return ok;
+  }
 }
 '@
 }
@@ -90,7 +113,14 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
     Start-Sleep -Milliseconds 250
   }
   $timedOut = -not $p.WaitForExit(120000)
-  if ($timedOut) { $p.Kill($true); $p.WaitForExit() }
+  if ($timedOut) {
+    # Its threads' stacks into its log before it goes (ART's SIGQUIT dump).
+    foreach ($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($p.Id)" -ErrorAction SilentlyContinue)) {
+      if ($c.Name -eq 'dalvikvm.exe') { Write-Host "INFO  SIGQUIT to $($c.ProcessId): $([GesherSurfWin32]::SigQuit([int]$c.ProcessId))" }
+    }
+    Start-Sleep -Seconds 8
+    $p.Kill($true); $p.WaitForExit()
+  }
   # Its dalvikvm may outlive cmd.exe for a moment (files it maps stay in use).
   Start-Sleep -Seconds 2
   $text = & $read
@@ -191,7 +221,7 @@ function SurfaceGlChecks([string] $Mode, $r) {
     InOrder $t @('surfacegl: surfaceChanged 100x100', 'surfacegl: EGL surface 100x100 after ', 'surfacegl: phase 2 ready', 'surfacegl: surfaceDestroyed', 'surfacegl: stopped after ')
     if ($s[2]) { Regions $s[2] @(@('GL red half', 10, 10, 190, 390, 0xff0000), @('GL green half', 210, 10, 390, 390, 0x00ff00)) })
   if ($script:failed -gt $script:surfacesFailedBefore) {
-    ("$t" -split "`n" | Where-Object { $_ -match 'surfacegl|EGL|Surface|Exception|FATAL| at |killed|gesher-app' } | Select-Object -Last 100) | Out-Host
+    ("$t" -split "`n" | Where-Object { $_ -match 'surfacegl|EGL|Surface|Exception|FATAL| at |killed|gesher-app|^"|^  [|]|  - |tid=' } | Select-Object -Last 400) | Out-Host
   }
 }
 
