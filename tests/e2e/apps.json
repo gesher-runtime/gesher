@@ -65,8 +65,7 @@
       "sha256": "e2cad1884047d80856141432169baaf9313722188ef5881e9c2a15d78b1d3601",
       "license": "GPL-3.0-or-later",
       "source": "https://github.com/billthefarmer/siggen",
-      "why": "Audio (docs/media.md): a tone generator that plays through AudioTrack (Builder defaults: the output's rate, the minimum buffer) from onResume on; custom views (scale, knob, display), pure Java, no AndroidX. Its activity asks for landscape (userLandscape) and its views size themselves only when their parent is wider than tall; Gesher does not rotate a window for screenOrientation yet, so its device has a landscape display.",
-      "display": "800x400",
+      "why": "Audio (docs/media.md): a tone generator that plays through AudioTrack (Builder defaults: the output's rate, the minimum buffer) from onResume on; custom views (scale, knob, display), pure Java, no AndroidX. Its activity asks for landscape (userLandscape) and its views size themselves only when their parent is wider than tall: on the default 400x800 display its task turns (windows3 track, docs/windows3.md), its window is 800x400.",
       "actions": [ { "click": [600, 168] }, { "click": [600, 213] } ]
     },
     {
