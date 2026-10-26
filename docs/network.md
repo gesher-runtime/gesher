@@ -226,11 +226,16 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (web3)
 
-Full-stage gate: **ci 40353139413**, exact source
-`6270c9e84e0a8f3486a77824ecb113c563d2871d`, after latest integration 46bc9e5.
-Watch: `C:/work/gesher-ci-review/web3-40353139413-watch.log`.
-No new milestone is closed before both Windows test jobs, package and both
-e2e jobs pass completely.
+Full-stage gate awaits a next combined CI with native geocoder probe exit
+1f1cc96 and exec3's Launcher line-framing fix. Completed ci 40353139413 at
+`6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3 checks
+per runner, package and both e2e jobs. Windows 2022 fails the probe's CLR
+teardown; Windows 2025 also fails windows3 because a real first-frame line
+was split by a concurrent launcher status line. Neither failure is waived.
+The native probe exit preserves real-answer/error/30-second/45-second gates
+and passes focused own-byte exit-zero/one fixtures. Launcher is owned by
+exec3; no concurrent edit is made here. No milestone is closed before both
+Windows jobs, package and e2e pass completely.
 
 In completed ci **40345505558 at 2130071**, all 14 web3 checks pass on each
 runner, including these real network observations in both process modes:
@@ -254,7 +259,8 @@ The full run still fails: Windows 2025 has zero failed tests; Windows 2022's
 only failure is a completed geocoder answer followed by a stuck PowerShell
 probe teardown. That 45-second timeout is not a passing probe. Minimal fix
 58d7dc6 flushes the awaited result and exits zero, while errors/inner timeouts
-exit one and both existing guards remain. Current CI must verify the fix.
+exit one and both existing guards remain. Environment.Exit still hung in 40353139413; the native exit fix above now
+awaits combined CI.
 
 The raw DNS worker uses the chosen adapter's configured servers and bound
 UDP, up to three servers (one with NO_RETRY), cache bypass and TCP fallback
