@@ -3,7 +3,7 @@
 Status: accepted for the oatdump/tool inspection stage, verified in full ci
 40368334642 at 96ef687 (attempt 1). All four new checks and zero-failure
 summaries pass on both runners; installed-copy cleanup and both e2e jobs
-also pass. Shared-library contexts, cloud profiles and secondary dex remain
+also pass. Shared-library contexts and secondary dex remain
 proposed/open. See [the frozen report](../handoff/tracks/aot3-oatdump.md).
 
 Revision: install-time cloud profiles are also accepted, verified in full
@@ -57,9 +57,10 @@ First full cloud run 40375696804 proves validation/copy/profman acceptance
 and selected compiled code on both runners, but is red: the fixture forced
 interpret while requiring AOT execution, and malformed ZIP validation leaked
 the input descriptor when StrictJarFile's native opening failed before its
-cleanup try. The next source uses the production JIT/AOT path and framework
-patch 0650 closes that failed-constructor descriptor. All remaining fallback/
-cleanup scenarios still require the next full run; no cloud box is closed.
+cleanup try. The corrected source uses the production JIT/AOT path and
+framework patch 0650 closes that failed-constructor descriptor. The first
+run did not close a cloud box; full ci 40408733247 subsequently verifies all
+fallback/cleanup scenarios above.
 
 ## Remaining contracts
 
