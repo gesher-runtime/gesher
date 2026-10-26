@@ -68,6 +68,8 @@ by the media3 Java/capture/session test results from that run.
 CI 40349479693 at 1361200 re-observes the same counts on both runners/ABIs;
 the added part-1 device PASS checks do not close any of these exports.
 The same counts remain in ci 40359757434 at 20b1d38, both runners/ABIs.
+CI 40386129131 at 6293a20 again records the same 34/3/276 missing exports on
+both runners and both ABIs; terminal Camera2 callback checks close none of them.
 
 The AAudio entries are AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
 AAudio_setMMapPolicy. OpenSL's entries include unimplemented 3D/effect/device
