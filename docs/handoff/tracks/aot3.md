@@ -68,3 +68,11 @@ the compiled files untouched and requires ART's actual image-load marker
 to agree with every measured mode. The installed oatdump header check and
 package cleanup pass. Windows2022 e2e has the DNS failures above; 2025 e2e
 passes. This run remains red and the corrected combined tree needs full CI.
+
+ci 40344382617 at a61d3ec: both Windows jobs pass app-image loading,
+framework headers, missing-file rejection and the strengthened startup mode
+checks. The only failure on each is the class-state assertion: actual pinned
+oatdump prints `(SomeCompiled)`, not `OatClassSomeCompiled`. Its output already
+lists LifecycleActivity and code sizes 75/219 bytes. Corrected that enum text
+and strengthened the code check to require an actual nonempty compiled-code
+range, rather than any `CODE:` substring. Full CI is still required.

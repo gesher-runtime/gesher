@@ -25,10 +25,10 @@ try {
 
   $app = Aot2Run $oatdump @("--oat-file=$(NoDrive $appOat)", "--dex-file=$(NoDrive $appDex)", '--no-disassemble')
   $compiled = $app.Exit -eq 0 -and $app.Out -match 'speed-profile' -and
-    $app.Out -match 'LifecycleActivity' -and $app.Out -match 'OatClass(Some|All)Compiled' -and
-    $app.Out -match 'CODE:'
+    $app.Out -match 'LifecycleActivity' -and $app.Out -match '\((Some|All)Compiled\)' -and
+    $app.Out -match 'CODE:\s+\(code_offset=0x[0-9a-fA-F]+ size=[1-9][0-9]*\)'
   Aot3Check 'oatdump independently lists lifecycle.apk classes and compiled oat code' $compiled $app.Out
-  ($app.Out -split "`n" | Where-Object { $_ -match 'compiler-filter|LifecycleActivity|OatClass(Some|All)Compiled|CODE:' } | Select-Object -First 25) | Out-Host
+  ($app.Out -split "`n" | Where-Object { $_ -match 'compiler-filter|LifecycleActivity|\((Some|All)Compiled\)|CODE:' } | Select-Object -First 25) | Out-Host
 
   $image = Aot2Run $oatdump @("--app-image=$(NoDrive $appArt)", "--oat-file=$(NoDrive $appOat)",
     "--dex-file=$(NoDrive $appDex)", "--boot-image=${bootArt}:$(NoDrive "$root/system")/framework/*",
