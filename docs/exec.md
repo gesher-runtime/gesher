@@ -216,19 +216,27 @@ Only devices children enable its narrow environment flag; existing signal
 disposition is unchanged. Own-file syntax and a fatal-handler native contract
 probe pass (same exit with diagnostics enabled/disabled). The devices helper
 symbolizes captured addresses with the runner's existing map on failure.
-Combined diagnostic/full CI 40382268730 is now running at
+Combined diagnostic/full CI 40382268730 was dispatched at
 4568c71db6ee033bcd7e4c4014e9f36cae8e71b5, including integration 634a273,
 the fixture namespace correction, inherited boot-root/ART regressions and the
 narrow sentinel trace. Watch log:
 C:\work\gesher-ci-review\exec3-watch-40382268730.log (120-second interval).
-It is diagnostic evidence pending review, not a waiver for the shutdown fault;
-a final combined run must follow the actual fixes and latest integration.
-While that run is retained, the coordinator/media3 source-only workflow patch
-from 1361200 is prepared for the next tree: media generation reuses an installed
+Its builds passed, but media generation did not finish before coordinator-
+directed supersession: job 121784230431's Generate step began 19:02:46Z and was
+still in_progress after 909 seconds at observation. It was canceled once before
+any Windows job started; there is no discarded Windows/runtime failure evidence
+and no inferred apt error or cause. Partial build proof and metadata are kept.
+A final combined run must follow actual runtime fixes and latest integration.
+The coordinator/media3 source-only workflow patch from 1361200 is now included:
+media generation reuses an installed
 ffmpeg, otherwise bounds apt retries/timeouts, prints the actual version and
 has a ten-minute step limit. Fixtures and their assertions are unchanged. The
 same source has actual media-job proof in media3 CI; this branch's YAML/Bash
-parsing passes, but its active run still uses the unconditional apt stage.
+parsing passes. One replacement diagnostic/full run, 40385411337, is now active
+at 80bf3947bee2dabf428b2c5c07b7c672dec0a947. It keeps all assertions and the
+sentinel diagnosis; watch C:\work\gesher-ci-review\exec3-watch-40385411337.log
+at 120-second intervals. Neither runtime root cause nor a green final tree is
+claimed from the canceled preparation run.
 
 **Previous review:** completed CI 40352529279 at
 dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
