@@ -19,6 +19,13 @@ the physical display mode remains natural. Real display callbacks carry basic
 display changes and respect each client's event mask. A user resize changes
 the task's bounds, not the shared display's natural dimensions.
 
+DisplayManagerGlobal's private cache is disabled in every app client before
+Application code. Its Android 16 invalidation path requires a native shared
+nonce store that Gesher lacks; the first CI exposed that as a Signal Generator
+crash on both runners. Fresh Binder snapshots preserve correct Display and
+listener behavior without invoking unsupported cache invalidation. Shared
+nonce storage is not claimed by this choice.
+
 This is a single shared display: an Application context describes the focused
 task, rather than identifying the Activity that happened to fetch the service.
 Activity contexts remain the way to query a particular task. Single-process

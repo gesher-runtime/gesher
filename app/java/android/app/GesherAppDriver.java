@@ -82,6 +82,7 @@ public final class GesherAppDriver {
 
     /** handleBindApplication, scaled down. */
     private static ActivityThread bindApplication(ApplicationInfo appInfo) throws Exception {
+        com.gesher.app.window.ApplicationDisplay.installClient();
         // ActivityThread.main() would construct it and attach(false) it to
         // ActivityManagerService; here the parts of attach() that set up this process.
         ActivityThread thread = new ActivityThread();
