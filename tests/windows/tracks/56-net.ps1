@@ -138,29 +138,12 @@ $serverCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($le
 $rootPublic = [Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCert.Export(
   [Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
-$tls = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$tls.Start()
-$tlsPort = $tls.LocalEndpoint.Port
-$tlsJob = Start-ThreadJob -ArgumentList $tls, $serverCert -ScriptBlock {
-  param($listener, $cert)
-  while ($true) {
-    $c = $listener.AcceptTcpClient()
-    try {
-      $ssl = [Net.Security.SslStream]::new($c.GetStream(), $false)
-      $ssl.ReadTimeout = 20000
-      $ssl.AuthenticateAsServer($cert, $false, [Security.Authentication.SslProtocols]::Tls12, $false)
-      $head = ''
-      $b = [byte[]]::new(1)
-      while (-not $head.EndsWith("`r`n`r`n") -and $ssl.Read($b, 0, 1) -eq 1) { $head += [char]$b[0] }
-      $body = [Text.Encoding]::ASCII.GetBytes('trusted through the Windows ROOT store')
-      $reply = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
-      $ssl.Write($reply); $ssl.Write($body); $ssl.Flush()
-      $ssl.Close()
-    } catch { } finally { $c.Close() }
-  }
-}
+if (-not ('GesherNetTlsServer' -as [type])) { Add-Type -Path "$PSScriptRoot/../net/TlsServer.cs" }
+[GesherNetTlsServerFixture]::Test($serverCert)
+Write-Host 'PASS  net fixture: idle accept, incomplete TLS handshake and accepted idle HTTP read stop with no surviving clients'
+$tlsServer = [GesherNetTlsServer]::new($serverCert)
 $machineRoot = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
-$url = "https://localhost:$tlsPort/"
+$url = "https://localhost:$($tlsServer.Port)/"
 try {
   $null = NetDex 'a test root not in Windows'' store is not trusted' @('https', $url, 'reject') 180
   $machineRoot.Open('ReadWrite')
@@ -181,9 +164,12 @@ try {
   $machineRoot.Close()
   $null = NetDex 'the test root removed from Windows'' store is not trusted any more' @('https', $url, 'reject') 180
 } finally {
-  try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
-  $tls.Stop()
-  $tlsJob | Stop-Job -PassThru | Remove-Job -Force
+  Write-Host 'INFO  net TLS cleanup: root-test server stop'
+  try { $tlsServer.Dispose() } finally {
+    Write-Host 'INFO  net TLS cleanup: root-test certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  }
+  Write-Host 'INFO  net TLS cleanup: root-test complete'
 }
 
 # On the internet (the runners have it): DNS, HTTPS GETs with TLS 1.3 and SNI, and

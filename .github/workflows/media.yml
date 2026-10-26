@@ -57,15 +57,37 @@ jobs:
 
       # The test media: a tone per format (tests/apps/mediaapp/gen-media.sh).
       - name: Generate the test media
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -q > /dev/null
-          sudo apt-get install -y --no-install-recommends ffmpeg > /dev/null
-          tests/apps/mediaapp/gen-media.sh
+          set -x
+          media_failure() {
+            media_status=$?
+            if [ "$media_status" -ne 0 ]; then
+              ps -eo pid,ppid,stat,wchan:32,comm | awk 'NR == 1 || $5 ~ /^(apt-get|dpkg|ffmpeg|timeout|bash|sudo)$/'
+            fi
+          }
+          trap media_failure EXIT
+          if ! command -v ffmpeg > /dev/null 2>&1; then
+            # The 63 MB ffmpeg dependency download from the regional Azure
+            # HTTP mirror timed out. Keep Ubuntu's source/key configuration and
+            # use its canonical HTTPS mirrors for this disposable runner.
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+            fi
+            if [ -f /etc/apt/apt-mirrors-security.txt ]; then
+              printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors-security.txt
+            fi
+            timeout --kill-after=5s 90s sudo apt-get -o DPkg::Lock::Timeout=30 -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q
+            timeout --kill-after=5s 240s sudo apt-get -o DPkg::Lock::Timeout=30 -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
+          command -v ffmpeg
+          timeout --kill-after=5s 60s ffmpeg -version
+          timeout --kill-after=5s 120s bash -x tests/apps/mediaapp/gen-media.sh
           # videoapp's clips (stage 2): a color per half second, one per codec.
-          tests/apps/videoapp/gen-media.sh
+          timeout --kill-after=5s 180s bash -x tests/apps/videoapp/gen-media.sh
           # Gesher's default ringtone, notification and alarm sounds, for the
           # tests and the installer.
-          compat/media/sounds/gen-system-sounds.sh out
+          timeout --kill-after=5s 60s bash -x compat/media/sounds/gen-system-sounds.sh out
 
       # mediaapp's NDK audio test library (AAudio, OpenSL ES), with the NDK
       # native-libs.yml caches.
