@@ -146,7 +146,7 @@ differences, arch-filtered symbol binding, an honest overhead figure).
 The arm64 workflow alone (run `40215298386`) ran the smoke test on both
 runners too.
 
-### e2e: TIC-80 (known failure, not an arm64 one)
+### e2e: TIC-80
 
 TIC-80 1.01.00 (`com.nesbox.tic`, F-Droid versionCode 10100, MIT; its APK
 ships native code only for arm64-v8a) is in tests/e2e/apps.json. In ci
@@ -154,16 +154,17 @@ ships native code only for arm64-v8a) is in tests/e2e/apps.json. In ci
 arm64-v8a: translated`), SDL's JNI_OnLoad and its three `nativeSetupJNI`
 natives run and call into ART, the window opens and the app closes cleanly
 (exit code 0). It stays black because SDL draws into an `SDLSurface`, a
-SurfaceView, which Gesher's graphics stack does not give a Surface yet, so
-SDL's main thread never starts; listed as `knownFailure` for that reason.
+SurfaceView. The surfaces stage now supplies it: ci 40307919084 attempt 2
+passes TIC-80 on both Windows runners (install, nonblank frame, input,
+close/process exit), with 0 unexpected failures. Its knownFailure was removed.
 On the way there, the DLL gained fallbacks for ~50 libc/libm functions the
 shim lacks (sem_*, 32-bit wchar_t functions, acosh/erf/lgamma..., div,
 getrusage, sched params), bound only when the shim has no such name.
 
 ### Not yet done
 
-- A real arm64-only app reaching its first frame in e2e: TIC-80 needs
-  SurfaceView (graphics track); the shim gaps above should move into the
+- A real arm64-only app now reaches its first frame in e2e (TIC-80,
+  ci 40307919084 attempt 2); the remaining shim gaps above belong to the
   shim (compat/bionic) so x86_64 apps get them too.
 - Guest JIT code (RWX pages the guest writes), guest signal handlers with an
   arm64 `ucontext`, LSE atomics (dynarmic does not decode them; HWCAP hides

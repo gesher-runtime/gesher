@@ -276,8 +276,8 @@ public class CaptureActivity extends Activity {
         int tw = THUMBNAIL_WIDTH;
         int th = Math.max(1, full.getHeight() * tw / full.getWidth());
         Bitmap thumbnail = Bitmap.createScaledBitmap(full, tw, th, true);
-        // A Bitmap crosses processes only where hwui parcels Bitmaps (on Gesher's Windows
-        // build it does not): then the result has no thumbnail, rather than failing.
+        // A Bitmap crosses processes only where hwui parcels Bitmaps (Gesher's does since the
+        // surfaces track, ADR 0056): elsewhere the result has no thumbnail, rather than failing.
         android.os.Parcel probe = android.os.Parcel.obtain();
         boolean parcels;
         try {

@@ -220,7 +220,8 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — continuing, 2026-10-26
-- Branch wip/media-soft, integration 91c195d/native2 included. Most recent
+- Branch wip/media-soft, integration 4f99afd included (surfaces and required
+  TIC-80 e2e matrix; native2 also included). Most recent completed
   full run: ci 40305909645 at 4a2a28ecb4e04467b72fa642cc05e67b6d82fa1f.
   All required builds, package and e2e passed; windows-2025 job 121531293918
   ended `0 test(s) failed`; windows-2022 job 121531293975 ended
@@ -255,8 +256,10 @@ the microphone (looped, from its start each time recording starts);
   legacy sessions work without the optional module; Session2 is still absent.
   ART patch 0590 is opt-in missing-boot-class diagnostics, enabled only in
   CI e2e by GESHER_TRACE_MISSING_BOOT_CLASSES.
-- Before the final CI: merge current origin/phase4/integration, push this
-  fix, dispatch ci.yml, then read both test logs and package/e2e conclusions.
+- Final combined verification is ready to dispatch from this branch after
+  merging integration 4f99afd. The own-file C++ syntax checks, JDK 21 test
+  app compile and PowerShell parse pass; NDK C compile remains CI-only.
+  Read both test logs and package/e2e conclusions when the run completes.
   Tick roadmap boxes only from actual CI evidence. Do not infer that every
   Android media API is implemented from these scoped end-to-end checks.
 - Explicit remaining contracts and acceptance checks are in

@@ -134,6 +134,11 @@ jobs:
     needs: [framework]
     uses: ./.github/workflows/media.yml
 
+  # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
+  # .github/workflows/surfaces.yml.
+  surfaces:
+    uses: ./.github/workflows/surfaces.yml
+
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     runs-on: ubuntu-24.04
@@ -507,7 +512,11 @@ jobs:
     needs: [package]
     # The package job uploads the installer before its own checks.
     if: ${{ !cancelled() && needs.package.result != 'skipped' }}
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -532,11 +541,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: e2e-results
+          name: e2e-results-${{ matrix.os }}
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, native2]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
     strategy:
       fail-fast: false
       matrix:
@@ -609,6 +618,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: media
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: surfaces
           path: dist
 
       - uses: actions/download-artifact@v4

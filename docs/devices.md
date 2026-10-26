@@ -148,6 +148,31 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 ## Status and next steps
 
+- Surfaces continuation verified: ci 40307919084 attempt 2 at b1b59a6,
+  both Windows summaries `0 test(s) failed`, package and both e2e jobs green.
+  Legacy and Camera2 previews into SurfaceView/TextureView and the cross-
+  process Gesher Camera Bitmap thumbnail pass. Attempt 1's only failure was
+  the known wrong.host.badssl.com timeout on Windows 2025. Later GL/hardware
+  contracts belong to surfaces2 (ADR 0063); real camera hardware is untested.
+- The following continuation notes record earlier runs, superseded by that
+  full combined verification.
+- Continuation (2026-10-26): ci 40291437446 at 025fda1 passed windows-2022,
+  package and e2e. windows-2025 ended with one locale test failure: the restored
+  locale and HandlesActivity callback #2 are present, but Set-Culture's own
+  broadcast finishes the test activity before the explicit WM_SETTINGCHANGE
+  send returns. Updated 49-locale to accept that completed callback while still
+  requiring the restored locale, first day and hour cycle. This test fix is
+  not yet CI-verified; all remaining surfaces scope below stays open.
+- Running: ci 40297011754 at b8d6752, after merging integration a98dda9.
+  framework.yml keeps both surfaceapp and winapp build/copy lines.
+- That run passed windows-2025/package/e2e; windows-2022 failed only the known
+  badssl timeout. All surfaces checks pass there. Merged integration 8b1b09d
+  (native2), and expanded e2e to both Windows runners to verify TIC-80.
+  ci 40302030881 verifies the combined surfaces checks on both runners and
+  TIC-80 in both e2e jobs (`0 unexpected failures`). Windows 2022 ends with
+  `0 test(s) failed`; Windows 2025 fails only the known badssl connection
+  timeout. Removed TIC-80's knownFailure and require a fresh full green run.
+
 ### Done and verified
 - **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,
   both runners; see docs/services.md "Status and next steps (hwsvc2)"):
