@@ -18,13 +18,17 @@ set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
   ${_media}/audio/shared_state.cc
   ${_media}/audio/sink_file.cc
-  ${_media}/audio/sink_wasapi.cc)
+  ${_media}/audio/sink_wasapi.cc
+  # Audio input (media3, ADR 0059).
+  ${_media}/audio/capture.cc
+  ${_media}/audio/capture_wasapi.cc)
 
 add_library(gesher_media OBJECT
   ${GESHER_MEDIA_AUDIO_SOURCES}
   ${_media}/jni/jni_util.cc
   ${_media}/jni/audio_system_jni.cc
-  ${_media}/jni/audio_track_jni.cc)
+  ${_media}/jni/audio_track_jni.cc
+  ${_media}/jni/audio_record_jni.cc)
 target_link_libraries(gesher_media PUBLIC nativehelper log ole32 uuid)
 target_compile_options(gesher_media PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 
@@ -53,6 +57,17 @@ add_library(gesher_media_player OBJECT
   ${_media}/jni/media_jni_others.cc
   ${_media}/jni/media_extractor_jni.cc
   ${_media}/jni/soundpool_jni.cc
+  # Recording (media3, ADR 0059): encoders, container writers, MediaMuxer, MediaRecorder.
+  ${_media}/encode/encoder.cc
+  ${_media}/encode/mf_encoder.cc
+  ${_media}/encode/opus_encoder.cc
+  ${_media}/encode/soft_avc_encoder.cc
+  ${_media}/mux/mp4_muxer.cc
+  ${_media}/mux/webm_muxer.cc
+  ${_media}/mux/ogg_muxer.cc
+  ${_media}/record/recorder.cc
+  ${_media}/jni/media_muxer_jni.cc
+  ${_media}/jni/media_recorder_jni.cc
   # The NDK's AAudio and OpenSL ES for apps' ELF libraries (bionic shim symbols).
   ${_media}/ndk/aaudio.cc
   ${_media}/ndk/opensles.cc)
@@ -70,6 +85,9 @@ foreach(_d ${GESHER_SOFT_VIDEO_INCLUDES})
   list(APPEND _soft_video_isystem "-isystem${_d}")
 endforeach()
 set_source_files_properties(${_media}/video/soft_video.cc PROPERTIES COMPILE_OPTIONS "${_soft_video_isystem}")
+# libwebm's mkvmuxer headers for the WebM writer.
+set_source_files_properties(${_media}/mux/webm_muxer.cc PROPERTIES COMPILE_OPTIONS
+  "-isystem${AOSP_DIR}/external/libwebm")
 foreach(_s AVC M4V)
   set(_isystem)
   foreach(_d ${GESHER_SOFT_${_s}_INCLUDES})
@@ -78,6 +96,12 @@ foreach(_s AVC M4V)
   string(TOLOWER ${_s} _file)
   set_source_files_properties(${_media}/video/soft_video_${_file}.cc PROPERTIES COMPILE_OPTIONS "${_isystem}")
 endforeach()
+# libavc's encoder headers (its iv2.h is not the decoder's iv.h: a file of its own).
+set(_isystem)
+foreach(_d ${GESHER_SOFT_AVCENC_INCLUDES})
+  list(APPEND _isystem "-isystem${_d}")
+endforeach()
+set_source_files_properties(${_media}/encode/soft_avc_encoder.cc PROPERTIES COMPILE_OPTIONS "${_isystem}")
 add_dependencies(media_codecs_all gesher_media_player)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media_player)
@@ -93,4 +117,6 @@ target_link_libraries(media_probe PRIVATE ole32 uuid pthread)
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
   ${_media}/surface/queue_surface.cc
-  ${_media}/surface/surface_jni.cc)
+  ${_media}/surface/surface_jni.cc
+  # The encoders' input surfaces (media3, ADR 0059): QueueSurfaces too.
+  ${_media}/video/input_surface.cc)

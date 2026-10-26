@@ -75,6 +75,10 @@ std::vector<uint8_t> AnnexBParameterSets(const Format& track, const std::string&
 // for avcC, `sps` and `pps` separately.
 bool AvccToAnnexB(const uint8_t* p, size_t n, std::vector<uint8_t>* sps, std::vector<uint8_t>* pps);
 bool HvccToAnnexB(const uint8_t* p, size_t n, std::vector<uint8_t>* out);
+// An ESDS (MPEG4Extractor's "esds": MPEG-4 part 2's) to its DecoderSpecificInfo, and
+// that as the track's csd-0 where it has none (as NuMediaExtractor gives it).
+bool EsdsCodecSpecificInfo(const uint8_t* p, size_t n, std::vector<uint8_t>* out);
+void AddCsdFromEsds(const Format& track);
 
 // Media Foundation (mf_video.cc).
 std::unique_ptr<VideoDecoder> CreateMfVideoDecoder(const Format& track, std::string* error);
@@ -95,6 +99,10 @@ std::unique_ptr<VideoDecoder> CreateSoftM4vDecoder(const Format& track, bool mpe
 void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, int dst_h);
 // NV12 (Y plane, interleaved UV) to the frame's I420 planes.
 void Nv12ToI420(const uint8_t* src, int src_stride, int src_height, VideoFrame* f);
+// RGBA_8888 (R in the low byte; src_w x src_h, stride == src_w) to the frame's
+// I420 planes at its size (nearest neighbour), BT.601 limited range: an input
+// Surface's frames for an encoder.
+void RgbaToI420(const uint32_t* src, int src_w, int src_h, VideoFrame* f);
 
 // Draws `f` (its visible part, as RGBA_8888) into a Surface's ANativeWindow
 // (render.cc): a window's, a SurfaceTexture's or a SurfaceView's.

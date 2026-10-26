@@ -70,6 +70,7 @@ public class VideoActivity extends Activity {
                     audioCodec();
                     webm("vp9_opus", "video_vp9_opus.webm", 880);
                     webm("vp8_vorbis", "video_vp8_vorbis.webm", 660);
+                    recordWithoutPermission();
                 }
                 surfaces();
                 if (!surfacesOnly) {
@@ -848,8 +849,8 @@ public class VideoActivity extends Activity {
                 + af.getString(MediaFormat.KEY_MIME) + " " + af.getInteger(MediaFormat.KEY_SAMPLE_RATE) + " Hz "
                 + af.getInteger(MediaFormat.KEY_CHANNEL_COUNT) + " ch], duration "
                 + (Math.abs(duration - 2000000) <= 60000 ? "ok" : String.valueOf(duration))
-                + "; seek to 1.1 s: previous sync at " + (previous / 1000) + " ms (sync " + previousSync
-                + "), back to " + (start / 1000) + " ms; audio " + audio);
+                + "; seek to 1.1 s: previous sync at " + Math.round(previous / 10000.0) * 10 + " ms (sync "
+                + previousSync + "), back to " + Math.round(start / 10000.0) * 10 + " ms; audio " + audio);
         say("webm " + name + " (info): " + samples + " video samples, " + sync
                 + " sync, next sync after 1.1 s at " + (next / 1000) + " ms");
     }
@@ -1000,6 +1001,36 @@ public class VideoActivity extends Activity {
             // nothing
         }
         say("retriever " + name + ": " + result);
+    }
+
+    /**
+     * media3: this app does not ask for RECORD_AUDIO, so recording is refused, as on a phone:
+     * the AudioRecord stays uninitialized, MediaRecorder.setAudioSource throws.
+     */
+    void recordWithoutPermission() {
+        android.media.AudioRecord r = new android.media.AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC, 44100,
+                android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, 8820);
+        int state = r.getState();
+        String start;
+        try {
+            r.startRecording();
+            start = "started";
+        } catch (IllegalStateException e) {
+            start = "IllegalStateException";
+        }
+        r.release();
+        String source;
+        android.media.MediaRecorder mr = new android.media.MediaRecorder(this);
+        try {
+            mr.setAudioSource(android.media.MediaRecorder.AudioSource.MIC);
+            source = "set";
+        } catch (RuntimeException e) {
+            source = e.getClass().getSimpleName();
+        }
+        mr.release();
+        say("record without RECORD_AUDIO: AudioRecord state " + state + ", startRecording " + start
+                + ", MediaRecorder.setAudioSource " + source);
     }
 
     /** The MP4's AAC track through MediaCodec: PCM of the 1661 Hz tone. */
