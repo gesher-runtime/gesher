@@ -128,7 +128,7 @@ struct ImeWindow::Impl {
   int32_t caret_size[2] = {0, 0};
   std::shared_ptr<TextService> tsf;
   int32_t tsf_epoch = -1;
-  bool attaching_tsf = false;
+  bool updating_tsf = false, deferred_document = false;
 
   LRESULT CallOriginal(UINT msg, WPARAM wparam, LPARAM lparam) {
     return CallWindowProcW(original, hwnd, msg, wparam, lparam);
@@ -137,6 +137,15 @@ struct ImeWindow::Impl {
   TextInputState State() {
     std::lock_guard<std::mutex> lock(mutex);
     return state;
+  }
+
+  void ResetTextService() {
+    auto service = std::move(tsf);
+    tsf_epoch = -1;
+    // A COM notification can replace the editor while the old Update/Focus
+    // still holds its lease. Restore the old association now, before attaching
+    // the successor, so delayed destruction cannot overwrite its focus owner.
+    if (service) service->Retire();
   }
 
   // Queues `event` and hands the window's procedure its marker.
@@ -150,17 +159,31 @@ struct ImeWindow::Impl {
   }
 
   void ApplyDocument() {
-    if (detached || attaching_tsf) return;
-    const TextInputState s = State();
-    if (!s.active || !s.ime) { tsf.reset(); tsf_epoch = -1; return; }
+    if (detached) return;
+    if (updating_tsf) { deferred_document = true; return; }
+    updating_tsf = true;
+    struct UpdateLease {
+      Impl* owner;
+      ~UpdateLease() {
+        owner->updating_tsf = false;
+        bool pending = owner->deferred_document;
+        owner->deferred_document = false;
+        // Never post while an inner COM callback is draining the queue. The
+        // next snapshot runs only after retire/attach/update has returned.
+        if (pending && !owner->detached)
+          PostMessageW(owner->hwnd, UpdateMessage(), kOpDocument, 0);
+      }
+    } update{this};
+    TextInputState s;
     TextDocument snapshot;
-    { std::lock_guard<std::mutex> lock(mutex); snapshot = document; }
+    { std::lock_guard<std::mutex> lock(mutex); s = state; snapshot = document; }
+    if (!s.active || !s.ime) { ResetTextService(); return; }
     if (snapshot.epoch != s.editor_epoch) return;
-    if (tsf && tsf_epoch != snapshot.epoch) tsf.reset();
-    if (!snapshot.available) { tsf.reset(); tsf_epoch = -1; return; }
+    if (tsf && tsf_epoch != snapshot.epoch) ResetTextService();
+    if (deferred_document || detached) return;
+    if (!snapshot.available) { ResetTextService(); return; }
     if (!tsf) {
       HRESULT result = E_FAIL;
-      attaching_tsf = true;
       auto created = TextService::Attach(hwnd, std::move(snapshot), [this](DocumentEdit edit) {
         TextEvent event;
         event.kind = TextEvent::kDocumentReplace + static_cast<int32_t>(edit.kind);
@@ -168,7 +191,6 @@ struct ImeWindow::Impl {
         event.revision = edit.revision; event.start = edit.start; event.end = edit.end;
         Emit(std::move(event));
       }, [this] { if (!detached) PostMessageW(hwnd, UpdateMessage(), kOpPump, 0); }, &result);
-      attaching_tsf = false;
       const TextInputState current = State();
       if (detached || !current.active || !current.ime || current.editor_epoch != s.editor_epoch) return;
       tsf = std::move(created);
@@ -364,9 +386,9 @@ struct ImeWindow::Impl {
     const TextInputState s = State();
     switch (op) {
       case kOpState: {
-        if (tsf_epoch != s.editor_epoch || !s.active || !s.ime) {
-          tsf.reset(); tsf_epoch = -1;
-        }
+        ApplyDocument();
+        if (detached) return;
+        const TextInputState s = State();
         const bool want = s.active && s.ime;
         if (want != associated) {
           if (!want && composing) {
@@ -445,7 +467,7 @@ struct ImeWindow::Impl {
   // On the window's thread: 1 when the procedure is the window's own again.
   LRESULT Detach() {
     detached = true;
-    tsf.reset();
+    ResetTextService();
     if (caret_created) {
       DestroyCaret();
       caret_created = false;
@@ -540,7 +562,7 @@ struct ImeWindow::Impl {
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original_proc));
         RemovePropW(hwnd, kProp);
         detached = true;
-        tsf.reset();
+        ResetTextService();
         return CallWindowProcW(original_proc, hwnd, msg, wparam, lparam);
       }
       default:

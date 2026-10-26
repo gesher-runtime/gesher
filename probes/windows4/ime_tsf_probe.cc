@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,6 +17,20 @@ int32_t ShowTouchKeyboard(void*, bool) { return 0; }
 struct TextServiceProbeAccess {
   static TextStore* Store(TextService* service) { return service->store_; }
   static ITextStoreACPSink* Sink(TextStore* store) { return store->sink_; }
+  static bool Focused(TextService* service) {
+    ITfDocumentMgr* document = nullptr;
+    HRESULT result = service->manager_->GetFocus(&document);
+    bool same = SUCCEEDED(result) && document == service->document_;
+    if (document != nullptr) document->Release();
+    return same;
+  }
+  static bool Associated(TextService* service) {
+    ITfDocumentMgr* previous = nullptr;
+    HRESULT result = service->manager_->AssociateFocus(service->window_, service->document_, &previous);
+    bool same = SUCCEEDED(result) && previous == service->document_;
+    if (previous != nullptr) previous->Release();
+    return same;
+  }
 };
 }
 using namespace gesher::input;
@@ -23,9 +38,10 @@ namespace {
 int failures = 0;
 bool detach_on_text = false;
 std::unique_ptr<ImeWindow> ime;
-class DetachOnChange final : public ITextStoreACPSink {
+class ChangeSink final : public ITextStoreACPSink {
  public:
   std::weak_ptr<TextService> service;
+  std::function<void()> change;
   bool called = false, retained = false;
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
     if (!out) return E_POINTER;
@@ -42,7 +58,9 @@ class DetachOnChange final : public ITextStoreACPSink {
     return static_cast<ULONG>(count);
   }
   HRESULT STDMETHODCALLTYPE OnTextChange(DWORD, const TS_TEXTCHANGE*) override {
-    called = true; ime.reset(); retained = !service.expired(); return S_OK;
+    called = true;
+    if (change) change(); else ime.reset();
+    retained = !service.expired(); return S_OK;
   }
   HRESULT STDMETHODCALLTYPE OnSelectionChange() override { return S_OK; }
   HRESULT STDMETHODCALLTYPE OnLayoutChange(TsLayoutCode, TsViewCookie) override { return S_OK; }
@@ -130,7 +148,7 @@ int main() {
     ITextStoreACPSink* original = TextServiceProbeAccess::Sink(store);
     if (original != nullptr) original->AddRef();
     if (original != nullptr) store->UnadviseSink(original);
-    auto* change = new DetachOnChange(); change->service = weak;
+    auto* change = new ChangeSink(); change->service = weak;
     HRESULT advised = store->AdviseSink(IID_ITextStoreACPSink, change, TS_AS_ALL_SINKS);
     inspect.reset(); // The callback's weak observer must not hide the regression.
     TextDocument update; update.text = u"external document edit"; update.epoch = 4;
@@ -142,6 +160,50 @@ int main() {
     if (original != nullptr) original->Release();
     store->Release(); change->Release();
   } else { Check(false, "the update-detach fixture obtains its window-owned TSF context"); }
+  SetFocus(window);
+  Check(GetFocus() == window, "the replacement fixture has actual native HWND focus");
+  Editor(window, 5);
+  weak = ime->TextServiceForTest();
+  inspect = weak.lock();
+  if (inspect != nullptr) {
+    TextStore* store = TextServiceProbeAccess::Store(inspect.get());
+    store->AddRef();
+    ITextStoreACPSink* original = TextServiceProbeAccess::Sink(store);
+    if (original != nullptr) original->AddRef();
+    if (original != nullptr) store->UnadviseSink(original);
+    auto* change = new ChangeSink(); change->service = weak;
+    change->change = [&] {
+      TextInputState next; next.active = next.ime = true; next.editor_epoch = 6;
+      ime->SetTextInput(next);
+      TextDocument doc; doc.text = u"before \u05e9\u05dc\u05d5\u05dd";
+      doc.start = 7; doc.end = 11; doc.epoch = 6; doc.available = true;
+      ime->SetDocument(doc); Drain();
+    };
+    HRESULT advised = store->AdviseSink(IID_ITextStoreACPSink, change, TS_AS_ALL_SINKS);
+    inspect.reset();
+    TextDocument update; update.text = u"replace this editor during its notification";
+    update.epoch = 5; update.start = update.end = static_cast<int32_t>(update.text.size());
+    update.available = true;
+    ime->SetDocument(update); Drain();
+    auto current = ime->TextServiceForTest().lock();
+    bool focused = current != nullptr && TextServiceProbeAccess::Focused(current.get());
+    bool associated = current != nullptr && TextServiceProbeAccess::Associated(current.get());
+    if (!focused || !associated) std::printf("INFO windows4 IME TSF replacement: focused %d associated %d\n", focused, associated);
+    Check(SUCCEEDED(advised) && change->called && change->retained && weak.expired()
+            && focused && associated,
+        "an old reentrant TSF owner cannot replace the new editor's focus or HWND association when its lease returns");
+    bool next_document = ime->RunTextServiceTest() == S_OK;
+    bool next_edit = false;
+    while (ime->TakeTextEvent(&event))
+      next_edit |= event.epoch == 6 && event.kind == TextEvent::kDocumentReplace
+          && event.text == u"\u65e5\u672c" && event.start == 7 && event.end == 11;
+    Check(next_document && next_edit,
+        "nested editor publications consumed during a TSF handoff are replayed into the latest real document");
+    store->UnadviseSink(change);
+    if (original != nullptr) original->Release();
+    store->Release(); change->Release();
+  } else { Check(false, "the replacement fixture obtains its window-owned TSF context"); }
+  ime.reset();
   Editor(window, 10);
   TextInputState delayed_finish; delayed_finish.editor_epoch = 9;
   ime->SetTextInput(delayed_finish); Drain();

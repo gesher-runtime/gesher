@@ -35,12 +35,7 @@ std::shared_ptr<TextService> TextService::Attach(HWND window, TextDocument initi
   return SUCCEEDED(status) ? service : nullptr;
 }
 TextService::~TextService() {
-  if (store_ != nullptr) store_->Disconnect();
-  if (associated_) {
-    ITfDocumentMgr* replaced = nullptr;
-    manager_->AssociateFocus(window_, previous_, &replaced);
-    if (replaced != nullptr) replaced->Release();
-  }
+  Retire();
   if (previous_ != nullptr) previous_->Release();
   if (document_ != nullptr) document_->Pop(TF_POPF_ALL);
   if (context_ != nullptr) context_->Release();
@@ -51,24 +46,36 @@ TextService::~TextService() {
   if (store_ != nullptr) store_->Release();
   if (test_service_ != nullptr) FreeLibrary(test_service_);
 }
-void TextService::Update(TextDocument document) { store_->Update(std::move(document)); }
-void TextService::Caret(const RECT& screen) { store_->Caret(screen); }
-void TextService::Pump() { store_->Pump(); }
-void TextService::Focus(bool focused) { if (manager_ != nullptr) manager_->SetFocus(focused ? document_ : nullptr); }
+void TextService::Retire() {
+  if (retired_) return;
+  retired_ = true;
+  if (store_ != nullptr) store_->Disconnect();
+  if (associated_) {
+    associated_ = false;
+    ITfDocumentMgr* replaced = nullptr;
+    manager_->AssociateFocus(window_, previous_, &replaced);
+    if (replaced != nullptr) replaced->Release();
+  }
+}
+void TextService::Update(TextDocument document) { if (!retired_) store_->Update(std::move(document)); }
+void TextService::Caret(const RECT& screen) { if (!retired_) store_->Caret(screen); }
+void TextService::Pump() { if (!retired_) store_->Pump(); }
+void TextService::Focus(bool focused) { if (!retired_ && manager_ != nullptr) manager_->SetFocus(focused ? document_ : nullptr); }
 bool TextService::Key(UINT message, WPARAM key, LPARAM flags) {
-  if (keys_ == nullptr) return false;
+  if (retired_ || keys_ == nullptr) return false;
   BOOL eaten = FALSE;
   if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
-    if (FAILED(keys_->TestKeyDown(key, flags, &eaten)) || !eaten) return false;
+    if (FAILED(keys_->TestKeyDown(key, flags, &eaten)) || !eaten || retired_) return false;
     return SUCCEEDED(keys_->KeyDown(key, flags, &eaten)) && eaten;
   }
   if (message == WM_KEYUP || message == WM_SYSKEYUP) {
-    if (FAILED(keys_->TestKeyUp(key, flags, &eaten)) || !eaten) return false;
+    if (FAILED(keys_->TestKeyUp(key, flags, &eaten)) || !eaten || retired_) return false;
     return SUCCEEDED(keys_->KeyUp(key, flags, &eaten)) && eaten;
   }
   return false;
 }
 HRESULT TextService::RunTestService(const wchar_t* path) {
+  if (retired_) return E_UNEXPECTED;
   if (path == nullptr || *path == 0) return E_ACCESSDENIED;
   if (test_service_ == nullptr) {
     test_service_ = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -78,6 +85,7 @@ HRESULT TextService::RunTestService(const wchar_t* path) {
   auto entry = reinterpret_cast<Entry>(reinterpret_cast<void*>(GetProcAddress(test_service_, "gesher_test_reconversion")));
   if (entry == nullptr) return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
   Focus(true);
+  if (retired_) return E_UNEXPECTED;
   return entry(manager_, client_);
 }
 }  // namespace gesher::input
