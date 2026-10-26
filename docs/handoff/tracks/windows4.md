@@ -153,3 +153,15 @@ This does not change the source or assertions of either already-running CI.
 A small additional TSF guard rejects service/key access immediately when the
 shared editor epoch/restriction changes, before its posted window-thread state
 update; the native probe covers that ordering explicitly.
+
+The display-only CI completed both suites (20 failures on 2025, 21 on 2022),
+not a TLS cleanup timeout. Its nonce failure explains the Windows3/4 rotation
+crash chain and is already fixed in the combined source. It also exposed an
+actual RTL regression: the newly always-present task override copied the
+display's LTR screenLayout bits onto Hebrew package configurations. Geometry
+overrides now leave layout direction undefined, inheriting the package locale.
+A real Configuration.updateFrom dex fixture covers Hebrew/Arabic/English and
+all four rotations; existing end-to-end locale checks remain unchanged.
+The 2022-only old IME conversion committed three valid kanji rather than the
+fixture's two-character assumption; that test's candidate selection is still
+being investigated, without treating the failure as waived.

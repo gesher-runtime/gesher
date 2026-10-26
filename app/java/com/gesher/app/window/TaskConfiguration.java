@@ -57,7 +57,9 @@ public final class TaskConfiguration {
                 : Configuration.ORIENTATION_PORTRAIT;
         c.screenLayout = Configuration.reduceScreenLayout(
                 Configuration.resetScreenLayout(base.screenLayout), Math.max(w, h),
-                Math.min(w, h));
+                Math.min(w, h)) & ~Configuration.SCREENLAYOUT_LAYOUTDIR_MASK;
+        // A task overrides geometry, not the package's locale. Copying the
+        // display's LTR bits here erased Hebrew/Arabic direction at launch.
         c.densityDpi = dpi;
         c.windowConfiguration.setBounds(bounds);
         c.windowConfiguration.setAppBounds(bounds);
