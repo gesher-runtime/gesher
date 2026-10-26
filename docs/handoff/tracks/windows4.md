@@ -39,7 +39,11 @@ WIP: the shared Application Display follows the focused visible task, with
 explicit per-Activity zero/rotated overrides and masked Binder display callbacks.
 ApplicationDisplay/TaskConfiguration compile against saved framework/core
 classes locally; the complete app/framework build and runtime tests await CI.
-No tests or roadmap milestones are complete. Next: actual Display/listener and
-multi-task fixtures, then TSF document/reconversion, real COM-source input-pane
-callbacks/candidate occlusion and old-target adjustResize. ADR 0061 records the
-work. The physical touch keyboard remains unverified.
+54-windows4.ps1 now drives real DisplayActivity windows with held/fresh
+Application Display objects and listeners, orientation changes, two visible
+portrait/landscape tasks and foreground switches. The test helper's PowerShell
+syntax passes; runtime results are pending. The latest verified AOT3 integration
+f5ce6f6 is merged. No tests or roadmap milestones are complete. Next: inspect
+the first display-stage CI, then TSF document/reconversion, real COM-source
+input-pane callbacks/candidate occlusion and old-target adjustResize. ADR 0061
+records the work. The physical touch keyboard remains unverified.

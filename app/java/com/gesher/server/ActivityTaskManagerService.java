@@ -1046,6 +1046,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** The last sequence number given to an activity's override configuration. */
     private int mConfigSeq;
+    private long mDisplaySeq;
 
     /**
      * The override of a task {@code task} in size (null: the display's): its size
@@ -1182,10 +1183,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord lose = null;
         ActivityRecord gain = null;
         int displayRotation;
+        long displaySequence;
         synchronized (this) {
             ActivityRecord want = topResumedCandidateLocked();
             displayRotation = want == null ? Surface.ROTATION_0
                     : mTaskRotation.get(want.taskId, Surface.ROTATION_0);
+            displaySequence = ++mDisplaySeq;
             if (mTopResumed != null && mTopResumed != want) {
                 if (mTopResumed.topSent && mTopResumed.app != null
                         && mTopResumed.state != State.DESTROYED) {
@@ -1199,7 +1202,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 gain = want;
             }
         }
-        com.gesher.app.window.ApplicationDisplay.update(displayRotation);
+        com.gesher.app.window.ApplicationDisplay.update(displayRotation, displaySequence);
         if (lose != null) {
             ClientTransaction t = new ClientTransaction(lose.app.thread);
             t.addTransactionItem(new TopResumedActivityChangeItem(lose.token, false));

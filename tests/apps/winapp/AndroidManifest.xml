@@ -38,5 +38,12 @@
             android:label="@string/pan_label"
             android:windowSoftInputMode="adjustPan|stateUnspecified"
             android:exported="true" />
+        <activity android:name=".DisplayActivity" android:label="Gesher windows4 display"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:exported="true" />
+        <activity android:name=".DisplayLandActivity" android:label="Gesher windows4 landscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:screenOrientation="landscape" android:taskAffinity="com.gesher.winapp.displayland"
+            android:exported="true" />
     </application>
 </manifest>
