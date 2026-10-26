@@ -221,6 +221,30 @@ void JNICALL WindowInput_setTextInput(JNIEnv*, jclass, jlong ptr, jboolean activ
   ConnectionOf(ptr)->SetTextInput(state);
 }
 
+void JNICALL WindowInput_setGeometry(JNIEnv* env, jclass, jlong ptr, jint epoch, jint start,
+                                     jstring text, jintArray rectangles) {
+  gesher::input::TextGeometry geometry; geometry.epoch = epoch; geometry.start = start;
+  if (text != nullptr) {
+    const jchar* characters = env->GetStringChars(text, nullptr);
+    if (characters == nullptr) return;
+    geometry.text.assign(reinterpret_cast<const char16_t*>(characters), env->GetStringLength(text));
+    env->ReleaseStringChars(text, characters);
+  }
+  if (rectangles != nullptr) {
+    jsize length = env->GetArrayLength(rectangles);
+    if (length % 6 != 0) return;
+    std::vector<jint> values(static_cast<size_t>(length));
+    env->GetIntArrayRegion(rectangles, 0, length, values.data());
+    if (env->ExceptionCheck()) return;
+    for (jsize index = 0; index < length; index += 6) {
+      if (values[index] < 0) continue; // CursorAnchorInfo has no bound for this character.
+      geometry.characters.push_back({values[index], values[index + 1], values[index + 2],
+          values[index + 3], values[index + 4], values[index + 5] != 0});
+    }
+  }
+  ConnectionOf(ptr)->SetGeometry(std::move(geometry));
+}
+
 void JNICALL WindowInput_setDocument(JNIEnv* env, jclass, jlong ptr, jstring text,
     jint start, jint end, jint offset, jint epoch, jint revision, jboolean available) {
   gesher::input::TextDocument document;
@@ -291,6 +315,7 @@ const JNINativeMethod kWindowInputMethods[] = {
     {"nClientToScreen", "(JII)J", reinterpret_cast<void*>(&WindowInput_clientToScreen)},
     {"nSetTextInput", "(JZZII)V", reinterpret_cast<void*>(&WindowInput_setTextInput)},
     {"nSetDocument", "(JLjava/lang/String;IIIIIZ)V", reinterpret_cast<void*>(&WindowInput_setDocument)},
+    {"nSetGeometry", "(JIILjava/lang/String;[I)V", reinterpret_cast<void*>(&WindowInput_setGeometry)},
     {"nRunTextServiceTest", "(J)I", reinterpret_cast<void*>(&WindowInput_runTextServiceTest)},
     {"nSetCaret", "(JIIII)V", reinterpret_cast<void*>(&WindowInput_setCaret)},
     {"nCompleteComposition", "(JZ)V", reinterpret_cast<void*>(&WindowInput_completeComposition)},

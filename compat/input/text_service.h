@@ -14,6 +14,7 @@ class TextService {
   void Retire();
   void Update(TextDocument document);
   void Caret(const RECT& screen);
+  void Geometry(TextGeometry geometry);
   void Pump();
   bool Key(UINT message, WPARAM key, LPARAM flags);
   void Focus(bool focused);

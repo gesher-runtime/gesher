@@ -168,6 +168,12 @@ public final class WindowInput implements AutoCloseable {
     if (ptr != 0) nSetDocument(ptr, text, start, end, offset, epoch, revision, available);
   }
 
+  /** Real CursorAnchorInfo bounds in client pixels, keyed to editor/text identity. */
+  public synchronized void setTextGeometry(int epoch, int start, String text, int[] rectangles) {
+    long ptr = mPtr;
+    if (ptr != 0) nSetGeometry(ptr, epoch, start, text, rectangles);
+  }
+
   /** Explicit fixture only: loads the CI-specified native Windows text service. */
   public int runTextServiceTest() {
     long ptr;
@@ -294,6 +300,7 @@ public final class WindowInput implements AutoCloseable {
       int enterAction, int epoch);
   private static native void nSetDocument(long ptr, String text, int start, int end,
       int offset, int epoch, int revision, boolean available);
+  private static native void nSetGeometry(long ptr, int epoch, int start, String text, int[] rectangles);
   private static native int nRunTextServiceTest(long ptr);
   private static native void nSetCaret(long ptr, int x, int y, int width, int height);
   private static native void nCompleteComposition(long ptr, boolean cancel);

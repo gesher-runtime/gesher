@@ -21,7 +21,7 @@ std::atomic<int> owner_deletions{0};
 }
 void* operator new(std::size_t size) {
   if (void* memory = std::malloc(size != 0 ? size : 1)) return memory;
-  throw std::bad_alloc();
+  std::abort(); // The production llvm-mingw build disables C++ exceptions.
 }
 void operator delete(void* memory) noexcept {
   if (memory != nullptr && memory == observed_owner.load()) ++owner_deletions;

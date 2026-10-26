@@ -62,6 +62,7 @@ class Connection {
   // The window's input method side (ime.h); any thread.
   void SetTextInput(const TextInputState& state);
   void SetDocument(TextDocument document);
+  void SetGeometry(TextGeometry geometry);
   int32_t RunTextServiceTest();
   void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height);
   void CompleteComposition(bool cancel);

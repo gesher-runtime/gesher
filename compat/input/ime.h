@@ -53,6 +53,7 @@ class ImeWindow {
   // What the focused editor takes; applied on the window's thread.
   void SetTextInput(const TextInputState& state);
   void SetDocument(TextDocument document);
+  void SetGeometry(TextGeometry geometry);
   int32_t RunTextServiceTest();
   // Native fixture inspection only, on the window thread. A weak reference
   // lets a COM sink prove ownership during reentrant detach without hiding it.

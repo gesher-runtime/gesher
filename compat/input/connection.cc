@@ -60,6 +60,9 @@ void Connection::SetTextInput(const TextInputState& state) {
 void Connection::SetDocument(TextDocument document) {
   if (ime_) ime_->SetDocument(std::move(document));
 }
+void Connection::SetGeometry(TextGeometry geometry) {
+  if (ime_) ime_->SetGeometry(std::move(geometry));
+}
 
 int32_t Connection::RunTextServiceTest() {
   return ime_ ? ime_->RunTextServiceTest() : -1;
