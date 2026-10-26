@@ -221,6 +221,12 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   47 local regression cases still pass. Exec3PropertiesTest covers the real
   Java/tool/NDK paths for CI; no property roadmap box is checked. The backend
   has no Android SELinux property permissions or change-wait notifications.
+- Merged integration 4f99afd (verified surfaces) in cfba36a before the next
+  combined run. First CI 40311734733 has build/package/e2e green (e2e reports
+  `0 unexpected failures`, including Puzzles' generator exiting 0); both
+  Windows test jobs are still running. Review their logs before dispatching
+  the follow-up containing the pipe expectation, signal/tool checks and shared
+  property implementation. No artifact was downloaded for this review.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
