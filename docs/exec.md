@@ -224,6 +224,12 @@ regression, quoted Launcher startup and caller-word records await combined CI.
 CI40405306826 now runs that complete source at87d5ada. Its watch file is
 C:\work\gesher-ci-review\exec3-watch-40405306826.log (120-second interval).
 Latest integration7826cbe is already included; it adds documentation atop117.
+A subsequent liblog correction restores pinned null/zero-length default-tag
+filtering for host calls and ELF writes, and adds the ELF default-tag setter.
+The NDK log-abi test now exercises those actual exports and hidden/visible
+writes. This follow-up is outside404053 and awaits a later combined run. A local
+own host-wrapper contract with mocked upstream tag access passes; it does not
+compile AOSP or establish the full liblog ABI.
 
 **Previous review:** CI 40385411337 completed at
 80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both

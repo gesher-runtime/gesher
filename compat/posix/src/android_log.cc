@@ -10,7 +10,7 @@
 #include <gesher/logging.h>
 
 extern "C" int __android_log_is_loggable_len(int priority, const char* tag, size_t length, int fallback) {
-  if (!tag) { tag = GetDefaultTag().c_str(); length = GetDefaultTag().size(); }
+  if (!tag || length == 0) { tag = GetDefaultTag().c_str(); length = GetDefaultTag().size(); }
   return gesher::logging::IsLoggable(priority, tag, length, fallback, __android_log_get_minimum_priority());
 }
 extern "C" int __android_log_is_loggable(int priority, const char* tag, int fallback) {

@@ -19,6 +19,12 @@ CI40405306826 is running at87d5ada with that combined source. Watch
 C:\work\gesher-ci-review\exec3-watch-40405306826.log at120seconds; no duplicate
 own run is active. The source includes the latest integration7826cbe docs atop
 the verified117 runtime code.
+A separate prepared liblog correction applies the pinned default-tag rule to
+both null and zero-length tags, routes ELF writes through that same filter and
+exports __android_log_set_default_tag. The real NDK log-abi regression now tests
+null/empty/default-tag filtering and writes; it is not in404053 and awaits the
+next combined run. Own host wrapper contract passes with a mocked upstream tag
+interface; no AOSP build or full ABI claim comes from that local check.
 
 Earlier continuation evidence:
 
