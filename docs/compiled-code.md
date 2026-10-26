@@ -169,6 +169,38 @@ the app's profiled classes are already loaded, linked and initialized when
 it starts, and its startup methods run their AOT code.
 
 ## Status and next steps (aot2 track, ADR 0054)
+Final combined verification: **ci 40320549410** at
+`ae75766b0bcbcc04f2161cb3d8b4c8fc54510cc9`, after merging integration
+8590f4b (including native2 and surfaces). All 28 jobs are success/skipped
+(22 success, 6 skipped), with no retry. The coordinator personally read all
+13 aot2 PASS lines on each runner, both `0 test(s) failed` summaries, the
+package install/run/input/uninstall cleanup and both e2e jobs' required
+TIC-80/Puzzles PASS lines and `0 unexpected failures` summaries.
+
+The final profile image is 74.7 MB versus 162.6 MB with `speed`;
+boot-framework.oat is 9.1 MB versus 72.2 MB. Startup uses one unmeasured
+warmup for each mode/image and five measured samples, reversing both mode
+and image order each round. The existing 10%/30 ms limit is unchanged:
+
+| runner | interpreter, profile / speed | JIT, profile / speed |
+|---|---|---|
+| windows-2022 | 574 / 610 ms | 477 / 458 ms |
+| windows-2025 | 620 / 651 ms | 489 / 487 ms |
+
+Both runners load the single-process image with 7 classes/16 methods
+(7 compiled) and the device image with 2 classes/11 methods (10 compiled).
+The next device launch reports 11 app methods with AOT code, none entering
+the interpreter or JIT. Profile saving, profman merging, install-time and
+idle dexopt pass with native2's integrated flock implementation.
+
+Remaining ADR 0054 contracts are assigned to [aot3](handoff/tracks/aot3.md),
+ADR 0065: shared-library class-loader contexts, cloud profiles, secondary
+dex and oatdump. They remain open. The WebView capture fix is the only
+runtime change outside this track's domain: WindowSession.java,
+compat/hwui/window/window_jni.cc and 37-webview.ps1. The sections below
+retain earlier verification and failed-run history; their pending-run
+instructions are superseded by this final result.
+
 Verified in CI on windows-2022 and windows-2025 (`tracks/61-aot2.ps1`), plus
 package and e2e:
 
