@@ -60,6 +60,13 @@ int RegisterSoundPool(JNIEnv* env);
 // MediaCodec, ... (media_jni_others.cc).
 int RegisterMediaJniOthers(JNIEnv* env);
 int RegisterMediaExtractor(JNIEnv* env);
+// MediaCodec and MediaCodecList (media_codec_jni.cc).
+int RegisterMediaCodec(JNIEnv* env);
+
+// An AMediaFormat as the HashMap MediaFormat(Map) takes (media_extractor_jni.cc):
+// Integer, Long, Float, String and ByteBuffer values.
+class Format;
+jobject FormatToMap(JNIEnv* env, const Format& f);
 
 }  // namespace gesher::media
 

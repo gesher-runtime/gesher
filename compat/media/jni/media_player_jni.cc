@@ -23,6 +23,13 @@
 #include "jni_util.h"
 #include "media_jni.h"
 
+// libandroid_runtime's host ANativeWindow_fromSurface; hostgraphics' release.
+struct ANativeWindow;
+extern "C" {
+ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
+void ANativeWindow_release(ANativeWindow* window);
+}
+
 namespace gesher::media {
 namespace {
 
@@ -251,6 +258,30 @@ void JNICALL MP_stop(JNIEnv* env, jobject thiz) {
 void JNICALL MP_pause(JNIEnv* env, jobject thiz) {
   if (auto mp = GetPlayerOrThrow(env, thiz)) Process(env, mp, mp->Pause(), nullptr, nullptr);
 }
+// _setVideoSurface(Surface): where the video is drawn (null: nowhere).
+void JNICALL MP_setVideoSurface(JNIEnv* env, jobject thiz, jobject surface) {
+  auto mp = GetPlayerOrThrow(env, thiz);
+  if (mp == nullptr) return;
+  ANativeWindow* window = surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
+  if (surface != nullptr && window == nullptr) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "The surface has been released");
+    return;
+  }
+  mp->SetVideoWindow(window);
+  if (window != nullptr) ANativeWindow_release(window);
+}
+jint JNICALL MP_getVideoWidth(JNIEnv* env, jobject thiz) {
+  auto mp = GetPlayer(env, thiz);
+  int w = 0, h = 0;
+  if (mp != nullptr) mp->VideoSize(&w, &h);
+  return w;
+}
+jint JNICALL MP_getVideoHeight(JNIEnv* env, jobject thiz) {
+  auto mp = GetPlayer(env, thiz);
+  int w = 0, h = 0;
+  if (mp != nullptr) mp->VideoSize(&w, &h);
+  return h;
+}
 jboolean JNICALL MP_isPlaying(JNIEnv* env, jobject thiz) {
   auto mp = GetPlayerOrThrow(env, thiz);
   return mp != nullptr && mp->IsPlaying() ? JNI_TRUE : JNI_FALSE;
@@ -388,6 +419,9 @@ const JNINativeMethod kMethods[] = {
     {"_seekTo", "(JI)V", GESHER_NATIVE(MP_seekTo)},
     {"_pause", "()V", GESHER_NATIVE(MP_pause)},
     {"isPlaying", "()Z", GESHER_NATIVE(MP_isPlaying)},
+    {"_setVideoSurface", "(Landroid/view/Surface;)V", GESHER_NATIVE(MP_setVideoSurface)},
+    {"getVideoWidth", "()I", GESHER_NATIVE(MP_getVideoWidth)},
+    {"getVideoHeight", "()I", GESHER_NATIVE(MP_getVideoHeight)},
     {"getCurrentPosition", "()I", GESHER_NATIVE(MP_getCurrentPosition)},
     {"getDuration", "()I", GESHER_NATIVE(MP_getDuration)},
     {"_release", "()V", GESHER_NATIVE(MP_release)},

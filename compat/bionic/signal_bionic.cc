@@ -15,6 +15,12 @@
 //    (nanosleep, usleep, sleep, poll, select, epoll_wait, pause). It cannot
 //    interrupt a thread running or blocked elsewhere.
 //  - sigwait/sigwaitinfo/sigtimedwait take pending signals.
+//  - kill() of another process goes through gesher-base's signal mailbox
+//    (process_bionic.cc); signals other processes send to this one, and
+//    SIGCHLD for the shim's children, are delivered as on Linux to a thread
+//    that does not block them (DeliverExternalSignal below): pending if every
+//    thread blocks them, to a thread waiting in sigsuspend/pause/a sleep (which
+//    then returns EINTR), else on the shim's signal thread at once.
 //  - SIG_DFL for a signal whose default is to terminate ends the process
 //    (abort() for the core-dumping ones); SIGCHLD, SIGCONT, SIGURG and
 //    SIGWINCH are ignored.
@@ -26,6 +32,7 @@
 
 #include "shim_internal.h"
 
+#include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 
 #include <windows.h>
@@ -40,6 +47,11 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
+
+// gesher-base's mailbox hook (compat/posix/src/process.cc): signals from
+// other processes go to it first.
+extern "C" int (*gesher_signal_hook)(int sig, int sender_pid);
 
 namespace gesher::bionic {
 
@@ -91,6 +103,11 @@ struct ThreadState {
   BionicSiginfo info[kNsig] = {};
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
+  // Signals this thread takes while it waits (sigsuspend, pause, sigwait, a
+  // sleep); 0 when it does not wait. Under State::mutex.
+  uint64_t waiting_for = 0;
+  // The shim's own signal thread, not one of the program's.
+  bool internal = false;
 };
 
 struct State {
@@ -334,13 +351,19 @@ bool IsSelfPid(int pid) {
   return pid == 0 || pid == -1 || pid == static_cast<int>(GetCurrentProcessId());
 }
 
+// Another process (a child, any Gesher process): process_bionic.cc, over
+// gesher-base's signal mailboxes; the target's handlers run there.
 int BIONIC_SYSV Kill(int pid, int sig) {
-  if (!IsSelfPid(pid)) return errno = kESRCH, -1;
+  int target = pid < -1 ? -pid : pid;  // a process group is its leader here
+  if (!IsSelfPid(target)) return KillOtherProcess(target, sig);
   return SendFromSelf(sig, kSiUser, 0, true);
 }
-int BIONIC_SYSV Killpg(int pgrp, int sig) { return Kill(pgrp, sig); }
+int BIONIC_SYSV Killpg(int pgrp, int sig) {
+  if (pgrp < 0) return errno = kEINVAL, -1;
+  return Kill(pgrp, sig);
+}
 int BIONIC_SYSV Sigqueue(int pid, int sig, uint64_t value) {
-  if (!IsSelfPid(pid)) return errno = kESRCH, -1;
+  if (!IsSelfPid(pid)) return KillOtherProcess(pid, sig);  // the value does not travel
   return SendFromSelf(sig, kSiQueue, value, true);
 }
 
@@ -378,17 +401,21 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
         self->pending &= ~Bit(sig);
         if (info) *info = self->info[sig];
         self->any_pending.store(self->pending != 0, std::memory_order_relaxed);
+        self->waiting_for = 0;
         return sig;
       }
       if ((S().process_pending & Bit(sig)) != 0) {
         S().process_pending &= ~Bit(sig);
         if (info) *info = S().process_info[sig];
+        self->waiting_for = 0;
         return sig;
       }
     }
+    self->waiting_for = want;
     if (deadline == nullptr) {
       S().sent.wait(lock);
     } else if (S().sent.wait_until(lock, *deadline) == std::cv_status::timeout) {
+      self->waiting_for = 0;
       return 0;
     }
   }
@@ -472,7 +499,145 @@ unsigned BIONIC_SYSV Alarm(unsigned) { return 0; }
 const char* g_sys_siglist[kNsig];
 const char* g_sys_signame[kNsig];
 
+// --- signals from outside the program's threads ----------------------------------
+//
+// Another process's kill() reaches this one through gesher-base's mailbox
+// (compat/posix/src/process.cc), on a thread-pool thread; a child's exit
+// raises SIGCHLD from a wait callback. Linux delivers such a process-directed
+// signal to any thread that does not block it. Here: if every program thread
+// blocks it, it stays pending for the process (sigwait, a lowered mask take
+// it); else a thread waiting for it (sigsuspend, pause, a sleep) takes it and
+// returns EINTR; else the handler runs on the shim's signal thread, at once,
+// even while the program's threads are busy.
+
+std::atomic<bool> g_authoritative{false};
+std::mutex g_queue_mutex;
+std::condition_variable g_queue_cv;
+struct Queued {
+  int sig;
+  BionicSiginfo info;
+};
+std::vector<Queued>* g_queue = nullptr;  // under g_queue_mutex
+bool g_signal_thread_started = false;
+
+DWORD WINAPI SignalThread(void*) {
+  ThreadState* self = Self();
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    self->internal = true;
+  }
+  for (;;) {
+    Queued q;
+    {
+      std::unique_lock<std::mutex> lock(g_queue_mutex);
+      g_queue_cv.wait(lock, [] { return !g_queue->empty(); });
+      q = g_queue->front();
+      g_queue->erase(g_queue->begin());
+    }
+    self->mask = 0;
+    Run(self, q.sig, q.info);
+  }
+}
+
+void RunOnSignalThread(int sig, const BionicSiginfo& info) {
+  std::lock_guard<std::mutex> lock(g_queue_mutex);
+  if (g_queue == nullptr) g_queue = new std::vector<Queued>();
+  g_queue->push_back({sig, info});
+  if (!g_signal_thread_started) {
+    HANDLE t = CreateThread(nullptr, 1u << 20, SignalThread, nullptr, 0, nullptr);
+    if (t != nullptr) CloseHandle(t);
+    g_signal_thread_started = true;
+  }
+  g_queue_cv.notify_all();
+}
+
+[[noreturn]] void TerminateBySignal(int sig) {
+  std::fflush(stdout);
+  std::fflush(stderr);
+  ExitProcess(128 + static_cast<UINT>(sig));
+}
+
+// gesher-base's hook: called with every signal another process sends. C
+// linkage, so its type matches the gesher_signal_hook pointer exactly.
+extern "C" int GesherBaseHook(int sig, int sender) {
+  return DeliverExternalSignal(sig, sender, kSiUser, 0, g_authoritative.load()) ? 1 : 0;
+}
+
 }  // namespace
+
+bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool owned) {
+  if (!Valid(sig)) return false;
+  BionicSigaction act;
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    act = S().actions[sig];
+  }
+  if (act.handler == kSigDfl && !owned) return false;  // gesher-base's (ART's) signal
+  if (act.handler == kSigIgn) return true;
+  if (act.handler == kSigDfl) {
+    // Stop signals have no effect here (SIGSTOP itself never comes this way).
+    if (DefaultIgnores(sig) || sig == 20 || sig == 21 || sig == 22) return true;
+    TerminateBySignal(sig);
+  }
+  BionicSiginfo info = MakeInfo(sig, code, static_cast<uint64_t>(static_cast<uint32_t>(status)));
+  info.pid = sender_pid;
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    bool any_thread = false, all_block = true, waiter = false;
+    for (auto& entry : S().threads) {
+      ThreadState* t = entry.second;
+      if (t->internal) continue;
+      any_thread = true;
+      if ((t->mask & Bit(sig)) == 0) all_block = false;
+      if ((t->waiting_for & Bit(sig)) != 0) waiter = true;
+    }
+    if ((any_thread && all_block) || waiter) {
+      if ((S().process_pending & Bit(sig)) == 0) {
+        S().process_pending |= Bit(sig);
+        S().process_info[sig] = info;
+      }
+      g_process_pending.store(true, std::memory_order_release);
+      S().sent.notify_all();
+      return true;
+    }
+  }
+  RunOnSignalThread(sig, info);
+  return true;
+}
+
+void InstallSignalHook(bool authoritative) {
+  if (authoritative) g_authoritative.store(true);
+  gesher_signal_hook = &GesherBaseHook;
+}
+
+bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms) {
+  ThreadState* self = Self();
+  DeliverAll(self);
+  auto start = std::chrono::steady_clock::now();
+  auto deadline = start + std::chrono::milliseconds(ms);
+  bool interrupted = false;
+  {
+    std::unique_lock<std::mutex> lock(S().mutex);
+    for (;;) {
+      uint64_t deliverable = (self->pending | S().process_pending) & ~self->mask;
+      if (deliverable != 0) {
+        interrupted = true;
+        break;
+      }
+      self->waiting_for = ~self->mask;
+      if (S().sent.wait_until(lock, deadline) == std::cv_status::timeout) break;
+    }
+    self->waiting_for = 0;
+  }
+  if (left_ms != nullptr) {
+    auto now = std::chrono::steady_clock::now();
+    *left_ms = now >= deadline ? 0
+                               : static_cast<uint32_t>(
+                                     std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+  }
+  if (interrupted) DeliverAll(self);
+  return interrupted;
+}
 
 void DeliverPendingSignals() {
   ThreadState* self = t_state;

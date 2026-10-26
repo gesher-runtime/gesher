@@ -5,6 +5,7 @@
 
 #include <jni.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -14,6 +15,7 @@
 #include "../player/data_source.h"
 #include "../player/decoder.h"
 #include "../player/extractor.h"
+#include "../video/video_decoder.h"
 #include "jni_util.h"
 #include "media_jni.h"
 
@@ -25,6 +27,7 @@ namespace {
 jfieldID gRetrieverContext;  // long mNativeContext
 
 struct Retriever {
+  std::shared_ptr<DataSource> source;  // for frames (getFrameAtTime)
   std::map<int, std::string> metadata;
   std::vector<uint8_t> album_art;
 };
@@ -45,6 +48,7 @@ const struct {
 
 bool Fill(Retriever* r, std::shared_ptr<DataSource> source, std::string* error) {
   int64_t size = source->Size();
+  r->source = source;
   auto ex = Extractor::Open(source, error);
   if (ex == nullptr) return false;
   r->metadata.clear();
@@ -166,6 +170,86 @@ jbyteArray JNICALL MMR_getEmbeddedPicture(JNIEnv* env, jobject thiz, jint) {
   return a;
 }
 
+// _getFrameAtTime(timeUs, option, width, height, params): the frame at (or the
+// sync frame around) timeUs as an ARGB_8888 Bitmap, scaled to fit width x height
+// (keeping its aspect) when both are positive; null without video.
+jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jint option, jint dst_w,
+                                   jint dst_h, jobject) {
+  Retriever* r = GetRetriever(env, thiz);
+  if (r == nullptr || r->source == nullptr) {
+    jniThrow(env, "java/lang/IllegalStateException", "No retriever available");
+    return nullptr;
+  }
+  std::string error;
+  auto ex = Extractor::Open(r->source, &error);
+  if (ex == nullptr) return nullptr;
+  std::unique_ptr<VideoDecoder> decoder;
+  std::unique_ptr<TrackReader> reader;
+  for (size_t i = 0; i < ex->TrackCount() && decoder == nullptr; i++) {
+    Format f = ex->TrackFormat(i);
+    if (f.Mime().rfind("video/", 0) != 0) continue;
+    decoder = VideoDecoder::Create(f, &error);
+    if (decoder != nullptr) reader = ex->OpenTrack(i);
+  }
+  if (decoder == nullptr || reader == nullptr) {
+    MEDIA_LOGW("MediaMetadataRetriever: no video frame: %s", error.c_str());
+    return nullptr;
+  }
+  // OPTION_PREVIOUS_SYNC 0, NEXT_SYNC 1, CLOSEST_SYNC 2, CLOSEST 3.
+  const bool closest = option == 3;
+  SeekMode mode = closest ? SeekMode::kPreviousSync : static_cast<SeekMode>(std::clamp(option, 0, 2));
+  Sample s;
+  int status = reader->Read(&s, std::max<int64_t>(time_us, 0), mode);
+  std::vector<VideoFrame> frames;
+  std::unique_ptr<VideoFrame> chosen;
+  for (int n = 0; n < 600 && chosen == nullptr; n++) {
+    if (status == 0) {
+      if (!decoder->Decode(s, &frames)) break;
+      status = reader->Read(&s);
+    } else {
+      decoder->Drain(&frames);
+      if (frames.empty()) break;
+    }
+    for (VideoFrame& f : frames) {
+      if (!closest || f.time_us + 1000 >= time_us || status != 0) {
+        chosen = std::make_unique<VideoFrame>(std::move(f));
+        break;
+      }
+    }
+    frames.clear();
+    if (status != 0 && chosen == nullptr) {
+      decoder->Drain(&frames);
+      if (!frames.empty()) chosen = std::make_unique<VideoFrame>(std::move(frames.back()));
+      break;
+    }
+  }
+  if (chosen == nullptr) return nullptr;
+  int w = chosen->visible_width(), h = chosen->visible_height();
+  if (dst_w > 0 && dst_h > 0 && (dst_w != w || dst_h != h)) {
+    double scale = std::min(static_cast<double>(dst_w) / w, static_cast<double>(dst_h) / h);
+    w = std::max(1, static_cast<int>(w * scale + 0.5));
+    h = std::max(1, static_cast<int>(h * scale + 0.5));
+  }
+  std::vector<uint32_t> rgba(static_cast<size_t>(w) * h);
+  I420ToRgba(*chosen, rgba.data(), w, w, h);
+  std::vector<jint> argb(rgba.size());
+  for (size_t i = 0; i < rgba.size(); i++) {
+    uint32_t p = rgba[i];
+    argb[i] = static_cast<jint>(0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu));
+  }
+  jintArray colors = env->NewIntArray(static_cast<jsize>(argb.size()));
+  env->SetIntArrayRegion(colors, 0, static_cast<jsize>(argb.size()), argb.data());
+  jclass config = env->FindClass("android/graphics/Bitmap$Config");
+  jobject argb8888 = env->GetStaticObjectField(
+      config, env->GetStaticFieldID(config, "ARGB_8888", "Landroid/graphics/Bitmap$Config;"));
+  jclass bitmap = env->FindClass("android/graphics/Bitmap");
+  jmethodID create = env->GetStaticMethodID(
+      bitmap, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+  jobject b = env->CallStaticObjectMethod(bitmap, create, colors, w, h, argb8888);
+  if (CheckException(env, "MediaMetadataRetriever.getFrameAtTime")) return nullptr;
+  return b;
+}
+
 void JNICALL MMR_init(JNIEnv* env, jclass) {
   jclass cls = env->FindClass("android/media/MediaMetadataRetriever");
   gRetrieverContext = env->GetFieldID(cls, "mNativeContext", "J");
@@ -187,6 +271,8 @@ const JNINativeMethod kRetrieverMethods[] = {
     {"_setDataSource", "(Ljava/io/FileDescriptor;JJ)V", GESHER_NATIVE(MMR_setDataSourceFD)},
     {"nativeExtractMetadata", "(I)Ljava/lang/String;", GESHER_NATIVE(MMR_extractMetadata)},
     {"getEmbeddedPicture", "(I)[B", GESHER_NATIVE(MMR_getEmbeddedPicture)},
+    {"_getFrameAtTime", "(JIIILandroid/media/MediaMetadataRetriever$BitmapParams;)Landroid/graphics/Bitmap;",
+     GESHER_NATIVE(MMR_getFrameAtTime)},
     {"release", "()V", GESHER_NATIVE(MMR_release)},
     {"native_finalize", "()V", GESHER_NATIVE(MMR_release)},
     {"native_setup", "()V", GESHER_NATIVE(MMR_setup)},
@@ -202,8 +288,8 @@ int RegisterMediaJniOthers(JNIEnv* env) {
   // Until their stages (phase 8, stages 2 and 3): every native answers zero,
   // false or null.
   RegisterMediaExtractor(env);
-  for (const char* cls : {"android/media/MediaCodec",
-                          "android/media/MediaCodecList", "android/media/MediaMuxer",
+  RegisterMediaCodec(env);
+  for (const char* cls : {"android/media/MediaMuxer",
                           "android/media/MediaRecorder", "android/media/MediaSync",
                           "android/media/MediaHTTPConnection", "android/media/MediaCrypto",
                           "android/media/MediaDrm", "android/media/MediaDescrambler",
