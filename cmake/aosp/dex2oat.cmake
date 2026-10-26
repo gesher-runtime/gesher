@@ -99,3 +99,14 @@ add_executable(dex2oat ${_d2o}/dex2oat.cc ${_d2o}/dex2oat_options.cc
 target_link_libraries(dex2oat PRIVATE art_dex2oat bcrypt)
 # A linker map, for tools/symbolize.py (the executable is stripped).
 target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map)
+
+# --- profman ----------------------------------------------------------------
+# art/profman/Android.bp: profiles from text (the boot image profile,
+# tools/boot-image/compile.ps1) and the merge of an app's JIT profile into its
+# reference profile before a speed-profile compile (com.gesher.server.Dexopt;
+# docs/compiled-code.md, ADR 0054). libprofile, libdexfile and libartbase only.
+set(_pm "${_art}/profman")
+add_executable(profman ${_pm}/profman.cc ${_pm}/boot_image_profile.cc
+  ${_pm}/profile_assistant.cc ${_pm}/inline_cache_format_util.cc)
+target_include_directories(profman PRIVATE ${_pm} ${_pm}/include)
+target_link_libraries(profman PRIVATE art_profile)
