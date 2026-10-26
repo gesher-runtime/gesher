@@ -24,6 +24,7 @@ import android.view.IWindowId;
 import android.view.IWindowSession;
 import android.view.Display;
 import android.view.InputChannel;
+import android.view.InsetsSource;
 import android.view.InsetsState;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -212,6 +213,18 @@ public final class WindowSession extends IWindowSession.Stub {
         int dimDrawn;
         int dimWidth;
         int dimHeight;
+
+        // windows3 track (docs/windows3.md).
+        /**
+         * The display rotation its task is turned to (Surface.ROTATION_*): its Activity's
+         * configuration says (the system server's task, for the orientation it asks for).
+         */
+        int rotation;
+        /** The bounds and rotation its Activity's configuration gave last (syncTaskShape). */
+        final Rect configBounds = new Rect();
+        int configRotation;
+        /** A top-level window: where the touch keyboard covers its client area (IME insets). */
+        final Rect ime = new Rect();
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -433,6 +446,15 @@ public final class WindowSession extends IWindowSession.Stub {
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
+        if (!root.ime.isEmpty()) {
+            // The touch keyboard over the app window (windows3 track): the IME's insets, as
+            // the IME window's are on a device. adjustResize and adjustPan follow
+            // (ViewRootImpl, DecorView).
+            InsetsSource ime = new InsetsSource(InsetsSource.ID_IME, WindowInsets.Type.ime());
+            ime.setFrame(root.ime);
+            ime.setVisible(true);
+            state.addSource(ime);
+        }
         Rect cutoutSafe = new Rect();
         state.getDisplayCutoutSafe(cutoutSafe);
         ClientWindowFrames frames = out.frames;
@@ -445,14 +467,15 @@ public final class WindowSession extends IWindowSession.Stub {
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
         Configuration override = new Configuration();
-        if (!root.bounds.isEmpty()) {
+        if (!root.bounds.isEmpty() || root.rotation != android.view.Surface.ROTATION_0) {
             // Resized by the user: the configuration of a freeform task of the window's size
             // (TaskConfiguration, docs/lifecycle.md): its bounds (ViewRootImpl computes its
             // frames from them, relayoutWindow's local layout), its screen size in dp, smallest
             // width, orientation and screen layout. An Activity that handles those changes gets
             // onConfigurationChanged (ViewRootImpl's activity config callback); the system
-            // server relaunches one that does not (resizeTask).
-            override = TaskConfiguration.override(bounds);
+            // server relaunches one that does not (resizeTask). A task turned for its
+            // Activity's orientation (windows3 track) has the display's rotation too.
+            override = TaskConfiguration.override(bounds, root.rotation);
         }
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
@@ -624,8 +647,77 @@ public final class WindowSession extends IWindowSession.Stub {
             case WindowInput.EVENT_VISIBILITY:
                 w.handler.post(() -> onVisibility(key, a != 0));
                 break;
+            case EVENT_INPUT_PANE:
+                w.handler.post(() -> onInputPane(key, a, b));
+                break;
             default:
                 break;
+        }
+    }
+
+    /**
+     * gesher::WindowEvent::kInputPane (compat/hwui/window): the Windows touch keyboard
+     * (IFrameworkInputPane) covers rows a to b of the window's client area (a = -1: none).
+     */
+    private static final int EVENT_INPUT_PANE = 30;
+
+    /**
+     * The touch keyboard came up over a top-level window, moved or went (windows3 track):
+     * the part of the window it covers is the IME's insets of the window and its popups
+     * (layout), given to them as on a device the IME window's are (IWindow.resized with the
+     * new insets state); ViewRootImpl and DecorView then resize the content
+     * (SOFT_INPUT_ADJUST_RESIZE) or pan it (ADJUST_PAN) as they do for an IME.
+     */
+    private void onInputPane(IBinder key, int top, int bottom) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null || w.nativeWindow == null || w.popup) return;
+        Rect ime = top < 0 || bottom <= top ? new Rect()
+                : new Rect(0, top, w.nativeWindow.getWidth(), bottom);
+        if (ime.equals(w.ime)) return;
+        w.ime.set(ime);
+        log("window \"" + w.title() + "\": the touch keyboard "
+                + (ime.isEmpty() ? "covers nothing (IME insets none)"
+                        : "covers rows " + top + "-" + bottom + " (IME insets "
+                                + ime.toShortString() + ")"));
+        List<AppWindow> group = new ArrayList<>();
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v.nativeWindow != null && root(v) == w) group.add(v);
+            }
+        }
+        group.sort(WindowSession::compareStack);
+        for (AppWindow v : group) {
+            WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
+                    new android.util.MergedConfiguration(), new InsetsState(),
+                    new android.view.InsetsSourceControl.Array());
+            layout(v, v.requestedWidth, v.requestedHeight, result);
+            if (v.popup) v.frame.set(result.frames.frame);
+            try {
+                v.client.resized(result, false /* reportDraw */, true /* forceLayout */,
+                        Display.DEFAULT_DISPLAY, false /* syncWithBuffers */,
+                        false /* dragResizing */);
+            } catch (RemoteException e) {
+                log("window \"" + v.title() + "\": resized: " + e);
+            }
+        }
+    }
+
+    /**
+     * The touch keyboard covers rows {@code top} to {@code bottom} of the window's client area
+     * (top -1: none), as if it were up: for windows without WindowInput (the stand-in
+     * natives) and tests.
+     */
+    public void setInputPane(IBinder windowToken, int top, int bottom) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(windowToken);
+        }
+        if (w != null && w.handler != null) {
+            w.handler.post(() -> onInputPane(windowToken, top, bottom));
         }
     }
 
@@ -891,6 +983,7 @@ public final class WindowSession extends IWindowSession.Stub {
         while ((type = w.nativeWindow.pollEvent(mEvent)) != 0) {
             if (type == NativeWindow.EVENT_CLOSE) close = true;
             if (type == WindowInput.EVENT_VISIBILITY) onVisibility(key, mEvent[3] != 0);
+            if (type == EVENT_INPUT_PANE) onInputPane(key, (int) mEvent[3], (int) mEvent[7]);
         }
         if (close) close(key);
     }
@@ -1054,8 +1147,15 @@ public final class WindowSession extends IWindowSession.Stub {
 
     /** The Activity whose token is {@code token} in this process, or null. */
     private static android.app.Activity activity(IBinder token) {
+        if (token == null) return null;
         ActivityThread thread = ActivityThread.currentActivityThread();
-        return thread != null && token != null ? thread.getActivity(token) : null;
+        android.app.Activity a = thread != null ? thread.getActivity(token) : null;
+        if (a == null) {
+            // gesher-app's single process: its driver's Activity is not ActivityThread's.
+            android.app.Activity local = android.app.GesherAppDriver.currentActivity();
+            if (local != null && local.getActivityToken() == token) a = local;
+        }
+        return a;
     }
 
     /** The task of the Activity whose token is {@code token}, or -1. */
@@ -1123,14 +1223,134 @@ public final class WindowSession extends IWindowSession.Stub {
         for (int i = 0; i < mWindows.size(); i++) {
             AppWindow v = mWindows.valueAt(i);
             if (v != w && !v.popup && v.taskId == w.taskId && v.shown && v.resizable) {
-                return v.bounds.isEmpty() ? null : new Rect(v.bounds);
+                // A window turned for its Activity's orientation has the turned display's
+                // size, not one the user gave the task (windows3 track).
+                return v.bounds.isEmpty() || v.rotation != android.view.Surface.ROTATION_0
+                        ? null : new Rect(v.bounds);
             }
         }
         Rect last = mTaskScreen.get(w.taskId);
         if (last == null) return null;
         Rect display = displayBounds();
+        Rect turned = TaskConfiguration.display(android.view.Surface.ROTATION_90);
+        if (last.width() == turned.width() && last.height() == turned.height()) return null;
         return last.width() == display.width() && last.height() == display.height() ? null
                 : new Rect(0, 0, last.width(), last.height());
+    }
+
+    /** The configuration of the Activity whose token is {@code token} (its resources'), or null. */
+    private static Configuration activityConfiguration(IBinder token) {
+        try {
+            android.app.Activity a = activity(token);
+            return a != null ? a.getResources().getConfiguration() : null;
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static int displayRotationOf(Configuration c) {
+        int r = c.windowConfiguration.getDisplayRotation();
+        return r == WindowConfiguration.ROTATION_UNDEFINED ? android.view.Surface.ROTATION_0 : r;
+    }
+
+    /**
+     * Whether an Activity's configuration gives its window a shape of its task's (windows3
+     * track): a display rotation (the task turned for the orientation the Activity asks for),
+     * or bounds that are not the display's (a task the user resized).
+     */
+    private static boolean hasTaskShape(Configuration c) {
+        if (c == null) return false;
+        if (displayRotationOf(c) != android.view.Surface.ROTATION_0) return true;
+        Rect b = c.windowConfiguration.getBounds();
+        return !b.isEmpty() && !b.equals(displayBounds());
+    }
+
+    /**
+     * An Activity's window follows its task's shape as its configuration gives it (windows3
+     * track, docs/windows3.md): when the system server (or the single process) turned the task
+     * for the orientation the Activity asks for, its Win32 window takes the turned display's
+     * size and its configuration the display's rotation; a configuration that follows a size
+     * the user gave the window (resizeTask) changes nothing more, nor one that comes after the
+     * user resized it again. Before a relayout, on the window's thread.
+     */
+    private void syncTaskShape(AppWindow w) {
+        if (w.popup || w.attrs.type != WindowManager.LayoutParams.TYPE_BASE_APPLICATION
+                || !w.resizable || w.nativeWindow == null) {
+            return;
+        }
+        Configuration c = activityConfiguration(w.attrs.token);
+        if (c == null) return;
+        Rect b = new Rect(c.windowConfiguration.getBounds());
+        if (b.isEmpty()) b = displayBounds();
+        int rotation = displayRotationOf(c);
+        Rect last = w.configBounds.isEmpty() ? displayBounds() : w.configBounds;
+        if (b.equals(last) && rotation == w.configRotation) return;
+        boolean turned = rotation != w.configRotation;
+        Rect current = w.bounds.isEmpty() ? displayBounds() : w.bounds;
+        boolean following = current.equals(last);  // not resized by the user since
+        w.configBounds.set(b);
+        w.configRotation = rotation;
+        if (!turned && !following) return;
+        w.rotation = rotation;
+        if (b.equals(displayBounds())) {
+            w.bounds.setEmpty();
+        } else {
+            w.bounds.set(0, 0, b.width(), b.height());
+        }
+        log("window \"" + w.title() + "\" takes its task's shape: " + b.width() + "x" + b.height()
+                + ", display " + TaskConfiguration.rotationName(rotation));
+        if (w.nativeWindow.getWidth() != b.width() || w.nativeWindow.getHeight() != b.height()) {
+            // WM_SIZE then finds the bounds already set (applyResize: no user resize).
+            w.nativeWindow.setClientSize(b.width(), b.height());
+            resizePopups(w);
+        }
+    }
+
+    /**
+     * An app's own Activity.moveTaskToBack (windows3 track): its task's windows are minimized,
+     * not hidden: they keep their taskbar buttons, and restoring one brings the task back
+     * (onVisibility: moveTaskToFront, or in a single process the Activity restarted).
+     * Minimizing reports itself as the user's minimizing does (WM_SIZE SIZE_MINIMIZED), which
+     * takes the task to the back where it is not there yet (the single process). Returns
+     * whether a window was minimized.
+     */
+    public boolean minimizeTask(IBinder activityToken) {
+        List<AppWindow> windows = new ArrayList<>();
+        synchronized (mWindows) {
+            int taskId = -2;
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (!v.popup && v.attrs.token == activityToken) taskId = v.taskId;
+            }
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow v = mWindows.valueAt(i);
+                if (v.popup || v.nativeWindow == null || v.minimized) continue;
+                if (v.attrs.token == activityToken || (taskId >= 0 && v.taskId == taskId)) {
+                    windows.add(v);
+                }
+            }
+        }
+        for (AppWindow v : windows) {
+            log("window \"" + v.title() + "\" minimized: its Activity moved its task to the back"
+                    + (v.taskId >= 0 ? " (task " + v.taskId + ")" : ""));
+            // Minimized from now on (its Activities stopping keep it so, relayout), before
+            // WM_SIZE says it (onVisibility then has nothing to do).
+            v.minimized = true;
+            v.nativeWindow.minimize();
+        }
+        if (!windows.isEmpty()) {
+            // The task goes to the back as when the user minimizes it: the system server has
+            // it there already (a second request changes nothing); the single process stops
+            // its Activity.
+            AppWindow v = windows.get(0);
+            Runnable back = () -> mLifecycleHandler.onTaskVisibility(v.attrs.token, v.taskId, false);
+            if (v.handler != null) {
+                v.handler.post(back);
+            } else {
+                back.run();
+            }
+        }
+        return !windows.isEmpty();
     }
 
     /** Remembers where a top-level window of a task is, as it goes or is hidden. */
@@ -1166,7 +1386,16 @@ public final class WindowSession extends IWindowSession.Stub {
             }
         }
         if (at == null) return;
-        if (w.resizable && (at.width() != w.nativeWindow.getWidth()
+        // Its size too, unless its configuration gives it its task's shape (the system
+        // server's: the size the user gave the task, or the display turned for its
+        // orientation; windows3 track), or the task's window was turned for another
+        // Activity's orientation.
+        boolean shaped = w.rotation != android.view.Surface.ROTATION_0
+                || (!w.configBounds.isEmpty() && !w.configBounds.equals(displayBounds()));
+        Rect turned = TaskConfiguration.display(android.view.Surface.ROTATION_90);
+        boolean otherTurned = !turned.equals(displayBounds()) && at.width() == turned.width()
+                && at.height() == turned.height();
+        if (w.resizable && !shaped && !otherTurned && (at.width() != w.nativeWindow.getWidth()
                 || at.height() != w.nativeWindow.getHeight())) {
             // WM_SIZE: the window lays out at the task's size (applyResize).
             w.nativeWindow.setClientSize(at.width(), at.height());
@@ -1519,15 +1748,19 @@ public final class WindowSession extends IWindowSession.Stub {
     public int addToDisplayAsUser(IWindow window, WindowManager.LayoutParams attrs,
             int viewVisibility, int layerStackId, int userId, int requestedVisibleTypes,
             InputChannel outInputChannel, WindowRelayoutResult result) {
+        // After a LaunchActivityItem: the Activity's calls go through the hook again.
+        ActivityClientHook.ensure();
         AppWindow w = new AppWindow(window);
         w.attrs.copyFrom(attrs);
         w.requestedVisibleTypes = requestedVisibleTypes;
         // The Activity's task, and whether the window floats over the Activity below it
         // (a dialog or translucent theme): before mWindows is locked (binder calls).
         boolean overActivity = false;
+        Configuration activityConfig = null;
         if (attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
             w.taskId = taskOf(attrs.token);
             overActivity = isTranslucentOrFloating(attrs.token);
+            activityConfig = activityConfiguration(attrs.token);
         }
         synchronized (mWindows) {
             if (mWindows.containsKey(window.asBinder())) {
@@ -1536,10 +1769,23 @@ public final class WindowSession extends IWindowSession.Stub {
             w.seq = mNextSeq++;
             w.parent = findParent(w, overActivity);
             w.popup = w.parent != null || attrs.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW;
+            if (activityConfig != null) {
+                Rect b = activityConfig.windowConfiguration.getBounds();
+                w.configBounds.set(b.isEmpty() ? displayBounds() : b);
+                w.configRotation = displayRotationOf(activityConfig);
+            }
             if (!w.popup && isUserResizable(w.attrs)) {
-                // An Activity on top of another in its task takes the task window's size.
-                Rect task = taskBounds(w);
-                if (task != null) w.bounds.set(task);
+                if (hasTaskShape(activityConfig)) {
+                    // Its task's shape (windows3 track): the display turned for the
+                    // orientation it asks for, or the size the user gave the task.
+                    Rect b = w.configBounds;
+                    w.rotation = w.configRotation;
+                    if (!b.equals(displayBounds())) w.bounds.set(0, 0, b.width(), b.height());
+                } else {
+                    // An Activity on top of another in its task takes the task window's size.
+                    Rect task = taskBounds(w);
+                    if (task != null) w.bounds.set(task);
+                }
             }
             mWindows.put(window.asBinder(), w);
         }
@@ -1555,7 +1801,11 @@ public final class WindowSession extends IWindowSession.Stub {
                 + DeviceProfile.describe() + ")"
                 + (w.parent != null ? ", a popup of \"" + w.parent.title() + "\""
                         : w.popup ? ", a popup" : "")
-                + (overActivity ? ", over the Activity below (translucent or floating)" : ""));
+                + (overActivity ? ", over the Activity below (translucent or floating)" : "")
+                + (!w.bounds.isEmpty() ? ", bounds " + w.bounds.width() + "x" + w.bounds.height()
+                        : "")
+                + (w.rotation != android.view.Surface.ROTATION_0 ? ", display turned to "
+                        + TaskConfiguration.rotationName(w.rotation) : ""));
         return WindowManagerGlobal.ADD_OKAY | WindowManagerGlobal.ADD_FLAG_APP_VISIBLE
                 | WindowManagerGlobal.ADD_FLAG_IN_TOUCH_MODE;
     }
@@ -1600,6 +1850,9 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         w.requestedWidth = requestedWidth;
         w.requestedHeight = requestedHeight;
+        // The task turned for an orientation (or back): the window takes its new shape.
+        syncTaskShape(w);
+        ActivityClientHook.ensure();
         WindowRelayoutResult result = outRelayoutResult != null ? outRelayoutResult
                 : new WindowRelayoutResult(new ClientWindowFrames(),
                         new android.util.MergedConfiguration(), new InsetsState(),

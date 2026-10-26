@@ -41,8 +41,11 @@ public final class ActivityClientController extends IActivityClientController.De
         if (r != null) mAtm.activityResumed(r);
     }
 
+    /** After TopResumedActivityChangeItem(false) (multi-resume, windows3 track). */
     @Override
     public void activityTopResumedStateLost(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) SystemServer.log("activityTopResumedStateLost: " + r.name());
     }
 
     @Override
@@ -136,6 +139,23 @@ public final class ActivityClientController extends IActivityClientController.De
     public boolean moveActivityTaskToBack(IBinder token, boolean nonRoot) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
         return r != null && mAtm.moveTaskToBack(r, nonRoot);
+    }
+
+    /**
+     * Activity.setRequestedOrientation (windows3 track): the task's display turns for its top
+     * activity's orientation (ActivityTaskManagerService.setRequestedOrientation).
+     */
+    @Override
+    public void setRequestedOrientation(IBinder token, int requestedOrientation) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        if (r != null) mAtm.setRequestedOrientation(r, requestedOrientation);
+    }
+
+    @Override
+    public int getRequestedOrientation(IBinder token) {
+        ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);
+        return r != null ? mAtm.getRequestedOrientation(r)
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     }
 
     @Override
