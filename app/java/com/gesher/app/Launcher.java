@@ -529,23 +529,26 @@ public final class Launcher {
         public void run() {
             long offset = mStart;
             byte[] buffer = new byte[16 * 1024];
+            LogLines lines = new LogLines(System.out);
             while (true) {
                 boolean last = mDone;
                 long length = mFile.length();
-                if (length < offset) offset = 0;  // a new log
+                if (length < offset) {
+                    offset = 0;  // a new log
+                    lines.reset();
+                }
                 if (length > offset) {
                     try (InputStream in = new FileInputStream(mFile)) {
                         in.skip(offset);
                         for (int n; (n = in.read(buffer)) > 0; ) {
-                            System.out.write(buffer, 0, n);
+                            lines.write(buffer, 0, n);
                             offset += n;
                         }
-                        System.out.flush();
                     } catch (IOException e) {
                         // try again
                     }
                 }
-                if (last) return;
+                if (last) { lines.finish(); return; }
                 SystemClock.sleep(150);
             }
         }
