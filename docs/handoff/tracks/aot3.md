@@ -37,6 +37,13 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+A separate aot3-probes workflow is prepared to run the same real collector
+quickly on both Windows versions using explicitly selected completed full
+CI build artifacts (exact source SHA and all supplying build jobs checked).
+It reuses the suite's actual helper definitions and track 64, without a
+local runtime/build or unrelated test bodies. Probe results are startup
+evidence only, not a full-CI/merge or performance claim.
+
 Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
 current integration f520fd1; the sole new collector change enables its
 required log and records actual size/marker diagnostics. All native

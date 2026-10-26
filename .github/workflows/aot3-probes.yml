@@ -1,0 +1,120 @@
+name: aot3-probes
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Existing full CI run supplying the runtime and boot image
+        required: true
+        type: string
+      source_sha:
+        description: Exact source SHA of that run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aot3-probes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  startup-profile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the selected CI source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if ($env:SOURCE_RUN -notmatch '^\d+$' -or $env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Invalid source run/SHA' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $env:SOURCE_SHA -or $run.status -cne 'completed' -or
+              $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or $run.name -cne 'ci') {
+            throw 'The selected full CI source does not match'
+          }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify build jobs' }
+          foreach ($name in 'build', 'framework / framework', 'native-libs / native-libs', 'graphics / build',
+              'angle / build', 'arm64 / build', 'boot-image / compile', 'webview / build', 'exec / exec') {
+            $matches = @($jobs.jobs | Where-Object { $_.name -ceq $name })
+            if ($matches.Count -ne 1 -or $matches[0].conclusion -cne 'success') { throw "Unverified artifact job $name" }
+          }
+          Write-Host "AOT_PROBE_SOURCE run $env:SOURCE_RUN SHA $($run.head_sha), script $env:GITHUB_SHA"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-libs
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: graphics
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: angle
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: webview
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+
+      - name: Record the actual startup profile through ART and profman
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/windows/aot3-startup-probe.ps1 dist
