@@ -153,7 +153,7 @@ or `gh api repos/gesher-runtime/gesher/actions/jobs/<job id>/logs`
 | web3 | wip/web3 (gesher-webview) | 58566f8 | 40262184075: proxy/PAC, CONNECTIVITY_ACTION, local https for 56-net pass; the accessibility bridge broke other apps (fixed in 77d659a); WebViews in web3app never load | 40285810159 at 77d659a | docs/webview.md "Status and next steps (web3)" |
 | exec3 | wip/exec3 (gesher-exec) | 31d348e | none (no CI run yet) | none | docs/exec.md exec3 section |
 | aot2 | wip/aot2 (gesher-stack) | 8551382 | 40263271836 at 7de81ac: all green except two 61-aot2 app-image checks (app classes not in the app image) | 40285423159 at ad9d360 (`--boot-image=<dir>/boot.art:<dir>/*`) | docs/compiled-code.md "Status and next steps (aot2 track, ADR 0054)" |
-| windows3 | wip/windows3 (gesher-lifecycle) | see branch | see its status section | see its status section | docs/lifecycle.md or docs/windows3.md |
+| windows3 | wip/windows3 (gesher-lifecycle) | 3e313ba (code a15ade4; contains integration 7711d7d) | 40258887997 at f03607f: ALL GREEN (attempt 2; attempt 1's windows-2025 job hung 40 min in 58-devices' geocoder step): orientation, multi-resume, moveTaskToBack minimizes, IME insets (adjustResize/adjustPan), Windows clipboard, window thread wake without the WM_NULL workaround; Signal Generator's e2e display override removed | 40285476400 at a15ade4 (only a roadmap section and an integration merge since f03607f) | docs/windows3.md "Status and next steps" |
 | native2 | wip/native2 (gesher-arm64) | 4ac03c4 (code b6a7d88; contains integration 8ff9219) | 40263281040: ScopedFlock and GetDexCanonicalLocation gtests, exec-bit stat, zlib/SQLite/OpenSSL/libc++ (x86_64) and zlib/libpng/libjpeg-turbo/SQLite/OpenSSL (arm64) pass; x86_64 setjmp, arm64 open flags and every dalvikvm-based native2 check failed (all fixed in b6a7d88) | 40285714522 at b6a7d88 | end of docs/native-libs.md; docs/posix.md |
 
 Notes per track:
@@ -172,6 +172,15 @@ Notes per track:
   front end (parser, expansions) but no executor, redirections or
   builtins; it does not link yet and exec.cmake still builds the old
   minimal shell. Everything else in its brief is not started.
+- windows3: closest to merge. When 40285476400 is green on every job,
+  tick its roadmap boxes with that run, set ADR 0053 to accepted, and
+  merge. Merging changes behaviour other tracks see: activities in other
+  tasks stay resumed (multi-resume); app processes install a proxy for
+  ActivityClient's controller; single-process windows get task 1, not -1.
+  Not covered: the real touch keyboard (runners have none; tests post the
+  handler's message), IME candidate window as insets, legacy adjustResize
+  for old target SDKs, per-task rotation only. Watch for the windows-2025
+  geocoder hang in 58-devices.
 - native2: ART patches 0570/0571 (renumber if they collide). Not done:
   SDL testautomation, BoringSSL tests, inotify for other processes' writes,
   fcntl record locks (always granted). Fill the symbols the "native2
