@@ -111,6 +111,21 @@ Merged so far:
   surfaces (graphics); no guest JIT code, guest signal handlers, LSE, HFAs
   by value. The arm64 shim fallbacks (sem_*, wchar, libm, dlopen of
   platform libs) should move into compat/bionic for x86_64 too.
+- media stage 2 (video): merged (verified at 6aff13d, ci 40258833980, which
+  contains 9e449b0; only handoff docs differ, so the integration tree after
+  this merge is the CI-verified one). ADR 0052. MediaExtractor, MediaCodec
+  and MediaCodecList over Media Foundation (H.264; decoders only),
+  MediaPlayer video with A/V sync, VideoView, MediaMetadataRetriever frames,
+  output into TextureView/SurfaceView (compat/media/surface plus
+  frameworks/base patch 0300: the surfaces track decides whether to adopt
+  or replace it). The windows-2022 sound gap is fixed (feeder threads wait
+  on Track::WaitForRoom). Leftovers: VP8/VP9/AV1/H.265 software decoders and
+  the Matroska extractor on wip/media-soft (not verified yet); no DXVA,
+  encoders, MediaMuxer, DRM, ImageReader output, GLSurfaceView,
+  TextureView.lockCanvas; no F-Droid video app in e2e.
+- 2026-10-26 early morning: the spend limit stopped all seven agents
+  (media, windows3, aot2, exec2, surfaces, native2, web3); each was resumed
+  from its saved state after the reset.
 - 2026-10-25 afternoon: the spend limit stopped the agents again; resumed
   after the reset. The arm64 agent kept falling back to claude-opus-4-8, so
   it was replaced by an Opus successor (model given explicitly) that first
@@ -146,6 +161,18 @@ Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
 - `web3` (C:\work\gesher-webview): WebViewCompat, web accessibility,
   geolocation, system proxy and the net leftovers, a local https check.
   ADR 0058, 54-web3.ps1.
+- media-soft: merged (verified at b57bb74, ci 40258938663, which contains
+  6aff13d; integration differed only in docs). VP8/VP9 (libvpx), AV1
+  (libdav1d), H.265 (libhevc), MatroskaExtractor; PASS lines on both
+  runners. docs/media-soft-video.md. Leftovers: no libavc/MPEG-4/H.263
+  software fallbacks; 10-bit output as 8-bit; WebM audio and seeking
+  untested.
+- `media3` (C:\work\gesher-media-soft, branch wip/media-soft, continuing
+  after its merge): stage 3: audio input, encoders, MediaMuxer,
+  MediaRecorder, ImageReader output, a video app in e2e, plus media-soft's
+  leftovers. ADR 0059.
+- The surfaces track owns compat/media/surface and frameworks/base patch
+  0300 (media stage 2's TextureView/SurfaceView output) from now on.
 
 In `framework.yml` every new test app is built and copied on its own line, so
 merges only add lines.
