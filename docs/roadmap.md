@@ -431,6 +431,18 @@ needs: [framework-build.md](framework-build.md).
       AChoreographer, a click and a key through AInputQueue, single process
       and on the device (ci run 40056663098; docs/native-libs.md step 8,
       ADR 0032)
+- [x] Native processes from native code ([exec.md](exec.md), ADR 0055; ci run
+      40260836601 on windows-2022 and windows-2025): `fork()`+`exec*()`
+      (vfork-style) with dup2 into a pipe, `posix_spawn` with file actions,
+      `system()`, `popen()`, `exec*()` outside a fork replacing the image,
+      `waitpid` status decoding (exit codes, WIFSIGNALED); signals between
+      processes (`kill` to the target's SIGUSR1/SIGTERM handlers, signal 0,
+      SIGKILL); `/system/bin` `ls`, `id`, `getprop`
+- [ ] The rest of exec2 (implemented, not exercised by CI): `Process.destroy()`
+      running the program's SIGTERM handler and `destroyForcibly()` (libcore
+      patch 0003), `logcat`, `ps`, `cat`, `kill`, `sleep`; still not done: a
+      fuller `sh` (pipes, redirections, control flow), ELF TLS in the executable,
+      `pm`/`am`, a persistent `setprop`; static executables are refused (ADR 0055)
 
 ## Phase 7 checklist (arm64 translation)
 
@@ -483,6 +495,16 @@ Media ([media.md](media.md), ADR 0042):
   - [x] SoundPool, Ringtone/RingtoneManager defaults, MediaMetadataRetriever
         (ci run 40193603079)
   - [x] AAudio and OpenSL ES for apps' native code (output; ci run 40193603079)
-- [ ] MediaCodec, MediaExtractor, MediaMuxer; video into SurfaceView and
-      TextureView (stage 2)
+- [ ] Video (stage 2; ADR 0052)
+  - [x] MediaExtractor, MediaCodec decoders (byte buffers, Images, a callback,
+        flush), MediaCodecList with real capabilities; H.264 through Media
+        Foundation (ci run 40258833980)
+  - [x] Video into a TextureView (SurfaceTexture) and a SurfaceView, drawn by
+        hwui's CPU pipeline and by SkiaGL (ci run 40258833980)
+  - [x] MediaPlayer and VideoView with video (A/V sync to the audio clock),
+        MediaMetadataRetriever.getFrameAtTime (ci run 40258833980)
+  - [x] Software decoders for what Media Foundation lacks (VP8, VP9, AV1,
+        H.265) and a WebM extractor (ci run 40258938663;
+        [media-soft-video.md](media-soft-video.md))
+  - [ ] Hardware decoding (DXVA), MediaMuxer and encoders
 - [ ] Audio input: AudioRecord, MediaRecorder (stage 3)

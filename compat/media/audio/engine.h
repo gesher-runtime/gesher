@@ -137,6 +137,11 @@ class Track : public std::enable_shared_from_this<Track> {
 
   // Streaming: frames written and not yet played.
   size_t Queued() const;
+  // Waits until rames frames fit in the buffer (signalled by the mixer as it
+  // plays, not polled), at most timeout_ms; true if they fit. A feeder that
+  // sleeps instead wakes late under load (Windows' 15.6 ms timer ticks) and lets
+  // a small buffer run dry.
+  bool WaitForRoom(size_t frames, int timeout_ms);
 
   // Detaches the track from the engine; blocked writers return.
   void Release();

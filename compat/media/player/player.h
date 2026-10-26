@@ -19,6 +19,8 @@
 
 #include "data_source.h"
 
+struct ANativeWindow;
+
 namespace gesher::media {
 
 // android::status_t values the JNI layer maps.
@@ -77,6 +79,11 @@ class Player {
   // An operation failed where the JNI layer throws nothing: MEDIA_ERROR
   // (status, 0) goes to the app, as libmedia's process_media_player_call does.
   void ReportError(int status);
+  // The Surface the video is drawn into (MediaPlayer.setSurface/setDisplay;
+  // null: none, the video is decoded and dropped). The player keeps a reference.
+  int SetVideoWindow(ANativeWindow* window);
+  // The video's size (0 x 0 without video, or before it is known).
+  void VideoSize(int* width, int* height);
   int session_id() const { return session_id_; }
   void set_session_id(int id) { session_id_ = id; }
 
@@ -97,6 +104,8 @@ class Player {
   float speed_ = 1.0f;
   int stream_ = 3;
   int session_id_ = 0;
+  ANativeWindow* window_ = nullptr;
+  int video_width_ = 0, video_height_ = 0;
   bool prepare_sync_ = false;
   int prepare_status_ = 0;
   int current_position_ = -1;  // a seek's target, until it completes

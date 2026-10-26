@@ -8,6 +8,7 @@
 
 #include <jni.h>
 
+#include <media/NdkMediaFormat.h>
 #include <media/NdkMediaFormatPriv.h>
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/AMessage.h>
@@ -22,6 +23,7 @@
 #include "../audio/log.h"
 #include "../player/data_source.h"
 #include "../player/extractor.h"
+#include "../video/video_decoder.h"
 #include "jni_util.h"
 #include "media_jni.h"
 
@@ -84,8 +86,10 @@ jobject Boxed(JNIEnv* env, const char* cls, const char* sig, jvalue v) {
   return env->CallStaticObjectMethodA(c, valueOf, &v);
 }
 
+}  // namespace
+
 // An AMediaFormat as the HashMap MediaFormat(Map) takes.
-jobject ToMap(JNIEnv* env, const Format& f) {
+jobject FormatToMap(JNIEnv* env, const Format& f) {
   jclass hashMap = env->FindClass("java/util/HashMap");
   jobject map = env->NewObject(hashMap, env->GetMethodID(hashMap, "<init>", "()V"));
   jmethodID put = env->GetMethodID(hashMap, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -147,6 +151,29 @@ jobject ToMap(JNIEnv* env, const Format& f) {
   return map;
 }
 
+namespace {
+
+jobject ToMap(JNIEnv* env, const Format& f) { return FormatToMap(env, f); }
+
+// A track's format as NuMediaExtractor gives it: H.264's avcC as csd-0 (the
+// SPSs) and csd-1 (the PPSs), H.265's hvcC as csd-0, with start codes.
+Format TrackFormatForJava(Extractor* ex, size_t index) {
+  Format f = ex->TrackFormat(index);
+  std::string mime = f.Mime();
+  std::vector<uint8_t> b, have;
+  if (mime == "video/avc" && f.GetBuffer("csd-avc", &b) && !f.GetBuffer("csd-0", &have)) {
+    std::vector<uint8_t> sps, pps;
+    if (AvccToAnnexB(b.data(), b.size(), &sps, &pps)) {
+      AMediaFormat_setBuffer(f.get(), "csd-0", sps.data(), sps.size());
+      if (!pps.empty()) AMediaFormat_setBuffer(f.get(), "csd-1", pps.data(), pps.size());
+    }
+  } else if (mime == "video/hevc" && f.GetBuffer("csd-hevc", &b) && !f.GetBuffer("csd-0", &have)) {
+    std::vector<uint8_t> ps;
+    if (HvccToAnnexB(b.data(), b.size(), &ps)) AMediaFormat_setBuffer(f.get(), "csd-0", ps.data(), ps.size());
+  }
+  return f;
+}
+
 void Open(JNIEnv* env, jobject thiz, std::unique_ptr<DataSource> source, const std::string& error) {
   JniExtractor* e = Get(env, thiz);
   if (e == nullptr) return;
@@ -202,7 +229,7 @@ jobject JNICALL ME_getTrackFormat(JNIEnv* env, jobject thiz, jint index) {
     jniThrow(env, "java/lang/IllegalArgumentException", nullptr);
     return nullptr;
   }
-  return ToMap(env, e->extractor->TrackFormat(static_cast<size_t>(index)));
+  return ToMap(env, TrackFormatForJava(e->extractor.get(), static_cast<size_t>(index)));
 }
 
 jobject JNICALL ME_getFileFormat(JNIEnv* env, jobject thiz) {
