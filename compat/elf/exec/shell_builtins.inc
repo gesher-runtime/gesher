@@ -501,6 +501,7 @@ int Simple(Shell* sh, const NodeP& node, Io io) {
   }
   int status;
   auto function = sh->funcs.find(args[0]);
+  bool special = function == sh->funcs.end() && IsSpecialBuiltin(args[0]);
   if (function != sh->funcs.end()) {
     NodeP body = function->second;
     auto positional = sh->pos;
@@ -534,11 +535,16 @@ int Simple(Shell* sh, const NodeP& node, Io io) {
       sh->persistent_fd[redir.fd] = std::make_shared<OwnedHandle>(copy);
     }
   }
-  for (const auto& [name, value] : saved) {
-    if (value)
-      sh->vars[name] = *value;
-    else
-      sh->vars.erase(name);
+  // Prefixes of special builtins change the shell's own environment. Other
+  // command prefixes are temporary; unwind repeated names in reverse order.
+  if (!special) {
+    for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+      const auto& [name, value] = *it;
+      if (value)
+        sh->vars[name] = *value;
+      else
+        sh->vars.erase(name);
+    }
   }
   return status;
 }

@@ -260,6 +260,12 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   output. The APK's Java sources, PowerShell and packaging script pass local
   compilation/parsing only; neither its native JNI build nor on-device run is
   verified. The current CI 40320290754 predates this prepared test step.
+- Four more local shell cases now cover special-builtin prefix assignments,
+  ordinary temporary assignments, repeated prefix-name restoration and prefix
+  assignment with readonly. Special builtins retain their assignments and
+  other commands unwind repeated names in reverse order. All 51 exact local
+  cases pass with an own-file -Werror build. This follow-up also awaits the
+  next CI; the active run contains the earlier 47-case suite.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,

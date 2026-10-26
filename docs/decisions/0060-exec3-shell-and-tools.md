@@ -111,8 +111,10 @@ its Java/package/script checks alone do not establish on-device behavior.
 
 ## Remaining work
 
-- umask and actual permission behavior; broader shell conformance, including
-  special-builtin assignment scopes and persistent-descriptor nesting.
+- umask and actual permission behavior; broader shell conformance and
+  persistent-descriptor nesting. Special-builtin prefix persistence and
+  repeated temporary-assignment restoration have four added local checks;
+  their real-launcher CI remains pending.
 - Signal interruption while blocked reading input, real mailbox traps and
   Process.destroy/destroyForcibly verification.
 - Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,

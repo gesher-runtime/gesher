@@ -503,6 +503,15 @@ bool IsBuiltin(const std::string& name) {
   return false;
 }
 
+bool IsSpecialBuiltin(const std::string& name) {
+  static const char* names[] = {":", ".", "source", "break", "continue", "eval",
+                                "exec", "exit", "export", "readonly", "return",
+                                "set", "shift", "trap", "unset"};
+  for (const char* builtin : names)
+    if (name == builtin) return true;
+  return false;
+}
+
 int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io);
 int Simple(Shell* sh, const NodeP& node, Io io);
 void RunPendingSignals(Shell* sh, Io io);
