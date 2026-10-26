@@ -1,0 +1,294 @@
+diff --git a/dex2oat/aot_class_linker.cc b/dex2oat/aot_class_linker.cc
+index b6eca10..f266e0e 100644
+--- a/dex2oat/aot_class_linker.cc
++++ b/dex2oat/aot_class_linker.cc
+@@ -16,6 +16,7 @@
+ 
+ #include "aot_class_linker.h"
+ 
++#include "base/logging.h"
+ #include "base/stl_util.h"
+ #include "class_status.h"
+ #include "compiler_callbacks.h"
+@@ -191,6 +192,8 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+ 
+   // Check the class itself.
+   if (!can_reference_dex_cache(klass->GetDexCache())) {
++    VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                   << " cannot go into the image: its own dex cache";
+     return false;
+   }
+ 
+@@ -199,6 +202,9 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+   while (!heap->ObjectIsInBootImageSpace(superclass)) {
+     DCHECK(superclass != nullptr);  // Cannot skip Object which is in the primary boot image.
+     if (!can_reference_dex_cache(superclass->GetDexCache())) {
++      VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                     << " cannot go into the image: its superclass "
++                     << superclass->PrettyDescriptor() << " is not in the boot image";
+       return false;
+     }
+     superclass = superclass->GetSuperClass();
+@@ -211,6 +217,9 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+     DCHECK(interface != nullptr);
+     if (!heap->ObjectIsInBootImageSpace(interface) &&
+         !can_reference_dex_cache(interface->GetDexCache())) {
++      VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                     << " cannot go into the image: its interface "
++                     << interface->PrettyDescriptor() << " is not in the boot image";
+       return false;
+     }
+   }
+diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
+index beef83e..eb334ff 100644
+--- a/runtime/class_linker.cc
++++ b/runtime/class_linker.cc
+@@ -1474,6 +1474,9 @@ bool ClassLinker::InitFromBootImage(std::string* error_msg) {
+         quick_generic_jni_trampoline_, quick_to_interpreter_bridge_trampoline_,
+         nterp_trampoline_, jni_dlsym_lookup_trampoline_,
+         jni_dlsym_lookup_critical_trampoline_};
++    static_assert(arraysize(oat_stubs) == kGesherOatStubs);
++    std::copy(std::begin(oat_stubs), std::end(oat_stubs), gesher_oat_stubs_);
++    std::copy(std::begin(runtime_stubs), std::end(runtime_stubs), gesher_runtime_stubs_);
+     auto runtime_stub = [&](const void* code) {
+       if (code != nullptr) {
+         for (size_t i = 0; i < arraysize(oat_stubs); ++i) {
+@@ -2401,6 +2404,51 @@ bool ClassLinker::AddImageSpace(gc::space::ImageSpace* space,
+     }
+   }
+ 
++#if defined(GESHER)
++  // Gesher: an app image's methods that have no compiled code of their own
++  // point at the primary boot image's oat stubs (ImageWriter::GetOatAddress),
++  // which the boot image's methods no longer use (InitFromBootImage): they get
++  // libart's stubs too. With GESHER_LOG_EXECUTION the runtime says what the
++  // app image brought (docs/compiled-code.md, ADR 0054).
++  size_t gesher_app_methods = 0u;
++  size_t gesher_app_compiled = 0u;
++  if (app_image && !runtime->IsAotCompiler()) {
++    auto runtime_stub = [&](const void* code) {
++      if (code != nullptr) {
++        for (size_t i = 0; i < kGesherOatStubs; ++i) {
++          if (gesher_oat_stubs_[i] != nullptr && code == gesher_oat_stubs_[i]) {
++            return gesher_runtime_stubs_[i];
++          }
++        }
++      }
++      return code;
++    };
++    const void* const nterp_with_clinit = interpreter::GetNterpWithClinitEntryPoint();
++    header.VisitPackedArtMethods([&](ArtMethod& method) REQUIRES_SHARED(Locks::mutator_lock_) {
++      const void* code = method.GetEntryPointFromQuickCompiledCodePtrSize(image_pointer_size_);
++      const void* stub = runtime_stub(code);
++      if (stub != code) {
++        method.SetEntryPointFromQuickCompiledCodePtrSize(stub, image_pointer_size_);
++      }
++      if (method.IsNative()) {
++        const void* data = method.GetDataPtrSize(image_pointer_size_);
++        const void* data_stub = runtime_stub(data);
++        if (data_stub != data) {
++          method.SetDataPtrSize(data_stub, image_pointer_size_);
++        }
++      }
++      if (!method.IsRuntimeMethod()) {
++        ++gesher_app_methods;
++        if (stub == code && code != nullptr && code != nterp_with_clinit &&
++            std::find(std::begin(gesher_runtime_stubs_), std::end(gesher_runtime_stubs_), code) ==
++                std::end(gesher_runtime_stubs_)) {
++          ++gesher_app_compiled;  // the app's own AOT code (its oat file)
++        }
++      }
++    }, space->Begin(), image_pointer_size_);
++  }
++#endif  // GESHER
++
+   // Set entry point to interpreter if in InterpretOnly mode.
+   if (!runtime->IsAotCompiler() &&
+       (runtime->GetInstrumentation()->InterpretOnly() ||
+@@ -2540,6 +2588,21 @@ bool ClassLinker::AddImageSpace(gc::space::ImageSpace* space,
+     class_table->InsertOatFile(oat_file);
+   }
+ 
++#if defined(GESHER)
++  if (app_image && getenv("GESHER_LOG_EXECUTION") != nullptr) {
++    size_t classes = 0u;
++    for (const ClassTable::TableSlot& root : temp_set) {
++      if (space->HasAddress(root.Read().Ptr())) {
++        ++classes;
++      }
++    }
++    LOG(INFO) << "gesher: app image loaded: " << space->GetImageLocation() << ": " << classes
++              << " classes, " << gesher_app_methods << " methods, " << gesher_app_compiled
++              << " with compiled code (" << oat_file->GetLocation() << ", "
++              << CompilerFilter::NameOfFilter(oat_file->GetCompilerFilter()) << ")";
++  }
++#endif  // GESHER
++
+   if (added_class_table) {
+     WriterMutexLock mu(self, *Locks::classlinker_classes_lock_);
+     class_table->AddClassSet(std::move(temp_set));
+diff --git a/runtime/class_linker.h b/runtime/class_linker.h
+index fc0ce69..2d13943 100644
+--- a/runtime/class_linker.h
++++ b/runtime/class_linker.h
+@@ -1470,6 +1470,15 @@ class ClassLinker {
+   const void* quick_to_interpreter_bridge_trampoline_;
+   const void* nterp_trampoline_;
+ 
++#if defined(GESHER)
++  // Gesher: the primary boot image's own oat stubs, before InitFromBootImage
++  // replaced them with libart's; app images point at them too, and get
++  // libart's when they are added (AddImageSpace).
++  static constexpr size_t kGesherOatStubs = 7u;
++  const void* gesher_oat_stubs_[kGesherOatStubs] = {};
++  const void* gesher_runtime_stubs_[kGesherOatStubs] = {};
++#endif
++
+   // Image pointer size.
+   PointerSize image_pointer_size_;
+ 
+diff --git a/runtime/oat/oat_file.cc b/runtime/oat/oat_file.cc
+index 02ba0f0..ecb8fdd 100644
+--- a/runtime/oat/oat_file.cc
++++ b/runtime/oat/oat_file.cc
+@@ -107,7 +107,15 @@ using android::base::StringAppendV;
+ using android::base::StringPrintf;
+ 
+ // Whether OatFile::Open will try dlopen. Fallback is our own ELF loader.
++#if defined(GESHER)
++// Gesher (ADR 0054): dlopen is gesher-base's (Windows modules, and ELF objects
++// through the ELF loader for apps' native libraries), which dl_iterate_phdr
++// does not show ART an oat file's mappings from: app oat files are loaded by
++// ART's own ELF loader, as the boot image's are (they come with a reservation).
++static constexpr bool kUseDlopen = false;
++#else
+ static constexpr bool kUseDlopen = true;
++#endif
+ 
+ // Whether OatFile::Open will try dlopen on the host. On the host we're not linking against
+ // bionic, so cannot take advantage of the support for changed semantics (loading the same soname
+diff --git a/runtime/oat/oat_file_manager.cc b/runtime/oat/oat_file_manager.cc
+index 5612c0d..54784bb 100644
+--- a/runtime/oat/oat_file_manager.cc
++++ b/runtime/oat/oat_file_manager.cc
+@@ -264,6 +264,16 @@ std::vector<std::unique_ptr<const DexFile>> OatFileManager::OpenDexFilesFromOat(
+     VLOG(oat) << "OatFileAssistant(" << dex_location << ").GetBestOatFile()="
+               << (oat_file != nullptr ? oat_file->GetLocation() : "")
+               << " (executable=" << (oat_file != nullptr ? oat_file->IsExecutable() : false) << ")";
++#if defined(GESHER)
++    // Gesher: which compiled code an app's dex file gets (docs/compiled-code.md, ADR 0054).
++    if (getenv("GESHER_LOG_EXECUTION") != nullptr) {
++      LOG(INFO) << "gesher: app oat: " << dex_location << ": "
++                << (oat_file != nullptr ? oat_file->GetLocation() : std::string("none"))
++                << " (status " << odex_status << ", filter " << compilation_filter
++                << ", reason " << compilation_reason << ", executable "
++                << (oat_file != nullptr && oat_file->IsExecutable() ? "yes" : "no") << ")";
++    }
++#endif
+ 
+     CHECK(oat_file == nullptr || odex_location == oat_file->GetLocation())
+         << "OatFileAssistant non-determinism in choosing best oat files. "
+@@ -296,6 +306,12 @@ std::vector<std::unique_ptr<const DexFile>> OatFileManager::OpenDexFilesFromOat(
+           // is executable.
+           image_space = oat_file_assistant->OpenImageSpace(oat_file.get());
+         }
++#if defined(GESHER)
++        if (image_space == nullptr && getenv("GESHER_LOG_EXECUTION") != nullptr) {
++          LOG(INFO) << "gesher: no app image for " << oat_file->GetLocation()
++                    << (oat_file->IsExecutable() ? "" : " (not executable)");
++        }
++#endif
+         // Load the runtime image. This logic must be aligned with the one that determines when to
+         // keep runtime images in `ArtManagerLocal.cleanup` in
+         // `art/libartservice/service/java/com/android/server/art/ArtManagerLocal.java`.
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+index 7f112de..77e1145 100644
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -905,7 +905,86 @@ void Runtime::PostZygoteFork() {
+   ResetStats(0xFFFFFFFF);
+ }
+ 
++#if defined(GESHER)
++// Gesher (docs/compiled-code.md, ADR 0054): System.exit ends the process
++// without the runtime's shutdown (FastExit), as on Android, where the
++// profile saver's last save is the one before. Gesher's app processes end
++// with System.exit as soon as the system server tells them to, often before
++// a periodic save: the JIT profile is saved first, as the signal catcher does
++// on SIGUSR1. With GESHER_LOG_EXECUTION the runtime then says how the app's
++// own methods (those of non-boot class loaders) ran: with their AOT code, or
++// entering the interpreter (nterp, the switch interpreter) or the JIT.
++static void GesherBeforeExit(Runtime* runtime) {
++  Thread* self = Thread::Current();
++  if (self == nullptr) {
++    return;
++  }
++  const bool log = getenv("GESHER_LOG_EXECUTION") != nullptr;
++  ScopedThreadStateChange tsc(self, ThreadState::kNative);
++  if (runtime->GetJit() != nullptr && ProfileSaver::IsStarted()) {
++    ProfileSaver::ForceProcessProfiles();
++    if (log) {
++      LOG(INFO) << "gesher: JIT profile saved at exit";
++    }
++  }
++  if (!log) {
++    return;
++  }
++  ScopedObjectAccess soa(self);
++  ClassLinker* class_linker = runtime->GetClassLinker();
++  const PointerSize pointer_size = class_linker->GetImagePointerSize();
++  const uint16_t threshold = runtime->GetJITOptions()->GetWarmupThreshold();
++  jit::Jit* jit = runtime->GetJit();
++  size_t classes = 0u, methods = 0u, with_aot = 0u, interpreted = 0u, interpreted_with_aot = 0u;
++  class GesherClassVisitor : public ClassVisitor {
++   public:
++    explicit GesherClassVisitor(std::function<void(ObjPtr<mirror::Class>)> f) : f_(std::move(f)) {}
++    bool operator()(ObjPtr<mirror::Class> klass) override REQUIRES_SHARED(Locks::mutator_lock_) {
++      f_(klass);
++      return true;
++    }
++   private:
++    std::function<void(ObjPtr<mirror::Class>)> f_;
++  };
++  GesherClassVisitor visitor([&](ObjPtr<mirror::Class> klass)
++                                 NO_THREAD_SAFETY_ANALYSIS {
++    if (klass->GetClassLoader() == nullptr || !klass->IsResolved() || klass->IsProxyClass() ||
++        klass->IsArrayClass() || klass->IsPrimitive()) {
++      return;
++    }
++    ++classes;
++    for (ArtMethod& m : klass->GetDeclaredMethods(pointer_size)) {
++      if (m.IsAbstract() || m.IsNative() || !m.HasCodeItem()) {
++        continue;
++      }
++      ++methods;
++      const void* entry = m.GetEntryPointFromQuickCompiledCode();
++      const void* aot = m.GetOatMethodQuickCode(pointer_size);
++      bool jitted = jit != nullptr && jit->GetCodeCache()->ContainsPc(entry);
++      bool ran_interpreted = m.CounterHasChanged(threshold) || jitted;
++      if (aot != nullptr) {
++        ++with_aot;
++      }
++      if (ran_interpreted) {
++        ++interpreted;
++        if (aot != nullptr) {
++          ++interpreted_with_aot;
++        }
++      }
++    }
++  });
++  class_linker->VisitClasses(&visitor);
++  LOG(INFO) << "gesher: app methods at exit: " << classes << " classes, " << methods
++            << " methods, " << with_aot << " with AOT code, " << interpreted
++            << " entered the interpreter or the JIT (" << interpreted_with_aot
++            << " of them with AOT code)";
++}
++#endif  // GESHER
++
+ void Runtime::CallExitHook(jint status) {
++#if defined(GESHER)
++  GesherBeforeExit(this);
++#endif
+   if (exit_ != nullptr) {
+     ScopedThreadStateChange tsc(Thread::Current(), ThreadState::kNative);
+     exit_(status);
