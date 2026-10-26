@@ -85,3 +85,12 @@ yet; no TSF capability is advertised or claimed. Next: native COM sink/service
 fixtures, then thread-manager and InputConnection plumbing. Non-caret text
 geometry, rich formatting/embedded objects and physical IME behavior are not
 established by this WIP.
+
+Own native TSF fixture now passes locally: 18 ACP/sink checks plus five actual
+Windows thread-manager/ITfTextInputProcessor/edit-session reconversion checks.
+Windows TSF reads a pre-existing Hebrew selection, starts a composition over
+that range, replaces it with Japanese text and ends it through the real ACP
+document. No system IME profile is registered. The source/probe compile with
+g++ -Wall -Wextra -Werror; CMake/graphics.yml and a 45-second bounded Windows
+test wrapper are added for eventual CI. This still does not connect Android's
+InputConnection to TSF; runtime activation/Java plumbing and CI remain open.

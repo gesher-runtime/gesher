@@ -2,13 +2,30 @@
 # simultaneous task overrides. 51-windows3 supplies the real HWND/log helpers.
 if (-not (Get-Command W3Wait -ErrorAction SilentlyContinue)) { throw 'Windows4 requires the windows3 HWND/log helpers' }
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
-$w4Pane = & "$Dir/windows4_input_pane_probe.exe" 2>&1 | Out-String
-$w4PaneCode = $LASTEXITCODE
-Write-Host $w4Pane
-if ($w4PaneCode -ne 0 -or $w4Pane -notmatch '0 windows4 COM input pane check\(s\) failed') {
-  Write-Host "FAIL  windows4: actual IFrameworkInputPane COM source callbacks and lifetime (exit $w4PaneCode)"
-  $script:failed++
-} else { Write-Host 'PASS  windows4: actual IFrameworkInputPane COM source callbacks, window events, geometry and lifetime' }
+function W4NativeProbe([string] $Executable, [string] $Pattern, [string] $Description) {
+  $start = [Diagnostics.ProcessStartInfo]::new("$Dir/$Executable")
+  $start.UseShellExecute = $false
+  $start.CreateNoWindow = $true
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $process = [Diagnostics.Process]::Start($start)
+  $stdout = $process.StandardOutput.ReadToEndAsync()
+  $stderr = $process.StandardError.ReadToEndAsync()
+  $timeout = -not $process.WaitForExit(45000)
+  if ($timeout) { $process.Kill($true); $process.WaitForExit() }
+  $drained = $stdout.Wait(10000) -and $stderr.Wait(10000)
+  $text = if ($drained) { $stdout.Result + $stderr.Result } else { 'output pipe did not close' }
+  Write-Host $text
+  if (-not $timeout -and $drained -and $process.ExitCode -eq 0 -and $text -match $Pattern) {
+    Write-Host "PASS  windows4: $Description"
+  } else {
+    Write-Host "FAIL  windows4: $Description (exit $($process.ExitCode), timeout $timeout, drained $drained)"
+    $script:failed++
+  }
+  $process.Dispose()
+}
+W4NativeProbe windows4_input_pane_probe.exe '0 windows4 COM input pane check\(s\) failed' 'actual IFrameworkInputPane COM source callbacks, window events, geometry and lifetime'
+W4NativeProbe windows4_text_store_probe.exe '0 windows4 TSF store check\(s\) failed' 'TSF ACP locks, document/revision protection and an actual Windows text-service reconversion session'
 $w4Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w4Apk = NoDrive "$Dir/winapp.apk"
