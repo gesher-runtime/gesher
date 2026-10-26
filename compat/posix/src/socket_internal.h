@@ -86,6 +86,7 @@ int BoundInterface(Socket s, uint32_t* ifindex);
 int SetProcessInterface(uint32_t ifindex);
 uint32_t ProcessInterface();
 int ValidateInterface(uint32_t ifindex);
+int DnsServers(uint32_t ifindex, std::vector<Address>* servers, uint32_t* selected = nullptr);
 
 // Gather/scatter I/O; `to`/`from` may be null.
 ptrdiff_t Send(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to);

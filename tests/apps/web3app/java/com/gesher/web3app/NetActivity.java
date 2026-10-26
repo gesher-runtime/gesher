@@ -119,7 +119,7 @@ public class NetActivity extends Activity {
         if (!success) throw new AssertionError(message);
     }
 
-    private static void binding(ConnectivityManager cm) throws Exception {
+    static void binding(ConnectivityManager cm) throws Exception {
         Network chosen = cm.getActiveNetwork();
         require(chosen != null, "no active network");
         int index = (int) (chosen.getNetworkHandle() >>> 32) - 100;
@@ -183,7 +183,13 @@ public class NetActivity extends Activity {
         catch (java.net.UnknownHostException expected) { rejected = true; }
         require(rejected, "DNS on a missing network fell back to another interface");
         Web3.log("net missing-network DNS refused fallback true");
+        System.load(System.getenv("GESHER_WEB3_NATIVE"));
+        String nativeResult = nativeNetworkCheck(chosen.getNetworkHandle(), local.getHostAddress(), port);
+        Web3.log("net NDK: " + nativeResult);
+        require(nativeResult.startsWith("PASS "), nativeResult);
     }
+
+    private static native String nativeNetworkCheck(long network, String local, int port);
 
     static String get(String url) {
         try {

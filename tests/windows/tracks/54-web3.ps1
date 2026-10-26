@@ -49,6 +49,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
   $psi.Environment['GESHER_UIA_TRACE'] = '1'
   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
+  $psi.Environment['GESHER_WEB3_NATIVE'] = NoDrive "$Dir/web3_network.so"
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   $read = { if (Test-Path $log) { "$(Get-Content -Raw $log -ErrorAction SilentlyContinue)" } else { '' } }
@@ -243,6 +244,15 @@ $null = Web3Run "$a11yName (single process)" @('com.gesher.app.Main', '--window'
 } finally { Web3ScreenReader $false }
 
 # --- The Gesher device: app processes of a system server ------------------------------
+$bindingExpect = @(
+  'Web3 net per-network DNS resolved example.com true',
+  'Web3 net bound SocketFactory kernel interface and source address true',
+  'Web3 net explicit TCP and UDP socket binding true',
+  'Web3 net Network.openConnection server observed the selected source address true',
+  'Web3 net process socket and DNS binding, invalid network preservation, unbind true',
+  'Web3 net missing-network DNS refused fallback true',
+  'Web3 net NDK: PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors')
+$null = Web3Run 'selected Network: real socket/process routing and DNS, bound HTTP, NDK raw DNS completion and cancellation (single process)' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.web3app.BindingActivity', (NoDrive "$Dir/web3app.apk")) ($bindingExpect + 'Web3 net done') 'Web3 net done'
 $savedData = $env:ANDROID_DATA
 $savedLogs = $env:GESHER_LOGS
 $env:ANDROID_DATA = NoDrive "$root/data-web3"
@@ -281,6 +291,7 @@ try {
       'Web3 net Network.openConnection server observed the selected source address true',
       'Web3 net process socket and DNS binding, invalid network preservation, unbind true',
       'Web3 net missing-network DNS refused fallback true',
+      'Web3 net NDK: PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors',
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 

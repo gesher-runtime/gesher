@@ -73,6 +73,7 @@ jobs:
           # API 29, plus a TLS library fs_test29.so dlopen()s while a thread
           # runs. The loader rewrites their %fs accesses (ADR 0014).
           cc29="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
+          "$cc29" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror -Wl,-soname,libweb3_network.so -o dist-native/web3_network.so tests/native/web3_network.c -landroid
           "$cc" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test26.so -o dist-native/fs_test26.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_test29.so -o dist-native/fs_test29.so tests/native/fs_test.c -ldl
           "$cc29" -shared -fPIC -O2 -fstack-protector-strong             -Wl,-soname,fs_late.so -o dist-native/fs_late.so tests/native/fs_late.c

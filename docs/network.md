@@ -226,6 +226,26 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- ci 40318144247 at 722f86b verifies the local negative-certificate fixture
+  tests on both Windows runners: `PASS net: DNS and HTTPS on the internet,
+  local expired/wrong-host/self-signed/untrusted certificates rejected`.
+  Both test jobs fail only the two web3 accessibility checks; package and
+  both e2e jobs pass. This run predates the network-binding implementation.
+- Pending CI: the seven assigned NDK networking exports now use the same
+  interface/socket/DNS implementation through existing System V thunks.
+  `android_res_nquery/nsend` return a socketpair descriptor signalled by a
+  bounded native worker; `nresult` returns the DNS wire packet and rcode,
+  consumes the descriptor, and rejects an undersized buffer. Cancellation
+  shuts down the active query and closes the result descriptor. Queries
+  use the chosen adapter's configured DNS servers over bound UDP, retry
+  up to three servers (one with NO_RETRY), and fall back to TCP for
+  truncated responses. Raw queries bypass the cache. A new NDK-built ELF
+  library exercises all seven functions, real source addresses, A-record
+  results, raw packet IDs, NXDOMAIN, cancellation and invalid arguments in
+  single-process and device modes. C++ `-Werror` syntax checks pass; full
+  NDK compilation/runtime remains for CI. Additional shared edits are one
+  source entry in `compat/posix/posix.cmake` and one test-library compile
+  line in `.github/workflows/native-libs.yml`.
 - Continuation (2026-10-26), pending CI: interface-specific socket/process
   binding, DNS, `Network.getSocketFactory/openConnection`, and NLM captive
   state are implemented. Local checks compile the changed POSIX files with
