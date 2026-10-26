@@ -14,6 +14,7 @@
 //  - setjmp/longjmp: they save and restore registers, so they must be guest
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
+//  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
 //  - dlsym: returns these definitions for those names;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
@@ -174,6 +175,53 @@ int GESHER_SYSV GuestEpollWait(int ep, A64EpollEvent* evs, int max, int timeout)
   return GuestEpollPwait(ep, evs, max, timeout, nullptr);
 }
 
+// --- open flags -----------------------------------------------------------------
+// Four O_* bits are numbered differently on arm64 (the generic table) and
+// x86-64 (the shim's): O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE.
+// libc++'s std::filesystem::remove_all opens entries with O_DIRECTORY |
+// O_NOFOLLOW to tell directories from files, so they must mean the same.
+constexpr int kA64Directory = 040000, kA64Nofollow = 0100000, kA64Direct = 0200000,
+              kA64Largefile = 0400000;
+constexpr int kX64Directory = 0200000, kX64Nofollow = 0400000, kX64Direct = 040000,
+              kX64Largefile = 0100000;
+constexpr int kMovedBits = 040000 | 0100000 | 0200000 | 0400000;
+
+int ToHostFlags(int f) {
+  int out = f & ~kMovedBits;
+  if (f & kA64Directory) out |= kX64Directory;
+  if (f & kA64Nofollow) out |= kX64Nofollow;
+  if (f & kA64Direct) out |= kX64Direct;
+  if (f & kA64Largefile) out |= kX64Largefile;
+  return out;
+}
+int ToGuestFlags(int f) {
+  int out = f & ~kMovedBits;
+  if (f & kX64Directory) out |= kA64Directory;
+  if (f & kX64Nofollow) out |= kA64Nofollow;
+  if (f & kX64Direct) out |= kA64Direct;
+  if (f & kX64Largefile) out |= kA64Largefile;
+  return out;
+}
+
+void* g_open = nullptr;
+void* g_openat = nullptr;
+void* g_fcntl = nullptr;
+
+int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
+  return reinterpret_cast<int(GESHER_SYSV*)(const char*, int, int)>(g_open)(path, ToHostFlags(flags), mode);
+}
+int GESHER_SYSV GuestOpenat(int dirfd, const char* path, int flags, int mode) {
+  return reinterpret_cast<int(GESHER_SYSV*)(int, const char*, int, int)>(g_openat)(
+      dirfd, path, ToHostFlags(flags), mode);
+}
+int64_t GESHER_SYSV GuestFcntl(int fd, int cmd, int64_t arg) {
+  constexpr int kGetfl = 3, kSetfl = 4;
+  if (cmd == kSetfl) arg = ToHostFlags(static_cast<int>(arg));
+  int64_t r = reinterpret_cast<int64_t(GESHER_SYSV*)(int, int, int64_t)>(g_fcntl)(fd, cmd, arg);
+  if (cmd == kGetfl && r >= 0) r = ToGuestFlags(static_cast<int>(r));
+  return static_cast<int32_t>(r);
+}
+
 // --- getauxval -----------------------------------------------------------------
 void* g_getauxval = nullptr;
 // HWCAP_FP | ASIMD | AES | PMULL | SHA1 | SHA2 | CRC32: what dynarmic's A64
@@ -246,6 +294,13 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
       return GuestEpollPwait(static_cast<int>(a[0]), reinterpret_cast<A64EpollEvent*>(a[1]),
                              static_cast<int>(a[2]), static_cast<int>(a[3]),
                              reinterpret_cast<const void*>(a[4]));
+    case 56:  // openat
+      if (g_openat == nullptr) break;
+      return GuestOpenat(static_cast<int>(a[0]), reinterpret_cast<const char*>(a[1]),
+                         static_cast<int>(a[2]), static_cast<int>(a[3]));
+    case 25:  // fcntl
+      if (g_fcntl == nullptr) break;
+      return GuestFcntl(static_cast<int>(a[0]), static_cast<int>(a[1]), a[2]);
     case 168:  // getcpu(cpu, node, cache)
       if (a[0] != 0) *reinterpret_cast<uint32_t*>(a[0]) = 0;
       if (a[1] != 0) *reinterpret_cast<uint32_t*>(a[1]) = 0;
@@ -419,6 +474,17 @@ void InitGuestLibc() {
   g_host_syscall = Host("syscall");
   for (const SyscallMap& s : kSyscalls) g_syscalls[s.nr] = {Host(s.fn), s.ret};
   Override("syscall", reinterpret_cast<void*>(&GuestSyscall));
+
+  g_open = Host("open");
+  g_openat = Host("openat");
+  g_fcntl = Host("fcntl");
+  if (g_open) {
+    for (const char* n : {"open", "open64", "__open_2"}) Override(n, reinterpret_cast<void*>(&GuestOpen));
+  }
+  if (g_openat) {
+    for (const char* n : {"openat", "openat64", "__openat_2"}) Override(n, reinterpret_cast<void*>(&GuestOpenat));
+  }
+  if (g_fcntl) Override("fcntl", reinterpret_cast<void*>(&GuestFcntl));
 
   g_dlsym = Host("dlsym");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));

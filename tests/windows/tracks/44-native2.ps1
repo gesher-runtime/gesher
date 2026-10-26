@@ -15,9 +15,10 @@ $n2 = (Resolve-Path $n2).Path
 $n2Dir = (Resolve-Path $Dir).Path
 
 # Runs a program with a time limit (a translated or broken run must never
-# hang the job), in $WorkDir, with extra environment variables; prints its
+# hang the job), in $WorkDir (by default the current directory: $bcp's paths
+# are relative to it), with extra environment variables; prints its
 # output and sets $LASTEXITCODE (124 on a timeout).
-function N2Run([string] $Exe, [string[]] $Arguments, [string] $WorkDir = $env:RUNNER_TEMP,
+function N2Run([string] $Exe, [string[]] $Arguments, [string] $WorkDir = (Get-Location).Path,
                [hashtable] $Environment = @{}, [int] $Seconds = 600) {
   $out = Join-Path $env:RUNNER_TEMP "n2-$([guid]::NewGuid()).out"
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
@@ -185,7 +186,7 @@ $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dl
   'Native2Activity: native2: all passed', 'Native2Activity onResume: all passed', 'gesher-app: done')
 foreach ($a in $apks) {
   Check "native2 ($($a.Tag)): gesher-app runs $($a.Apk) (single process): System.loadLibrary from the APK, the library's checks pass" {
-    N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Main', (NoDrive "$n2/$($a.Apk)"))) $env:RUNNER_TEMP @{} 900
+    N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Main', (NoDrive "$n2/$($a.Apk)"))) (Get-Location).Path @{} 900
   } $n2Lines
 }
 
@@ -199,11 +200,11 @@ try {
   foreach ($a in $apks) {
     Check "native2 ($($a.Tag)): the Gesher device: $($a.Apk)'s process (started by the system server) loads its library and passes the checks" {
       N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'launch', (NoDrive "$n2/$($a.Apk)"), '--headless')) `
-        $env:RUNNER_TEMP @{} 900
+        (Get-Location).Path @{} 900
     } ($n2Lines + @('gesher-app: app process for com.gesher.native2'))
   }
 } finally {
-  $sd = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'shutdown')) $env:RUNNER_TEMP @{} 120 | Out-String
+  $sd = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'shutdown')) (Get-Location).Path @{} 120 | Out-String
   if ($LASTEXITCODE -ne 0) { Write-Host "INFO  native2: the device shutdown: exit $LASTEXITCODE $sd" }
   $env:ANDROID_DATA = $savedData
   if ($savedLogs) { $env:GESHER_LOGS = $savedLogs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }

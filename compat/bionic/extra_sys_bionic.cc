@@ -629,7 +629,92 @@ int BIONIC_SYSV Sethostname(const char*, size_t) { return errno = kEPERM, -1; }
 
 }  // namespace
 
+// --- setjmp/longjmp (x86-64, System V) ---------------------------------------
+// bionic's x86-64 jmp_buf is 11 longs; the layout is the shim's own, since
+// only these functions read it: rbx, rbp, r12-r15, the stack pointer after
+// the return, the return address, whether the signal mask was saved, the
+// mask. setjmp saves the mask (bionic's does), _setjmp does not, sigsetjmp
+// when asked; every longjmp restores it if it was saved. (The arm64
+// translator has guest versions: guest_libc.cc.)
+extern "C" void BIONIC_SYSV gesher_bionic_jmp_savemask(uint64_t* env) {
+  static auto fn = Shim<int(BIONIC_SYSV*)(int, const uint64_t*, uint64_t*)>("sigprocmask");
+  env[9] = 0;
+  if (fn != nullptr) fn(0 /* SIG_BLOCK */, nullptr, &env[9]);
+}
+extern "C" void BIONIC_SYSV gesher_bionic_jmp_restoremask(uint64_t* env) {
+  static auto fn = Shim<int(BIONIC_SYSV*)(int, const uint64_t*, uint64_t*)>("sigprocmask");
+  if (fn != nullptr) fn(2 /* SIG_SETMASK */, &env[9], nullptr);
+}
+asm(".text\n"
+    ".globl gesher_bionic_setjmp\n"
+    ".p2align 4\n"
+    "gesher_bionic_setjmp:\n"
+    "  movl $1, %esi\n"
+    "  jmp gesher_bionic_sigsetjmp\n"
+    ".globl gesher_bionic__setjmp\n"
+    ".p2align 4\n"
+    "gesher_bionic__setjmp:\n"
+    "  xorl %esi, %esi\n"
+    ".globl gesher_bionic_sigsetjmp\n"
+    "gesher_bionic_sigsetjmp:\n"
+    "  movq %rbx, 0(%rdi)\n"
+    "  movq %rbp, 8(%rdi)\n"
+    "  movq %r12, 16(%rdi)\n"
+    "  movq %r13, 24(%rdi)\n"
+    "  movq %r14, 32(%rdi)\n"
+    "  movq %r15, 40(%rdi)\n"
+    "  leaq 8(%rsp), %rdx\n"
+    "  movq %rdx, 48(%rdi)\n"
+    "  movq (%rsp), %rdx\n"
+    "  movq %rdx, 56(%rdi)\n"
+    "  movslq %esi, %rsi\n"
+    "  movq %rsi, 64(%rdi)\n"
+    "  testq %rsi, %rsi\n"
+    "  jz 1f\n"
+    "  subq $8, %rsp\n"
+    "  call gesher_bionic_jmp_savemask\n"
+    "  addq $8, %rsp\n"
+    "1:\n"
+    "  xorl %eax, %eax\n"
+    "  ret\n"
+    ".globl gesher_bionic_longjmp\n"
+    ".p2align 4\n"
+    "gesher_bionic_longjmp:\n"
+    "  cmpq $0, 64(%rdi)\n"
+    "  je 1f\n"
+    "  pushq %rdi\n"
+    "  pushq %rsi\n"
+    "  subq $8, %rsp\n"
+    "  call gesher_bionic_jmp_restoremask\n"
+    "  addq $8, %rsp\n"
+    "  popq %rsi\n"
+    "  popq %rdi\n"
+    "1:\n"
+    "  movq 0(%rdi), %rbx\n"
+    "  movq 8(%rdi), %rbp\n"
+    "  movq 16(%rdi), %r12\n"
+    "  movq 24(%rdi), %r13\n"
+    "  movq 32(%rdi), %r14\n"
+    "  movq 40(%rdi), %r15\n"
+    "  movq 48(%rdi), %rsp\n"
+    "  movl %esi, %eax\n"
+    "  testl %eax, %eax\n"
+    "  jnz 2f\n"
+    "  movl $1, %eax\n"
+    "2:\n"
+    "  jmp *56(%rdi)\n");
+extern "C" int gesher_bionic_setjmp();
+extern "C" int gesher_bionic__setjmp();
+extern "C" int gesher_bionic_sigsetjmp();
+extern "C" void gesher_bionic_longjmp();
+
 void RegisterExtraSys(SymbolTable& t) {
+  t["setjmp"] = reinterpret_cast<void*>(&gesher_bionic_setjmp);
+  t["_setjmp"] = reinterpret_cast<void*>(&gesher_bionic__setjmp);
+  t["sigsetjmp"] = reinterpret_cast<void*>(&gesher_bionic_sigsetjmp);
+  t["longjmp"] = reinterpret_cast<void*>(&gesher_bionic_longjmp);
+  t["_longjmp"] = reinterpret_cast<void*>(&gesher_bionic_longjmp);
+  t["siglongjmp"] = reinterpret_cast<void*>(&gesher_bionic_longjmp);
   E("sem_init", SemInit);
   E("sem_destroy", SemDestroy);
   E("sem_post", SemPost);
