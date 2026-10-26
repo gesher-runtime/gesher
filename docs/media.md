@@ -226,6 +226,18 @@ the microphone (looped, from its start each time recording starts);
   failure-stack logging. Camera diagnostics, 2-second collection and 30+
   frame/picture/duration thresholds remain unchanged. Watch interval 120;
   no result from this new run is verified yet.
+- Prepared after that dispatch for the next final CI: merged verified
+  integration f677944f99bc5c999d9f6f0ffbc68e9312f517d5 (native3 software
+  Bitmap/Minikin foundation; ci 40344682373 attempt 2 at 1e881b5). No merge
+  conflict or change to its verified source. The current diagnostic run is
+  retained and does not include this later foundation merge.
+- Also prepared for the next final CI: the coordinator's completed-only
+  geocoder-probe termination patch changes only 58-devices.ps1. It flushes
+  the real WinRT result then terminates only its own probe process; errors
+  exit 1, and incomplete answers still fail the 30/45-second guards. Outer
+  and embedded PowerShell parse plus C# declaration compile pass locally;
+  no geocoder/network/termination operation was executed locally. This later
+  test change is not included in the retained diagnostic run.
 - Latest completed CI: **40349479693**, attempt 1, exact tested SHA
   **1361200103e4ab74b8051be0cba53d2eb8d13e1c**. All job metadata and both
   runtime logs are read. Windows-2022 job **121670240001** and Windows-2025
