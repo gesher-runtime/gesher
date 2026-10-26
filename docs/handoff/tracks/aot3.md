@@ -37,6 +37,26 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Fast startup evidence is green in aot3-probes 40410450314 at bcddfb9:
+both actual logs read, saved profiles 18673/18661 bytes, each dump 23314
+rows/6666 methods including 3077 android-framework methods, zero failures.
+Runtime artifacts are exactly full ci 40403284714/e928eec, validated before
+use; this is a collector result, not a full-green or performance claim.
+
+Prepared boot input tools/boot-image/gesher-startup-profile.txt adds 1971
+observed common boot methods absent from the exact pinned AOSP profiles,
+retaining observed H/S/P flags, and 177 observed declaring classes not
+already listed. Excludes Gesher/app classes because gesher-app.jar already
+uses speed; omits inline caches. Both runners' normalized method sets are
+identical. SHA-256 053e8d37c550f79720919fe92cfbc559c9c28a2a7f7ccfeee3641a7098bc3c59.
+New track 65 inspects PackageParser2.parsePackage and SystemFonts fallback
+compiled code in the shipped framework oat. Original size and 10%/30ms
+startup criteria are unchanged. This input is not yet compiled/CI verified.
+
+The current cloud/collector full run remains 40408733247 at 05ca072.
+Its frozen wip/aot3-cloud head 97e08e5 adds docs only and excludes these
+later probe/profile changes. Do not merge an unverified continuation tip.
+
 Initial aot3-probes 40409910036 at 7bc3fd2 validates/downloads the selected
 artifacts but both collectors fail before startup: the standalone root
 omitted build.prop. Add the suite's framework-res/build.prop/font setup;
