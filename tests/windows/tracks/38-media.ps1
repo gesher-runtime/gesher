@@ -358,7 +358,11 @@ public static class GesherMediaCapture {
   Write-Host "INFO  media: SkiaGL run: $((($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces: ' } | Select-Object -First 1))"
   $glRenderer = (($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces renderer: ' } | Select-Object -First 1)
   if ("$glRenderer" -match 'skiagl') {
-    CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE): the TextureView red, the SurfaceView blue' $videoGl
+    # What hwui's GL pipeline drew (its last frame, read with glReadPixels); what Windows
+    # shows of an Activity's GL window (PrintWindow) is the graphics track's and reported.
+    $glFrame = (($videoGl.Out -split "`n") | Where-Object { $_ -match 'VideoTest surfaces gl frame: ' } | Select-Object -First 1)
+    Write-Host "INFO  media: SkiaGL window as Windows shows it (PrintWindow): $($videoGl.Read)"
+    CheckSurfaceColors 'media: the same with hwui''s SkiaGL pipeline (ANGLE; its frame read with glReadPixels): the TextureView red, the SurfaceView blue' @{ Read = "$glFrame"; Out = $videoGl.Out }
   } else {
     Write-Host "INFO  media: SkiaGL run read back: $($videoGl.Read) ($("$glRenderer".Trim()))"
   }

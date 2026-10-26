@@ -482,6 +482,13 @@ public class VideoActivity extends Activity {
         final android.view.TextureView[] tv = new android.view.TextureView[1];
         final android.view.SurfaceView[] sv = new android.view.SurfaceView[1];
         CountDownLatch ready = new CountDownLatch(2);
+        try {
+            // SkiaGL: keep a copy of each GL frame (GraphicsDebug.lastGlFrame below).
+            Class.forName("com.gesher.app.graphics.GraphicsDebug").getMethod("setGlReadback", boolean.class)
+                    .invoke(null, true);
+        } catch (Throwable t) {
+            // Not on Gesher's boot class path: nothing to read back.
+        }
         runOnUiThread(() -> {
             android.widget.FrameLayout root = new android.widget.FrameLayout(this);
             root.setBackgroundColor(0xff808080);
@@ -563,6 +570,41 @@ public class VideoActivity extends Activity {
             renderer = "unknown";
         }
         say("surfaces renderer: " + renderer);
+        if ("skiagl".equals(renderer)) {
+            // The last GL frame hwui presented (glReadPixels before eglSwapBuffers): what
+            // the SkiaGL pipeline drew, whatever Windows shows of the window.
+            try {
+                final long[] hwnd = new long[1];
+                CountDownLatch got = new CountDownLatch(1);
+                runOnUiThread(() -> {
+                    try {
+                        Object session = Class.forName("com.gesher.app.window.WindowSession")
+                                .getMethod("get").invoke(null);
+                        android.os.IBinder token = getWindow().getDecorView().getWindowToken();
+                        hwnd[0] = (Long) session.getClass().getMethod("hwndOf", android.os.IBinder.class)
+                                .invoke(session, token);
+                    } catch (Throwable t) {
+                        say("surfaces gl frame: no window handle (" + t + ")");
+                    }
+                    got.countDown();
+                });
+                got.await(5, TimeUnit.SECONDS);
+                int[] frame = (int[]) Class.forName("com.gesher.app.graphics.GraphicsDebug")
+                        .getMethod("lastGlFrame", long.class).invoke(null, hwnd[0]);
+                if (frame == null) {
+                    say("surfaces gl frame: none (hwnd 0x" + Long.toHexString(hwnd[0]) + ")");
+                } else {
+                    int fw = frame[0];
+                    java.util.function.BiFunction<Integer, Integer, String> at =
+                            (x, y) -> String.format("%06x", frame[2 + y * fw + x] & 0xffffff);
+                    say("surfaces gl frame: texture view #" + at.apply(where[0][0] + 160, where[0][1] + 120)
+                            + ", surface view #" + at.apply(where[1][0] + 160, where[1][1] + 120)
+                            + ", background #" + at.apply(10, 300));
+                }
+            } catch (Throwable t) {
+                say("surfaces gl frame: " + t);
+            }
+        }
         say("surfaces ready: texture view center " + (where[0][0] + 160) + "," + (where[0][1] + 120)
                 + ", surface view center " + (where[1][0] + 160) + "," + (where[1][1] + 120));
         Thread.sleep(10000);
