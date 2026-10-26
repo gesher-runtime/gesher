@@ -151,7 +151,9 @@ track agents keep their existing branch-only scope.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0072; earlier reservation notes below are historical.
+ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
+certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
+notes below are historical.
 
 The handover tables below are historical. windows3 is now merged as 80cb28b:
 code verified at a15ade4 (ci 40285476400), branch head 063b051 adds docs only.
