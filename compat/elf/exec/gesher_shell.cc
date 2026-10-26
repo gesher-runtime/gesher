@@ -13,8 +13,8 @@
 //     splitting on IFS, pathname globbing, quote removal;
 //   - a subshell, a pipeline stage and a command substitution run a copy of the
 //     shell's state (variables, functions, the working directory, which the
-//     shell keeps itself rather than only in the process) on a thread of their
-//     own; pipeline stages run at once, joined by Windows pipes;
+//     shell keeps itself rather than only in the process) in a child process;
+//     pipeline stages run at once, joined by Windows pipes;
 //   - other commands are Windows processes, found as execvp finds them
 //     (exec_spawn.h: Android ELF programs through gesher-exec, the /system/bin
 //     tools, Windows programs), with the shell's fds 0-9 and its exported
@@ -28,6 +28,7 @@
 
 #include "gesher_shell.h"
 
+#include <io.h>
 #include <windows.h>
 
 #include <algorithm>
@@ -60,9 +61,12 @@ namespace gesher::exec {
 
 namespace {
 
-// --- small helpers -------------------------------------------------------------
+// --- small helpers
+// -------------------------------------------------------------
 
-bool IsNameStart(char c) { return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+bool IsNameStart(char c) {
+  return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
 bool IsNameChar(char c) { return IsNameStart(c) || (c >= '0' && c <= '9'); }
 bool IsDigitC(char c) { return c >= '0' && c <= '9'; }
 bool IsName(const std::string& s) {
@@ -80,37 +84,30 @@ bool IsNumber(const std::string& s) {
   return true;
 }
 
-std::string Format(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  char buf[2048];
-  int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-  va_end(ap);
-  if (n < 0) return "";
-  return std::string(buf, static_cast<size_t>(std::min(n, static_cast<int>(sizeof(buf) - 1))));
-}
-
 // Writes all of `s` to `h`; false if the handle is closed or broken (EPIPE).
 bool WriteAll(HANDLE h, const std::string& s) {
   if (h == nullptr || h == INVALID_HANDLE_VALUE) return false;
   size_t done = 0;
   while (done < s.size()) {
     DWORD wrote = 0;
-    DWORD chunk = static_cast<DWORD>(std::min<size_t>(s.size() - done, 1u << 20));
-    if (!WriteFile(h, s.data() + done, chunk, &wrote, nullptr) || wrote == 0) return false;
+    DWORD chunk =
+        static_cast<DWORD>(std::min<size_t>(s.size() - done, 1u << 20));
+    if (!WriteFile(h, s.data() + done, chunk, &wrote, nullptr) || wrote == 0)
+      return false;
     done += wrote;
   }
   return true;
 }
 
-// --- signals ---------------------------------------------------------------------
+// --- signals
+// ---------------------------------------------------------------------
 //
 // Process-wide: what the main shell's `trap` set, the foreground programs (to
 // pass a fatal signal on), and the signals waiting for their trap.
 
 constexpr int kMaxSig = 65;
 std::atomic<int> g_trap_mode[kMaxSig];  // 0 default, 1 ignored, 2 trapped
-std::atomic<uint64_t> g_pending_signals{0};
+std::atomic<uint64_t> g_pending_signals[2];
 std::mutex g_fg_mutex;
 std::set<DWORD> g_fg_pids;
 
@@ -118,13 +115,14 @@ struct SigName {
   const char* name;
   int sig;
 };
-const SigName kSignals[] = {{"HUP", 1},     {"INT", 2},   {"QUIT", 3},  {"ILL", 4},   {"TRAP", 5},
-                            {"ABRT", 6},    {"BUS", 7},   {"FPE", 8},   {"KILL", 9},  {"USR1", 10},
-                            {"SEGV", 11},   {"USR2", 12}, {"PIPE", 13}, {"ALRM", 14}, {"TERM", 15},
-                            {"STKFLT", 16}, {"CHLD", 17}, {"CONT", 18}, {"STOP", 19}, {"TSTP", 20},
-                            {"TTIN", 21},   {"TTOU", 22}, {"URG", 23},  {"XCPU", 24}, {"XFSZ", 25},
-                            {"VTALRM", 26}, {"PROF", 27}, {"WINCH", 28}, {"IO", 29},  {"PWR", 30},
-                            {"SYS", 31}};
+const SigName kSignals[] = {
+    {"HUP", 1},     {"INT", 2},   {"QUIT", 3},   {"ILL", 4},   {"TRAP", 5},
+    {"ABRT", 6},    {"BUS", 7},   {"FPE", 8},    {"KILL", 9},  {"USR1", 10},
+    {"SEGV", 11},   {"USR2", 12}, {"PIPE", 13},  {"ALRM", 14}, {"TERM", 15},
+    {"STKFLT", 16}, {"CHLD", 17}, {"CONT", 18},  {"STOP", 19}, {"TSTP", 20},
+    {"TTIN", 21},   {"TTOU", 22}, {"URG", 23},   {"XCPU", 24}, {"XFSZ", 25},
+    {"VTALRM", 26}, {"PROF", 27}, {"WINCH", 28}, {"IO", 29},   {"PWR", 30},
+    {"SYS", 31}};
 
 // A signal by name (TERM, SIGTERM, term) or number; -1 if unknown. "EXIT" is 0.
 int SignalNumber(const std::string& s) {
@@ -144,9 +142,12 @@ int SignalNumber(const std::string& s) {
   return -1;
 }
 
-bool DefaultIgnored(int sig) { return sig == 17 || sig == 18 || sig == 23 || sig == 28; }
+bool DefaultIgnored(int sig) {
+  return sig == 17 || sig == 18 || sig == 23 || sig == 28;
+}
 
-std::atomic<bool> g_have_tail_child{false};  // the foreground program decides the status
+std::atomic<bool> g_have_tail_child{
+    false};  // the foreground program decides the status
 
 // gesher-base calls this (on a thread-pool thread) for each signal another
 // process sends. Returns nonzero: the shell owns the signal.
@@ -155,7 +156,7 @@ int ShellSignalHook(int sig, int /*sender*/) {
   int mode = g_trap_mode[sig].load();
   if (mode == 1) return 1;  // ignored
   if (mode == 2) {
-    g_pending_signals.fetch_or(uint64_t{1} << sig);
+    g_pending_signals[sig / 64].fetch_or(uint64_t{1} << (sig % 64));
     return 1;
   }
   if (DefaultIgnored(sig)) return 1;
@@ -165,7 +166,8 @@ int ShellSignalHook(int sig, int /*sender*/) {
     fg.assign(g_fg_pids.begin(), g_fg_pids.end());
   }
   for (DWORD pid : fg) gesher_kill_other(static_cast<int>(pid), sig);
-  if (!fg.empty() && g_have_tail_child.load()) return 1;  // the program handles it
+  if (!fg.empty() && g_have_tail_child.load())
+    return 1;  // the program handles it
   TerminateProcess(GetCurrentProcess(), static_cast<UINT>(128 + sig));
   return 1;
 }
@@ -179,7 +181,8 @@ void RemoveForeground(DWORD pid) {
   g_fg_pids.erase(pid);
 }
 
-// --- the state -----------------------------------------------------------------
+// --- the state
+// -----------------------------------------------------------------
 
 struct Var {
   std::string value;
@@ -223,8 +226,10 @@ struct Shell {
   std::map<std::string, NodeP> funcs;
   std::map<DWORD, HandleP> jobs;
   std::map<int, std::string> traps;
-  bool opt_e = false, opt_u = false, opt_x = false, opt_f = false, opt_pipefail = false;
+  bool opt_e = false, opt_u = false, opt_x = false, opt_f = false,
+       opt_pipefail = false;
   int status = 0;
+  std::optional<int> substitution_status;
   DWORD last_bg = 0;
   bool exiting = false;
   int breaking = 0, continuing = 0;
@@ -235,12 +240,16 @@ struct Shell {
   // `exec N>file`: redirections that outlast the command.
   std::map<int, HandleP> persistent_fd;
   std::string name = "sh";
+  DWORD shell_pid = GetCurrentProcessId();
+  size_t getopts_offset = 1;
   time_t started = time(nullptr);
   // Saved variable scopes for `local`.
-  std::vector<std::vector<std::pair<std::string, std::optional<Var>>>> local_scopes;
+  std::vector<std::vector<std::pair<std::string, std::optional<Var>>>>
+      local_scopes;
 };
 
-// --- variables -----------------------------------------------------------------
+// --- variables
+// -----------------------------------------------------------------
 
 const std::string* GetVarPtr(const Shell& sh, const std::string& name) {
   auto it = sh.vars.find(name);
@@ -257,8 +266,8 @@ std::string GetVar(const Shell& sh, const std::string& name) {
 }
 
 bool VarSet(const Shell& sh, const std::string& name) {
-  if (name == "?" || name == "#" || name == "$" || name == "!" || name == "@" || name == "*" ||
-      name == "-" || name == "0")
+  if (name == "?" || name == "#" || name == "$" || name == "!" || name == "@" ||
+      name == "*" || name == "-" || name == "0")
     return true;
   if (IsNumber(name)) {
     size_t i = static_cast<size_t>(atoi(name.c_str()));
@@ -271,6 +280,7 @@ void SetVar(Shell* sh, const std::string& name, const std::string& value) {
   Var& v = sh->vars[name];
   if (v.readonly) return;
   v.value = value;
+  if (name == "OPTIND") sh->getopts_offset = 1;
 }
 
 void ExportVar(Shell* sh, const std::string& name) {
@@ -285,8 +295,9 @@ std::string Ifs(const Shell& sh) {
 
 std::string SpecialVar(const Shell& sh, const std::string& name) {
   if (name == "?") return std::to_string(sh.status);
-  if (name == "#") return std::to_string(sh.pos.empty() ? 0 : sh.pos.size() - 1);
-  if (name == "$") return std::to_string(static_cast<int>(GetCurrentProcessId()));
+  if (name == "#")
+    return std::to_string(sh.pos.empty() ? 0 : sh.pos.size() - 1);
+  if (name == "$") return std::to_string(sh.shell_pid);
   if (name == "!") return std::to_string(sh.last_bg);
   if (name == "-") {
     std::string s;
@@ -298,7 +309,8 @@ std::string SpecialVar(const Shell& sh, const std::string& name) {
   }
   if (name == "@" || name == "*") {
     std::string out;
-    std::string sep = name == "*" ? std::string(1, Ifs(sh).empty() ? ' ' : Ifs(sh)[0]) : " ";
+    std::string sep =
+        name == "*" ? std::string(1, Ifs(sh).empty() ? ' ' : Ifs(sh)[0]) : " ";
     for (size_t i = 1; i < sh.pos.size(); ++i) {
       if (i > 1) out += sep;
       out += sh.pos[i];
@@ -325,7 +337,8 @@ std::vector<std::string> ChildEnv(const Shell& sh) {
   return out;
 }
 
-// --- the working directory -----------------------------------------------------
+// --- the working directory
+// -----------------------------------------------------
 
 std::string CurrentDir() {
   DWORD n = GetCurrentDirectoryW(0, nullptr);
@@ -343,23 +356,25 @@ void ShErr(const Shell& sh, const Io& io, const std::string& msg) {
   Err(io, sh.name + ": " + msg + "\n");
 }
 
-// --- the lexer -----------------------------------------------------------------
+// --- the lexer
+// -----------------------------------------------------------------
 
 enum class Tok { Word, Op, Newline, Eof };
 
 struct Token {
   Tok type = Tok::Eof;
-  std::string text;       // the raw word (quotes kept) or the operator
-  bool quoted = false;    // the word had quotes or a backslash (not a keyword)
-  std::string heredoc;    // a << operator's body
+  std::string text;     // the raw word (quotes kept) or the operator
+  bool quoted = false;  // the word had quotes or a backslash (not a keyword)
+  std::string heredoc;  // a << operator's body
   bool heredoc_expand = true;
-  int io_number = -1;     // a redirection's explicit fd, or -1
+  int io_number = -1;  // a redirection's explicit fd, or -1
   bool incomplete = false;
 };
 
 // Scans one raw word from src[*i], honouring '', "", \, and the $(...), ${...},
 // `...` and $((...)) forms that may hold spaces and operators. Advances *i.
-void ScanBalanced(const std::string& src, size_t* i, char open, char close, bool* incomplete);
+void ScanBalanced(const std::string& src, size_t* i, char open, char close,
+                  bool* incomplete);
 
 void ScanQuoted(const std::string& src, size_t* i, bool* incomplete) {
   char quote = src[(*i)++];
@@ -369,8 +384,10 @@ void ScanQuoted(const std::string& src, size_t* i, bool* incomplete) {
     if (quote != '\'' && c == '\\') {
       if (*i < src.size()) ++*i;
     } else if (quote == '"' && c == '$' && *i < src.size()) {
-      if (src[*i] == '(') ScanBalanced(src, i, '(', ')', incomplete);
-      else if (src[*i] == '{') ScanBalanced(src, i, '{', '}', incomplete);
+      if (src[*i] == '(')
+        ScanBalanced(src, i, '(', ')', incomplete);
+      else if (src[*i] == '{')
+        ScanBalanced(src, i, '{', '}', incomplete);
     } else if (quote == '"' && c == '`') {
       --*i;
       ScanQuoted(src, i, incomplete);
@@ -379,7 +396,8 @@ void ScanQuoted(const std::string& src, size_t* i, bool* incomplete) {
   if (incomplete != nullptr) *incomplete = true;
 }
 
-void ScanBalanced(const std::string& src, size_t* i, char open, char close, bool* incomplete) {
+void ScanBalanced(const std::string& src, size_t* i, char open, char close,
+                  bool* incomplete) {
   int depth = 0;
   while (*i < src.size()) {
     char c = src[*i];
@@ -395,14 +413,17 @@ void ScanBalanced(const std::string& src, size_t* i, char open, char close, bool
       ScanBalanced(src, i, '{', '}', incomplete);
     } else {
       ++*i;
-      if (c == open) ++depth;
-      else if (c == close && --depth == 0) return;
+      if (c == open)
+        ++depth;
+      else if (c == close && --depth == 0)
+        return;
     }
   }
   if (incomplete != nullptr) *incomplete = true;
 }
 
-std::string ScanWord(const std::string& src, size_t* i, bool* quoted, bool* incomplete = nullptr) {
+std::string ScanWord(const std::string& src, size_t* i, bool* quoted,
+                     bool* incomplete = nullptr) {
   size_t start = *i;
   size_t n = src.size();
   while (*i < n) {
@@ -469,7 +490,8 @@ std::vector<Token> Tokenize(const std::string& src) {
       bool found = false;
       while (p < n) {
         size_t le = src.find('\n', p);
-        std::string line = src.substr(p, (le == std::string::npos ? n : le) - p);
+        std::string line =
+            src.substr(p, (le == std::string::npos ? n : le) - p);
         std::string trimmed = line;
         if (dash) {
           size_t t = trimmed.find_first_not_of('\t');
@@ -586,20 +608,35 @@ std::vector<Token> Tokenize(const std::string& src) {
   return out;
 }
 
-// --- the AST -------------------------------------------------------------------
+// --- the AST
+// -------------------------------------------------------------------
 
 struct Redir {
-  int fd = -1;        // the fd being redirected (filled by default per op)
-  std::string op;     // "<", ">", ">>", "<&", ">&", "<>", ">|", "<<"
-  std::string target; // a raw word, or an fd/"-" for <& >&, or the here-doc body
+  int fd = -1;     // the fd being redirected (filled by default per op)
+  std::string op;  // "<", ">", ">>", "<&", ">&", "<>", ">|", "<<"
+  std::string
+      target;  // a raw word, or an fd/"-" for <& >&, or the here-doc body
   bool heredoc_expand = true;
 };
 
 struct Node {
-  enum Kind { Simple, Pipeline, AndOr, List, If, For, While, Case, Group, Subshell, FuncDef, Arith } kind;
+  enum Kind {
+    Simple,
+    Pipeline,
+    AndOr,
+    List,
+    If,
+    For,
+    While,
+    Case,
+    Group,
+    Subshell,
+    FuncDef,
+    Arith
+  } kind;
   // Simple:
-  std::vector<std::string> words;                             // raw, unexpanded
-  std::vector<std::pair<std::string, std::string>> assigns;   // NAME=rawvalue
+  std::vector<std::string> words;                            // raw, unexpanded
+  std::vector<std::pair<std::string, std::string>> assigns;  // NAME=rawvalue
   std::vector<Redir> redirs;
   // Pipeline:
   bool negate = false;
@@ -626,7 +663,8 @@ struct Node {
   std::string func_name;
 };
 
-// --- the parser ----------------------------------------------------------------
+// --- the parser
+// ----------------------------------------------------------------
 
 struct Parser {
   const std::vector<Token>& toks;
@@ -636,14 +674,18 @@ struct Parser {
   explicit Parser(const std::vector<Token>& t) : toks(t) {}
 
   const Token& peek() const { return toks[pos]; }
-  const Token& at(size_t k) const { return pos + k < toks.size() ? toks[pos + k] : toks.back(); }
+  const Token& at(size_t k) const {
+    return pos + k < toks.size() ? toks[pos + k] : toks.back();
+  }
   void advance() {
     if (pos + 1 < toks.size()) ++pos;
   }
   bool isWord(const char* s) const {
     return peek().type == Tok::Word && !peek().quoted && peek().text == s;
   }
-  bool isOp(const char* s) const { return peek().type == Tok::Op && peek().text == s; }
+  bool isOp(const char* s) const {
+    return peek().type == Tok::Op && peek().text == s;
+  }
   bool atEof() const { return peek().type == Tok::Eof; }
 
   void skipNewlines() {
@@ -651,9 +693,9 @@ struct Parser {
   }
 
   bool isReserved(const std::string& w) const {
-    static const char* const kw[] = {"if", "then", "elif", "else", "fi",   "for", "in",   "do",
-                                      "done", "while", "until", "case", "esac", "{",   "}",    "!",
-                                      "function"};
+    static const char* const kw[] = {
+        "if",    "then",  "elif", "else", "fi", "for", "in", "do",      "done",
+        "while", "until", "case", "esac", "{",  "}",   "!",  "function"};
     for (const char* k : kw) {
       if (w == k) return true;
     }
@@ -662,8 +704,8 @@ struct Parser {
   bool isTerminatorWord() const {
     if (peek().type != Tok::Word || peek().quoted) return false;
     const std::string& w = peek().text;
-    return w == "then" || w == "else" || w == "elif" || w == "fi" || w == "do" || w == "done" ||
-           w == "esac" || w == "}";
+    return w == "then" || w == "else" || w == "elif" || w == "fi" ||
+           w == "do" || w == "done" || w == "esac" || w == "}";
   }
 
   NodeP parseProgram() {
@@ -674,7 +716,8 @@ struct Parser {
       }
     }
     NodeP list = parseList();
-    if (!atEof() && error.empty()) error = "unexpected token near `" + peek().text + "'";
+    if (!atEof() && error.empty())
+      error = "unexpected token near `" + peek().text + "'";
     return list;
   }
 
@@ -768,8 +811,9 @@ struct Parser {
     if (isOp("{")) return parseGroup();
     if (isWord("{")) return parseGroup();
     if (isOp("(")) return parseSubshell();
-    if (peek().type == Tok::Word && !peek().quoted && !isReserved(peek().text) &&
-        at(1).type == Tok::Op && at(1).text == "(" && at(2).type == Tok::Op && at(2).text == ")") {
+    if (peek().type == Tok::Word && !peek().quoted &&
+        !isReserved(peek().text) && at(1).type == Tok::Op &&
+        at(1).text == "(" && at(2).type == Tok::Op && at(2).text == ")") {
       return parseFuncDef(peek().text);
     }
     if (isWord("function")) {
@@ -787,8 +831,8 @@ struct Parser {
   void parseRedirsInto(std::vector<Redir>* redirs) {
     while (peek().type == Tok::Op) {
       const std::string& op = peek().text;
-      if (op != "<" && op != ">" && op != ">>" && op != "<&" && op != ">&" && op != "<>" &&
-          op != ">|" && op != "<<") {
+      if (op != "<" && op != ">" && op != ">>" && op != "<&" && op != ">&" &&
+          op != "<>" && op != ">|" && op != "<<") {
         break;
       }
       Token rt = peek();
@@ -819,7 +863,9 @@ struct Parser {
     while (!atEof() && error.empty()) {
       if (peek().type == Tok::Op) {
         const std::string& t = peek().text;
-        if (t == ";" || t == "&" || t == "&&" || t == "||" || t == "|" || t == ")" || t == ";;") break;
+        if (t == ";" || t == "&" || t == "&&" || t == "||" || t == "|" ||
+            t == ")" || t == ";;")
+          break;
         size_t before = pos;
         parseRedirsInto(&node->redirs);
         if (pos != before) continue;
@@ -904,7 +950,8 @@ struct Parser {
     if (peek().type == Tok::Word && peek().text == w) {
       advance();
     } else if (error.empty()) {
-      error = std::string("expected `") + w + "'" + (peek().text.empty() ? "" : ", got `" + peek().text + "'");
+      error = std::string("expected `") + w + "'" +
+              (peek().text.empty() ? "" : ", got `" + peek().text + "'");
     }
   }
 
@@ -1013,11 +1060,13 @@ struct Parser {
   }
 };
 
-// --- execution forward declarations --------------------------------------------
+// --- execution forward declarations
+// --------------------------------------------
 
 int ExecNode(Shell* sh, const NodeP& node, Io io);
 int RunProgramString(Shell* sh, const std::string& src, Io io);
-int RunSubshell(Shell* sh, const std::string& src, Io io, bool background = false);
+int RunSubshell(Shell* sh, const std::string& src, Io io,
+                bool background = false);
 
 // Runs `src` as a subshell and returns its standard output (trailing newlines
 // stripped), through a temp file (output is finite).
@@ -1027,18 +1076,21 @@ std::string CommandSubstitute(Shell* sh, const std::string& src) {
   wchar_t path[MAX_PATH];
   GetTempFileNameW(dir, L"gsh", 0, path);
   SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
-  HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
-                         CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+  HANDLE h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_TEMPORARY, nullptr);
   std::string result;
   if (h != INVALID_HANDLE_VALUE) {
     Io io = sh->io;
     io.set(1, h);
     sh->status = RunSubshell(sh, src, io);
+    sh->substitution_status = sh->status;
     FlushFileBuffers(h);
     SetFilePointer(h, 0, nullptr, FILE_BEGIN);
     char buf[8192];
     DWORD got = 0;
-    while (ReadFile(h, buf, sizeof(buf), &got, nullptr) && got > 0) result.append(buf, got);
+    while (ReadFile(h, buf, sizeof(buf), &got, nullptr) && got > 0)
+      result.append(buf, got);
     CloseHandle(h);
   }
   DeleteFileW(path);
@@ -1046,7 +1098,8 @@ std::string CommandSubstitute(Shell* sh, const std::string& src) {
   return result;
 }
 
-// --- arithmetic ($(( )) and let) -----------------------------------------------
+// --- arithmetic ($(( )) and let)
+// -----------------------------------------------
 
 struct Arith {
   const std::string& s;
@@ -1066,7 +1119,8 @@ struct Arith {
       if (i < s.size() && s[i] == ')') ++i;
       return v;
     }
-    if (i < s.size() && (s[i] == '-' || s[i] == '+' || s[i] == '!' || s[i] == '~')) {
+    if (i < s.size() &&
+        (s[i] == '-' || s[i] == '+' || s[i] == '!' || s[i] == '~')) {
       char op = s[i++];
       long long v = atom();
       return op == '-' ? -v : op == '!' ? !v : op == '~' ? ~v : v;
@@ -1082,7 +1136,8 @@ struct Arith {
       std::string name;
       while (i < s.size() && IsNameChar(s[i])) name += s[i++];
       skip();
-      if (i < s.size() && s[i] == '=' && (i + 1 >= s.size() || s[i + 1] != '=')) {
+      if (i < s.size() && s[i] == '=' &&
+          (i + 1 >= s.size() || s[i + 1] != '=')) {
         ++i;
         long long v = expr(0);
         SetVar(sh, name, std::to_string(v));
@@ -1105,7 +1160,8 @@ struct Arith {
   std::string peekOp() {
     skip();
     if (i >= s.size()) return "";
-    static const char* const ops[] = {"||", "&&", "==", "!=", "<=", ">=", "<", ">", "+", "-", "*", "/", "%"};
+    static const char* const ops[] = {"||", "&&", "==", "!=", "<=", ">=", "<",
+                                      ">",  "+",  "-",  "*",  "/",  "%"};
     for (const char* o : ops) {
       size_t len = strlen(o);
       if (s.compare(i, len, o) == 0) return o;
@@ -1120,19 +1176,32 @@ struct Arith {
       if (p < 0 || p < min_prec) break;
       i += op.size();
       long long rhs = expr(p + 1);
-      if (op == "+") lhs += rhs;
-      else if (op == "-") lhs -= rhs;
-      else if (op == "*") lhs *= rhs;
-      else if (op == "/") lhs = rhs != 0 ? lhs / rhs : 0;
-      else if (op == "%") lhs = rhs != 0 ? lhs % rhs : 0;
-      else if (op == "==") lhs = lhs == rhs;
-      else if (op == "!=") lhs = lhs != rhs;
-      else if (op == "<") lhs = lhs < rhs;
-      else if (op == ">") lhs = lhs > rhs;
-      else if (op == "<=") lhs = lhs <= rhs;
-      else if (op == ">=") lhs = lhs >= rhs;
-      else if (op == "&&") lhs = lhs && rhs;
-      else if (op == "||") lhs = lhs || rhs;
+      if (op == "+")
+        lhs += rhs;
+      else if (op == "-")
+        lhs -= rhs;
+      else if (op == "*")
+        lhs *= rhs;
+      else if (op == "/")
+        lhs = rhs != 0 ? lhs / rhs : 0;
+      else if (op == "%")
+        lhs = rhs != 0 ? lhs % rhs : 0;
+      else if (op == "==")
+        lhs = lhs == rhs;
+      else if (op == "!=")
+        lhs = lhs != rhs;
+      else if (op == "<")
+        lhs = lhs < rhs;
+      else if (op == ">")
+        lhs = lhs > rhs;
+      else if (op == "<=")
+        lhs = lhs <= rhs;
+      else if (op == ">=")
+        lhs = lhs >= rhs;
+      else if (op == "&&")
+        lhs = lhs && rhs;
+      else if (op == "||")
+        lhs = lhs || rhs;
     }
     return lhs;
   }
@@ -1143,7 +1212,8 @@ long long EvalArith(Shell* sh, const std::string& expr) {
   return a.expr(0);
 }
 
-// --- glob matching -------------------------------------------------------------
+// --- glob matching
+// -------------------------------------------------------------
 
 bool GlobMatch(const std::string& pat, const std::string& str) {
   size_t p = 0, s = 0, star_p = std::string::npos, star_s = 0;
@@ -1212,7 +1282,8 @@ bool HasGlobMeta(const std::string& s) {
   return false;
 }
 
-// --- word expansion ------------------------------------------------------------
+// --- word expansion
+// ------------------------------------------------------------
 //
 // Output carries, per character, whether it may be split on IFS (came from an
 // unquoted expansion) and whether it is an active glob metacharacter (a literal
@@ -1223,6 +1294,7 @@ struct Buf {
   bool quoted_empty = false;
   std::string split;  // '1' where IFS splitting applies
   std::string glob;   // '1' where the char is an active pattern character
+  std::vector<size_t> boundaries;  // quoted $@ preserves each positional field
   void add(const std::string& s, bool sp, bool gl) {
     text += s;
     split.append(s.size(), sp ? '1' : '0');
@@ -1238,9 +1310,27 @@ struct Buf {
 std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split);
 void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out);
 
+std::string ParameterValue(Shell* sh, const std::string& name) {
+  if (sh->opt_u && !VarSet(*sh, name) && name != "@" && name != "*") {
+    ShErr(*sh, sh->io, name + ": parameter is not set");
+    sh->status = 2;
+    sh->exiting = true;
+    return "";
+  }
+  return GetVar(*sh, name);
+}
+
+void QuotedPositional(const Shell& sh, Buf* out) {
+  for (size_t i = 1; i < sh.pos.size(); ++i) {
+    if (i > 1) out->boundaries.push_back(out->text.size());
+    out->add(sh.pos[i], false, false);
+  }
+}
+
 // Appends the value of the $-expansion at raw[*i] ('$') to `out`. Unquoted
-// expansions are marked splittable; nothing from an expansion is a glob char.
-void ExpandDollar(Shell* sh, const std::string& raw, size_t* i, bool in_dquote, Buf* out) {
+// expansions undergo field splitting and pathname expansion.
+void ExpandDollar(Shell* sh, const std::string& raw, size_t* i, bool in_dquote,
+                  Buf* out) {
   size_t n = raw.size();
   size_t j = *i + 1;
   bool split = !in_dquote;
@@ -1253,9 +1343,14 @@ void ExpandDollar(Shell* sh, const std::string& raw, size_t* i, bool in_dquote, 
     size_t k = j;
     ScanBalanced(raw, &k, '{', '}', nullptr);
     std::string body = raw.substr(j + 1, k - j - 2);
+    if (body == "@" && in_dquote) {
+      QuotedPositional(*sh, out);
+      *i = k;
+      return;
+    }
     bool p = false;
     std::string v = ExpandParam(sh, body, &p);
-    out->add(v, split, false);
+    out->add(v, split, split);
     *i = k;
     return;
   }
@@ -1274,11 +1369,12 @@ void ExpandDollar(Shell* sh, const std::string& raw, size_t* i, bool in_dquote, 
     size_t k = j;
     ScanBalanced(raw, &k, '(', ')', nullptr);
     std::string cmd = raw.substr(j + 1, k - j - 2);
-    out->add(CommandSubstitute(sh, cmd), split, false);
+    out->add(CommandSubstitute(sh, cmd), split, split);
     *i = k;
     return;
   }
-  if (!IsNameStart(raw[j]) && !IsDigitC(raw[j]) && strchr("?$!#@*-", raw[j]) == nullptr) {
+  if (!IsNameStart(raw[j]) && !IsDigitC(raw[j]) &&
+      strchr("?$!#@*-", raw[j]) == nullptr) {
     out->add('$', false, false);
     *i = j;
     return;
@@ -1292,21 +1388,24 @@ void ExpandDollar(Shell* sh, const std::string& raw, size_t* i, bool in_dquote, 
     name = std::string(1, raw[j]);
     *i = j + 1;
   }
-  // "$@" in double quotes still splits into one field per positional; we
-  // approximate by joining on space (fields are preserved by $@ unquoted).
-  out->add(GetVar(*sh, name), split, false);
+  if (name == "@" && in_dquote)
+    QuotedPositional(*sh, out);
+  else
+    out->add(ParameterValue(sh, name), split, split);
 }
 
-// Expands a ${...} body (operators :-, :=, :+, :?, #, ##, %, %%, /, //, :off:len,
-// and ${#name}). Sets *did_split (unused by callers for now).
+// Expands a ${...} body (operators :-, :=, :+, :?, #, ##, %, %%, /, //,
+// :off:len, and ${#name}). Sets *did_split (unused by callers for now).
 std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split) {
   *did_split = false;
   if (body.empty()) return "";
   if (body[0] == '#' && body.size() > 1) {
-    return std::to_string(GetVar(*sh, body.substr(1)).size());
+    return std::to_string(ParameterValue(sh, body.substr(1)).size());
   }
   size_t k = 0;
-  if (!body.empty() && (strchr("?$!#@*-", body[0]) != nullptr || IsDigitC(body[0]))) {
+  if (IsDigitC(body[0])) {
+    while (k < body.size() && IsDigitC(body[k])) ++k;
+  } else if (strchr("?$!#@*-", body[0]) != nullptr) {
     k = 1;
   } else {
     while (k < body.size() && IsNameChar(body[k])) ++k;
@@ -1314,17 +1413,18 @@ std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split) {
   std::string name = body.substr(0, k);
   bool set = VarSet(*sh, name);
   std::string value = GetVar(*sh, name);
-  if (k >= body.size()) return value;
+  if (k >= body.size()) return ParameterValue(sh, name);
   std::string rest = body.substr(k);
   auto word = [&](const std::string& w) {
     Buf b;
     ExpandInto(sh, w, true, &b);
     return b.text;
   };
-  if (rest[0] == ':' && rest.size() > 1 && strchr("-=+?", rest[1]) != nullptr) {
-    char op = rest[1];
-    std::string arg = rest.substr(2);
-    bool empty = !set || value.empty();
+  bool colon = rest[0] == ':' && rest.size() > 1 && strchr("-=+?", rest[1]) != nullptr;
+  if (colon || strchr("-=+?", rest[0]) != nullptr) {
+    char op = rest[colon ? 1 : 0];
+    std::string arg = rest.substr(colon ? 2 : 1);
+    bool empty = !set || (colon && value.empty());
     if (op == '-') return empty ? word(arg) : value;
     if (op == '=') {
       if (empty) {
@@ -1336,17 +1436,22 @@ std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split) {
     }
     if (op == '+') return empty ? "" : word(arg);
     if (op == '?') {
-      if (empty) std::fprintf(stderr, "%s: %s\n", name.c_str(),
-                              arg.empty() ? "parameter null or not set" : word(arg).c_str());
+      if (empty) {
+        ShErr(*sh, sh->io, name + ": " + (arg.empty() ? "parameter null or not set" : word(arg)));
+        sh->status = 2;
+        sh->exiting = true;
+      }
       return value;
     }
   }
+  value = ParameterValue(sh, name);
   if (rest[0] == ':') {
     // ${name:offset} or ${name:offset:length}
     std::string spec = rest.substr(1);
     size_t colon = spec.find(':');
-    long long off = atoll(spec.substr(0, colon).c_str());
-    long long len = colon == std::string::npos ? -1 : atoll(spec.substr(colon + 1).c_str());
+    long long off = EvalArith(sh, spec.substr(0, colon));
+    long long len =
+        colon == std::string::npos ? -1 : EvalArith(sh, spec.substr(colon + 1));
     long long sz = static_cast<long long>(value.size());
     if (off < 0) off = std::max<long long>(0, sz + off);
     if (off > sz) off = sz;
@@ -1372,13 +1477,15 @@ std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split) {
   if (rest[0] == '%') {
     bool longest = rest.size() > 1 && rest[1] == '%';
     std::string pat = word(rest.substr(longest ? 2 : 1));
-    if (longest) {
+    if (!longest) {
       for (size_t len = 0; len <= value.size(); ++len) {
-        if (GlobMatch(pat, value.substr(value.size() - len))) return value.substr(0, value.size() - len);
+        if (GlobMatch(pat, value.substr(value.size() - len)))
+          return value.substr(0, value.size() - len);
       }
     } else {
       for (size_t len = value.size();; --len) {
-        if (GlobMatch(pat, value.substr(value.size() - len))) return value.substr(0, value.size() - len);
+        if (GlobMatch(pat, value.substr(value.size() - len)))
+          return value.substr(0, value.size() - len);
         if (len == 0) break;
       }
     }
@@ -1388,8 +1495,10 @@ std::string ExpandParam(Shell* sh, const std::string& body, bool* did_split) {
     bool all = rest.size() > 1 && rest[1] == '/';
     std::string body2 = rest.substr(all ? 2 : 1);
     size_t slash = body2.find('/');
-    std::string pat = word(slash == std::string::npos ? body2 : body2.substr(0, slash));
-    std::string repl = slash == std::string::npos ? "" : word(body2.substr(slash + 1));
+    std::string pat =
+        word(slash == std::string::npos ? body2 : body2.substr(0, slash));
+    std::string repl =
+        slash == std::string::npos ? "" : word(body2.substr(slash + 1));
     if (pat.empty()) return value;
     std::string out;
     size_t pos = 0;
@@ -1435,10 +1544,11 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
       while (i < n && raw[i] != '\'') out->add(raw[i++], false, false);
       if (i < n) ++i;
     } else if (!in_dquote && c == '"') {
-      out->quoted_empty = true;
       size_t end = i;
       ScanQuoted(raw, &end, nullptr);
       std::string inner = raw.substr(i + 1, end - i - 2);
+      if (sh->pos.size() > 1 || (inner != "$@" && inner != "${@}"))
+        out->quoted_empty = true;
       ExpandInto(sh, inner, true, out);
       i = end;
     } else if (c == '\\') {
@@ -1460,10 +1570,12 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
       size_t k = i + 1;
       std::string cmd;
       while (k < n && raw[k] != '`') {
-        if (raw[k] == '\\' && k + 1 < n && strchr("$`\\", raw[k + 1]) != nullptr) ++k;
+        if (raw[k] == '\\' && k + 1 < n &&
+            strchr("$`\\", raw[k + 1]) != nullptr)
+          ++k;
         cmd += raw[k++];
       }
-      out->add(CommandSubstitute(sh, cmd), !in_dquote, false);
+      out->add(CommandSubstitute(sh, cmd), !in_dquote, !in_dquote);
       i = (k < n ? k + 1 : k);
     } else if (!in_dquote && (c == '*' || c == '?' || c == '[')) {
       out->add(c, false, true);
@@ -1481,7 +1593,8 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
                 std::vector<std::string>* out) {
   bool active = false;
   for (size_t i = 0; i < glob.size(); ++i) {
-    if (glob[i] == '1' && (text[i] == '*' || text[i] == '?' || text[i] == '[')) active = true;
+    if (glob[i] == '1' && (text[i] == '*' || text[i] == '?' || text[i] == '['))
+      active = true;
   }
   if (sh->opt_f || !active) {
     out->push_back(text);
@@ -1509,7 +1622,10 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
     std::vector<std::string> next;
     for (const std::string& base : paths) {
       if (!HasGlobMeta(comp)) {
-        std::string joined = base.empty() ? comp : (base.back() == '/' ? base + comp : base + "/" + comp);
+        std::string joined =
+            base.empty()
+                ? comp
+                : (base.back() == '/' ? base + comp : base + "/" + comp);
         next.push_back(joined);
         continue;
       }
@@ -1521,10 +1637,16 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
         do {
           std::string name = Narrow(fd.cFileName);
           if (name == "." || name == "..") continue;
-          if (!name.empty() && name[0] == '.' && (comp.empty() || comp[0] != '.')) continue;
+          if (!name.empty() && name[0] == '.' &&
+              (comp.empty() || comp[0] != '.'))
+            continue;
           if (GlobMatch(comp, name)) {
-            if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
-            std::string joined = base.empty() ? name : (base.back() == '/' ? base + name : base + "/" + name);
+            if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+              continue;
+            std::string joined =
+                base.empty()
+                    ? name
+                    : (base.back() == '/' ? base + name : base + "/" + name);
             next.push_back(joined);
           }
         } while (FindNextFileW(h, &fd));
@@ -1542,14 +1664,17 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
 }
 
 // Expands one raw word into fields (splitting and globbing applied).
-void ExpandWord(Shell* sh, const std::string& raw, std::vector<std::string>* out) {
+void ExpandWord(Shell* sh, const std::string& raw,
+                std::vector<std::string>* out) {
   Buf b;
   ExpandInto(sh, raw, false, &b);
   std::string ifs = Ifs(*sh);
   std::string ws, non_ws;
   for (char c : ifs) {
-    if (c == ' ' || c == '\t' || c == '\n') ws += c;
-    else non_ws += c;
+    if (c == ' ' || c == '\t' || c == '\n')
+      ws += c;
+    else
+      non_ws += c;
   }
   // Field splitting on split-flagged characters.
   std::vector<std::pair<std::string, std::string>> fields;  // text, glob
@@ -1561,14 +1686,21 @@ void ExpandWord(Shell* sh, const std::string& raw, std::vector<std::string>* out
     cur_g.clear();
     have = false;
   };
-  for (size_t i = 0; i < b.text.size(); ++i) {
+  size_t boundary = 0;
+  for (size_t i = 0; i <= b.text.size(); ++i) {
+    while (boundary < b.boundaries.size() && b.boundaries[boundary] == i) {
+      flush();
+      ++boundary;
+    }
+    if (i == b.text.size()) break;
     char c = b.text[i];
     bool splittable = b.split[i] == '1';
     if (splittable && ifs.find(c) != std::string::npos) {
       if (ws.find(c) != std::string::npos) {
         if (have) flush();
         // consume a run of whitespace IFS
-        while (i + 1 < b.text.size() && b.split[i + 1] == '1' && ws.find(b.text[i + 1]) != std::string::npos)
+        while (i + 1 < b.text.size() && b.split[i + 1] == '1' &&
+               ws.find(b.text[i + 1]) != std::string::npos)
           ++i;
       } else {
         // a non-whitespace IFS delimiter: always a field break
@@ -1580,7 +1712,7 @@ void ExpandWord(Shell* sh, const std::string& raw, std::vector<std::string>* out
       have = true;
     }
   }
-  if (have) flush();
+  if (have || !b.boundaries.empty()) flush();
   if (fields.empty() && !b.text.empty()) {
     // Not reached: a fully-unsplit word produces one field below.
   }
@@ -1604,9 +1736,13 @@ std::string ExpandOne(Shell* sh, const std::string& raw) {
   return b.text;
 }
 
+// clang-format off
+#include "shell_execute.inc"
+#include "shell_builtins.inc"
+// clang-format on
+
 }  // namespace
 
-// Defined after the parser and executor; see the bottom of the file.
-int RunShell(const std::vector<std::string>& argv);
+#include "shell_main.inc"
 
 }  // namespace gesher::exec
