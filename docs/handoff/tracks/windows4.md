@@ -165,3 +165,13 @@ all four rotations; existing end-to-end locale checks remain unchanged.
 The 2022-only old IME conversion committed three valid kanji rather than the
 fixture's two-character assumption; that test's candidate selection is still
 being investigated, without treating the failure as waived.
+
+IME fixture correction prepared for coordinator review: retain real SendInput,
+hiragana composition, kanji conversion, candidate/caret geometry and Enter,
+but compare final all-kanji editor text exactly to the post-Enter IMM commit
+event (with no composing suffix). The prior fixture accepted arbitrary
+two-kanji results, including 二本, but rejected the valid three-kanji 日本語
+result. It now checks actual Windows-to-InputConnection fidelity rather than
+the runner dictionary's word length. This is an explicit assertion change,
+not a reclassification of the old failure; runtime CI and coordinator review
+are required before acceptance.
