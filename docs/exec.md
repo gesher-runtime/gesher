@@ -209,7 +209,18 @@ not validated frames; at most eight records/96 published lines are allowed.
 Own-file -Werror and enabled/disabled fatal-child/publication contracts pass,
 with the same exit7. The crash remains open pending an actual runtime fix and
 combined CI. Verified Native3 integration117 and media's independently proven
-callback/handle/request ownership corrections are the next combined foundation.
+callback/handle/request ownership corrections are now combined. The source-only
+camera transfer uses ordered asynchronous callbacks, capture-thread-owned native
+handle release and atomic repeating-request selection. Its actual-class 1000
+cancel/flush race regression passes locally on JDK21 and is invoked under ART
+from track58 in the next run. This independently fixes demonstrated ownership
+and request races; it does not establish the cause of the ntdll crash.
+
+The combined tree includes verified integration117629e and a quote-aware Windows
+argument scanner for Zygote.vmCommandLine. That scanner fixes Windows4's actual
+startup failure when the Launcher main-class token is quoted; thirteen host
+cases pass, with direct execution wired into the exec workflow. New ART camera
+regression, quoted Launcher startup and caller-word records await combined CI.
 
 **Previous review:** CI 40385411337 completed at
 80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both
