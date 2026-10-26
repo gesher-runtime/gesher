@@ -22,6 +22,8 @@
 # methods it marks and put only the classes it lists in the image, as
 # Android's boot image is made (docs/compiled-code.md, ADR 0054).
 # -AppFilter is gesher-app.jar's filter (no AOSP profile covers it).
+# -AllClasses puts every class of the jars in the image (dexdump.exe lists
+# them), not only the profile's.
 #
 # BOOT_IMAGE_VERBOSE=compiler (or other -verbose: tags) logs dex2oat's phases.
 param(
@@ -31,6 +33,7 @@ param(
   [string] $ExtensionFilter = 'verify',
   [string] $AppFilter = '',
   [string[]] $BootProfiles = @(),
+  [switch] $AllClasses,
   [int] $TimeoutMinutes = 20
 )
 $ErrorActionPreference = 'Stop'
@@ -82,6 +85,26 @@ if ($BootProfiles) {
     if (-not $content.EndsWith("`n")) { $content += "`n" }
     [IO.File]::AppendAllText($text, $content)
     $lines += ($content -split "`n").Count - 1
+  }
+  # -AllClasses: every class of the jars goes into the image too, as with no
+  # profile; the profile still picks the methods that get AOT code. Gesher's
+  # framework.jar is not the one AOSP's profile was made for: some of the
+  # profile's classes reference classes it does not list, and the image left
+  # out classes such as android.app.Activity, which then kept every app class
+  # that extends them out of its app image (ADR 0054).
+  if ($AllClasses) {
+    $classes = [Collections.Generic.HashSet[string]]::new()
+    $dump = Join-Path $root 'dexdump.txt'
+    foreach ($jar in $jars) {
+      $null = & (Join-Path $dist 'dexdump.exe') -n -o (NoDrive $dump) (NoDrive "$dist/$jar.jar") 2>&1
+      foreach ($l in [IO.File]::ReadLines($dump)) {
+        if ($l -match "^\s*Class descriptor\s*:\s*'(L[^']+;)'") { $null = $classes.Add($Matches[1]) }
+      }
+      Remove-Item $dump
+    }
+    [IO.File]::AppendAllText($text, (($classes | Sort-Object) -join "`n") + "`n")
+    $lines += $classes.Count
+    Write-Host ("profman: {0:N0} classes of the boot class path added to the profile's" -f $classes.Count)
   }
   $bootProfile = NoDrive (Join-Path $root 'boot.prof')
   $pa = @('--output-profile-type=boot', "--create-profile-from=$(NoDrive $text)", "--reference-profile-file=$bootProfile")
