@@ -223,6 +223,16 @@ the microphone (looped, from its start each time recording starts);
 - Running: ci 40299212277 at a1a0f43, with integration a98dda9. Verify the
   new session round trip, NDK tones, all existing media checks and Just
   Player's e2e; prior runs are recorded below for diagnosis.
+- That run's build/package pass, but e2e still has 1 unexpected failure:
+  Just Player now reaches a preallocated NoClassDefFoundError with no
+  descriptor/stack. Windows test jobs are still running. Added opt-in ART
+  patch 0590 to log missing android/com.android boot descriptors, enabled
+  only by GESHER_TRACE_MISSING_BOOT_CLASSES in the e2e job, and included
+  those lines in Just Player diagnostics. `git apply --check` against the
+  saved ART source passes; this diagnostic patch is not compiled/CI-verified.
+  Read both current test logs before the next dispatch, then merge current
+  integration (native2, 8b1b09d or later) and fix/diagnose the actual missing
+  dependency. Do not count package success as app/session verification.
 - Lead-engineer continuation: ci 40292991000 at fc99140 completed with
   4 failures on windows-2022 and 5 on windows-2025; package passed, e2e
   had 1 unexpected failure. The recording/mux/recorder/ImageReader paths
