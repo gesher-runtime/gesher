@@ -147,6 +147,11 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] Aot3 oatdump: inspect shipped framework/app oat code, actual app image
       and missing-file errors with pinned ART; verify the installed tool.
       Full ci 40368334642 at 96ef687, both Windows runners and package/e2e.
+- [x] Aot3 install-time cloud profiles: validate/copy paired DM, accept only
+      matching profman data, execute selected AOT/app-image code on first
+      launch, preserve malformed updates, handle rejected/missing profiles
+      and remove all metadata/profile staging on uninstall. Full ci
+      40408733247 at 05ca072, both Windows runners and package/e2e.
 - [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
       dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
