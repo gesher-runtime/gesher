@@ -292,6 +292,13 @@ void Window::Run(std::wstring title, int width, int height) {
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
     hwnd_ = hwnd;
+  }
+  // CreateWindowEx with CW_USEDEFAULT can clamp an initial top-level window
+  // to the desktop work area. The Android display/requested client size must
+  // still be exact, including on the hosted runners' small desktops.
+  if (hwnd != nullptr) SetClientSize(width, height);
+  {
+    std::lock_guard<std::mutex> lock(create_mutex_);
     created_ = true;
   }
   create_cv_.notify_all();
@@ -687,7 +694,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
         client_width_ = w;
         client_height_ = h;
       }
-      if (changed) {
+      if (changed && created_) {
         e.type = WindowEvent::kResize;
         e.width = w;
         e.height = h;

@@ -160,6 +160,21 @@ int main() {
   Check(source != nullptr && source->unadvised == 0, "a failed Advise is not Unadvised");
   if (source != nullptr) { current_source.store(nullptr); source->Release(); }
   Check(live_sources.load() == 0, "failed Advise also releases the source and handler");
+  fail_advise = false;
+  window.reset(gesher::Window::Create("Gesher initial client size fixture", 400, 4000, Factory));
+  source = WaitSource();
+  if (window != nullptr) window->ScreenBounds(bounds);
+  Check(window != nullptr && source != nullptr && bounds[2] - bounds[0] == 400
+          && bounds[3] - bounds[1] == 4000,
+        "an initial top-level client larger than the desktop retains its exact requested size");
+  bool initial_resize = false;
+  gesher::WindowEvent queued;
+  if (window != nullptr) while (window->PollEvent(&queued))
+    initial_resize |= queued.type == gesher::WindowEvent::kResize;
+  Check(!initial_resize, "initial desktop clamping is not reported as an Android user resize");
+  window.reset();
+  if (source != nullptr) { current_source.store(nullptr); source->Release(); }
+  Check(live_sources.load() == 0, "the large initial-client fixture also releases its source");
   std::printf("%d windows4 COM input pane check(s) failed\n", failures);
   return failures;
 }
