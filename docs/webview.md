@@ -474,7 +474,8 @@ Pitfalls: detach threads attached to ART before exit; enable accessibility
 for screen-reader state rather than every ambient UIA client; restore the
 runner's proxy settings after tests; preserve byte pins across cache/mirrors.
 Use job logs, not artifact downloads, for review. Local checks are limited to
-own Java/native syntax and small focused fixtures; AOSP builds remain CI-only.
+source inspection and lightweight script parsing; C/C++ compilation and
+native fixture execution run only in CI.
 
 Recovery update (2026-10-27): current integration a0f32e1 (including verified
 AOT runtime merge 6dc3f03) is merged into the Web3 preparation branch. The
