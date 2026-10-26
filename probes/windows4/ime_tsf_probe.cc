@@ -59,6 +59,24 @@ namespace {
 int failures = 0;
 bool detach_on_text = false;
 std::unique_ptr<ImeWindow> ime;
+class ExpectedDisconnectScope {
+ public:
+  explicit ExpectedDisconnectScope(const wchar_t* path) {
+    module_ = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (module_ != nullptr) set_ = reinterpret_cast<Set>(reinterpret_cast<void*>(
+        GetProcAddress(module_, "gesher_test_expect_disconnect")));
+    if (set_ != nullptr) set_(TRUE);
+  }
+  ~ExpectedDisconnectScope() {
+    if (set_ != nullptr) set_(FALSE);
+    if (module_ != nullptr) FreeLibrary(module_);
+  }
+  bool Available() const { return set_ != nullptr; }
+ private:
+  using Set = void(WINAPI*)(BOOL);
+  HMODULE module_ = nullptr;
+  Set set_ = nullptr;
+};
 class ChangeSink final : public ITextStoreACPSink {
  public:
   std::weak_ptr<TextService> service;
@@ -155,9 +173,14 @@ int main() {
   Check(ime->RunTextServiceTest() == static_cast<int32_t>(E_UNEXPECTED), "a restricted editor destroys its TSF document before service access");
   ime.reset();
   Editor(window, 3);
-  detach_on_text = true;
-  result = ime->RunTextServiceTest();
-  Check(ime == nullptr, "a nested native text callback can detach the owner during a real COM edit session");
+  {
+    ExpectedDisconnectScope expected(path.c_str());
+    Check(expected.Available(), "the native negative service fixture declares its expected disconnect");
+    detach_on_text = true;
+    result = ime->RunTextServiceTest();
+  }
+  Check(FAILED(static_cast<HRESULT>(result)) && ime == nullptr,
+      "a nested native owner detach explicitly interrupts its real COM edit session with a failed HRESULT");
   Check(reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == Procedure,
       "reentrant detach restores the original window procedure");
   Editor(window, 4);

@@ -26,7 +26,9 @@ class ReconvertSession final : public ITfEditSession, public ITfCompositionSink 
     if (FAILED(result) || fetched != 1) return E_FAIL;
     WCHAR buffer[32]; ULONG copied = 0;
     result = selection.range->GetText(cookie, 0, buffer, 32, &copied);
-    Check(SUCCEEDED(result) && std::u16string(buffer, buffer + copied) == u"\u05e9\u05dc\u05d5\u05dd",
+    std::u16string selected(buffer, buffer + copied);
+    bool partial = selected == u"abcd";
+    Check(SUCCEEDED(result) && (selected == u"\u05e9\u05dc\u05d5\u05dd" || partial),
           "a Windows TSF edit session reads the existing selected UTF-16 text");
     ITfContextComposition* owner = nullptr;
     ITfComposition* composition = nullptr;
@@ -34,14 +36,37 @@ class ReconvertSession final : public ITfEditSession, public ITfCompositionSink 
     if (SUCCEEDED(result)) result = owner->StartComposition(cookie, selection.range,
         static_cast<ITfCompositionSink*>(this), &composition);
     Check(SUCCEEDED(result) && composition != nullptr, "the test text service starts reconversion on an existing range");
-    if (SUCCEEDED(result)) result = selection.range->SetText(cookie, 0, L"\u65e5\u672c", 2);
+    ITfRange* replacement = nullptr;
+    if (SUCCEEDED(result) && partial) {
+      result = selection.range->Clone(&replacement);
+      LONG moved = 0;
+      if (SUCCEEDED(result)) result = replacement->ShiftStart(cookie, 1, &moved, nullptr);
+      if (SUCCEEDED(result) && moved != 1) result = E_FAIL;
+      if (SUCCEEDED(result)) result = replacement->ShiftEnd(cookie, -2, &moved, nullptr);
+      if (SUCCEEDED(result) && moved != -2) result = E_FAIL;
+    }
+    if (SUCCEEDED(result)) result = partial ? replacement->SetText(cookie, 0, L"X", 1)
+                                          : selection.range->SetText(cookie, 0, L"\u65e5\u672c", 2);
+    if (replacement != nullptr) replacement->Release();
     if (composition != nullptr) {
       HRESULT ended = composition->EndComposition(cookie);
       if (SUCCEEDED(result)) result = ended;
       composition->Release();
     }
-    if (SUCCEEDED(result)) result = selection.range->Collapse(cookie, TF_ANCHOR_END);
-    if (SUCCEEDED(result)) result = context_->SetSelection(cookie, 1, &selection);
+    if (SUCCEEDED(result) && !partial) result = selection.range->Collapse(cookie, TF_ANCHOR_END);
+    if (SUCCEEDED(result) && !partial) result = context_->SetSelection(cookie, 1, &selection);
+    if (SUCCEEDED(result) && partial) {
+      TF_SELECTION current{}; ULONG count = 0; ITfRangeACP* acp = nullptr;
+      result = context_->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &current, &count);
+      if (SUCCEEDED(result) && count == 1)
+        result = current.range->QueryInterface(IID_ITfRangeACP, reinterpret_cast<void**>(&acp));
+      LONG start = -1, length = -1;
+      if (acp != nullptr) result = acp->GetExtent(&start, &length);
+      Check(SUCCEEDED(result) && start == 2 && length == 0,
+          "a partial TSF composition edit keeps its insertion caret before the full composition end");
+      if (acp != nullptr) acp->Release();
+      if (current.range != nullptr) current.range->Release();
+    }
     Check(SUCCEEDED(result), "the TSF service replaces/reconverts the selection and ends its composition");
     if (owner != nullptr) owner->Release();
     selection.range->Release();

@@ -4,6 +4,8 @@ package com.gesher.winapp;
 import android.os.Bundle;
 import android.os.Handler;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -14,7 +16,7 @@ import android.widget.LinearLayout;
 public final class TsfActivity extends Reporting {
     private final Handler handler = new Handler();
     private EditText edit;
-    private Button reconvert, password, number, normal;
+    private Button reconvert, password, number, normal, partial;
     private int generation;
 
     @Override protected void onCreate(Bundle saved) {
@@ -22,16 +24,28 @@ public final class TsfActivity extends Reporting {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         edit = new EditText(this);
+        edit.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable text) {
+                int start = BaseInputConnection.getComposingSpanStart(text);
+                int end = BaseInputConnection.getComposingSpanEnd(text);
+                if (start >= 0) say("W4 TSF live composing " + start + "-" + end
+                        + " Japanese " + text.toString().equals("before \u65e5\u672c")
+                        + " partial " + text.toString().equals("aXcd"));
+            }
+        });
         root.addView(edit, new LinearLayout.LayoutParams(-1, 150));
         reconvert = button(root, "Reconvert selection", () -> reconvert(0, generation));
         password = button(root, "Password", () -> restrict("password", InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_VARIATION_PASSWORD));
         number = button(root, "Number", () -> restrict("number", InputType.TYPE_CLASS_NUMBER));
         normal = button(root, "Normal editor", this::normal);
+        partial = button(root, "Partial composition edit", this::partial);
         setContentView(root);
         root.post(() -> {
             say("W4 TSF buttons reconvert " + center(reconvert) + " password " + center(password)
-                    + " number " + center(number) + " normal " + center(normal));
+                    + " number " + center(number) + " normal " + center(normal) + " partial " + center(partial));
             normal();
         });
     }
@@ -80,16 +94,41 @@ public final class TsfActivity extends Reporting {
     }
 
     private void reconvert(int attempt, int current) {
+        reconvert(attempt, current, false);
+    }
+
+    private void partial() {
+        int current = ++generation;
+        edit.setInputType(InputType.TYPE_CLASS_TEXT);
+        edit.setText("abcd"); edit.setSelection(0, 4); edit.requestFocus();
+        getSystemService(InputMethodManager.class).restartInput(edit);
+        handler.post(() -> reconvert(0, current, true));
+    }
+
+    private void reconvert(int attempt, int current, boolean partialEdit) {
         if (current != generation) return;
         try {
             int result = invokeService();
             if (result == 0x8000ffff && attempt < 50) {
-                handler.postDelayed(() -> reconvert(attempt + 1, current), 100);
+                handler.postDelayed(() -> reconvert(attempt + 1, current, partialEdit), 100);
                 return;
             }
             say("W4 TSF service HRESULT " + Integer.toHexString(result));
-            observe(0, current);
+            if (partialEdit) observePartial(0, current); else observe(0, current);
         } catch (ReflectiveOperationException e) { say("W4 TSF failure " + e); }
+    }
+
+    private void observePartial(int attempt, int current) {
+        if (current != generation) return;
+        boolean changed = edit.getText().toString().equals("aXcd");
+        boolean finished = BaseInputConnection.getComposingSpanStart(edit.getText()) == -1
+                && BaseInputConnection.getComposingSpanEnd(edit.getText()) == -1;
+        if ((!changed || !finished || edit.getSelectionStart() != 2 || edit.getSelectionEnd() != 2)
+                && attempt < 70) {
+            handler.postDelayed(() -> observePartial(attempt + 1, current), 100); return;
+        }
+        say("W4 TSF actual EditText partial " + changed + " composition ended " + finished
+                + " selection " + edit.getSelectionStart() + "-" + edit.getSelectionEnd());
     }
 
     private void observe(int attempt, int current) {

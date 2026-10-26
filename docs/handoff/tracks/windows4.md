@@ -366,3 +366,27 @@ placed the caret after the inserted substring. The corrected source emits
 an additional ordered selection transaction only when needed, with revision
 capacity checked before mutation. A native partial-edit fixture is prepared;
 actual InputConnection coverage and CI results remain pending.
+
+Standalone **40409646065** at
+`e408f423cb13d64a1008a478531020cced3abd16` completes all three jobs successfully.
+The actual llvm-mingw 23.1.3/Werror/no-exceptions build and both Windows logs
+were read. All COM geometry/initial-size/source-lifetime checks and ACP
+composition/measurement/hit-test/offset/partial-caret checks pass on both.
+Each of the three native aggregates reports zero failures on both runners.
+This is scoped native proof, not full Android/base/eventfd or package/e2e proof.
+
+Log review also caught a misleading raw helper FAIL inside the intentionally
+interrupted native detach case, despite its zero probe aggregate. The next
+source tightens this: that one fixture invocation explicitly declares an
+expected disconnect using a native-only DLL export scoped by RAII, still
+returns a failed HRESULT, and the probe requires that failure together with
+actual owner destruction and procedure restoration. All other helper failures
+remain FAIL; both standalone and full-CI native wrappers reject any raw FAIL
+even with an aggregate zero. Independent review agreed with that scoped
+negative-case treatment. This correction needs its next CI result.
+
+The real EditText/Windows-service fixture now also prepares an abcd composition,
+edits only [1,2] to X and ends without a helper SetSelection. The editor must
+finish as aXcd with caret 2, and both normal reconversion and the partial case
+must expose actual live composing spans before completion. These new Android
+assertions and the fixture service extension have not run in full CI yet.
