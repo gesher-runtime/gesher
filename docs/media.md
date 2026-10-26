@@ -221,12 +221,22 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
-- Running full CI **40398992353** at
+- Diagnostic full CI **40398992353** at
   **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
   117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase
   diagnostics and traced/bounded media preparation. Expected media3 count
-  is 36; all original recording and boot criteria remain in force. No
-  runtime result is claimed yet.
+  is 36; all original recording and boot criteria remain in force. Media
+  **121842567795** fails before runtime: ffmpeg is absent; apt update takes
+  17 seconds, then installing 87 packages/62.8 MB from
+  azure.archive.ubuntu.com times out at 120 seconds (exit 124), after the
+  last reported libcodec2-1.2 8,998 kB acquisition. No version/generator runs.
+  This identifies the blocked preparation command; no camera diagnosis is
+  inferred from it. The follow-up uses canonical Ubuntu HTTPS mirror lists
+  on this disposable runner, retaining its suites, components, Ubuntu keys
+  and APT signature/hash validation. Install gets 240 seconds for the fresh
+  dependency set; all command and global ten-minute bounds remain explicit.
+  YAML/Bash syntax and present/missing/failing-tool control-flow fixtures
+  pass locally. Runtime/package/e2e and the new 36-check set remain unverified.
 - Diagnostic CI **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
   atomic request-selection repair, 1,000-race regression and the approved
   ART array entry/decode/body/exit diagnostic compile successfully (main
