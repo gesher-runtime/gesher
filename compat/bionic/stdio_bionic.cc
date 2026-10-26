@@ -38,6 +38,7 @@
 
 extern "C" int32_t __android_log_get_minimum_priority();
 extern "C" int32_t __android_log_set_minimum_priority(int32_t priority);
+extern "C" void __android_log_set_default_tag(const char* tag);
 extern "C" int __android_log_is_loggable_len(int priority, const char* tag, size_t length, int fallback);
 extern "C" const char* gesher_android_default_log_tag();
 
@@ -656,8 +657,7 @@ char PriorityLetter(int prio) {
 // the same file) can land between.
 int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
   if (!tag) tag = ::gesher_android_default_log_tag();
-  if (filter && !logging::IsLoggable(prio, tag, tag ? std::strlen(tag) : 0, 2,
-                                    ::__android_log_get_minimum_priority())) return -1;
+  if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
   logging::Record(buffer, prio, tag, text);
   std::string line(1, PriorityLetter(prio));
   line += '/';
@@ -789,6 +789,9 @@ int BIONIC_SYSV gesher_bionic_android_log_is_loggable(int prio, const char* tag,
 int32_t BIONIC_SYSV gesher_bionic_android_log_get_minimum_priority() { return ::__android_log_get_minimum_priority(); }
 int32_t BIONIC_SYSV gesher_bionic_android_log_set_minimum_priority(int32_t priority) {
   return ::__android_log_set_minimum_priority(priority);
+}
+void BIONIC_SYSV gesher_bionic_android_log_set_default_tag(const char* tag) {
+  ::__android_log_set_default_tag(tag);
 }
 
 // The variadic entry points, defined in assembly below.
@@ -931,6 +934,7 @@ void RegisterStdio(SymbolTable& t) {
   E("__android_log_is_loggable_len", gesher_bionic_android_log_is_loggable_len);
   E("__android_log_get_minimum_priority", gesher_bionic_android_log_get_minimum_priority);
   E("__android_log_set_minimum_priority", gesher_bionic_android_log_set_minimum_priority);
+  E("__android_log_set_default_tag", gesher_bionic_android_log_set_default_tag);
 #undef E
 }
 

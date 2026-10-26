@@ -156,7 +156,9 @@ static int log_abi(const char* tag) {
   int (*loggable_len)(int, const char*, size_t, int) = dlsym(RTLD_DEFAULT, "__android_log_is_loggable_len");
   int (*set_minimum)(int) = dlsym(RTLD_DEFAULT, "__android_log_set_minimum_priority");
   int (*get_minimum)(void) = dlsym(RTLD_DEFAULT, "__android_log_get_minimum_priority");
-  if (!loggable || !loggable_len || !set_minimum || !get_minimum) return 5;
+    void (*set_default_tag)(const char*) = dlsym(RTLD_DEFAULT, "__android_log_set_default_tag");
+    int (*write_log)(int, const char*, const char*) = dlsym(RTLD_DEFAULT, "__android_log_write");
+    if (!loggable || !loggable_len || !set_minimum || !get_minimum || !set_default_tag || !write_log) return 5;
   char key[256], full_tag[256], full_key[512];
   snprintf(key, sizeof(key), "log.tag.%s", tag);
   snprintf(full_tag, sizeof(full_tag), "%s.extra", tag);
@@ -166,6 +168,12 @@ static int log_abi(const char* tag) {
   if (__system_property_set(key, "E") || __system_property_set(full_key, "V")) failed = 1;
   if (loggable(3, tag, 2) || !loggable(6, tag, 2)) failed = 1;
   if (loggable_len(3, full_tag, strlen(tag), 2) || !loggable_len(3, full_tag, strlen(full_tag), 2)) failed = 1;
+    set_default_tag(tag);
+    if (loggable(3, NULL, 2) || loggable(3, "", 2) || loggable_len(3, full_tag, 0, 2)
+            || !loggable_len(6, full_tag, 0, 2)) failed = 1;
+    if (write_log(3, NULL, "default-null-hidden") >= 0
+            || write_log(3, "", "default-empty-hidden") >= 0
+            || write_log(6, "", "default-empty-visible") <= 0) failed = 1;
   set_minimum(5);
   if (get_minimum() != 5 || loggable(3, tag, 2) || !loggable(5, tag, 2)) failed = 1;
   if (__system_property_set(key, "")) failed = 1;
@@ -173,7 +181,7 @@ static int log_abi(const char* tag) {
   if (!loggable(3, tag, 2) || loggable(3, tag, 6)) failed = 1;
   set_minimum(previous);
   if (failed) return 6;
-  puts("log-abi:PASS length-limited tags, property priorities, defaults and minimum priority");
+    puts("log-abi:PASS length-limited tags, null/empty/default tags, property priorities, defaults and minimum priority");
   return 0;
 }
 
