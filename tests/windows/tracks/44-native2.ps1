@@ -86,7 +86,7 @@ foreach ($a in $abis) {
     }
   }
   if (-not $gaps -and ($lines | Where-Object { $_ -like 'native2 symbols *' })) {
-    Write-Host "PASS  native2 ($($a.Tag)): every function and object the e2e apps' NDK libraries and the third-party test programs import resolves in the shim"
+    Write-Host "PASS  native2 ($($a.Tag)): e2e and third-party imports resolve in the shim (executable __libc_init is checked by gesher-exec program runs)"
   } else {
     Write-Host "FAIL  native2 ($($a.Tag)): imports the shim lacks in: $($gaps -join ', ')"
     $failed++

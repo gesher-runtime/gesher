@@ -722,21 +722,37 @@ uint64_t BIONIC_SYSV StrtoulL(const char* s, char** e, int base, void*) { return
 // --- wide characters (bionic's wchar_t is 32-bit) ----------------------------------
 
 bool InBmp(uint32_t c) { return c < 0x10000; }
-#define WCLASS(name, astral)                                                     \
-  int BIONIC_SYSV W_##name(uint32_t c) {                                         \
-    return InBmp(c) ? (::name(static_cast<wint_t>(c)) != 0 ? 1 : 0) : (astral); \
+void* UnicodeFunction(const char* name) {
+  static HMODULE module = [] {
+    HMODULE m = LoadLibraryExW(L"icu.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return m != nullptr ? m : LoadLibraryExW(L"icuuc.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+  }();
+  return module != nullptr ? reinterpret_cast<void*>(GetProcAddress(module, name)) : nullptr;
+}
+// Use Unicode properties rather than the CRT's process-wide C locale. ICU
+// accepts the full 32-bit code point, including supplementary characters.
+#define WCLASS(name, icu)                                                       \
+  int BIONIC_SYSV W_##name(uint32_t c) {                                        \
+    using Predicate = int8_t(__cdecl*)(int32_t);                               \
+    static auto fn = reinterpret_cast<Predicate>(UnicodeFunction(icu));        \
+    if (c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) return 0;                \
+    return fn != nullptr ? (fn(static_cast<int32_t>(c)) != 0 ? 1 : 0)           \
+                         : (InBmp(c) && ::name(static_cast<wint_t>(c)) != 0);  \
   }
-// Outside the BMP: letters and printable, not digits/space/punctuation.
-WCLASS(iswalpha, c <= 0x10ffff) WCLASS(iswalnum, c <= 0x10ffff) WCLASS(iswdigit, 0)
-WCLASS(iswxdigit, 0) WCLASS(iswspace, 0) WCLASS(iswupper, 0) WCLASS(iswlower, 0)
-WCLASS(iswcntrl, 0) WCLASS(iswpunct, 0) WCLASS(iswprint, c <= 0x10ffff) WCLASS(iswgraph, c <= 0x10ffff)
+WCLASS(iswalpha, "u_isalpha") WCLASS(iswalnum, "u_isalnum") WCLASS(iswdigit, "u_isdigit")
+WCLASS(iswxdigit, "u_isxdigit") WCLASS(iswspace, "u_isspace") WCLASS(iswupper, "u_isupper")
+WCLASS(iswlower, "u_islower") WCLASS(iswcntrl, "u_iscntrl") WCLASS(iswpunct, "u_ispunct")
+WCLASS(iswprint, "u_isprint") WCLASS(iswgraph, "u_isgraph") WCLASS(iswblank, "u_isblank")
 #undef WCLASS
-int BIONIC_SYSV W_iswblank(uint32_t c) { return c == ' ' || c == '\t' || c == 0x3000 ? 1 : 0; }
 uint32_t BIONIC_SYSV W_towlower(uint32_t c) {
-  return InBmp(c) ? static_cast<uint32_t>(::towlower(static_cast<wint_t>(c))) : c;
+  using Map = int32_t(__cdecl*)(int32_t);
+  static auto fn = reinterpret_cast<Map>(UnicodeFunction("u_tolower"));
+  return fn != nullptr && c <= 0x10ffff ? static_cast<uint32_t>(fn(c)) : c;
 }
 uint32_t BIONIC_SYSV W_towupper(uint32_t c) {
-  return InBmp(c) ? static_cast<uint32_t>(::towupper(static_cast<wint_t>(c))) : c;
+  using Map = int32_t(__cdecl*)(int32_t);
+  static auto fn = reinterpret_cast<Map>(UnicodeFunction("u_toupper"));
+  return fn != nullptr && c <= 0x10ffff ? static_cast<uint32_t>(fn(c)) : c;
 }
 // wctype/iswctype and wctrans/towctrans: small integer handles.
 const char* const kClasses[] = {"alnum", "alpha", "blank", "cntrl", "digit", "graph",

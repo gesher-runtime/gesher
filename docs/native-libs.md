@@ -750,6 +750,24 @@ _Last updated 2026-10-26 (continuation after handover)._
   a462e9c). Integration has since merged windows3 as 80cb28b; after reading
   these results, merge the latest integration before the final verification.
 
+- ci 40291049581 failed on both runners (8 checks each). The API-level
+  abort is fixed: extras now reaches a Greek case-mapping failure, while
+  dlopen/files and the third-party program runs pass. The import gate reports
+  `mremap`, `__cmsg_nxthdr`, `sendmmsg`, `recvmmsg`, plus executable-only
+  `__libc_init`. Added the missing shim entries, datagram batch/timeout tests,
+  ancillary-header bounds checks and anonymous remap growth/copy/shrink tests.
+  Wide case and classification use Windows' ICU C API instead of the CRT C
+  locale or treating every supplementary character as a letter. Tests cover
+  Greek, Deseret, emoji, an unassigned code point and WEOF. Windows ICU's data
+  version can differ from AOSP's ICU; full version parity is not established.
+  The symbol generator now marks __libc_init as launcher-owned only for an
+  ELF with PT_INTERP; the report names it separately. Its existing real
+  gesher-exec program runs exercise startup; no dummy dalvikvm export was added.
+  Local g++ syntax checks pass for the four changed Gesher implementation files
+  with the build's WIN32_LEAN_AND_MEAN/NOMINMAX defines (the first invocation
+  omitted them and hit Winsock header collisions in socket.cc). The NDK tests
+  and runtime behavior still need CI.
+
 - Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
 - **ci 40263281040** (commit before the setjmp fix, both runners): build
   green; art_libartbase_tests 233 passed (3 excluded) and
