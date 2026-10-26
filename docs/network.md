@@ -224,146 +224,60 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
   `NET_CAPABILITY_CAPTIVE_PORTAL`, suppressing `VALIDATED` for that adapter.
   A runner without a captive portal cannot verify a real portal transition.
 
-## Status and next steps (2026-10-25)
+## Status and next steps (web3)
 
-- Running full ci 40353139413 at
-  `6270c9e84e0a8f3486a77824ecb113c563d2871d`, including the
-  completed-geocoder-probe exit fix and latest integration 46bc9e5
-  (documentation only). Watch output:
-  `C:/work/gesher-ci-review/web3-40353139413-watch.log`. No full-stage
-  milestone is closed until both complete Windows jobs pass with the
-  existing package/e2e gates. Web4/ADR 0072 owns the remaining WebView
-  contracts; net4/ADR 0070 owns the remaining network contracts.
+Full-stage gate: **ci 40353139413**, exact source
+`6270c9e84e0a8f3486a77824ecb113c563d2871d`, after latest integration 46bc9e5.
+Watch: `C:/work/gesher-ci-review/web3-40353139413-watch.log`.
+No new milestone is closed before both Windows test jobs, package and both
+e2e jobs pass completely.
 
-- ci 40345505558 at 2130071: all 14 web3 checks pass on each runner,
-  including external Android/Chrome UIA actions, both NDK ABIs in both modes,
-  all 70,000-byte binary-message checks and device geolocation. Package and
-  both e2e jobs pass (all nine apps, TIC-80, four new transport fixtures,
-  zero unexpected failures). Windows 2025 has `0 test(s) failed`.
-  Windows 2022 has one failure only: the geocoder probe printed the genuine
-  `status: InvalidCredentials`, then remained alive until the 45-second
-  process guard. That timeout remains a failure, not a passing probe.
-- Minimal shared fix 58d7dc6 flushes the completed result and immediately
-  exits the probe with code zero; exceptions and inner timeouts print their
-  error and exit one. The 30-second result wait and 45-second process guard
-  remain. A local no-answer probe was still terminated by the outer guard;
-  successful completion and full green CI remain pending the next run.
+In completed ci **40345505558 at 2130071**, all 14 web3 checks pass on each
+runner, including these real network observations in both process modes:
 
-- Running combined ci 40345505558 at
-  `21300715416f076ac32219b23d7ec0db97d9ca15`, after the fixture
-  lifetime/ABI-selection fixes and coordinator reliability patch. Watch output:
-  `C:/work/gesher-ci-review/web3-40345505558-watch.log`. Previous
-  40338521188 completed with exactly three web3 fixture failures per runner;
-  its runtime successes are bounded by the observations below. No milestone
-  is closed pending complete green Windows/package/e2e verification.
+- Configured selected-interface DNS and refusal to fall back from a missing
+  network; actual `IP_UNICAST_IF`/`IPV6_UNICAST_IF` kernel binding and source
+  addresses, explicit TCP/UDP binding, process bind/unbind/invalid preservation,
+  and a bound HTTP connection whose server observes the selected source.
+- Real x86_64 and translated arm64 NDK ELF callers pass all seven assigned
+  libandroid networking APIs: selected TCP/process source, getaddrinfo,
+  pollable raw DNS query/send/result, packet ID, NXDOMAIN, cancellation,
+  closed descriptors, undersized buffers and invalid flags/networks. Each
+  ABI runs in single-process and device modes and identifies its compiled ABI.
+- Windows system proxy/PAC, direct bypass, sticky CONNECTIVITY_ACTION and
+  PendingIntent requests. The four local TLS negative-certificate cases
+  pass while live internet DNS/HTTPS/TLS assertions remain enabled.
 
-- ci 40338521188 at 010551b completed: package and both e2e jobs pass
-  (all nine apps, including required TIC-80; zero unexpected failures).
-  Both Windows test jobs report exactly three failures, all in web3 fixtures:
-  Activity completion destroyed the WebView before the external UIA client's
-  final web-button search; a later launcher environment could not change the
-  existing device server's native-library path, so its ARM case loaded x86_64.
-  All binary messaging assertions, device geolocation, native x86_64 device
-  execution and genuine x86_64/arm64 single-process networking pass.
-- The next run keeps the accessibility Activity alive until external UIA
-  invokes the page button and DOM title becomes `pressed 2` (after the
-  Android provider's first click). Device ARM selection uses a boolean
-  Intent extra, and device x86_64 identity is asserted too. Local Java
-  compilation and PowerShell parsing pass. No existing action/name/heading
-  assertions or time limits were relaxed.
-- Imported coordinator reliability patch 50f16a9 (source-only): bounded
-  geocoder completion without reading an incomplete Result, and atomic
-  SHA-pinned APK caching/official-mirror fallback with four own-byte
-  transport fixtures. All four local checks pass; full CI remains pending.
-  Additional shared files: ci.yml, tests/e2e/{apks.ps1,test-apks.ps1,
-  apps.json,run-e2e.ps1}, and tests/windows/tracks/58-devices.ps1.
+Package cleanup and both e2e jobs pass, including all nine apps, required
+TIC-80, four pinned-byte APK transport fixtures and zero unexpected failures.
+The full run still fails: Windows 2025 has zero failed tests; Windows 2022's
+only failure is a completed geocoder answer followed by a stuck PowerShell
+probe teardown. That 45-second timeout is not a passing probe. Minimal fix
+58d7dc6 flushes the awaited result and exits zero, while errors/inner timeouts
+exit one and both existing guards remain. Current CI must verify the fix.
 
-- Running final combined ci 40338521188 at
-  `010551b16f54c6eb9040e77c18f2082e1abf1a2a`. Watch output is
-  `C:/work/gesher-ci-review/web3-40338521188-watch.log`. Superseded
-  40333695614 cancellation was requested only after this dispatch succeeded.
-  No new runtime milestone is closed until both complete Windows test jobs,
-  package and both required e2e jobs pass.
+The raw DNS worker uses the chosen adapter's configured servers and bound
+UDP, up to three servers (one with NO_RETRY), cache bypass and TCP fallback
+for truncated answers. Only a completion byte uses its pollable socketpair;
+the full answer remains available until nresult consumes/closes the fd.
+Cancellation shuts down the active query. Forced truncation/TCP fallback,
+cache transitions (including mixed Java/NDK binding) and IPv6-only default
+selection remain for net4; current assertions do not prove those cases.
 
-- Final coverage dispatch is ready after merging integration ac50d41
-  (verified aot2 code plus central net4 ownership documentation). It includes
-  device geolocation and both native ABIs in both process modes. Diagnostic
-  ci 40333695614 passed all builds; media preparation spent about 21 minutes
-  before completing successfully. With final coverage now ready, that run
-  will be superseded after the replacement dispatch is confirmed. Its runtime
-  result is incomplete, not a runtime failure or an assumed known flake.
+**net4 / ADR 0070** owns the remaining 84 libc networking inventory entries,
+legacy resolver ABI/error state, shared socket flags/ancillary/truncation/
+urgent data/families, Wi-Fi/VPN/captive transitions, connectivity hidden APIs
+and BoringSSL acceleration. See [its handoff](handoff/tracks/net4.md).
+**web4 / ADR 0072** owns remaining WebView contracts separately.
 
-- Pending next final CI: build `web3_network_arm64.so` with the NDK arm64
-  compiler and run its same seven-API regression in both single-process and
-  device modes, asserting the compiled ABI in the native success message.
-  Current ci 40333695614 contains x86_64 execution only. Remaining resolver,
-  socket semantics and hardware/network completeness belong to the explicit
-  net4 follow-up (ADR 0070), coordinated separately from these seven exports.
-
-- Running combined ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66
-  after the absolute NDK path and verified aot2 integration. Read the NDK
-  runtime PASS line in both process modes on each runner before closing the
-  seven exported networking API items.
-
-- ci 40325234847 at 2de1e15: package and both e2e jobs pass. Both test
-  runners pass the new selected-interface DNS, kernel binding, server-observed
-  source address, process binding/unbinding and bound HTTP assertions in both
-  modes. Four tests fail per runner: accessibility fixture/runtime semantics
-  and a relative `System.load` path prevented NDK execution. The next run
-  uses an absolute path. Raw resolver/NDK runtime verification remains pending.
-- ci 40324592794 at 5e90b96 compiled the NDK test ELF, but the native
-  build failed because raw-DNS used try/catch with exceptions disabled.
-  Corrected to a native CreateThread worker; local syntax now checks
-  `-fno-exceptions` too. Runtime checks remain pending a new full CI.
-- ci 40318144247 at 722f86b verifies the local negative-certificate fixture
-  tests on both Windows runners: `PASS net: DNS and HTTPS on the internet,
-  local expired/wrong-host/self-signed/untrusted certificates rejected`.
-  Both test jobs fail only the two web3 accessibility checks; package and
-  both e2e jobs pass. This run predates the network-binding implementation.
-- Pending CI: the seven assigned NDK networking exports now use the same
-  interface/socket/DNS implementation through existing System V thunks.
-  `android_res_nquery/nsend` return a socketpair descriptor signalled by a
-  bounded native worker; `nresult` returns the DNS wire packet and rcode,
-  consumes the descriptor, and rejects an undersized buffer. Cancellation
-  shuts down the active query and closes the result descriptor. Queries
-  use the chosen adapter's configured DNS servers over bound UDP, retry
-  up to three servers (one with NO_RETRY), and fall back to TCP for
-  truncated responses. Raw queries bypass the cache. A new NDK-built ELF
-  library exercises all seven functions, real source addresses, A-record
-  results, raw packet IDs, NXDOMAIN, cancellation and invalid arguments in
-  single-process and device modes. C++ `-Werror` syntax checks pass; full
-  NDK runtime remains for CI (ELF compilation passed in 40324592794 and
-  40325234847). Additional shared edits are one
-  source entry in `compat/posix/posix.cmake` and one test-library compile
-  line in `.github/workflows/native-libs.yml`.
-- Continuation (2026-10-26), pending CI: interface-specific socket/process
-  binding, DNS, `Network.getSocketFactory/openConnection`, and NLM captive
-  state are implemented. Local checks compile the changed POSIX files with
-  `-Werror`, compile `Network/WindowsNetworks/NetActivity` against the saved
-  Android classes, and parse the PowerShell tests. A small native executable
-  using the actual changed Winsock code passes IPv4/dual-stack kernel
-  option readback, unbinding, process inheritance, invalid-network binding
-  preservation, and A/AAAA DNS through interface 8. The native JNI file has
-  a syntax check with JDK headers/a thunk-macro stand-in; CI must validate
-  the real SysV JNI build and Android runtime. New 54-web3 checks require
-  the HTTP server to observe the selected adapter's source address and
-  reject DNS on a missing network. No adapter configuration was changed.
-  The seven native networking exports assigned from native3's API inventory
-  are implemented, including pollable raw DNS results and cancellation; their
-  runtime checks are pending the absolute-path correction above.
-- Additional file ownership approved by the coordinator: minimal edits in
-  `compat/posix/{src/socket.cc,src/winsock.cc,src/netdb.cc,src/socket_internal.h,
-  include/gesher/inet.h}` and related bionic wrappers; the original web3
-  domain also needs the additive `oleaut32` link in `cmake/aosp/conscrypt.cmake`.
-- Continuation (2026-10-26), pending CI: replaced the four badssl rejection
-  endpoints in 56-net with local certificate fixtures. Real internet
-  DNS/HTTPS/TLS 1.3/SNI assertions remain. Rejection must now have a
-  CertificateException in its cause chain or SSLPeerUnverifiedException;
-  an unrelated SSL handshake failure or timeout is not accepted. Local
-  Java compilation, PowerShell parsing and fixture key/date/SAN/custom-root
-  chain checks pass. No Windows ROOT store was changed locally. Runtime
-  Conscrypt validation still requires a new full CI run.
-
+Approved expanded/shared edits: POSIX socket.cc, winsock.cc, netdb.cc,
+socket_internal.h and public gesher/inet.h; bionic networking wrappers;
+network_dns.cc plus its posix.cmake entry; WindowsNetworks/Network/native
+routing glue; conscrypt.cmake's oleaut32 link; native-libs.yml's two NDK
+fixture builds. Coordinator reliability helpers add ci.yml APK caching,
+tests/e2e transport fixtures and the bounded geocoder child process in
+58-devices.ps1. No new routing check reconfigures runner adapters, and no
+Windows ROOT store was changed locally.
 
 ### ADR 0009 socket gap audit (2026-10-26)
 
@@ -379,7 +293,7 @@ forward directly to the Windows imports. A small probe using Gesher headers
 confirmed the ABI defect: Windows' 16-bit hostent fields are read as Linux's
 32-bit fields (`h_addrtype=262146,h_length=0` for native `2,4`). A neutral
 structure translation and correct resolver error state are required.
-These socket/resolver items remain assigned to web3 or an explicit successor.
+These socket/resolver items are assigned to net4 / ADR 0070.
 
 The coordinator assigns epoll edge/nesting/poll-on-epoll/multiwaiter behavior
 and pipe polling to native3, and cross-process InputChannel/socket descriptor
