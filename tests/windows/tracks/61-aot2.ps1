@@ -124,16 +124,20 @@ if ($beforeOk) {
     $failed++
   }
 
-  # Startup, median of 5, alternating: lifecycle.apk to LifecycleActivity.onCreate
+  # Warm both images once, then median of 5 with the pair order reversed
+  # each round. Always running profile first biases it by cache/load trends.
+  # Time lifecycle.apk to LifecycleActivity.onCreate
   # under the interpreter (60-boot-image.ps1's runs) and with the JIT (the
   # Gesher device's app processes), on each image.
   $images = [ordered]@{ profile = $aotImage; speed = "-Ximage:$(NoDrive $before)/framework/boot.art" }
   $modes = [ordered]@{ interpreter = @('-Xint', '-Xusejit:false'); jit = @('-Xusejit:true') }
   $t = @{}
   $ok = $true
-  for ($i = 0; $i -lt 5; $i++) {
-    foreach ($m in $modes.Keys) {
-      foreach ($img in $images.Keys) {
+  for ($i = -1; $i -lt 5; $i++) {
+    $modeOrder = if ($i -ge 0 -and $i % 2 -eq 1) { @('jit', 'interpreter') } else { @('interpreter', 'jit') }
+    $imageOrder = if ($i -ge 0 -and $i % 2 -eq 1) { @('speed', 'profile') } else { @('profile', 'speed') }
+    foreach ($m in $modeOrder) {
+      foreach ($img in $imageOrder) {
         $r = Aot2Startup (@("-Xbootclasspath:$aotBcpApp", $images[$img]) + $modes[$m] + @('com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk"))) 'LifecycleActivity onCreate' @{ GESHER_REQUIRE_BOOT_IMAGE = '1' }
         if ($r.Exit -ne 0 -or $null -eq $r.At -or $r.Out -notmatch 'boot image loaded: 5 spaces') {
           $ok = $false
@@ -141,6 +145,11 @@ if ($beforeOk) {
           ($r.Out -split "`n" | Select-Object -Last 20) | Out-Host
           continue
         }
+        if ($i -lt 0) {
+          Write-Host ('INFO  aot2: startup warmup ({0}, {1} image): {2:N1} ms; excluded from medians' -f $m, $img, $r.At)
+          continue
+        }
+        Write-Host ('INFO  aot2: startup sample {0} ({1}, {2} image): {3:N1} ms to onCreate, {4:N1} ms to exit' -f ($i + 1), $m, $img, $r.At, $r.Total)
         $t["$m-$img"] += @($r.At)
         $t["$m-$img-total"] += @($r.Total)
       }

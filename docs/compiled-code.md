@@ -210,6 +210,18 @@ package and e2e:
       device launch reports 11 methods with AOT code, none interpreted.
 
 ### Continuation (2026-10-26)
+- ci 40309659362 at 7373128: Windows 2025, package and e2e pass. Windows
+  2022 has the known media tone timing failure plus a startup comparison
+  failure: JIT median 501 ms with the profile image versus 449 ms speed
+  (interpreter 575 versus 611 ms). All app-image/profile/dexopt assertions
+  pass, including the integrated native2 lock path. This is not a green run.
+  The benchmark said alternating but always ran profile first. It now warms
+  both images, reverses image/mode order each round and logs every sample;
+  the five-sample median and existing 10%/30 ms acceptance limit are retained.
+  This removes an ordering confound; it does not establish that the measured
+  difference was noise. The next CI must pass that unchanged limit.
+- Merged current integration 8590f4b, including surfaces and its required
+  TIC-80 e2e checks on both runners, before the next combined verification.
 - Running: ci 40309659362 at 7373128, with native2 integrated and the
   duplicate ART lock patch removed. Full combined verification is pending.
 - ci 40297189562 at 0e0262f failed one Windows 2022 WebView pixel check;
