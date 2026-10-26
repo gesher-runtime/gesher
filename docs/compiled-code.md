@@ -36,6 +36,11 @@ TEB. This brings the three faster execution modes to Windows. The design is
 - **Oat files are mapped, not copied**: gesher-base's `mmap` fills placeholder
   reservations with views (`MapViewOfFile3`), executable ones included, so an
   oat file's code is a view of the file shared between processes (ADR 0036).
+- **Android's compilation model** (ADR 0054, below): the boot image is
+  compiled `speed-profile` with AOSP's boot image profiles; the Gesher device
+  compiles an app at install (`verify`), runs its processes with the JIT and
+  its profile saver, and compiles it again in the background with its profile
+  (`speed-profile` and an app image).
 
 ## Diagnosis switches
 - `GESHER_ART_INTERPRET_ONLY=1` — the switch interpreter only, explicit checks,
@@ -48,6 +53,13 @@ TEB. This brings the three faster execution modes to Windows. The design is
   they became a view (`an executable view of ...`) or a copy.
 - `GESHER_MMAP_NO_PLACEHOLDERS=1` — plain allocations and views, oat code
   copied, no dual-mapped JIT cache (the configuration before ADR 0036).
+- `GESHER_LOG_EXECUTION=1` also logs, for an app, the oat file its dex file
+  gets (`gesher: app oat: <apk>: <odex> (status, filter, reason, executable)`),
+  its app image (`gesher: app image loaded: <art>: N classes, M methods, K with
+  compiled code`) and, at `System.exit`, how its own methods ran (`gesher: app
+  methods at exit: ... with AOT code, ... entered the interpreter or the JIT`).
+- `GESHER_APP_EXECUTION=interpret` (in the device's environment) — app
+  processes keep the device's interpreter-only options (before ADR 0054).
 
 ## Status
 Verified in CI (`tests/windows/tracks/70-codegen.ps1`, run-tests.ps1 sets
@@ -129,4 +141,187 @@ Verified in ci run 40138006773 (1c158b4, both runners, package, e2e):
 
 Next (not part of this track's goal): an app image for the app's own
 classes; a JIT profile / `speed-profile` for framework.jar to shrink its
-75 MB oat file.
+75 MB oat file. (Done by the aot2 track, below.)
+
+## Apps and the framework as Android compiles them (aot2 track, ADR 0054)
+
+### The boot image with a profile
+`boot-image.yml` fetches AOSP's boot image profiles in text form at the
+pinned tag (`art/build/boot/boot-image-profile.txt`, 14,017 lines, and
+`frameworks/base/boot/boot-image-profile.txt`, 38,909 lines;
+`tools/boot-image/fetch-profiles.ps1`); profman.exe makes one binary boot
+profile of them (`--output-profile-type=boot`, as Soong does); dex2oat
+compiles the primary image and framework.jar `speed-profile`: only the
+profile's hot and startup methods get AOT code, and only its classes go into
+the image. gesher-app.jar, which no AOSP profile covers, stays `speed`.
+
+### Apps
+On the Gesher device (`com.gesher.server.Dexopt`):
+
+| when | what | filter | files |
+|---|---|---|---|
+| install | dex2oat (`pm.dexopt.install`, no profile yet) | `verify` | `<code path>/oat/x86_64/base.{odex,vdex}` |
+| every run | the app process runs nterp and the JIT with `-Xjitsaveprofilinginfo`; ART's profile saver writes the app's profile, at the latest when it exits | | `misc/profiles/cur/0/<package>/primary.prof` |
+| device idle (2 s without an app process) | profman `--force-merge-and-analyze` into the reference profile, then dex2oat (`pm.dexopt.bg-dexopt`) | `speed-profile` | `base.{odex,vdex,art}` (`art`: the app image), `misc/profiles/ref/<package>/primary.prof` |
+
+ART's OatFileAssistant finds the oat file next to the APK; with an app image
+the app's profiled classes are already loaded, linked and initialized when
+it starts, and its startup methods run their AOT code.
+
+## Status and next steps (aot2 track, ADR 0054)
+Final combined verification: **ci 40320549410** at
+`ae75766b0bcbcc04f2161cb3d8b4c8fc54510cc9`, after merging integration
+8590f4b (including native2 and surfaces). All 28 jobs are success/skipped
+(22 success, 6 skipped), with no retry. The coordinator personally read all
+13 aot2 PASS lines on each runner, both `0 test(s) failed` summaries, the
+package install/run/input/uninstall cleanup and both e2e jobs' required
+TIC-80/Puzzles PASS lines and `0 unexpected failures` summaries.
+
+The final profile image is 74.7 MB versus 162.6 MB with `speed`;
+boot-framework.oat is 9.1 MB versus 72.2 MB. Startup uses one unmeasured
+warmup for each mode/image and five measured samples, reversing both mode
+and image order each round. The existing 10%/30 ms limit is unchanged:
+
+| runner | interpreter, profile / speed | JIT, profile / speed |
+|---|---|---|
+| windows-2022 | 574 / 610 ms | 477 / 458 ms |
+| windows-2025 | 620 / 651 ms | 489 / 487 ms |
+
+Both runners load the single-process image with 7 classes/16 methods
+(7 compiled) and the device image with 2 classes/11 methods (10 compiled).
+The next device launch reports 11 app methods with AOT code, none entering
+the interpreter or JIT. Profile saving, profman merging, install-time and
+idle dexopt pass with native2's integrated flock implementation.
+
+Remaining ADR 0054 contracts are assigned to [aot3](handoff/tracks/aot3.md),
+ADR 0065: shared-library class-loader contexts, cloud profiles, secondary
+dex and oatdump. They remain open. The WebView capture fix is the only
+runtime change outside this track's domain: WindowSession.java,
+compat/hwui/window/window_jni.cc and 37-webview.ps1. The sections below
+retain earlier verification and failed-run history; their pending-run
+instructions are superseded by this final result.
+
+Verified in CI on windows-2022 and windows-2025 (`tracks/61-aot2.ps1`), plus
+package and e2e:
+
+- [x] **Boot image with AOSP's profiles** (ci 40237467952, 40240540799,
+      40242793689): boot-framework.oat 9.1 MB (was 72.2 MB with `speed`, the
+      same jars compiled by the test), all `.oat` files 16.5 MB (was 96.3 MB),
+      the whole image 74.5 MB (was 162.4 MB); `.art` files 7.1 MB (was 14 MB).
+      dex2oat: primary 1.6 s, framework.jar 3.1 s.
+- [x] **Startup no worse** (61-aot2, median of 3, lifecycle.apk to
+      `Activity.onCreate`, the profile image vs the `speed` image on the same
+      runner, ci 40242793689): interpreter 503 / 499 ms (windows-2022), 618 /
+      648 ms (windows-2025); JIT 366 / 385 ms, 480 / 486 ms.
+- [x] **The installer** ships the smaller image, dex2oat.exe and profman.exe:
+      88.9 MB, was 112.5 MB (ci 40237467952); the installed device compiles
+      lifecycle.apk at install (package job, ci 40240540799).
+- [x] **Install-time dexopt** (verify) on the device and by hand; the app runs
+      from its oat file (`gesher: app oat: ... filter verify, reason install,
+      executable yes`), app processes on the JIT (ci 40240540799).
+- [x] **JIT profiles**: the profile saver writes the app's profile, in one
+      process and on the device (ci 40242793689; file locks on Windows, patch
+      0540).
+- [x] e2e (8 F-Droid apps) and every other device check pass with app
+      processes on nterp and the JIT (ci 40237467952 and later).
+- [x] **Background dexopt** on the device (profman `--force-merge-and-analyze`,
+      dex2oat `speed-profile` with `--app-image-file`) once the device is idle,
+      and the next run uses the speed-profile code: the app's profiled methods
+      run their AOT code and none of them entered the interpreter (8 of 16
+      methods with AOT code, 0 interpreted, was 8 interpreted with verify;
+      ci 40244966896, 40263271836, both runners).
+- [x] **The app image holding the app's classes** (ci 40285423159 at
+      ad9d360, both runners, package and e2e): until
+      ad9d360 the app images loaded but held only the `R` classes;
+      LifecycleActivity and LifecycleApplication were "unsuitable" because
+      dex2oat compiled the app against the primary boot image only (patch
+      0012's lone-location expansion to `<dir>/*` is runtime-only). ad9d360
+      passes `--boot-image=<dir>/boot.art:<dir>/*` (Dexopt and 61-aot2).
+      The single-process image holds 7 classes and 16 methods (7 compiled);
+      the device image holds 2 classes and 11 methods (10 compiled). The next
+      device launch reports 11 methods with AOT code, none interpreted.
+
+### Continuation (2026-10-26)
+- ci 40309659362 at 7373128: Windows 2025, package and e2e pass. Windows
+  2022 has the known media tone timing failure plus a startup comparison
+  failure: JIT median 501 ms with the profile image versus 449 ms speed
+  (interpreter 575 versus 611 ms). All app-image/profile/dexopt assertions
+  pass, including the integrated native2 lock path. This is not a green run.
+  The benchmark said alternating but always ran profile first. It now warms
+  both images, reverses image/mode order each round and logs every sample;
+  the five-sample median and existing 10%/30 ms acceptance limit are retained.
+  This removes an ordering confound; it does not establish that the measured
+  difference was noise. The next CI must pass that unchanged limit.
+- Merged current integration 8590f4b, including surfaces and its required
+  TIC-80 e2e checks on both runners, before the next combined verification.
+- Running: ci 40309659362 at 7373128, with native2 integrated and the
+  duplicate ART lock patch removed. Full combined verification is pending.
+- ci 40297189562 at 0e0262f failed one Windows 2022 WebView pixel check;
+  Windows 2025, package and e2e passed. This was an actual rejected navigation
+  being loaded: debug PrintWindow on Android's UI Looper waited for the
+  WebView2 thread, which was waiting for shouldOverrideUrlLoading on that
+  Looper. After five seconds the callback timed out and allowed navigation.
+  WindowSession now captures on a daemon worker; native capture pins an open
+  surface while running so a concurrent window close is safe. The WebView
+  test also requires the native cancellation and forbids the rejected page's
+  onPageStarted. These three files are a minimal fix outside the aot2 domain.
+- Merged integration 91c195d (including native2). The capture fix and the
+  combined tree need a new full CI run before this track can merge.
+- ci 40307691668 at 061a67c stopped at patch application: 0540's private
+  scoped_flock implementation conflicts with integrated native2 patch 0571.
+  Removed that redundant file diff from 0540; 0571 now provides LockedFile's
+  existing POSIX flock path, backed by gesher-base's verified LockFileEx
+  implementation, including ReleaseLock. The app-image/profile parts of 0540
+  are retained. Patch application and the combined runtime need fresh CI.
+- Verified ci 40285423159 personally from every job's conclusion and logs:
+  both Windows test jobs end with `0 test(s) failed`, package succeeds and
+  e2e reports `0 unexpected failures`.
+- Merged origin/phase4/integration a462e9c, including exec2, before the next
+  full run. Removed the diagnostic `-AllClasses` boot-image option: the app
+  image fix is the explicit boot-image extension list, not extra boot classes.
+  The smaller image, startup and app-image checks need fresh CI verification.
+- Running: ci 40290847953 at 19014a2 (without -AllClasses, with integration
+  a462e9c). Read all 61-aot2 PASS lines and both test summaries, package and
+  e2e. Integration has since merged windows3 (80cb28b), so merge the latest
+  integration and run final CI again before merging this track. The
+  historical handoff below records the predecessor's state.
+- ci 40290847953 finished with only the known media tone timing failure on
+  windows-2022 (sound26: 1441.3 Hz, expected 1480 Hz). windows-2025, package
+  and e2e passed. Read every 61-aot2 PASS on windows-2022: profile boot image
+  74.6 MB versus 162.5 MB; interpreter startup median 571 versus 593 ms and
+  JIT 449 versus 439 ms; single-process app image 7 classes/16 methods, 7
+  compiled; device app image 2 classes/11 methods, 10 compiled; no AOT app
+  methods interpreted. These confirm the image fix without -AllClasses but
+  do not make this full run green. Merged current integration a98dda9 as
+  4b795a7 before the next full verification.
+
+### Handoff (2026-10-26, stopped by the coordinator)
+- Branch `wip/aot2`. Last verified: 7de81ac, ci 40263271836. Everything
+  passed on both runners, plus package and e2e, except the two app-image
+  checks of 61-aot2 ("lifecycle.apk from its app image",
+  "second launch on the device (app image)").
+- In progress when stopped: ci 40285423159 at ad9d360 (the `<dir>/*` fix). It
+  was not watched to the end. Check its 61-aot2 lines first.
+- Next steps: (1) if 40285423159 shows `gesher: app image loaded: ...: N
+  classes` with N >= 2 and compiled methods, tick the box above and the
+  roadmap. If not, read the `Gesher: ... cannot go into the image` lines that
+  61-aot2 prints (`-verbose:compiler`, patch 0540). (2) Decide whether to keep
+  `-AllClasses` (boot-image.yml). It was added when the cause was believed to
+  be a pruned boot image. It costs 6.6 MB of `.art`; without it, startup
+  under the interpreter was within noise. Try without it once the app image
+  works. (3) Roadmap boxes for this track are not ticked yet. (4) Merge
+  origin/phase4/integration again before the final run.
+- Pitfalls: `gh workflow run ci` now fails with HTTP 422 (another workflow
+  is also named ci); use `gh workflow run ci.yml`. Read the device's logs with
+  shared access (other processes append to them). Python string literals with
+  Windows paths corrupt YAML (`\v`, `\t`). The media check on windows-2022 and
+  the webapp pixel check on windows-2025 failed once each in earlier runs;
+  both passed in 40263271836.
+- scoped_flock (for native2, ADR 0057): patch 0540 implements
+  `LockedFile::Open`/`DupOf` on Windows (`#if defined(_WIN32) &&
+  defined(GESHER)`) with `LockFileEx` (exclusive, whole file,
+  `LOCKFILE_FAIL_IMMEDIATELY` when not blocking) on `_get_osfhandle(fd)`. The
+  lock is released when the handle closes; `ReleaseLock` is still a no-op on
+  Windows. These are mandatory locks: every user takes the lock before it
+  reads or writes. That covers what the profile saver and profman need, and
+  nothing else.
