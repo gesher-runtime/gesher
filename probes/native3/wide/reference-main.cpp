@@ -23,13 +23,26 @@ int main() {
   api.unsigned_integer = pinned::wcstoul;
   unsigned checks = 0;
   unsigned failures = 0;
-  WideContracts(api, [&](bool ok, const std::string& what) {
+  auto check = [&](bool ok, const std::string& what) {
     ++checks;
     if (!ok) {
       ++failures;
       std::printf("FAIL pinned wide: %s (errno %d)\n", what.c_str(), errno);
     }
-  });
+  };
+  WideContracts(api, check);
+  WideComparisonContracts<wchar_t>(pinned::llvm_signed::wcscmp, pinned::llvm_signed::wcsncmp,
+      pinned::llvm_signed::wmemcmp, check);
+  WideComparisonContracts<uint32_t>(pinned::llvm_unsigned::wcscmp, pinned::llvm_unsigned::wcsncmp,
+      pinned::llvm_unsigned::wmemcmp, check);
+  for (uint32_t high : {UINT32_C(0x80000000), UINT32_C(0xffffffff)}) {
+    const uint32_t text[] = {high, '1', 0};
+    uint32_t* end;
+    errno = 0;
+    check(pinned::StrToI<int64_t, INT64_MIN, INT64_MAX, uint32_t>(text, &end, 10) == 0 &&
+              end == text && errno == 0,
+          "pinned unsigned wchar numeric instantiation rejects high-bit input");
+  }
   WideFloatingContracts(static_cast<double (*)(const wchar_t*, wchar_t**)>(pinned::wcstod),
       pinned::wcstof, [&](bool ok, const std::string& what) {
         ++checks;

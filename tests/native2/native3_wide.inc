@@ -29,6 +29,16 @@ Part Wide() {
 #undef WIDE_ENTRY
   if (!complete) return p;
   WideContracts(api, [&](bool ok, const std::string& what) { p.Check(ok, what); });
+  using Compare = int (*)(const wchar_t*, const wchar_t*);
+  using CompareN = int (*)(const wchar_t*, const wchar_t*, size_t);
+  auto compare = reinterpret_cast<Compare>(dlsym(RTLD_DEFAULT, "wcscmp"));
+  auto compare_n = reinterpret_cast<CompareN>(dlsym(RTLD_DEFAULT, "wcsncmp"));
+  auto memory = reinterpret_cast<CompareN>(dlsym(RTLD_DEFAULT, "wmemcmp"));
+  p.Check(compare && compare_n && memory, "wide comparison ABI entries");
+  if (compare && compare_n && memory) {
+    WideComparisonContracts<wchar_t>(compare, compare_n, memory,
+        [&](bool ok, const std::string& what) { p.Check(ok, what); });
+  }
   p.notes.push_back("pinned UTF8/16/32 state, errors, bounds and LP64 integers");
 
   locale_t locale = newlocale(LC_ALL_MASK, "C.UTF-8", nullptr);
@@ -182,6 +192,10 @@ Part Wide() {
     p.Check(collate(L"\U00010000", L"\uffff") > 0 &&
                 collate_l(L"Z", L"a", locale) < 0 && collate(transform, transform) == 0,
             "pinned C collation orders codepoints");
+    const wchar_t high[] = {static_cast<wchar_t>(0xffffffffu), 0};
+    p.Check(collate(high, L"") == -1 && collate_l(high, L"\U00010000", locale) == -65537 &&
+                collate(L"\U0001f642", L"\U00010000") == 0xf642,
+            "pinned C collation preserves exact high-bit subtraction");
   }
   using Time = size_t (*)(wchar_t*, size_t, const wchar_t*, const struct tm*);
   using TimeL = size_t (*)(wchar_t*, size_t, const wchar_t*, const struct tm*, locale_t);

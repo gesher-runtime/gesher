@@ -149,6 +149,17 @@ fields. NDK tests now check all fourteen fields, exact lconv layout and
 import/dlsym identity in both ABIs. Scoped compilation now includes this
 guest object with -Werror; it and the subsequent full runtime run are pending.
 
+Scoped 40421984640 at e0077b3 passed the locale and guest objects with
+-Werror, both NDK fixtures and the 203-case reference; actual logs read.
+Root accepted the localeconv-only cross-domain override. A further signedness
+audit found that pinned LLVM-libc comparisons return raw 32-bit subtraction;
+the common wcscmp/wcsncmp/wmemcmp and collation now preserve that magnitude
+and high-bit result. Exact signed/unsigned LLVM comparison bodies and the
+unsigned bionic numeric-template instantiation extend the independent CI
+reference. Production numeric tests cover high-bit source/end behavior.
+No width/property/case code or fixture was edited; root owns its unsigned
+width-reference correction. This follow-up still needs scoped/full CI.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.

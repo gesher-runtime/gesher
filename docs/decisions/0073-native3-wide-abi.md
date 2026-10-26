@@ -54,7 +54,8 @@ is not claimed as fixed.
 
 Locale names/categories/masks and owned locale copies follow bionic's two
 supported locales. Locale-suffixed wide conversions share the ordinary
-semantics. C collation compares code points; wcsxfrm follows bionic's
+semantics. For Unicode scalar values C collation compares code points;
+wcsxfrm follows bionic's
 wcslcpy alias, including termination of truncated output. Windows language
 collation is not consulted.
 
@@ -64,6 +65,15 @@ therefore need bytes 127 and 255 respectively. A narrow architecture-specific
 override retains the common pointer fields and returns the arm64 indicators;
 the common x86-64 entry retains its signed-char values. Both the import and
 dlsym path are tested, with exact 96-byte layout and indicator offsets.
+
+The pinned LLVM-libc wcscmp/wcsncmp/wmemcmp return the 32-bit subtraction,
+including its magnitude and high-bit results, rather than a normalized sign.
+The common entries reproduce those result bits for both wchar_t signedness
+variants. The independent reference compiles the exact LLVM bodies for
+signed and unsigned wchar32, and instantiates bionic's numeric template for
+unsigned input. Numeric high-bit inputs still stop parsing: StrToI narrows
+to int before ASCII ctype; the floating parser uses uint32 wint_t predicates.
+No new comparison policy or width change is introduced.
 
 wcsftime converts its UTF-32 format through the shared conversions, calls
 the existing System V narrow strftime entry with Android's unchanged

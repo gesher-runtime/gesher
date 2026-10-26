@@ -32,7 +32,9 @@ files = [
     "stdio/parsefloat.c", "bionic/wcstod.cpp",
 ]
 parts = [(root / "reference-prefix.h").read_text()]
-for file in files:
+
+
+def source_part(file):
     source = (root / "upstream" / file).read_text()
     # Only environment directives are adapted; no function body rewriting.
     source = re.sub(r'^\s*#include[^\n]*$', '', source, flags=re.M)
@@ -41,6 +43,24 @@ for file in files:
         # Compile only the original narrow parser used by wcstod. Wide scanf
         # and its separate wparsefloat implementation remain outside scope.
         source = source.split("size_t wparsefloat(", 1)[0]
-    parts.append(f'\n#line 1 "{file}"\n{source}')
+    return f'\n#line 1 "{file}"\n{source}'
+
+
+parts.extend(source_part(file) for file in files)
+# The pinned bionic wchar_l.cpp delegates comparisons to this exact LLVM-libc
+# implementation. Compile its unchanged bodies under both target wchar types.
+parts.append("""
+#define LLVM_LIBC_FUNCTION(R, N, A) R N A
+#define LIBC_CRASH_ON_NULLPTR(P) do { if ((P) == nullptr) abort(); } while (false)
+""")
+for variant in ("signed", "unsigned"):
+    parts.append(f"#define LIBC_NAMESPACE_DECL llvm_{variant}")
+    if variant == "unsigned":
+        parts.append("#define wchar_t uint32_t")
+    parts.extend(source_part(f"llvm-libc/src/wchar/{name}.cpp")
+                 for name in ("wcscmp", "wcsncmp", "wmemcmp"))
+    parts.append("#undef LIBC_NAMESPACE_DECL")
+    if variant == "unsigned":
+        parts.append("#undef wchar_t")
 parts.append((root / "reference-main.cpp").read_text())
 Path(sys.argv[1]).write_text("\n".join(parts))
