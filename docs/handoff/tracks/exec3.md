@@ -1,5 +1,17 @@
 # Track brief: exec3
 
+Latest verified slice (2026-10-27): CI 40405306826 is fully green at
+87d5adadea4008a9c4340b9ee58fbabf9aedb00f, 22 successful jobs and six intentional
+skips. Both actual Windows logs end with zero failed tests. Every exec3 Check,
+the new ART camera request-selection regression and every original track58
+device/single-process assertion pass; no signal records. Actual package and both
+nine-app e2e logs were read, all pass with zero unexpected failures, Puzzles
+6156/9424 exit 0. This verifies the combined ownership correction, without
+establishing the cause of the earlier ntdll fault. Final CI is next for the
+narrow default-tag liblog follow-up 97e63e5 plus integration f520fd1; no local
+compilation. The full track's umask/permissions/console and architectural
+limitations remain explicit. Earlier continuation entries below are historical.
+
 Current continuation status (2026-10-26): full track remains open. Completed
 CI40393019261 at6a3289d passes EVERY exec3 Check on both runners, including the
 actual installed pm/am target/receiver/force-stop assertions. Windows-2022 whole

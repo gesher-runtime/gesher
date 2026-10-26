@@ -201,6 +201,12 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
+CI 40405306826 at 87d5adadea4008a9c4340b9ee58fbabf9aedb00f is fully green:
+both Windows whole-suite zero summaries, all exec3 and new ART camera-race
+checks, package and both nine-app e2e runs. The prior post-steps fault does not
+recur in this combined tree; its exact cause is not inferred. The later
+default-tag loggability/setter correction awaits final combined CI with f520fd1.
+
 CI40393019261 passes all exec3 Checks on both runners, including real installed
 pm/am list/path/start/broadcast/force-stop, and the whole Windows-2022 suite.
 Only a Windows-2025 device-mode post-steps crash remains in the combined run;
@@ -259,8 +265,8 @@ An additional APK runs the nine exec2 native checks through JNI inside the
 app's ART process, with real device services, then repeats the Java shell,
 signal, tool and property suites. The nine JNI checks pass both APK modes on
 both runners in CI 40352529279 and CI 40385411337. The latter also passes the
-complete single-process APK and installed properties/logcat; installed pm/am
-and a green combined run remain open.
+complete single-process APK and installed properties/logcat. CI40393019261
+verifies installed pm/am, and CI40405306826 verifies the complete combined run.
 
 ## Remaining work
 
@@ -271,9 +277,9 @@ and a green combined run remain open.
   both runners in CI 40385411337.
 - CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
   Process.destroy/destroyForcibly on both runners. Native console interruption
-  remains unverified; the changed combined tree still needs a green run.
-- A green combined run after the post-steps devices
-  crashes; property permissions and Binder report/poke notifications. Properties,
+  remains unverified. CI40405306826 verifies the combined runtime tree; the
+  separate default-tag follow-up still needs final combined CI.
+- Property permissions and Binder report/poke notifications. Properties,
   explicit callbacks and real logcat capture pass CI 40385411337 in all modes.
 - CI 40338806524 verifies the API29 NDK executable local-exec TLS program and
   ProcessBuilder invocation on both runners. The installed APK native-process
