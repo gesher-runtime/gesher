@@ -911,6 +911,9 @@ public class VideoActivity extends Activity {
 
     /** MediaPlayer plays a clip (video, and audio where it has some) into a TextureView. */
     void playClip(String name, String asset) throws Exception {
+        // The capture analyzer identifies separate sounds by silence. Two
+        // consecutive WebM tones otherwise become one 4-second measurement.
+        Thread.sleep(300);
         final android.graphics.SurfaceTexture[] texture = new android.graphics.SurfaceTexture[1];
         final android.view.TextureView[] tv = new android.view.TextureView[1];
         final java.util.concurrent.atomic.AtomicInteger updates = new java.util.concurrent.atomic.AtomicInteger();
