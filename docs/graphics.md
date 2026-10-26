@@ -531,6 +531,16 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 
 Status and next steps (stopped by the coordinator, 2026-10-26):
 
+- Continuation: read ci 40285764214's windows-2025 log (job 121451383191):
+  `1 test(s) failed`, surfacegl's single-process shutdown only. The SIGQUIT
+  dump shows the main thread idle in MessageQueue.nativePollOnce, not blocked
+  on GL. ActivityClientController rejected finishActivity because the
+  single-process driver's token has no server ActivityRecord. Route that token's
+  finish request to the window session's existing close handler, posted to the
+  window's handler so Activity.finish returns before lifecycle destruction.
+  The existing surfacegl check exercises the app-request path. Not CI-verified
+  yet; windows3's ActivityClientHook also leaves finishActivity to this controller.
+
 - Last fully read run: **ci 40265921060 at bbff936** (both runners). 31 surfaces PASS
   lines on each runner; the only surfaces FAIL was surfacegl's single-process
   shutdown (below). Unrelated: net's badssl.com TLS check timed out on windows-2022.
