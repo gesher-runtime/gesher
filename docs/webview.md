@@ -347,6 +347,8 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running ci 40325234847 at 2de1e15 (the same combined UIA/network/NDK
+  tree with the exception-free worker). No runtime gap is closed yet.
 - ci 40324592794 at 5e90b96 failed compiling the new raw-DNS worker:
   the project disables C++ exceptions. The NDK ELF library compiled.
   Replaced try/catch and std::thread with the existing native CreateThread
