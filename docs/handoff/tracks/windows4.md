@@ -25,7 +25,7 @@ Goals, each with CI evidence on both Windows runners:
   Application context; cover multiple visible tasks with different rotations
   and document which display the shared Application context describes.
 
-Tests: tests/windows/tracks/53-windows4.ps1 and focused additions to winapp/ime
+Tests: tests/windows/tracks/54-windows4.ps1 and focused additions to winapp/ime
 test apps (one build/copy line per app in framework.yml). Domain: compat/input,
 compat/hwui/window, app window/input glue and their docs; keep shared edits
 minimal. Merge current origin/phase4/integration before final CI. Report every
