@@ -472,7 +472,12 @@ needs: [framework-build.md](framework-build.md).
       match pinned bionic ICU4X over every code point and invalid sentinels;
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
-      Widths, collation and remaining NDK/POSIX scope stay open.
+      Collation and remaining NDK/POSIX scope stay open.
+- [x] Pinned bionic wcwidth/wcswidth: all code points/four invalid sentinels
+      match the locked ICU4X width oracle; 33 boundaries and bounded UTF-32
+      strings pass both NDK ABIs and APK modes. Full ci 40404678100 at
+      581e88f, both Windows runners and package/e2e. CPU clocks and other
+      wide/POSIX contracts are separate open work.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

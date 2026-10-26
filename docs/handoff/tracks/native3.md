@@ -62,13 +62,25 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Full ci 40404678100 at 581e88f is pending. Locked-reference ci 40404677936
-at that same source is fully green: every job, all 14 old digests, width
-digest/33 rows/exact lock and both binary128 zero-failure logs personally
-read. Independent static review of the production width/source/ABI tests
-found no additional issue. The full run must still verify actual Windows
-parity, both ABI/APK paths and all package/e2e gates before a width closure.
-Its frozen stage branch wip/native3-width stays code-identical to 581e88f.
+Full width ci 40404678100 at 581e88f is fully green: every job personally
+read (22 success/six skipped), both zero-failure summaries, whole-code-point
+width/classification parity, both NDK ABIs and four APK cases per runner,
+actual package input/uninstall and both required e2e logs (zero unexpected).
+See [the scoped report](native3-width.md). Locked-reference ci 40404677936
+at that source also passes every old/new digest, row and lock check.
+Independent width and CPU-clock static reviews found no additional issue.
+
+Current source includes integration 94ccde1 plus docs-only a06d930 and the
+CPU-clock follow-up 0572/host executable. The new combined full run must
+verify that code before integration; the frozen width proof does not cover
+it. Wide/multibyte/locale/numeric/time ABI work is delegated to
+[native3-wide](native3-wide.md), ADR0073/test66. Root keeps the clock,
+binary128, remaining NDK/POSIX and cross-thread clock lifetime contracts.
+
+### Earlier preparation history
+
+Pending width statements below are historical and superseded by the scoped
+full-width verification above. Other native3 contracts remain open.
 
 The Unicode/Process stage below is merged as integration 117629e. This
 continuation starts from 7826cbe (the following README-only milestone).
