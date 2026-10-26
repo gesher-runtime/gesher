@@ -220,6 +220,11 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — device coverage and diagnostic continuation, 2026-10-26
+- Running: ci 40343220358 at f41f3a97eef42ae374300054f135082915ccbebb:
+  required part-1 device repetition, opt-in capture/camera flow diagnostics
+  and the coordinator's reliability patch. No results from this run are
+  verified yet. Watch with interval 120; read actual counters before changing
+  any recording capacity, collection duration or frame/tone threshold.
 - Latest full CI: 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
   including integration 4d144663/AOT2. All metadata and both test logs are
   read: windows-2025 job 121604055608 ends `0 test(s) failed`;
@@ -281,8 +286,7 @@ the microphone (looped, from its start each time recording starts);
   remains open. Session2, transport controls, permission/user filtering,
   external volume notifications, recorder lifecycle/limits, physical routes,
   persistent surfaces, legacy Camera, DRM and hardware remain explicit gaps.
-- Next: commit/push this reviewed device-coverage/diagnostic tree and run full
-  CI. Read both runner logs, trace counters, package/e2e and the new device
+- Next: read both runner logs, trace counters, package/e2e and the new device
   PASS cases. Tick scoped roadmap items only from proof; no broad API claim.
   ci 40318189310 passed all 30 media3 checks but failed two output checks;
   ci 40329138943 was cancelled when superseded by the AOT2 combined tree.
