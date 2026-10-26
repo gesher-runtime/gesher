@@ -38,6 +38,11 @@ subsequent verification rather than overwriting missing with a broad claim.
 - Implement AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
   AAudio_setMMapPolicy with correct Windows capability/policy semantics;
   verify getter/setter/result behavior rather than adding generic zeros.
+- Implement AAudio error/disconnection callback delivery (currently stored
+  but never invoked), device/route selection and the ignored policy setters;
+  verify removal, stop/close cancellation and callback lifecycle separately
+  from successful tone capture. AudioRecord's input-device setter likewise
+  reports success without changing routes and needs a real route contract.
 
 ## Verified boundary
 
