@@ -357,7 +357,7 @@ drawing in a window that is covered or off the desktop;
   popups failed); Windows' WPAD default became a PAC proxy for every request. Fixed: the
   UIA bridge serves windows only while the screen reader flag is set (the test sets it, as
   Narrator), threads attach per call and detach; WPAD is not followed.
-- ci 40285810159 (tip of the fixes above, 5f2e…; see git log): in progress when the track was
+- ci 40285810159 (at 77d659a, the fixes above): in progress when the track was
   stopped (2026-10-26); its result is unknown. Nothing of this track is CI-verified yet; the
   last verified SHA of the branch is its base (9e449b0, phase4/integration).
 
