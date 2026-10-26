@@ -312,3 +312,13 @@ still CI-only. Runtime CI must establish the runner geometry correction.
 Imported exec3's portable 5b772b7 quoted-Launcher fix as 3a03f40. Its pure-Java
 13-case parser fixture passed locally and in exec3 CI 40405306826's build job;
 actual Windows4 device/ART scenarios remain pending.
+
+The failed Application real-size snapshot is explained by the pinned
+Display bytecode: getRealSize/getRealMetrics prefer their Resources' maximum
+bounds even when Binder DisplayInfo has the new rotation. Shared-display
+rotation now uses the standard process configuration dispatch (with a new
+configuration sequence), in addition to Display callbacks. The existing
+per-Activity task overrides retain each visible task's own bounds/rotation;
+the package's locales remain authoritative. The configuration fixture adds
+Application max-bounds/direction checks at every rotation. Actual held/fresh
+Display behavior and full locale/lifecycle regression CI remain pending.
