@@ -57,3 +57,14 @@ Also fixed 58-devices' known unbounded geocoder probe: it ignored a false
 30-second Wait and then blocked on Result. It now checks completion first
 and bounds the whole child process to 45 seconds using DevRun. A timeout
 still fails the probe; no synthetic status or weakened assertion is used.
+
+Final ci 40334251458: both Windows jobs have two aot3 failures. Framework
+header parsing and missing-file rejection pass; both app inspections fail
+because the single-process lifecycle.odex no longer exists after 61's
+startup comparison. That comparison moved oat directories away and back;
+a recreated destination can turn restoration into directory nesting.
+It now runs an identical APK copy at a separate APK-only location, leaves
+the compiled files untouched and requires ART's actual image-load marker
+to agree with every measured mode. The installed oatdump header check and
+package cleanup pass. Windows2022 e2e has the DNS failures above; 2025 e2e
+passes. This run remains red and the corrected combined tree needs full CI.
