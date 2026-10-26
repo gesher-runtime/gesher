@@ -27,6 +27,13 @@
 
 #include "internal.h"
 
+// Set by the bionic shim (compat/bionic/signal_bionic.cc) in processes that
+// run loaded Android code: it gets each signal another process sends first
+// and returns nonzero if it delivered it to the code's own handlers.
+extern "C" {
+int (*gesher_signal_hook)(int sig, int sender_pid) = nullptr;
+}
+
 namespace {
 
 struct Mailbox {
@@ -44,6 +51,12 @@ bool DefaultIgnores(int sig) {
 }
 
 void Deliver(int sig) {
+  // The bionic shim takes the signals its loaded code handles (exec2 track,
+  // ADR 0055): gesher_signal_hook below.
+  if (gesher_signal_hook != nullptr &&
+      gesher_signal_hook(sig, static_cast<int>(g_mailbox->senders[sig])) != 0) {
+    return;
+  }
   struct sigaction sa = {};
   gesher_sigaction_raw(sig, nullptr, &sa);
   if (sa.sa_handler == SIG_IGN) return;

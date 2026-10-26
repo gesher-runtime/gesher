@@ -4,7 +4,9 @@
 # launcher gesher-exec.exe uses it for its minimal shell. The launcher loads
 # an ELF executable with the ELF loader and the bionic shim as its main
 # program.
-add_library(gesher_exec_spawn STATIC ${CMAKE_CURRENT_LIST_DIR}/exec_spawn.cc)
+add_library(gesher_exec_spawn STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/exec_spawn.cc
+  ${CMAKE_CURRENT_LIST_DIR}/gesher_tools.cc)
 target_include_directories(gesher_exec_spawn PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
 
