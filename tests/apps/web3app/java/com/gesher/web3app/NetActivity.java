@@ -93,7 +93,7 @@ public class NetActivity extends Activity {
                 Web3.log("net PendingIntent request: " + (network.await(20, TimeUnit.SECONDS)
                         ? got.get() : "not sent"));
                 cm.releaseNetworkRequest(pi);
-                if (!pac) binding(cm);
+                if (!pac) binding(cm, nativeLibrary(getIntent()));
                 String host = pac ? "pac-proxied.test" : "web3-proxied.test";
                 Web3.log("net http://" + host + "/net: " + get("http://" + host + "/net"));
                 if (pac) {
@@ -119,7 +119,18 @@ public class NetActivity extends Activity {
         if (!success) throw new AssertionError(message);
     }
 
-    static void binding(ConnectivityManager cm) throws Exception {
+    static String nativeLibrary(Intent intent) {
+        String path = System.getenv("GESHER_WEB3_NATIVE");
+        // The existing device server inherits the first launcher's environment.
+        // Select an alternate ABI through the launch intent, not later env changes.
+        if (intent.getBooleanExtra("arm64Native", false)) {
+            path = new java.io.File(new java.io.File(path).getParentFile(),
+                    "web3_network_arm64.so").getPath();
+        }
+        return path;
+    }
+
+    static void binding(ConnectivityManager cm, String library) throws Exception {
         Network chosen = cm.getActiveNetwork();
         require(chosen != null, "no active network");
         int index = (int) (chosen.getNetworkHandle() >>> 32) - 100;
@@ -183,7 +194,7 @@ public class NetActivity extends Activity {
         catch (java.net.UnknownHostException expected) { rejected = true; }
         require(rejected, "DNS on a missing network fell back to another interface");
         Web3.log("net missing-network DNS refused fallback true");
-        System.load(System.getenv("GESHER_WEB3_NATIVE"));
+        System.load(library);
         String nativeResult = nativeNetworkCheck(chosen.getNetworkHandle(), local.getHostAddress(), port);
         Web3.log("net NDK: " + nativeResult);
         require(nativeResult.startsWith("PASS "), nativeResult);

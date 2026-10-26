@@ -182,14 +182,34 @@ public class A11yActivity extends Activity {
             getWindow().getDecorView().announceForAccessibility("Web3 announcement");
         }
         boolean done = mClicks > 0 && mTextSet && mToggled;
-        if (done || android.os.SystemClock.uptimeMillis() > mWaitUntil) {
-            Web3.log("a11y UI Automation: clicks " + mClicks + ", text set " + mTextSet
-                    + ", toggled " + mToggled + ", accessibility enabled "
-                    + (am != null && am.isEnabled()));
-            Web3.log("a11y done");
-            finish();
+        if (done) {
+            // Keep the window alive until the external client operates the web
+            // subtree too. Finishing after the three Android actions destroyed
+            // WebView2 before the client could find its page button.
+            mWeb.evaluateJavascript("document.title", title -> {
+                if (title.equals("\"pressed 2\"")) {
+                    Web3.log("a11y UI Automation web button: title " + title);
+                    finishUia(am);
+                } else if (android.os.SystemClock.uptimeMillis() > mWaitUntil) {
+                    finishUia(am);
+                } else {
+                    mHandler.postDelayed(this::check, 250);
+                }
+            });
+            return;
+        }
+        if (android.os.SystemClock.uptimeMillis() > mWaitUntil) {
+            finishUia(am);
             return;
         }
         mHandler.postDelayed(this::check, 250);
+    }
+
+    private void finishUia(AccessibilityManager am) {
+        Web3.log("a11y UI Automation: clicks " + mClicks + ", text set " + mTextSet
+                + ", toggled " + mToggled + ", accessibility enabled "
+                + (am != null && am.isEnabled()));
+        Web3.log("a11y done");
+        finish();
     }
 }

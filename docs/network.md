@@ -226,6 +226,27 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- ci 40338521188 at 010551b completed: package and both e2e jobs pass
+  (all nine apps, including required TIC-80; zero unexpected failures).
+  Both Windows test jobs report exactly three failures, all in web3 fixtures:
+  Activity completion destroyed the WebView before the external UIA client's
+  final web-button search; a later launcher environment could not change the
+  existing device server's native-library path, so its ARM case loaded x86_64.
+  All binary messaging assertions, device geolocation, native x86_64 device
+  execution and genuine x86_64/arm64 single-process networking pass.
+- The next run keeps the accessibility Activity alive until external UIA
+  invokes the page button and DOM title becomes `pressed 2` (after the
+  Android provider's first click). Device ARM selection uses a boolean
+  Intent extra, and device x86_64 identity is asserted too. Local Java
+  compilation and PowerShell parsing pass. No existing action/name/heading
+  assertions or time limits were relaxed.
+- Imported coordinator reliability patch 50f16a9 (source-only): bounded
+  geocoder completion without reading an incomplete Result, and atomic
+  SHA-pinned APK caching/official-mirror fallback with four own-byte
+  transport fixtures. All four local checks pass; full CI remains pending.
+  Additional shared files: ci.yml, tests/e2e/{apks.ps1,test-apks.ps1,
+  apps.json,run-e2e.ps1}, and tests/windows/tracks/58-devices.ps1.
+
 - Running final combined ci 40338521188 at
   `010551b16f54c6eb9040e77c18f2082e1abf1a2a`. Watch output is
   `C:/work/gesher-ci-review/web3-40338521188-watch.log`. Superseded
