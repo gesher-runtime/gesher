@@ -276,6 +276,55 @@ int SetProcessInterface(uint32_t ifindex) {
 
 uint32_t ProcessInterface() { return g_process_interface.load(); }
 
+int DnsServers(uint32_t ifindex, std::vector<Address>* servers, uint32_t* selected) {
+  if (!Startup()) return -1;
+  if (ifindex == 0) ifindex = ProcessInterface();
+  if (ifindex == 0) {
+    sockaddr_in destination{};
+    destination.sin_family = AF_INET;
+    destination.sin_addr.s_addr = htonl(0x08080808);
+    DWORD best = 0;
+    if (GetBestInterfaceEx(reinterpret_cast<sockaddr*>(&destination), &best) != NO_ERROR) {
+      return errno = ENONET, -1;
+    }
+    ifindex = best;
+  }
+  if (ValidateInterface(ifindex) != 0) return -1;
+  if (selected != nullptr) *selected = ifindex;
+  ULONG size = 16384;
+  std::vector<unsigned char> buffer;
+  ULONG status = ERROR_BUFFER_OVERFLOW;
+  for (int retry = 0; retry < 4 && status == ERROR_BUFFER_OVERFLOW; ++retry) {
+    buffer.resize(size);
+    status = GetAdaptersAddresses(AF_UNSPEC, 0, nullptr,
+        reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()), &size);
+  }
+  if (status != NO_ERROR) return errno = EIO, -1;
+  for (auto* adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()); adapter != nullptr;
+       adapter = adapter->Next) {
+    if (adapter->IfIndex != ifindex && adapter->Ipv6IfIndex != ifindex) continue;
+    for (auto* dns = adapter->FirstDnsServerAddress; dns != nullptr; dns = dns->Next) {
+      sockaddr_storage address{};
+      memcpy(&address, dns->Address.lpSockaddr, dns->Address.iSockaddrLength);
+      if (address.ss_family == AF_INET) {
+        reinterpret_cast<sockaddr_in*>(&address)->sin_port = htons(53);
+      } else if (address.ss_family == AF_INET6) {
+        auto* v6 = reinterpret_cast<sockaddr_in6*>(&address);
+        // Windows' legacy site-local placeholders are not DNS servers.
+        if (v6->sin6_addr.s6_addr[0] == 0xfe && v6->sin6_addr.s6_addr[1] == 0xc0) continue;
+        v6->sin6_port = htons(53);
+      } else {
+        continue;
+      }
+      Address converted;
+      FromWin(reinterpret_cast<sockaddr*>(&address), dns->Address.iSockaddrLength, &converted);
+      servers->push_back(converted);
+    }
+    break;
+  }
+  return servers->empty() ? (errno = ENONET, -1) : 0;
+}
+
 int SocketFamily(Socket s) {
   WSAPROTOCOL_INFOW info{};
   int length = sizeof(info);
