@@ -226,6 +226,14 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- Final coverage dispatch is ready after merging integration ac50d41
+  (verified aot2 code plus central net4 ownership documentation). It includes
+  device geolocation and both native ABIs in both process modes. Diagnostic
+  ci 40333695614 passed all builds; media preparation spent about 21 minutes
+  before completing successfully. With final coverage now ready, that run
+  will be superseded after the replacement dispatch is confirmed. Its runtime
+  result is incomplete, not a runtime failure or an assumed known flake.
+
 - Pending next final CI: build `web3_network_arm64.so` with the NDK arm64
   compiler and run its same seven-API regression in both single-process and
   device modes, asserting the compiled ABI in the native success message.

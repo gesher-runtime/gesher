@@ -347,6 +347,14 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Final coverage dispatch is ready after merging integration ac50d41
+  (verified aot2 code plus central net4 ownership documentation). It includes
+  device geolocation and both native ABIs in both process modes. Diagnostic
+  ci 40333695614 passed all builds; media preparation spent about 21 minutes
+  before completing successfully. With final coverage now ready, that run
+  will be superseded after the replacement dispatch is confirmed. Its runtime
+  result is incomplete, not a runtime failure or an assumed known flake.
+
 - Coverage audit: the original 54-web3 geolocation scenario ran only in one
   process, and the new NDK networking library was x86_64 only. The next final
   run adds the same exact geolocation checks in the device app process and
