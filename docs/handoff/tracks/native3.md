@@ -52,7 +52,19 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Not started. First read ci 40296960603's complete `INFO native2 ... ndk:*`
-lists (jobs 121487355022 and 121487354891), write an ownership inventory,
-then implement the common-shim and filesystem items above. Review logs are
-available locally in C:\work\gesher-ci-review; no artifacts were downloaded.
+First implementation (not CI-verified): libjnigraphics' six bitmap entry
+points over hwui's real ABitmap storage, with System V entries/JNIEnv
+conversion and a compression callback trampoline. Builds AOSP's existing
+apex/android_bitmap.cpp; patch 0620 handles the host's software-only Bitmap
+getHardwareBuffer path. Tests extend native2app in both modes/ABIs and add
+46-native3's framework dalvikvm Bitmap tests (direct pixel aliasing while
+locked, PNG callback/decode round trip, data space and error paths).
+Java test sources compile locally with JDK 21 against the saved framework
+classes; PowerShell parses; the patch applies to the pinned source. No
+AOSP build was run locally; all C++/NDK linking and runtime checks await CI.
+
+The complete ownership inventory is still outstanding. Read ci 40296960603's
+`INFO native2 ... ndk:*` lists (jobs 121487355022 and 121487354891), record
+each remaining symbol's implementation owner, then continue the common-shim
+and filesystem items above. Review logs are available locally in
+C:\work\gesher-ci-review; no artifacts were downloaded.

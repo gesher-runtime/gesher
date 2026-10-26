@@ -92,6 +92,8 @@ gesher_bp_cc(HWUI frameworks/base/libs/hwui libhwui
 configure_file(${_native}/libs/gui/include/gui/TraceUtils.h
   ${CMAKE_BINARY_DIR}/gen/hwui-gui/gui/TraceUtils.h COPYONLY)
 add_library(hwui STATIC ${HWUI_SRCS}
+  # ABitmap's real pixel storage and compression for the NDK bitmap bridge.
+  ${_hwui}/apex/android_bitmap.cpp
   ${CMAKE_SOURCE_DIR}/compat/hwui/SharedLib.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/graphics_runtime.cc
   # Fontations (Skia's Rust font backend) is not built: FreeType takes its calls.

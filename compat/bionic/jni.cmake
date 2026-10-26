@@ -26,6 +26,15 @@ target_compile_options(gesher_libandroid PRIVATE -Wall -Wextra -Werror -Wno-unus
   -Wno-deprecated-anon-enum-enum-conversion -Wno-deprecated-copy)
 target_link_libraries(dalvikvm PRIVATE gesher_libandroid)
 
+# Bitmap's NDK entry points over hwui's ABitmap storage, with the loaded
+# library's System V ABI and JNI proxy translated at the boundary.
+add_library(gesher_libjnigraphics OBJECT ${CMAKE_CURRENT_LIST_DIR}/libjnigraphics.cc)
+target_include_directories(gesher_libjnigraphics PRIVATE ${CMAKE_CURRENT_LIST_DIR}
+  ${AOSP_DIR}/frameworks/base/libs/hwui/apex/include)
+target_link_libraries(gesher_libjnigraphics PRIVATE gesher_bionic hwui nativehelper)
+target_compile_options(gesher_libjnigraphics PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(dalvikvm PRIVATE gesher_libjnigraphics)
+
 # gesher: libandroid's ANativeWindow functions and EGL/GLES (ANGLE) for the
 # app's .so files, and their Windows test (compat/bionic/ndk_graphics.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/ndk_graphics.cmake)
