@@ -62,6 +62,20 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+New independent fix, pending CI: media3 exposed an UnsatisfiedLinkError for
+android.os.Process.readProcLines in ReferenceQueueDaemon. The explicit
+Process table now registers a parser over gesher-base's real procfs, matching
+the pinned Android numeric-prefix/array/error behavior. Native3ProcessTest
+covers live Threads/VmRSS, 64-bit values, missing fields/files and invalid
+arguments. Java compiles and PowerShell parses locally; no AOSP build was
+run locally. Do not infer that this fixes camera pacing; media3 will retain
+its counters and original capture thresholds.
+
+Font/bitmap run 40344682373 at 1e881b5 is now green on attempt 2 after the
+permitted failed-job rerun of the known output tone timing check. Final
+personal log review is in progress; the newer rounding probe and process
+implementation are separate changes and do not inherit that full-run result.
+
 Current full CI: 40333703940 at
 f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
 integration b9f93f0. Watching with interval 120; no result is claimed yet.
