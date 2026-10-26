@@ -192,5 +192,46 @@ package and e2e:
       0540).
 - [x] e2e (8 F-Droid apps) and every other device check pass with app
       processes on nterp and the JIT (ci 40237467952 and later).
-- [ ] Background dexopt (`speed-profile`, app image) and the next launch
-      running from the app image, its compiled methods not interpreted.
+- [x] **Background dexopt** on the device (profman `--force-merge-and-analyze`,
+      dex2oat `speed-profile` with `--app-image-file`) once the device is idle,
+      and the next run uses the speed-profile code: the app's profiled methods
+      run their AOT code and none of them entered the interpreter (8 of 16
+      methods with AOT code, 0 interpreted, was 8 interpreted with verify;
+      ci 40244966896, 40263271836, both runners).
+- [ ] **The app image holding the app's classes** (not verified): until
+      ad9d360 the app images loaded but held only the `R` classes;
+      LifecycleActivity and LifecycleApplication were "unsuitable" because
+      dex2oat compiled the app against the primary boot image only (patch
+      0012's lone-location expansion to `<dir>/*` is runtime-only). ad9d360
+      passes `--boot-image=<dir>/boot.art:<dir>/*` (Dexopt and 61-aot2).
+
+### Handoff (2026-10-26, stopped by the coordinator)
+- Branch `wip/aot2`. Last verified: 7de81ac, ci 40263271836. Everything
+  passed on both runners, plus package and e2e, except the two app-image
+  checks of 61-aot2 ("lifecycle.apk from its app image",
+  "second launch on the device (app image)").
+- In progress when stopped: ci 40285423159 at ad9d360 (the `<dir>/*` fix). It
+  was not watched to the end. Check its 61-aot2 lines first.
+- Next steps: (1) if 40285423159 shows `gesher: app image loaded: ...: N
+  classes` with N >= 2 and compiled methods, tick the box above and the
+  roadmap. If not, read the `Gesher: ... cannot go into the image` lines that
+  61-aot2 prints (`-verbose:compiler`, patch 0540). (2) Decide whether to keep
+  `-AllClasses` (boot-image.yml). It was added when the cause was believed to
+  be a pruned boot image. It costs 6.6 MB of `.art`; without it, startup
+  under the interpreter was within noise. Try without it once the app image
+  works. (3) Roadmap boxes for this track are not ticked yet. (4) Merge
+  origin/phase4/integration again before the final run.
+- Pitfalls: `gh workflow run ci` now fails with HTTP 422 (another workflow
+  is also named ci); use `gh workflow run ci.yml`. Read the device's logs with
+  shared access (other processes append to them). Python string literals with
+  Windows paths corrupt YAML (`\v`, `\t`). The media check on windows-2022 and
+  the webapp pixel check on windows-2025 failed once each in earlier runs;
+  both passed in 40263271836.
+- scoped_flock (for native2, ADR 0057): patch 0540 implements
+  `LockedFile::Open`/`DupOf` on Windows (`#if defined(_WIN32) &&
+  defined(GESHER)`) with `LockFileEx` (exclusive, whole file,
+  `LOCKFILE_FAIL_IMMEDIATELY` when not blocking) on `_get_osfhandle(fd)`. The
+  lock is released when the handle closes; `ReleaseLock` is still a no-op on
+  Windows. These are mandatory locks: every user takes the lock before it
+  reads or writes. That covers what the profile saver and profman need, and
+  nothing else.
