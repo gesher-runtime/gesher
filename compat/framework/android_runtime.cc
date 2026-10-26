@@ -16,11 +16,18 @@
 
 #include <gesher/builtin_library.h>
 
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#include <string>
+#include <vector>
 
 #include <android_runtime/AndroidRuntime.h>
 #include <log/log.h>
@@ -200,19 +207,250 @@ static void Process_sendSignal(JNIEnv*, jclass, jint pid, jint sig) {
   if (pid > 0) kill(pid, sig);
 }
 
+// Match pinned android_util_Process.cpp: numeric line prefixes, zero missing
+// fields after a successful open, and preserve the output when open fails.
+static void Process_readProcLines(JNIEnv* env, jclass, jstring file,
+                                  jobjectArray requested, jlongArray output) {
+  if (file == nullptr || requested == nullptr || output == nullptr) {
+    jniThrowNullPointerException(env, nullptr);
+    return;
+  }
+  jsize count = env->GetArrayLength(requested);
+  if (count > env->GetArrayLength(output)) {
+    jniThrowException(env, "java/lang/IllegalArgumentException", "Array lengths differ");
+    return;
+  }
+  const char* path = env->GetStringUTFChars(file, nullptr);
+  if (path == nullptr) return;
+  std::string filename(path);
+  env->ReleaseStringUTFChars(file, path);
+  std::vector<std::string> fields;
+  for (jsize i = 0; i < count; ++i) {
+    auto field = static_cast<jstring>(env->GetObjectArrayElement(requested, i));
+    if (field == nullptr) {
+      jniThrowNullPointerException(env, "Element in reqFields");
+      return;
+    }
+    const char* value = env->GetStringUTFChars(field, nullptr);
+    if (value == nullptr) {
+      env->DeleteLocalRef(field);
+      return;
+    }
+    fields.emplace_back(value);
+    env->ReleaseStringUTFChars(field, value);
+    env->DeleteLocalRef(field);
+  }
+  jlong* values = env->GetLongArrayElements(output, nullptr);
+  if (values == nullptr) return;
+  int fd = open(filename.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    for (jsize i = 0; i < count; ++i) values[i] = 0;
+    char buffer[4096];
+    ssize_t length = read(fd, buffer, sizeof(buffer) - 1);
+    close(fd);
+    if (length < 0) length = 0;
+    buffer[length] = 0;
+    jsize found = 0;
+    for (char* line = buffer; *line != 0 && found < count;) {
+      char* end = strchr(line, '\n');
+      if (end != nullptr) *end = 0;
+      for (jsize i = 0; i < count; ++i) {
+        if (strncmp(line, fields[i].c_str(), fields[i].size()) != 0) continue;
+        char* number = line + fields[i].size();
+        while (*number == ' ' || *number == '\t') ++number;
+        char* last = number;
+        while (*last >= '0' && *last <= '9') ++last;
+        *last = 0;
+        values[i] = strtoll(number, nullptr, 10);
+        ++found;
+        break;
+      }
+      if (end == nullptr) break;
+      line = end + 1;
+    }
+  }
+  env->ReleaseLongArrayElements(output, values, 0);
+}
+
+enum {
+  PROC_TERM_MASK = 0xff,
+  PROC_COMBINE = 0x100,
+  PROC_PARENS = 0x200,
+  PROC_QUOTES = 0x400,
+  PROC_CHAR = 0x800,
+  PROC_OUT_STRING = 0x1000,
+  PROC_OUT_LONG = 0x2000,
+  PROC_OUT_FLOAT = 0x4000,
+};
+
+// android-16.0.0_r4's field format has one shared output index, including
+// fields written to more than one output array. A missing later field leaves
+// earlier results intact and returns false. The buffer has an extra sentinel.
+static jboolean Process_parseProcBuffer(JNIEnv* env, char* buffer, jint start,
+                                        jint limit, jintArray format,
+                                        jobjectArray strings, jlongArray longs,
+                                        jfloatArray floats) {
+  jsize count = env->GetArrayLength(format);
+  std::vector<jint> modes(count);
+  if (count > 0) env->GetIntArrayRegion(format, 0, count, modes.data());
+  if (env->ExceptionCheck()) return JNI_FALSE;
+  jsize string_count = strings == nullptr ? 0 : env->GetArrayLength(strings);
+  jsize long_count = longs == nullptr ? 0 : env->GetArrayLength(longs);
+  jsize float_count = floats == nullptr ? 0 : env->GetArrayLength(floats);
+  jsize dest = 0;
+  jint i = start;
+  for (jint mode : modes) {
+    if (i >= limit) return JNI_FALSE;
+    if ((mode & PROC_PARENS) != 0) {
+      ++i;
+    } else if ((mode & PROC_QUOTES) != 0) {
+      if (buffer[i] == '"')
+        ++i;
+      else
+        mode &= ~PROC_QUOTES;
+    }
+    jint field_start = i;
+    if (i >= limit) return JNI_FALSE;
+    jint end = -1;
+    if ((mode & (PROC_PARENS | PROC_QUOTES)) != 0) {
+      char close = (mode & PROC_PARENS) != 0 ? ')' : '"';
+      while (i < limit && buffer[i] != close) ++i;
+      end = i;
+      if (i < limit) ++i;
+    }
+    char term = static_cast<char>(mode & PROC_TERM_MASK);
+    while (i < limit && buffer[i] != term) ++i;
+    if (end < 0) end = i;
+    if (i < limit) {
+      ++i;
+      if ((mode & PROC_COMBINE) != 0) {
+        while (i < limit && buffer[i] == term) ++i;
+      }
+    }
+    if ((mode & (PROC_OUT_STRING | PROC_OUT_LONG | PROC_OUT_FLOAT)) == 0)
+      continue;
+    char saved = buffer[end];
+    buffer[end] = 0;
+    if ((mode & PROC_OUT_FLOAT) != 0 && dest < float_count) {
+      jfloat value = strtof(buffer + field_start, nullptr);
+      env->SetFloatArrayRegion(floats, dest, 1, &value);
+    }
+    if ((mode & PROC_OUT_LONG) != 0 && dest < long_count) {
+      jlong value = (mode & PROC_CHAR) != 0
+                        ? buffer[field_start]
+                        : strtoll(buffer + field_start, nullptr, 10);
+      env->SetLongArrayRegion(longs, dest, 1, &value);
+    }
+    if ((mode & PROC_OUT_STRING) != 0 && dest < string_count) {
+      for (jint j = field_start; j < end; ++j) {
+        if (!isprint(static_cast<unsigned char>(buffer[j]))) buffer[j] = '?';
+      }
+      jstring value = env->NewStringUTF(buffer + field_start);
+      if (value != nullptr) {
+        env->SetObjectArrayElement(strings, dest, value);
+        env->DeleteLocalRef(value);
+      }
+    }
+    buffer[end] = saved;
+    if (env->ExceptionCheck()) return JNI_FALSE;
+    ++dest;
+  }
+  return JNI_TRUE;
+}
+
+static jboolean Process_parseProcLine(JNIEnv* env, jclass, jbyteArray input,
+                                      jint start, jint end, jintArray format,
+                                      jobjectArray strings, jlongArray longs,
+                                      jfloatArray floats) {
+  if (input == nullptr || format == nullptr) {
+    jniThrowNullPointerException(env, nullptr);
+    return JNI_FALSE;
+  }
+  jsize length = env->GetArrayLength(input);
+  if (start < 0 || end < start || end > length) {
+    jniThrowException(env, "java/lang/ArrayIndexOutOfBoundsException",
+                      "Invalid proc buffer range");
+    return JNI_FALSE;
+  }
+  std::vector<char> buffer(static_cast<size_t>(end) + 1);
+  env->GetByteArrayRegion(input, 0, end,
+                          reinterpret_cast<jbyte*>(buffer.data()));
+  if (env->ExceptionCheck()) return JNI_FALSE;
+  jboolean result = Process_parseProcBuffer(env, buffer.data(), start, end,
+                                            format, strings, longs, floats);
+  // The pinned parser also writes sanitized string bytes back to the input.
+  if (!env->ExceptionCheck()) {
+    env->SetByteArrayRegion(
+        input, start, end - start,
+        reinterpret_cast<const jbyte*>(buffer.data() + start));
+  }
+  return result;
+}
+
+static jboolean Process_readProcFile(JNIEnv* env, jclass, jstring file,
+                                     jintArray format, jobjectArray strings,
+                                     jlongArray longs, jfloatArray floats) {
+  if (file == nullptr || format == nullptr) {
+    jniThrowNullPointerException(env, nullptr);
+    return JNI_FALSE;
+  }
+  const char* path = env->GetStringUTFChars(file, nullptr);
+  if (path == nullptr) return JNI_FALSE;
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  env->ReleaseStringUTFChars(file, path);
+  if (fd < 0) return JNI_FALSE;
+  constexpr size_t kMaxBytes = 64 << 20;
+  size_t capacity = 1024;
+  size_t length = 0;
+  std::vector<char> buffer(capacity + 1);
+  for (;;) {
+    ssize_t n = pread(fd, buffer.data() + length, capacity - length, length);
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0) {
+      close(fd);
+      return JNI_FALSE;
+    }
+    if (n == 0) break;
+    length += n;
+    if (length == capacity) {
+      if (capacity >= kMaxBytes) {
+        close(fd);
+        return JNI_FALSE;
+      }
+      capacity *= 2;
+      buffer.resize(capacity + 1);
+    }
+  }
+  close(fd);
+  buffer[length] = 0;
+  return Process_parseProcBuffer(env, buffer.data(), 0,
+                                 static_cast<jint>(length), format, strings,
+                                 longs, floats);
+}
+
 static const JNINativeMethod gProcessMethods[] = {
-    {"setThreadPriorityNative", "(II)V", GESHER_JNI(Process_setThreadPriorityNative)},
+    {"setThreadPriorityNative", "(II)V",
+     GESHER_JNI(Process_setThreadPriorityNative)},
     {"getThreadPriority", "(I)I", GESHER_JNI(Process_getThreadPriority)},
     {"setThreadGroup", "(II)V", GESHER_JNI(Process_setThreadGroup)},
     {"setThreadGroupAndCpuset", "(II)V", GESHER_JNI(Process_setThreadGroup)},
     {"setProcessGroup", "(II)V", GESHER_JNI(Process_setThreadGroup)},
     {"getProcessGroup", "(I)I", GESHER_JNI(Process_getProcessGroup)},
-    {"setArgV0Native", "(Ljava/lang/String;)V", GESHER_JNI(Process_setArgV0Native)},
+    {"setArgV0Native", "(Ljava/lang/String;)V",
+     GESHER_JNI(Process_setArgV0Native)},
     {"getElapsedCpuTime", "()J", GESHER_JNI(Process_getElapsedCpuTime)},
-    {"getUidForName", "(Ljava/lang/String;)I", GESHER_JNI(Process_getIdForName)},
-    {"getGidForName", "(Ljava/lang/String;)I", GESHER_JNI(Process_getIdForName)},
+    {"getUidForName", "(Ljava/lang/String;)I",
+     GESHER_JNI(Process_getIdForName)},
+    {"getGidForName", "(Ljava/lang/String;)I",
+     GESHER_JNI(Process_getIdForName)},
     {"sendSignal", "(II)V", GESHER_JNI(Process_sendSignal)},
     {"sendSignalQuiet", "(II)V", GESHER_JNI(Process_sendSignal)},
+    {"readProcLines", "(Ljava/lang/String;[Ljava/lang/String;[J)V",
+     GESHER_JNI(Process_readProcLines)},
+    {"readProcFile", "(Ljava/lang/String;[I[Ljava/lang/String;[J[F)Z",
+     GESHER_JNI(Process_readProcFile)},
+    {"parseProcLine", "([BII[I[Ljava/lang/String;[J[F)Z",
+     GESHER_JNI(Process_parseProcLine)},
 };
 
 // --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------

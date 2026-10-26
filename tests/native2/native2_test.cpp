@@ -32,6 +32,7 @@
 #include <fenv.h>
 #include <getopt.h>
 #include <limits.h>
+#include <locale.h>
 #include <math.h>
 #include <poll.h>
 #include <pthread.h>
@@ -686,8 +687,10 @@ std::vector<std::string> Symbols(const std::string& path) {
   return out;
 }
 
+#include "native3_unicode.inc"
+
 std::string Run(const std::string& dir, const std::string& symbols) {
-  std::vector<Part> parts = {Extras(dir), Dlopen(), Files(dir)};
+  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir)};
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {

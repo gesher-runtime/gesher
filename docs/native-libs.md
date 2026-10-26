@@ -702,9 +702,19 @@ see "After that" for what is left._
 
 native3 follows this verified track; its current work is described in
 [ADR 0062](decisions/0062-native3-ndk-coverage.md) and
-[the brief](handoff/tracks/native3.md). The first libjnigraphics/Bitmap
-bridge is implemented with tests but has not been compiled or verified in
-CI yet. Remaining public API coverage and filesystem limits are still open.
+[the brief](handoff/tracks/native3.md). The software Bitmap/Minikin font
+foundation is merged as f677944, fully verified at 1e881b5 in ci 40344682373
+attempt 2. Process's proc-line/file/parser follow-up is fully verified in
+ci 40367959106 at 644e7f8, with both zero-failure Windows summaries, package
+cleanup and required e2e logs personally read; newer Unicode source does not
+inherit that result. Remaining public API coverage and filesystem limits
+stay open. The Unicode bridge replaces Windows ICU/16-bit CRT classification/
+case mappings with pinned ICU4C. Full ci 40386670586 at 6f6ac6f verifies every
+code point and four invalid values for 14 plain/locale entries against the
+locked ICU4X beta2 reference, plus NDK boundaries/handles/errors in both
+ABIs/modes. Both zero-failure summaries, package and required e2e logs are
+personally read. wcwidth, collation and other wide/POSIX contracts remain
+open; see handoff/tracks/native3-unicode.md.
 
 Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 `docs/handoff/tracks/native2.md`. Branch `wip/native2`.
