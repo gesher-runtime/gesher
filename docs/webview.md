@@ -347,6 +347,14 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- ci 40318144247 at 722f86b completed: both package/e2e runners pass, both
+  test runners report exactly two failures (the external accessibility
+  checks). The TLS fixture checks pass on both. HOST_VIEW_ID now correctly
+  maps each HWND, but the trace shows override -> parent -> WM_GETOBJECT
+  looping. Reproduced with this native provider and a hard-coded Android
+  tree/STATIC child HWND, without ART or WebView2. The same fixture finishes
+  after setting `ProviderOptions_OverrideProvider` on hosted nodes. This
+  flag fix is pending CI; RuntimeId changes were tested and not retained.
 - Network continuation is being prepared after the running UIA/TLS SHA:
   real interface socket/process binding, per-interface DNS, bound HTTP and
   NLM captive state; local checks and the added runtime assertions are in

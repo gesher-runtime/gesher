@@ -292,6 +292,12 @@ class Element final : public IRawElementProviderSimple,
   HRESULT STDMETHODCALLTYPE get_ProviderOptions(ProviderOptions* out) override {
     if (out == nullptr) return E_POINTER;
     *out = ProviderOptions_ServerSideProvider;
+    // A provider returned by GetOverrideProviderForHwnd replaces the
+    // child's default HWND provider. Without this flag UIA repeatedly
+    // merges the host back into itself while navigating its descendants.
+    if (id_ != kRoot && Get().hosted != nullptr) {
+      *out = static_cast<ProviderOptions>(*out | ProviderOptions_OverrideProvider);
+    }
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE GetPatternProvider(PATTERNID pattern, IUnknown** out) override {
