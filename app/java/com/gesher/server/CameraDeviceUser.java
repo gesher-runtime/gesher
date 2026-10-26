@@ -59,6 +59,57 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         }
     }
 
+    /** Opt-in capture-thread timings; all fields belong to that thread. */
+    private static final class CaptureTiming {
+        static final int NEXT = 0, SETUP = 1, READ = 2, STARTED = 3;
+        static final int DELIVERY = 4, METADATA = 5, RESULT = 6, TAIL = 7;
+        static final String[] NAMES = {
+                "next", "setup", "read", "started", "delivery", "metadata", "result", "tail"};
+        final long[] total = new long[NAMES.length], maximum = new long[NAMES.length];
+        final long startNs = System.nanoTime();
+        long frames, readErrors, callbackErrors, deliveries, deliveryErrors, idleTailNs;
+        long lastNs;
+        int phase;
+
+        void add(int which, long nanos) {
+            total[which] += nanos;
+            maximum[which] = Math.max(maximum[which], nanos);
+        }
+
+        void begin(long beforeNext) {
+            long now = System.nanoTime();
+            add(NEXT, now - beforeNext);
+            ++frames;
+            phase = SETUP;
+            lastNs = now;
+        }
+
+        void advance(int nextPhase) {
+            long now = System.nanoTime();
+            add(phase, now - lastNs);
+            phase = nextPhase;
+            lastNs = now;
+        }
+
+        void end() {
+            add(phase, System.nanoTime() - lastNs);
+        }
+
+        void log(String cameraId) {
+            StringBuilder phases = new StringBuilder();
+            for (int i = 0; i < NAMES.length; ++i) {
+                if (i != 0) phases.append(", ");
+                phases.append(NAMES[i]).append(' ').append(total[i] / 1000)
+                        .append('/').append(maximum[i] / 1000);
+            }
+            CameraService.log("capture phase trace: camera " + cameraId + ", frames " + frames
+                    + ", read errors " + readErrors + ", callback errors " + callbackErrors
+                    + ", deliveries " + deliveries + ", delivery errors " + deliveryErrors
+                    + "; phase total/max us [" + phases + "]; idle tail us " + idleTailNs / 1000
+                    + "; loop start/end ns " + startNs + ".." + System.nanoTime());
+        }
+    }
+
     /** A submitted request, copied (the app may reuse its own). */
     private static final class Request {
         final int requestId;
@@ -418,9 +469,11 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     }
 
     private void captureLoop() {
+        CaptureTiming timing = "1".equals(System.getenv("GESHER_MEDIA_TRACE_RECORD"))
+                ? new CaptureTiming() : null;
         byte[] nv12 = null;
         Frame f;
-        while ((f = next()) != null) {
+        while ((f = next(timing)) != null) {
             List<Stream> targets = new ArrayList<>();
             synchronized (mLock) {
                 for (int streamId : f.request.streamIds) {
@@ -434,24 +487,29 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 } catch (WindowsCamera.OpenException e) {
                     CameraService.log(e.getMessage());
                     fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
+                    if (timing != null) { ++timing.readErrors; timing.end(); }
                     continue;
                 }
             }
             if (nv12 == null || nv12.length < mCapture.width * mCapture.height * 3 / 2) {
                 nv12 = new byte[mCapture.width * mCapture.height * 3 / 2];
             }
+            if (timing != null) timing.advance(CaptureTiming.READ);
             int hr = mCapture.read(nv12);
             long timestamp = SystemClock.elapsedRealtimeNanos();
+            if (timing != null) timing.advance(CaptureTiming.STARTED);
             if (hr < 0) {
                 CameraService.log(String.format("reading camera %s: HRESULT 0x%08X", mCameraId,
                         hr));
                 fail(f, ICameraDeviceCallbacks.ERROR_CAMERA_DEVICE);
+                if (timing != null) { ++timing.readErrors; timing.end(); }
                 continue;
             }
             CaptureResultExtras extras = extras(f.request.requestId, f.subsequenceId,
                     f.frameNumber);
             try {
                 mCallbacks.onCaptureStarted(extras, timestamp);
+                if (timing != null) timing.advance(CaptureTiming.DELIVERY);
                 for (int i = 0; i < f.request.streamIds.length; i++) {
                     Stream s;
                     synchronized (mLock) {
@@ -468,8 +526,11 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                                 s.size.getWidth(), s.size.getHeight(),
                                 quality != null ? quality & 0xff : 95);
                     }
-                    if (CameraFrames.deliver(surface, nv12, mCapture.width, mCapture.height,
-                            timestamp, jpeg) != CameraFrames.OK) {
+                    if (timing != null) ++timing.deliveries;
+                    int delivered = CameraFrames.deliver(surface, nv12, mCapture.width,
+                            mCapture.height, timestamp, jpeg);
+                    if (delivered != CameraFrames.OK) {
+                        if (timing != null) ++timing.deliveryErrors;
                         CameraService.log("frame " + f.frameNumber + ": stream "
                                 + f.request.streamIds[i] + " (format 0x"
                                 + Integer.toHexString(s.format) + ") took no frame"
@@ -480,14 +541,30 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                                         f.request.streamIds[i]));
                     }
                 }
+                if (timing != null) timing.advance(CaptureTiming.METADATA);
                 CameraMetadataNative result = result(f.request.settings, timestamp);
+                if (timing != null) timing.advance(CaptureTiming.RESULT);
                 mCallbacks.onResultReceived(CameraMetadataInfo.metadata(result), extras,
                         new PhysicalCaptureResultInfo[0]);
+                if (timing != null) timing.advance(CaptureTiming.TAIL);
             } catch (RemoteException | RuntimeException e) {
+                if (timing != null) ++timing.callbackErrors;
                 CameraService.log("frame " + f.frameNumber + " of camera " + mCameraId
                         + " failed: " + e);
+            } finally {
+                if (timing != null) timing.end();
             }
         }
+        if (timing != null) timing.log(mCameraId);
+    }
+
+    private Frame next(CaptureTiming timing) {
+        if (timing == null) return next();
+        long before = System.nanoTime();
+        Frame frame = next();
+        if (frame != null) timing.begin(before);
+        else timing.idleTailNs += System.nanoTime() - before;
+        return frame;
     }
 
     /** Opens the device at the largest size a target asks for. */
