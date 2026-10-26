@@ -1568,6 +1568,11 @@ const PropInfo* BIONIC_SYSV SystemPropertyFindNth(unsigned n) {
   }
   return Info(name);
 }
+// Android's device API level and the application's target SDK are distinct.
+int BIONIC_SYSV GetDeviceApiLevel() {
+  std::string value;
+  return GetProp("ro.build.version.sdk", &value) ? std::atoi(value.c_str()) : -1;
+}
 // android_get_application_target_sdk_version and friends (libc, API 24).
 int g_target_sdk = 36;
 int BIONIC_SYSV GetTargetSdk() { return g_target_sdk; }
@@ -2000,6 +2005,7 @@ void RegisterExtra(SymbolTable& t) {
   E("__system_property_serial", SystemPropertySerial);
   E("__system_property_area_serial", SystemPropertyAreaSerial);
   E("__system_property_find_nth", SystemPropertyFindNth);
+  E("android_get_device_api_level", GetDeviceApiLevel);
   E("android_get_application_target_sdk_version", GetTargetSdk);
   E("android_set_application_target_sdk_version", SetTargetSdk);
   E("android_get_LD_LIBRARY_PATH", GetLdLibraryPath);
