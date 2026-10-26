@@ -35,6 +35,7 @@ public final class Zygote {
     static native long nativeCreateEvent(String name);
     static native boolean nativeWaitEvent(long handle, int timeoutMs);
     static native boolean nativeSignalEvent(String name);
+    static native boolean nativeWaitForBinder(String device, int pid, int timeoutMs);
     static native String nativeCommandLine();
     static native String nativeExePath();
 
@@ -102,6 +103,9 @@ public final class Zygote {
     public static boolean signalEvent(String name) {
         return nativeSignalEvent(name);
     }
+    public static boolean waitForBinder(String device, int pid, int timeoutMs) {
+        return nativeWaitForBinder(device, pid, timeoutMs);
+    }
 
     /** The full path of this process's executable (dalvikvm.exe). */
     public static String exePath() {
@@ -113,13 +117,7 @@ public final class Zygote {
      * options (boot class path, image, interpreter), to start another dalvikvm the same way.
      */
     public static String vmCommandLine(String mainClass) {
-        String cmd = nativeCommandLine();
-        int at = cmd.indexOf(" " + mainClass + " ");
-        if (at < 0 && cmd.endsWith(" " + mainClass)) at = cmd.length() - mainClass.length() - 1;
-        if (at < 0) {
-            throw new IllegalStateException("no " + mainClass + " in this command line: " + cmd);
-        }
-        return cmd.substring(0, at);
+        return com.gesher.app.VmCommandLine.beforeMainClass(nativeCommandLine(), mainClass);
     }
 
     /** The command line of a dalvikvm like this one running {@code mainClass args}. */

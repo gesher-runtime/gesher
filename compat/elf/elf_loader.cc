@@ -146,6 +146,7 @@ struct Library {
   // e_entry + load bias (executables: _start), and whether PT_INTERP exists.
   void* entry = nullptr;
   bool has_interp = false;
+  bool text_relocations = false;
 
   // TLS (PT_TLS).
   TlsModule tls{};
@@ -580,6 +581,8 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       case DT_PLTRELSZ: pltrel_size = v; break;
       case DT_RELR: lib->relr = reinterpret_cast<const Elf64_Relr*>(p); break;
       case DT_RELRSZ: lib->relr_count = v / sizeof(Elf64_Relr); break;
+      case DT_TEXTREL: lib->text_relocations = true; break;
+      case DT_FLAGS: lib->text_relocations |= (v & DF_TEXTREL) != 0; break;
       case DT_INIT: lib->init_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_FINI: lib->fini_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_INIT_ARRAY: lib->init_array = reinterpret_cast<void (SYSV**)()>(p); break;
@@ -942,12 +945,24 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
   }
   ParseDynamic(lib, data);
 
+  size_t executable_tls_size = 0;
+  if (!aarch64 && options.main_executable && lib->has_interp && lib->tls.present) {
+    if (lib->text_relocations || !TlsAssignModule(&lib->tls, true)) {
+      Fail(error, std::string(name) + ": incompatible executable local-exec TLS layout or text relocations");
+      delete lib;
+      return nullptr;
+    }
+    executable_tls_size = static_cast<size_t>(-lib->tls.tp_offset);
+  }
   if (!aarch64) {
     // x86-64 only: %fs accesses become %gs ones before any of the object's code
     // runs (IFUNC resolvers run during relocation). Guest arm64 code reaches
     // TLS through TPIDR_EL0, which the translator supplies (ADR 0047).
-    if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, &lib->fs, error)) {
-      delete lib;
+    if (!RewriteFsAccesses(lib->name.c_str(), data, size, lib->load_bias, &lib->fs, error,
+                           executable_tls_size)) {
+      // A main TLS module is already registered; keep its backing object
+      // alive just as later relocation failures keep registered libraries.
+      if (lib->tls.module_id == 0) delete lib;
       return nullptr;
     }
   }
@@ -960,7 +975,10 @@ Library* LoadCommon(const char* name, const uint8_t* data, size_t size, std::str
         lib->tls.is_static = lib->tls.tp_offset >= 0;
         lib->tls.module_id = 0;  // dynamic TLS via the translator, not compat/elf
       } else {
-        TlsAssignModule(&lib->tls);
+        if (!TlsAssignModule(&lib->tls)) {
+          Fail(error, lib->name + ": invalid TLS alignment");
+          return nullptr;
+        }
       }
     }
     Loaded().push_back(lib);
@@ -1017,7 +1035,9 @@ bool ResolveNeeded(Library* lib, const LoadOptions& options, std::string* error)
     if (!found.empty()) {
       std::vector<uint8_t> buf;
       if (!ReadFile(found.c_str(), &buf, error)) return false;
-      Library* dep = LoadCommon(soname.c_str(), buf.data(), buf.size(), error, options);
+      LoadOptions dependency_options = options;
+      dependency_options.main_executable = false;
+      Library* dep = LoadCommon(soname.c_str(), buf.data(), buf.size(), error, dependency_options);
       if (dep == nullptr) return false;
       lib->dependencies.push_back(dep);
       continue;
