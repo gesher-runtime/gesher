@@ -273,6 +273,8 @@ int Copy(AppZStream* dest, AppZStream* source, F f) {
   s->last_out = src->last_out;
   if (s->host.opaque == src) s->host.opaque = s;
   int r = f(&s->host, &src->host);
+  // zlib's copy took the source's z_stream, opaque included: the copy's own.
+  if (s->host.opaque == src) s->host.opaque = s;
   if (r != Z_OK) {
     delete s;
     dest->state = nullptr;
