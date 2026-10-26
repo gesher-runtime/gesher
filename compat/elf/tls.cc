@@ -154,14 +154,20 @@ uintptr_t TlsCurrentThreadPointer() {
   return reinterpret_cast<uintptr_t>(TlsGetValue(g_slot_index));
 }
 
-void TlsAssignModule(TlsModule* m) {
-  if (!m->present || m->module_id != 0) return;
+bool TlsAssignModule(TlsModule* m, bool executable) {
+  if (!m->present) return true;
   std::lock_guard<std::mutex> lock(g_mutex);
-  m->module_id = g_next_module_id++;
   size_t align = m->align ? m->align : 1;
+  if ((align & (align - 1)) != 0) return false;
+  if (m->module_id != 0)
+    return !executable || (m->is_static && m->tp_offset == -static_cast<int64_t>(AlignUp(m->total_size, align)));
+  if (executable && (g_static_size != 0 || align > kPage ||
+                     m->total_size > kStaticReserve ||
+                     (reinterpret_cast<uintptr_t>(m->init_image) & (align - 1)) != 0))
+    return false;
   size_t new_size = AlignUp(g_static_size + m->total_size, align);
   // The thread pointer is page-aligned, so any alignment up to a page holds.
-  bool fits = new_size <= kStaticReserve && align <= kPage;
+  bool fits = new_size >= m->total_size && new_size <= kStaticReserve && align <= kPage;
   if (fits) {
     for (Arena* a : g_arenas) {
       if (!CommitBelow(a, new_size)) {
@@ -170,6 +176,8 @@ void TlsAssignModule(TlsModule* m) {
       }
     }
   }
+  if (executable && !fits) return false;
+  m->module_id = g_next_module_id++;
   if (fits) {
     m->is_static = true;
     m->tp_offset = -static_cast<int64_t>(new_size);
@@ -179,6 +187,7 @@ void TlsAssignModule(TlsModule* m) {
     m->tp_offset = 0;
   }
   g_modules.push_back(m);
+  return true;
 }
 
 void TlsPublishModule(TlsModule* m) {

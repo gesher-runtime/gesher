@@ -49,6 +49,9 @@ struct LoadOptions {
   // use names the symbol and aborts, instead of failing the load. TLS imports
   // must always resolve.
   bool stub_unresolved_functions = true;
+  // Only the initial dynamic executable, before its dependencies. Enables
+  // link-time local-exec TLS offsets when its PT_TLS layout is compatible.
+  bool main_executable = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its

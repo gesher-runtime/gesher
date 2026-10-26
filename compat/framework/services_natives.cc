@@ -202,6 +202,9 @@ static jboolean Zygote_signalEvent(JNIEnv* env, jclass, jstring name) {
 static jstring Zygote_commandLine(JNIEnv* env, jclass) {
     return ZygoteJavaString(env, gesher::zygote::CommandLine());
 }
+static jboolean Zygote_waitForBinder(JNIEnv* env, jclass, jstring device, jint pid, jint timeout) {
+    return gesher::zygote::WaitForBinder(ZygoteString(env, device), pid, timeout) ? JNI_TRUE : JNI_FALSE;
+}
 
 static jstring Zygote_exePath(JNIEnv* env, jclass) {
     return ZygoteJavaString(env, gesher::zygote::ExePath());
@@ -220,6 +223,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeCreateEvent", "(Ljava/lang/String;)J", GESHER_JNI(Zygote_createEvent)},
     {"nativeWaitEvent", "(JI)Z", GESHER_JNI(Zygote_waitEvent)},
     {"nativeSignalEvent", "(Ljava/lang/String;)Z", GESHER_JNI(Zygote_signalEvent)},
+    {"nativeWaitForBinder", "(Ljava/lang/String;II)Z", GESHER_JNI(Zygote_waitForBinder)},
     {"nativeCommandLine", "()Ljava/lang/String;", GESHER_JNI(Zygote_commandLine)},
     {"nativeExePath", "()Ljava/lang/String;", GESHER_JNI(Zygote_exePath)},
 };
