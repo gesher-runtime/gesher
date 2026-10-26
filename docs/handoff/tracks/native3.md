@@ -70,6 +70,16 @@ ICU4X wrapper, every code point/four invalid values and 33 targeted rows.
 No production-width verification is claimed yet. Preserve all existing
 Unicode classification/case digests and their separate provenance.
 
+Initial width reference ci 40403945297 at f8871df is fully green: all four
+jobs read, old 14 classification/case digests unchanged, 33 width rows and
+whole-code-point digest 566ac5b76f65a70b recorded separately, both binary128
+17-case/zero-failure logs read. Prepared production follows the pinned
+wcwidth decision order with the pinned ICU4C data, including signed wchar_t,
+Hangul/ignorable ordering, supplementary marks and special CJK widths. New
+host parity and both-ABI native2/APK checks cover widths, bounded strings,
+NUL termination and invalid inputs. Also import portable bounded TLS cleanup
+and only the verified media-preparation block. Runtime verification pending.
+
 Also retain the observed Windows ART global ThreadCpuNanoTime() unimplemented
 diagnostic as an open native/clock-consumer gap. Thread::GetCpuNanoTime()
 already has a supported thread-clock implementation; these are distinct.

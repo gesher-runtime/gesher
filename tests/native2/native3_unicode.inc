@@ -1,6 +1,7 @@
 // Plain and locale ABI entry points against the independent pinned ICU4X
 // oracle.
 #include "native3_unicode_samples.inc"
+#include "native3_unicode_width_samples.inc"
 
 Part Unicode() {
   Part p{"unicode"};
@@ -60,8 +61,29 @@ Part Unicode() {
           "invalid towctrans preserves input and sets EINVAL");
   p.Check(towctrans_l(0x345, bad, locale) == 0x345 && errno == EINVAL,
           "invalid locale towctrans preserves input and sets EINVAL");
+  using Width = int (*)(wchar_t);
+  auto width = reinterpret_cast<Width>(dlsym(RTLD_DEFAULT, "wcwidth"));
+  p.Check(width != nullptr, "wcwidth entry");
+  if (width != nullptr) {
+    for (const UnicodeWidthSample& sample : kUnicodeWidthSamples) {
+      p.Check(width(static_cast<wchar_t>(sample.codepoint)) == sample.width,
+              "wcwidth oracle code point " + std::to_string(sample.codepoint));
+    }
+  }
+  const wchar_t sequence[] = {L'A', 0x345, 0x115f, 0x1160, 0xad,
+                              0x1d167, 0x1f600, 0, L'B', 0};
+  p.Check(wcswidth(sequence, 3) == 3 && wcswidth(sequence, 6) == 4,
+          "wcswidth bounds and Hangul combining sequence");
+  p.Check(wcswidth(sequence, 10) == 6 && wcswidth(sequence, 0) == 0,
+          "wcswidth NUL termination and zero count");
+  const wchar_t control[] = {L'A', 0xa0, L'B', 0};
+  const wchar_t invalid[] = {static_cast<wchar_t>(0xffffffff), 0};
+  p.Check(wcswidth(control, 1) == 1 && wcswidth(control, 2) == -1 &&
+              wcswidth(invalid, 1) == -1,
+          "wcswidth rejects control and signed invalid characters");
   freelocale(locale);
   p.notes.push_back(
       "pinned ICU4X boundaries; plain/_l/wctype/wctrans and errors");
+  p.notes.push_back("pinned wcwidth/wcswidth: 33 boundaries, full-width strings and bounds");
   return p;
 }

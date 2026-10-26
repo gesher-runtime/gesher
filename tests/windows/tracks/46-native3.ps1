@@ -18,6 +18,10 @@ $n3UnicodeExpected = foreach ($property in $n3Unicode.properties.PSObject.Proper
 Check 'native3: every Unicode code point and invalid sentinel matches pinned bionic ICU4X, plain and locale forms' {
   N2Run "$n2Dir/native3_unicode_test.exe" @()
 } $n3UnicodeExpected
+$n3Width = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../../probes/native3/unicode/width-reference.json') -Raw | ConvertFrom-Json
+Check 'native3: wcwidth matches pinned bionic ICU4X for every code point and signed invalid input' {
+  N2Run "$n2Dir/native3_unicode_test.exe" @()
+} @("HOST_WIDTH wcwidth $($n3Width.wcwidth)")
 Check 'native3: Process proc natives use real procfs, full-width values and the Android field format' {
   N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3ProcessTest',

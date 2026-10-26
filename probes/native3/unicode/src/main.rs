@@ -1,8 +1,8 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The unmodified pinned wrapper also exports width/Hangul properties; this
-// reference exercises the wctype contract only.
+// Classification/case and the separate width mode share the unmodified
+// pinned wrapper and exactly locked ICU4X data.
 #[allow(dead_code)]
 mod bionic_icu4x;
 mod width;
