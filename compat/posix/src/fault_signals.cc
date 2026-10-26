@@ -77,6 +77,39 @@ bool Tracing() {
   static const bool on = getenv("GESHER_TRACE_SIGNALS") != nullptr;
   return on;
 }
+void TraceStackWords(const CONTEXT* context) {
+  // A system-DLL RIP does not identify its caller. Read a bounded snapshot
+  // without dereferencing suspect stack pointers or unwinding corrupted state.
+  // These are candidate code addresses in stack words, not proven frames.
+  DWORD64 words[64]{};
+  SIZE_T bytes = 0;
+  ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(context->Rsp),
+                    words, sizeof(words), &bytes);
+  DWORD64 printed[8]{};
+  size_t count = 0;
+  for (size_t index = 0; index < bytes / sizeof(words[0]) && count < 8; ++index) {
+    DWORD64 pc = words[index];
+    bool duplicate = false;
+    for (size_t previous = 0; previous < count; ++previous) duplicate |= printed[previous] == pc;
+    MEMORY_BASIC_INFORMATION memory{};
+    if (duplicate || VirtualQuery(reinterpret_cast<void*>(pc), &memory, sizeof(memory)) == 0 ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                           PAGE_EXECUTE_WRITECOPY)) == 0) continue;
+    printed[count++] = pc;
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = "?";
+    DWORD64 base = 0;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCSTR>(pc), &module) &&
+        GetModuleFileNameA(module, name, sizeof(name)) != 0) base = reinterpret_cast<DWORD64>(module);
+    const char* file = strrchr(name, '\\');
+    fprintf(stderr, "gesher-signal: stack word +0x%llx code %s+0x%llx (0x%llx)\n",
+            static_cast<unsigned long long>(index * sizeof(words[0])), file ? file + 1 : name,
+            static_cast<unsigned long long>(pc - base), static_cast<unsigned long long>(pc));
+  }
+}
 
 void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what, bool sentinel = false) {
   static const bool sentinel_on = getenv("GESHER_TRACE_INVALID_SENTINEL") != nullptr;
@@ -99,10 +132,14 @@ void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what, bool
           file != nullptr ? file + 1 : name, static_cast<unsigned long long>(c->Rip - base),
           static_cast<unsigned long long>(c->Rip), static_cast<unsigned long long>(c->Rsp), what);
   if (sentinel) {
+    const char* access = rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 0 ? "read" :
+                         rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 1 ? "write" :
+                         rec->NumberParameters >= 2 && rec->ExceptionInformation[0] == 8 ? "execute" : "unknown";
     fprintf(stderr,
-            "gesher-signal: rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx rbp=%016llx\n"
+            "gesher-signal: access=%s rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx rbp=%016llx\n"
             "gesher-signal: rsi=%016llx rdi=%016llx r8=%016llx r9=%016llx r10=%016llx r11=%016llx\n",
-            c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rbp, c->Rsi, c->Rdi, c->R8, c->R9, c->R10, c->R11);
+            access, c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rbp, c->Rsi, c->Rdi, c->R8, c->R9, c->R10, c->R11);
+    TraceStackWords(c);
     fflush(stderr);
   }
 }

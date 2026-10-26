@@ -201,6 +201,13 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
+CI40393019261 passes all exec3 Checks on both runners, including real installed
+pm/am list/path/start/broadcast/force-stop, and the whole Windows-2022 suite.
+Only a Windows-2025 device-mode post-steps crash remains in the combined run;
+all build/package/e2e jobs pass. Its preserved record locates RIP in ntdll, so
+the product caller and root cause remain open. Media's ownership/race fixes
+have independent comparison proof and are being combined with verified Native3.
+
 CI 40385411337 verifies the complete shared property and log suites in
 standalone ART and both APK modes, including scratch-root ProcessBuilder,
 explicit Java reports, serial/wait ABI, boot/persist and live logcat clear/follow.
@@ -260,12 +267,12 @@ and a green combined run remain open.
 - CI 40338806524 verifies idle pipe/read mailbox traps and native-handler
   Process.destroy/destroyForcibly on both runners. Native console interruption
   remains unverified; the changed combined tree still needs a green run.
-- A green combined run after pm's image resolution and the post-steps devices
+- A green combined run after the post-steps devices
   crashes; property permissions and Binder report/poke notifications. Properties,
   explicit callbacks and real logcat capture pass CI 40385411337 in all modes.
 - CI 40338806524 verifies the API29 NDK executable local-exec TLS program and
   ProcessBuilder invocation on both runners. The installed APK native-process
-  suite and broker startup fix also pass CI 40385411337; installed pm/am are
-  separate pending checks. Unsupported TLS layouts and opcode forms remain explicit.
+  suite and broker startup fix also pass CI 40385411337; installed pm/am pass
+  CI40393019261. Unsupported TLS layouts and opcode forms remain explicit.
 - General fork-before-exec and static executables remain unsupported for the
   architectural reasons reviewed above.

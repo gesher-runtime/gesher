@@ -1,6 +1,20 @@
 # Track brief: exec3
 
-Current continuation status (2026-10-26): the full track remains open. Completed
+Current continuation status (2026-10-26): full track remains open. Completed
+CI40393019261 at6a3289d passes EVERY exec3 Check on both runners, including the
+actual installed pm/am target/receiver/force-stop assertions. Windows-2022 whole
+suite0 failed;2025 only nine devices Checks from one device-process post-steps
+crash. All build/media/package/both e2e pass, zero unexpected/Puzzles generator
+exit0. Preserved record now shows ntdll.dll+0x9a7e7, fault address-1 and UTF16-
+like pointer-register values; no caller/cause inferred. A narrow safe stack-word/
+access-kind extension is prepared (eight candidate words/512bytes per captured
+record, eight records/96 published lines maximum); own-file fatal contracts pass
+with exit unchanged. Next combine verified integration117 and media ownership
+corrections; retain all real assertions and open umask/policy scope.
+
+Earlier continuation evidence:
+
+Completed
 CI 40385411337 at 80bf394 passes all build/media/package/both e2e jobs (zero
 unexpected), shell57, signals/tools/TLS/readiness, ten host assertions, complete
 properties/logcat in standalone and both APK modes, and the single-process APK.
