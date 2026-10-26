@@ -2,8 +2,9 @@
 # simultaneous task overrides. 51-windows3 supplies the real HWND/log helpers.
 if (-not (Get-Command W3Wait -ErrorAction SilentlyContinue)) { throw 'Windows4 requires the windows3 HWND/log helpers' }
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
-function W4NativeProbe([string] $Executable, [string] $Pattern, [string] $Description) {
+function W4NativeProbe([string] $Executable, [string] $Pattern, [string] $Description, [string[]] $Arguments = @()) {
   $start = [Diagnostics.ProcessStartInfo]::new("$Dir/$Executable")
+  foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
   $start.UseShellExecute = $false
   $start.CreateNoWindow = $true
   $start.RedirectStandardOutput = $true
@@ -30,6 +31,7 @@ W4NativeProbe windows4_ime_tsf_probe.exe '0 windows4 IME TSF check\(s\) failed' 
 $w4Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w4Apk = NoDrive "$Dir/winapp.apk"
+W4NativeProbe dalvikvm.exe 'Windows4ConfigurationTest all passed' 'actual Configuration merging keeps Hebrew/Arabic/English layout direction at all four task rotations' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4ConfigurationTest'))
 
 function W4Check([string] $Mode, [string] $What, $Problems) {
   if (@($Problems).Count -eq 0) { Write-Host "PASS  windows4: $What ($Mode)" }
