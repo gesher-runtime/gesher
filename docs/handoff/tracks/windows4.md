@@ -247,3 +247,16 @@ owner lease closes its original P1; review of 106dcdd is pending. The older
 ed94 CI has successful builds, media, package and both e2e jobs while its two
 Windows suites are still running. These are partial diagnostic results only;
 no new runtime or roadmap claim is accepted before final combined CI.
+
+Further independent review produced a second real COM regression: an
+OnTextChange callback replaced the editor while the old Update lease was
+active, and the old service's later destructor overwrote the new HWND
+association. The own native reproducer fails exactly that assertion on the
+pre-fix source. Services now retire their owner callbacks and restore their
+association before replacement, with final context/manager/DLL release still
+deferred until active leases return. Reentrant document work is held across
+retire/attach/update and posted once after the outer call, preserving the
+latest epoch/snapshot instead of losing consumed queued messages. The fixed
+real-COM fixture has zero failures locally under g++ Werror; CI is pending.
+Review also identified the separate normal-HWND-destruction owner cleanup
+path, which is being checked before final dispatch.

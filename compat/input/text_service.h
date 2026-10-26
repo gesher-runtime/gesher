@@ -9,6 +9,9 @@ class TextService {
   static std::shared_ptr<TextService> Attach(HWND window, TextDocument initial,
       TextStore::Emit emit, TextStore::Schedule schedule, HRESULT* result);
   ~TextService();
+  // Restore this owner's HWND association before another editor is attached.
+  // Active COM calls retain the disconnected context until their lease ends.
+  void Retire();
   void Update(TextDocument document);
   void Caret(const RECT& screen);
   void Pump();
@@ -28,7 +31,7 @@ class TextService {
   ITfKeystrokeMgr* keys_ = nullptr;
   TextStore* store_ = nullptr;
   TfClientId client_ = 0;
-  bool activated_ = false, associated_ = false;
+  bool activated_ = false, associated_ = false, retired_ = false;
   HMODULE test_service_ = nullptr;
 };
 }  // namespace gesher::input
