@@ -302,8 +302,12 @@ the microphone (looped, from its start each time recording starts);
   filtering, recorder lifecycle/limits, physical routes, persistent surfaces,
   legacy Camera, effects and hardware. services3 owns advanced Camera2
   service contracts. No broad roadmap completion box is ticked.
-- Next: merge the coordinator's verified oatdump integration f5ce6f64, run
-  the opt-in camera-phase diagnostics without changing collection, and retain
+- Current integration is merged: 634a273de497f042408cdb13df5b6e26bd030903,
+  a README-only update above verified oatdump integration f5ce6f64
+  (source 96ef687, ci 40368334642). The existing complete Process fix,
+  completed-only geocoder exit, Just Player pin, transport fixtures and
+  missing-class trace are retained. The boot startup criterion is unchanged.
+- Next: run the opt-in camera-phase diagnostics without changing collection, and retain
   the separate boot startup failure until its own evidence resolves it.
   No integration/main merge or release action here.
 
