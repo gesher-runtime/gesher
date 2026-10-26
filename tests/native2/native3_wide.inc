@@ -65,8 +65,20 @@ Part Wide() {
   errno = 0;
   p.Check(setlocale(LC_ALL, "unsupported") == nullptr && errno == ENOENT,
           "setlocale unsupported name");
-  p.Check(!std::strcmp(localeconv()->decimal_point, ".") && localeconv()->grouping[0] == 0,
+  static_assert(sizeof(struct lconv) == 96 && offsetof(struct lconv, int_frac_digits) == 80 &&
+                offsetof(struct lconv, int_n_sign_posn) == 93);
+  const struct lconv* conventions = localeconv();
+  p.Check(!std::strcmp(conventions->decimal_point, ".") && conventions->grouping[0] == 0 &&
+              conventions->mon_decimal_point[0] == 0 && conventions->negative_sign[0] == 0,
           "C locale lconv pointer layout");
+  const auto* indicators = reinterpret_cast<const unsigned char*>(&conventions->int_frac_digits);
+  for (size_t i = 0; i < 14; ++i) {
+    p.Check(indicators[i] == CHAR_MAX, "localeconv architecture-specific CHAR_MAX field " + std::to_string(i));
+  }
+  using Conventions = struct lconv* (*)();
+  auto dynamic_conventions = reinterpret_cast<Conventions>(dlsym(RTLD_DEFAULT, "localeconv"));
+  p.Check(dynamic_conventions && dynamic_conventions() == conventions,
+          "localeconv import and dynamic lookup use the same ABI adapter");
   using DecodeL = size_t (*)(wchar_t*, const char**, size_t, mbstate_t*, locale_t);
   using EncodeL = size_t (*)(char*, const wchar_t**, size_t, mbstate_t*, locale_t);
   auto decode_l = reinterpret_cast<DecodeL>(dlsym(RTLD_DEFAULT, "mbsrtowcs_l"));

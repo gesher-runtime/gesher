@@ -58,6 +58,13 @@ semantics. C collation compares code points; wcsxfrm follows bionic's
 wcslcpy alias, including termination of truncated output. Windows language
 collation is not consulted.
 
+The pinned NDK confirms signed char/wchar_t on x86-64 and unsigned char/
+wchar_t on arm64 (ci 40421702672). localeconv's fourteen CHAR_MAX indicators
+therefore need bytes 127 and 255 respectively. A narrow architecture-specific
+override retains the common pointer fields and returns the arm64 indicators;
+the common x86-64 entry retains its signed-char values. Both the import and
+dlsym path are tested, with exact 96-byte layout and indicator offsets.
+
 wcsftime converts its UTF-32 format through the shared conversions, calls
 the existing System V narrow strftime entry with Android's unchanged
 56-byte tm, and decodes UTF-32 output. Preserve the pinned FreeBSD wrapper's
