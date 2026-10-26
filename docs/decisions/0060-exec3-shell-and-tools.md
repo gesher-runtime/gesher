@@ -72,6 +72,10 @@ Polling currently bounds notification latency to approximately ten milliseconds.
 These ABI corrections pass native host checks; the ELF/ART tests remain pending.
 Caller-specific permissions and the device's report/poke notification path
 remain open.
+Property values now reject malformed UTF-8, including overlong encodings,
+surrogates and out-of-range code points; initial build/persistent values use
+the same validation. Native host assertions pass invalid sequences and a valid
+four-byte value. This correction is after active CI 40352529279.
 
 Java change callbacks retain the existing framework/libutils report path:
 [SystemProperties JNI](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/jni/android_os_SystemProperties.cpp)

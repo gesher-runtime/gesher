@@ -109,6 +109,10 @@ static int property_abi(const char* prefix) {
                  strcmp(value, legacy_error) == 0 && strncmp(old_name, long_ro, 31) == 0);
   struct property_enumeration enumerated = {name, 0, 0};
   PROPERTY_CHECK(foreach(property_enumerate, &enumerated) == 0 && enumerated.count > 0 && !enumerated.failed);
+  for (const char** invalid_utf8 = (const char*[]){"\xc0\x80", "\xe0\x80\xa0", "\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", NULL};
+       *invalid_utf8; ++invalid_utf8) PROPERTY_CHECK(__system_property_set(name, *invalid_utf8) != 0);
+  PROPERTY_CHECK(__system_property_set(name, "\xf0\x9f\x98\x80") == 0);
+  PROPERTY_CHECK(__system_property_get(name, value) == 4 && strcmp(value, "\xf0\x9f\x98\x80") == 0);
   printf("property-abi:PASS serial, zero timeout, stable ro pointers, long values and reentrant foreach\n");
   return 0;
 #undef PROPERTY_CHECK

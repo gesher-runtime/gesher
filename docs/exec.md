@@ -223,6 +223,9 @@ The packaged one-shot device path also now uses the same protocol handshake
 through RuntimeCommands and fails before servicemanager when it cannot connect;
 its old pipe-name polling loop had proceeded after timeout. This is after the
 active dispatch and needs package/e2e verification in the next combined run.
+Property UTF-8 validation is also prepared after the dispatch: local native
+assertions reject overlong/surrogate/out-of-range sequences and preserve a
+valid four-byte value. Initial build/persistent values follow the same policy.
 
 Continuation history and exact evidence:
 
