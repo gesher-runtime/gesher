@@ -54,6 +54,24 @@ media-provider queries/scanning/transcoding; CamcorderProfile lacks the
 MediaProfiles backend. Unsupported APIs outside these registered classes
 are not made available by this inventory.
 
+## NDK export baseline still open
+
+The machine-readable [native API coverage baseline](handoff/native-api-coverage.json)
+records 313 missing exports assigned to media3 from ci 40296960603, on both
+runners and both x86_64/arm64: 276 in libmediandk.so, 34 in libOpenSLES.so and
+3 in libaaudio.so. These are symbol-presence observations from that exact
+run, not semantics or a current-run reassessment.
+
+The AAudio entries are AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
+AAudio_setMMapPolicy. OpenSL's entries include unimplemented 3D/effect/device
+interface identifiers. libmediandk spans native codec/format/extractor/muxer,
+image/reader and protected-media APIs; Java MediaCodec/ImageReader tests do
+not establish those NDK exports. media4 inherits this unresolved export
+scope and coordinates image/reader implementation with the devices/surfaces
+owners. Preserve each baseline observation and add a new run, ABI and
+semantic case before claiming an entry implemented. Publishing a zero
+function or an interface-id constant alone does not complete its API.
+
 ## Evidence and ownership
 
 [38-media.ps1](../tests/windows/tracks/38-media.ps1) and

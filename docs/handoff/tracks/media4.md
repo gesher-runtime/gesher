@@ -18,6 +18,27 @@ and reflection stand-ins are described in
 [framework-natives.md](../../framework-natives.md); successful sample-app
 coverage does not prove the remainder of those native/API contracts.
 
+The machine-readable [native export baseline](../native-api-coverage.json)
+also assigns 313 unresolved media symbols to media3: 276 libmediandk.so,
+34 libOpenSLES.so and 3 libaaudio.so (ci 40296960603; both runners/ABIs).
+media4 inherits these open exports; coordinate central per-entry ownership
+updates with the coordinator, retain the recorded baseline, and add exact
+subsequent verification rather than overwriting missing with a broad claim.
+
+## NDK export contracts
+
+- Supply the native libmediandk codec, format, extractor, muxer, image/reader
+  and protected-media interfaces, coordinating image/reader ownership with
+  the devices/surfaces tracks. Java API round trips do not implement these
+  ELF exports. Reuse functional backends and test NDK lifecycle, data and
+  error behavior on both ABIs/runners; export resolution alone is insufficient.
+- Implement the 34 remaining OpenSL interface identifiers together with
+  their actual interface contracts or explicit documented unsupported
+  results. Do not claim effects or 3D audio by exporting constants alone.
+- Implement AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
+  AAudio_setMMapPolicy with correct Windows capability/policy semantics;
+  verify getter/setter/result behavior rather than adding generic zeros.
+
 ## Verified boundary
 
 media3 implements file-fed audio input, AAC/H.264/Opus encoding, MP4/WebM
