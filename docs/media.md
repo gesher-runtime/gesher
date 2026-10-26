@@ -220,6 +220,9 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — stopped by the coordinator, 2026-10-26
+- Running: ci 40299212277 at a1a0f43, with integration a98dda9. Verify the
+  new session round trip, NDK tones, all existing media checks and Just
+  Player's e2e; prior runs are recorded below for diagnosis.
 - Lead-engineer continuation: ci 40292991000 at fc99140 completed with
   4 failures on windows-2022 and 5 on windows-2025; package passed, e2e
   had 1 unexpected failure. The recording/mux/recorder/ImageReader paths
