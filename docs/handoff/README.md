@@ -149,6 +149,13 @@ closure, CI, PR description and installer verification gates remain in force.
 The coordinator alone merges integration/main and publishes the release;
 track agents keep their existing branch-only scope.
 
+Local-load follow-up (owner chat, 2026-10-26): C/C++ fixture/compiler
+checks also move to CI. Do not start local C/C++ compilations, even for
+small Gesher-only fixtures; use source inspection/edits and lightweight
+script checks locally. The coordinator and agents checked the process list
+after the report and found no remaining compiler process. The earlier
+local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
 ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
