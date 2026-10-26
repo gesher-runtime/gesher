@@ -154,7 +154,7 @@ or `gh api repos/gesher-runtime/gesher/actions/jobs/<job id>/logs`
 | exec3 | wip/exec3 (gesher-exec) | 31d348e | none (no CI run yet) | none | docs/exec.md exec3 section |
 | aot2 | wip/aot2 (gesher-stack) | 8551382 | 40263271836 at 7de81ac: all green except two 61-aot2 app-image checks (app classes not in the app image) | 40285423159 at ad9d360 (`--boot-image=<dir>/boot.art:<dir>/*`) | docs/compiled-code.md "Status and next steps (aot2 track, ADR 0054)" |
 | windows3 | wip/windows3 (gesher-lifecycle) | see branch | see its status section | see its status section | docs/lifecycle.md or docs/windows3.md |
-| native2 | wip/native2 (gesher-arm64) | see branch | see its status section | see its status section | docs/native-libs.md / docs/posix.md |
+| native2 | wip/native2 (gesher-arm64) | 4ac03c4 (code b6a7d88; contains integration 8ff9219) | 40263281040: ScopedFlock and GetDexCanonicalLocation gtests, exec-bit stat, zlib/SQLite/OpenSSL/libc++ (x86_64) and zlib/libpng/libjpeg-turbo/SQLite/OpenSSL (arm64) pass; x86_64 setjmp, arm64 open flags and every dalvikvm-based native2 check failed (all fixed in b6a7d88) | 40285714522 at b6a7d88 | end of docs/native-libs.md; docs/posix.md |
 
 Notes per track:
 - media3: VERIFIED earlier is only media-soft (merged). Encoders on the
@@ -172,6 +172,10 @@ Notes per track:
   front end (parser, expansions) but no executor, redirections or
   builtins; it does not link yet and exec.cmake still builds the old
   minimal shell. Everything else in its brief is not started.
+- native2: ART patches 0570/0571 (renumber if they collide). Not done:
+  SDL testautomation, BoringSSL tests, inotify for other processes' writes,
+  fcntl record locks (always granted). Fill the symbols the "native2
+  symbols" INFO lines list.
 - aot2: verified: profile-guided boot image (framework oat 9.0 MB, was 72.2
   MB; all oat 16.4 MB, was 96.3 MB), startup no worse, installer 88.9 MB
   (was 112.5 MB), install-time dexopt, JIT profiles, profman merge,
