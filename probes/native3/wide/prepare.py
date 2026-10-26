@@ -6,10 +6,12 @@ The function bodies remain verbatim. The Linux host supplies size_t, wchar_t
 different state and undefined out-of-range ctype table indexing.
 """
 import hashlib
+import base64
 import json
 from pathlib import Path
 import re
 import sys
+import urllib.request
 
 root = Path(__file__).resolve().parent
 manifest = json.loads((root / "sources.json").read_text())
@@ -17,6 +19,15 @@ for source, digest in manifest["sha256"].items():
     actual = hashlib.sha256((root / "upstream" / source).read_bytes()).hexdigest()
     if actual != digest:
         raise SystemExit(f"source digest mismatch: {source}")
+    if "--verify-upstream" in sys.argv[2:]:
+        if source.startswith("llvm-libc/"):
+            url = manifest["llvm_source"] + source.removeprefix("llvm-libc/")
+        else:
+            url = manifest["source"] + source
+        with urllib.request.urlopen(url + "?format=TEXT", timeout=30) as response:
+            upstream = base64.b64decode(response.read(), validate=True)
+        if hashlib.sha256(upstream).hexdigest() != digest:
+            raise SystemExit(f"pinned upstream provenance mismatch: {source}")
     print("PINNED_SOURCE", source, digest)
 
 files = [

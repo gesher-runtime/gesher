@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check source digests and prepare include-only adapters
-        run: python3 probes/native3/wide/prepare.py /tmp/wide-reference.cpp
+        run: python3 probes/native3/wide/prepare.py /tmp/wide-reference.cpp --verify-upstream
       - name: Compile and execute the pinned bionic reference
         run: |
           clang++ -std=c++20 -O2 -Wall -Wextra -Werror -Wno-unused-parameter \

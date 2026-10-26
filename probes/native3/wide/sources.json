@@ -16,7 +16,6 @@
     "bionic/wcstod.cpp": "b144284d2e0a7e40291ec2b977bed8a9266a379731b7751ef27caca1d729eb60",
     "include/ctype.h": "e24fff272b0834ab83b1f3f1f213375eebb136f05a5ed0efc063eedb24fbdeef",
     "llvm-libc/LICENSE": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
-    "llvm-libc/LICENSE.TXT": "242abee4e39bc0ae9fc586bf48771272c5acd5da2d59f9b85bfa37df7e03be36",
     "llvm-libc/src/wchar/wcscmp.cpp": "9479a08bf49141f90a45f9802350f38fb6687d1f450f8f0bf9eba940bb9c4ad0",
     "llvm-libc/src/wchar/wcsncmp.cpp": "0d248bcfbe21efda990b95a737b521991ebcc5a857354c6406aa55401b763143",
     "llvm-libc/src/wchar/wmemcmp.cpp": "242abee4e39bc0ae9fc586bf48771272c5acd5da2d59f9b85bfa37df7e03be36",
