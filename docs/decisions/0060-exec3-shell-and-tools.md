@@ -111,6 +111,9 @@ resume, receiver delivery and actual pid disappearance after force-stop.
 User 0 and the implemented intent options are explicit; unsupported commands
 fail. Java and native source checks pass, but this slice is absent from active
 CI 40352529279 and still requires real device evidence.
+The packaged one-shot startup reuses this helper's internal wait-binder entry
+point before starting servicemanager, so reaching the old pipe polling deadline
+cannot silently proceed. Its runtime/package verification is also pending.
 
 ## Fork and static-executable feasibility review
 

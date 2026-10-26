@@ -219,6 +219,10 @@ for actual package list/path, activity start, force-stop and asynchronous
 broadcast. The device test installs a second target APK, observes its resumed
 Activity pid and receiver output, then verifies force-stop removes that pid.
 Local Java/native/script checks pass; this behavior has no runtime CI proof yet.
+The packaged one-shot device path also now uses the same protocol handshake
+through RuntimeCommands and fails before servicemanager when it cannot connect;
+its old pipe-name polling loop had proceeded after timeout. This is after the
+active dispatch and needs package/e2e verification in the next combined run.
 
 Continuation history and exact evidence:
 
