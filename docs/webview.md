@@ -347,6 +347,10 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running ci 40324592794 at 5e90b96 (integration 8590f4b, UIA override
+  option, network bindings/captive state and seven NDK networking APIs).
+  Read both test logs, package/e2e results and all new native/network PASS
+  lines before marking any accessibility or native-network item verified.
 - ci 40318144247 at 722f86b completed: both package/e2e runners pass, both
   test runners report exactly two failures (the external accessibility
   checks). The TLS fixture checks pass on both. HOST_VIEW_ID now correctly
