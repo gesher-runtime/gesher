@@ -170,17 +170,43 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
 $geoScript = Join-Path $root 'devices-geocode.ps1'
 Set-Content -Path $geoScript -Encoding UTF8 -Value @'
+$ErrorActionPreference = 'Stop'
+# Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the
+# completed answer. This isolated probe owns only its current process.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class GesherGeocoderProbeExit {
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  static extern bool TerminateProcess(IntPtr process, uint code);
+  public static void Exit(uint code) {
+    if (!TerminateProcess(GetCurrentProcess(), code))
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
+"@
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 [Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
 try {
   $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @([Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)))
-  $null = $t.Wait(30000)
-  'status: ' + $t.Result.Status
-} catch { 'error: ' + $_.Exception.Message }
+  if (-not $t.Wait(30000)) { throw 'MapLocationFinder did not complete within 30 seconds' }
+  [Console]::Out.WriteLine('status: ' + $t.Result.Status)
+  [Console]::Out.Flush()
+  # WinRT/COM teardown can keep PowerShell alive after the genuine answer.
+  [GesherGeocoderProbeExit]::Exit(0)
+} catch {
+  [Console]::Out.WriteLine('error: ' + $_.Exception.Message)
+  [Console]::Out.Flush()
+  [GesherGeocoderProbeExit]::Exit(1)
+}
 '@
-$geo = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $geoScript 2>&1 | Out-String).Trim()
-if ($geo -match 'status: ([A-Za-z]+)') {
+# Bound activation/COM startup as well as the asynchronous wait. Reading Result
+# after a false Wait used to block until the entire test job timed out.
+$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript) 45).Trim()
+if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   Write-Host "PASS  devices: geocoder: Windows.Services.Maps without a map service key answers $($Matches[1]) (Geocoder stays absent: isPresent false, IOException)"
 } else {
   Write-Host "FAIL  devices: geocoder: Windows.Services.Maps did not answer: $geo"

@@ -67,15 +67,17 @@ try {
     $null = Run-ReleaseProcess 'install' $setup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-')
     $out = Run-ReleaseProcess 'hello' 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',"$app/gesher.ps1","$app/hello.dex",'gesher.Hello')
     if ($out -notmatch 'Hello from ART on Windows' -or $out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'Installed ART/boot-image Hello did not run' }
+    $out = Run-ReleaseProcess 'oatdump' "$app/oatdump.exe" @("--oat-file=$app/framework/x86_64/boot-framework.oat",'--header-only','--no-disassemble')
+    if ($out -notmatch 'speed-profile') { throw 'Installed oatdump did not inspect the installed speed-profile framework oat' }
     $out = Run-ReleaseProcess 'lifecycle-single' 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',"$app/gesher-app.ps1","$app/lifecycle.apk",'--single-process')
     if ($out -notmatch 'LifecycleActivity onResume' -or $out -notmatch 'gesher-app: done' -or
         $out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'Installed framework lifecycle did not run' }
     $out = Run-ReleaseProcess 'lifecycle-device' 'powershell.exe' @('-NoProfile','-ExecutionPolicy','Bypass','-File',"$app/gesher-app.ps1","$app/lifecycle.apk",'--headless')
     if ($out -notmatch 'LifecycleActivity onResume' -or $out -notmatch 'gesher-app: done') { throw 'Installed device lifecycle did not run' }
-    foreach ($required in 'gesher_arm64.dll','framework.jar','gesher-app.jar','libEGL.dll','libGLESv2.dll','licenses/NET-NOTICES.txt') {
+    foreach ($required in 'gesher_arm64.dll','framework.jar','gesher-app.jar','libEGL.dll','libGLESv2.dll','dex2oat.exe','profman.exe','oatdump.exe','licenses/NET-NOTICES.txt') {
       if (-not (Test-Path -LiteralPath (Join-Path $app $required))) { throw "Installed package omitted $required" }
     }
-    Write-Host "PASS release $Phase bytes: PE version 0.1.0, SHA256 $hash; installed ART/boot image, framework and device lifecycle"
+    Write-Host "PASS release $Phase bytes: PE version 0.1.0, SHA256 $hash; installed ART/boot image, oatdump, framework and device lifecycle"
   }
 } catch {
   $problems.Add($_.Exception.Message)

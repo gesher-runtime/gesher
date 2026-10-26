@@ -81,3 +81,13 @@ reproducers were blocked before writes, and it verified pre-execution pin
 transport, API/receipt/member authentication and safe tag/asset idempotence.
 It found no further actionable issue in that reviewed scope. This does not
 replace actual full CI or publication verification; neither has run yet.
+
+Current verified integration cd0b849 (including the AOT3 oatdump foundation)
+is merged into the release branch without conflicts. The release input,
+explicit PE versions, early installer upload and post-smoke receipt remain
+present. All 34 offline guards still pass after this integration update.
+Candidate/released-byte verification now also requires the installed compiler
+tools and runs installed oatdump against the installed speed-profile framework,
+matching the integrated package smoke. The full release branch CI is still
+held until the coordinator merges verified Web3 and the latest integration;
+the promotion workflow remains undispatched and nothing is tagged/published.

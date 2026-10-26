@@ -144,6 +144,9 @@ Each phase ends with something demonstrable, built and tested in CI.
       framework oat 9.1 MB versus 72.2 MB, whole image 74.7 MB versus 162.6 MB;
       startup passes the unchanged 10%/30 ms comparison on both runners
       (aot2, ci 40320549410; package install/run/uninstall and both e2e pass).
+- [x] Aot3 oatdump: inspect shipped framework/app oat code, actual app image
+      and missing-file errors with pinned ART; verify the installed tool.
+      Full ci 40368334642 at 96ef687, both Windows runners and package/e2e.
 - [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
       dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
@@ -450,6 +453,16 @@ needs: [framework-build.md](framework-build.md).
 - [ ] Native3: remaining public NDK APIs/platform handles, fcntl record locks,
       cross-process inotify and the POSIX/ABI limits in
       [its brief](handoff/tracks/native3.md) (ADR 0062 reserved).
+- [x] libjnigraphics software Bitmap interoperability: real locked pixel
+      storage, data space, native writes visible in Java, PNG compression
+      callbacks/decode and error paths; x86_64/arm64 through dalvikvm and
+      APKs in both modes (native3, ci 40305973210, both runners). Hardware
+      Bitmap/HardwareBuffer rendering and remaining NDK coverage stay open.
+- [x] NDK AFontMatcher/AFont/ASystemFontIterator over the real Minikin map:
+      readable font files, UTF-16 mixed-script runs, style/variable-axis values
+      and owned metadata lifetime; x86_64/arm64 through framework dalvikvm
+      and APKs in both modes (native3 foundation, ci 40344682373 attempt 2,
+      both Windows runners). Standalone native bootstrap/font updates stay open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

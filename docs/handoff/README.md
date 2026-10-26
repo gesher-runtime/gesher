@@ -151,7 +151,9 @@ track agents keep their existing branch-only scope.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0072; earlier reservation notes below are historical.
+ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
+certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
+notes below are historical.
 
 The handover tables below are historical. windows3 is now merged as 80cb28b:
 code verified at a15ade4 (ci 40285476400), branch head 063b051 adds docs only.
@@ -216,8 +218,13 @@ attached per entry. It records symbol presence, not complete API semantics.
 Property APIs belong to exec3; Android socket/process binding, resolver and
 per-network DNS APIs belong to web3, with remaining libc resolver/socket
 contracts assigned to net4. The four baseline bitmap exports are
-verified in native3 ci 40305973210, but that branch's remaining scope is
-still open and its code is not merged yet.
+verified in native3 ci 40305973210. The software Bitmap and Minikin font
+foundation is now merged as f677944, verified together in ci 40344682373
+at 1e881b5, attempt 2. Attempt 1 failed only the known output-tone timing
+check; the failed-job retry passed. The frozen head 8b511a8 adds docs only,
+and the merged tree differs from the verified SHA only in docs, so no new
+integration run is needed for this merge. Remaining NDK/POSIX scope stays
+open on native3; this is not a complete API-coverage claim.
 
 | Track | Result read / change | New verification |
 |---|---|---|
@@ -225,18 +232,22 @@ still open and its code is not merged yet.
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
-| web3 | ci 40325234847: routing/DNS/source/process checks pass both; UIA reads the tree and edits/toggles controls. Fixed exact button casing, Chromium131 heading fallback and absolute NDK load path; added typed ArrayBuffer checks. Current integration/aot2 merged. | ci 40333695614 at 455e9fc; full result pending. Legacy resolver ABI/socket remainder assigned to net4/ADR 0070. |
-| media3 | ci 40318189310: all 30 media3 checks pass each runner, 2025/package/both e2e pass. Fixed finite output-tone prefill and adjacent WebM clip separation; aot2 merged. Current package cleanup and both actual Just Player/TIC-80 e2e results pass. | ci 40330465222 at d1bbc02; both full Windows test jobs pending; remainder belongs to media4/ADR 0064. |
-| exec3 | ci 40320290754: package/both e2e pass. 2025 real ART shell/NDK signal/tool checks pass; property test bootstrap fails before assertions, fixed for the next run. 2022 still running. Later shell scope/trap and device checks have only local verification. | ci 40320290754 at 1189dc4; incomplete/red, aot2 not yet included. |
-| native3 | Software bitmap stage green in ci 40305973210. Fonts CI40328565752 failed a wrong include root; early compile in 40332803102 found upstream header warnings. Fixed external include roots while retaining -Werror; aot2/current integration merged. Remaining NDK/POSIX scope open, branch unmerged. | ci 40333703940 at f24223c; font build/runtime unverified. |
-| aot3 | Added pinned ART oatdump/disassembler targets, installer entry/installed-copy check and independent framework/app oat and app-image checks. All remaining compilation contracts stay open. | ci 40334251458 at 47224d8; first compile/runtime verification pending. |
+| web3 | Agent read ci 40376044459 at 939ec3: all 14 web3 checks pass each runner; 2025 has zero failures, 2022 has only the BOOT profile-vs-speed JIT failure (452/404 ms). Package/both actual e2e and bounded TLS cleanup pass. Earlier 40364697280 timed out in 2025 TLS cleanup and has no zero summary there. | Not mergeable. Root owns repeated boot startup diagnosis; no timing waiver. Remaining WebView contracts belong to web4/ADR 0072 and resolver/socket contracts to net4/ADR 0070. |
+| media3 | Agent read ci 40377453079 at ad00461: both Windows suites have exactly one failure, device Camera2-to-recorder frames (20/27 versus unchanged 30+ in 2 s); package/both ten-app e2e pass. Native timing distinguishes active read/delivery from a demonstrated terminal callback/client-lock cycle. | ci 40386129131 at 6293a20 tests serial oneway callbacks, capture-handle ownership, onClosed ordering and separate native phase timings; pending. No FPS/crash causal claim. Remaining media contracts stay on media4/ADR 0064. |
+| exec3 | Agent read ci 40372171824: builds/package/both e2e pass; three property fixture namespace failures each and 2022 device exits after expected steps with SIGSEGV address -1. Namespace/boot-root regressions are corrected; actual native fault cause remains open. | ci 40385411337 at 80bf394 includes bounded ffmpeg preparation and narrow pre-handler fault diagnostics. Superseded 40382268730 spent 16 minutes in unbounded media preparation without Windows results, then was cancelled. |
+| native3 foundation | Merged as f677944; all four dalvikvm and four APK scoped PASS lines per runner, both zero-failure summaries, package cleanup and both required Puzzles/TIC-80 e2e logs personally read. Remaining scope continues on wip/native3. | ci 40344682373 at 1e881b5, attempt 2; frozen head 8b511a8 adds docs only. |
+| native3 continuation | Process follow-up fully green in ci 40367959106 at 644e7f8: personally read all jobs, five native3/four APK PASS lines per runner, both zero-failure summaries, package cleanup and both required e2e logs. It predates the oatdump integration. New Unicode boundaries pass both ABIs/modes, but 40381742392 stops on an omitted sparse-checkout reference fixture. | ci 40386670586 at 6f6ac6f includes current integration and the reference checkout fix; full Unicode parity still pending. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
+| aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |
+| aot3 continuation | ci 40375696804 validates/copies matching DM and inspects selected compiled code on both runners, but has two fixture/constructor failures each. The new source corrects forced interpretation, closes StrictJarFile's failed-open descriptor leak (framework patch 0650), and learns real startup methods using ART boot/AOT profiling. | ci 40385898668 at 9831182; pending. Timing thresholds unchanged. Shared-library contexts and secondary dex remain open. |
+| windows4 | Agent continues Application-context display/foreground task snapshots, real InputPane COM callbacks and TSF reconversion. First display run 40377891527 has upstream asm fetch HTTP502 and a real display cache nonce failure in both e2e Signal Generator runs; no waiver. | Subsequent COM/TSF/legacy-resize source has only own local fixtures so far; real display cache correction and combined CI remain required. |
+| release1 | Exact 0.1.0 installer metadata/receipts and CI-only byte promotion prepared. Independent review reproduced/fixed mutable local receipt trust and candidate/publisher attempt drift; all 34 offline tests pass at reviewed 8073a31. | No tag/release/publication. Full branch installer/release CI waits for verified integration/web3; all final gap gates still apply. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
 downloaded). No roadmap box was ticked for the new, unverified fixes.
 
-Current open-track runs include native2/surfaces, but must include the new
-aot2 integration before final verification. The WebView capture fix is now
+All open tracks must include the latest integration runtime before final
+verification. The WebView capture fix is now
 merged through aot2 and was also cherry-picked into web3. Do not merge
 any red or partially inspected run. The final PR/main merge and release must
 wait for gap closure and full verification; the owner's later explicit

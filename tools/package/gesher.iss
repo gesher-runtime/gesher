@@ -63,6 +63,8 @@ Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; install and, with their JIT profiles, in the background.
 Source: "{#BuildDir}\dex2oat.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\profman.exe"; DestDir: "{app}"; Flags: ignoreversion
+; oatdump independently inspects this runtime's oat/vdex/app images (ADR 0065).
+Source: "{#BuildDir}\oatdump.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; Gesher Camera (ADR 0051): ACTION_IMAGE_CAPTURE's app, installed by the Gesher device when the PC has a camera.
 Source: "{#BuildDir}\gesher-camera.apk"; DestDir: "{app}"; Flags: ignoreversion

@@ -34,7 +34,12 @@ jobs:
           ccache-key: runtime
 
       - name: Build
-        run: ninja -C out
+        run: |
+          ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
+          # Compile the new bridge before the full runtime to expose its
+          # header/ABI errors without waiting for every AOSP object.
+          ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
+          ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
@@ -272,10 +277,13 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe',
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
                       'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
+          $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $oatdumpOutput -notmatch 'speed-profile') { throw "Installed oatdump could not inspect the installed framework: $oatdumpOutput" }
+          'PASS  installer: the installed oatdump inspects the installed speed-profile framework oat' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The system fonts (docs/fonts.md): fonts.xml, every font it names, their licenses.
           foreach ($f in 'fonts\fonts.xml', 'licenses\FONTS-NOTICES.txt') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
@@ -581,9 +589,22 @@ jobs:
           name: gesher-setup
           path: installer
 
+      - name: Locate APK cache on Gesher's drive
+        id: apk-cache
+        shell: pwsh
+        run: '"path=$(Join-Path $env:TEMP gesher-e2e)" >> $env:GITHUB_OUTPUT'
+
+      # run-e2e checks every SHA-256 again, including cache hits.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.apk-cache.outputs.path }}
+          key: e2e-apks-v1-${{ hashFiles('tests/e2e/apps.json') }}
+
       - name: Run real apps
         shell: pwsh
         run: |
+          pwsh -NoProfile -File tests/e2e/test-apks.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
           exit $LASTEXITCODE
