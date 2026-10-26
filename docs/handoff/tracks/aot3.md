@@ -37,6 +37,11 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Initial aot3-probes 40409910036 at 7bc3fd2 validates/downloads the selected
+artifacts but both collectors fail before startup: the standalone root
+omitted build.prop. Add the suite's framework-res/build.prop/font setup;
+this failure says nothing about profile saving or boot performance.
+
 A separate aot3-probes workflow is prepared to run the same real collector
 quickly on both Windows versions using explicitly selected completed full
 CI build artifacts (exact source SHA and all supplying build jobs checked).

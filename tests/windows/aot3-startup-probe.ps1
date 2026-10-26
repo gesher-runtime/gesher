@@ -23,12 +23,22 @@ foreach ($source in @(
 }
 
 $root = Join-Path $env:RUNNER_TEMP 'aot3-startup-probe'
-foreach ($dirName in 'system/framework/x86_64', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
+foreach ($dirName in 'system/framework/x86_64', 'system/fonts', 'system/etc', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
   New-Item -ItemType Directory -Force (Join-Path $root $dirName) | Out-Null
 }
 Copy-Item "$Dir/icudt*l.dat" (Join-Path $root 'i18n/etc/icu')
 if (Test-Path "$Dir/tzdata") { Copy-Item -Recurse -Force "$Dir/tzdata/*" (Join-Path $root 'tzdata') }
 Copy-Item "$Dir/framework/x86_64/*" (Join-Path $root 'system/framework/x86_64')
+Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework')
+Copy-Item "$Dir/build.prop" (Join-Path $root 'system')
+Copy-Item "$Dir/fonts/*.ttf" (Join-Path $root 'system/fonts')
+Copy-Item "$Dir/fonts/fonts.xml" (Join-Path $root 'system/etc/fonts.xml')
+Copy-Item "$Dir/fonts/windows-fonts.xml" (Join-Path $root 'system/etc/windows-fonts.xml')
+$fontLink = Join-Path $root 'windows-fonts'
+if (-not (Test-Path $fontLink)) {
+  New-Item -ItemType Junction -Path $fontLink -Target (Join-Path $env:WINDIR 'Fonts') | Out-Null
+}
+$env:GESHER_WINDOWS_FONTS = NoDrive $fontLink
 $env:ANDROID_ROOT = NoDrive "$root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$root/art"
 $env:ANDROID_DATA = NoDrive "$root/data"
