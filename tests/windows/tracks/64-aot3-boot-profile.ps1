@@ -9,14 +9,16 @@ try {
     New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
     [IO.File]::WriteAllBytes($path, [byte[]]::new(0))
   }
-  $learnEnv = @{ ANDROID_DATA = (NoDrive $learnData); GESHER_APP_EXECUTION = 'jit' }
+  $learnEnv = @{ ANDROID_DATA = (NoDrive $learnData); GESHER_APP_EXECUTION = 'jit'; GESHER_LOG_EXECUTION = '1' }
   $learnArgs = @("-Xbootclasspath:$aotBcpApp", $aotImage, '-Xusejit:true', '-Xjitsaveprofilinginfo',
     '-Xps-profile-boot-class-path', '-Xps-profile-aot-code', '-Xps-min-first-save-ms:0',
     '-Xps-min-methods-to-save:1', '-Xps-min-classes-to-save:1',
     'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk"))
   $learn = Aot2Run "$Dir/dalvikvm.exe" $learnArgs $learnEnv 300
+  $learnSize = Aot2Size $learnCur
+  Write-Host "INFO  aot3: boot collector exit $($learn.Exit), profile $learnSize bytes, saved-at-exit marker $($learn.Out.Contains('gesher: JIT profile saved at exit'))"
   if ($learn.Exit -ne 0 -or -not $learn.Out.Contains('gesher-app: done') -or
-      -not $learn.Out.Contains('gesher: JIT profile saved at exit') -or (Aot2Size $learnCur) -eq 0) {
+      -not $learn.Out.Contains('gesher: JIT profile saved at exit') -or $learnSize -eq 0) {
     throw "ART boot startup profile was not saved (exit $($learn.Exit)): $($learn.Out)"
   }
   $dumpArgs = @('--dump-classes-and-methods', "--profile-file=$(NoDrive $learnCur)")

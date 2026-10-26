@@ -37,6 +37,18 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+ci 40403284714 at e928eec: all 11 cloud checks and four oatdump checks
+pass on both runners; both original boot performance gates pass (JIT
+411/430 ms on 2022, 469/478 ms on 2025). All other jobs pass/skip, actual
+installed oatdump/input/uninstall and both nine-app e2e logs read with zero
+unexpected failures. Each Windows suite still has one collector failure:
+ART boot startup profile was not saved (exit 0). The fixture demanded the
+saved-at-exit log marker without setting GESHER_LOG_EXECUTION, which gates
+that marker in ART patch 0540. Set the flag and print actual file size/marker
+before the assertion; do not infer an empty profile from that combined
+failure. No timing threshold or runtime change. Combined CI remains required.
+Latest integration f520fd1 includes the binding CI-only local compiler rule.
+
 Combined ci 40403284714 at e928eec is pending. It includes integration
 117629e, the supported startup-collector arguments, portable bounded TLS
 fixture shutdown and only media3's bounded/canonical-mirror preparation
