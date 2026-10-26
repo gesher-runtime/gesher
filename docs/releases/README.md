@@ -24,7 +24,10 @@ asset. Local artifact downloads are not part of this procedure.
    Do not promote a partial rerun: all required jobs must belong to the same
    complete attempt. The post-smoke package receipt must exist.
 3. Review `docs/releases/0.1.0.md` against the final commit. Its source SHA and
-   CI run placeholders are filled from the validated inputs. Dispatch the
+   CI run placeholders are filled from the validated inputs. Check the public
+   README's capabilities, Windows scope and remaining limits against the same
+   evidence; retain its pending-publication wording until publication and
+   released-byte verification actually succeed. Dispatch the
    preparation and candidate-install dry run at that same main SHA:
 
    ```powershell
@@ -65,6 +68,10 @@ asset. Local artifact downloads are not part of this procedure.
    unexpected failures. Record the release URL, source SHA, source CI run,
    publication run and installer SHA-256 in the final report. Publication is
    not considered verified until these jobs pass.
+
+   Only after that success, update the README with the actual release/asset
+   link, installer digest and source CI references. Never describe a candidate
+   or an uploaded draft as a published, verified 0.1.0 release.
 
 Evidence is uploaded by the workflow even after a failure. Read logs through
 `gh run view --log` or the jobs log API; do not download artifacts locally.

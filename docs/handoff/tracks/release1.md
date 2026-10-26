@@ -48,6 +48,17 @@ conflicts at f47a22f. The release-version branch CI remains held for verified
 Web3 and the coordinator's combined source; this merge supplies no new release
 verification and does not authorize this agent to publish.
 
+Explicit release documentation gap: the repository README still described phase
+1 with no Java or APK execution. The coordinator authorized this agent on
+2026-10-27 to update that shared file in the release worktree. Its English
+replacement now describes actual ART/app/installer capabilities and scoped
+limitations, while marking 0.1.0 as not yet published or release-verified.
+Before main/release completion the coordinator must reconcile this README with
+the final combined evidence, remove only pending items that actually pass,
+and add the actual released asset URL, digest and source/CI references after
+publication and released-byte verification. That final evidence update remains
+an open gate; preparing the text does not close it or publish anything.
+
 Preparation is owned by the web3 agent in this separate worktree. The root
 coordinator alone merges integration/main, creates tags and publishes; do not
 interpret the broad completion gates above as authorization for this agent to
