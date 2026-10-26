@@ -336,15 +336,6 @@ public final class UiaBridge {
         }
     }
 
-    static void clientSeen(long hwnd) {
-        AccessibilityService s = AccessibilityService.get();
-        if (s != null) s.clientSeen();
-    }
-
-    static void settingChanged() {
-        AccessibilityService s = AccessibilityService.get();
-        if (s != null) s.screenReaderChanged();
-    }
 
     // ---- Events ----
 

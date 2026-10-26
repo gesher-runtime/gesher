@@ -30,8 +30,9 @@ import java.util.Map;
  * Android's accessibility on Windows is UI Automation, which reads each app process's
  * windows in that process ({@link UiaBridge}). It is what the process's
  * AccessibilityManager talks to: its clients get the state (enabled while a Windows screen
- * reader runs, a UI Automation client has read one of the process's windows, or
- * $GESHER_ACCESSIBILITY=1), and setState when it changes; ViewRootImpl registers its
+ * reader runs: the SPI_GETSCREENREADER flag, which Narrator sets; or with
+ * $GESHER_ACCESSIBILITY=1; UI Automation serves the windows then), and setState when it
+ * changes; ViewRootImpl registers its
  * windows' interaction connections; the views' AccessibilityEvents become UIA events
  * (focus, announcements, invocations, value and structure changes).
  */
@@ -47,7 +48,6 @@ public final class AccessibilityService extends IAccessibilityManager.Default {
     private int mNextWindowId = 1;
 
     private volatile boolean mScreenReader;
-    private volatile boolean mClientSeen;
     private final boolean mForced = "1".equals(System.getenv("GESHER_ACCESSIBILITY"));
     private int mState;
 
@@ -84,27 +84,32 @@ public final class AccessibilityService extends IAccessibilityManager.Default {
             log("no accessibility service in this process: " + e);
             return;
         }
-        if (UiaBridge.start()) {
-            service.mScreenReader = UiaBridge.screenReader();
-        }
+        service.mScreenReader = UiaBridge.screenReader();
         service.update("started");
+        // Windows' screen reader flag, looked at every 2 s (SystemParametersInfo: cheap).
+        Thread watch = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (UiaBridge.screenReader() != service.mScreenReader) service.screenReaderChanged();
+            }
+        }, "gesher-a11y-watch");
+        watch.setDaemon(true);
+        watch.start();
     }
 
-    /** Windows' screen reader flag changed (WM_SETTINGCHANGE SPI_SETSCREENREADER). */
+    /** Windows' screen reader flag changed. */
     void screenReaderChanged() {
         mScreenReader = UiaBridge.screenReader();
         update("screen reader " + (mScreenReader ? "on" : "off"));
     }
 
-    /** A UI Automation client read one of this process's windows. */
-    void clientSeen() {
-        if (mClientSeen) return;
-        mClientSeen = true;
-        update("a UI Automation client reads the app's windows");
-    }
 
     private int computeState() {
-        return mScreenReader || mClientSeen || mForced
+        return mScreenReader || mForced
                 ? AccessibilityManager.STATE_FLAG_ACCESSIBILITY_ENABLED : 0;
     }
 
@@ -116,6 +121,9 @@ public final class AccessibilityService extends IAccessibilityManager.Default {
             mState = state;
             clients = new ArrayList<>(mClients);
         }
+        // UI Automation serves the windows while accessibility is on: the bridge starts
+        // (windows subclassed) then, and only then, so nothing changes for apps otherwise.
+        if (state != 0) UiaBridge.start();
         if (state != 0 || !why.equals("started")) {
             log("accessibility " + (state != 0 ? "enabled" : "disabled") + " (" + why + "), "
                     + clients.size() + " client(s)");

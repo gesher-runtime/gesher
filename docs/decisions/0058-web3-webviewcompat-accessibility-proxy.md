@@ -46,8 +46,10 @@ ever enabled and nothing read an app's views.
   camera service): on Windows the consumer of an app's accessibility is UI Automation,
   which reads each process's windows in that process. Its clients (the process's
   AccessibilityManager) are enabled while Windows' screen reader flag is set
-  (SPI_GETSCREENREADER, Narrator sets it), once a UI Automation client has read one of the
-  process's windows, or with `$GESHER_ACCESSIBILITY=1`; it takes ViewRootImpl's
+  (SPI_GETSCREENREADER, Narrator sets it) or with `$GESHER_ACCESSIBILITY=1`, and the UIA
+  bridge serves the windows only then: the system's own UIA clients read windows all the
+  time, and enabling accessibility for any of them changed every app (ci 40262184075).
+  It takes ViewRootImpl's
   interaction connections and the AccessibilityEvents, which become UIA events (focus,
   announcements as UIA notifications, invoke, value and structure changes).
 - **The reverse bridge** (compat/accessibility/uia_bridge.cc, libgesher_a11y.so):
@@ -65,10 +67,10 @@ ever enabled and nothing read an app's views.
   compat/accessibility/uia_client.cc) as virtual views; clicks, focus, text and scrolling
   act on them (Invoke/Toggle/SelectionItem/LegacyIAccessible, SetFocus, Value, ScrollItem).
 - **Windows' proxy**: the user's Internet Options (WinHTTP's view: a proxy server and
-  bypass list, a PAC URL, automatic detection) are `ConnectivityManager.getDefaultProxy()`;
+  bypass list, a PAC URL; automatic detection, on by default and mostly finding nothing, is not followed) are `ConnectivityManager.getDefaultProxy()`;
   every process applies them with `Proxy.setHttpProxyConfiguration` (as ActivityThread
-  does) and follows Windows' changes (RegNotifyChangeKeyValue). A PAC script or WPAD makes
-  it a PAC proxy: PacProxySelector's `com.android.net.IProxyService` is served in every
+  does) and follows Windows' changes (RegNotifyChangeKeyValue). A PAC script makes it a PAC
+  proxy: PacProxySelector's `com.android.net.IProxyService` is served in every
   process by WinHttpGetProxyForUrl, so Windows evaluates the script.
 - **CONNECTIVITY_ACTION** is a sticky broadcast of the connectivity service, sent when
   the default network changes; **PendingIntent requests and listens** are kept by the

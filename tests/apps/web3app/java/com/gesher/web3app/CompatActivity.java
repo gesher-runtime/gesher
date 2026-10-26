@@ -77,6 +77,18 @@ public class CompatActivity extends Activity {
                 "window.__web3Early = 'early-' + location.host;", Collections.singleton("*"));
         mView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                Web3.log("compat onPageStarted: " + url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                Web3.log("compat onReceivedError: " + request.getUrl() + " " + error.getErrorCode()
+                        + " " + error.getDescription());
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 Web3.log("compat onPageFinished: " + url);
                 mPage++;
