@@ -91,6 +91,13 @@ bionic's Clang-oriented always_inline declaration under -Werror. Both are
 corrected (the reference uses Clang, as bionic does). The NDK compile job
 succeeded; no runtime or full-green verification is claimed.
 
+Scoped 40419236055 at f280450 compiled production and both NDK ABIs, but
+the reference compilation found Clang's suspicious-literal-concatenation
+warning in a malformed-input fixture. The byte string is now explicit;
+no assertion or production behavior was relaxed. test66 now checks the
+actual test44 process logs for all six ABI/mode cases, avoiding duplicate
+Activity runs. No runtime proof is claimed until the next scoped/full run.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
