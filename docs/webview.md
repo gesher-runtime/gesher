@@ -357,4 +357,41 @@ drawing in a window that is covered or off the desktop;
   popups failed); Windows' WPAD default became a PAC proxy for every request. Fixed: the
   UIA bridge serves windows only while the screen reader flag is set (the test sets it, as
   Narrator), threads attach per call and detach; WPAD is not followed.
-- ci 40285810159: in progress.
+- ci 40285810159 (tip of the fixes above, 5f2e…; see git log): in progress when the track was
+  stopped (2026-10-26); its result is unknown. Nothing of this track is CI-verified yet; the
+  last verified SHA of the branch is its base (9e449b0, phase4/integration).
+
+**Done, not verified**: androidx.webkit glue (`SupportLib`, `org.chromium.support_lib_glue`),
+WebMessageListener, document-start scripts, ProxyController (browser arguments; only before
+the environment starts), `GeolocationShim`, `WebViewAccessibility` (AccessibilityNodeProvider
+from WebView2's UIA tree, `compat/accessibility/uia_client.cc`), the `accessibility` service
+and UIA bridge (`app/java/com/gesher/app/accessibility`, `compat/accessibility/uia_bridge.cc`),
+Windows' proxy (`com.gesher.net.WindowsProxy`, `compat/net/windows_proxy.cc`),
+CONNECTIVITY_ACTION and PendingIntent requests, 56-net's local HTTPS NetApp check, tests
+(tests/windows/tracks/54-web3.ps1, tests/apps/web3app, tests/windows/web3/Web3Servers.ps1),
+ADR 0058, docs (webview.md, network.md, services.md).
+**Partly seen working in ci 40262184075**: NetActivity on the device: getDefaultProxy and
+Proxy.getDefaultHost from Windows' proxy server and from a PAC URL, the sticky
+CONNECTIVITY_ACTION, a PendingIntent request; the PAC script fetched by Windows and its
+DIRECT URL not proxied (`PASS  web3: the PAC script was fetched by Windows, ...`).
+**Not started**: the Wi-Fi/VPN/captive-portal/per-network-DNS leftovers of network.md;
+ArrayBuffer web messages; restarting the WebView2 environment for a late ProxyController.
+
+**Next steps**
+1. Read ci 40285810159's test logs (`gh api repos/gesher-runtime/gesher/actions/jobs/<id>/logs`;
+   artifact downloads are blocked by NetFree locally). Check that 37-webview, 33/35 ime,
+   popups and glapp are green again (they failed in ci 40262184075 only because of the
+   UIA/attach bug, now fixed).
+2. In ci 40262184075 CompatActivity and GeoActivity hung with no page loaded (the main thread
+   idle, no onPageFinished); the new run logs gesher-webview lines, onPageStarted/
+   onReceivedError and the proxy's log to find out why (suspects: the old accessibility bug;
+   Chromium refusing `--proxy-server` for the navigation to `http://web3-proxied.test`).
+3. Fix, rerun, merge origin/phase4/integration before the final run, tick the roadmap boxes
+   only for what CI verifies.
+
+**Pitfalls**: a thread attached to ART must detach before it exits (UIA's thread pool);
+never enable accessibility for every UIA client (the system has some on every window);
+Windows' WPAD default must not become a PAC proxy; the runner's proxy settings are changed
+only around the NetActivity runs and restored (`GesherWeb3Proxy.Save/Restore`), with a
+forwarding proxy and a GitHub bypass list; `gh run download` is blocked by NetFree here; local
+checks: JDK 21 + gfx-local framework classes for javac, llvm-mingw for -fsyntax-only.
