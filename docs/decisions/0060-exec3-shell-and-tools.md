@@ -104,6 +104,11 @@ read-only values, write-once/invalid-name rejection, boot isolation, persistent
 reload and 32 concurrent persistent writers. The real ART/NDK tests are added
 to 45-exec3 and remain pending CI.
 
+An additional APK runs the nine exec2 native checks through JNI inside the
+app's ART process, with real device services, then repeats the Java shell,
+signal, tool and property suites. This is prepared but not yet CI-verified;
+its Java/package/script checks alone do not establish on-device behavior.
+
 ## Remaining work
 
 - umask and actual permission behavior; broader shell conformance, including

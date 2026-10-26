@@ -252,6 +252,14 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   processes, but bionic's length-byte/clean dirty-bit encoding and wait/wait_any
   semantics are still open. ADR 0060 now records the fork-before-exec and
   ET_EXEC feasibility review and the exec builtin's changed-pid limitation.
+- Prepared for the next independent CI step: exec3.apk packages the NDK child
+  and a JNI wrapper around the existing nine-check exec2 driver. Its Activity
+  calls that driver inside the real ART app process (not a separate test
+  executable), then runs the Java shell/signal/tool/property suites. 45-exec3
+  starts its own binderd/servicemanager/system server and verifies the APK's
+  output. The APK's Java sources, PowerShell and packaging script pass local
+  compilation/parsing only; neither its native JNI build nor on-device run is
+  verified. The current CI 40320290754 predates this prepared test step.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
