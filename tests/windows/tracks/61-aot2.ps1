@@ -262,7 +262,7 @@ if ($verifyOk) {
     } else {
       Aot2Fail 'lifecycle.apk from its app image (speed-profile)' $r2.Out
       # What dex2oat made of the profile's classes (-verbose:compiler).
-      ($r.Out -split "`n" | Where-Object { $_ -match 'image class|Image class|[Pp]run|LoadImageClasses|UpdateImageClasses|InitializeClasses' } | Select-Object -First 60) | Out-Host
+      ($r.Out -split "`n" | Where-Object { $_ -match 'image class|Image class|cannot go into the image|[Pp]run|LoadImageClasses|UpdateImageClasses|InitializeClasses' } | Select-Object -First 60) | Out-Host
     }
     if ($m0 -and $m1 -and $m2) {
       Write-Host ("INFO  aot2: lifecycle.apk's methods that entered the interpreter or the JIT: {0} of {1} from the APK, {2} of {3} with the verify oat file, {4} of {5} with speed-profile code ({6} with AOT code, {7} of those interpreted)" -f

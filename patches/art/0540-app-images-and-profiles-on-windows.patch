@@ -1,3 +1,44 @@
+diff --git a/dex2oat/aot_class_linker.cc b/dex2oat/aot_class_linker.cc
+index b6eca10..f266e0e 100644
+--- a/dex2oat/aot_class_linker.cc
++++ b/dex2oat/aot_class_linker.cc
+@@ -16,6 +16,7 @@
+ 
+ #include "aot_class_linker.h"
+ 
++#include "base/logging.h"
+ #include "base/stl_util.h"
+ #include "class_status.h"
+ #include "compiler_callbacks.h"
+@@ -191,6 +192,8 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+ 
+   // Check the class itself.
+   if (!can_reference_dex_cache(klass->GetDexCache())) {
++    VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                   << " cannot go into the image: its own dex cache";
+     return false;
+   }
+ 
+@@ -199,6 +202,9 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+   while (!heap->ObjectIsInBootImageSpace(superclass)) {
+     DCHECK(superclass != nullptr);  // Cannot skip Object which is in the primary boot image.
+     if (!can_reference_dex_cache(superclass->GetDexCache())) {
++      VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                     << " cannot go into the image: its superclass "
++                     << superclass->PrettyDescriptor() << " is not in the boot image";
+       return false;
+     }
+     superclass = superclass->GetSuperClass();
+@@ -211,6 +217,9 @@ bool AotClassLinker::CanReferenceInBootImageExtensionOrAppImage(
+     DCHECK(interface != nullptr);
+     if (!heap->ObjectIsInBootImageSpace(interface) &&
+         !can_reference_dex_cache(interface->GetDexCache())) {
++      VLOG(compiler) << "Gesher: " << klass->PrettyDescriptor()
++                     << " cannot go into the image: its interface "
++                     << interface->PrettyDescriptor() << " is not in the boot image";
+       return false;
+     }
+   }
 diff --git a/libartbase/base/scoped_flock.cc b/libartbase/base/scoped_flock.cc
 index 3f44e25..2f0340b 100644
 --- a/libartbase/base/scoped_flock.cc
