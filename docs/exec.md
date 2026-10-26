@@ -227,6 +227,17 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   Windows test jobs are still running. Review their logs before dispatching
   the follow-up containing the pipe expectation, signal/tool checks and shared
   property implementation. No artifact was downloaded for this review.
+- First Windows-2022 job 121551537293 completed with three failing Check
+  groups: ExecTest's stale pipe/diagnostic expectations (also reused for
+  arm64) and the shell Python harness omitting --sh, which sent its scripts
+  to launcher usage rather than the shell. The pipe assertion is updated;
+  the harness now selects --sh explicitly and missing commands print the
+  expected "not found" with status 127. The actual ART incremental-stdin
+  Exec3Test and all exec2 checks passed on both runners. Windows-2025 has the
+  same three failures; all remaining required jobs succeeded (probe jobs are
+  skipped by design). None of the 47 Python cases is claimed CI-verified from
+  this run. The corrected harness passes all 47 cases in the small local
+  launcher build before the combined follow-up dispatch.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,

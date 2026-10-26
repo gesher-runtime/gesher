@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='gesher-shell-') as folder:
         script = Path(folder, 'case.sh')
         script.write_text(source, encoding='utf-8', newline='\n')
         try:
-            result = subprocess.run([exe, str(script)], cwd=folder, capture_output=True, timeout=20)
+            result = subprocess.run([exe, '--sh', str(script)], cwd=folder, capture_output=True, timeout=20)
             output = result.stdout.decode('utf-8', errors='replace')
             good = result.returncode == code and (expected is None or output == expected)
             if label == 'pid':
