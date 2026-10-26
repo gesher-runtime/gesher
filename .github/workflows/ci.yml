@@ -87,6 +87,12 @@ jobs:
   libs:
     uses: ./.github/workflows/libs.yml
 
+  # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
+  # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
+  # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
+  arm64:
+    uses: ./.github/workflows/arm64.yml
+
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
@@ -147,7 +153,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image, media]
+    needs: [build, framework, graphics, angle, boot-image, media, arm64]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -175,6 +181,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: angle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
           path: dist
 
       - uses: actions/download-artifact@v4
@@ -519,7 +530,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64]
     strategy:
       fail-fast: false
       matrix:
@@ -547,6 +558,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-libs
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
           path: dist
 
       - uses: actions/download-artifact@v4
