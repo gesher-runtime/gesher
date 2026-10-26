@@ -132,6 +132,11 @@ target_sources(hwui PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/hwui_gl_standins.cc)
 # gesher-app's text natives (rtl track): Windows' fonts folder, the user's locales.
 target_sources(hwui PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwui/text/text_natives.cc)
+# Surfaces track (ADR 0056): Bitmap parcels, YuvImage's JPEG encoder.
+target_sources(hwui PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/surfaces_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/bitmap_parcel.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/yuv_image.cc)
 target_include_directories(hwui BEFORE PRIVATE
   ${CMAKE_BINARY_DIR}/gen/hwui-gl
   ${CMAKE_SOURCE_DIR}/compat/hwui/gl/include

@@ -37,6 +37,8 @@
 
 #include <GraphicsJNI.h>
 #include <SkiaCanvas.h>
+#include <android/graphics/canvas.h>
+#include <android/native_window.h>
 #include <android_runtime/android_view_Surface.h>
 #include <hwui/Bitmap.h>
 #include <hwui/Canvas.h>
@@ -44,6 +46,7 @@
 #include <log/log.h>
 #include <utils/LightRefBase.h>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -235,9 +238,53 @@ void JNICALL TV_destroyNativeWindow(JNIEnv* env, jobject thiz) {
   if (QueueSurface* q = QueueSurface::From(w)) q->decStrong(reinterpret_cast<void*>(&TV_createNativeWindow));
 }
 
-// TextureView.lockCanvas: not supported (null, as when the surface is not ready).
-jboolean JNICALL TV_lockCanvas(JNIEnv*, jclass, jlong, jobject, jobject) { return JNI_FALSE; }
-void JNICALL TV_unlockCanvasAndPost(JNIEnv*, jclass, jlong, jobject) {}
+// TextureView.lockCanvas / unlockCanvasAndPost (surfaces track): the Canvas draws into the
+// SurfaceTexture's producer (its QueueSurface), as core/jni/android_view_TextureView.cpp
+// does on a device; the frame posted becomes the layer's latest one.
+jboolean JNICALL TV_lockCanvas(JNIEnv* env, jclass, jlong native_window, jobject canvas_obj,
+                               jobject dirty) {
+  auto* window = reinterpret_cast<ANativeWindow*>(native_window);
+  if (window == nullptr) return JNI_FALSE;
+  jclass rect_class = env->FindClass("android/graphics/Rect");
+  jfieldID left = env->GetFieldID(rect_class, "left", "I");
+  jfieldID top = env->GetFieldID(rect_class, "top", "I");
+  jfieldID right = env->GetFieldID(rect_class, "right", "I");
+  jfieldID bottom = env->GetFieldID(rect_class, "bottom", "I");
+  ARect rect = {0, 0, 0x3FFF, 0x3FFF};
+  if (dirty != nullptr) {
+    rect = {env->GetIntField(dirty, left), env->GetIntField(dirty, top),
+            env->GetIntField(dirty, right), env->GetIntField(dirty, bottom)};
+  }
+  ANativeWindow_Buffer buffer;
+  if (ANativeWindow_lock(window, &buffer, &rect) != 0) {
+    env->DeleteLocalRef(rect_class);
+    return JNI_FALSE;
+  }
+  // Within the buffer (libgui's Surface::lock clips the dirty region the same way).
+  if (rect.left < 0) rect.left = 0;
+  if (rect.top < 0) rect.top = 0;
+  if (rect.right > buffer.width) rect.right = buffer.width;
+  if (rect.bottom > buffer.height) rect.bottom = buffer.height;
+  android::graphics::Canvas canvas(env, canvas_obj);
+  canvas.setBuffer(&buffer, ADATASPACE_UNKNOWN);
+  canvas.clipRect({rect.left, rect.top, rect.right, rect.bottom});
+  if (dirty != nullptr) {
+    env->SetIntField(dirty, left, rect.left);
+    env->SetIntField(dirty, top, rect.top);
+    env->SetIntField(dirty, right, rect.right);
+    env->SetIntField(dirty, bottom, rect.bottom);
+  }
+  env->DeleteLocalRef(rect_class);
+  return JNI_TRUE;
+}
+
+void JNICALL TV_unlockCanvasAndPost(JNIEnv* env, jclass, jlong native_window, jobject canvas_obj) {
+  android::graphics::Canvas canvas(env, canvas_obj);
+  canvas.setBuffer(nullptr, ADATASPACE_UNKNOWN);
+  if (auto* window = reinterpret_cast<ANativeWindow*>(native_window)) {
+    ANativeWindow_unlockAndPost(window);
+  }
+}
 
 // --- TextureView's layer --------------------------------------------------------------------
 
@@ -405,6 +452,9 @@ struct ViewSurface {
   android::sp<QueueSurface> surface;
   jweak view = nullptr;  // the SurfaceView, invalidated by each frame
   FrameImages images;
+  // Surfaces track: an invalidation is on its way (cleared when the view records its
+  // frame), so a fast producer (EGL at 60 Hz) does not flood the UI thread with them.
+  std::atomic<bool> invalidate_pending{false};
 };
 
 std::mutex gViewMutex;
@@ -424,6 +474,7 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
   vs->surface->SetListener([weak] {
     std::shared_ptr<ViewSurface> v = weak.lock();
     if (v == nullptr) return;
+    if (v->invalidate_pending.exchange(true)) return;
     JNIEnv* env = Env();
     if (env == nullptr) return;
     jobject view;
@@ -477,6 +528,7 @@ void JNICALL SV_drawSurface(JNIEnv* env, jclass, jlong canvas_ptr, jlong blast, 
   auto* canvas = reinterpret_cast<android::Canvas*>(canvas_ptr);
   std::shared_ptr<ViewSurface> vs = ViewSurfaceFor(blast, false);
   if (canvas == nullptr || vs == nullptr) return;
+  vs->invalidate_pending.store(false);  // the next frame invalidates the view again
   {
     std::lock_guard<std::mutex> lock(gViewMutex);
     if (vs->view == nullptr || !env->IsSameObject(vs->view, view)) {
