@@ -231,6 +231,27 @@ int main() {
     return S_OK;
   };
   sink->Lock(store); sink->action = nullptr;
+  auto clipped_geometry = geometry;
+  clipped_geometry.characters.back().right = 500;
+  store->Geometry(clipped_geometry);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}, client{}; BOOL clipped = FALSE;
+    GetClientRect(window, &client); POINT edge{client.right, 0}; ClientToScreen(window, &edge);
+    HRESULT result = store->GetTextExt(0, 1, 4, &rectangle, &clipped);
+    Check(SUCCEEDED(result) && clipped && rectangle.right == edge.x,
+        "measured TSF range extents report actual client clipping without invented off-window geometry");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  auto missing_geometry = geometry;
+  missing_geometry.characters.pop_back(); store->Geometry(missing_geometry);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = FALSE;
+    Check(store->GetTextExt(0, 1, 4, &rectangle, &clipped) == TS_E_NOLAYOUT,
+        "a range missing any measured UTF-16 character returns TS_E_NOLAYOUT");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
   geometry.text = u"old"; store->Geometry(geometry);
   sink->action = [&](DWORD) -> HRESULT {
     RECT rectangle{}; BOOL clipped = FALSE;

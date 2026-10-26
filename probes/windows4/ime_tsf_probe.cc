@@ -278,6 +278,22 @@ int main() {
   Check(GetCaretPos(&position) && position.x == 56 && position.y == 78,
       "a delayed old-editor caret cannot overwrite the newer editor's actual Windows caret");
   ime.reset(); Drain();
+  Editor(window, 30);
+  TextDocument partial_document; partial_document.available = true; partial_document.epoch = 30;
+  partial_document.text = u"abcd"; partial_document.start = 0; partial_document.end = 4;
+  ime->SetDocument(partial_document); Drain();
+  result = ime->RunTextServiceTest();
+  bool partial_text = false, partial_selection = false, partial_end = false;
+  while (ime->TakeTextEvent(&event)) {
+    partial_text |= event.epoch == 30 && event.kind == TextEvent::kDocumentCompositionText
+        && event.text == u"aXcd" && event.start == 0 && event.end == 4;
+    partial_selection |= event.epoch == 30 && event.kind == TextEvent::kDocumentSelect
+        && event.start == 2 && event.end == 2;
+    partial_end |= event.epoch == 30 && event.kind == TextEvent::kDocumentCompositionEnd && event.text == u"aXcd";
+  }
+  Check(result == S_OK && partial_text && partial_selection && partial_end,
+      "an actual Windows text-service partial composition preserves full text, insertion caret and completion through the production IME bridge");
+  ime.reset(); Drain();
   Editor(window, 12);
   observed_owner.store(TextServiceProbeAccess::Owner(ime.get()));
   owner_deletions.store(0);
