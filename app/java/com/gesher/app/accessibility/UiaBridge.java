@@ -14,6 +14,7 @@ import android.view.WindowManagerGlobal;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityInteractionClient;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.webkit.WebView;
 
@@ -198,7 +199,9 @@ public final class UiaBridge {
     private static WebView webViewOf(Root r, AccessibilityNodeInfo n) {
         if (!"android.webkit.WebView".contentEquals(String.valueOf(n.getClassName()))) return null;
         long id = n.getSourceNodeId();
-        if (AccessibilityNodeInfo.getVirtualDescendantId(id) != AccessibilityNodeInfo.UNDEFINED_ITEM_ID) {
+        // A real View uses HOST_VIEW_ID (-1); UNDEFINED_ITEM_ID is the
+        // unrelated invalid view/virtual id (Integer.MAX_VALUE).
+        if (AccessibilityNodeInfo.getVirtualDescendantId(id) != AccessibilityNodeProvider.HOST_VIEW_ID) {
             return null;
         }
         int viewId = AccessibilityNodeInfo.getAccessibilityViewId(id);
