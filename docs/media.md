@@ -221,11 +221,42 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — source-flow diagnosis, 2026-10-26
-- Running: **40359757434** at **20b1d3863e10ff01c10e0db18b74a32955b69abc**,
-  combining the source-only Process fix, videoapp uninstall and complete
-  failure-stack logging. Camera diagnostics, 2-second collection and 30+
-  frame/picture/duration thresholds remain unchanged. Watch interval 120;
-  no result from this new run is verified yet.
+- Latest diagnostic: **40359757434**, attempt 1, exact SHA
+  **20b1d3863e10ff01c10e0db18b74a32955b69abc**. All job metadata and both
+  runtime logs are read: 20 success, six skipped and two failed jobs.
+  Windows-2022 **121705048508** and Windows-2025 **121705048265** each end
+  `5 test(s) failed`: four lightweight Process-stub registration failures
+  plus the device camera frame count. Each has 29 media3, all 12 part-1
+  device, 32 surfaces and 13 AOT2 PASS checks. No green integration claim.
+- The native implementation compiles and links in main build **121701714119**.
+  However, tests/dex-natives/android/os/Process.java lacks the newly explicit
+  readProcLines declaration; framework-natives, both Looper modes and
+  resources abort registration against natives.dex. The coordinator owns
+  the matching stub declarations and complete Process follow-up patch.
+- Device camera surface/accepted/encoded/muxed counts remain **19 (2025) /
+  22 (2022)**, all correct-pattern frames, zero rejects/drops/encode failures,
+  no pending frames at stop and successful drain. Single-process camera
+  records 61 frames on each runner. AudioRecord still passes all four mode/
+  runner combinations with zero lost frames and overruns. No recording
+  capacity, 2-second collection or 30+ frame/picture/duration check changed.
+- The complete retained Java stack now identifies the next missing native:
+  Process.readProcFile -> ProcfsMemoryUtil.readOomScoreAdjFromProcfs (182,
+  177) -> MetricsLoggerWrapper.logPostGcMemorySnapshot (88) ->
+  ActivityThread$4.run (8209) -> VMRuntime.onPostCleanup (1115) ->
+  ReferenceQueueDaemon.runInternal (275). This is post-GC metrics, not a
+  media finalizer stack. Its causal relationship to camera throughput is
+  unproven. Framework/process parser and regression work remain with the
+  coordinator; no new dispatch until that complete patch is ready.
+- The videoapp uninstall fixture fix is verified: install/list and uninstall
+  in 50-services pass on both runners, with exact package-count assertions
+  unchanged. Output sound 26 is 1480.0 Hz on each; all original tone checks,
+  all new part-1 device checks and the geocoder checks pass again.
+- Completed jobs from this diagnostic are read: media **121704381738**
+  builds the native/Java apps; package **121705048018** passes actual
+  installed-window/input and all uninstall cleanup checks; e2e
+  **121706246550** (2022) / **121706246606** (2025) each pass four pinned
+  transport fixtures, all ten apps including Just Player/TIC-80, association/
+  Start-menu launch and `0 unexpected failures`.
 - Prepared after that dispatch for the next final CI: merged verified
   integration f677944f99bc5c999d9f6f0ffbc68e9312f517d5 (native3 software
   Bitmap/Minikin foundation; ci 40344682373 attempt 2 at 1e881b5). No merge
@@ -238,7 +269,7 @@ the microphone (looped, from its start each time recording starts);
   and embedded PowerShell parse plus C# declaration compile pass locally;
   no geocoder/network/termination operation was executed locally. This later
   test change is not included in the retained diagnostic run.
-- Latest completed CI: **40349479693**, attempt 1, exact tested SHA
+- Earlier instrumented CI: **40349479693**, attempt 1, exact tested SHA
   **1361200103e4ab74b8051be0cba53d2eb8d13e1c**. All job metadata and both
   runtime logs are read. Windows-2022 job **121670240001** and Windows-2025
   job **121670239943** each end `3 test(s) failed`: two package-list fixture
@@ -269,19 +300,20 @@ the microphone (looped, from its start each time recording starts);
   Its causal relationship to low camera throughput is not proven. Camera
   service and surfaces stay in the app process in both modes. The original
   2-second collection, 30+ frame, picture and duration checks are unchanged.
-- Included in the running CI: the coordinator's source-only Process fix from
+- Included in the latest diagnostic: the coordinator's source-only Process fix from
   native3 commit 95e70c18ec76f5a5d83cc6be0133031d69d1c09e applies cleanly.
   The only imported file is compat/framework/android_runtime.cc: explicit
   readProcLines registration and pinned numeric-prefix/procfs/array/null/
   missing-file semantics. Its separate native3 Java/PowerShell regression
   passed local checks; compilation/runtime and any camera effect remain
-  unverified until this CI. No other native3 or integration changes are imported.
+  checked by that diagnostic above. No other native3 or integration changes
+  were included in its tested SHA.
 - Pending source changes: 38-media now uninstalls its own videoapp after
   each device run, checks the cleanup result and then shuts down. The log's
   extra third installed package was exactly com.gesher.videoapp; 50-services'
   original exact package-count assertions remain unchanged. 59-media now
   retains tab-prefixed Java stack frames in failure output. These changes
-  are included with the coordinator's process fix in the running CI.
+  are included with the coordinator's process fix in the latest diagnostic.
 - Output fixture fixes pass again on both runners: the complete finite
   AAudio write tone is prefilled before start, then measured at **1480.0 Hz,
   0.405 s**, with exact written/read and prefilled assertions. Explicit silence
@@ -323,9 +355,9 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: read the new run's actual failure stacks/counters, verify fixture
-  cleanup and camera throughput
-  on both runners before final acceptance. No integration/main merge here.
+- Next: take the complete Process parser/stub/regression patch, then run
+  the prepared foundation/geocoder tree and verify camera throughput on
+  both runners before final acceptance. No integration/main merge here.
 
 ### Done and verified
 - **CI run 40129230078** (ci, windows-2022 and windows-2025, 0 failed each;

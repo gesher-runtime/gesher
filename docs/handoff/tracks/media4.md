@@ -48,7 +48,7 @@ subsequent verification rather than overwriting missing with a broad claim.
 
 media3 implements file-fed audio input, AAC/H.264/Opus encoding, MP4/WebM
 muxing, audio/Surface/Camera2 MediaRecorder and ImageReader decoder output.
-The exact verified run and remaining red check are in docs/media.md. CI uses
+The exact verified runs and remaining failed checks are in docs/media.md. CI uses
 a known WAV microphone source and GESHER_CAMERA_TEST; it does not establish
 physical microphone, loopback or Windows hardware interoperability.
 Legacy Binder MediaSession round trips and Just Player launch pass in
@@ -102,7 +102,7 @@ legacy use; they do not implement that module.
   MediaProfiles/CamcorderProfile and a real MediaStore provider.
 
 Camera2 reprocessing, offline sessions, extensions, torch and the remaining
-camera-service contracts belong to the coordinator's services3 track.
+camera-service contracts belong to the coordinator's [services3](services3.md) track.
 media4 owns recorder input/lifecycle contracts and coordinates camera-to-recorder
 integration with that owner; it does not duplicate the camera-service scope.
 
