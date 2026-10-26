@@ -19,7 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <thread>
+#include <new>
 #include <vector>
 
 #include "linux_socket.h"
@@ -162,6 +162,30 @@ void Publish(const std::shared_ptr<Query>& query, int error, std::vector<uint8_t
   Transfer(query->writer, &complete, 1, true);
   close(query->writer);
 }
+
+struct Job {
+  std::shared_ptr<Query> query;
+  std::vector<ws::Address> servers;
+  uint32_t index;
+  std::vector<uint8_t> packet;
+  uint32_t flags;
+};
+
+DWORD WINAPI QueryWorker(void* argument) {
+  std::unique_ptr<Job> job(static_cast<Job*>(argument));
+  std::vector<uint8_t> answer;
+  int error = -EIO;
+  size_t count = (job->flags & 1) != 0 ? 1 : std::min<size_t>(job->servers.size(), 3);
+  for (size_t i = 0; i < count && !job->query->cancelled; ++i) {
+    error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, false);
+    if (error == 0 && (answer[2] & 2) != 0) {
+      error = Exchange(job->query, job->servers[i], job->index, job->packet, &answer, true);
+    }
+    if (error == 0) break;
+  }
+  Publish(job->query, job->query->cancelled ? -ECANCELED : error, answer);
+  return 0;
+}
 }  // namespace
 
 extern "C" int gesher_res_nsend(uint32_t index, const uint8_t* bytes, size_t size, uint32_t flags) {
@@ -169,41 +193,25 @@ extern "C" int gesher_res_nsend(uint32_t index, const uint8_t* bytes, size_t siz
   if (!gesher_inet_allowed()) return -EACCES;
   if (index == 0) index = ws::ProcessInterface();
   std::vector<ws::Address> servers;
-  std::shared_ptr<Query> query;
-  std::vector<uint8_t> packet;
-  try {
-    if (ws::DnsServers(index, &servers, &index) != 0) return -errno;
-    query = std::make_shared<Query>();
-    packet.assign(bytes, bytes + size);
-  } catch (...) { return -ENOMEM; }
+  if (ws::DnsServers(index, &servers, &index) != 0) return -errno;
+  auto query = std::make_shared<Query>();
+  std::vector<uint8_t> packet(bytes, bytes + size);
   int pair[2];
   if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) != 0) return -errno;
   query->writer = pair[1];
-  try {
+  {
     std::lock_guard<std::mutex> lock(g_queries_mutex);
     g_queries[pair[0]] = query;
-  } catch (...) { close(pair[0]); close(pair[1]); return -ENOMEM; }
-  try {
-    std::thread([query, servers, index, packet = std::move(packet), flags] {
-      std::vector<uint8_t> answer;
-      int error = -EIO;
-      try {
-        size_t count = (flags & 1) != 0 ? 1 : std::min<size_t>(servers.size(), 3);
-        for (size_t i = 0; i < count && !query->cancelled; ++i) {
-          error = Exchange(query, servers[i], index, packet, &answer, false);
-          if (error == 0 && (answer[2] & 2) != 0) {
-            error = Exchange(query, servers[i], index, packet, &answer, true);
-          }
-          if (error == 0) break;
-        }
-      } catch (...) { error = -ENOMEM; }
-      Publish(query, query->cancelled ? -ECANCELED : error, answer);
-    }).detach();
-  } catch (...) {
+  }
+  auto* job = new (std::nothrow) Job{query, std::move(servers), index, std::move(packet), flags};
+  HANDLE worker = job != nullptr ? CreateThread(nullptr, 0, QueryWorker, job, 0, nullptr) : nullptr;
+  if (worker == nullptr) {
     gesher_res_cancel(pair[0]);
     close(pair[1]);
-    return -EAGAIN;
+    delete job;
+    return job == nullptr ? -ENOMEM : -EAGAIN;
   }
+  CloseHandle(worker);
   return pair[0];
 }
 
