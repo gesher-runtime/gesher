@@ -277,6 +277,8 @@ the microphone (looped, from its start each time recording starts);
   Bitmap/Minikin foundation; ci 40344682373 attempt 2 at 1e881b5). No merge
   conflict or change to its verified source. The current diagnostic run is
   retained and does not include this later foundation merge.
+  Current integration d68ec795c2fc74e4db67717dace3227dc47aa94c is also
+  merged before the final CI; its only later change is the handoff README.
 - Also prepared for the next final CI: the coordinator's completed-only
   geocoder-probe termination patch changes only 58-devices.ps1. It flushes
   the real WinRT result then terminates only its own probe process; errors
@@ -370,8 +372,7 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: merge current integration's later documentation, then run the
-  prepared Process/foundation/geocoder tree and verify camera throughput on
+- Next: run the prepared Process/foundation/geocoder tree and verify camera throughput on
   both runners before final acceptance. No integration/main merge here.
 
 ### Done and verified
