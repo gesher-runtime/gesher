@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher windows3</string>
+    <string name="main_label">Gesher windows3 main</string>
+    <string name="land_label">Gesher windows3 land</string>
+    <string name="other_label">Gesher windows3 other task</string>
+    <string name="pan_label">Gesher windows3 pan</string>
+    <!-- Which orientation qualifier the resources were resolved with: none (values). -->
+    <string name="orientation_name">port</string>
+</resources>

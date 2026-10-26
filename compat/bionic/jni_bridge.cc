@@ -32,6 +32,7 @@
 // first argument when that is this thread's JNIEnv.
 
 #include "jni_bridge.h"
+#include "extra_bionic.h"
 #include "shim_internal.h"
 
 #include <gesher/arm64_runtime.h>
@@ -781,6 +782,8 @@ void* ElfOpen(const char* path, int /*flags*/, char* error, size_t error_size) {
   std::string message;
   elf::Library* lib = elf::Load(path, &message, options);
   if (lib == nullptr) std::snprintf(error, error_size, "%s", message.c_str());
+  // The app's library directory: where its dlopen() of a bare name looks.
+  if (lib != nullptr) gesher::bionic::NoteLibraryDirectory(dir);
   if (lib != nullptr && elf::IsAarch64(lib)) {
     // An app's arm64-v8a library (System.loadLibrary): say so in its log.
     std::fprintf(stderr, "gesher arm64: %s is arm64-v8a: translated (gesher_arm64.dll)\n",

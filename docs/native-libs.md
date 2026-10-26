@@ -697,3 +697,125 @@ see "After that" for what is left._
 - Full verification is CI only: `gh workflow run ci --ref wip/native-libs`
   (the reusable `native-libs.yml` runs because `ci` calls it; it cannot be
   dispatched on its own until it reaches the default branch).
+
+## native2 track: shim gaps, platform dlopen, file-system leftovers (ADR 0057)
+
+Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
+`docs/handoff/tracks/native2.md`. Branch `wip/native2`.
+
+### What was added
+- `compat/bionic/extra_bionic.cc`, `extra_sys_bionic.cc`, `zlib_bionic.cc`
+  (+ `extra_bionic.h`): registered first in `shim.cc`'s `Table()`, so the
+  core files' definitions win. libm extras and the x86-64 fenv, div/ldiv,
+  rand48, getopt/getopt_long (GNU permutation), mkstemp family, pwd/grp,
+  strverscmp and `*_l` forms, all 32-bit wchar_t string/class functions,
+  wprintf/fwprintf/fgetws, unlocked stdio, fmemopen (read), strptime,
+  `__system_property_*` (runtime's properties via libandroid.cc, else
+  `$ANDROID_ROOT/build.prop`), android_get_application_target_sdk_version;
+  sem_*, sched_*, pthread spin/barrier/rwlockattr/timed+clock forms,
+  getrusage, times, utime(s), clock_nanosleep, sysinfo, prctl, getrandom,
+  getentropy, memfd_create, madvise, dup3, tgkill, flock, lockf,
+  posix_fadvise/fallocate, inotify_*, **setjmp/longjmp/sigsetjmp for x86-64**
+  (asm; were missing: libpng/libjpeg aborted); libz.so (shadow z_stream, gz*).
+- `shim.cc`: `dlopen` of platform libraries by name and `/system/lib64`
+  path (pseudo handles, `PlatformLibraryHandle`), bare names searched in app
+  library dirs (noted by `jni_bridge.cc`) and `$LD_LIBRARY_PATH`; `dlsym`
+  falls back to the shim table for RTLD_DEFAULT and library handles.
+- `compat/arm64/dll/guest_libc.cc`: the ~50 fallbacks removed (now in the
+  shim); pseudo dlopen handles removed; kept arm64-specific: stat/epoll,
+  syscalls (+inotify, flock numbers), setjmp, getauxval, FP environment, and
+  new O_DIRECTORY/O_NOFOLLOW/O_DIRECT/O_LARGEFILE translation for
+  open/openat/fcntl (libc++ remove_all failed on arm64 without it).
+- gesher-base: `<sys/file.h>` + `flock` (system.cc), stat execute bits
+  (stat.cc), inotify `IN_MODIFY` at write (`InotifyNoteWrite`, fd.cc,
+  unistd.cc, inotify.cc). ART patches 0570 (dex canonical location through
+  symlinks), 0571 (ScopedFlock on). `21-posix.ps1` exclusions for those two
+  gtests removed; `posix_probe.cc` mode check now masks 0666.
+- Tests: `.github/workflows/native2.yml` (job `native2` in ci.yml; artifact
+  `native2` into `dist/native2`), `tests/native2/*`, `tests/apps/native2app`,
+  `tests/windows/tracks/44-native2.ps1`.
+
+### Status and next steps
+
+_Last updated 2026-10-26 (continuation after handover)._
+
+- **Verified: ci 40296960603 at d380a3e0190f5b418cfa3ee042691db601092e25.**
+  Personally read every job's conclusion (success/skipped), all 26 native2
+  PASS lines per runner, and both `0 test(s) failed` summaries. Both ABIs
+  pass extras (Unicode BMP/supplementary case/classes, datagram batches,
+  timeout/header bounds, mremap growth/copy/shrink), platform dlopen/dlsym,
+  file checks, import gates, seven third-party executable tests and APKs
+  in single-process/device modes. ART gtests pass 233/120 (3/1 exclusions).
+  Package checks install, launch, input and uninstall cleanup; e2e reports
+  `0 unexpected failures` (TIC-80 remains an owned surfaces known failure).
+  No retry was needed. Merged later integration 5fc521a; its diff from the
+  verified tree is docs only.
+- Remaining native/POSIX work is assigned to native3 (ADR 0062 reserved;
+  docs/handoff/tracks/native3.md). In particular the public NDK API report
+  still contains missing functions: a passing real-app import gate does not
+  establish complete NDK coverage. Platform handles absent in this run are
+  libjnigraphics, libmediandk, libcamera2ndk and libvulkan. Windows ICU data
+  version parity, record locks and cross-process inotify are not closed.
+- The run/failure notes below are historical and explain the fixes.
+
+- Read ci 40285714522's windows-2025 job log (121456663287): it ends with
+  `12 test(s) failed`. The dalvikvm and APK checks all call the missing
+  `android_get_device_api_level` and abort with exit -1073740791; the loader
+  names that unresolved function. Added the System V entry to the common shim,
+  reading `ro.build.version.sdk` through the existing property bridge for both
+  ABIs. The existing extras check compares it with that property. Not verified
+  yet: rerun full CI after merging the current integration branch.
+- Running: ci 40291049581 at e1e99c0 (the API-level fix plus integration
+  a462e9c). Integration has since merged windows3 as 80cb28b; after reading
+  these results, merge the latest integration before the final verification.
+
+- ci 40291049581 failed on both runners (8 checks each). The API-level
+  abort is fixed: extras now reaches a Greek case-mapping failure, while
+  dlopen/files and the third-party program runs pass. The import gate reports
+  `mremap`, `__cmsg_nxthdr`, `sendmmsg`, `recvmmsg`, plus executable-only
+  `__libc_init`. Added the missing shim entries, datagram batch/timeout tests,
+  ancillary-header bounds checks and anonymous remap growth/copy/shrink tests.
+  Wide case and classification use Windows' ICU C API instead of the CRT C
+  locale or treating every supplementary character as a letter. Tests cover
+  Greek, Deseret, emoji, an unassigned code point and WEOF. Windows ICU's data
+  version can differ from AOSP's ICU; full version parity is not established.
+  The symbol generator now marks __libc_init as launcher-owned only for an
+  ELF with PT_INTERP; the report names it separately. Its existing real
+  gesher-exec program runs exercise startup; no dummy dalvikvm export was added.
+  Local g++ syntax checks pass for the four changed Gesher implementation files
+  with the build's WIN32_LEAN_AND_MEAN/NOMINMAX defines (the first invocation
+  omitted them and hit Winsock header collisions in socket.cc). The NDK tests
+  and runtime behavior still need CI.
+- Running: ci 40296960603 at d380a3e, including integration a98dda9
+  (windows3). Verify both ABIs, both runners and the full job set before merge.
+
+- Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
+- **ci 40263281040** (commit before the setjmp fix, both runners): build
+  green; art_libartbase_tests 233 passed (3 excluded) and
+  art_libdexfile_tests 120 passed (1 excluded) — i.e. ScopedFlockTest and
+  GetDexCanonicalLocation now pass; posix probe PASS; all other tracks green
+  (one media tone-frequency FAIL on windows-2025 only, not this track's).
+  native2 PASS lines there: x86_64 zlib example, minigzip, SQLite (WAL, FTS5),
+  OpenSSL, libc++; arm64 zlib example, minigzip, pngtest, tjunittest, SQLite,
+  OpenSSL. FAILs then: x86_64 pngtest/tjunittest (setjmp missing → fixed),
+  arm64 libc++ remove_all (open flags → fixed), and every dalvikvm-based
+  check (the script ran dalvikvm from RUNNER_TEMP while $bcp is relative →
+  fixed: N2Run now defaults to the current directory).
+- **ci 40285714522** (commit b6a7d88: setjmp, arm64 flags,
+  cwd fix) was **in progress** at stop; build green; tests not seen. Check
+  its `test (windows-2022/2025)` logs for `native2` lines first.
+- Not yet verified at all: the dalvikvm checks (extras/dlopen/files parts),
+  the symbol-coverage gate (`native2 symbols ...` INFO lines list what the
+  e2e apps / third-party programs import that the shim lacks — close those),
+  the native2app APKs single process and on the device.
+- Next steps: read 40285714522's results; fix what the native2 lines report
+  (expect some symbol gaps and possibly test-expectation tweaks); rerun ci;
+  when green on both runners, tick roadmap boxes (Phase 6/7) and fill
+  this section with the PASS lines; merge origin/phase4/integration again
+  before the final run.
+- Pitfalls: the Bash tool collapses `\` in heredocs/inline python (it broke
+  asm strings and a NUL once) — write such scripts with the Write tool.
+  CI artifacts cannot be downloaded locally (NetFree blocks the blob URL);
+  read job logs via `gh api repos/.../actions/jobs/<id>/logs`. g++'s
+  syntax check works for the shim, but top-level `asm` with `.text` fails to
+  assemble under g++ (SEH) for existing files too — clang is fine.

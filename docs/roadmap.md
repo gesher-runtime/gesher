@@ -91,11 +91,12 @@ Each phase ends with something demonstrable, built and tested in CI.
       Windows' zone; java.util, java.time and android.icu match Windows'
       offsets at every 2025-2027 transition in four zones ([posix.md](posix.md),
       ADR 0045; ci 40198104086)
-- [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+- [x] BoringSSL (`NativeBN`), epoll and inotify, a process model
       (inotify over `ReadDirectoryChangesW`, epoll-compatible, with
       `WatchService` and `FileObserver` on it; `kill`/`getppid` across
       Gesher processes, `/proc/self/{status,maps,fd,task}`: posix track,
-      ci 40198104086)
+      ci 40198104086; verified together with NativeBN on both runners in
+      ci 40285476400: BigInteger, EPoll, posix probe, WatchService, FileObserver)
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
       need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
@@ -338,6 +339,24 @@ needs: [framework-build.md](framework-build.md).
       composed with alpha with the CPU pipeline and SkiaGL (ci run
       40191526766 at 404cd11, both runners, single process and the Gesher
       device; package and e2e green)
+- [x] Window and activity behavior below (windows3 track; docs/windows3.md, ADR
+      0053; ci run 40285476400 at a15ade4, both runners, package and e2e)
+  - [x] Screen orientation per task: screenOrientation and
+        setRequestedOrientation turn the task's display (window, Configuration,
+        Display rotation and size, -land/-port); Signal Generator on the
+        default display in e2e (ci 40285476400)
+  - [x] Window threads wake for input with WebView2 attached (no WM_NULL;
+        ci 40285476400)
+  - [x] Multi-resume and onTopResumedActivityChanged (ci 40285476400)
+  - [x] Activity.moveTaskToBack minimizes; restoring brings the task back
+        (ci 40285476400)
+  - [x] The single process relaunches for unhandled configuration changes
+        (ci 40285476400)
+  - [x] IME inset delivery for touch keyboard rows; adjustPan and edge-to-edge
+        adjustResize (posted handler message in CI, no physical touch keyboard;
+        ci 40285476400). The real IFrameworkInputPane callback and IME candidate
+        window remain unverified (docs/windows3.md).
+  - [x] Ctrl+C/V/X in EditText with Windows' clipboard (ci 40285476400)
 
 - [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
@@ -404,6 +423,18 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 6 checklist
 
+- [x] Common x86-64/arm64 shim additions and platform dlopen handles checked
+      through dalvikvm and APKs (single process and device); zlib, libpng,
+      libjpeg-turbo, SQLite, OpenSSL and libc++ executable tests; imports of
+      those programs and e2e libraries resolve in their shim/launcher context
+      (native2, ADR 0057, ci 40296960603, both runners). Full public NDK API
+      coverage remains open in native3.
+- [x] Filesystem consistency: stat execute bits, symbolic-link dex locations,
+      flock/ART ScopedFlock, same-process IN_MODIFY before close; both ABIs'
+      native checks and ART gtests (233/120 passed; ci 40296960603).
+- [ ] Native3: remaining public NDK APIs/platform handles, fcntl record locks,
+      cross-process inotify and the POSIX/ABI limits in
+      [its brief](handoff/tracks/native3.md) (ADR 0062 reserved).
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

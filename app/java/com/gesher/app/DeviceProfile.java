@@ -132,8 +132,10 @@ public final class DeviceProfile {
         c.densityDpi = DENSITY_DPI;
         c.screenWidthDp = widthDp();
         c.screenHeightDp = heightDp();
-        c.smallestScreenWidthDp = widthDp();
-        c.orientation = Configuration.ORIENTATION_PORTRAIT;
+        c.smallestScreenWidthDp = Math.min(widthDp(), heightDp());
+        // The display's natural orientation (a landscape display: GESHER_DISPLAY 800x400).
+        c.orientation = WIDTH > HEIGHT ? Configuration.ORIENTATION_LANDSCAPE
+                : Configuration.ORIENTATION_PORTRAIT;
         c.screenLayout = Configuration.SCREENLAYOUT_SIZE_NORMAL
                 | Configuration.SCREENLAYOUT_LONG_YES
                 | Configuration.SCREENLAYOUT_LAYOUTDIR_LTR
