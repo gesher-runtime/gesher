@@ -1,8 +1,8 @@
 # 0073. native3-wide: pinned multibyte and LP64 wide ABI
 
-Status: proposed; independent conversion/integer reference and compilation
-verified in ci 40419402781 at 908125d. Production runtime and the expanded
-floating-grammar reference await CI. This does not close native3/0062.
+Status: proposed; independent conversion/integer/floating-grammar reference
+and compilation verified in ci 40420020504 at 9ea7ef5. Production runtime
+awaits full CI. This does not close native3/0062.
 
 ## Context
 
@@ -73,7 +73,7 @@ wcstod/parsefloat bodies with a finite FILE adapter; host strtod/strtof
 provides rounding, so it verifies pinned wide grammar/end handling rather
 than claiming a complete independent Android gdtoa implementation.
 
-Scoped ci 40419402781 verifies 186 reference assertions with zero failures,
+Scoped ci 40420020504 verifies 202 reference assertions with zero failures,
 the production object under pinned llvm-mingw/-Werror and both NDK library
 builds. test66 consumes actual test44 process logs for x86_64/arm64 dalvikvm
 and APK single/device modes. Their production runtime proof and final full
