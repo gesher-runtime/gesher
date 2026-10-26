@@ -221,6 +221,10 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
+- Running **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
+  terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
+  Current integration 634a273 is already included. This source has no runtime
+  result yet; expected 35 media3 checks, with original recording gates intact.
 - Latest full CI **40377453079**, attempt 1, exact source SHA
   **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, includes integration
   634a273 (README-only above verified oatdump integration f5ce6f64). All
