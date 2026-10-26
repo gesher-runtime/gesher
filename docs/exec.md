@@ -243,6 +243,10 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   NDK header/stub. The test now resolves that export with dlsym (and links
   libdl) instead of declaring an unavailable NDK API. Supersede that run with
   the correction; the shared-property implementation remains unverified in CI.
+- Running: corrected combined CI 40320290754 at 1189dc4. Watch log is
+  C:\work\gesher-ci-review\exec3-watch-40320290754.log (120-second interval).
+  Verify the NDK artifact first, then the real shell/property/signal checks on
+  both Windows runners, package and e2e before recording any new completion.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
