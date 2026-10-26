@@ -10,6 +10,9 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
+  # The 2022 shutdown crash can exit inside ART's fatal handler. Keep its
+  # bounded pre-handler context in the failing process's actual diagnostic.
+  $psi.Environment['GESHER_TRACE_INVALID_SENTINEL'] = '1'
   $p = [Diagnostics.Process]::Start($psi)
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $stderr = $p.StandardError.ReadToEndAsync()
@@ -19,9 +22,13 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
     $p.WaitForExit()
   }
   $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   $out = $stdout.Result + $stderr.Result
   if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+  if ($out.Contains('invalid sentinel before signal handler') -and (Test-Path "$Dir/dalvikvm.map")) {
+    $resolved = @($out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map")
+    if ($LASTEXITCODE -eq 0) { $out = $resolved -join "`n" }
+  }
+  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   return $out
 }
 

@@ -72,13 +72,16 @@ thread_local int t_depth = 0;
 // GESHER_TRACE_SIGNALS=1: the first 200 exceptions this handler sees, and what
 // became of them, on stderr.
 LONG g_traced = 0;
+LONG g_sentinel_traced = 0;
 bool Tracing() {
   static const bool on = getenv("GESHER_TRACE_SIGNALS") != nullptr;
   return on;
 }
 
-void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what) {
-  if (!Tracing() || InterlockedIncrement(&g_traced) > 200) return;
+void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what, bool sentinel = false) {
+  static const bool sentinel_on = getenv("GESHER_TRACE_INVALID_SENTINEL") != nullptr;
+  if (!(Tracing() || (sentinel && sentinel_on)) ||
+      InterlockedIncrement(sentinel ? &g_sentinel_traced : &g_traced) > (sentinel ? 8 : 200)) return;
   ULONG_PTR fault = rec->NumberParameters >= 2 ? rec->ExceptionInformation[1] : 0;
   HMODULE module = nullptr;
   char name[MAX_PATH] = "?";
@@ -95,6 +98,13 @@ void Trace(const EXCEPTION_RECORD* rec, const CONTEXT* c, const char* what) {
           GetCurrentThreadId(), rec->ExceptionCode, static_cast<unsigned long long>(fault),
           file != nullptr ? file + 1 : name, static_cast<unsigned long long>(c->Rip - base),
           static_cast<unsigned long long>(c->Rip), static_cast<unsigned long long>(c->Rsp), what);
+  if (sentinel) {
+    fprintf(stderr,
+            "gesher-signal: rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx rbp=%016llx\n"
+            "gesher-signal: rsi=%016llx rdi=%016llx r8=%016llx r9=%016llx r10=%016llx r11=%016llx\n",
+            c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rbp, c->Rsi, c->Rdi, c->R8, c->R9, c->R10, c->R11);
+    fflush(stderr);
+  }
 }
 
 void Unhandled(int, siginfo_t*, void*) { t_unhandled = true; }
@@ -274,6 +284,13 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
   const bool saved_unhandled = t_unhandled;
   t_unhandled = false;
   ++t_depth;
+  // ART's fatal handler can exit without returning to our ordinary trace or
+  // Windows' crash reporter. Capture this observed shutdown fault first; it
+  // remains env-gated, separately bounded, and does not change disposition.
+  if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+      reinterpret_cast<uintptr_t>(addr) == ~uintptr_t{0}) {
+    Trace(rec, info->ContextRecord, "invalid sentinel before signal handler", true);
+  }
   if ((act.sa_flags & SA_SIGINFO) != 0) {
     act.sa_sigaction(signo, &si, &uc);
   } else {

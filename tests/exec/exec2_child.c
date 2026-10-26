@@ -66,7 +66,7 @@ static int property_abi(const char* prefix) {
   char name[256], ro[256], long_ro[256];
   snprintf(name, sizeof(name), "debug.%s.abi", prefix);
   snprintf(ro, sizeof(ro), "ro.%s.stable", prefix);
-  snprintf(long_ro, sizeof(long_ro), "ro.%s.long", prefix);
+  snprintf(long_ro, sizeof(long_ro), "ro.%s.abi.long", prefix);
   PROPERTY_CHECK(__system_property_set(name, "abc") == 0);
   const prop_info* property = __system_property_find(name);
   PROPERTY_CHECK(property && serial(property) == (3U << 24));

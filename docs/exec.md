@@ -189,7 +189,35 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** completed CI 40352529279 at
+**Current review:** CI 40372171824 completed at
+7ae515fdd4a7dd84af4a65f15e19392d6517a437. All build/package and both e2e jobs
+pass; both e2e logs have zero unexpected failures, nine apps including TIC-80,
+four transport fixtures and Puzzles generator pids 2560/8992 exiting 0. Both
+Windows logs pass the previous loggability canary, libartbase's 233 tests,
+libdexfile's 120 tests, the host callback/root regression, standalone Java/NDK
+logcat (nine formats, filters, clear and follow), the complete native3 Process
+proc regression, 57 shell cases and unchanged windows3 UI assertions.
+
+Windows-2025 has three failing Checks, all from a test-name collision: Java
+first writes ro.exec3.<suffix>.long with 1000 bytes; the later NDK ABI fixture
+tries to write 180 bytes to that same readonly name. The backend correctly
+refuses. The NDK fixture now uses ro.exec3.<suffix>.abi.long; a native local
+fixture proves both long values coexist and both still reject overwrites.
+Explicit Java reports, later waits and pm/am remain blocked by that earlier
+assertion and need the next combined run, including both complete APK modes.
+
+Windows-2022 has those three failures and thirteen devices Checks affected by
+two actual process crashes after all expected steps, at fault address -1.
+Single-process and device sensor/camera output is complete, but the exit is 1;
+the assertion is retained and the shutdown cause remains open. A coordinator-
+authorized, env-gated pre-handler trace now captures that sentinel fault's
+RIP/module/registers before ART can exit, with at most eight records per process.
+Only devices children enable its narrow environment flag; existing signal
+disposition is unchanged. Own-file syntax and a fatal-handler native contract
+probe pass (same exit with diagnostics enabled/disabled). The devices helper
+symbolizes captured addresses with the runner's existing map on failure.
+
+**Previous review:** completed CI 40352529279 at
 dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
 All build jobs, package and both e2e jobs pass; both e2e summaries have zero
 unexpected failures, required TIC-80 and Puzzles generator pids 5244/8604
@@ -215,13 +243,13 @@ C:\work\gesher-ci-review\exec3-40352529279-windows-*.log.
 
 The prepared tree also merges verified native3 integration f677944 (merge
 333b1d6). Its separate green CI does not verify this combination. Combined CI
-40372171824 is now running at 7ae515fdd4a7dd84af4a65f15e19392d6517a437 after
+40372171824 ran at 7ae515fdd4a7dd84af4a65f15e19392d6517a437 after
 the complete Process follow-up and integration d68ec795 (docs on f677944).
 Watch log C:\work\gesher-ci-review\exec3-watch-40372171824.log uses 120 seconds.
 After dispatch, merge 2ba2375 incorporates integration 634a273 (documentation
 above the verified f5ce6f6 AOT3 oatdump stage). It is retained for the final
-combined CI; the current diagnostic run is still at the SHA stated above.
-The current run's main build and package job have completed successfully;
+combined CI; the completed diagnostic is at the SHA stated above.
+Its main build and package job completed successfully;
 the package log confirms actual install, Hello, device UI/input and uninstall.
 One additional post-dispatch property regression is corrected: a child started
 while ART temporarily changes ANDROID_DATA now inherits the boot's original
@@ -229,7 +257,7 @@ property root, bound to its session. A new session still chooses its own root.
 The bounded native child assertion failed before the correction (missing value
 and a nonempty scratch directory) and now passes with ten host assertions and
 zero failures. This source and the updated CI expectation need the final run;
-the active diagnostic still contains the earlier nine-assertion probe.
+the completed diagnostic contains the earlier nine-assertion probe.
 The Java suite also now launches both getprop and the NDK child with a scratch
 ANDROID_DATA override, requires both to read the original boot value and then
 requires the scratch directory to be empty. Java source compilation passes;
@@ -240,7 +268,7 @@ Applied the coordinator's complete four-file Process follow-up (source 644e7f8):
 readProcLines/readProcFile/parseProcLine, matching lightweight JNI declarations,
 the full-width/procfs parser regression and native3 test wiring. The coordinator
 has compiled/linked its C++ in CI, and local Java/script checks pass here; the
-combined runtime test is pending the active run's completed Windows logs.
+combined runtime test passes both Windows logs in CI 40372171824.
 
 Included in this dispatch: pm/am now invoke a boot-classpath Binder client
 for actual package list/path, activity start, force-stop and asynchronous
@@ -250,25 +278,26 @@ Local Java/native/script checks pass; this behavior has no runtime CI proof yet.
 The packaged one-shot device path also now uses the same protocol handshake
 through RuntimeCommands and fails before servicemanager when it cannot connect;
 its old pipe-name polling loop had proceeded after timeout. Its package job
-passes; completed e2e logs are still required.
+and both e2e jobs pass in CI 40372171824.
 Property UTF-8 validation is included in this dispatch: local native
 assertions reject overlong/surrogate/out-of-range sequences and preserve a
 valid four-byte value. Initial build/persistent values follow the same policy.
 An additional Java check reads a 1000-byte ro value through the framework and
 verifies the same property's legacy NDK get returns the Android error value;
-source compilation passes, with runtime proof pending the active run.
+the Java and legacy NDK reads pass in CI 40372171824 before the later fixture
+name collision. The new UTF-8 ABI assertions remain after that collision.
 The coordinator's windows3 diagnosis also exposed Launcher forwarding partial
 log chunks: its own status println could split a child's first-frame window
 title. Tail now frames raw UTF-8 bytes into complete atomic lines, resets the
 pending fragment on truncation and emits an unterminated final fragment once,
 with a separating newline, only when finishing. The focused JDK regression
-passes in the active CI build; the real windows3 UI assertions remain unchanged
-and await the active Windows test jobs.
+passes in the CI build; unchanged real windows3 UI assertions pass both
+Windows jobs in CI 40372171824.
 Applied the coordinator/web3 completed-geocoder termination follow-up after
 the 30/45-second bounds: the isolated probe prints and flushes its genuine
 MapLocationFinder result, then terminates only itself to bypass a CLR/WinRT
 teardown hang. Errors exit 1 and incomplete answers still fail. PowerShell
-syntax passes; the real query remains for the active Windows test jobs.
+the actual query returns InvalidCredentials on both runners in CI 40372171824.
 
 Continuation history and exact evidence:
 
