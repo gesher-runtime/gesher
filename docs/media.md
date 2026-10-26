@@ -254,6 +254,14 @@ the microphone (looped, from its start each time recording starts);
   These reuse existing output and add three checks (33 media3 checks total),
   with no extra app run or recording behavior change. The PowerShell parser
   and local positive/negative guard controls pass; runtime proof is pending.
+- The complete coordinator Process follow-up from native3 644e7f8 now
+  applies cleanly: readProcFile/parseProcLine, all three matching lightweight
+  Process-stub declarations, Native3ProcessTest and its 46-native3 check.
+  Cases cover actual procfs counters, 64-bit/mixed output, bounded slices,
+  grouping/quotes/characters, sanitization, partial results, an 8 KiB file
+  and errors. Both Java sources compile with release 11 (the native2 workflow
+  target), and 46/59 PowerShell parse. C++ and runtime remain CI-only.
+  No camera causality claim; original capture diagnostics and thresholds stay.
 - The videoapp uninstall fixture fix is verified: install/list and uninstall
   in 50-services pass on both runners, with exact package-count assertions
   unchanged. Output sound 26 is 1480.0 Hz on each; all original tone checks,
@@ -362,8 +370,8 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: take the complete Process parser/stub/regression patch, then run
-  the prepared foundation/geocoder tree and verify camera throughput on
+- Next: merge current integration's later documentation, then run the
+  prepared Process/foundation/geocoder tree and verify camera throughput on
   both runners before final acceptance. No integration/main merge here.
 
 ### Done and verified
