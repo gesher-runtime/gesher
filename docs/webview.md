@@ -350,14 +350,20 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Full-stage gate is pending **ci 40353139413**, exact source
-`6270c9e84e0a8f3486a77824ecb113c563d2871d`, after integration 46bc9e5
-(verified aot2/surfaces code plus central ownership/release documentation).
-Watch: `C:/work/gesher-ci-review/web3-40353139413-watch.log`.
-No new roadmap milestone is closed until both complete Windows test jobs,
-package and both required e2e jobs pass.
+Full-stage gate awaits the next combined run. Completed **ci 40353139413**
+at `6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3
+checks per runner, package and both e2e jobs. Windows 2022 fails only the
+completed geocoder probe's CLR teardown; Windows 2025 has the same failure
+and a windows3 launcher-log framing failure. These remain failed checks.
+Fix 1f1cc96 uses Win32 TerminateProcess on the isolated current probe only
+after its real answer is flushed (errors exit one; both guards remain).
+Own-byte child fixtures verify output and exit codes zero/one. exec3 owns
+the Launcher fix: an actual first-frame line was split by the launcher's own
+startActivityAndWait message while forwarding partial child-log chunks.
+Wait for its minimal patch before the next full web3 CI. No new roadmap
+milestone is closed before complete Windows/package/e2e success.
 
-The most recent completed run, **40345505558 at 2130071**, has all **14 web3
+Earlier completed run **40345505558 at 2130071** also has all **14 web3
 checks passing on each runner** (`INFO  web3: every check passed`):
 
 - androidx.webkit 1.18.0 from Maven: feature discovery, proxy override before
@@ -385,8 +391,8 @@ tests. Windows 2022 has one failure outside web3: the geocoder probe printed
 the completed `InvalidCredentials` result but did not exit before its
 45-second guard. That timeout is a failure. Fix 58d7dc6 flushes the genuine
 awaited result, then exits zero; errors/inner timeouts exit one. Both the
-30-second wait and the outer 45-second guard remain. The current full run
-must verify that fix; a local no-answer probe still failed the outer guard.
+30-second wait and the outer 45-second guard remain. Environment.Exit itself still hung in 40353139413, so the native exit fix
+above now awaits CI; a local no-answer probe still failed the outer guard.
 
 Remaining WebView contracts belong to **web4 / ADR 0072**: subframe support
 for listeners/scripts/geolocation, additional page-to-app port transfers,
