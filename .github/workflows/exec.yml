@@ -93,8 +93,9 @@ jobs:
           set -euo pipefail
           mkdir -p work/classes work/dex
           javac --release 11 -encoding UTF-8 -d work/classes tests/exec/java/gesher/*.java \
-            app/java/com/gesher/app/LogLines.java
+            app/java/com/gesher/app/LogLines.java app/java/com/gesher/app/VmCommandLine.java
           java -cp work/classes gesher.LauncherTailTest
+          java -cp work/classes gesher.LauncherCommandLineTest
           java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
             --output work/dex $(find work/classes -name '*.class')
           cp work/dex/classes.dex dist-exec/exec-test.dex
