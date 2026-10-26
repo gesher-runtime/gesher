@@ -160,9 +160,12 @@ Then merged origin/phase4/integration 2d88915 (locale, net, media, lifecycle);
 ci 40211480836 at e76dde3 is green too (every job; 241 PASS / 0 FAIL on
 both runners, package and e2e).
 
-**Remaining gaps:** see "Known gaps" above; `X_OK` holds for every file while
-`stat` shows no execute bit; DexFileLoader keeps ART's no-realpath on Windows;
-ART's `LockedFile` stays unsupported under `_WIN32`.
+**Remaining gaps:** see "Known gaps" above and the native3 brief. The historical
+execute-bit, symbolic-link dex-location and LockedFile gaps are closed by
+native2 (ci 40296960603, both runners): native file checks pass, as do
+ScopedFlockTest and GetDexCanonicalLocation in ART's 233/120 passing gtests.
+The inotify check proves same-process IN_MODIFY before close; it does not
+close the cross-process notifications gap.
 
 **Pitfalls met:**
 - The Bash tool collapses `\\` to `\` inside commands and heredocs (a `'\\0'`
