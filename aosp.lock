@@ -38,7 +38,7 @@ external/sqlite android/ dist/sqlite-autoconf-3500400/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl
+frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl core/java/android/view/SurfaceView.java
 
 # Graphics (docs/graphics.md): Skia, the libraries it, minikin and hwui build
 # on, and the fonts.
