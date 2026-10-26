@@ -171,6 +171,10 @@ void JNICALL WebView2Host_configure(JNIEnv* env, jclass, jstring user_data, jstr
   Host::Configure(Str(env, user_data), Str(env, args));
 }
 
+jboolean JNICALL WebView2Host_setProxyArguments(JNIEnv* env, jclass, jstring args) {
+  return Host::SetProxyArguments(Str(env, args)) ? JNI_TRUE : JNI_FALSE;
+}
+
 jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong parent, jdouble scale,
                                   jint background) {
   HostOptions options;
@@ -181,6 +185,10 @@ jlong JNICALL WebView2Host_create(JNIEnv* env, jclass, jobject peer, jlong paren
 }
 
 void JNICALL WebView2Host_destroy(JNIEnv*, jclass, jlong h) { Get(h)->Destroy(); }
+
+jlong JNICALL WebView2Host_container(JNIEnv*, jclass, jlong h) {
+  return static_cast<jlong>(reinterpret_cast<intptr_t>(Get(h)->Container()));
+}
 
 std::vector<uint8_t> Bytes(JNIEnv* env, jbyteArray a) {
   std::vector<uint8_t> bytes;
@@ -379,9 +387,12 @@ const JNINativeMethod kMethods[] = {
     {"nLoaderKind", "()Ljava/lang/String;", reinterpret_cast<void*>(&WebView2Host_loaderKind)},
     {"nConfigure", "(Ljava/lang/String;Ljava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_configure)},
+    {"nSetProxyArguments", "(Ljava/lang/String;)Z",
+     reinterpret_cast<void*>(&WebView2Host_setProxyArguments)},
     {"nCreate", "(Lcom/gesher/app/webview/WebView2Host;JDI)J",
      reinterpret_cast<void*>(&WebView2Host_create)},
     {"nDestroy", "(J)V", reinterpret_cast<void*>(&WebView2Host_destroy)},
+    {"nContainer", "(J)J", reinterpret_cast<void*>(&WebView2Host_container)},
     {"nNavigate", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V",
      reinterpret_cast<void*>(&WebView2Host_navigate)},
     {"nPostWebMessage", "(JLjava/lang/String;)V",
