@@ -21,6 +21,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $root 'tests\windows\graphics\WindowChecks.ps1')
+. (Join-Path $PSScriptRoot 'apks.ps1')
 Add-Type -AssemblyName System.Drawing
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
@@ -296,7 +297,7 @@ foreach ($a in $manifestData.apps) {
   $apk = Join-Path $apks "$($pkg)_$($a.versionCode).apk"
   $url = "$($manifestData.repo)/$($pkg)_$($a.versionCode).apk"
   try {
-    if (-not (Test-Path $apk)) { Invoke-WebRequest -Uri $url -OutFile $apk -UseBasicParsing -MaximumRetryCount 3 -RetryIntervalSec 10 }
+    Get-PinnedApk $apk "$($pkg)_$($a.versionCode).apk" $a.sha256 (@(@($manifestData.repo) + @($manifestData.mirrors)) | Where-Object { $_ })
     $sha = (Get-FileHash -Algorithm SHA256 $apk).Hash.ToLowerInvariant()
     if (-not $a.sha256) { Report "INFO  e2e: $pkg $($a.versionCode): sha256 $sha (not pinned yet)" }
     elseif ($sha -ne $a.sha256.ToLowerInvariant()) { throw "SHA-256 $sha, not the pinned $($a.sha256)" }
