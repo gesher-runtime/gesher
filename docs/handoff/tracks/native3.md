@@ -62,6 +62,23 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Verified Unicode/Process stage: full ci 40386670586 at
+6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
+integration 634a273. Every job personally read (22 success/six skipped),
+both zero-failure summaries, complete code-point/locale comparison, both NDK
+ABIs and four APK cases per runner, existing Bitmap/font/Process checks,
+actual installed input/uninstall cleanup and both required Puzzles/TIC-80
+e2e logs (0 unexpected failures). No retry. See native3-unicode.md.
+Current integration cd0b849 adds docs only and is merged. Subsequent tip
+changes must remain docs-only before this merge. Remaining NDK/POSIX scope
+above stays open on wip/native3; this does not close the aggregate. Continue
+missing APIs/ABI/filesystem contracts after this verified stage is merged.
+
+### Earlier CI history
+
+Pending/unverified statements below are historical and superseded only for
+the specific Unicode/Process scope verified above.
+
 ci 40381742392 at 3c9f6cb: production Unicode bridge and host executable
 compile/link, package and both e2e jobs pass. Both Windows suites pass the
 new Unicode boundary/handle/error checks through both NDK ABIs and all four

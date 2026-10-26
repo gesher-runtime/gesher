@@ -708,10 +708,13 @@ attempt 2. Process's proc-line/file/parser follow-up is fully verified in
 ci 40367959106 at 644e7f8, with both zero-failure Windows summaries, package
 cleanup and required e2e logs personally read; newer Unicode source does not
 inherit that result. Remaining public API coverage and filesystem limits
-stay open. The prepared Unicode bridge replaces Windows ICU/16-bit CRT
-classification/case mappings with pinned ICU4C and compares every code point
-against an independent locked ICU4X beta2 reference. This equivalence still
-requires CI; wcwidth, collation and other wide/POSIX contracts remain open.
+stay open. The Unicode bridge replaces Windows ICU/16-bit CRT classification/
+case mappings with pinned ICU4C. Full ci 40386670586 at 6f6ac6f verifies every
+code point and four invalid values for 14 plain/locale entries against the
+locked ICU4X beta2 reference, plus NDK boundaries/handles/errors in both
+ABIs/modes. Both zero-failure summaries, package and required e2e logs are
+personally read. wcwidth, collation and other wide/POSIX contracts remain
+open; see handoff/tracks/native3-unicode.md.
 
 Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 `docs/handoff/tracks/native2.md`. Branch `wip/native2`.

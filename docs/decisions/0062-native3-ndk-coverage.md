@@ -2,7 +2,10 @@
 
 Status: accepted for the software Bitmap and Minikin font foundation,
 verified in ci 40344682373 at 1e881b5, attempt 2 (2026-10-26).
-The remaining native3 NDK/POSIX scope stays open/proposed.
+Unicode classification/case and Process proc natives are also accepted,
+verified in full ci 40386670586 at 6f6ac6f, attempt 1; both Windows suites,
+package and required e2e logs personally read. See the scoped report in
+handoff/tracks/native3-unicode.md. Remaining NDK/POSIX scope stays open.
 
 ## Context
 
@@ -70,7 +73,7 @@ required TIC-80/Puzzles e2e jobs say 0 unexpected failures. Attempt 1 failed
 only the known output-tone timing check; the permitted failed-job rerun
 passed. See the frozen stage report in handoff/tracks/native3-foundation.md.
 
-## Unicode classification and case mappings (pending CI)
+## Unicode classification and case mappings (verified)
 
 Windows' dynamically loaded ICU version and the CRT's 16-bit locale forms
 are replaced by one bridge over the pinned ICU4C data. It uses bionic's
@@ -85,6 +88,7 @@ ICU4X wrapper with locked beta2 crate/data versions. ci 40374405950 records
 saved from the log and hash-checked. The production host test calls actual
 plain/locale shim entries for every code point and four invalid values;
 NDK tests cover reference rows, handles and error paths in both ABIs/modes.
-ICU4C equivalence is not assumed before that comparison passes. No local
-AOSP/ICU build ran. wcwidth/wcswidth, collation and the rest of native3 remain
-separate open contracts; no new roadmap box is ticked.
+The full comparison passes in ci 40386670586 on both Windows versions,
+including NDK boundary/handle/error checks in both ABIs and APK modes.
+No local AOSP/ICU build ran. wcwidth/wcswidth, collation and the rest of
+native3 remain open; only the scoped Unicode row is ticked.
