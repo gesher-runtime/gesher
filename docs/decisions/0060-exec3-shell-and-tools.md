@@ -34,6 +34,8 @@ fd duplication, background jobs/wait, common builtins and getopts. Exit traps
 run with the original status. Caught mailbox signals are queued without
 calling the parser from the mailbox thread and dispatched between commands.
 Default signals are forwarded to foreground children before shell exit.
+The exec builtin starts a child, waits and exits with its status; it preserves
+the launcher architecture's process behavior but changes the program's pid.
 
 This decision does not approve a partial property or package-manager
 implementation: getprop/setprop, logcat and pm/am must use the real device
@@ -52,7 +54,34 @@ use a locked, flushed replacement file and reload on a new boot. Closed areas
 from old boots are removed when a new area opens; live mappings deny deletion.
 This is a shared property service backend, without Android SELinux property
 contexts or caller-specific write permissions. Those permissions and property
-wait/change-notification APIs remain outside the current implementation.
+wait/change-notification APIs remain outside the current implementation. The
+first draft's shared serials are monotonic counters; the complete bionic
+length-byte/clean-dirty-bit serial representation still needs implementing
+and checking with the wait APIs.
+
+## Fork and static-executable feasibility review
+
+The native fork trampoline saves the calling thread's register/stack return
+context and records selected descriptor, environment and directory operations.
+It creates a Windows process only when exec is reached. It never clones the
+native heap, ART heap, TLS, running threads or synchronization objects, so
+arbitrary writes or library calls in the child affect the original process.
+Saving more registers or serializing shell variables cannot provide fork's
+independent copy of these objects. A general child that performs work before
+exec therefore remains unsupported under the current architecture. The
+supported subset is the documented vfork-style preparation followed by
+exec/_exit; this review does not expand it.
+
+Fixed-address allocation alone would not enable an ET_EXEC static program.
+exec_spawn currently rejects that ELF type, and the loader maps ET_DYN objects
+whose imported libc operations can resolve to the bionic shim. A static NDK
+libc embeds Linux syscall instructions instead of those imports; Windows
+interprets those instructions with a different syscall ABI and kernel object
+model. Supporting it requires syscall translation and process/runtime state
+beyond the existing loader. Keep ENOEXEC for ET_EXEC rather than mapping it
+and allowing its first kernel operation to execute incorrectly. Static PIE
+and non-NDK runtime compatibility are not established by the dynamic NDK
+executable tests.
 
 ## Verification
 
@@ -81,9 +110,9 @@ to 45-exec3 and remain pending CI.
   special-builtin assignment scopes and persistent-descriptor nesting.
 - Signal interruption while blocked reading input, real mailbox traps and
   Process.destroy/destroyForcibly verification.
-- Shared-property ART/NDK CI proof, property permissions/notifications, logcat
+- Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,
+  property permissions/notifications, logcat
   formats/filter/clear and real pm/am service calls.
 - Executable local-exec TLS and the on-device native-process suite.
-- Review the recorded fork-before-exec/static executable limitations against
-  the complete brief. This shell's process serialization does not make a
-  general native fork clone possible.
+- General fork-before-exec and static executables remain unsupported for the
+  architectural reasons reviewed above.

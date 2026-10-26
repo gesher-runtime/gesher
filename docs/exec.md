@@ -247,6 +247,11 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   C:\work\gesher-ci-review\exec3-watch-40320290754.log (120-second interval).
   Verify the NDK artifact first, then the real shell/property/signal checks on
   both Windows runners, package and e2e before recording any new completion.
+- The corrected NDK exec artifact now builds in 40320290754. The follow-up
+  property ABI work remains explicit: shared counters currently change across
+  processes, but bionic's length-byte/clean dirty-bit encoding and wait/wait_any
+  semantics are still open. ADR 0060 now records the fork-before-exec and
+  ET_EXEC feasibility review and the exec builtin's changed-pid limitation.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
