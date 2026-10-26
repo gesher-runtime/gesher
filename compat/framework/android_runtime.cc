@@ -16,11 +16,16 @@
 
 #include <gesher/builtin_library.h>
 
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#include <string>
+#include <vector>
 
 #include <android_runtime/AndroidRuntime.h>
 #include <log/log.h>
@@ -200,6 +205,71 @@ static void Process_sendSignal(JNIEnv*, jclass, jint pid, jint sig) {
   if (pid > 0) kill(pid, sig);
 }
 
+// Match pinned android_util_Process.cpp: numeric line prefixes, zero missing
+// fields after a successful open, and preserve the output when open fails.
+static void Process_readProcLines(JNIEnv* env, jclass, jstring file,
+                                  jobjectArray requested, jlongArray output) {
+  if (file == nullptr || requested == nullptr || output == nullptr) {
+    jniThrowNullPointerException(env, nullptr);
+    return;
+  }
+  jsize count = env->GetArrayLength(requested);
+  if (count > env->GetArrayLength(output)) {
+    jniThrowException(env, "java/lang/IllegalArgumentException", "Array lengths differ");
+    return;
+  }
+  const char* path = env->GetStringUTFChars(file, nullptr);
+  if (path == nullptr) return;
+  std::string filename(path);
+  env->ReleaseStringUTFChars(file, path);
+  std::vector<std::string> fields;
+  for (jsize i = 0; i < count; ++i) {
+    auto field = static_cast<jstring>(env->GetObjectArrayElement(requested, i));
+    if (field == nullptr) {
+      jniThrowNullPointerException(env, "Element in reqFields");
+      return;
+    }
+    const char* value = env->GetStringUTFChars(field, nullptr);
+    if (value == nullptr) {
+      env->DeleteLocalRef(field);
+      return;
+    }
+    fields.emplace_back(value);
+    env->ReleaseStringUTFChars(field, value);
+    env->DeleteLocalRef(field);
+  }
+  jlong* values = env->GetLongArrayElements(output, nullptr);
+  if (values == nullptr) return;
+  int fd = open(filename.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd >= 0) {
+    for (jsize i = 0; i < count; ++i) values[i] = 0;
+    char buffer[4096];
+    ssize_t length = read(fd, buffer, sizeof(buffer) - 1);
+    close(fd);
+    if (length < 0) length = 0;
+    buffer[length] = 0;
+    jsize found = 0;
+    for (char* line = buffer; *line != 0 && found < count;) {
+      char* end = strchr(line, '\n');
+      if (end != nullptr) *end = 0;
+      for (jsize i = 0; i < count; ++i) {
+        if (strncmp(line, fields[i].c_str(), fields[i].size()) != 0) continue;
+        char* number = line + fields[i].size();
+        while (*number == ' ' || *number == '\t') ++number;
+        char* last = number;
+        while (*last >= '0' && *last <= '9') ++last;
+        *last = 0;
+        values[i] = strtoll(number, nullptr, 10);
+        ++found;
+        break;
+      }
+      if (end == nullptr) break;
+      line = end + 1;
+    }
+  }
+  env->ReleaseLongArrayElements(output, values, 0);
+}
+
 static const JNINativeMethod gProcessMethods[] = {
     {"setThreadPriorityNative", "(II)V", GESHER_JNI(Process_setThreadPriorityNative)},
     {"getThreadPriority", "(I)I", GESHER_JNI(Process_getThreadPriority)},
@@ -213,6 +283,8 @@ static const JNINativeMethod gProcessMethods[] = {
     {"getGidForName", "(Ljava/lang/String;)I", GESHER_JNI(Process_getIdForName)},
     {"sendSignal", "(II)V", GESHER_JNI(Process_sendSignal)},
     {"sendSignalQuiet", "(II)V", GESHER_JNI(Process_sendSignal)},
+    {"readProcLines", "(Ljava/lang/String;[Ljava/lang/String;[J)V",
+     GESHER_JNI(Process_readProcLines)},
 };
 
 // --- android.os.PerfettoTrace (Gesher stub) ---------------------------------------

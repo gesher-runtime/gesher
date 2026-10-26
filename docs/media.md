@@ -252,6 +252,13 @@ the microphone (looped, from its start each time recording starts);
   Its causal relationship to low camera throughput is not proven. Camera
   service and surfaces stay in the app process in both modes. The original
   2-second collection, 30+ frame, picture and duration checks are unchanged.
+- Prepared for the next CI: the coordinator's source-only Process fix from
+  native3 commit 95e70c18ec76f5a5d83cc6be0133031d69d1c09e applies cleanly.
+  The only imported file is compat/framework/android_runtime.cc: explicit
+  readProcLines registration and pinned numeric-prefix/procfs/array/null/
+  missing-file semantics. Its separate native3 Java/PowerShell regression
+  passed local checks; compilation/runtime and any camera effect remain
+  unverified until CI. No other native3 or integration changes are imported.
 - Pending source changes: 38-media now uninstalls its own videoapp after
   each device run, checks the cleanup result and then shuts down. The log's
   extra third installed package was exactly com.gesher.videoapp; 50-services'
@@ -299,7 +306,7 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: preserve the camera diagnostics/thresholds, take the coordinator's
+- Next: preserve the camera diagnostics/thresholds, run the coordinator's
   framework/process fix, then verify fixture cleanup and camera throughput
   on both runners before final acceptance. No integration/main merge here.
 
