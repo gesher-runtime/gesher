@@ -394,7 +394,8 @@ int MediaFoundation() {
     uint32_t sub;
   } wants[] = {{"AAC", false, 0x1610}, {"MP3", false, 0x0055}, {"FLAC", false, 0xF1AC},
                {"Opus", false, 0x704F}, {"H.264", true, 0x34363248}, {"HEVC", true, 0x43564548},
-               {"VP9", true, 0x30395056}, {"AV1", true, 0x31305641}, {"MPEG-4 part 2", true, 0x5634504D}};
+               {"VP9", true, 0x30395056}, {"AV1", true, 0x31305641}, {"MPEG-4 part 2", true, 0x5634504D},
+               {"VP8", true, 0x30385056}, {"H.263", true, 0x33363248}};
   for (const Want& w : wants) {
     TypeInfo in = {w.video ? kVideo : kAudio, fourcc(w.sub)};
     IUnknown** acts = nullptr;
@@ -402,6 +403,21 @@ int MediaFoundation() {
     hr = enumEx(w.video ? kVideoDecoder : kAudioDecoder, 0x1 | 0x2 | 0x4 | 0x10 | 0x40, &in, nullptr,
                 &acts, &count);
     printf("mf: %s decoders: %u (0x%08lx)\n", w.name, count, static_cast<unsigned long>(hr));
+    for (UINT32 i = 0; i < count; i++) acts[i]->Release();
+    if (acts != nullptr) CoTaskMemFree(acts);
+  }
+  // The encoders (media3, ADR 0059): MediaCodec's encoders use these where present.
+  const GUID kAudioEncoder = {0x91C64BD0, 0xF91E, 0x4D8C, {0x92, 0x76, 0xDB, 0x24, 0x82, 0x79, 0xD9, 0x75}};
+  const GUID kVideoEncoder = {0xF79EAC7D, 0xE545, 0x4387, {0xBD, 0xEE, 0xD6, 0x47, 0xD7, 0xBD, 0xE4, 0x2A}};
+  const Want encoders[] = {{"AAC", false, 0x1610}, {"Opus", false, 0x704F}, {"H.264", true, 0x34363248},
+                           {"HEVC", true, 0x43564548}, {"VP8", true, 0x30385056}, {"VP9", true, 0x30395056}};
+  for (const Want& w : encoders) {
+    TypeInfo out = {w.video ? kVideo : kAudio, fourcc(w.sub)};
+    IUnknown** acts = nullptr;
+    UINT32 count = 0;
+    hr = enumEx(w.video ? kVideoEncoder : kAudioEncoder, 0x1 | 0x2 | 0x4 | 0x10 | 0x40, nullptr, &out,
+                &acts, &count);
+    printf("mf: %s encoders: %u (0x%08lx)\n", w.name, count, static_cast<unsigned long>(hr));
     for (UINT32 i = 0; i < count; i++) acts[i]->Release();
     if (acts != nullptr) CoTaskMemFree(acts);
   }

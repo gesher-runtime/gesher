@@ -44,6 +44,8 @@ add_library(gesher_media_player OBJECT
   ${_media}/video/video_decoder.cc
   ${_media}/video/mf_video.cc
   ${_media}/video/soft_video.cc
+  ${_media}/video/soft_video_avc.cc
+  ${_media}/video/soft_video_m4v.cc
   ${_media}/video/render.cc
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
@@ -68,6 +70,14 @@ foreach(_d ${GESHER_SOFT_VIDEO_INCLUDES})
   list(APPEND _soft_video_isystem "-isystem${_d}")
 endforeach()
 set_source_files_properties(${_media}/video/soft_video.cc PROPERTIES COMPILE_OPTIONS "${_soft_video_isystem}")
+foreach(_s AVC M4V)
+  set(_isystem)
+  foreach(_d ${GESHER_SOFT_${_s}_INCLUDES})
+    list(APPEND _isystem "-isystem${_d}")
+  endforeach()
+  string(TOLOWER ${_s} _file)
+  set_source_files_properties(${_media}/video/soft_video_${_file}.cc PROPERTIES COMPILE_OPTIONS "${_isystem}")
+endforeach()
 add_dependencies(media_codecs_all gesher_media_player)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media_player)
