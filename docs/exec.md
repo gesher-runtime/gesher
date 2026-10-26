@@ -189,7 +189,26 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** CI 40393019261 completed at
+**Current review:** CI 40405306826 is fully green at
+87d5adadea4008a9c4340b9ee58fbabf9aedb00f: all 28 jobs completed (22 success,
+six intentional skips). Both actual Windows logs end in `0 test(s) failed`.
+Every exec3 Check passes, including shell57, signals/processes/tools, the full
+shared-property/log suites in three modes, executable TLS, broker readiness and
+the installed-device pm/am target/receiver/force-stop checks. The new actual ART
+camera request-selection regression and all original track58 single/device
+camera, sensor, permission and capture-intent assertions pass. No signal records
+were emitted. This is successful combined runtime evidence after the independent
+camera ownership corrections; it does not prove the prior ntdll fault's cause.
+
+Actual package logs pass installed oatdump/image/fonts, lifecycle/shortcuts,
+UI/input and complete shutdown/uninstall cleanup. Both e2e logs pass all nine
+apps including TIC-80 and Puzzles, four transport fixtures and zero unexpected
+failures; native Puzzles generators 6156/9424 exit 0. The exec build directly
+passes LauncherTailTest and LauncherCommandLineTest's 13 cases. The later
+97e63e5 default-tag filter/setter regression and integration f520fd1's CI-only
+rules are prepared for final combined CI; no new local compiler will run.
+
+**Previous review:** CI 40393019261 completed at
 6a3289d2162359aa4f59d22a39b52d724b61517b. Every exec3 Check passes on both
 runners, including all exact installed-device pm/am expectations (actual list/
 path, separate resumed target/receiver and force-stop). Windows-2022's entire
