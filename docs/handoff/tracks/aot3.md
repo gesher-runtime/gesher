@@ -37,6 +37,25 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+ci 40352810247 at f949321: all four aot3 checks pass on both Windows
+versions, including actual nonempty compiled code and app-image loading.
+The only failure on each runner is the completed WinRT geocoder probe's
+CLR/COM teardown after printing InvalidCredentials. All other jobs succeed
+or are skipped; this is still a red run, not mergeable.
+
+The next combined tree includes current integration d68ec79/foundation
+f677944, the completed-only Win32 probe termination, exec3's atomic UTF-8
+Launcher log framing with an executed host regression, and media3's finite
+AAudio prefill fixture. Both oatdump and font bridge early compile checks
+are retained when resolving ci.yml. JDK21's own LauncherTailTest passes
+locally and the changed PowerShell files parse. No AOSP build ran locally;
+all runtime/C++ verification still requires full CI. The first three
+dexopt contracts above remain open even after the oatdump slice passes.
+
+### Earlier CI history
+
+The pending instructions below are historical, superseded by the results above.
+
 First implementation on 2026-10-26: worktree C:\work\gesher-aot3,
 branch wip/aot3, current integration b9f93f0 included. Added real ART
 oatdump/disassembler CMake targets, installer entry/installed-copy check and
