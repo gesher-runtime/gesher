@@ -317,6 +317,15 @@ public static class GesherMediaCapture {
     $capturePath = if ($captureMatch.Success) { $captureMatch.Groups[1].Value } else { $null }
     $code = if ($timedOut) { -1 } else { $p.ExitCode }
     if ($device) {
+      # This fixture installs its APK. Leave the package registry as it was
+      # before this run so later install/list/uninstall checks stay isolated.
+      $cleanup = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'uninstall', 'com.gesher.videoapp') 2>&1 | Out-String
+      $cleanupCode = $LASTEXITCODE
+      $text += "`n" + $cleanup
+      if ($cleanupCode -ne 0 -or $cleanup -notmatch 'gesher-app: uninstalled com\.gesher\.videoapp') {
+        Write-Host "INFO  media: videoapp.apk ($tag) cleanup failed (exit $cleanupCode)"
+        if ($code -eq 0) { $code = -1 }
+      }
       $null = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'shutdown') 2>&1 | Out-String
     }
     Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_HWUI_RENDERER -ErrorAction SilentlyContinue
