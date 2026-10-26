@@ -146,15 +146,16 @@ Pages see the https origin: same-origin requests between assets work without
 | `WebStorage.deleteAllData`, `clearCache` | `Profile2.ClearBrowsingData` (DOM storage kinds; disk cache) |
 | `DownloadListener` | `DownloadStarting`: WebView2's download is cancelled and the listener gets the URL, user agent, Content-Disposition, MIME type and length (Android's WebView never downloads itself) |
 | `window.open`, `window.close` | `NewWindowRequested` with a deferral: with `supportMultipleWindows` (and a user gesture or `javaScriptCanOpenWindowsAutomatically`) `onCreateWindow` gets a `WebViewTransport` and the WebView put there becomes the window (`put_NewWindow`: `window.opener` works); otherwise the page opens in the same WebView, as Android's. `WindowCloseRequested` is `onCloseWindow` |
-| Permissions | `PermissionRequested` with a deferral: geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
+| Geolocation | navigator.geolocation in main frames from LocationManager (`GeolocationShim`, ADR 0058): the WebChromeClient decides per origin, positions are Windows' location service's or the app's test providers |
+| Permissions | `PermissionRequested` with a deferral: iframes' geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
 | File chooser | DevTools `Page.setInterceptFileChooserDialog`: `<input type=file>` calls `onShowFileChooser` (`FileChooserParams` from the input); the Uris go in with `DOM.setFileInputFiles` (content: copied to the cache). Not handled by the app: a Windows file dialog (`IFileOpenDialog`, owned by the app's window, filters from `accept`) |
 | `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings only; ports end with the page |
 | `copyBackForwardList`, `goBackOrForward(n)`, `clearHistory` | DevTools `Page.getNavigationHistory` (read after each history change), `Page.navigateToHistoryEntry`, `Page.resetNavigationHistory` |
 | `findAllAsync`, `findNext`, `clearMatches`, `findAll` | `ICoreWebView2Find` when the runtime has it (its 1-based index is Android's 0-based ordinal), else a script (`PageScripts.find`, CSS Custom Highlights); `findAll` (synchronous) uses the script |
 | `saveWebArchive` | DevTools `Page.captureSnapshot` (MHTML) |
 | `capturePicture` | `CapturePreview` (waited for up to 3 s) drawn into a `Picture` of the view's size: what is shown, not the whole page |
-| Accessibility | WebView2's own UI Automation tree under its window (screen readers read it directly); nothing in Android's accessibility tree |
-| androidx.webkit (`WebViewCompat`) | not reachable: no `org.chromium.support_lib_glue` boundary; `WebViewFeature.isFeatureSupported` is false |
+| Accessibility | the WebView's AccessibilityNodeProvider: WebView2's UI Automation tree as virtual views (click, focus, set text, scroll); UI Automation clients reading the app's window find WebView2's own tree under the WebView's element (ADR 0058) |
+| androidx.webkit (`WebViewCompat`) | Gesher's support library glue (`SupportLib`, ADR 0058): WebMessageListener, document-start scripts, ProxyController, multi-process query, the framework-backed features |
 
 ### JavaScript interfaces
 
