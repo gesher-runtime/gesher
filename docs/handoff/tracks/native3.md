@@ -62,6 +62,10 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Current full CI: 40367959106 at 644e7f8, including integration f677944.
+Watching with --exit-status --interval 120. This combined proc-native/stub
+follow-up and shared reliability changes are not verified yet.
+
 ci 40365301342 at 9361064 was cancelled after media3's diagnostic run
 40359757434 exposed four early native/Looper/resource failures: the new
 readProcLines registration lacked its lightweight tests/dex-natives Process
