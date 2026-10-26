@@ -220,18 +220,20 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — device coverage and diagnostic continuation, 2026-10-26
-- Running: ci 40343220358 at f41f3a97eef42ae374300054f135082915ccbebb:
+- Running: ci 40349479693 at 1361200103e4ab74b8051be0cba53d2eb8d13e1c:
   required part-1 device repetition, opt-in capture/camera flow diagnostics
-  and the coordinator's reliability patch. No results from this run are
+  and the coordinator's reliability patch plus bounded media setup. No results from this run are
   verified yet. Watch with interval 120; read actual counters before changing
   any recording capacity, collection duration or frame/tone threshold.
-- The run's main/framework/native/graphics builds and boot image pass, but
-  media job 121646773927 remains in Generate the test media for over 20
-  minutes. Its active logs endpoint returns 404, so the stalled command is
-  not identified. Prepared workflow change: use an existing ffmpeg before
-  attempting apt, bound apt network waits/retries and cap generation at 10
-  minutes. Generator scripts and asset/check thresholds are unchanged. No
-  recording runtime result is available while the media artifact is blocked.
+- Superseded ci 40343220358 was cancelled after the replacement was
+  confirmed. Its completed media job 121646773927 log shows the delay before
+  any generator output: apt step starts 14:55:53 UTC, needrestart/package
+  maintenance finishes 15:23:46, assets appear 15:23:48..50 and NDK/Java/
+  upload finish 15:24:21. Both apt commands hid stdout, so update versus
+  install cannot be isolated; this was not a long ffmpeg/Java compile.
+  The replacement uses existing ffmpeg, bounds apt waits/retries and caps
+  generation at 10 minutes. Generator scripts/assets/checks are unchanged.
+  No recording runtime result was obtained before superseding that run.
 - Latest full CI: 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
   including integration 4d144663/AOT2. All metadata and both test logs are
   read: windows-2025 job 121604055608 ends `0 test(s) failed`;
