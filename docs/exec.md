@@ -187,7 +187,29 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-- Lead-engineer continuation (2026-10-26): the current WIP fixes nested
+- Current continuation (2026-10-26): the shell executor, builtin dispatch and
+  RunShell entry are now linked into gesher-exec, replacing the minimal shell.
+  Subshells/pipeline stages/command substitutions use child processes and
+  serialized state on inherited fd 63 (not a potentially oversized Windows
+  command line); stdin stays available to commands. Redirections, incremental
+  input, functions/local scopes, control flow, positional fields, parameter
+  operators, getopts, traps and process status handling are implemented.
+  Small local compilation/linking of Gesher's own files passes with
+  `-Wall -Wextra -Werror`; 47 exact-output/status cases pass, including a
+  pipeline larger than a pipe buffer and 40 KiB of serialized state. The new
+  Exec3Test also passes locally through a small launcher driver and JDK 21's
+  ProcessBuilder, including read from the still-open stdin. The local driver
+  has no Gesher signal mailbox, so it does not verify signal delivery or ART.
+  CI checks are in 45-exec3 and exec.yml's existing Java-source glob builds
+  Exec3Test. No AOSP build was run locally. No exec3 work is CI-verified yet.
+- Still open: umask (reports unsupported rather than claiming permissions),
+  broader shell conformance (including special-builtin assignment scopes and
+  persistent-descriptor nesting), caught signals during a blocked input read,
+  real mailbox/Process.destroy tests, shared properties, logcat, pm/am,
+  executable local-exec TLS, the on-device native-process checks and the
+  feasibility limits in the original brief. Complete these after reading the
+  first CI result; do not mark the whole track or shell complete.
+- Previous WIP (superseded by the current implementation above): fixes nested
   substitution/quote scanning, incomplete-input reporting, quoted assignment
   parsing and empty-field expansion. `shell_execute.inc` now contains draft
   AST execution, process-isolated subshells/pipeline stages, redirections and

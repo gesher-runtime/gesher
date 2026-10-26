@@ -1,7 +1,7 @@
 // gesher-exec's /system/bin/sh (docs/exec.md, ADR 0060): a POSIX shell with
-// mksh's common extensions, written for Windows (no fork: subshells,
-// pipeline stages and command substitutions are copies of the shell state run
-// on threads; programs are Windows processes started as execvp would find
+// common mksh syntax, written for Windows (no fork: subshells, pipeline
+// stages and command substitutions run serialized state in child processes;
+// programs are Windows processes started as execvp would find
 // them, exec_spawn.h). Apps reach it through Runtime.exec("sh -c ..."),
 // native system()/popen(), and #!/system/bin/sh scripts.
 #pragma once
