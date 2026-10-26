@@ -214,8 +214,11 @@ actual ART/Java/e2e run. Both completed Windows logs are retained under
 C:\work\gesher-ci-review\exec3-40352529279-windows-*.log.
 
 The prepared tree also merges verified native3 integration f677944 (merge
-333b1d6). Its separate green CI does not verify this combination. No replacement
-CI has been dispatched yet; the full track, pm/am and umask remain open.
+333b1d6). Its separate green CI does not verify this combination. Combined CI
+40372171824 is now running at 7ae515fdd4a7dd84af4a65f15e19392d6517a437 after
+the complete Process follow-up and integration d68ec795 (docs on f677944).
+Watch log C:\work\gesher-ci-review\exec3-watch-40372171824.log uses 120 seconds.
+The full track, pm/am and umask remain open until actual completed evidence.
 Applied the coordinator's complete four-file Process follow-up (source 644e7f8):
 readProcLines/readProcFile/parseProcLine, matching lightweight JNI declarations,
 the full-width/procfs parser regression and native3 test wiring. The coordinator
