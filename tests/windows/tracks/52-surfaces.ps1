@@ -113,6 +113,10 @@ function SurfaceChecks([string] $Mode, $r) {
     (& $none 2)
     InOrder $t @('surfaces: A surfaceChanged format ', ' 50x25', 'surfaces: A: drew 50x25')
     if ($s[2]) { Regions $s[2] @(@('A left red', 10, 10, 90, 140, 0xff0000), @('A right green', 110, 10, 190, 140, 0x00ff00)) })
+  SurfaceCheck "TextureView ($Mode): lockCanvas / unlockCanvasAndPost draw into its SurfaceTexture" @(
+    (& $none 2)
+    InOrder $t @(,'surfaces: T lockCanvas: drew magenta 150x150')
+    if ($s[2]) { Regions $s[2] @(,@('T magenta', 260, 260, 390, 390, 0xff00ff)) })
   # Phase 3: moved and resized by layout.
   SurfaceCheck "SurfaceView ($Mode): moved and resized by its layout: surfaceChanged 300x100, its frames follow the view" @(
     (& $none 3)
