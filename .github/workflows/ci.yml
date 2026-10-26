@@ -28,7 +28,11 @@ jobs:
           ccache-key: runtime
 
       - name: Build
-        run: ninja -C out
+        run: |
+          # Compile the new bridge before the full runtime to expose its
+          # header/ABI errors without waiting for every AOSP object.
+          ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
+          ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
