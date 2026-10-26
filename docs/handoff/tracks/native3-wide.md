@@ -160,6 +160,12 @@ reference. Production numeric tests cover high-bit source/end behavior.
 No width/property/case code or fixture was edited; root owns its unsigned
 width-reference correction. This follow-up still needs scoped/full CI.
 
+Reference provenance checking now compares every saved source with the
+actual pinned upstream bytes in CI, in addition to the checked-in digest.
+This also prevents a failed source fetch from leaving a misleading file:
+an erroneous LLVM LICENSE.TXT path (upstream uses LICENSE) was removed;
+its copied content was never compiled. The genuine LLVM LICENSE is retained.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
