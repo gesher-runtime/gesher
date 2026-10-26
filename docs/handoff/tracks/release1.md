@@ -100,3 +100,13 @@ an actual candidate/publisher CI run. The branch CI is still held while the
 coordinator resolves the separate full-suite boot-profile failure and merges
 verified Web3. No installer, artifact, tag or release was downloaded or
 published locally.
+
+Recovery update (2026-10-27): current integration a0f32e1, including verified
+AOT runtime merge 6dc3f03, is merged without conflicts. This adds the verified
+DM/StrictJarFile and compiler-test stage plus portable TLS/media preparation;
+the exact-version input, early installer artifact and post-smoke receipt,
+candidate pin/reauthentication guards and installed compiler/oatdump checks
+remain present. No C/C++ fixture will be compiled or executed locally under
+the updated CI-only rule. Branch release-version CI is still held for verified
+Web3 integration and the coordinator's final combined source. Neither the
+candidate/publisher workflow nor any tag/release/publication has run here.
