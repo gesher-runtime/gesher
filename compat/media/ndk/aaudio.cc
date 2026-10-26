@@ -130,12 +130,9 @@ void CallbackLoop(AAudioStream* s) {
       s->cv.wait(lock, [s] { return s->quit || s->state == kStateStarted; });
       if (s->quit) return;
     }
-    size_t room = s->track->buffer_capacity_frames() - std::min<size_t>(s->track->Queued(),
-                                                                          s->track->buffer_capacity_frames());
-    if (room < static_cast<size_t>(s->burst)) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
-      continue;
-    }
+    // Woken by the mixer as it plays (not a sleep: under load a sleeping feeder wakes
+    // late and the stream's few bursts run dry).
+    if (!s->track->WaitForRoom(static_cast<size_t>(s->burst), 20)) continue;
     int32_t r = s->b.data_cb(s, s->b.data_user, buf.data(), s->burst);
     s->track->Write(buf.data(), buf.size(), false);
     s->written += s->burst;

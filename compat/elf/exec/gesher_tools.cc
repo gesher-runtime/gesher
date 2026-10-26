@@ -1,0 +1,345 @@
+// gesher-exec --tool <name> [args]: the Android /system/bin programs apps
+// really call, as toybox/AOSP provide them (docs/exec.md, ADR 0055). No root,
+// so `su` is absent; these cover ls, cat, id, ps, getprop, setprop, logcat, pm,
+// kill and sleep. exec_spawn.h routes a bare name or a /system/bin path here.
+//
+// They read and write bytes unchanged (binary stdio, set by main()).
+
+#include "exec_spawn.h"
+
+#include <windows.h>
+#include <tlhelp32.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+extern "C" int gesher_kill_other(int pid, int sig);
+
+namespace gesher::exec {
+
+namespace {
+
+std::string EnvOr(const char* name, const char* fallback) {
+  const wchar_t* v = _wgetenv(Widen(name).c_str());
+  return v != nullptr && *v != 0 ? Narrow(v) : fallback;
+}
+
+// --- cat -----------------------------------------------------------------------
+
+int CatFile(FILE* in) {
+  char buf[65536];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) {
+    if (std::fwrite(buf, 1, n, stdout) != n) return 1;
+  }
+  return 0;
+}
+
+int Cat(const std::vector<std::string>& args) {
+  int status = 0;
+  bool any = false;
+  for (const std::string& a : args) {
+    if (a == "-" ) {
+      CatFile(stdin);
+      any = true;
+      continue;
+    }
+    if (!a.empty() && a[0] == '-') continue;  // ignore options
+    any = true;
+    FILE* f = _wfopen(WindowsPath(a).c_str(), L"rb");
+    if (f == nullptr) {
+      std::fprintf(stderr, "cat: %s: No such file or directory\n", a.c_str());
+      status = 1;
+      continue;
+    }
+    if (CatFile(f) != 0) status = 1;
+    std::fclose(f);
+  }
+  if (!any) CatFile(stdin);
+  std::fflush(stdout);
+  return status;
+}
+
+// --- ls ------------------------------------------------------------------------
+
+int ListOne(const std::string& path, bool long_form, bool all) {
+  std::wstring w = WindowsPath(path);
+  DWORD attrs = GetFileAttributesW(w.c_str());
+  if (attrs == INVALID_FILE_ATTRIBUTES) {
+    std::fprintf(stderr, "ls: %s: No such file or directory\n", path.c_str());
+    return 1;
+  }
+  std::vector<std::string> names;
+  if ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((w + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+      do {
+        std::string name = Narrow(fd.cFileName);
+        if (!all && !name.empty() && name[0] == '.') continue;
+        names.push_back(name);
+      } while (FindNextFileW(h, &fd));
+      FindClose(h);
+    }
+  } else {
+    names.push_back(path);
+  }
+  for (const std::string& n : names) {
+    if (long_form) {
+      std::wstring full = (attrs & FILE_ATTRIBUTE_DIRECTORY) ? w + L"\\" + Widen(n) : w;
+      WIN32_FILE_ATTRIBUTE_DATA info = {};
+      long long size = 0;
+      char type = '-';
+      if (GetFileAttributesExW(full.c_str(), GetFileExInfoStandard, &info)) {
+        if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) type = 'd';
+        size = (static_cast<long long>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+      }
+      std::fprintf(stdout, "%crw-rw-rw- %10lld %s\n", type, size, n.c_str());
+    } else {
+      std::fprintf(stdout, "%s\n", n.c_str());
+    }
+  }
+  std::fflush(stdout);
+  return 0;
+}
+
+int Ls(const std::vector<std::string>& args) {
+  bool long_form = false, all = false;
+  std::vector<std::string> paths;
+  for (const std::string& a : args) {
+    if (a.size() >= 2 && a[0] == '-' && a[1] != '-') {
+      for (char c : a.substr(1)) {
+        if (c == 'l') long_form = true;
+        else if (c == 'a') all = true;
+      }
+    } else if (a != "--") {
+      paths.push_back(a);
+    }
+  }
+  if (paths.empty()) paths.push_back(".");
+  int status = 0;
+  for (const std::string& p : paths) {
+    if (ListOne(p, long_form, all) != 0) status = 1;
+  }
+  return status;
+}
+
+// --- id ------------------------------------------------------------------------
+
+int Id(const std::vector<std::string>&) {
+  int uid = std::atoi(EnvOr("GESHER_UID", "10000").c_str());
+  std::fprintf(stdout, "uid=%d(u0_a%d) gid=%d(u0_a%d) groups=%d(u0_a%d)\n", uid,
+               uid >= 10000 ? uid - 10000 : uid, uid, uid >= 10000 ? uid - 10000 : uid, uid,
+               uid >= 10000 ? uid - 10000 : uid);
+  std::fflush(stdout);
+  return 0;
+}
+
+// --- ps ------------------------------------------------------------------------
+
+int Ps(const std::vector<std::string>&) {
+  std::fprintf(stdout, "%-8s %-8s %s\n", "PID", "PPID", "NAME");
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return 1;
+  PROCESSENTRY32W pe = {};
+  pe.dwSize = sizeof(pe);
+  if (Process32FirstW(snap, &pe)) {
+    do {
+      std::fprintf(stdout, "%-8lu %-8lu %s\n", pe.th32ProcessID, pe.th32ParentProcessID,
+                   Narrow(pe.szExeFile).c_str());
+    } while (Process32NextW(snap, &pe));
+  }
+  CloseHandle(snap);
+  std::fflush(stdout);
+  return 0;
+}
+
+// --- getprop / setprop ---------------------------------------------------------
+//
+// Properties live in $ANDROID_ROOT/build.prop (BuildProps on the Java side);
+// getprop reads them, plus the environment's $GESHER_PROP_<name>. There is no
+// shared property store across processes on Windows, so setprop cannot persist;
+// it reports that and succeeds, as a device without write access would.
+
+std::string PropFromFile(const std::string& name) {
+  std::string root = EnvOr("ANDROID_ROOT", "/system");
+  FILE* f = _wfopen(WindowsPath(root + "/build.prop").c_str(), L"rb");
+  if (f == nullptr) return "";
+  char line[1024];
+  std::string value;
+  while (std::fgets(line, sizeof(line), f) != nullptr) {
+    std::string s = line;
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+    size_t b = s.find_first_not_of(" \t");
+    if (b == std::string::npos || s[b] == '#') continue;
+    size_t eq = s.find('=', b);
+    if (eq == std::string::npos) continue;
+    std::string key = s.substr(b, eq - b);
+    while (!key.empty() && key.back() == '?') key.pop_back();
+    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+    if (key == name) value = s.substr(eq + 1);
+  }
+  std::fclose(f);
+  return value;
+}
+
+int Getprop(const std::vector<std::string>& args) {
+  std::vector<std::string> names;
+  for (const std::string& a : args) {
+    if (a.empty() || a[0] != '-') names.push_back(a);
+  }
+  if (names.empty()) {
+    std::fprintf(stderr, "getprop: listing all properties is not supported\n");
+    return 0;
+  }
+  std::string value = PropFromFile(names[0]);
+  if (value.empty()) value = EnvOr(("GESHER_PROP_" + names[0]).c_str(), names.size() > 1 ? names[1].c_str() : "");
+  std::fprintf(stdout, "%s\n", value.c_str());
+  std::fflush(stdout);
+  return 0;
+}
+
+int Setprop(const std::vector<std::string>& args) {
+  if (args.size() < 2) {
+    std::fprintf(stderr, "usage: setprop NAME VALUE\n");
+    return 1;
+  }
+  std::fprintf(stderr, "setprop: %s: not stored (Gesher has no shared property store)\n",
+               args[0].c_str());
+  return 0;
+}
+
+// --- logcat --------------------------------------------------------------------
+//
+// Gesher's log for a process is the file in $GESHER_LOG_FILE (the system server
+// sets it per app process); -d dumps it and exits, otherwise it follows.
+
+int Logcat(const std::vector<std::string>& args) {
+  bool dump = false;
+  for (const std::string& a : args) {
+    if (a == "-d" || a == "--dump") dump = true;
+    if (a == "-c" || a == "--clear") return 0;  // nothing to clear
+  }
+  std::string path = EnvOr("GESHER_LOG_FILE", "");
+  if (path.empty()) {
+    std::fprintf(stderr, "logcat: no log for this process (GESHER_LOG_FILE is unset)\n");
+    return 0;
+  }
+  FILE* f = _wfopen(WindowsPath(path).c_str(), L"rb");
+  if (f == nullptr) {
+    std::fprintf(stderr, "logcat: %s: No such file or directory\n", path.c_str());
+    return 1;
+  }
+  char buf[65536];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) std::fwrite(buf, 1, n, stdout);
+  std::fflush(stdout);
+  if (!dump) {
+    // Follow: read what is appended until stdout breaks (the reader left).
+    for (;;) {
+      Sleep(200);
+      while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (std::fwrite(buf, 1, n, stdout) != n) {
+          std::fclose(f);
+          return 0;
+        }
+      }
+      std::fflush(stdout);
+      clearerr(f);
+    }
+  }
+  std::fclose(f);
+  return 0;
+}
+
+// --- kill ----------------------------------------------------------------------
+
+int SignalByName(const std::string& name) {
+  static const struct {
+    const char* n;
+    int sig;
+  } kSigs[] = {{"HUP", 1}, {"INT", 2}, {"QUIT", 3}, {"KILL", 9}, {"USR1", 10}, {"USR2", 12},
+               {"TERM", 15}, {"STOP", 19}, {"CONT", 18}};
+  std::string n = name;
+  if (n.rfind("SIG", 0) == 0) n = n.substr(3);
+  for (const auto& s : kSigs) {
+    if (n == s.n) return s.sig;
+  }
+  return std::atoi(name.c_str());
+}
+
+int Kill(const std::vector<std::string>& args) {
+  int sig = 15;
+  size_t i = 0;
+  if (i < args.size() && !args[i].empty() && args[i][0] == '-') {
+    sig = SignalByName(args[i].substr(1));
+    ++i;
+  }
+  if (i >= args.size()) {
+    std::fprintf(stderr, "usage: kill [-SIGNAL] PID...\n");
+    return 1;
+  }
+  int status = 0;
+  for (; i < args.size(); ++i) {
+    int pid = std::atoi(args[i].c_str());
+    if (gesher_kill_other(pid, sig) != 0) {
+      std::fprintf(stderr, "kill: %d: No such process\n", pid);
+      status = 1;
+    }
+  }
+  return status;
+}
+
+// --- sleep ---------------------------------------------------------------------
+
+int Sleep_(const std::vector<std::string>& args) {
+  if (args.empty()) return 0;
+  double seconds = std::atof(args[0].c_str());
+  if (seconds > 0) Sleep(static_cast<DWORD>(seconds * 1000));
+  return 0;
+}
+
+// --- pm ------------------------------------------------------------------------
+//
+// Package management is the system server's (Installer); from a native process
+// there is no binder here, so pm answers the few harmless queries and declines
+// the rest, as a shell without the right permissions would.
+
+int Pm(const std::vector<std::string>& args) {
+  if (!args.empty() && args[0] == "path") {
+    std::fprintf(stderr, "pm: not available from a native process\n");
+    return 1;
+  }
+  std::fprintf(stderr, "pm: not available from a native process\n");
+  return 1;
+}
+
+}  // namespace
+
+int RunTool(const std::string& name, const std::vector<std::string>& args) {
+  if (name == "toybox") {
+    if (args.empty()) {
+      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm\n");
+      std::fflush(stdout);
+      return 0;
+    }
+    return RunTool(args[0], std::vector<std::string>(args.begin() + 1, args.end()));
+  }
+  if (name == "ls") return Ls(args);
+  if (name == "cat") return Cat(args);
+  if (name == "id") return Id(args);
+  if (name == "ps") return Ps(args);
+  if (name == "getprop") return Getprop(args);
+  if (name == "setprop") return Setprop(args);
+  if (name == "logcat") return Logcat(args);
+  if (name == "kill") return Kill(args);
+  if (name == "sleep") return Sleep_(args);
+  if (name == "pm" || name == "am") return Pm(args);
+  std::fprintf(stderr, "%s: not found\n", name.c_str());
+  return 127;
+}
+
+}  // namespace gesher::exec
