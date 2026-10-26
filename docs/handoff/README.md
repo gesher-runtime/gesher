@@ -162,7 +162,7 @@ explicitly unverified. Next free ADR: 0062.
 | native2 | windows-2025 job 121456663287 of 40285714522 ends with 12 test(s) failed: all dalvikvm/APK paths abort on unresolved android_get_device_api_level. Added it to the common shim through ro.build.version.sdk; local g++ syntax-only check passed. Merged a462e9c. | ci 40291049581 at e1e99c0; not verified yet. |
 | surfaces | windows-2025 job 121451383191 of 40285764214 ends with 1 test(s) failed: surfacegl single-process finish. SIGQUIT shows an idle main looper; the server rejects the driver's unregistered token. Routed local finish requests to the existing window close handler. Merged a462e9c. TIC-80 passes e2e at 800x400 (job 121452091155), but needs confirmation on both runners before removing knownFailure. | ci 40291437446 at 025fda1; not verified yet. |
 | web3 | windows-2025 job 121453338756 of 40285810159 ends with 3 test(s) failed. Geo watch double encoding fixed at 3852225. Removed a provider cache lock across Java callbacks (UIA reentrancy) and added snapshot timeout phases; accessibility remains unverified. Merged a462e9c. | ci 40292261578 at 63203c4; must read accessibility results before closing anything. |
-| media3 | ci 40287172595 remains under watch; package and test/e2e results must be read when complete. | Existing run at f21d531. |
+| media3 | Read windows-2022 job 121463451415 of 40287172595: MPEG-4 part 2 returns 0 frames; tests then abort before stage 3 (59-media3 dereferences a regex capture overwritten by another match). Read e2e job 121464252568: Just Player launcher exit 1; 1 unexpected failure. Added VOL sample prefix/reset on flush, fixed the regex capture, pinned Just Player SHA and enabled its diagnostic log; test exceptions now print script/line/stack. Merged integration 7d6a82e. | ci 40292991000 at fc99140; stage 3 still unverified. |
 | exec3 | No changes since handover; the shell still has no executor or builtins. | No run. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
@@ -174,6 +174,12 @@ shared-library class-loader contexts, cloud profiles, secondary dex and oatdump;
 media3 lists legacy camera recording, persistent input surfaces and VP8/VP9
 encoding. Include these in the subsequent gap audit along with every other
 remaining item; green track tests alone do not close the overall goal.
+
+Roadmap audit: the old aggregate Phase 1 NativeBN/epoll/inotify/process-model
+box was still unticked despite implementations being merged. Closed using
+40285476400's PASS lines on both runners (NativeBN/BigInteger, EPoll,
+posix probe, WatchService, FileObserver); clarified the superseded parts of
+ADR 0011 without closing its outstanding LLP64 value audit.
 
 The owner stopped all track agents on 2026-10-26 to hand the project to a
 new team. Each open track committed and pushed its work and updated its

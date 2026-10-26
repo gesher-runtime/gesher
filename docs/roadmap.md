@@ -91,11 +91,12 @@ Each phase ends with something demonstrable, built and tested in CI.
       Windows' zone; java.util, java.time and android.icu match Windows'
       offsets at every 2025-2027 transition in four zones ([posix.md](posix.md),
       ADR 0045; ci 40198104086)
-- [ ] BoringSSL (`NativeBN`), epoll and inotify, a process model
+- [x] BoringSSL (`NativeBN`), epoll and inotify, a process model
       (inotify over `ReadDirectoryChangesW`, epoll-compatible, with
       `WatchService` and `FileObserver` on it; `kill`/`getppid` across
       Gesher processes, `/proc/self/{status,maps,fd,task}`: posix track,
-      ci 40198104086)
+      ci 40198104086; verified together with NativeBN on both runners in
+      ci 40285476400: BigInteger, EPoll, posix probe, WatchService, FileObserver)
 - [x] Path model ([0010](decisions/0010-paths.md)): Linux paths are
       drive-less paths on the current drive, so ART's `:`-separated lists
       need no drive letters; `/dev/null`, `/dev/zero`, `/dev/urandom` and
