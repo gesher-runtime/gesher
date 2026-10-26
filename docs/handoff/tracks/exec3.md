@@ -15,6 +15,10 @@ invokes it under ART; that ART invocation is pending. Quote-aware Launcher main
 token parsing fixes a Windows4 startup defect and passes13 host cases. The next
 combined run retains all real assertions and open umask/policy scope; neither
 camera ownership proof nor stack-word candidates establish the ntdll cause.
+CI40405306826 is running at87d5ada with that combined source. Watch
+C:\work\gesher-ci-review\exec3-watch-40405306826.log at120seconds; no duplicate
+own run is active. The source includes the latest integration7826cbe docs atop
+the verified117 runtime code.
 
 Earlier continuation evidence:
 

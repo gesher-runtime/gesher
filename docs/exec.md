@@ -221,6 +221,9 @@ argument scanner for Zygote.vmCommandLine. That scanner fixes Windows4's actual
 startup failure when the Launcher main-class token is quoted; thirteen host
 cases pass, with direct execution wired into the exec workflow. New ART camera
 regression, quoted Launcher startup and caller-word records await combined CI.
+CI40405306826 now runs that complete source at87d5ada. Its watch file is
+C:\work\gesher-ci-review\exec3-watch-40405306826.log (120-second interval).
+Latest integration7826cbe is already included; it adds documentation atop117.
 
 **Previous review:** CI 40385411337 completed at
 80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both
