@@ -148,6 +148,14 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 ## Status and next steps
 
+- Continuation (2026-10-26): ci 40291437446 at 025fda1 passed windows-2022,
+  package and e2e. windows-2025 ended with one locale test failure: the restored
+  locale and HandlesActivity callback #2 are present, but Set-Culture's own
+  broadcast finishes the test activity before the explicit WM_SETTINGCHANGE
+  send returns. Updated 49-locale to accept that completed callback while still
+  requiring the restored locale, first day and hour cycle. This test fix is
+  not yet CI-verified; all remaining surfaces scope below stays open.
+
 ### Done and verified
 - **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,
   both runners; see docs/services.md "Status and next steps (hwsvc2)"):
