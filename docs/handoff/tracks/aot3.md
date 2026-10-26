@@ -37,6 +37,13 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+ci 40385898668 at 9831182 failed before framework compilation: patch 0650's
+Java source was absent from aosp.lock's sparse fetch. Add exactly
+core/java/android/util/jar/StrictJarFile.java to frameworks/base's existing
+paths, retaining every other entry. The failed run does not verify either
+the descriptor cleanup or boot-profile learning. No compile error is
+inferred from the missing-file patch-application error.
+
 ci 40375696804 at 9ba2df5: real app/installer compilation, package and both
 e2e jobs pass. Both Windows suites have two cloud-fixture failures. Matching
 DM validation/copy/profman acceptance, selected onCreate compiled code,
