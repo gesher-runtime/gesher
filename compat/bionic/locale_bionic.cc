@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -621,11 +622,22 @@ int64_t BIONIC_SYSV Wcstol(const wchar32* s, wchar32** end, int base) {
 uint64_t BIONIC_SYSV Wcstoul(const wchar32* s, wchar32** end, int base) {
   return WideInteger<false>(s, end, base);
 }
+_locale_t NumericLocale() {
+  // bionic's supported locales all have C numeric syntax. Keep host CRT
+  // language changes from changing the parser's decimal separator.
+  static _locale_t locale = _create_locale(LC_ALL, "C");
+  return locale;
+}
+
 double BIONIC_SYSV Wcstod(const wchar32* s, wchar32** end) {
-  return WideParse<double>(s, end, [](const char* b, char** e) { return strtod(b, e); });
+  return WideParse<double>(s, end, [](const char* b, char** e) {
+    return _strtod_l(b, e, NumericLocale());
+  });
 }
 float BIONIC_SYSV Wcstof(const wchar32* s, wchar32** end) {
-  return WideParse<float>(s, end, [](const char* b, char** e) { return strtof(b, e); });
+  return WideParse<float>(s, end, [](const char* b, char** e) {
+    return _strtof_l(b, e, NumericLocale());
+  });
 }
 Quad BIONIC_SYSV Wcstold(const wchar32* s, wchar32** end) {
   return ToQuad(WideParse<double>(s, end, [](const char* b, char** e) { return strtod(b, e); }));

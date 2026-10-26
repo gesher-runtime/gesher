@@ -120,6 +120,13 @@ Production locale and both NDK ABI builds also pass. Current integration
 a06d930 is merged as 6bec63d before the first full runtime CI dispatch.
 No production runtime, package or e2e claim is made yet.
 
+First full ci 40420123819 at 6e91b8d is pending. A final float audit adds
+a decimal just above a binary32 halfway boundary (detects double rounding)
+and explicitly selects the CRT's C numeric locale for wcstod/wcstof, matching
+both supported bionic locales independently of host language changes. This
+follow-up needs scoped compilation/reference and a subsequent full run;
+the first full run remains useful production diagnostics for the prior SHA.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
