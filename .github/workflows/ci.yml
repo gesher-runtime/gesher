@@ -542,9 +542,22 @@ jobs:
           name: gesher-setup
           path: installer
 
+      - name: Locate APK cache on Gesher's drive
+        id: apk-cache
+        shell: pwsh
+        run: '"path=$(Join-Path $env:TEMP gesher-e2e)" >> $env:GITHUB_OUTPUT'
+
+      # run-e2e checks every SHA-256 again, including cache hits.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.apk-cache.outputs.path }}
+          key: e2e-apks-v1-${{ hashFiles('tests/e2e/apps.json') }}
+
       - name: Run real apps
         shell: pwsh
         run: |
+          pwsh -NoProfile -File tests/e2e/test-apks.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
           exit $LASTEXITCODE
