@@ -125,7 +125,7 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
   Launch launch;
   int error = PrepareLaunchInPath(args, sh.cwd, GetVar(sh, "PATH"), &launch);
   if (error != 0) {
-    ShErr(sh, io, args[0] + ": " + ErrorText(error));
+    ShErr(sh, io, args[0] + ": " + (error == kENOENT ? "not found" : ErrorText(error)));
     return error == kENOENT ? 127 : 126;
   }
   std::vector<ChildFd> fds;
