@@ -347,6 +347,11 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Merged verified aot2 integration (4d144663) and central documentation through
+  b9f93f0c before the next full run. The original capture fix, hosted UIA
+  override, both e2e runner requirements and all new network/ArrayBuffer
+  assertions remain present. Combined dispatch is next.
+
 - Next combined run includes typed `WEB_MESSAGE_ARRAY_BUFFER` payloads for
   main-frame posting, WebMessageListener/replies and message ports. Payloads
   preserve byte arrays through a base64 JSON envelope; injected JavaScript
