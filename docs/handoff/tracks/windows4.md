@@ -78,6 +78,27 @@ Watch: `C:/work/gesher-ci-review/windows4-40417632512-watch.log`, interval 120.
 It is diagnostic until every required result is read; no threshold or runtime
 assertion was relaxed. The independent old main build was not canceled.
 
+Shared edits to review at final handoff (relative to integration 94ccde1):
+- framework.yml adds the winlegacy build/copy lines; graphics.yml builds and
+  collects the three full-native probes and test-service DLL. The separate
+  windows4-probes workflow owns only the fast Gesher fixture path.
+- cmake/aosp/input.cmake and window.cmake register production TSF/COM sources
+  and native probe targets; no global CMakeLists or main CI orchestration edit.
+- android/app/GesherAppDriver and GesherAppProcess install the fresh Binder
+  display path before Application code. The driver also publishes rotation and
+  explicit zero overrides; ActivityTaskManagerService sequences focused-task
+  display changes. Services connects the Binder display/callback contract.
+- LocaleManagerService samples shared geometry with its configuration sequence
+  and installs the initialized Runnable dispatcher for real process changes.
+- tests/windows/tracks/35-ime.ps1 retains SendInput, actual composition/candidate
+  observations and Enter. The coordinator-approved assertion correction compares
+  the exact post-Enter all-kanji editor with the independently logged native
+  commit, replacing the incorrect fixed two-kanji criterion. Floating candidate
+  observation checks zero edge insets and unchanged client/content dimensions.
+  Both Java IME fixtures expose the actual editor spans/state used by that oracle.
+Portable TLS/media and quoted-launcher changes are already in the integration
+base, so they introduce no remaining Windows4 delta against it.
+
 Resumed on 2026-10-26 after merging current integration a57c1f8 without a reset.
 WIP: the shared Application Display follows the focused visible task, with
 explicit per-Activity zero/rotated overrides and masked Binder display callbacks.
