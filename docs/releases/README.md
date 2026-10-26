@@ -46,6 +46,9 @@ asset. Local artifact downloads are not part of this procedure.
    Candidate execution has read-only job permissions. Publication uses a fresh
    runner/checkout, downloads the original artifacts again and runs no installer
    with write credentials. The workflow verifies source provenance, all job conclusions/critical
+   steps and the pre-execution candidate job's immutable output pin (source
+   attempt, artifact identities/digests/sizes and member hashes). A new green
+   source attempt requires candidate verification again. It verifies all job conclusions/critical
    steps, both artifact ZIP digests, the manifest/checksums, installer PE
    metadata and candidate install/runtime/cleanup. Immediately before any write
    it re-fetches/hashes the source receipt ZIP and derives expected hashes from

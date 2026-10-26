@@ -226,12 +226,17 @@ def authenticate_receipt(client, item, parent):
         temporary.rmdir()
 
 
-def promote(client, identifier, expected, directory, notes, verify_directory, prepared):
+def promote(client, identifier, expected, directory, notes, verify_directory, prepared, candidate_pin):
     # Re-fetch all source gates immediately before any write. A new/incomplete
     # CI attempt or changed artifact identity invalidates the prepared receipt.
     run, installer, receipt = source(client, identifier, expected)
     trusted_receipt = authenticate_receipt(client, receipt, Path(directory).resolve().parent)
     assets = g.candidate(directory, run, installer, trusted_receipt)
+    current_pin = g.source_pin({"source_run": identifier, "source_sha": expected,
+                 "source_attempt": run["run_attempt"], "installer_artifact": installer,
+                 "receipt_artifact": receipt, "assets": assets})
+    g.require(candidate_pin == current_pin,
+              "Candidate verification source changed; run candidate verification again")
     g.require(prepared.get("source_run") == identifier and prepared.get("source_sha") == expected and
               prepared.get("source_attempt") == run["run_attempt"] and prepared.get("assets") == assets,
               "Prepared source or bytes changed")
@@ -297,10 +302,16 @@ def main(argv=None):
         run, installer, receipt, assets = prepare(client, args.source_run, expected, directory)
         proof = {"source_run": args.source_run, "source_attempt": run["run_attempt"], "source_sha": expected,
                  "installer_artifact": installer, "receipt_artifact": receipt, "assets": assets}
+        if os.environ.get("GESHER_RECORD_CANDIDATE_PIN") == "1":
+            # GitHub captures this step output before any installer executes.
+            with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8", newline="\n") as output:
+                output.write("source_pin=" + json.dumps(g.source_pin(proof), sort_keys=True, separators=(",", ":")) + "\n")
     elif args.mode == "publish":
         prepared = json.loads((evidence / "prepare.json").read_text(encoding="utf-8"))
+        candidate_pin = json.loads(os.environ.get("GESHER_CANDIDATE_SOURCE_PIN", "null"))
+        g.require(isinstance(candidate_pin, dict), "Missing pre-execution candidate verification pin")
         proof = promote(client, args.source_run, expected, directory, args.notes,
-                        directory.parent / (directory.name + "-existing"), prepared)
+                        directory.parent / (directory.name + "-existing"), prepared, candidate_pin)
     else:
         reference = directory.parent / (directory.name + "-source-candidate")
         _, _, _, assets = prepare(client, args.source_run, expected, reference)

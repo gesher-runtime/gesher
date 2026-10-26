@@ -53,7 +53,7 @@ CI numbering retained, explicit PE metadata, post-smoke manifest/checksum
 receipts, promotion guards and GitHub transport, a dispatch-only main release
 workflow, candidate and released-byte install/run/uninstall verification,
 released-byte real-app e2e on both Windows runners, and release-note source.
-Thirty-one offline test methods (including negative subcases) and the version
+Thirty-four offline test methods (including negative subcases) and the version
 selection fixture pass. ADR 0071 records the mechanism; [the release
 runbook](../../releases/README.md) gives the coordinator's final commands.
 Remaining: independent review, full branch CI with release_version=0.1.0 after
@@ -70,3 +70,9 @@ own-byte reproducer now refuses before tag creation. Candidate execution and
 write-capable publication also use separate runners/checkouts and permissions;
 the publication runner never executes an installer. Re-review and actual CI
 remain pending.
+
+The follow-up review's full-green-rerun race is also guarded: pre-execution
+prepare writes an exact source attempt/artifact/member pin to a GitHub job
+output. The publisher's reauthenticated source must match that pin or refuse
+before any write. Both pin emission and an intervening new green attempt have
+offline fixtures; independent re-review remains pending.

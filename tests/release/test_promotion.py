@@ -112,9 +112,11 @@ class PromotionTests(unittest.TestCase):
                          "installer_artifact": copy.deepcopy(self.client.installer),
                          "receipt_artifact": copy.deepcopy(self.client.receipt),
                          "assets": g.candidate(self.candidate, self.client.run, self.client.installer)}
+        self.candidate_pin = g.source_pin(copy.deepcopy(self.prepared))
 
     def promote(self):
-        return p.promote(self.client, 123, SHA, self.candidate, self.notes, self.root / "existing", self.prepared)
+        return p.promote(self.client, 123, SHA, self.candidate, self.notes, self.root / "existing",
+                         self.prepared, self.candidate_pin)
 
     def source_archives(self):
         def build(item, names):
@@ -205,7 +207,8 @@ class PromotionTests(unittest.TestCase):
         forged_prepare = copy.deepcopy(self.prepared)
         forged_prepare["assets"] = g.candidate(target, run, installer)
         with self.assertRaisesRegex(g.Refused, "authenticated source"):
-            p.promote(self.client, 123, SHA, target, self.notes, self.root / "existing", forged_prepare)
+            p.promote(self.client, 123, SHA, target, self.notes, self.root / "existing",
+                      forged_prepare, g.source_pin(forged_prepare))
         self.assertEqual(self.client.mutations, [])
         self.assertIsNone(self.client.tag)
         self.assertFalse(list(self.root.glob("gesher-release-receipt-*")))
@@ -216,6 +219,63 @@ class PromotionTests(unittest.TestCase):
         self.client.artifact_archives[identifier] = b"X" + original[1:]
         with self.assertRaisesRegex(g.Refused, "Source receipt archive"):
             self.promote()
+        self.assertEqual(self.client.mutations, [])
+
+    def test_new_full_green_attempt_cannot_replace_candidate_verified_attempt(self):
+        # Model a new complete green source run attempt between jobs. Its new
+        # installer/receipt/prepared evidence are genuine, but were not executed
+        # by the candidate verification job whose output GitHub already captured.
+        old_pin = copy.deepcopy(self.candidate_pin)
+        self.client.run["run_attempt"] = 2
+        self.manifest["source"]["run_attempt"] = 2
+        self.client.installer["id"] = 21
+        self.client.receipt["id"] = 22
+        changed = (self.candidate / g.INSTALLER).read_bytes() + b"new green attempt"
+        (self.candidate / g.INSTALLER).write_bytes(changed)
+        self.manifest["installer"].update(size=len(changed), sha256=hashlib.sha256(changed).hexdigest())
+        self.manifest["artifact"]["id"] = 21
+        self.source_archives()
+        self.prepared = {"source_run": 123, "source_sha": SHA, "source_attempt": 2,
+                         "installer_artifact": copy.deepcopy(self.client.installer),
+                         "receipt_artifact": copy.deepcopy(self.client.receipt),
+                         "assets": g.candidate(self.candidate, self.client.run, self.client.installer)}
+        self.assertNotEqual(g.source_pin(self.prepared), old_pin)
+        with self.assertRaisesRegex(g.Refused, "Candidate verification source changed"):
+            self.promote()
+        self.assertEqual(self.client.mutations, [])
+        self.assertIsNone(self.client.tag)
+
+    def test_candidate_pin_changes_or_absence_refuse_before_any_write(self):
+        original = copy.deepcopy(self.candidate_pin)
+        for change in ("missing", "source_attempt", "installer_artifact", "receipt_artifact", "assets"):
+            self.candidate_pin = copy.deepcopy(original)
+            if change == "missing":
+                self.candidate_pin = None
+            elif change == "source_attempt":
+                self.candidate_pin[change] += 1
+            elif change.endswith("artifact"):
+                self.candidate_pin[change]["id"] += 1
+            else:
+                self.candidate_pin[change][g.INSTALLER]["sha256"] = "d" * 64
+            with self.subTest(change=change), self.assertRaisesRegex(g.Refused, "Candidate verification"):
+                self.promote()
+            self.assertEqual(self.client.mutations, [])
+
+    def test_prepare_emits_job_pin_from_authenticated_pre_execution_bytes(self):
+        output = self.root / "github-output"
+        evidence = self.root / "evidence"
+        env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": g.REPOSITORY,
+               "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch",
+               "GITHUB_SHA": SHA, "GITHUB_WORKSPACE": str(self.root),
+               "GITHUB_WORKFLOW_REF": g.REPOSITORY + "/" + g.PROMOTION_WORKFLOW + "@refs/heads/main",
+               "GH_TOKEN": "own-fixture-token", "GITHUB_OUTPUT": str(output),
+               "GESHER_RECORD_CANDIDATE_PIN": "1"}
+        with mock.patch.dict(p.os.environ, env, clear=True), mock.patch.object(p, "GitHub", return_value=self.client):
+            p.main(["prepare", "--source-run", "123", "--expected-sha", SHA,
+                    "--directory", str(self.root / "prepared"), "--evidence", str(evidence)])
+        name, value = output.read_text(encoding="utf-8").strip().split("=", 1)
+        self.assertEqual(name, "source_pin")
+        self.assertEqual(json.loads(value), self.candidate_pin)
         self.assertEqual(self.client.mutations, [])
 
     def test_missing_or_unresolved_notes_fail_before_tag_creation(self):
@@ -258,7 +318,8 @@ class PromotionTests(unittest.TestCase):
         self.promote()
         self.client.mutations.clear()
         self.promote_again_directory = self.root / "second-existing"
-        proof = p.promote(self.client, 123, SHA, self.candidate, self.notes, self.promote_again_directory, self.prepared)
+        proof = p.promote(self.client, 123, SHA, self.candidate, self.notes,
+                          self.promote_again_directory, self.prepared, self.candidate_pin)
         self.assertFalse(proof["dry_run"])
         self.assertEqual(self.client.mutations, [])
         self.assertEqual(len(self.client.public_links), 6)

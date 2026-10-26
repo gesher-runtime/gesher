@@ -131,6 +131,14 @@ def file_digest(path):
     return result.hexdigest()
 
 
+def source_pin(proof):
+    """Pre-execution job output binding candidate verification to exact source bytes."""
+    result = {key: proof[key] for key in ("source_run", "source_attempt", "source_sha", "assets")}
+    for key in ("installer_artifact", "receipt_artifact"):
+        result[key] = {field: proof[key][field] for field in ("id", "name", "digest", "size_in_bytes")}
+    return result
+
+
 def archive(path, item, allowed, output):
     path, output = Path(path), Path(output).resolve()
     require(path.stat().st_size == item["size_in_bytes"] and file_digest(path) == digest(item["digest"]),

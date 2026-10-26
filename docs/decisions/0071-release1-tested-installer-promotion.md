@@ -42,13 +42,21 @@ The workflow defaults to a dry run; only the coordinator requests publication.
 
 ## Verification and open gates
 
-Thirty-one offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
+Before candidate execution, preparation records source run/attempt/SHA, both
+artifact identities/digests/sizes and member hashes as a GitHub step/job output.
+The fresh publishing runner must match that exact pin against its authenticated
+source again. A later complete green rerun cannot substitute new unexecuted
+candidate bytes; it requires a fresh candidate verification job.
+
+Thirty-four offline own-byte tests cover red/partial/fork/wrong-ref/wrong-SHA runs, skipped
 required steps, mismatched artifacts/receipts and safe existing tag/release
 handling, both complete archive downloads/extractions and corruption of either
 archive, changed prepared artifacts/bytes and missing/unresolved notes before
 any tag write. A complete mutation of installer, local manifest/checksums and
 prepare evidence cannot override the original API-authenticated receipt; a
-corrupt re-fetched receipt also refuses publication. Version selection tests
+corrupt re-fetched receipt also refuses publication. Job-output generation and
+a new full-green attempt between candidate execution and promotion are covered.
+Version selection tests
 retain normal numbering and reject malformed
 release overrides. Full branch CI with the exact 0.1.0 override, successful main
 CI, actual promotion and released-byte verification remain pending.

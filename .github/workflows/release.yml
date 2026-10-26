@@ -36,6 +36,8 @@ jobs:
     env:
       SOURCE_CI_RUN: ${{ inputs.source_ci_run_id }}
       EXPECTED_SHA: ${{ inputs.expected_sha }}
+    outputs:
+      source_pin: ${{ steps.prepared.outputs.source_pin }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,9 +58,11 @@ jobs:
           pwsh -NoProfile -File tests/release/version.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate full main CI and consume its exact artifacts
+        id: prepared
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          GESHER_RECORD_CANDIDATE_PIN: '1'
         run: |
           python tools/release/promote.py prepare --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -109,6 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GESHER_ALLOW_RELEASE_PUBLISH: ${{ inputs.publish && '1' || '0' }}
+          GESHER_CANDIDATE_SOURCE_PIN: ${{ needs.candidate.outputs.source_pin }}
         run: |
           python tools/release/promote.py publish --source-run $env:SOURCE_CI_RUN --expected-sha $env:EXPECTED_SHA --directory release-candidate --evidence release-evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
