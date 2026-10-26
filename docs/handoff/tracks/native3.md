@@ -54,10 +54,13 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Running diagnostic CI: 40328565752 at
+Diagnostic CI: 40328565752 at
 9c4d3803722eba83475ebe2475b7457ded394f21, with surfaces/integration 8590f4b.
-Native test compilation has passed; main runtime/font compilation and the
-Windows executions are pending. Current integration 1d49642, including
+Native test compilation passed; the main build failed before Windows tests:
+`hwui/MinikinSkia.h` was not found. Its pinned source is under
+libs/hwui/hwui, so the private include root is corrected to libs/hwui.
+CI now compiles this own bridge object before the full runtime so further
+header/ABI errors are reported early. Current integration 1d49642, including
 verified aot2, is now merged locally; the combined tree needs a subsequent
 full CI before merge. Do not treat this in-progress run as verification.
 
