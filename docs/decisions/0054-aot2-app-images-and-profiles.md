@@ -1,6 +1,8 @@
 # 0054 — App dexopt, JIT profiles, app images and a profile-guided boot image
 
-**Status:** accepted, 2026-10-25 (aot2 track). Extends ADR 0031, 0033 and 0036.
+**Status:** accepted, final combined verification 2026-10-26 (aot2 track,
+ci 40320549410 at ae75766, both Windows runners, package and both e2e jobs).
+Extends ADR 0031, 0033 and 0036. Remaining contracts belong to aot3, ADR 0065.
 
 ## Context
 After the codegen and stack tracks (ADR 0033, 0036) Gesher had nterp, the JIT
@@ -90,3 +92,5 @@ frameworks/base/boot.
   gets a context mismatch and runs from its APK, as ART refuses the oat file);
   no cloud profiles (`.dm` files); secondary dex files are not compiled;
   oatdump is not built (ART's logging stands in).
+  These remain open in [aot3](../handoff/tracks/aot3.md); this decision's
+  acceptance covers the verified app/profile/image model above.
