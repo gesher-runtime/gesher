@@ -540,6 +540,10 @@ Status and next steps (stopped by the coordinator, 2026-10-26):
   window's handler so Activity.finish returns before lifecycle destruction.
   The existing surfacegl check exercises the app-request path. Not CI-verified
   yet; windows3's ActivityClientHook also leaves finishActivity to this controller.
+- Running: ci 40291437446 at 025fda1 (finish fix, integration a462e9c).
+  Integration has since merged windows3 as 80cb28b: merge it before final CI,
+  keeping both ActivityClientController/WindowSession changes. TIC-80 passed
+  the previous e2e run at 800x400, but still needs checks on both runners.
 
 - Last fully read run: **ci 40265921060 at bbff936** (both runners). 31 surfaces PASS
   lines on each runner; the only surfaces FAIL was surfacegl's single-process
