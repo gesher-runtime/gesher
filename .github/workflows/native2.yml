@@ -105,7 +105,7 @@ jobs:
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
           mkdir -p work/classes work/dex
-          javac --release 11 -encoding UTF-8 -d work/classes tests/native2/java/gesher/*.java
+          javac --release 11 -encoding UTF-8 -cp sdk/android.jar -d work/classes tests/native2/java/gesher/*.java
           java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
             --output work/dex $(find work/classes -name '*.class')
           cp work/dex/classes.dex dist/native2-test.dex
