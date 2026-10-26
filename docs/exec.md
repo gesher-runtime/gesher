@@ -187,6 +187,17 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
+- Lead-engineer continuation (2026-10-26): the current WIP fixes nested
+  substitution/quote scanning, incomplete-input reporting, quoted assignment
+  parsing and empty-field expansion. `shell_execute.inc` now contains draft
+  AST execution, process-isolated subshells/pipeline stages, redirections and
+  expression/printf helpers. It is not included in the build yet: simple
+  commands, builtin dispatch and `RunShell` are still missing. None of these
+  changes has been compiled or CI-verified. The earlier syntax-only result
+  below applies only to the original front end; it did not establish shell
+  correctness. Process isolation replaces the earlier proposed stage threads
+  so subprocess environment/current-directory changes cannot race.
+
 - **STOPPED by the coordinator mid-task (2026-10-26)**, project handed to a new
   team. No exec3 CI run was ever started; nothing exec3 is verified yet. Last
   fully-green exec/exec2 CI was `40260836601` on the merge base; exec3's own work
