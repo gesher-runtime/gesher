@@ -16,7 +16,7 @@ public final class BindingActivity extends Activity {
         ConnectivityManager manager = getSystemService(ConnectivityManager.class);
         new Thread(() -> {
             try {
-                NetActivity.binding(manager);
+                NetActivity.binding(manager, NetActivity.nativeLibrary(getIntent()));
             } catch (Throwable failure) {
                 Web3.log("net failed: " + failure);
             }

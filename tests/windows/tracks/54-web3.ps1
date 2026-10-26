@@ -207,8 +207,11 @@ $uiaClient = {
       } else { $out.Add('no check box') }
       Write-Output 'phase: find WebView page button'
       $press = & $find 'Press me'
-      if ($press) { $out.Add("web button: " + $press.Current.ControlType.ProgrammaticName + " (" + $press.Current.FrameworkId + ")") }
-      else { $out.Add('no web button') }
+      if ($press) {
+        $out.Add("web button: " + $press.Current.ControlType.ProgrammaticName + " (" + $press.Current.FrameworkId + ")")
+        $press.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $out.Add('web invoked')
+      } else { $out.Add('no web button') }
     } catch {
       $out.Add("UI Automation failed: $($_.Exception.Message)")
     }
@@ -220,6 +223,7 @@ $uiaClient = {
   Remove-Job $job -Force
   $results | ForEach-Object { Write-Host "INFO  web3 UI Automation: $_" }
   $problems = @()
+  if ($results -notcontains 'web invoked') { $problems += 'the WebView page button was not invoked through UI Automation' }
   if ($results -notcontains 'invoked') { $problems += 'the Android button was not invoked through UI Automation' }
   if ($results -notcontains 'value set') { $problems += 'the edit text was not set through UI Automation' }
   if ($results -notcontains 'toggled') { $problems += 'the check box was not toggled through UI Automation' }
@@ -236,6 +240,7 @@ $a11yExpect = @(
   'gesher-a11y: accessibility enabled (',
   'Web3 a11y AccessibilityManager enabled true',
   'gesher-a11y: announcement for UI Automation: Web3 announcement',
+  'Web3 a11y UI Automation web button: title "pressed 2"',
   'Web3 a11y UI Automation: clicks 1, text set true, toggled true, accessibility enabled true',
   'Web3 a11y done')
 $a11yName = 'web3app.apk''s A11yActivity: the WebView''s AccessibilityNodeProvider from WebView2''s UI Automation tree (heading, button clicked, field set), and a UI Automation client reading the app''s window (Android''s views as UIA Button, Edit, CheckBox: invoked, set, toggled; WebView2''s page under the WebView), AccessibilityManager enabled for it, an announcement'
@@ -275,7 +280,7 @@ try {
   CompatProxied 'the app process''s WebView' $before
 
   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
-  $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
+  $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
 
   Web3ScreenReader $true
   try {
@@ -302,6 +307,7 @@ try {
       'Web3 net process socket and DNS binding, invalid network preservation, unbind true',
       'Web3 net missing-network DNS refused fallback true',
       'Web3 net NDK: PASS selected-network sockets/process/DNS, raw DNS poll/result/NXDOMAIN/cancel/errors',
+      'raw DNS poll/result/NXDOMAIN/cancel/errors abi=x86_64',
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 
