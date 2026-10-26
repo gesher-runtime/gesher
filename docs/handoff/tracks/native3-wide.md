@@ -127,6 +127,14 @@ both supported bionic locales independently of host language changes. This
 follow-up needs scoped compilation/reference and a subsequent full run;
 the first full run remains useful production diagnostics for the prior SHA.
 
+Scoped ci 40421142590 at a898a11 is green, all three job logs read:
+"PASS pinned wide: 203 conversion/state/boundary/LP64 assertions, 0 failures".
+Both NDK ABIs and the production locale object compile with the new parser
+calls. Superseded full 40420123819 was cancelled during compilation, before
+Windows runtime results; no failure or runtime proof is inferred from it.
+origin/phase4/integration remains a06d930 and is included. The next full run
+uses this verified follow-up and is the required production acceptance run.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
