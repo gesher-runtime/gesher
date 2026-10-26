@@ -47,6 +47,14 @@ new checks are not yet CI verified. The first local Java attempt could not
 resolve the incomplete saved app/generated dependency set; the actual app
 compilation is left to CI, with no local AOSP build.
 
+First full cloud run 40375696804 proves validation/copy/profman acceptance
+and selected compiled code on both runners, but is red: the fixture forced
+interpret while requiring AOT execution, and malformed ZIP validation leaked
+the input descriptor when StrictJarFile's native opening failed before its
+cleanup try. The next source uses the production JIT/AOT path and framework
+patch 0650 closes that failed-constructor descriptor. All remaining fallback/
+cleanup scenarios still require the next full run; no cloud box is closed.
+
 ## Remaining contracts
 
 Shared-library loader contexts, validated `.dm` install profiles and

@@ -37,6 +37,24 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+ci 40375696804 at 9ba2df5: real app/installer compilation, package and both
+e2e jobs pass. Both Windows suites have two cloud-fixture failures. Matching
+DM validation/copy/profman acceptance, selected onCreate compiled code,
+malformed-update preservation and the old installed app's execution pass.
+The fixture forced interpret while demanding AOT execution; it now uses the
+production JIT/AOT path. Rewriting the malformed input then exposed a real
+failed-constructor descriptor leak: StrictJarFile calls nativeOpenJarFile
+before its cleanup try. Framework patch 0650 closes that owned descriptor
+and marks the failed instance closed when native opening throws. The patch
+applies to the pinned source; no AOSP compilation ran locally.
+
+Repeated BOOT profile-vs-speed JIT failures in media3/web3 are owned here.
+The 10%/30ms criterion is unchanged; no known-flake waiver or causal claim
+for the unrelated app-artifact fixture fix. New 64-aot3-boot-profile uses
+pinned ART's boot/AOT profile-saver options and profman to log the actual
+framework startup methods as evidence for a targeted profile improvement.
+The current supplied boot profiles and performance gate are unchanged.
+
 Verified oatdump stage: full ci 40368334642 at
 96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. Personally read every
 job (22 success/six skipped), all four aot3 and 14 aot2 PASS lines per runner,
