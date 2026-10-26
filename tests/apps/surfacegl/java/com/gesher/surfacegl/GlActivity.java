@@ -68,9 +68,24 @@ public class GlActivity extends Activity {
                 view.getHolder().setFixedSize(100, 100);
                 mMain.postDelayed(() -> {
                     say("phase 2 ready");
-                    mMain.postDelayed(this::finish, 6000);
+                    mMain.postDelayed(() -> {
+                        say("finishing");
+                        finish();
+                    }, 6000);
                 }, 4000);
             }, 6000);
         }, 8000);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        say("onPause");
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        say("onDestroy");
     }
 }
