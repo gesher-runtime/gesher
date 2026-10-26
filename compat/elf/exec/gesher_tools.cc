@@ -7,12 +7,17 @@
 
 #include "exec_spawn.h"
 
+#include <gesher/system_properties.h>
+#include <gesher/logging.h>
+
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -159,32 +164,7 @@ int Ps(const std::vector<std::string>&) {
 
 // --- getprop / setprop ---------------------------------------------------------
 //
-// Properties live in $ANDROID_ROOT/build.prop (BuildProps on the Java side);
-// getprop reads them, plus the environment's $GESHER_PROP_<name>. There is no
-// shared property store across processes on Windows, so setprop cannot persist;
-// it reports that and succeeds, as a device without write access would.
-
-std::string PropFromFile(const std::string& name) {
-  std::string root = EnvOr("ANDROID_ROOT", "/system");
-  FILE* f = _wfopen(WindowsPath(root + "/build.prop").c_str(), L"rb");
-  if (f == nullptr) return "";
-  char line[1024];
-  std::string value;
-  while (std::fgets(line, sizeof(line), f) != nullptr) {
-    std::string s = line;
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-    size_t b = s.find_first_not_of(" \t");
-    if (b == std::string::npos || s[b] == '#') continue;
-    size_t eq = s.find('=', b);
-    if (eq == std::string::npos) continue;
-    std::string key = s.substr(b, eq - b);
-    while (!key.empty() && key.back() == '?') key.pop_back();
-    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
-    if (key == name) value = s.substr(eq + 1);
-  }
-  std::fclose(f);
-  return value;
-}
+// The same boot-scoped area as Java SystemProperties and ELF bionic.
 
 int Getprop(const std::vector<std::string>& args) {
   std::vector<std::string> names;
@@ -192,24 +172,30 @@ int Getprop(const std::vector<std::string>& args) {
     if (a.empty() || a[0] != '-') names.push_back(a);
   }
   if (names.empty()) {
-    std::fprintf(stderr, "getprop: listing all properties is not supported\n");
+    if (!properties::Initialize()) return 1;
+    for (const auto& [name, value] : properties::List()) {
+      std::fprintf(stdout, "[%s]: [%s]\n", name.c_str(), value.text.c_str());
+    }
+    std::fflush(stdout);
     return 0;
   }
-  std::string value = PropFromFile(names[0]);
-  if (value.empty()) value = EnvOr(("GESHER_PROP_" + names[0]).c_str(), names.size() > 1 ? names[1].c_str() : "");
+  if (!properties::Initialize()) return 1;
+  std::string value;
+  properties::Get(names[0], &value);
+  if (value.empty() && names.size() > 1) value = names[1];
   std::fprintf(stdout, "%s\n", value.c_str());
   std::fflush(stdout);
   return 0;
 }
 
 int Setprop(const std::vector<std::string>& args) {
-  if (args.size() < 2) {
+  if (args.size() != 2) {
     std::fprintf(stderr, "usage: setprop NAME VALUE\n");
     return 1;
   }
-  std::fprintf(stderr, "setprop: %s: not stored (Gesher has no shared property store)\n",
-               args[0].c_str());
-  return 0;
+  if (properties::Set(args[0], args[1])) return 0;
+  std::fprintf(stderr, "setprop: %s: property is read-only, invalid, or the store is unavailable\n", args[0].c_str());
+  return 1;
 }
 
 // --- logcat --------------------------------------------------------------------
@@ -218,40 +204,67 @@ int Setprop(const std::vector<std::string>& args) {
 // sets it per app process); -d dumps it and exits, otherwise it follows.
 
 int Logcat(const std::vector<std::string>& args) {
-  bool dump = false;
-  for (const std::string& a : args) {
-    if (a == "-d" || a == "--dump") dump = true;
-    if (a == "-c" || a == "--clear") return 0;  // nothing to clear
+  bool dump = false, clear = false;
+  int default_priority = 2;
+  std::string format = "brief";
+  std::map<std::string, int> filters;
+  for (size_t i = 0; i < args.size(); ++i) {
+    const std::string& argument = args[i];
+    if (argument == "-d" || argument == "--dump") { dump = true; continue; }
+    if (argument == "-c" || argument == "--clear") { clear = true; continue; }
+    if (argument == "-s" || argument == "--silent") { default_priority = 8; continue; }
+    if (argument == "-v" || argument == "--format") {
+      if (++i == args.size()) { std::fprintf(stderr, "logcat: -v needs a format\n"); return 1; }
+      format = args[i];
+      if (format != "brief" && format != "process" && format != "tag" && format != "thread" &&
+          format != "raw" && format != "time" && format != "threadtime" && format != "long" && format != "epoch") {
+        std::fprintf(stderr, "logcat: unsupported format %s\n", format.c_str());
+        return 1;
+      }
+      continue;
+    }
+    if (argument.empty() || argument[0] == '-') {
+      std::fprintf(stderr, "logcat: unsupported option %s\n", argument.c_str());
+      return 1;
+    }
+    size_t colon = argument.rfind(':');
+    int priority = 2;
+    std::string tag = argument;
+    if (colon != std::string::npos) {
+      if (colon + 2 != argument.size() || (priority = logging::Priority(argument.back())) < 0) {
+        std::fprintf(stderr, "logcat: invalid filter %s\n", argument.c_str());
+        return 1;
+      }
+      tag = argument.substr(0, colon);
+    }
+    if (tag.empty()) { std::fprintf(stderr, "logcat: empty tag\n"); return 1; }
+    if (tag == "*") default_priority = priority;
+    else filters[tag] = priority;
   }
-  std::string path = EnvOr("GESHER_LOG_FILE", "");
-  if (path.empty()) {
-    std::fprintf(stderr, "logcat: no log for this process (GESHER_LOG_FILE is unset)\n");
-    return 0;
-  }
-  FILE* f = _wfopen(WindowsPath(path).c_str(), L"rb");
-  if (f == nullptr) {
-    std::fprintf(stderr, "logcat: %s: No such file or directory\n", path.c_str());
+  std::string error;
+  if (clear) {
+    if (logging::Clear(&error)) return 0;
+    std::fprintf(stderr, "logcat: %s\n", error.c_str());
     return 1;
   }
-  char buf[65536];
-  size_t n;
-  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) std::fwrite(buf, 1, n, stdout);
-  std::fflush(stdout);
-  if (!dump) {
-    // Follow: read what is appended until stdout breaks (the reader left).
-    for (;;) {
-      Sleep(200);
-      while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (std::fwrite(buf, 1, n, stdout) != n) {
-          std::fclose(f);
-          return 0;
-        }
-      }
-      std::fflush(stdout);
-      clearerr(f);
+  size_t consumed = 0;
+  uint64_t last_timestamp = 0;
+  do {
+    std::vector<logging::Entry> entries;
+    if (!logging::Read(&entries, &error)) { std::fprintf(stderr, "logcat: %s\n", error.c_str()); return 1; }
+    if (entries.size() < consumed || (consumed && entries[consumed - 1].timestamp != last_timestamp)) consumed = 0;
+    for (size_t i = consumed; i < entries.size(); ++i) {
+      const auto& entry = entries[i];
+      auto filter = filters.find(entry.tag);
+      if (entry.priority < (filter == filters.end() ? default_priority : filter->second)) continue;
+      std::string line = logging::Format(entry, format);
+      if (std::fwrite(line.data(), 1, line.size(), stdout) != line.size()) return 0;
     }
-  }
-  std::fclose(f);
+    if (std::fflush(stdout) != 0) return 0;
+    consumed = entries.size();
+    last_timestamp = consumed ? entries.back().timestamp : 0;
+    if (!dump) Sleep(200);
+  } while (!dump);
   return 0;
 }
 
@@ -304,17 +317,62 @@ int Sleep_(const std::vector<std::string>& args) {
 
 // --- pm ------------------------------------------------------------------------
 //
-// Package management is the system server's (Installer); from a native process
-// there is no binder here, so pm answers the few harmless queries and declines
-// the rest, as a shell without the right permissions would.
-
-int Pm(const std::vector<std::string>& args) {
-  if (!args.empty() && args[0] == "path") {
-    std::fprintf(stderr, "pm: not available from a native process\n");
-    return 1;
+// Keep the Binder client in the boot-classpath helper, with the runtime's real
+// package/activity interfaces. Native callers inherit the same device namespace.
+int DeviceCommand(const std::string& tool, const std::vector<std::string>& args) {
+  if (EnvOr("GESHER_BINDER", "").empty()) { std::fprintf(stderr, "%s: no Gesher device namespace\n", tool.c_str()); return 1; }
+  std::wstring directory = LauncherPath();
+  size_t slash = directory.find_last_of(L"/\\");
+  if (slash == std::wstring::npos) return 126;
+  directory.resize(slash + 1);
+  auto has_image = [](const std::wstring& path) {
+    auto file = [](const std::wstring& candidate) {
+      DWORD attributes = GetFileAttributesW(candidate.c_str());
+      return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    };
+    if (file(path)) return true;
+    // ART accepts the logical framework/boot.art option and selects its host
+    // instruction-set subdirectory itself. Do not reject that normal layout
+    // merely because there is no physical boot.art beside x86_64/boot.art.
+    size_t separator = path.find_last_of(L"/\\");
+    return separator != std::wstring::npos &&
+           file(path.substr(0, separator + 1) + L"x86_64\\" + path.substr(separator + 1));
+  };
+  std::wstring image = WindowsPath(EnvOr("ANDROID_ROOT", "/system") + "/framework/boot.art");
+  if (!has_image(image)) image = directory + L"framework\\boot.art";
+  if (!has_image(image)) {
+    std::fprintf(stderr, "%s: the runtime boot image is unavailable\n", tool.c_str());
+    return 126;
   }
-  std::fprintf(stderr, "pm: not available from a native process\n");
-  return 1;
+  auto vm_path = [&](std::wstring path) {
+    // Boot class paths use ':' separators. Rooted paths on the VM's current
+    // drive avoid interpreting the Windows drive colon as another entry.
+    if (path.size() > 2 && path[1] == L':' && directory.size() > 2 &&
+        (path[0] | 0x20) == (directory[0] | 0x20)) path.erase(0, 2);
+    std::replace(path.begin(), path.end(), L'\\', L'/');
+    return Narrow(path);
+  };
+  std::string boot_class_path = "-Xbootclasspath:";
+  for (const wchar_t* jar : {L"core-oj.jar", L"core-libart.jar", L"core-icu4j.jar", L"framework.jar", L"gesher-app.jar"}) {
+    if (boot_class_path.back() != ':') boot_class_path += ':';
+    boot_class_path += vm_path(directory + jar);
+  }
+  std::vector<std::string> command{Narrow(directory + L"dalvikvm.exe"),
+      boot_class_path, "-Ximage:" + vm_path(image), "-Xint", "-Xusejit:false", "com.gesher.server.RuntimeCommands", tool};
+  command.insert(command.end(), args.begin(), args.end());
+  Launch launch;
+  int error = PrepareLaunch(command, Narrow(directory), &launch);
+  if (error) { std::fprintf(stderr, "%s: %s\n", tool.c_str(), ErrorText(error)); return 126; }
+  PROCESS_INFORMATION process{};
+  DWORD failed = SpawnWithFds(launch, nullptr, directory,
+      {{0, GetStdHandle(STD_INPUT_HANDLE)}, {1, GetStdHandle(STD_OUTPUT_HANDLE)}, {2, GetStdHandle(STD_ERROR_HANDLE)}}, &process);
+  if (failed) { std::fprintf(stderr, "%s: %s\n", tool.c_str(), ErrorText(ErrnoFromWin32(failed))); return 126; }
+  CloseHandle(process.hThread);
+  WaitForSingleObject(process.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(process.hProcess, &code);
+  CloseHandle(process.hProcess);
+  return ExitStatus(code);
 }
 
 }  // namespace
@@ -322,7 +380,7 @@ int Pm(const std::vector<std::string>& args) {
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm am\n");
       std::fflush(stdout);
       return 0;
     }
@@ -337,7 +395,7 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "logcat") return Logcat(args);
   if (name == "kill") return Kill(args);
   if (name == "sleep") return Sleep_(args);
-  if (name == "pm" || name == "am") return Pm(args);
+  if (name == "pm" || name == "am") return DeviceCommand(name, args);
   std::fprintf(stderr, "%s: not found\n", name.c_str());
   return 127;
 }
