@@ -136,6 +136,13 @@ public final class Exec3PropertiesTest {
         }
         if (!refused) throw new AssertionError("Java rewrote a ro property");
         equal("once", property(readOnly));
+        String longName = readOnly + ".long";
+        StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 1000; ++i) longText.append('x');
+        set.invoke(null, longName, longText.toString());
+        equal(longText.toString(), property(longName));
+        equal("Must use __system_property_read_callback() to read\n",
+                command(new ProcessBuilder(child, "property-get", longName), 0));
         set.invoke(null, name, "");
         equal("fallback\n", command(new ProcessBuilder("getprop", name, "fallback"), 0));
         command(new ProcessBuilder("setprop", "bad..name", "value"), 1);

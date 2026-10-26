@@ -213,6 +213,9 @@ The coordinator's timeout and pinned APK transport guards are also prepared.
 Combined CI 40352529279 is running at dc19ee29190961bb6238081d1978d0882ab77f44,
 after merging integration 46bc9e5 (docs only). Watch log:
 C:\work\gesher-ci-review\exec3-watch-40352529279.log, 120-second interval.
+Main build passes in 42m05s, boot-image compilation in 33s; both Windows suites
+are now running (jobs 121700775159 and 121700775178). No new runtime assertion
+is marked verified before their completed logs are read.
 The full track, pm/am and umask remain open.
 
 Prepared after this dispatch: pm/am now invoke a boot-classpath Binder client
@@ -227,6 +230,9 @@ active dispatch and needs package/e2e verification in the next combined run.
 Property UTF-8 validation is also prepared after the dispatch: local native
 assertions reject overlong/surrogate/out-of-range sequences and preserve a
 valid four-byte value. Initial build/persistent values follow the same policy.
+An additional Java check reads a 1000-byte ro value through the framework and
+verifies the same property's legacy NDK get returns the Android error value;
+source compilation passes, with runtime proof pending the next dispatch.
 
 Continuation history and exact evidence:
 
