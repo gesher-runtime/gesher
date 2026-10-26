@@ -1,6 +1,7 @@
 // Verify the compiler's binary128 arithmetic and the MS/System V boundary
 // before reusing bionic's long-double libm sources. No CRT long-double calls.
 #include <float.h>
+#include <fenv.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -64,6 +65,22 @@ int main(void) {
         bits(converted, UINT64_C(0x00fe000000000000), UINT64_C(0x403e000000000000)));
   check("binary128 to uint64 crosses the ABI boundary",
         to_uint_sysv(converted) == integer);
+  const int modes[] = {FE_TONEAREST, FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO};
+  volatile Quad half = 0x1p-113L;
+  volatile Quad minus_one = -1.0L;
+  for (unsigned i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+    int mode = modes[i];
+    int selected = fesetround(mode) == 0;
+    Quad positive = add_sysv(one, half);
+    Quad negative = sub_sysv(minus_one, half);
+    check("positive binary128 tie obeys the selected rounding mode",
+          selected && bits(positive, mode == FE_UPWARD ? 1 : 0,
+                           UINT64_C(0x3fff000000000000)));
+    check("negative binary128 tie obeys the selected rounding mode",
+          selected && bits(negative, mode == FE_DOWNWARD ? 1 : 0,
+                           UINT64_C(0xbfff000000000000)));
+  }
+  check("restore the default rounding mode", fesetround(FE_TONEAREST) == 0);
   printf("%d test(s) failed\n", failures);
   return failures != 0;
 }
