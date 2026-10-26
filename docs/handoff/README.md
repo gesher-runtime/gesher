@@ -181,6 +181,17 @@ Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
 downloaded). No roadmap box was ticked for the new, unverified fixes.
 
+Latest follow-up: surfaces 40297011754 passed windows-2025 and its own
+checks on windows-2022; the latter failed only the known badssl timeout.
+Merged native2 into surfaces and started ci 40302030881 at e73be53, now
+with e2e on both runners and unique artifacts. Media3 40299212277 builds
+and packages, but Just Player still fails with an unnamed preallocated
+NoClassDefFoundError. Opt-in ART missing-boot-class diagnostics are being
+prepared on that branch; read the still-running Windows tests before its
+next dispatch, and include current integration/native2. web3 40300418334
+and aot2 40297189562 are also still running. native3's branch/worktree are
+created at 8b1b09d; implementation has not started.
+
 The open tracks do not cover every ADR limit: aot2's ADR 0054 also lists
 shared-library class-loader contexts, cloud profiles, secondary dex and oatdump;
 media3 lists legacy camera recording, persistent input surfaces and VP8/VP9
