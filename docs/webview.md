@@ -307,6 +307,18 @@ drawing in a window that is covered or off the desktop;
   `ICoreWebView2_28` is there, `PageScripts.find` otherwise (`find: match 0
   of 4`, `match 1 of 4` on both).
 
+### web3 track (ADR 0058)
+
+- androidx.webkit: Gesher's support library glue (`SupportLib`, `org.chromium.support_lib_glue.SupportLibReflectionUtil`):
+  WebMessageListener (main frames, strings), document-start scripts, ProxyController (applies
+  to the process's WebView2 environment when set before it starts), multi-process query and
+  the framework-backed features. Test: web3app.apk (androidx.webkit 1.18.0 from Maven) in
+  54-web3.ps1.
+- navigator.geolocation from LocationManager (`GeolocationShim`), the WebView's
+  AccessibilityNodeProvider from WebView2's UI Automation tree (`WebViewAccessibility`), and
+  WebView2's tree under the WebView's element for UI Automation clients (docs/services.md).
+- Status and CI runs: see "Status and next steps (web3)" below.
+
 ### In progress
 
 - Nothing: verified at 55ab46a (ci run 40216380541).
@@ -332,3 +344,7 @@ drawing in a window that is covered or off the desktop;
 - Typical apps open their chooser with `FileChooserParams.createIntent()`
   (ACTION_GET_CONTENT): Gesher has no document picker Activity for it yet;
   apps that return false get the Windows dialog.
+
+### Status and next steps (web3)
+
+- Branch wip/web3 (worktree C:\work\gesher-webview). First CI run: ci 40262184075 (in progress).
