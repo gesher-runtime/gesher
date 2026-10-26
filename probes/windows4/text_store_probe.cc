@@ -184,6 +184,31 @@ int main() {
         "a restricted editor is read-only and retains no document text");
   store->Update(accepted);
   Check(Text(store, sink).empty(), "a reply from an old focused editor cannot expose its document");
+  TextDocument composing; composing.available = true; composing.epoch = 3; composing.offset = 40;
+  composing.text = u"A\U0001f600B"; composing.start = 1; composing.end = 3;
+  store->Update(composing);
+  size_t composition_edits = edits.size();
+  sink->action = [&](DWORD) -> HRESULT {
+    BOOL allowed = FALSE; TS_TEXTCHANGE change;
+    HRESULT result = store->OnStartComposition(nullptr, &allowed);
+    if (SUCCEEDED(result) && allowed) result = store->SetText(0, 1, 3, L"\u306b", 1, &change);
+    LONG first = 0, last = 0;
+    if (SUCCEEDED(result)) result = store->QueryInsert(1, 1, 4, &first, &last);
+    if (SUCCEEDED(result)) result = store->SetText(0, 2, 2, L"\u307b\u3093", 2, &change);
+    if (SUCCEEDED(result)) result = store->OnEndComposition(nullptr);
+    return result;
+  };
+  HRESULT composed = sink->Lock(store); sink->action = nullptr;
+  Check(SUCCEEDED(composed) && edits.size() == composition_edits + 3
+          && edits[composition_edits].kind == DocumentEdit::kCompositionText
+          && edits[composition_edits].start == 41 && edits[composition_edits].end == 43
+          && edits[composition_edits].text == u"\u306b"
+          && edits[composition_edits + 1].kind == DocumentEdit::kCompositionText
+          && edits[composition_edits + 1].start == 41 && edits[composition_edits + 1].end == 42
+          && edits[composition_edits + 1].text == u"\u306b\u307b\u3093"
+          && edits.back().kind == DocumentEdit::kCompositionEnd
+          && edits.back().text == u"\u306b\u307b\u3093",
+        "TSF composition transactions preserve full composing text, UTF-16 replacement ranges, offsets and the native final commit");
   Check(SUCCEEDED(store->UnadviseSink(sink)), "the actual sink can unsubscribe by canonical COM identity");
   store->Release(); sink->Release();
   TestWindowsTextService(window);
@@ -202,7 +227,7 @@ int main() {
     HRESULT result = service != nullptr ? service->RunTestService(path.c_str()) : attached;
     bool replacement = false;
     for (const auto& edit : attached_edits)
-      replacement |= edit.kind == DocumentEdit::kReplace && edit.text == u"\u65e5\u672c" && edit.start == 7 && edit.end == 11;
+      replacement |= edit.kind == DocumentEdit::kCompositionText && edit.text == u"\u65e5\u672c" && edit.start == 7 && edit.end == 11;
     Check(SUCCEEDED(result) && replacement, "the window-owned TSF adapter executes the real test-service DLL against its own document");
     service.reset();
     Check(SUCCEEDED(result), "window-owned TSF teardown restores focus and deactivates before releasing its service DLL");

@@ -141,9 +141,9 @@ int main() {
   for (const auto& edit : edits) {
     Check(edit.epoch == 1 && edit.revision > revision, "ordered edits retain the editor epoch and increasing revisions");
     revision = edit.revision;
-    replaced |= edit.kind == TextEvent::kDocumentReplace && edit.text == u"\u65e5\u672c"
+    replaced |= edit.kind == TextEvent::kDocumentCompositionText && edit.text == u"\u65e5\u672c"
         && edit.start == 7 && edit.end == 11;
-    ended |= edit.kind == TextEvent::kDocumentCompositionEnd;
+    ended |= edit.kind == TextEvent::kDocumentCompositionEnd && edit.text == u"\u65e5\u672c";
   }
   Check(result == S_OK && replaced && ended, "the production IME adapter emits exact native reconversion/finish events");
   TextInputState restricted; restricted.active = true; restricted.editor_epoch = 2;
@@ -216,7 +216,7 @@ int main() {
     bool next_document = ime->RunTextServiceTest() == S_OK;
     bool next_edit = false;
     while (ime->TakeTextEvent(&event))
-      next_edit |= event.epoch == 6 && event.kind == TextEvent::kDocumentReplace
+      next_edit |= event.epoch == 6 && event.kind == TextEvent::kDocumentCompositionText
           && event.text == u"\u65e5\u672c" && event.start == 7 && event.end == 11;
     Check(next_document && next_edit,
         "nested editor publications consumed during a TSF handoff are replayed into the latest real document");

@@ -100,7 +100,6 @@ public final class LocaleManagerService extends ILocaleManager.Default
      */
     public static Configuration configurationFor(String packageName) {
         Configuration c = DeviceProfile.configuration();
-        com.gesher.app.window.ApplicationDisplay.applyConfiguration(c);
         LocaleManagerService s = sInstance;
         LocaleList app = s != null && packageName != null ? s.appLocales(packageName) : null;
         if (app != null && !app.isEmpty()) {
@@ -109,6 +108,9 @@ public final class LocaleManagerService extends ILocaleManager.Default
             c.setLayoutDirection(combined.get(0));
         }
         synchronized (LocaleManagerService.class) {
+            // Read geometry under the same sequence lock: an older rotation
+            // snapshot must not receive a newer concurrent change's sequence.
+            com.gesher.app.window.ApplicationDisplay.applyConfiguration(c);
             c.seq = sSeq;
         }
         return c;

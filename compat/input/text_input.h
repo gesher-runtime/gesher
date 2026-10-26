@@ -23,6 +23,7 @@ struct TextEvent {
     kEditorAction = 4,  // Enter: the editor's IME action (performEditorAction)
     kDocumentReplace = 5, kDocumentSelect = 6,
     kDocumentCompositionRange = 7, kDocumentCompositionEnd = 8,
+    kDocumentCompositionText = 9,
   };
   int32_t kind = kCommit;
   std::u16string text;

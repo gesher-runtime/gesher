@@ -322,3 +322,21 @@ per-Activity task overrides retain each visible task's own bounds/rotation;
 the package's locales remain authoritative. The configuration fixture adds
 Application max-bounds/direction checks at every rotation. Actual held/fresh
 Display behavior and full locale/lifecycle regression CI remain pending.
+
+The shared-display geometry snapshot is read under the same configuration
+sequence lock, so an older concurrent snapshot cannot inherit a newer
+rotation change's sequence number.
+
+The real-IME failures exposed actual TSF composition loss: every ACP SetText
+was sent through InputConnection.replaceText, which commits/removes composing
+spans. A composition transaction now carries its complete composing text and
+prior UTF-16 range through the existing ordered native bridge, and Java uses
+setComposingRegion followed by setComposingText. Partial edits retain the
+whole composition; query-only insertion cannot change its bounds. OnEnd
+carries the final Windows-side document substring, so the existing post-Enter
+exact-commit oracle compares an independent native TSF result with the editor.
+The native ACP fixture covers supplementary text, nonzero ExtractedText
+offsets, partial composition updates and the final native commit. The real
+Windows service/production-IME probes still pass locally under g++ Werror.
+Actual Microsoft composing spans and candidate geometry need fresh CI; the
+existing real-IME assertions and thresholds are retained.

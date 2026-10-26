@@ -56,6 +56,7 @@ public final class WindowInput implements AutoCloseable {
   public static final int TEXT_EDITOR_ACTION = 4;
   public static final int DOCUMENT_REPLACE = 5, DOCUMENT_SELECT = 6;
   public static final int DOCUMENT_COMPOSITION_RANGE = 7, DOCUMENT_COMPOSITION_END = 8;
+  public static final int DOCUMENT_COMPOSITION_TEXT = 9;
 
   /**
    * Text for the window's focused editor (docs/input.md, "Text input"), in order with the
