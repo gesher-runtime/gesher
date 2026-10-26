@@ -20,6 +20,28 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  unicode-reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the reference Rust toolchain
+        run: rustup toolchain install 1.87.0 --profile minimal
+      - name: Resolve and record the pinned Unicode reference dependencies
+        run: |
+          cargo +1.87.0 generate-lockfile --manifest-path probes/native3/unicode/Cargo.toml
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          from pathlib import Path
+          lock = Path('probes/native3/unicode/Cargo.lock').read_bytes()
+          print('UNICODE_LOCK_SHA256', hashlib.sha256(lock).hexdigest())
+          print('UNICODE_LOCK_BASE64', base64.b64encode(lock).decode('ascii'))
+          PY
+      - name: Compute the pinned bionic Unicode reference
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml
+
   build:
     runs-on: ubuntu-24.04
     steps:
