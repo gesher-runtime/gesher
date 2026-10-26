@@ -180,12 +180,21 @@ void JNICALL NativeWindow_present(JNIEnv*, jclass, jlong ptr) {
 // what PrintWindow reads back (print = true), or the back buffer. Null when
 // PrintWindow fails.
 jintArray JNICALL NativeWindow_capture(JNIEnv* env, jclass, jlong ptr, jboolean print) {
+  // A debug worker may outlive NativeWindow.close(). Pin the open surface before
+  // touching it; do not hold gOpenMutex while PrintWindow dispatches messages.
+  android::sp<android::Surface> surface;
+  {
+    std::lock_guard<std::mutex> lock(gOpenMutex);
+    if (gOpen.count(Get(ptr)) == 0) return nullptr;
+    surface = android::sp<android::Surface>::fromExisting(Get(ptr));
+  }
+  auto* window = static_cast<Win32Surface*>(surface.get())->window();
   std::vector<uint32_t> pixels;
   int w = 0, h = 0;
   if (print) {
-    if (!Get(ptr)->window()->PrintClient(&pixels, &w, &h)) return nullptr;
+    if (!window->PrintClient(&pixels, &w, &h)) return nullptr;
   } else {
-    Get(ptr)->window()->ReadBackBuffer(&pixels, &w, &h);
+    window->ReadBackBuffer(&pixels, &w, &h);
   }
   for (uint32_t& p : pixels) p |= 0xff000000u;
   // [width, height, pixels...]
