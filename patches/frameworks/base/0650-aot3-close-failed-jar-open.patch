@@ -1,0 +1,18 @@
+diff --git a/core/java/android/util/jar/StrictJarFile.java b/core/java/android/util/jar/StrictJarFile.java
+--- a/core/java/android/util/jar/StrictJarFile.java
++++ b/core/java/android/util/jar/StrictJarFile.java
+@@ -102,7 +102,13 @@
+             boolean verify,
+             boolean signatureSchemeRollbackProtectionsEnforced)
+                     throws IOException, SecurityException {
+-        this.nativeHandle = nativeOpenJarFile(name, fd.getInt$());
++        try {
++            this.nativeHandle = nativeOpenJarFile(name, fd.getInt$());
++        } catch (IOException | RuntimeException | Error e) {
++            IoUtils.closeQuietly(fd);
++            closed = true;
++            throw e;
++        }
+         this.fd = fd;
+ 
+         try {
