@@ -697,3 +697,75 @@ see "After that" for what is left._
 - Full verification is CI only: `gh workflow run ci --ref wip/native-libs`
   (the reusable `native-libs.yml` runs because `ci` calls it; it cannot be
   dispatched on its own until it reaches the default branch).
+
+## native2 track: shim gaps, platform dlopen, file-system leftovers (ADR 0057)
+
+Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
+`docs/handoff/tracks/native2.md`. Branch `wip/native2`.
+
+### What was added
+- `compat/bionic/extra_bionic.cc`, `extra_sys_bionic.cc`, `zlib_bionic.cc`
+  (+ `extra_bionic.h`): registered first in `shim.cc`'s `Table()`, so the
+  core files' definitions win. libm extras and the x86-64 fenv, div/ldiv,
+  rand48, getopt/getopt_long (GNU permutation), mkstemp family, pwd/grp,
+  strverscmp and `*_l` forms, all 32-bit wchar_t string/class functions,
+  wprintf/fwprintf/fgetws, unlocked stdio, fmemopen (read), strptime,
+  `__system_property_*` (runtime's properties via libandroid.cc, else
+  `$ANDROID_ROOT/build.prop`), android_get_application_target_sdk_version;
+  sem_*, sched_*, pthread spin/barrier/rwlockattr/timed+clock forms,
+  getrusage, times, utime(s), clock_nanosleep, sysinfo, prctl, getrandom,
+  getentropy, memfd_create, madvise, dup3, tgkill, flock, lockf,
+  posix_fadvise/fallocate, inotify_*, **setjmp/longjmp/sigsetjmp for x86-64**
+  (asm; were missing: libpng/libjpeg aborted); libz.so (shadow z_stream, gz*).
+- `shim.cc`: `dlopen` of platform libraries by name and `/system/lib64`
+  path (pseudo handles, `PlatformLibraryHandle`), bare names searched in app
+  library dirs (noted by `jni_bridge.cc`) and `$LD_LIBRARY_PATH`; `dlsym`
+  falls back to the shim table for RTLD_DEFAULT and library handles.
+- `compat/arm64/dll/guest_libc.cc`: the ~50 fallbacks removed (now in the
+  shim); pseudo dlopen handles removed; kept arm64-specific: stat/epoll,
+  syscalls (+inotify, flock numbers), setjmp, getauxval, FP environment, and
+  new O_DIRECTORY/O_NOFOLLOW/O_DIRECT/O_LARGEFILE translation for
+  open/openat/fcntl (libc++ remove_all failed on arm64 without it).
+- gesher-base: `<sys/file.h>` + `flock` (system.cc), stat execute bits
+  (stat.cc), inotify `IN_MODIFY` at write (`InotifyNoteWrite`, fd.cc,
+  unistd.cc, inotify.cc). ART patches 0570 (dex canonical location through
+  symlinks), 0571 (ScopedFlock on). `21-posix.ps1` exclusions for those two
+  gtests removed; `posix_probe.cc` mode check now masks 0666.
+- Tests: `.github/workflows/native2.yml` (job `native2` in ci.yml; artifact
+  `native2` into `dist/native2`), `tests/native2/*`, `tests/apps/native2app`,
+  `tests/windows/tracks/44-native2.ps1`.
+
+### Status and next steps
+
+_Last updated 2026-10-26 (stopped by the coordinator)._
+
+- Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
+- **ci 40263281040** (commit before the setjmp fix, both runners): build
+  green; art_libartbase_tests 233 passed (3 excluded) and
+  art_libdexfile_tests 120 passed (1 excluded) — i.e. ScopedFlockTest and
+  GetDexCanonicalLocation now pass; posix probe PASS; all other tracks green
+  (one media tone-frequency FAIL on windows-2025 only, not this track's).
+  native2 PASS lines there: x86_64 zlib example, minigzip, SQLite (WAL, FTS5),
+  OpenSSL, libc++; arm64 zlib example, minigzip, pngtest, tjunittest, SQLite,
+  OpenSSL. FAILs then: x86_64 pngtest/tjunittest (setjmp missing → fixed),
+  arm64 libc++ remove_all (open flags → fixed), and every dalvikvm-based
+  check (the script ran dalvikvm from RUNNER_TEMP while $bcp is relative →
+  fixed: N2Run now defaults to the current directory).
+- **ci 40285714522** (commit 0ee… tip before docs: setjmp, arm64 flags,
+  cwd fix) was **in progress** at stop; build green; tests not seen. Check
+  its `test (windows-2022/2025)` logs for `native2` lines first.
+- Not yet verified at all: the dalvikvm checks (extras/dlopen/files parts),
+  the symbol-coverage gate (`native2 symbols ...` INFO lines list what the
+  e2e apps / third-party programs import that the shim lacks — close those),
+  the native2app APKs single process and on the device.
+- Next steps: read 40285714522's results; fix what the native2 lines report
+  (expect some symbol gaps and possibly test-expectation tweaks); rerun ci;
+  when green on both runners, tick roadmap boxes (Phase 6/7) and fill
+  this section with the PASS lines; merge origin/phase4/integration again
+  before the final run.
+- Pitfalls: the Bash tool collapses `\` in heredocs/inline python (it broke
+  asm strings and a NUL once) — write such scripts with the Write tool.
+  CI artifacts cannot be downloaded locally (NetFree blocks the blob URL);
+  read job logs via `gh api repos/.../actions/jobs/<id>/logs`. g++'s
+  syntax check works for the shim, but top-level `asm` with `.text` fails to
+  assemble under g++ (SEH) for existing files too — clang is fine.
