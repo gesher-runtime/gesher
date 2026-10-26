@@ -350,10 +350,18 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Running full ci **40376044459** at
+Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
-and bounded TLS fixture cleanup. Watch output is
-`C:/work/gesher-ci-review/web3-40376044459-watch.log`. Full results pending.
+and bounded TLS fixture cleanup. All 14 web3 checks pass per runner; the new
+TLS fixture and every root/negative/app cleanup marker complete on both.
+Windows 2025 ends with zero failed tests; Windows 2022 has one AOT2 JIT
+startup threshold failure (profile/speed medians 452/404 ms; interpreter
+571/612 ms). Package actual cleanup and both nine-app e2e jobs pass, including
+required TIC-80/Puzzles, four pinned-byte transport cases and zero unexpected
+failures. Every other job is success/skipped. The sole startup failure is not
+waived; the coordinator owns its diagnosis before another full combined run.
+Watch/logs: `C:/work/gesher-ci-review/web3-40376044459-watch.log` and
+`web3-40376044459-win2022.log` / `-win2025.log`. No merge gate is closed.
 
 Completed diagnostic ci **40364697280**, exact source
 `eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:

@@ -226,10 +226,19 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (web3)
 
-Running full ci **40376044459** at
+Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
-and bounded TLS fixture cleanup. Watch output is
-`C:/work/gesher-ci-review/web3-40376044459-watch.log`. Full results pending.
+and bounded TLS fixture cleanup. All 14 web3 checks and the new TLS fixture
+pass on each runner; root-test, all four negative and app-server cleanup
+markers complete on both, with accepted clients joined and certificates
+removed/disposed. Real internet/TLS and all certificate assertions still pass.
+Windows 2025 has zero failed tests; Windows 2022's sole failure is the AOT2
+JIT startup threshold (profile/speed medians 452/404 ms; interpreter 571/612).
+Package actual cleanup and both nine-app e2e jobs pass with required
+TIC-80/Puzzles and zero unexpected failures. Every other job is success/skipped.
+This is not mergeable; the coordinator owns startup diagnosis and a complete
+new combined CI remains required. Watch/logs are under
+`C:/work/gesher-ci-review/web3-40376044459-*`.
 
 Completed diagnostic ci **40364697280**, exact source
 `eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
