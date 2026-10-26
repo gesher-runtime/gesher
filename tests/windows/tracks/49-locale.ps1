@@ -249,11 +249,20 @@ try {
           $line = LocaleLine $t 'HandlesActivity onConfigurationChanged #1 '
           $problems += @(LocaleStateProblems $line @{ 'locales' = { param($v) $v -and $v.Contains('-u-') -and $v.Contains('fw-mon') }; 'firstDay' = '2'; '24h' = 'true' } | ForEach-Object { "change: $_" })
           LocaleSetFormat $win.format
-          if (-not (LocaleSettingChange $events)) { $problems += 'WM_SETTINGCHANGE (restore) not delivered' }
+          $restoreSent = LocaleSettingChange $events
           $deadline = (Get-Date).AddSeconds(60)
           while ((Get-Date) -lt $deadline -and -not "$(& $readLog)".Contains('HandlesActivity onConfigurationChanged #2')) { Start-Sleep -Milliseconds 300 }
           $line = LocaleLine "$(& $readLog)" 'HandlesActivity onConfigurationChanged #2 '
           $problems += @(LocaleStateProblems $line @{ 'locales' = { param($v) $v -and -not $v.Contains('fw-mon') }; 'firstDay' = "$($win.firstDay)"; '24h' = "$($win.is24)".ToLower() } | ForEach-Object { "restore: $_" })
+          if (-not $restoreSent) {
+            # Set-Culture can broadcast the change before our explicit send.
+            # HandlesActivity finishes after #2, destroying the events window.
+            if ($line) {
+              Write-Host 'INFO  locale: restore callback already received; the explicit WM_SETTINGCHANGE send raced activity shutdown'
+            } else {
+              $problems += 'WM_SETTINGCHANGE (restore) not delivered'
+            }
+          }
           ("$(& $readLog)" -split "`n" | Select-String -Pattern 'locale: |onConfigurationChanged') | Out-Host
           return $problems } `
         @('HandlesActivity onCreate', 'locale: Windows'' settings changed: ', 'LocaleApp onConfigurationChanged ',
