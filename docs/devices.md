@@ -155,6 +155,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   send returns. Updated 49-locale to accept that completed callback while still
   requiring the restored locale, first day and hour cycle. This test fix is
   not yet CI-verified; all remaining surfaces scope below stays open.
+- Running: ci 40297011754 at b8d6752, after merging integration a98dda9.
+  framework.yml keeps both surfaceapp and winapp build/copy lines.
 
 ### Done and verified
 - **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,
