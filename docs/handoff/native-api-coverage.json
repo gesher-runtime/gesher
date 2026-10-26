@@ -4554,7 +4554,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40386670586,
+        "attempt": 1,
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
+        "status": "verified-wide-classification-transform-abi",
+        "scope": "Plain/locale System V shim entry matches all 1,114,112 code points and four invalid values against pinned ICU4X beta2, on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
+      }
     },
     {
       "library": "libc.so",
@@ -4566,7 +4573,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40386670586,
+        "attempt": 1,
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
+        "status": "verified-wide-classification-transform-abi",
+        "scope": "Plain/locale System V shim entry matches all 1,114,112 code points and four invalid values against pinned ICU4X beta2, on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
+      }
     },
     {
       "library": "libc.so",
@@ -6510,7 +6524,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40386670586,
+        "attempt": 1,
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
+        "status": "verified-wide-classification-transform-abi",
+        "scope": "Transform handles, 11 reference boundary rows and invalid-name/handle EINVAL behavior on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
+      }
     },
     {
       "library": "libc.so",
@@ -6870,7 +6891,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40386670586,
+        "attempt": 1,
+        "sha": "6f6ac6fa9519207797ee5b997e0ae1e5b9e77049",
+        "status": "verified-wide-classification-transform-abi",
+        "scope": "Transform handles, 11 reference boundary rows and invalid-name/handle EINVAL behavior on both Windows versions. Both NDK ABIs through dalvikvm and APKs in single/device modes. Does not establish wcwidth, collation or unrelated Unicode/POSIX contracts."
+      }
     },
     {
       "library": "libc.so",
