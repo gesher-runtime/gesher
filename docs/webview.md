@@ -321,7 +321,9 @@ drawing in a window that is covered or off the desktop;
 
 ### In progress
 
-- Nothing: verified at 55ab46a (ci run 40216380541).
+- web3 full-stage verification after correcting the completed geocoder probe
+  process lifetime; all 14 web3 scenarios already pass on both runners in
+  ci 40345505558. See the current gate below.
 
 ### Not done / limits
 
@@ -331,13 +333,14 @@ drawing in a window that is covered or off the desktop;
   found.
 - Page-to-app port messages cannot transfer additional ports. Typed `ArrayBuffer`
   support through `WebViewCompat`, listeners, reply proxies and ports is implemented
-  with CI verification pending; framework `WebMessage` remains its Android string API.
+  with runtime scenario proof in ci 40345505558; framework `WebMessage` remains its Android string API.
 - Client certificates: only certificates in Windows' store can be sent;
   `proceed()` with any other key goes on without one. Tested: the request
   callback and `ignore()`.
 - `onSafeBrowsingHit` is never called (SmartScreen has no callback).
 - Accessibility: Android page nodes and the external UIA tree are implemented;
-  complete cross-runtime action verification remains pending in the web3 status below.
+  external actions pass on both runtimes in ci 40345505558. The full-stage
+  gate is recorded below.
 - `capturePicture` is what is shown, not the whole page; text zoom does not
   reach cross-origin iframes or closed shadow roots; multi-step
   `goBackOrForward` may ask `shouldOverrideUrlLoading`.
@@ -347,240 +350,81 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-- Running full ci 40353139413 at
-  `6270c9e84e0a8f3486a77824ecb113c563d2871d`, including the
-  completed-geocoder-probe exit fix and latest integration 46bc9e5
-  (documentation only). Watch output:
-  `C:/work/gesher-ci-review/web3-40353139413-watch.log`. No full-stage
-  milestone is closed until both complete Windows jobs pass with the
-  existing package/e2e gates. Web4/ADR 0072 owns the remaining WebView
-  contracts; net4/ADR 0070 owns the remaining network contracts.
+Full-stage gate is pending **ci 40353139413**, exact source
+`6270c9e84e0a8f3486a77824ecb113c563d2871d`, after integration 46bc9e5
+(verified aot2/surfaces code plus central ownership/release documentation).
+Watch: `C:/work/gesher-ci-review/web3-40353139413-watch.log`.
+No new roadmap milestone is closed until both complete Windows test jobs,
+package and both required e2e jobs pass.
 
-- ci 40345505558 at 2130071: all 14 web3 checks pass on each runner,
-  including external Android/Chrome UIA actions, both NDK ABIs in both modes,
-  all 70,000-byte binary-message checks and device geolocation. Package and
-  both e2e jobs pass (all nine apps, TIC-80, four new transport fixtures,
-  zero unexpected failures). Windows 2025 has `0 test(s) failed`.
-  Windows 2022 has one failure only: the geocoder probe printed the genuine
-  `status: InvalidCredentials`, then remained alive until the 45-second
-  process guard. That timeout remains a failure, not a passing probe.
-- Minimal shared fix 58d7dc6 flushes the completed result and immediately
-  exits the probe with code zero; exceptions and inner timeouts print their
-  error and exit one. The 30-second result wait and 45-second process guard
-  remain. A local no-answer probe was still terminated by the outer guard;
-  successful completion and full green CI remain pending the next run.
+The most recent completed run, **40345505558 at 2130071**, has all **14 web3
+checks passing on each runner** (`INFO  web3: every check passed`):
 
-- Running combined ci 40345505558 at
-  `21300715416f076ac32219b23d7ec0db97d9ca15`, after the fixture
-  lifetime/ABI-selection fixes and coordinator reliability patch. Watch output:
-  `C:/work/gesher-ci-review/web3-40345505558-watch.log`. Previous
-  40338521188 completed with exactly three web3 fixture failures per runner;
-  its runtime successes are bounded by the observations below. No milestone
-  is closed pending complete green Windows/package/e2e verification.
+- androidx.webkit 1.18.0 from Maven: feature discovery, proxy override before
+  the first WebView, origin-aware listener/replies, document-start scripts
+  and removal, Safe Browsing setting and main-frame messages.
+- `WEB_MESSAGE_ARRAY_BUFFER`: a 70,000-byte pattern reaches listeners and
+  message ports intact; replies, empty buffers and app-to-page port data
+  retain binary types. Both process modes pass on both runners.
+- Geolocation from LocationManager test providers: getCurrentPosition,
+  watchPosition, permission prompt and disabled-setting error, in single
+  process and device app processes on both runners.
+- The Android page provider finds a heading/button/edit field and changes
+  DOM state. External UIA invokes an Android button, sets text, toggles a
+  checkbox, finds Chrome's subtree and invokes the web button. The Activity
+  stays alive until the DOM confirms `pressed 2`; assertions retain the
+  exact names, roles and action results on WebView2 131 and 155.
+- Selected-interface sockets, source addresses, DNS, HTTP and process binding;
+  all seven assigned libandroid networking calls from real x86_64 and
+  translated arm64 ELF libraries, in both process modes. See network.md.
 
-- ci 40338521188 at 010551b completed: package and both e2e jobs pass
-  (all nine apps, including required TIC-80; zero unexpected failures).
-  Both Windows test jobs report exactly three failures, all in web3 fixtures:
-  Activity completion destroyed the WebView before the external UIA client's
-  final web-button search; a later launcher environment could not change the
-  existing device server's native-library path, so its ARM case loaded x86_64.
-  All binary messaging assertions, device geolocation, native x86_64 device
-  execution and genuine x86_64/arm64 single-process networking pass.
-- The next run keeps the accessibility Activity alive until external UIA
-  invokes the page button and DOM title becomes `pressed 2` (after the
-  Android provider's first click). Device ARM selection uses a boolean
-  Intent extra, and device x86_64 identity is asserted too. Local Java
-  compilation and PowerShell parsing pass. No existing action/name/heading
-  assertions or time limits were relaxed.
-- Imported coordinator reliability patch 50f16a9 (source-only): bounded
-  geocoder completion without reading an incomplete Result, and atomic
-  SHA-pinned APK caching/official-mirror fallback with four own-byte
-  transport fixtures. All four local checks pass; full CI remains pending.
-  Additional shared files: ci.yml, tests/e2e/{apks.ps1,test-apks.ps1,
-  apps.json,run-e2e.ps1}, and tests/windows/tracks/58-devices.ps1.
+40345505558 also passes package install/run/input/uninstall cleanup and both
+e2e jobs: all nine apps, required TIC-80, four pinned-byte APK transport
+fixtures and `0 unexpected failures` each. Windows 2025 has zero failed
+tests. Windows 2022 has one failure outside web3: the geocoder probe printed
+the completed `InvalidCredentials` result but did not exit before its
+45-second guard. That timeout is a failure. Fix 58d7dc6 flushes the genuine
+awaited result, then exits zero; errors/inner timeouts exit one. Both the
+30-second wait and the outer 45-second guard remain. The current full run
+must verify that fix; a local no-answer probe still failed the outer guard.
 
-- Running final combined ci 40338521188 at
-  `010551b16f54c6eb9040e77c18f2082e1abf1a2a`. Watch output is
-  `C:/work/gesher-ci-review/web3-40338521188-watch.log`. Superseded
-  40333695614 cancellation was requested only after this dispatch succeeded.
-  No new runtime milestone is closed until both complete Windows test jobs,
-  package and both required e2e jobs pass.
+Remaining WebView contracts belong to **web4 / ADR 0072**: subframe support
+for listeners/scripts/geolocation, additional page-to-app port transfers,
+late ProxyController environment replacement and reverse bypass, client
+certificate keys outside Windows, Safe Browsing callbacks, geometry/zoom/
+capture limits and the missing document-picker flow. These remain open;
+current scenario proof does not establish complete Android WebView behavior.
+Network/socket/resolver/hardware gaps belong to **net4 / ADR 0070** and are
+listed in network.md and its central handoff brief. Actual Narrator speech,
+real Wi-Fi/VPN hardware and captive-portal transitions are not CI claims.
 
-- Final coverage dispatch is ready after merging integration ac50d41
-  (verified aot2 code plus central net4 ownership documentation). It includes
-  device geolocation and both native ABIs in both process modes. Diagnostic
-  ci 40333695614 passed all builds; media preparation spent about 21 minutes
-  before completing successfully. With final coverage now ready, that run
-  will be superseded after the replacement dispatch is confirmed. Its runtime
-  result is incomplete, not a runtime failure or an assumed known flake.
+Earlier diagnostics explain the retained implementation choices:
 
-- Coverage audit: the original 54-web3 geolocation scenario ran only in one
-  process, and the new NDK networking library was x86_64 only. The next final
-  run adds the same exact geolocation checks in the device app process and
-  builds/runs the same seven-API native regression as arm64 in both modes.
-  Native success identifies its compiled ABI. The current diagnostic run
-  remains useful and is not cancelled; these additions are not yet CI verified.
+- 40309961504 / 40318144247 exposed hosted-HWND provider cycles. A real host
+  node uses `HOST_VIEW_ID=-1`, and a hosted override needs
+  `ProviderOptions_OverrideProvider`. An own native provider fixture without
+  ART or WebView2 reproduced the loop and verified that flag's effect.
+- 40325234847 exposed fixture all-caps, old Chromium's missing HeadingLevel
+  and the relative NDK load path. Exact button text, the semantic ARIA heading
+  fallback and absolute paths correct those cases.
+- 40338521188 exposed premature Activity completion and device-server
+  environment inheritance. External web invocation/DOM feedback now controls
+  completion; an Intent extra selects the device's arm64 library.
+- 40333695614 was superseded after builds/media succeeded; it has no complete
+  runtime result. A slow media preparation step is not a runtime failure or
+  an assumed known flake.
 
-- Running ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66,
-  including the integrated aot2/surfaces code, exact UIA fixture corrections,
-  native networking and ArrayBuffer messages. Watch output is preserved at
-  `C:/work/gesher-ci-review/web3-40333695614-watch.log`. No runtime milestone
-  is closed pending the complete test, package and both e2e results.
+Shared/additive edits: framework.yml's test app build, native-libs.yml's two
+NDK builds, conscrypt.cmake's network/proxy objects and oleaut32 link,
+webview.cmake's UIA client object, app bootstrap accessibility/proxy hooks,
+docs/services.md, and approved POSIX/bionic networking files listed in
+network.md. The coordinator reliability patch adds ci.yml's pinned APK cache,
+tests/e2e transport helpers/fixtures and the bounded 58-devices geocoder probe.
+The shared PrintWindow capture fix was imported from the coordinator and is
+already in verified aot2 integration.
 
-- Merged verified aot2 integration (4d144663) and central documentation through
-  b9f93f0c before the next full run. The original capture fix, hosted UIA
-  override, both e2e runner requirements and all new network/ArrayBuffer
-  assertions remain present. Combined dispatch is next.
-
-- Next combined run includes typed `WEB_MESSAGE_ARRAY_BUFFER` payloads for
-  main-frame posting, WebMessageListener/replies and message ports. Payloads
-  preserve byte arrays through a base64 JSON envelope; injected JavaScript
-  reconstructs an actual ArrayBuffer, including empty buffers and cross-realm
-  input. The regression checks a 70,000-byte pattern in both directions plus
-  binary replies and empty buffers. Local Java compilation/payload checks and
-  the actual injected port script pass; Maven-boundary/runtime verification
-  remains for CI. No ArrayBuffer milestone is closed yet.
-
-- ci 40325234847 at 2de1e15: package/both e2e pass; four test failures
-  per runner. External UIA now traverses both trees and sets/toggles Android
-  edit/check controls; its exact button-name lookup sees the theme's
-  `ANDROID BUTTON`. Disabled all-caps in that fixture, keeping the exact
-  name assertion. The 2022 page's heading needs UIA `AriaRole=heading`
-  when old Chromium has no HeadingLevel; added that semantic fallback.
-  New network kernel-interface/source/DNS/process/HTTP checks pass in
-  both process modes. Native NDK execution was blocked by a relative
-  `dist/web3_network.so` path; the next run uses its absolute path.
-- ci 40325234847 completed; the next dispatch will include the fixture and
-  old-Chromium heading fixes above, the absolute NDK path, ArrayBuffer coverage
-  and the latest verified integration. No new runtime gap is closed yet.
-- ci 40324592794 at 5e90b96 failed compiling the new raw-DNS worker:
-  the project disables C++ exceptions. The NDK ELF library compiled.
-  Replaced try/catch and std::thread with the existing native CreateThread
-  style and added `-fno-exceptions` to the local syntax check. New dispatch
-  pending; read all new native/network PASS lines before closing gaps.
-- ci 40318144247 at 722f86b completed: both package/e2e runners pass, both
-  test runners report exactly two failures (the external accessibility
-  checks). The TLS fixture checks pass on both. HOST_VIEW_ID now correctly
-  maps each HWND, but the trace shows override -> parent -> WM_GETOBJECT
-  looping. Reproduced with this native provider and a hard-coded Android
-  tree/STATIC child HWND, without ART or WebView2. The same fixture finishes
-  after setting `ProviderOptions_OverrideProvider` on hosted nodes. This
-  flag fix is pending CI; RuntimeId changes were tested and not retained.
-- Network continuation is being prepared after the running UIA/TLS SHA:
-  real interface socket/process binding, per-interface DNS, bound HTTP and
-  NLM captive state; local checks and the added runtime assertions are in
-  network.md. The seven native networking exports remain the next step.
-- Merged integration 4f99afd (surfaces, ci 40307919084 attempt 2) before
-  the combined UIA host-id/TLS fixture verification run. Both the surfaces
-  window integration and the diagnostic capture worker remain present.
-  Running ci 40318144247 at 722f86b; no accessibility checkbox is closed yet.
-- ci 40309961504 at e3209d6: package/e2e pass; the two external UIA checks
-  still fail on both runners. Its bounded provider trace shows repeated
-  embedded-HWND override searches with every Android node reporting no
-  hosted window. Root cause: `webViewOf` compared the virtual descendant id
-  with `UNDEFINED_ITEM_ID` (2147483647), but a real view's host id is
-  `AccessibilityNodeProvider.HOST_VIEW_ID` (-1). Corrected that marker;
-  added a host-id regression assertion, successful override trace, and
-  client phase output retained even after a timeout. Pending CI.
-- Pending test fix: 56-net now serves the
-  four certificate rejection cases locally, retaining live internet tests
-  and requiring actual certificate/hostname failures. See network.md.
-- ci 40300418334 at f87d5b8: package/e2e pass; both runners fail the two
-  external UIA checks (2022 also has the known audio timing failure).
-  Windows 2025's WebView provider now finds 12 nodes, the heading, button
-  and field; its real DOM click and text change pass in both modes. The
-  external UIA client still times out, as do later internal snapshots.
-- Merged integration 91c195d/native2 and cherry-picked the shared capture
-  fix from 061a67c: diagnostic PrintWindow must not block Android's UI
-  Looper while native providers are waiting for it. Native capture pins
-  its surface across close. Added bounded, opt-in GESHER_UIA_TRACE output
-  for WM_GETOBJECT, provider navigation and Java node lookup durations to
-  locate any remaining wait or tree cycle. CI must verify this combined
-  tree; the previous red result does not establish external accessibility.
-
-- ci 40292261578 at 63203c4 completed with two accessibility failures on
-  each runner. Geolocation and compat pass; accessibility still has zero
-  page nodes and the external UIA client times out. The new phase diagnostic
-  locates the wait at ElementFromHandleBuildCache. e2e also fails on the
-  first device startup (system server did not get ready); it is not treated
-  as a known flake. Added conditional server-log output to diagnose it.
-- Pending verification: WebViewAccessibility refreshes snapshots and performs
-  accepted page actions asynchronously, leaving the Android UI thread free
-  for UIA's provider callbacks. Accessibility events are raised on a worker
-  for the same reason. The test waits for the initial asynchronous tree,
-  retaining all node/action/DOM checks. The fragment root now implements
-  IRawElementProviderHwndOverride to place each embedded WebView HWND under
-  its Android node. Pattern providers return the requested COM interface.
-  Native snapshots retain two generations per live HWND so refreshing one
-  WebView does not invalidate another's actions. These changes follow the
-  Windows [threading guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading)
-  and [provider repositioning contract](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-serversideprovider#provider-repositioning).
-  A11yActivity/Web3 compile locally against the saved framework classes;
-  full bridge compilation and runtime behavior still require CI.
-
-- Continuation (2026-10-26): read ci 40285810159's windows-2025 log (job
-  121453338756), ending with `3 test(s) failed`. Compat/proxy checks pass.
-  Geolocation returns both Jerusalem and Tel Aviv, but GeoActivity stringifies
-  the watch array before evaluateJavascript serializes it again; the test
-  expects an array. Evaluate the array itself so its JSON has the expected
-  shape, retaining both location assertions. The two accessibility checks
-  remain real failures: the page provider has zero nodes, and the external
-  UI Automation client times out. Do not mark accessibility verified.
-- Removed the UIA provider cache lock across its Java callback (a Java
-  accessibility event can reenter UIA). Added a snapshot timeout phase to
-  stderr to locate any remaining UIA stall in the next run. This is a
-  reentrancy fix; the CI result must establish whether it resolves the
-  observed accessibility failures.
-- Running: ci 40292261578 at 63203c4 (geolocation array, provider lock fix,
-  snapshot diagnostics, integration a462e9c). Read both accessibility checks
-  and the timeout phase. Integration has since merged windows3 as 80cb28b;
-  merge it before final verification. No accessibility checkbox is closed.
-
-- Branch wip/web3 (worktree C:\work\gesher-webview).
-- ci 40261113581: web3app's build.sh was not executable (fixed).
-- ci 40262184075 (b44730c): everything built (glue, UIA bridge, proxy natives); NetActivity
-  showed Windows' proxy as getDefaultProxy/Proxy.getDefaultHost, the sticky CONNECTIVITY_ACTION
-  and a PendingIntent request working (cleartext was refused: the test app now permits it).
-  Failures: the system's own UIA clients read every window, which turned accessibility on in
-  every app, and UIA's threads exited while attached to the VM (ART aborts: webapp, ime,
-  popups failed); Windows' WPAD default became a PAC proxy for every request. Fixed: the
-  UIA bridge serves windows only while the screen reader flag is set (the test sets it, as
-  Narrator), threads attach per call and detach; WPAD is not followed.
-- ci 40285810159 (at 77d659a, the fixes above): in progress when the track was
-  stopped (2026-10-26); its result is unknown. Nothing of this track is CI-verified yet; the
-  last verified SHA of the branch is its base (9e449b0, phase4/integration).
-
-**Done, not verified**: androidx.webkit glue (`SupportLib`, `org.chromium.support_lib_glue`),
-WebMessageListener, document-start scripts, ProxyController (browser arguments; only before
-the environment starts), `GeolocationShim`, `WebViewAccessibility` (AccessibilityNodeProvider
-from WebView2's UIA tree, `compat/accessibility/uia_client.cc`), the `accessibility` service
-and UIA bridge (`app/java/com/gesher/app/accessibility`, `compat/accessibility/uia_bridge.cc`),
-Windows' proxy (`com.gesher.net.WindowsProxy`, `compat/net/windows_proxy.cc`),
-CONNECTIVITY_ACTION and PendingIntent requests, 56-net's local HTTPS NetApp check, tests
-(tests/windows/tracks/54-web3.ps1, tests/apps/web3app, tests/windows/web3/Web3Servers.ps1),
-ADR 0058, docs (webview.md, network.md, services.md).
-**Partly seen working in ci 40262184075**: NetActivity on the device: getDefaultProxy and
-Proxy.getDefaultHost from Windows' proxy server and from a PAC URL, the sticky
-CONNECTIVITY_ACTION, a PendingIntent request; the PAC script fetched by Windows and its
-DIRECT URL not proxied (`PASS  web3: the PAC script was fetched by Windows, ...`).
-**Not started**: the Wi-Fi/VPN/captive-portal/per-network-DNS leftovers of network.md;
-ArrayBuffer web messages; restarting the WebView2 environment for a late ProxyController.
-
-**Next steps**
-1. Read ci 40285810159's test logs (`gh api repos/gesher-runtime/gesher/actions/jobs/<id>/logs`;
-   artifact downloads are blocked by NetFree locally). Check that 37-webview, 33/35 ime,
-   popups and glapp are green again (they failed in ci 40262184075 only because of the
-   UIA/attach bug, now fixed).
-2. In ci 40262184075 CompatActivity and GeoActivity hung with no page loaded (the main thread
-   idle, no onPageFinished); the new run logs gesher-webview lines, onPageStarted/
-   onReceivedError and the proxy's log to find out why (suspects: the old accessibility bug;
-   Chromium refusing `--proxy-server` for the navigation to `http://web3-proxied.test`).
-3. Fix, rerun, merge origin/phase4/integration before the final run, tick the roadmap boxes
-   only for what CI verifies.
-
-**Pitfalls**: a thread attached to ART must detach before it exits (UIA's thread pool);
-never enable accessibility for every UIA client (the system has some on every window);
-Windows' WPAD default must not become a PAC proxy; the runner's proxy settings are changed
-only around the NetActivity runs and restored (`GesherWeb3Proxy.Save/Restore`), with a
-forwarding proxy and a GitHub bypass list; `gh run download` is blocked by NetFree here; local
-checks: JDK 21 + gfx-local framework classes for javac, llvm-mingw for -fsyntax-only.
+Pitfalls: detach threads attached to ART before exit; enable accessibility
+for screen-reader state rather than every ambient UIA client; restore the
+runner's proxy settings after tests; preserve byte pins across cache/mirrors.
+Use job logs, not artifact downloads, for review. Local checks are limited to
+own Java/native syntax and small focused fixtures; AOSP builds remain CI-only.
