@@ -53,7 +53,11 @@ public final class GesherActivityWindow {
      */
     public static android.os.Bundle stop(Activity a) {
         if (a.mFinished || a.mStopped) return null;
-        if (a.isResumed()) a.performPause();
+        if (a.isResumed()) {
+            // No longer the top resumed Activity (ActivityThread reports it as it pauses).
+            a.performTopResumedActivityChanged(false, "pausing");
+            a.performPause();
+        }
         android.os.Bundle state = new android.os.Bundle();
         boolean before = a.getApplicationInfo().targetSdkVersion < android.os.Build.VERSION_CODES.P;
         // Instrumentation.callActivityOnSaveInstanceState's call.
@@ -80,6 +84,7 @@ public final class GesherActivityWindow {
             if (a.mVisibleFromClient) a.makeVisible();
         }
         a.performResume(false /* followedByPause */, "gesher-app");
+        a.performTopResumedActivityChanged(true, "topWhenResuming");
     }
 
     /**
@@ -93,6 +98,7 @@ public final class GesherActivityWindow {
             a.mFinished = true;
         }
         if (a.isResumed()) {
+            a.performTopResumedActivityChanged(false, "pausing");
             a.performPause();
         }
         a.performStop(false /* preserveWindow */, "gesher-app");

@@ -24,6 +24,7 @@ import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.servertransaction.StartActivityItem;
 import android.app.servertransaction.StopActivityItem;
+import android.app.servertransaction.TopResumedActivityChangeItem;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -40,6 +41,7 @@ import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.MergedConfiguration;
 import android.view.Display;
+import android.view.Surface;
 import android.window.ActivityWindowInfo;
 import android.window.IWindowContainerToken;
 import android.window.WindowContainerToken;
@@ -165,6 +167,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean configPending;
         /** The size buckets its resources care about (reportSizeConfigurations), or null. */
         android.window.SizeConfigurationBuckets sizeBuckets;
+        /**
+         * The orientation it asks for (windows3 track): its manifest's screenOrientation,
+         * then what setRequestedOrientation sets. The task's rotation follows its top
+         * activity's ({@link #updateRotationLocked}).
+         */
+        int requestedOrientation;
+        /** The app was told it is the top resumed activity (TopResumedActivityChangeItem). */
+        boolean topSent;
 
         ActivityRecord(ActivityInfo info, Intent intent, int taskId, int launchedFromPid,
                 String launchedFromPackage, ActivityRecord resultTo, String resultWho,
@@ -178,6 +188,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             this.resultWho = resultWho;
             this.requestCode = requestCode;
             this.token = new Binder("ActivityRecord " + info.name);
+            this.requestedOrientation = info.screenOrientation;
         }
 
         String name() {
@@ -210,6 +221,20 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final java.util.Set<Integer> mHiddenTasks = new java.util.HashSet<>();
     /** Tasks the user resized (resizeTask): their size in pixels; others are the display's. */
     private final android.util.SparseArray<Rect> mTaskBounds = new android.util.SparseArray<>();
+    /**
+     * Each task's display rotation (Surface.ROTATION_*, absent: ROTATION_0): the display of a
+     * device that rotates, turned for the task's top activity's requested orientation
+     * (windows3 track, docs/windows3.md). Each task is a window of its own on the desktop, so
+     * each has its own.
+     */
+    private final android.util.SparseIntArray mTaskRotation = new android.util.SparseIntArray();
+    /**
+     * Tasks by when they came to the front, the latest last (multi-resume, windows3 track):
+     * the top resumed activity is the top of the latest that is not at the back.
+     */
+    private final List<Integer> mTaskOrder = new ArrayList<>();
+    /** The activity told it is the top resumed one (onTopResumedActivityChanged), or null. */
+    private ActivityRecord mTopResumed;
     /** Processes started for a package and not attached yet, by start sequence number. */
     private final Map<Long, PendingProcess> mStarting = new HashMap<>();
     private long mNextStartSeq = 1;
@@ -442,6 +467,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord bind = null;
         boolean launchNow = false;
         boolean needProcess = false;
+        List<ActivityRecord> reconfigure = new ArrayList<>();
         synchronized (this) {
             int taskId = source != null && (launchFlags & Intent.FLAG_ACTIVITY_NEW_TASK) == 0
                     ? source.taskId : mNextTaskId++;
@@ -457,9 +483,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 r.translucent = translucent;
                 // A start in a task moved to the back brings it to the front.
                 mHiddenTasks.remove(taskId);
-                // The activity in front (one activity is resumed at a time) is paused first.
+                // The activity in front in its task is paused first; other tasks' stay
+                // resumed (multi-resume: each visible task's top activity is resumed).
                 ActivityRecord front = front(r);
                 mActivities.add(r);
+                focusTaskLocked(taskId);
+                // Its orientation may turn the task's display (windows3 track).
+                if (updateRotationLocked(taskId)) {
+                    for (ActivityRecord a : mActivities) {
+                        if (a != r && a.taskId == taskId && !a.finishing && a.app != null) {
+                            reconfigure.add(a);
+                        }
+                    }
+                }
                 ProcessRecord app = processFor(info.packageName);
                 if (app == null) {
                     app = unassignedProcess(callingPid);
@@ -501,6 +537,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (needProcess) startProcess(info.packageName, "activity " + r.name());
         if (pause != null) pause(pause, false);
         if (launchNow) realStartActivity(r);
+        for (ActivityRecord a : reconfigure) ensureConfiguration(a);
+        updateTopResumed();
         return ActivityManager.START_SUCCESS;
     }
 
@@ -536,13 +574,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /**
-     * The activity in front of the user, other than {@code except}: resumed or on its way
-     * to it, or being paused. Guarded by this.
+     * The activity in front in {@code except}'s task, other than {@code except}: resumed or on
+     * its way to it, or being paused. Each visible task has one (multi-resume, as Android 10
+     * and later resume the top activity of each visible task: windows3 track). Guarded by
+     * this.
      */
     private ActivityRecord front(ActivityRecord except) {
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord a = mActivities.get(i);
-            if (a == except || a.app == null) continue;
+            if (a == except || a.app == null || a.taskId != except.taskId) continue;
             switch (a.state) {
                 case LAUNCHING:
                 case RESUMING:
@@ -961,13 +1001,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void realStartActivity(ActivityRecord r) {
         Configuration config = LocaleManagerService.configurationFor(r.info.packageName);
         Rect task;
+        int rotation;
         synchronized (this) {
-            task = mTaskBounds.get(r.taskId);
-            r.config = effectiveConfiguration(config, task);
+            task = taskBoundsLocked(r.taskId);
+            rotation = mTaskRotation.get(r.taskId, Surface.ROTATION_0);
+            r.config = effectiveConfiguration(config, task, rotation);
             r.configPending = false;
         }
-        // A task the user resized: the task's configuration overrides the display's.
-        Configuration override = taskOverride(task, config);
+        // A task the user resized, or turned for its orientation: the task's configuration
+        // overrides the display's.
+        Configuration override = taskOverride(task, rotation, config);
+        if (rotation != Surface.ROTATION_0) {
+            SystemServer.log(r.name() + " launches in task " + r.taskId + " turned to "
+                    + TaskConfiguration.rotationName(rotation) + " (" + task.width() + "x"
+                    + task.height() + ")");
+        }
         ActivityWindowInfo windowInfo = windowInfo(task);
         List<ResultInfo> results = takeResults(r);
         ClientTransaction t = new ClientTransaction(r.app.thread);
@@ -1006,8 +1054,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * override that is not newer than the one it has (a seq of 0 too), and a task's size
      * changes back and forth with the same package configuration.
      */
-    private synchronized Configuration taskOverride(Rect task, Configuration global) {
-        Configuration override = task != null ? TaskConfiguration.override(task)
+    private synchronized Configuration taskOverride(Rect task, int rotation,
+            Configuration global) {
+        Configuration override = task != null ? TaskConfiguration.override(task, rotation)
                 : new Configuration();
         mConfigSeq = Math.max(mConfigSeq, global.seq) + 1;
         if (mConfigSeq == 0) mConfigSeq = 1;
@@ -1016,10 +1065,145 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /** What an activity sees: its package's configuration with its task's override. */
-    private static Configuration effectiveConfiguration(Configuration global, Rect task) {
+    private static Configuration effectiveConfiguration(Configuration global, Rect task,
+            int rotation) {
         Configuration c = new Configuration(global);
-        if (task != null) c.updateFrom(TaskConfiguration.override(task));
+        if (task != null) c.updateFrom(TaskConfiguration.override(task, rotation));
         return c;
+    }
+
+    /**
+     * The task's bounds: the size the user gave its window, else the display turned to the
+     * task's rotation; null for the display as it is. Guarded by this.
+     */
+    private Rect taskBoundsLocked(int taskId) {
+        Rect user = mTaskBounds.get(taskId);
+        if (user != null) return user;
+        int rotation = mTaskRotation.get(taskId, Surface.ROTATION_0);
+        return rotation == Surface.ROTATION_0 ? null : TaskConfiguration.display(rotation);
+    }
+
+    /**
+     * DisplayRotation.updateOrientation for a task (windows3 track): the orientation its top
+     * activity asks for (one asking for {@code behind}, and a translucent one asking for
+     * nothing, leave it to the one below, as TaskFragment.getOrientation does) turns the
+     * task's display (TaskConfiguration.rotationFor). Returns whether the rotation changed.
+     * Guarded by this.
+     */
+    private boolean updateRotationLocked(int taskId) {
+        int requested = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord a = mActivities.get(i);
+            if (a.taskId != taskId || a.finishing || a.state == State.DESTROYED) continue;
+            int o = a.requestedOrientation;
+            if (o == ActivityInfo.SCREEN_ORIENTATION_BEHIND) continue;
+            if (o == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED && a.translucent) continue;
+            requested = o;
+            break;
+        }
+        int current = mTaskRotation.get(taskId, Surface.ROTATION_0);
+        int rotation = TaskConfiguration.rotationFor(requested, current);
+        if (rotation == current) return false;
+        // The window turns to the display's new size: the size the user gave it goes.
+        mTaskBounds.remove(taskId);
+        if (rotation == Surface.ROTATION_0) {
+            mTaskRotation.delete(taskId);
+        } else {
+            mTaskRotation.put(taskId, rotation);
+        }
+        SystemServer.log("task " + taskId + " turned from " + TaskConfiguration.rotationName(current)
+                + " to " + TaskConfiguration.rotationName(rotation) + " for orientation "
+                + ActivityInfo.screenOrientationToString(requested));
+        return true;
+    }
+
+    /**
+     * ActivityClientController.setRequestedOrientation (Activity.setRequestedOrientation): the
+     * activity's orientation request; when it turns its task's display, the task's activities
+     * get the configuration (told, or relaunched: now if resumed, else when they are).
+     */
+    void setRequestedOrientation(ActivityRecord r, int orientation) {
+        List<ActivityRecord> reconfigure = new ArrayList<>();
+        synchronized (this) {
+            if (r.requestedOrientation == orientation) return;
+            r.requestedOrientation = orientation;
+            if (!updateRotationLocked(r.taskId)) {
+                SystemServer.log(r.name() + " asks for orientation "
+                        + ActivityInfo.screenOrientationToString(orientation)
+                        + ": task " + r.taskId + " stays as it is");
+                return;
+            }
+            for (ActivityRecord a : mActivities) {
+                if (a.taskId == r.taskId && !a.finishing && a.app != null) reconfigure.add(a);
+            }
+        }
+        for (ActivityRecord a : reconfigure) ensureConfiguration(a);
+    }
+
+    /** ActivityClientController.getRequestedOrientation. */
+    synchronized int getRequestedOrientation(ActivityRecord r) {
+        return r.requestedOrientation;
+    }
+
+    // --- multi-resume (windows3 track) ------------------------------------------------------
+
+    /** The task came to the front (started in, moved to the front). Guarded by this. */
+    private void focusTaskLocked(int taskId) {
+        mTaskOrder.remove(Integer.valueOf(taskId));
+        mTaskOrder.add(taskId);
+    }
+
+    /**
+     * The activity that should be the top resumed one (ActivityTaskSupervisor's
+     * mTopResumedActivity): the top of the task that came to the front last and is not at the
+     * back, if it is in a process. Guarded by this.
+     */
+    private ActivityRecord topResumedCandidateLocked() {
+        for (int i = mTaskOrder.size() - 1; i >= 0; i--) {
+            int taskId = mTaskOrder.get(i);
+            if (mHiddenTasks.contains(taskId)) continue;
+            ActivityRecord top = topOf(taskId);
+            if (top == null) continue;
+            return top.app != null ? top : null;
+        }
+        return null;
+    }
+
+    /**
+     * ActivityTaskSupervisor.updateTopResumedActivityIfNeeded: the activity that was the top
+     * resumed one is told it no longer is (TopResumedActivityChangeItem false), the new one
+     * that it is, once it is resumed (the app reports onTopResumedActivityChanged when it
+     * resumes, and false again whenever it pauses). Other visible tasks' top activities stay
+     * resumed (multi-resume).
+     */
+    private void updateTopResumed() {
+        ActivityRecord lose = null;
+        ActivityRecord gain = null;
+        synchronized (this) {
+            ActivityRecord want = topResumedCandidateLocked();
+            if (mTopResumed != null && mTopResumed != want) {
+                if (mTopResumed.topSent && mTopResumed.app != null
+                        && mTopResumed.state != State.DESTROYED) {
+                    lose = mTopResumed;
+                }
+                mTopResumed.topSent = false;
+            }
+            mTopResumed = want;
+            if (want != null && !want.topSent && want.state == State.RESUMED) {
+                want.topSent = true;
+                gain = want;
+            }
+        }
+        if (lose != null) {
+            ClientTransaction t = new ClientTransaction(lose.app.thread);
+            t.addTransactionItem(new TopResumedActivityChangeItem(lose.token, false));
+            schedule(lose, t, "TopResumedActivityChangeItem (no longer the top resumed activity)");
+        }
+        if (gain != null) {
+            ClientTransaction t = new ClientTransaction(gain.app.thread);
+            t.addTransactionItem(new TopResumedActivityChangeItem(gain.token, true));
+            schedule(gain, t, "TopResumedActivityChangeItem (the top resumed activity)");
+        }
     }
 
     /**
@@ -1032,11 +1216,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     @Override
     public void resizeTask(int taskId, Rect bounds, int resizeMode) {
-        Rect task = bounds == null || bounds.isEmpty()
-                || (bounds.width() == DeviceProfile.WIDTH && bounds.height() == DeviceProfile.HEIGHT)
-                ? null : new Rect(0, 0, bounds.width(), bounds.height());
         List<ActivityRecord> activities = new ArrayList<>();
+        Rect task;
         synchronized (this) {
+            // The display's size (turned as the task is) is no size of the user's.
+            Rect display = TaskConfiguration.display(mTaskRotation.get(taskId, Surface.ROTATION_0));
+            task = bounds == null || bounds.isEmpty()
+                    || (bounds.width() == display.width() && bounds.height() == display.height())
+                    ? null : new Rect(0, 0, bounds.width(), bounds.height());
             Rect old = mTaskBounds.get(taskId);
             if (old == null ? task == null : old.equals(task)) return;
             if (task != null) {
@@ -1134,6 +1321,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (r.finishing) return true;
             r.finishing = true;
             state = r.state;
+            // The activity below may ask for another orientation (it gets the configuration
+            // as it resumes).
+            updateRotationLocked(r.taskId);
             if (r.resultTo != null && r.resultTo.state != State.DESTROYED
                     && !r.resultTo.finishing) {
                 r.resultTo.pendingResults.add(new ResultInfo(r.resultWho, r.requestCode,
@@ -1143,6 +1333,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         SystemServer.log("finishing " + r.name() + " (" + reason + ")"
                 + (r.resultTo != null ? ", result " + resultCode + " to " + r.resultTo.name()
                         : ""));
+        updateTopResumed();
         switch (state) {
             case INITIALIZING:
                 remove(r);
@@ -1255,8 +1446,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // process is told to exit, unless something else keeps it.
                 if (r.app.activities.isEmpty() && r.finishing) check = r.app;
             }
+            if (r == mTopResumed) mTopResumed = null;
+            if (topOf(r.taskId) == null) {
+                mTaskOrder.remove(Integer.valueOf(r.taskId));
+                mTaskRotation.delete(r.taskId);
+            }
             notifyAll();
         }
+        updateTopResumed();
         maybeExit(check);
     }
 
@@ -1300,6 +1497,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             pending = r.configPending && r.state == State.RESUMED;
         }
         if (pending) ensureConfiguration(r);
+        updateTopResumed();
     }
 
     void activityIdle(ActivityRecord r) {
@@ -1432,6 +1630,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("moving task " + taskId + " to the back: " + toPause.size()
                 + " to pause, " + toStop.size() + " to stop");
+        // The top resumed activity is another visible task's now, if any.
+        updateTopResumed();
         for (ActivityRecord a : toPause) pause(a, false);
         for (ActivityRecord a : toStop) stop(a);
         return true;
@@ -1439,50 +1639,44 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /**
      * IActivityTaskManager.moveTaskToFront (the user restored or activated the task's
-     * window): the task is visible again; its top activity is resumed (after the activity
-     * in front of another task is paused), the ones visible under it started.
+     * window): the task is visible again and the focused one; its top activity is resumed
+     * if it was not (other tasks' top activities stay resumed: multi-resume), the ones
+     * visible under it started, and it becomes the top resumed activity.
      */
     @Override
     public void moveTaskToFront(IApplicationThread app, String callingPackage, int taskId,
             int flags, Bundle options) {
         ActivityRecord top;
-        ActivityRecord pause = null;
         boolean resumeNow = false;
         List<ActivityRecord> toStart;
         boolean wasHidden;
+        boolean refocused;
         synchronized (this) {
             wasHidden = mHiddenTasks.remove(taskId);
             top = topOf(taskId);
             if (top == null || top.app == null || !top.app.ready) return;
+            refocused = mTaskOrder.isEmpty() || mTaskOrder.get(mTaskOrder.size() - 1) != taskId;
+            focusTaskLocked(taskId);
             switch (top.state) {
                 case PAUSED:
                 case STARTED:
                 case STOPPING:
                 case STOPPED:
+                    resumeNow = true;
                     break;
                 default:
-                    if (!wasHidden) return;  // already in front
-                    top = null;  // on its way to the front
-            }
-            if (top != null) {
-                ActivityRecord front = front(top);
-                if (front != null && front.taskId != taskId && !front.finishing) {
-                    top.waitingFor = front;
-                    top.resumeAfterPause = true;
-                    if (front.state != State.PAUSING) pause = front;
-                } else {
-                    resumeNow = true;
-                }
+                    // Resumed, or on its way to it (or being paused in its own task).
+                    if (!wasHidden && !refocused) return;  // in front already
+                    top = null;
             }
             toStart = starting();
             if (top != null) toStart.remove(top);
         }
         SystemServer.log("moving task " + taskId + " to the front"
-                + (top != null ? ": resuming " + top.name() : "")
-                + (pause != null ? " after pausing " + pause.name() : ""));
-        if (pause != null) pause(pause, false);
+                + (top != null ? ": resuming " + top.name() : ""));
         if (resumeNow) resume(top);
         for (ActivityRecord a : toStart) makeVisible(a);
+        updateTopResumed();
     }
 
     /**
@@ -1541,10 +1735,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // the most recent one of another task.
                 resume = topOf(r.taskId);
                 if (resume == null) {
-                    for (int i = mActivities.size() - 1; i >= 0 && resume == null; i--) {
-                        ActivityRecord a = mActivities.get(i);
-                        if (!a.finishing && a.state != State.DESTROYED) resume = a;
-                    }
+                    // Another visible task's top (with multi-resume, usually resumed already).
+                    ActivityRecord next = topResumedCandidateLocked();
+                    if (next != null && next.taskId != r.taskId) resume = next;
                 }
                 if (resume != null && resume.app == null) resume = null;
                 if (resume != null) {
@@ -1669,11 +1862,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         Configuration global = LocaleManagerService.configurationFor(r.info.packageName);
         Configuration config;
         Rect task;
+        int rotation;
         int diff;
         synchronized (this) {
             if (r.config == null) return null;
-            task = mTaskBounds.get(r.taskId);
-            config = effectiveConfiguration(global, task);
+            task = taskBoundsLocked(r.taskId);
+            rotation = mTaskRotation.get(r.taskId, Surface.ROTATION_0);
+            config = effectiveConfiguration(global, task, rotation);
             // Size changes within the buckets its resources care about do not count.
             diff = android.window.SizeConfigurationBuckets.filterDiff(
                     r.config.diffPublicOnly(config), r.config, config, r.sizeBuckets);
@@ -1681,12 +1876,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             r.configPending = false;
         }
         if (diff == 0) return null;
-        Configuration override = taskOverride(task, global);
+        Configuration override = taskOverride(task, rotation, global);
         ActivityWindowInfo windowInfo = windowInfo(task);
         int handled = r.info.getRealConfigChanged();
         String changes = "changes 0x" + Integer.toHexString(diff) + ", handles 0x"
                 + Integer.toHexString(handled) + ", " + config.getLocales().toLanguageTags()
-                + ", " + config.screenWidthDp + "x" + config.screenHeightDp + " dp";
+                + ", " + config.screenWidthDp + "x" + config.screenHeightDp + " dp"
+                + (rotation != Surface.ROTATION_0 ? ", " + TaskConfiguration.rotationName(rotation)
+                        : "");
         if ((diff & ~handled) == 0) {
             t.addTransactionItem(new ActivityConfigurationChangeItem(r.token, override,
                     windowInfo, Display.DEFAULT_DISPLAY));
