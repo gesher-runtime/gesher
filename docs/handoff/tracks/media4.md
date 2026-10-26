@@ -85,8 +85,10 @@ legacy use; they do not implement that module.
   cover successful recordings and getMaxAmplitude only.
 - Verify RECORD_AUDIO denial for NDK AAudio/OpenSL paths independently;
   current denial test proves the Java AudioRecord/MediaRecorder boundary.
-- Exercise the software H.264 encoder with GESHER_VIDEO_ENCODERS=soft on
-  both runners; current stage-3 encode checks select Media Foundation.
+- Exercise the software H.264 encoder explicitly with GESHER_VIDEO_ENCODERS=soft
+  on both runners. Ordinary stage-3 selection tries Media Foundation first;
+  ci 40330465222's 2022 log records MF I420 input rejection and actual libavc
+  fallback. That fallback evidence does not replace a forced-soft check.
 
 ## Deliberate feature gaps requiring separate implementation
 
@@ -98,6 +100,11 @@ legacy use; they do not implement that module.
 - Hardware DXVA/D3D11 decode/encode, encoder B-frames and 10-bit output.
 - Input audio effects (AEC/AGC/noise suppression), output effects/offload,
   MediaProfiles/CamcorderProfile and a real MediaStore provider.
+
+Camera2 reprocessing, offline sessions, extensions, torch and the remaining
+camera-service contracts belong to the coordinator's services3 track.
+media4 owns recorder input/lifecycle contracts and coordinates camera-to-recorder
+integration with that owner; it does not duplicate the camera-service scope.
 
 ## Completion evidence
 

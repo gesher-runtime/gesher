@@ -76,9 +76,10 @@ communication, listener permission/user filtering and external volume-change
 notifications remain open work (docs/media.md and the explicit acceptance
 checks in docs/handoff/tracks/media4.md).
 
-Recording works the same on a PC with a microphone and on CI, where the
-file source makes what is recorded known and checkable end to end (recorded,
-encoded, muxed, read back, decoded, measured). No AMR, Vorbis or VP8/VP9/HEVC
+The capture abstraction shares the recorder path between WASAPI and CI's
+file source. CI makes the input known and checkable end to end (recorded,
+encoded, muxed, read back, decoded, measured); it does not establish physical
+microphone, loopback, route-change or endpoint-removal behavior. No AMR, Vorbis or VP8/VP9/HEVC
 encoders: MediaRecorder falls back to AAC (3GPP/MPEG-4) or Opus (WebM/Ogg)
 for audio and refuses other video encoders; persistent input surfaces, the
 legacy camera's recording, hardware (DXVA/D3D11) encoding and B-frames are
