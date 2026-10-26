@@ -37,6 +37,12 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Combined ci 40403284714 at e928eec is pending. It includes integration
+117629e, the supported startup-collector arguments, portable bounded TLS
+fixture shutdown and only media3's bounded/canonical-mirror preparation
+block (no recordapp dependency or test-asset changes). No new verification
+or timing-cause claim until the actual Windows results are read.
+
 ci 40389331018 at 31adc99: all 11 cloud-profile checks pass on both Windows
 versions, including first app-image/AOT execution, failed-archive descriptor
 cleanup, corrupt/mismatched/missing-profile fallback, identical-APK metadata
