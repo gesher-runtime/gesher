@@ -161,10 +161,16 @@ Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
 - `web3` (C:\work\gesher-webview): WebViewCompat, web accessibility,
   geolocation, system proxy and the net leftovers, a local https check.
   ADR 0058, 54-web3.ps1.
-- `media3` (C:\work\gesher-media-soft, branch wip/media-soft): finish the
-  stopped helper's software decoders (VP8/VP9/AV1/HEVC, WebM) as PASS
-  checks, then stage 3: audio input, encoders, MediaMuxer, MediaRecorder,
-  ImageReader output, a video app in e2e. ADR 0059.
+- media-soft: merged (verified at b57bb74, ci 40258938663, which contains
+  6aff13d; integration differed only in docs). VP8/VP9 (libvpx), AV1
+  (libdav1d), H.265 (libhevc), MatroskaExtractor; PASS lines on both
+  runners. docs/media-soft-video.md. Leftovers: no libavc/MPEG-4/H.263
+  software fallbacks; 10-bit output as 8-bit; WebM audio and seeking
+  untested.
+- `media3` (C:\work\gesher-media-soft, branch wip/media-soft, continuing
+  after its merge): stage 3: audio input, encoders, MediaMuxer,
+  MediaRecorder, ImageReader output, a video app in e2e, plus media-soft's
+  leftovers. ADR 0059.
 - The surfaces track owns compat/media/surface and frameworks/base patch
   0300 (media stage 2's TextureView/SurfaceView output) from now on.
 

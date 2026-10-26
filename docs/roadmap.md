@@ -478,7 +478,8 @@ Media ([media.md](media.md), ADR 0042):
         hwui's CPU pipeline and by SkiaGL (ci run 40258833980)
   - [x] MediaPlayer and VideoView with video (A/V sync to the audio clock),
         MediaMetadataRetriever.getFrameAtTime (ci run 40258833980)
-  - [ ] Software decoders for what Media Foundation lacks (VP8, VP9, AV1,
-        H.265) and a WebM extractor
+  - [x] Software decoders for what Media Foundation lacks (VP8, VP9, AV1,
+        H.265) and a WebM extractor (ci run 40258938663;
+        [media-soft-video.md](media-soft-video.md))
   - [ ] Hardware decoding (DXVA), MediaMuxer and encoders
 - [ ] Audio input: AudioRecord, MediaRecorder (stage 3)
