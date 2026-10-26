@@ -221,6 +221,11 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — remaining camera-source timing gate, 2026-10-26
+- Running source-phase CI **40377453079** at
+  **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, with current integration
+  634a273 and the new opt-in camera timings. This is a changed diagnostic
+  tree, not a rerun claim about a known flake. No result is verified yet;
+  camera and boot-startup criteria remain unchanged. Watch interval 120.
 - Latest full CI **40368511782**, attempt 1, exact source SHA
   **43cfe4e1d59032ae493836f8c32571617950069a**, includes integration d68ec79
   and the verified native3 Bitmap/Minikin foundation. All job metadata and
@@ -307,7 +312,7 @@ the microphone (looped, from its start each time recording starts);
   (source 96ef687, ci 40368334642). The existing complete Process fix,
   completed-only geocoder exit, Just Player pin, transport fixtures and
   missing-class trace are retained. The boot startup criterion is unchanged.
-- Next: run the opt-in camera-phase diagnostics without changing collection, and retain
+- Next: read the opt-in camera-phase diagnostics without changing collection, and retain
   the separate boot startup failure until its own evidence resolves it.
   No integration/main merge or release action here.
 

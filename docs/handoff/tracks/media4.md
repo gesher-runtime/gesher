@@ -92,6 +92,14 @@ legacy use; they do not implement that module.
   on both runners. Ordinary stage-3 selection tries Media Foundation first;
   ci 40330465222's 2022 log records MF I420 input rejection and actual libavc
   fallback. That fallback evidence does not replace a forced-soft check.
+- Positively verify the Media Foundation H.264 encoding path on compatible
+  inputs, including input-format negotiation and independently decoded
+  pictures. Current CI rejects its I420 setup and selects libavc, so it does
+  not prove successful MF H.264 encoding or hardware acceleration.
+- Independently verify cumulative AudioTrack underrun and AAudio output
+  xrun getter semantics over several starvation/recovery cycles, separating
+  incidents from lost frames and preserving lifetime counts across restart.
+  The media3 three-cycle counter proof covers input overruns only.
 
 ## Container validation still required
 
