@@ -220,6 +220,10 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — continuing, 2026-10-26
+- Running: ci 40318189310 at 9158120f957ea01935d071aa9c80b4791ba673f5,
+  the combined callback/xrun fix plus integration 4f99afd. No result from
+  this run is verified yet. See the [source API boundary inventory](media-api-inventory.md)
+  for implemented subsets and remaining reflection stand-ins.
 - Branch wip/media-soft, integration 4f99afd included (surfaces and required
   TIC-80 e2e matrix; native2 also included). Most recent completed
   full run: ci 40305909645 at 4a2a28ecb4e04467b72fa642cc05e67b6d82fa1f.
@@ -256,8 +260,8 @@ the microphone (looped, from its start each time recording starts);
   legacy sessions work without the optional module; Session2 is still absent.
   ART patch 0590 is opt-in missing-boot-class diagnostics, enabled only in
   CI e2e by GESHER_TRACE_MISSING_BOOT_CLASSES.
-- Final combined verification is ready to dispatch from this branch after
-  merging integration 4f99afd. The own-file C++ syntax checks, JDK 21 test
+- Final combined verification includes integration 4f99afd. Own-file C++
+  syntax checks, JDK 21 test
   app compile and PowerShell parse pass; NDK C compile remains CI-only.
   Read both test logs and package/e2e conclusions when the run completes.
   Tick roadmap boxes only from actual CI evidence. Do not infer that every

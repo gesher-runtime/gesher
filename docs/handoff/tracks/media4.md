@@ -8,7 +8,8 @@ docs/media.md and ADRs 0042, 0052 and 0059 first. CI only for AOSP builds;
 no local AOSP builds, WSL or artifact downloads. This brief records gaps,
 not completed features or authorization to use another track's worktree.
 
-Keep the full media API inventory linked from [docs/media.md](../../media.md):
+Keep the [source API boundary inventory](../../media-api-inventory.md) and
+the media implementation inventory linked from [docs/media.md](../../media.md):
 the [audio/codec design](../../decisions/0042-media-audio-engine-and-codecs.md),
 [video/surface design](../../decisions/0052-media-video.md),
 [recording design](../../decisions/0059-media3-recording-and-encoders.md) and
