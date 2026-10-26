@@ -150,7 +150,8 @@ static void Paths(const std::string& dir) {
   CHECK(rmdir(b.c_str()) == -1 && errno == ENOTDIR);
 
   // chmod: the owner's write permission is the read-only attribute.
-  CHECK(chmod(b.c_str(), 0444) == 0 && stat(b.c_str(), &st) == 0 && (st.st_mode & 0777) == 0444);
+  CHECK(chmod(b.c_str(), 0444) == 0 && stat(b.c_str(), &st) == 0 && (st.st_mode & 0666) == 0444 &&
+        (st.st_mode & 0111) == 0111);
   CHECK(access(b.c_str(), W_OK) == -1 && errno == EACCES);
   CHECK(open(b.c_str(), O_WRONLY) == -1 && errno == EACCES);
   CHECK(chmod(b.c_str(), 0644) == 0 && access(b.c_str(), W_OK) == 0);

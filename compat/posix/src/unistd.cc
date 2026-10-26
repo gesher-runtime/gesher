@@ -331,6 +331,7 @@ ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
   DWORD n = 0;
   DWORD want = count > 0x7fffffff ? 0x7fffffff : static_cast<DWORD>(count);
   if (!WriteFile(h, buf, want, &n, &ov)) return gesher::FailWithLastError();
+  if (n > 0) gesher::InotifyNoteWrite(fd);
   return static_cast<ssize_t>(n);
 }
 

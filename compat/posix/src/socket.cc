@@ -360,14 +360,18 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
 }
 
 struct cmsghdr* __cmsg_nxthdr(struct msghdr* mhdr, struct cmsghdr* cmsg) {
-  if (cmsg->cmsg_len < sizeof(struct cmsghdr)) return nullptr;
-  auto* next = reinterpret_cast<struct cmsghdr*>(reinterpret_cast<unsigned char*>(cmsg) +
-                                                 CMSG_ALIGN(cmsg->cmsg_len));
-  auto* end = static_cast<unsigned char*>(mhdr->msg_control) + mhdr->msg_controllen;
-  if (reinterpret_cast<unsigned char*>(next + 1) > end ||
-      reinterpret_cast<unsigned char*>(next) + CMSG_ALIGN(next->cmsg_len) > end) {
-    return nullptr;
-  }
+  if (mhdr == nullptr || mhdr->msg_control == nullptr || cmsg == nullptr) return nullptr;
+  uintptr_t begin = reinterpret_cast<uintptr_t>(mhdr->msg_control);
+  uintptr_t current = reinterpret_cast<uintptr_t>(cmsg);
+  if (current < begin || current - begin > mhdr->msg_controllen) return nullptr;
+  size_t left = mhdr->msg_controllen - (current - begin);
+  if (left < sizeof(cmsghdr) || cmsg->cmsg_len < sizeof(cmsghdr) ||
+      cmsg->cmsg_len > left || cmsg->cmsg_len > SIZE_MAX - sizeof(size_t) + 1) return nullptr;
+  size_t step = CMSG_ALIGN(cmsg->cmsg_len);
+  if (step > left || left - step < sizeof(cmsghdr)) return nullptr;
+  auto* next = reinterpret_cast<cmsghdr*>(static_cast<unsigned char*>(mhdr->msg_control) +
+                                         (current - begin) + step);
+  if (next->cmsg_len < sizeof(cmsghdr) || next->cmsg_len > left - step) return nullptr;
   return next;
 }
 
