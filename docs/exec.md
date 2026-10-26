@@ -158,6 +158,15 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
   exec2_test.c/exec2_child.c). ci 40238884918: the libcore patch was malformed
   and the test had a `-Wnonnull`; ci 40239339448: process_bionic.cc lacked
   `<fcntl.h>` (fixed in fa01b01).
-- 784c47b: merged origin/phase4/integration (hwsvc2); ci 40240910969 running.
+- 784c47b: merged origin/phase4/integration (hwsvc2). ci 40240910969: system,
+  popen, posix_spawn, exec-replace and the tools passed; the driver died at the
+  fork test (exit 127): `__builtin_longjmp` re-entered fork's own frame, which
+  the child's calls had overwritten.
+- 995eef1: fork is now an asm trampoline (`gesher_fork`) that saves the
+  caller's context and returns to the caller a second time
+  (`gesher_fork_return`). ci 40244652480 (after a transient curl failure in the
+  build job, rerun): every exec2 check passes on windows-2022 and windows-2025;
+  the test's expected SUMMARY count was off by one (9 checks, fixed). package
+  and e2e green.
 - Not done: ELF TLS in the executable (ADR 0055 explains why); `pm`/`am`
   decline; `setprop` does not persist; a real fork that does work before exec.
