@@ -139,6 +139,31 @@ Merged so far:
 
 ## Stopped at handover (2026-10-26)
 
+### Lead-engineer continuation (2026-10-26)
+
+The handover tables below are historical. No new track has been merged yet.
+The integration checkout was clean at a462e9c; main has not been changed.
+
+| Track | Result read / change | New verification |
+|---|---|---|
+| aot2 | ci 40285423159 at ad9d360: every job success/skipped; both Windows jobs end with 0 test(s) failed; e2e 0 unexpected failures. App images hold app classes (single: 7 classes/16 methods, 7 compiled; device: 2 classes/11 methods, 10 compiled). Merged a462e9c and removed diagnostic -AllClasses. | ci 40290847953 at 19014a2; must verify the smaller image, startup, app images and all jobs before merge. |
+| windows3 | Merged a462e9c in its worktree: docs only beyond the running a15ade4; waiting for ci 40285476400. | No extra run required if the running SHA is green and subsequent differences remain docs only. |
+| native2 | windows-2025 job 121456663287 of 40285714522 ends with 12 test(s) failed: all dalvikvm/APK paths abort on unresolved android_get_device_api_level. Added it to the common shim through ro.build.version.sdk; local g++ syntax-only check passed. Merged a462e9c. | ci 40291049581 at e1e99c0; not verified yet. |
+| surfaces | windows-2025 job 121451383191 of 40285764214 ends with 1 test(s) failed: surfacegl single-process finish. SIGQUIT shows an idle main looper; the server rejects the driver's unregistered token. Routed local finish requests to the existing window close handler. Merged a462e9c. TIC-80 passes e2e at 800x400 (job 121452091155), but needs confirmation on both runners before removing knownFailure. | ci 40291437446 at 025fda1; not verified yet. |
+| web3 | windows-2025 job 121453338756 of 40285810159 ends with 3 test(s) failed. Geo watch returns both expected positions but was double-JSON-encoded in the app; fixed at 3852225. Both accessibility checks still fail (zero page nodes; UIA client timeout). | No new run yet: fix accessibility before dispatch. |
+| media3 | ci 40287172595 remains under watch; package and test/e2e results must be read when complete. | Existing run at f21d531. |
+| exec3 | No changes since handover; the shell still has no executor or builtins. | No run. |
+
+Watches use gh run watch with --exit-status --interval 120. Review logs are
+saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
+downloaded). No roadmap box was ticked for the new, unverified fixes.
+
+The open tracks do not cover every ADR limit: aot2's ADR 0054 also lists
+shared-library class-loader contexts, cloud profiles, secondary dex and oatdump;
+media3 lists legacy camera recording, persistent input surfaces and VP8/VP9
+encoding. Include these in the subsequent gap audit along with every other
+remaining item; green track tests alone do not close the overall goal.
+
 The owner stopped all track agents on 2026-10-26 to hand the project to a
 new team. Each open track committed and pushed its work and updated its
 "Status and next steps" section; continue from there. None of these tracks
