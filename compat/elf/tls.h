@@ -39,7 +39,9 @@ struct TlsModule {
 // Assigns `m` a module id and, if it fits, a static offset from the thread
 // pointer (committing the space in every live thread's block). Called once per
 // object with PT_TLS, before its relocations.
-void TlsAssignModule(TlsModule* m);
+// executable requires the first static block and a compatible variant-II
+// layout, so link-time local-exec offsets address this module unchanged.
+bool TlsAssignModule(TlsModule* m, bool executable = false);
 
 // After the object's relocations: copies its TLS image into every live
 // thread's block; threads set up later copy it themselves.

@@ -18,6 +18,7 @@
 // the CRT's sscanf with the format's lengths mapped the same way.
 
 #include "shim_internal.h"
+#include <gesher/logging.h>
 
 #include <windows.h>
 
@@ -34,6 +35,12 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+extern "C" int32_t __android_log_get_minimum_priority();
+extern "C" int32_t __android_log_set_minimum_priority(int32_t priority);
+extern "C" void __android_log_set_default_tag(const char* tag);
+extern "C" int __android_log_is_loggable_len(int priority, const char* tag, size_t length, int fallback);
+extern "C" const char* gesher_android_default_log_tag();
 
 namespace gesher::bionic {
 
@@ -648,7 +655,10 @@ char PriorityLetter(int prio) {
 // One WriteFile per line: stderr is unbuffered, and the CRT would write a
 // formatted line in pieces that other threads' output (Java's System.out on
 // the same file) can land between.
-int LogWrite(int prio, const char* tag, const char* text) {
+int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
+  if (!tag) tag = ::gesher_android_default_log_tag();
+  if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
+  logging::Record(buffer, prio, tag, text);
   std::string line(1, PriorityLetter(prio));
   line += '/';
   line += tag ? tag : "";
@@ -747,16 +757,16 @@ int BIONIC_SYSV gesher_bionic_android_log_vprint(int prio, const char* tag, cons
                                                 SysvVaList* ap) {
   return LogWrite(prio, tag, Format(fmt, ap).c_str());
 }
-int BIONIC_SYSV gesher_bionic_android_log_buf_vprint(int /*buf*/, int prio, const char* tag,
+int BIONIC_SYSV gesher_bionic_android_log_buf_vprint(int buf, int prio, const char* tag,
                                                     const char* fmt, SysvVaList* ap) {
-  return LogWrite(prio, tag, Format(fmt, ap).c_str());
+  return LogWrite(prio, tag, Format(fmt, ap).c_str(), buf);
 }
 void BIONIC_SYSV gesher_bionic_android_log_vassert(const char* cond, const char* tag,
                                                   const char* fmt, SysvVaList* ap) {
   if (fmt != nullptr) {
-    LogWrite(7, tag, Format(fmt, ap).c_str());
+    LogWrite(7, tag, Format(fmt, ap).c_str(), 0, false);
   } else {
-    LogWrite(7, tag, cond ? cond : "assertion failed");
+    LogWrite(7, tag, cond ? cond : "assertion failed", 0, false);
   }
   std::abort();
 }
@@ -766,11 +776,23 @@ void BIONIC_SYSV gesher_bionic_vsyslog(int prio, const char* fmt, SysvVaList* ap
 int BIONIC_SYSV gesher_bionic_android_log_write(int prio, const char* tag, const char* text) {
   return LogWrite(prio, tag, text);
 }
-int BIONIC_SYSV gesher_bionic_android_log_buf_write(int /*buf*/, int prio, const char* tag,
+int BIONIC_SYSV gesher_bionic_android_log_buf_write(int buf, int prio, const char* tag,
                                                    const char* text) {
-  return LogWrite(prio, tag, text);
+  return LogWrite(prio, tag, text, buf);
 }
-int BIONIC_SYSV gesher_bionic_android_log_is_loggable(int, const char*, int) { return 1; }
+int BIONIC_SYSV gesher_bionic_android_log_is_loggable_len(int prio, const char* tag, size_t length, int fallback) {
+  return ::__android_log_is_loggable_len(prio, tag, length, fallback);
+}
+int BIONIC_SYSV gesher_bionic_android_log_is_loggable(int prio, const char* tag, int fallback) {
+  return gesher_bionic_android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, fallback);
+}
+int32_t BIONIC_SYSV gesher_bionic_android_log_get_minimum_priority() { return ::__android_log_get_minimum_priority(); }
+int32_t BIONIC_SYSV gesher_bionic_android_log_set_minimum_priority(int32_t priority) {
+  return ::__android_log_set_minimum_priority(priority);
+}
+void BIONIC_SYSV gesher_bionic_android_log_set_default_tag(const char* tag) {
+  ::__android_log_set_default_tag(tag);
+}
 
 // The variadic entry points, defined in assembly below.
 void gesher_bionic_printf();
@@ -909,6 +931,10 @@ void RegisterStdio(SymbolTable& t) {
   E("__android_log_vprint", gesher_bionic_android_log_vprint);
   E("__android_log_assert", gesher_bionic_android_log_assert);
   E("__android_log_is_loggable", gesher_bionic_android_log_is_loggable);
+  E("__android_log_is_loggable_len", gesher_bionic_android_log_is_loggable_len);
+  E("__android_log_get_minimum_priority", gesher_bionic_android_log_get_minimum_priority);
+  E("__android_log_set_minimum_priority", gesher_bionic_android_log_set_minimum_priority);
+  E("__android_log_set_default_tag", gesher_bionic_android_log_set_default_tag);
 #undef E
 }
 

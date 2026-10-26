@@ -19,7 +19,10 @@
 // (flags preserved), runs the instruction without the %fs prefix, undoes the
 // addition and jumps back. The site becomes a `jmp rel32` to the stub when the
 // instruction is at least 5 bytes long and the stub is within +-2 GiB, and an
-// int3 that a vectored handler redirects otherwise. Anything else (another
+// int3 that a vectored handler redirects otherwise. A compatible main
+// executable's negative absolute local-exec operands use a scratch-register
+// stub, preserving its register, flags and red zone; only offsets in the
+// executable's own static TLS block qualify. Other unsupported accesses (a
 // %fs displacement, a RIP-relative %fs operand, an instruction the stub cannot
 // replay) becomes an int3 that, if reached, prints what and where and aborts;
 // the load reports it on stderr.
@@ -51,7 +54,11 @@ struct FsRewriteStats {
 // is the object's file image (for program and section headers); the segments
 // at `load_bias` must still be writable. Returns false (and sets *error) only
 // on a hard failure (no TLS slot, out of memory).
+// executable_tls_size is nonzero only for an already-assigned compatible
+// main executable, whose linker-resolved negative offsets occupy the first
+// static TLS block. Libraries retain their existing rewrite rules.
 bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
-                       uint8_t* load_bias, FsRewriteStats* stats, std::string* error);
+                       uint8_t* load_bias, FsRewriteStats* stats, std::string* error,
+                       size_t executable_tls_size = 0);
 
 }  // namespace gesher::elf
