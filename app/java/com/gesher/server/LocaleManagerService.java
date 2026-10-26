@@ -100,6 +100,7 @@ public final class LocaleManagerService extends ILocaleManager.Default
      */
     public static Configuration configurationFor(String packageName) {
         Configuration c = DeviceProfile.configuration();
+        com.gesher.app.window.ApplicationDisplay.applyConfiguration(c);
         LocaleManagerService s = sInstance;
         LocaleList app = s != null && packageName != null ? s.appLocales(packageName) : null;
         if (app != null && !app.isEmpty()) {
@@ -111,6 +112,18 @@ public final class LocaleManagerService extends ILocaleManager.Default
             c.seq = sSeq;
         }
         return c;
+    }
+
+    /** The shared Application display changed while task overrides stay local. */
+    public static void onSharedDisplayChanged() {
+        LocaleManagerService service = sInstance;
+        if (service == null) return;
+        nextSeq();
+        if (service.mInProcessPackage != null) {
+            applyInProcess(configurationFor(service.mInProcessPackage), "shared display rotation");
+        } else {
+            service.mAtm.dispatchConfiguration(null);
+        }
     }
 
     /**

@@ -5,6 +5,7 @@
 package com.gesher.app.window;
 
 import android.hardware.display.DisplayManagerGlobal;
+import android.content.res.Configuration;
 import android.hardware.display.IDisplayManagerCallback;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
@@ -57,6 +58,12 @@ public final class ApplicationDisplay {
         return info;
     }
 
+    /** Application Resources must describe the same shared display as Binder. */
+    public static void applyConfiguration(Configuration configuration) {
+        int rotation = sRotation;
+        configuration.updateFrom(TaskConfiguration.override(TaskConfiguration.display(rotation), rotation));
+    }
+
     public static void register(IDisplayManagerCallback callback, long mask) {
         if (callback == null) return;
         synchronized (CALLBACKS) {
@@ -67,9 +74,11 @@ public final class ApplicationDisplay {
 
     /** Called outside the activity manager's lock, before focus notifications. */
     public static void update(int rotation) {
+        long sequence;
         synchronized (CALLBACKS) {
-            update(rotation, sSequence + 1);
+            sequence = sSequence + 1;
         }
+        update(rotation, sequence);
     }
 
     /** An older focus calculation must not overwrite a newer concurrent one. */
@@ -100,5 +109,9 @@ public final class ApplicationDisplay {
                 CALLBACKS.finishBroadcast();
             }
         }
+        // Display.getRealSize/getRealMetrics use their Resources max bounds,
+        // not just fresh DisplayInfo. Send the normal process configuration
+        // change as well; per-Activity task overrides retain their own shape.
+        com.gesher.server.LocaleManagerService.onSharedDisplayChanged();
     }
 }

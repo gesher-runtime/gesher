@@ -6,6 +6,7 @@ import android.view.Surface;
 import android.view.View;
 import com.gesher.app.DeviceProfile;
 import com.gesher.app.window.TaskConfiguration;
+import com.gesher.app.window.ApplicationDisplay;
 
 /** Actual Configuration.updateFrom must retain app locale direction for every task rotation. */
 public final class Windows4ConfigurationTest {
@@ -17,6 +18,15 @@ public final class Windows4ConfigurationTest {
                 Configuration global = DeviceProfile.configuration();
                 global.setLocales(LocaleList.forLanguageTags(language));
                 int direction = global.getLayoutDirection();
+                ApplicationDisplay.update(rotation);
+                Configuration application = new Configuration(global);
+                ApplicationDisplay.applyConfiguration(application);
+                if (!application.windowConfiguration.getMaxBounds().equals(TaskConfiguration.display(rotation))
+                        || application.windowConfiguration.getDisplayRotation() != rotation
+                        || application.getLayoutDirection() != direction
+                        || !application.getLocales().equals(global.getLocales())) {
+                    throw new AssertionError("Application display configuration: " + application);
+                }
                 Configuration task = TaskConfiguration.override(TaskConfiguration.display(rotation), rotation);
                 if ((task.screenLayout & Configuration.SCREENLAYOUT_LAYOUTDIR_MASK) != 0) {
                     throw new AssertionError("Task geometry defines a locale direction");
