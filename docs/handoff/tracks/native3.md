@@ -62,6 +62,17 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+ci 40381742392 at 3c9f6cb: production Unicode bridge and host executable
+compile/link, package and both e2e jobs pass. Both Windows suites pass the
+new Unicode boundary/handle/error checks through both NDK ABIs and all four
+APK cases, then abort before the full-code-point comparison: the test job's
+sparse checkout omitted probes/native3/unicode/reference.json. Add that
+directory to the checkout; retain the complete comparison and all suite
+assertions. This is not a full green run or all-code-point parity proof.
+The locked reference itself is fully reviewed at ci 40376822140/7ee6b32:
+all four jobs succeed and all 15 lock/digest/boundary verification PASS
+lines were personally read. This remains separate from Windows parity.
+
 Prepared Unicode production follow-up, not yet CI verified: replace Windows'
 changing ICU/16-bit CRT predicates with an isolated bridge over the pinned
 ICU4C data, matching bionic's ASCII and binary-property/category rules. Plain
