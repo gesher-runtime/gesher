@@ -247,6 +247,34 @@ void WideContracts(const Api& api, Check check) {
   errno = 0;
   check(api.integer(long_input.c_str(), &end, 10) == 123 && end == long_input.c_str() + 603 && errno == 0,
         "integer has no fixed input buffer");
+  for (uint32_t high : {UINT32_C(0x80000000), UINT32_C(0xffffffff)}) {
+    wchar_t text[] = {static_cast<wchar_t>(high), L'1', 0};
+    errno = 0;
+    check(api.integer(text, &end, 10) == 0 && end == text && errno == 0 &&
+              api.unsigned_integer(text, &end, 10) == 0 && end == text && errno == 0,
+          "integer high-bit wchar input stops in both signedness ABIs");
+  }
+}
+
+template <class Char, class Compare, class CompareN, class Memory, class Check>
+void WideComparisonContracts(Compare compare, CompareN compare_n, Memory memory, Check check) {
+  const struct { uint32_t left; uint32_t right; int result; } samples[] = {
+      {0x1f642, 0x10000, 0xf642}, {0xffffffff, 0, -1}, {0, 0xffffffff, 1},
+      {0x80000000, 0, INT32_MIN}, {0x7fffffff, 0, INT32_MAX},
+      {0x80000000, 0xffffffff, -2147483647}, {0xffffffff, 0x10000, -65537}};
+  for (const auto& sample : samples) {
+    const Char left[] = {static_cast<Char>(sample.left), 0};
+    const Char right[] = {static_cast<Char>(sample.right), 0};
+    check(compare(left, right) == sample.result && compare_n(left, right, 1) == sample.result &&
+              memory(left, right, 1) == sample.result && compare_n(left, right, 0) == 0 &&
+              memory(left, right, 0) == 0, "pinned full-width comparison subtraction/result");
+    const Char prefix_left[] = {static_cast<Char>('A'), left[0], 0};
+    const Char prefix_right[] = {static_cast<Char>('A'), right[0], 0};
+    check(compare(prefix_left, prefix_right) == sample.result &&
+              compare_n(prefix_left, prefix_right, 1) == 0 &&
+              compare_n(prefix_left, prefix_right, 2) == sample.result,
+          "pinned full-width comparison bounded prefix");
+  }
 }
 
 template <class Double, class Float, class Check>
@@ -293,4 +321,10 @@ void WideFloatingContracts(Double to_double, Float to_float, Check check) {
   long_float += L"1.25e2!";
   check(to_double(long_float.c_str(), &end) == 125 && end == long_float.c_str() + 606,
         "floating input/end beyond 255 characters");
+  for (uint32_t high : {UINT32_C(0x80000000), UINT32_C(0xffffffff)}) {
+    wchar_t text[] = {static_cast<wchar_t>(high), L'1', 0};
+    errno = 0;
+    check(to_double(text, &end) == 0 && end == text && to_float(text, &end) == 0 && end == text && errno == 0,
+          "floating high-bit wchar input stops in both signedness ABIs");
+  }
 }

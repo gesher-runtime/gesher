@@ -471,14 +471,14 @@ wchar32* BIONIC_SYSV Wmemchr(const wchar32* s, wchar32 c, size_t n) {
 
 int BIONIC_SYSV Wmemcmp(const wchar32* a, const wchar32* b, size_t n) {
   for (size_t i = 0; i < n; ++i) {
-    if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    if (a[i] != b[i]) return static_cast<int32_t>(a[i] - b[i]);
   }
   return 0;
 }
 
 int BIONIC_SYSV Wcscoll(const wchar32* a, const wchar32* b, void*) {
   for (;; ++a, ++b) {
-    if (*a != *b) return *a < *b ? -1 : 1;
+    if (*a != *b) return static_cast<int32_t>(*a - *b);
     if (*a == 0) return 0;
   }
 }

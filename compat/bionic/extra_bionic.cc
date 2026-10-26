@@ -817,11 +817,11 @@ size_t Wlen(const wchar32* s) {
 }
 int BIONIC_SYSV Wcscmp(const wchar32* a, const wchar32* b) {
   while (*a && *a == *b) ++a, ++b;
-  return *a < *b ? -1 : *a > *b ? 1 : 0;
+  return static_cast<int32_t>(*a - *b);
 }
 int BIONIC_SYSV Wcsncmp(const wchar32* a, const wchar32* b, size_t n) {
   for (; n > 0; --n, ++a, ++b) {
-    if (*a != *b) return *a < *b ? -1 : 1;
+    if (*a != *b) return static_cast<int32_t>(*a - *b);
     if (*a == 0) break;
   }
   return 0;

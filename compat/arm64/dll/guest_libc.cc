@@ -65,8 +65,9 @@ void* g_localeconv = nullptr;
 
 const Arm64Lconv* GESHER_SYSV GuestLocaleconv() {
   static const Arm64Lconv locale = [] {
-    using Function = const Arm64Lconv*(GESHER_SYSV*)();
-    Arm64Lconv result = *reinterpret_cast<Function>(g_localeconv)();
+    using Function = const void*(GESHER_SYSV*)();
+    Arm64Lconv result;
+    std::memcpy(&result, reinterpret_cast<Function>(g_localeconv)(), sizeof(result));
     // Both bionic locales use CHAR_MAX for all fourteen monetary indicators.
     // The host/x86-64 char is signed (127); Android arm64 char is unsigned.
     std::memset(result.indicators, 0xff, sizeof(result.indicators));
