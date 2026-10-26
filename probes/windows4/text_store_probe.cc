@@ -279,6 +279,48 @@ int main() {
           && edits[partial_edits + 1].start == 2 && edits[partial_edits + 1].end == 2
           && edits.back().kind == DocumentEdit::kCompositionEnd && edits.back().text == u"aXcd",
         "a partial edit inside a TSF composition restores the native insertion caret after publishing the full composing text");
+  TextDocument live; live.available = true; live.epoch = 5; live.text = u"abc"; live.start = live.end = 3;
+  store->Update(live);
+  RECT live_caret{20, 20, 22, 42};
+  MapWindowPoints(window, nullptr, reinterpret_cast<POINT*>(&live_caret), 2);
+  store->Caret(live_caret);
+  TextDocument unavailable; unavailable.epoch = 5;
+  store->Update(unavailable);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = FALSE; LONG position = -1;
+    POINT old_point{live_caret.left, live_caret.top};
+    Check(store->GetTextExt(0, 0, 0, &rectangle, &clipped) == TS_E_NOLAYOUT
+            && store->GetACPFromPoint(0, &old_point, 0, &position) == TS_E_NOLAYOUT,
+        "an unavailable editor exposes neither the previous caret nor measured range geometry");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  live.epoch = 6; live.text = u"XYZ"; store->Update(live);
+  geometry.epoch = 6; geometry.start = 0; geometry.text = u"XYZ";
+  geometry.characters = {{0, 20, 20, 30, 42, false}, {1, 30, 20, 40, 42, false}, {2, 40, 20, 50, 42, false}};
+  store->Geometry(geometry); store->Caret(live_caret);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = TRUE;
+    Check(store->GetTextExt(0, 0, 3, &rectangle, &clipped) == S_OK && !clipped
+            && rectangle.left == live_caret.left && rectangle.right == live_caret.left + 30,
+        "a new editor epoch recovers only from its own fresh text and geometry");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  ITextStoreACP* held = nullptr;
+  HRESULT retained = store->QueryInterface(IID_ITextStoreACP, reinterpret_cast<void**>(&held));
+  store->Disconnect();
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = FALSE; LONG position = -1;
+    POINT old_point{live_caret.left, live_caret.top};
+    Check(SUCCEEDED(retained) && held != nullptr
+            && held->GetTextExt(0, 0, 0, &rectangle, &clipped) == TS_E_NOLAYOUT
+            && held->GetACPFromPoint(0, &old_point, 0, &position) == TS_E_NOLAYOUT,
+        "a retained COM interface cannot expose a retired editor's caret or text geometry after Disconnect");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  if (held != nullptr) held->Release();
   Check(SUCCEEDED(store->UnadviseSink(sink)), "the actual sink can unsubscribe by canonical COM identity");
   store->Release(); sink->Release();
   TestWindowsTextService(window);

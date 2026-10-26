@@ -89,6 +89,8 @@ public final class LocaleManagerService extends ILocaleManager.Default
             mInProcessPackage = pm.packages().iterator().next().packageName;
             WindowsHost.addListener(this);
         }
+        com.gesher.app.window.ApplicationDisplay.installConfigurationDispatcher(
+                LocaleManagerService::onSharedDisplayChanged);
     }
 
     // --- the configuration -------------------------------------------------------------

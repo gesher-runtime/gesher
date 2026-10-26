@@ -441,3 +441,31 @@ failures, counts, timeouts or source-replacement drift fail the workflow.
 The real Windows service also gains a native partial-composition bridge
 check, and ACP geometry gains actual clipping/missing-character checks.
 All of these new checks await CI; no local compilation/execution is allowed.
+
+Counterfactual CI **40414421254** at a827d5c completes all three jobs
+successfully. Both actual Windows logs were read: all four canonical native
+aggregates are zero with no raw FAIL; actual Windows-service partial editing,
+measured clipping and missing-character behavior pass. The five deliberately
+changed source copies fail exactly their declared 1/1/3/4/1 assertions on both
+runners. Those negative raw FAIL lines stay visible and are not canonical
+failures or a full Android-suite result.
+
+The full diagnostic 40413109702 fails its framework job after the pinned
+framework javac succeeds with zero errors: the graphics dex fixture's new
+ApplicationDisplay import followed a static dependency into the complete
+LocaleManagerService/Services/CompatChanges graph, outside that fixture's
+generated-server class path. The production configuration service now installs
+a real Runnable dispatcher after initialization, keeping ApplicationDisplay's
+configuration helper independent of the server dependency graph. No test or
+assertion is removed. Native/JNI build jobs in that old run remain diagnostic;
+it cannot reach the required Android/legacy observations. The corrected
+combined source and latest runtime integration need new CI verification.
+
+A final native lifecycle audit also found stale layout data on retained
+unavailable/retired COM stores: Disconnect cleared text but retained its caret,
+and an unavailable same-epoch snapshot retained measured text. The corrected
+source clears caret/geometry at both boundaries and returns TS_E_NOLAYOUT
+after the existing lock/argument checks. Independent review agreed with that
+boundary. New held-COM and unavailable-to-new-epoch recovery checks are
+prepared for CI, with the geometry counterfactual's additional recovery
+assertion declared explicitly. No local native build or execution occurred.

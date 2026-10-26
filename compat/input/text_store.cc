@@ -14,6 +14,7 @@ void TextStore::Disconnect() {
   schedule_ = [] {};
   document_ = TextDocument{}; pending_document_.reset();
   geometry_ = TextGeometry{};
+  caret_ = RECT{};
   pending_lock_ = 0; pending_layout_ = false; composing_ = false;
   window_ = nullptr;
 }
@@ -123,7 +124,7 @@ void TextStore::Apply(TextDocument document) {
   bool status = document.available != document_.available;
   TS_TEXTCHANGE delta = {0, static_cast<LONG>(document_.text.size()), static_cast<LONG>(document.text.size())};
   if (document.epoch != document_.epoch) { revision_ = 0; composing_ = false; geometry_ = TextGeometry{}; }
-  if (!document.available) composing_ = false;
+  if (!document.available) { composing_ = false; geometry_ = TextGeometry{}; caret_ = RECT{}; }
   document_ = std::move(document);
   if (sink_ == nullptr) return;
   if (changed && (sink_mask_ & TS_AS_TEXT_CHANGE) != 0) sink_->OnTextChange(0, &delta);
@@ -302,6 +303,7 @@ HRESULT TextStore::GetTextExt(TsViewCookie view, LONG start, LONG end, RECT* rec
   if (!ReadLock()) return TS_E_NOLOCK;
   if (!rectangle || !clipped) return E_POINTER;
   if (view != 0 || !Range(start, end)) return TS_E_INVALIDPOS;
+  if (!document_.available) return TS_E_NOLAYOUT;
   if (start == end && start == document_.end && caret_.bottom > caret_.top) {
     *rectangle = caret_; *clipped = FALSE; return S_OK;
   }
@@ -326,6 +328,7 @@ HRESULT TextStore::GetACPFromPoint(TsViewCookie view, const POINT* point, DWORD,
   if (!ReadLock()) return TS_E_NOLOCK;
   if (!point || !position) return E_POINTER;
   if (view != 0) return E_INVALIDARG;
+  if (!document_.available) return TS_E_NOLAYOUT;
   if (PtInRect(&caret_, *point)) { *position = document_.end; return S_OK; }
   if (!GeometryMatches()) return TS_E_NOLAYOUT;
   POINT client = *point; ScreenToClient(window_, &client);

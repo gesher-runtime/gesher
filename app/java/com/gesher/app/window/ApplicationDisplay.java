@@ -30,6 +30,7 @@ public final class ApplicationDisplay {
             new RemoteCallbackList<>();
     private static volatile int sRotation = Surface.ROTATION_0;
     private static long sSequence;
+    private static volatile Runnable sConfigurationDispatcher;
 
     private ApplicationDisplay() {
     }
@@ -62,6 +63,12 @@ public final class ApplicationDisplay {
     public static void applyConfiguration(Configuration configuration) {
         int rotation = sRotation;
         configuration.updateFrom(TaskConfiguration.override(TaskConfiguration.display(rotation), rotation));
+    }
+
+    /** Installed by the process configuration service after its initialization. */
+    public static void installConfigurationDispatcher(Runnable dispatcher) {
+        if (dispatcher == null) throw new IllegalArgumentException("configuration dispatcher");
+        sConfigurationDispatcher = dispatcher;
     }
 
     public static void register(IDisplayManagerCallback callback, long mask) {
@@ -112,6 +119,7 @@ public final class ApplicationDisplay {
         // Display.getRealSize/getRealMetrics use their Resources max bounds,
         // not just fresh DisplayInfo. Send the normal process configuration
         // change as well; per-Activity task overrides retain their own shape.
-        com.gesher.server.LocaleManagerService.onSharedDisplayChanged();
+        Runnable dispatcher = sConfigurationDispatcher;
+        if (dispatcher != null) dispatcher.run();
     }
 }
