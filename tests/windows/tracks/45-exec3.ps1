@@ -5,6 +5,11 @@ Check 'exec3: binder startup waits for a protocol connection with bounded failur
   & "$Dir/exec3_binder_ready_probe.exe"
 } @('exec3 binder readiness: 10 checks, 0 failed')
 
+Check 'exec3: launcher frames child log lines without splitting window titles' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.LauncherTailTest
+} @('LauncherTailTest PASS partial UTF-8 title, atomic concurrent lines, truncation reset and final fragment')
+
 Check 'exec3: local-exec FS rewrite preserves registers, flags, SIMD and thread isolation' {
   & "$Dir/exec3_tls_probe.exe"
 } @('exec3 TLS probe: 0 failed')

@@ -119,6 +119,14 @@ The packaged one-shot startup reuses this helper's internal wait-binder entry
 point before starting servicemanager, so reaching the old pipe polling deadline
 cannot silently proceed. Its runtime/package verification is also pending.
 
+Launcher log forwarding now buffers raw bytes until newline before a single
+atomic PrintStream write. This prevents the launcher's status line from
+splitting a child window title across 16 KiB reads, which had hidden a genuine
+first-frame HWND from the windows3 test. Truncation discards pending old bytes;
+finishing emits one remaining fragment with a separating newline. A focused
+plain-Java regression passes UTF-8 chunking, concurrent parent/child lines and
+reset/final-fragment behavior. Existing UI assertions remain intact.
+
 ## Fork and static-executable feasibility review
 
 The native fork trampoline saves the calling thread's register/stack return

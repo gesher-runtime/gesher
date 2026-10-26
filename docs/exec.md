@@ -233,6 +233,12 @@ valid four-byte value. Initial build/persistent values follow the same policy.
 An additional Java check reads a 1000-byte ro value through the framework and
 verifies the same property's legacy NDK get returns the Android error value;
 source compilation passes, with runtime proof pending the next dispatch.
+The coordinator's windows3 diagnosis also exposed Launcher forwarding partial
+log chunks: its own status println could split a child's first-frame window
+title. Tail now frames raw UTF-8 bytes into complete atomic lines, resets the
+pending fragment on truncation and emits an unterminated final fragment once,
+with a separating newline, only when finishing. The focused JDK regression
+passes; the real windows3 UI assertions remain unchanged and await next CI.
 
 Continuation history and exact evidence:
 
