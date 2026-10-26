@@ -503,6 +503,66 @@ with `tests/apps/popupapp` (built by framework.yml next to uiapp).
   dropdown; `ACTION_OUTSIDE` from the input translator; a shown-window
   (desktop) check of activation and z-order.
 
+### Surfaces (surfaces track): status and next steps
+
+Branch `wip/surfaces`, ADR 0056, tests `tests/windows/tracks/52-surfaces.ps1` with
+`tests/apps/surfaceapp` (Java, built by framework.yml) and `tests/apps/surfacegl` (an NDK
+library, built by `.github/workflows/surfaces.yml`, artifact `surfaces`).
+
+How child surfaces work (built on the media track's no-compositor path, ADR 0052,
+`compat/media/surface`, which this track now owns):
+
+- **SurfaceView**: its BLASTBufferQueue's Surface is a QueueSurface; each frame queued
+  invalidates the view and hwui draws the latest frame into the hole it punches
+  (frameworks/base patch 0300), scaled to the view (setFixedSize). Holder callbacks,
+  position, size, scrolling and clipping follow the view tree. `setZOrderOnTop`: the
+  frame is drawn by a drawable in the root view's overlay, over every view (patch 0300,
+  `GesherOverlay`).
+- **EGL/GLES into it** (SDL, games): an ANativeWindow without an HWND gets a hidden
+  helper window for ANGLE's swap chain; before each eglSwapBuffers the frame is read
+  back and posted to the ANativeWindow, paced at 60 Hz (`compat/bionic/egl_child_surface.cc`).
+- **TextureView / SurfaceTexture**: the media track's TextureLayer and SurfaceTexture
+  natives; TextureView.lockCanvas now draws into the SurfaceTexture's producer.
+- **Cameras**: Camera2 and the legacy Camera write RGBA into any surface with a native
+  window, so SurfaceViews and TextureViews get frames; the legacy `setPreviewTexture`
+  now goes through a Surface over the SurfaceTexture (LegacyCamera).
+- **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
+  (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+
+Status and next steps (2026-10-26):
+
+- Verified at b1b59a65d30eef81bdc7208a4c88dbfdeab5e35c, ci 40307919084,
+  attempt 2. All 28 jobs are success/skipped (22 success, 6 skipped); both
+  Windows test summaries end with `0 test(s) failed`. Attempt 1 failed only
+  the known wrong.host.badssl.com connection timeout on Windows 2025 (two
+  counted failures); that failed job passed on rerun. No surfaces check was
+  relaxed. The subsequent integration merge and verification report add docs
+  only; code and test inputs remain the verified tree.
+- Personally read all 32 surfaces PASS lines on each runner: Bitmap parcels
+  (small and shared-memory transport), NV21 YuvImage JPEG, Canvas producer
+  SurfaceTexture callbacks, SurfaceView lifecycle/size/position/z-order and
+  TextureView Canvas/getBitmap, all three camera-preview paths, and EGL/GLES
+  rendering plus fixed-size/lifecycle shutdown in both execution modes.
+  surfacegl's single-process finish and the locale restore/resend race now
+  pass. Gesher Camera's cross-process thumbnail is covered by 58-devices.
+- Package install/run/input/uninstall cleanup passes. Both required e2e jobs
+  pass TIC-80: installation, nonblank first frame, input response, closing and
+  process termination. Each ends with `0 unexpected failures`. Its obsolete
+  knownFailure has been removed.
+- Remaining scope is assigned to [surfaces2](handoff/tracks/surfaces2.md),
+  ADR 0063 reserved: GLES SurfaceTexture/external-OES consumption, Java
+  EGL14/GLES20/GLSurfaceView, child SurfaceControl alpha/corner radius and
+  transforms, SkiaGL Activity readback/composition, hardware buffers,
+  YuvImage JPEG_R and the parcel/storage limits in ADR 0056. These features
+  are open; the verified stage does not claim them or real-camera hardware
+  coverage on the CI runners.
+
+Edits outside the track's domain (minimal): compat/bionic/egl_gles.cc and
+ndk_graphics.cmake (child surface hooks, swap entry points), app/java/com/gesher/server/
+LegacyCamera.java (setPreviewTexture frames), app/gesher-camera CaptureActivity comment,
+tests/windows/tracks/58-devices.ps1 (thumbnail expected), tests/e2e/apps.json (TIC-80
+display, diagnoseLog, click), .github/workflows/ci.yml (surfaces job + artifact),
+framework.yml (surfaceapp), compat/hwui/graphics_runtime.cc, cmake/aosp/hwui.cmake.
 ### Open problems and dead ends
 
 - AOSP android-16 no longer builds libhwui or layoutlib_jni for Windows

@@ -1,0 +1,91 @@
+name: surfaces
+
+# The surfaces track's NDK test app (docs/graphics.md "Surfaces", ADR 0056):
+# surfacegl.apk, EGL/GLES 2 from lib/x86_64/libsurfacegl.so into a SurfaceView,
+# built on the Linux runner with the pinned NDK and uploaded as artifact
+# `surfaces` for the Windows test jobs (tests/windows/tracks/52-surfaces.ps1).
+# ci.yml calls it; it also runs on its own: gh workflow run surfaces --ref <branch>
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  R8_VERSION: "9.5.26"
+
+concurrency:
+  group: ${{ github.workflow }}-surfaces-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/apps/surfacegl
+
+      # The same caches as native-libs.yml.
+      - name: Cache the Android NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Fetch the Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+
+      - name: Cache d8
+        id: r8
+        uses: actions/cache@v4
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o r8.jar \
+            "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+
+      - name: Cache build-tools and android.jar
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+
+      - name: Fetch build-tools and android.jar
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+          rm -rf bt.zip pf.zip tmp-bt tmp-pf
+
+      - name: Build surfacegl.apk
+        run: |
+          tests/apps/surfacegl/build.sh dist-surfaces --ndk "$PWD/$NDK_DIR" \
+            --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" \
+            --r8 "$PWD/r8.jar"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: surfaces
+          path: dist-surfaces/
