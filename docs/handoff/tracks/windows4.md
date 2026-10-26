@@ -140,3 +140,16 @@ Watch: `C:/work/gesher-ci-review/windows4-40389984421-watch.log`.
 This run includes the nonce fix and TSF/COM-source/target-28 fixtures; the
 previous display-only run remains diagnostic and is not cancelled. All new
 runtime claims remain pending.
+
+Post-dispatch source imports only the portable TLS lifecycle slice for the
+next run: TlsServer.cs plus the local root-test server setup/cleanup in 56-net.
+NetTest and the original public badssl/internet tail remain identical to
+integration cd0b849; no Web3 negative-certificate helper is required. Patch:
+`C:/work/gesher-ci-review/tls-lifecycle-cd0b849.patch` (SHA256
+`2B975536B28F6BE8969317848CF16E3BDBADF6ED8738F747C0ED5FF0336C9629`).
+Its isolated lifecycle self-test passes locally in 120 ms with the same
+PFX-backed certificate setup; the C# owner itself passed both Web3 runners.
+This does not change the source or assertions of either already-running CI.
+A small additional TSF guard rejects service/key access immediately when the
+shared editor epoch/restriction changes, before its posted window-thread state
+update; the native probe covers that ordering explicitly.

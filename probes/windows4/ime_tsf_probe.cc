@@ -71,7 +71,11 @@ int main() {
   }
   Check(result == S_OK && replaced && ended, "the production IME adapter emits exact native reconversion/finish events");
   TextInputState restricted; restricted.active = true; restricted.editor_epoch = 2;
-  ime->SetTextInput(restricted); Drain();
+  ime->SetTextInput(restricted);
+  // Sent work can run before the posted state update. Shared state must already
+  // deny service access, rather than exposing the previous editor's context.
+  Check(ime->RunTextServiceTest() == static_cast<int32_t>(E_UNEXPECTED), "a restriction takes effect before its queued window-thread update");
+  Drain();
   Check(ime->RunTextServiceTest() == static_cast<int32_t>(E_UNEXPECTED), "a restricted editor destroys its TSF document before service access");
   ime.reset();
   Editor(window, 3);
