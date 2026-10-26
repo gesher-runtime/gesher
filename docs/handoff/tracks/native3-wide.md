@@ -166,6 +166,17 @@ This also prevents a failed source fetch from leaving a misleading file:
 an erroneous LLVM LICENSE.TXT path (upstream uses LICENSE) was removed;
 its copied content was never compiled. The genuine LLVM LICENSE is retained.
 
+Scoped ci 40423004909 at 569b497 is green; all three actual job logs read.
+Every saved source/license matches its pinned upstream bytes. The reference
+prints "PASS pinned wide: 237 conversion/state/boundary/LP64 assertions,
+0 failures", including signed/unsigned LLVM comparisons, high-bit numeric
+input, hard float rounding and the earlier state/bounds contracts. Production
+locale and the localeconv guest adapter pass -Werror; both NDK ABIs compile.
+Superseded full 40421328934 (pre-lconv/comparison source) was cancelled in
+compilation; it supplies no runtime acceptance claim. Current integration
+remains a06d930 and is included before the next complete acceptance run.
+Root's unsigned width follow-up is separate and has not been modified here.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
