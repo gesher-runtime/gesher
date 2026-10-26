@@ -347,6 +347,12 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66,
+  including the integrated aot2/surfaces code, exact UIA fixture corrections,
+  native networking and ArrayBuffer messages. Watch output is preserved at
+  `C:/work/gesher-ci-review/web3-40333695614-watch.log`. No runtime milestone
+  is closed pending the complete test, package and both e2e results.
+
 - Merged verified aot2 integration (4d144663) and central documentation through
   b9f93f0c before the next full run. The original capture fix, hosted UIA
   override, both e2e runner requirements and all new network/ArrayBuffer
