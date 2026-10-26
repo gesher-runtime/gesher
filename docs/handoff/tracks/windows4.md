@@ -131,3 +131,12 @@ exercise reconversion, composition completion, password/number exclusion and
 normal-editor reconnection. These Android runtime scenarios are not yet CI
 verified. Candidate-window occlusion, richer geometry/formatting and physical
 IME behavior remain open; no milestone or roadmap row is ticked.
+
+Combined WIP full CI dispatched: **40389984421**, exact source
+`502b7d7a6ba7e3ca1640c5a1b8ba7a237ed107c2`, after merging current integration.
+The branch merge commit was then amended only to add its required author
+footer; `9d094ed` has an identical tree (empty diff against the run source).
+Watch: `C:/work/gesher-ci-review/windows4-40389984421-watch.log`.
+This run includes the nonce fix and TSF/COM-source/target-28 fixtures; the
+previous display-only run remains diagnostic and is not cancelled. All new
+runtime claims remain pending.
