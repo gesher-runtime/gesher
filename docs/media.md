@@ -220,6 +220,12 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — output-test continuation, 2026-10-26
+- Running: ci 40329138943 at ac12cbb5b4866595d64dd1023944dc3c530cae77,
+  the output-tone test fixes below. Current integration was fetched before
+  dispatch and is already included (8590f4b; documentation only beyond
+  4f99afd). There are no runtime-source changes after 9158120. New runtime
+  results are pending; the changed VideoActivity compiles with JDK 21 and
+  38-media parses locally. NDK C is compiled only in CI.
 - Latest completed full run: ci 40318189310, attempt 1, exact code SHA
   9158120f957ea01935d071aa9c80b4791ba673f5, with integration 4f99afd
   (surfaces, native2 and the required TIC-80 e2e matrix). Subsequent branch
@@ -255,8 +261,7 @@ the microphone (looped, from its start each time recording starts);
   the old log does not prove an underrun. Final xruns are diagnostic because
   a finite stream can starve at its end before the polling thread stops it.
   The drain wait is now bounded. No tone threshold is relaxed.
-- Next: compile the changed test app/parse 38-media locally, commit/push,
-  merge current integration, and dispatch the final combined full CI.
+- Next: read the new combined full CI's completed Windows test logs.
   Read both test logs and package/e2e logs, and tick only scoped roadmap
   items supported by actual checks. No broad API completion claim.
 - The runners have no physical microphone: input checks use the known WAV
