@@ -184,8 +184,14 @@ void Window::UpdateInputPane() {
     const int t = k[1] > ct ? k[1] : ct, b = k[3] < cb ? k[3] : cb;
     const int l = k[0] > cl ? k[0] : cl, r = k[2] < cr ? k[2] : cr;
     if (b > t && r > l) {
-      covered_top = t - ct;
-      covered_bottom = b - ct;
+      if (l == cl && r == cr && b == cb) {
+        covered_top = t - ct;
+        covered_bottom = b - ct;
+      } else {
+        // A floating/undocked pane is visible but creates no Android edge
+        // inset. Preserve that distinction instead of inventing bottom rows.
+        covered_top = -2;
+      }
     }
   }
   if (covered_top == input_pane_top_ && covered_bottom == input_pane_bottom_) return;

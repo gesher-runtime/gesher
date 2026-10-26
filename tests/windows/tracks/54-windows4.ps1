@@ -108,6 +108,19 @@ function W4Legacy([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
   } 40
   if (-not $resize.Success) { $problems += 'The framework did not resize unpadded content to 500 and keep the editor above the IME' }
   if ((W3Size $Window) -ne '400x800') { $problems += 'The native client was resized instead of the legacy content' }
+  $floatingProblems = @()
+  $mark = W3Mark $Read
+  [void][GesherW3Win32]::PostMessageW($Window, $w3Input, [IntPtr]($client[1] + 250), [IntPtr]($client[1] + 450))
+  if (-not (W3Wait $Read $mark 'W4 legacy target 28 content 400x800 edit bottom 800 padding 0 ime visible true bottom 0' 40).Success) {
+    $floatingProblems += 'Undocking the pane did not clear Android edge insets and restore unpadded content'
+  }
+  if ((W3Size $Window) -ne '400x800') { $floatingProblems += 'The floating pane changed the native client size' }
+  W4Check $Mode 'a floating input pane leaves Android IME edge insets empty and target-28 content unresized' $floatingProblems
+  $mark = W3Mark $Read
+  [void][GesherW3Win32]::PostMessageW($Window, $w3Input, [IntPtr]($client[3] - 300), [IntPtr]$client[3])
+  if (-not (W3WaitWhere $Read $mark 'W4 legacy target 28 content 400x(\d+) edit bottom (\d+) padding 0 ime visible true bottom 300' {
+    param($groups) [int]$groups[1].Value -eq 500 -and [int]$groups[2].Value -le 500
+  } 40).Success) { $problems += 'Docking again did not restore the framework content resize' }
   $mark = W3Mark $Read
   [void][GesherW3Win32]::PostMessageW($Window, $w3Input, [IntPtr]::Zero, [IntPtr]::Zero)
   if (-not (W3Wait $Read $mark 'W4 legacy target 28 content 400x800 edit bottom 800 padding 0 ime visible false bottom 0' 40).Success) {

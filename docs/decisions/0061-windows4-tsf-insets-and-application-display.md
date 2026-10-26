@@ -79,3 +79,10 @@ no production resize change is justified before that observation. The Android
 resize fixture uses the existing keyboard-message seam while the native COM
 probe separately exercises the actual callback/source/window-event boundary.
 Physical touch keyboard behavior requires hardware and remains unverified.
+
+The source geometry preserves a visible floating pane separately from edge
+occlusion: a rectangle must span the client's complete bottom edge to become
+bottom rows; a floating overlap has an empty visible IME source frame. The
+real COM probe covers middle/narrow floating rectangles and redocking, while
+the old-target APK checks visible-with-zero-insets content behavior. Native
+local proof does not replace the pending Android/runtime CI verification.

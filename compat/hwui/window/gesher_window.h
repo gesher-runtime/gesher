@@ -55,7 +55,8 @@ struct WindowEvent {
     // windows3 track (docs/windows3.md): the part of the client area the
     // Windows touch keyboard (IFrameworkInputPane) covers: rows button (top)
     // to modifiers (bottom) of the client area; button -1 when it covers
-    // nothing (hidden, or beside the window). Android's IME insets.
+    // nothing (hidden, or beside the window); -2 means a visible floating
+    // pane with no Android edge inset.
     kInputPane = 30,
   };
   int32_t type = 0;

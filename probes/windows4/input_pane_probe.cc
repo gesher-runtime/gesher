@@ -120,6 +120,18 @@ int main() {
   RECT rectangle = {bounds[0], bounds[1] + 500, bounds[2], bounds[3]};
   Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), 500, 800),
         "Showing callback reaches a real window's kInputPane event with client rows 500-800");
+  rectangle = RECT{bounds[0], bounds[1] + 300, bounds[2], bounds[1] + 500};
+  Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), -2, 0),
+        "a floating full-width pane above the client's bottom creates no Android edge inset");
+  rectangle = RECT{bounds[0], bounds[1] + 550, bounds[2], bounds[3]};
+  Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), 550, 800),
+        "the COM source can dock again after its floating geometry");
+  rectangle = RECT{bounds[0] + 80, bounds[1] + 500, bounds[2] - 80, bounds[3]};
+  Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), -2, 0),
+        "a narrow floating pane touching the client's bottom creates no Android edge inset");
+  rectangle = RECT{bounds[0], bounds[1] + 600, bounds[2], bounds[3]};
+  Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), 600, 800),
+        "docking the pane restores its real bottom-edge occlusion");
   rectangle.left = bounds[2] + 10; rectangle.right = bounds[2] + 100;
   Check(SUCCEEDED(source->Show(rectangle)) && Event(window.get(), -1, 0),
         "a pane horizontally outside the window does not cover its rows");

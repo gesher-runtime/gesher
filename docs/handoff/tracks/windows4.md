@@ -271,3 +271,29 @@ Connection release drops its owner reference after known destruction (also
 safe after HWND reuse), while active procedure leases protect outer calls.
 The hung/live foreign-subclass fallback still retains its reachable owner.
 The fixed native fixture reports zero failures locally; full CI is pending.
+
+Independent re-review of 7def3f5 and 80cdf80 found no further actionable issue
+in those corrections (static review; the peer did not run the fixtures).
+The insets audit then reproduced a separate floating-pane defect: intersecting
+middle/narrow rectangles were treated as bottom insets. Only a rectangle
+spanning the client's full bottom edge now produces edge rows. Other visible
+overlaps retain IME visibility with an empty source frame, so Android reports
+zero edge insets and does not resize legacy content. The real COM-source
+probe adds undock/redock cases; the target-28 scenario adds a visible floating
+pane transition in both process modes. The local production-window/COM probe
+fails exactly its two new geometry assertions before the fix and has zero
+failures after it under g++ Werror. That local harness disables only eventfd;
+the real HWND, handler callbacks and condition-variable event queue run. CI
+uses the real Gesher base/eventfd path. Java/runtime verification is pending.
+
+Diagnostic 40396019963 is complete red at ed94b87: 20 jobs succeed, six skip,
+both Windows suites fail (14 checks on 2022, 12 on 2025), without a suite
+timeout. Package and both nine-app e2e jobs pass, including Signal Generator,
+Puzzles, TIC-80, four transport fixtures and zero unexpected failures.
+The Windows failures establish actual remaining work: Microsoft TSF composing
+spans/commit fidelity and caret geometry, the native COM probe's runner
+geometry, Application Display real-size rotation, legacy adjustResize and
+quoted Launcher command-line tokens blocking all three device scenarios.
+All native ACP/session/production-IME probes, layout-direction configuration
+and single-process EditText reconversion pass on both runners. The corrected
+source is newer than this run; no failed assertion is waived.
