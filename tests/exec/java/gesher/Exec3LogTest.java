@@ -24,8 +24,10 @@ public final class Exec3LogTest {
             Thread reader = new Thread(output, "logcat-output");
             reader.setDaemon(true);
             reader.start();
-            if (!process.waitFor(15, TimeUnit.SECONDS) || process.exitValue() != 0) throw new AssertionError(String.join(" ", args) + " failed or timed out");
-            return output.get(5, TimeUnit.SECONDS);
+            if (!process.waitFor(15, TimeUnit.SECONDS)) throw new AssertionError(String.join(" ", args) + " timed out");
+            String text = output.get(5, TimeUnit.SECONDS);
+            if (process.exitValue() != 0) throw new AssertionError(String.join(" ", args) + " exit " + process.exitValue() + ": " + text);
+            return text;
         } finally {
             process.destroyForcibly();
         }

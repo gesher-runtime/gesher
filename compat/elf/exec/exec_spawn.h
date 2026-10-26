@@ -86,7 +86,7 @@ int PrepareLaunchProgram(const std::string& program, const std::vector<std::stri
 
 // Whether `name` (a bare name or /system/bin/<name>, /system/xbin/<name>) is
 // one of the Android programs gesher-exec provides itself (`--tool`):
-// getprop, setprop, logcat, ls, cat, id, ps, pm, kill, sleep, toybox.
+// getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox.
 bool IsToolName(const std::string& name);
 
 // gesher-exec --tool: runs the built-in program `name` with `args` (argv[1..]).

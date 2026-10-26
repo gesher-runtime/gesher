@@ -214,6 +214,12 @@ after merging integration 46bc9e5 (docs only). Watch log:
 C:\work\gesher-ci-review\exec3-watch-40352529279.log, 120-second interval.
 The full track, pm/am and umask remain open.
 
+Prepared after this dispatch: pm/am now invoke a boot-classpath Binder client
+for actual package list/path, activity start, force-stop and asynchronous
+broadcast. The device test installs a second target APK, observes its resumed
+Activity pid and receiver output, then verifies force-stop removes that pid.
+Local Java/native/script checks pass; this behavior has no runtime CI proof yet.
+
 Continuation history and exact evidence:
 
 - Current continuation (2026-10-26): the shell executor, builtin dispatch and

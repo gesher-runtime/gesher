@@ -34,10 +34,10 @@ public final class Exec3PropertiesTest {
             Thread reader = new Thread(output, "property-command-output");
             reader.setDaemon(true);
             reader.start();
-            if (!process.waitFor(20, TimeUnit.SECONDS) || process.exitValue() != wanted) {
-                throw new AssertionError(builder.command() + ": unexpected exit or timeout");
-            }
-            return output.get(5, TimeUnit.SECONDS);
+            if (!process.waitFor(20, TimeUnit.SECONDS)) throw new AssertionError(builder.command() + ": timeout");
+            String text = output.get(5, TimeUnit.SECONDS);
+            if (process.exitValue() != wanted) throw new AssertionError(builder.command() + ": exit " + process.exitValue() + ": " + text);
+            return text;
         } finally {
             process.destroyForcibly();
         }

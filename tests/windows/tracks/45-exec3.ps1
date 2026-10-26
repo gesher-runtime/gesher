@@ -111,12 +111,17 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     '-Xint', '-Xusejit:false')
   try {
     # Launcher installs and extracts the APK before starting its real app process.
-    $exec3App = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless')
+    $exec3Target = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'install', (NoDrive "$Dir/exec3target.apk"))
+    if ($exec3Target.Code -ne 0) { throw "exec3 target install failed: $($exec3Target.Text)" }
+    $exec3App = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true')
     $exec3Wanted = @(
       'exec2: SUMMARY pass=9 fail=0',
       'gesher-app: app process for com.gesher.exec3',
       'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
       'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
+      'Exec3CommandsTest PASS pm list packages and path query the actual device package manager',
+      'Exec3CommandsTest PASS am start resumes a separate app and broadcast reaches its real receiver',
+      'Exec3CommandsTest PASS am force-stop terminates the target app process',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device')
     $exec3Missing = $exec3Wanted | Where-Object { -not $exec3App.Text.Contains($_) }
     if ($exec3App.Code -eq 0 -and -not $exec3Missing -and -not $exec3App.Text.Contains('Exec3DeviceTest FAIL')) {
@@ -129,6 +134,9 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
       }
       $failed++
     }
+  } catch {
+    Write-Host "FAIL  exec3: installed-device test could not complete: $_"
+    $failed++
   } finally {
     $exec3Shutdown = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'shutdown') 60
     if ($exec3Shutdown.Code -ne 0) { Write-Host "INFO  exec3: device shutdown: $($exec3Shutdown.Text)" }
