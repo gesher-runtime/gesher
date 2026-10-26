@@ -14,6 +14,7 @@
 // there (strtold returns it in %xmm0).
 
 #include "shim_internal.h"
+#include "unicode_bionic.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -309,37 +310,15 @@ size_t BIONIC_SYSV Wcsnrtombs(char* dst, const wchar32** src, size_t nwc, size_t
 
 // --- wide characters ----------------------------------------------------------------
 
-// The CRT's classification takes 16-bit characters: the BMP goes there.
-bool Bmp(wint32 c) { return c <= 0xFFFF; }
-
-int BIONIC_SYSV Iswalpha(wint32 c, void*) {
-  return c < 0x80 ? isalpha(static_cast<int>(c)) != 0 : Bmp(c) && iswalpha(static_cast<wint_t>(c));
-}
-int BIONIC_SYSV Iswblank(wint32 c, void*) { return c == ' ' || c == '\t'; }
-int BIONIC_SYSV Iswcntrl(wint32 c, void*) { return c < 0x20 || (c >= 0x7F && c < 0xA0); }
-int BIONIC_SYSV Iswdigit(wint32 c, void*) { return c >= '0' && c <= '9'; }
-int BIONIC_SYSV Iswlower(wint32 c, void*) {
-  return c < 0x80 ? islower(static_cast<int>(c)) != 0 : Bmp(c) && iswlower(static_cast<wint_t>(c));
-}
-int BIONIC_SYSV Iswupper(wint32 c, void*) {
-  return c < 0x80 ? isupper(static_cast<int>(c)) != 0 : Bmp(c) && iswupper(static_cast<wint_t>(c));
-}
-int BIONIC_SYSV Iswprint(wint32 c, void*) {
-  return c >= 0x20 && c != 0x7F && !(c >= 0x80 && c < 0xA0) && c <= 0x10FFFF;
-}
-int BIONIC_SYSV Iswpunct(wint32 c, void*) {
-  return c < 0x80 ? ispunct(static_cast<int>(c)) != 0 : Bmp(c) && iswpunct(static_cast<wint_t>(c));
-}
-int BIONIC_SYSV Iswspace(wint32 c, void*) {
-  return c < 0x80 ? isspace(static_cast<int>(c)) != 0 : Bmp(c) && iswspace(static_cast<wint_t>(c));
-}
-int BIONIC_SYSV Iswxdigit(wint32 c, void*) { return c < 0x80 && isxdigit(static_cast<int>(c)); }
-wint32 BIONIC_SYSV Towlower(wint32 c, void*) {
-  return Bmp(c) ? static_cast<wint32>(towlower(static_cast<wint_t>(c))) : c;
-}
-wint32 BIONIC_SYSV Towupper(wint32 c, void*) {
-  return Bmp(c) ? static_cast<wint32>(towupper(static_cast<wint_t>(c))) : c;
-}
+#define WCLASS_L(name, property) \
+  int BIONIC_SYSV name(wint32 c, void*) { return UnicodeValue(c, UnicodeProperty::property); }
+WCLASS_L(Iswalnum, Alnum) WCLASS_L(Iswalpha, Alpha) WCLASS_L(Iswblank, Blank)
+WCLASS_L(Iswcntrl, Cntrl) WCLASS_L(Iswdigit, Digit) WCLASS_L(Iswgraph, Graph)
+WCLASS_L(Iswlower, Lower) WCLASS_L(Iswprint, Print) WCLASS_L(Iswpunct, Punct)
+WCLASS_L(Iswspace, Space) WCLASS_L(Iswupper, Upper) WCLASS_L(Iswxdigit, Xdigit)
+#undef WCLASS_L
+wint32 BIONIC_SYSV Towlower(wint32 c, void*) { return UnicodeValue(c, UnicodeProperty::ToLower); }
+wint32 BIONIC_SYSV Towupper(wint32 c, void*) { return UnicodeValue(c, UnicodeProperty::ToUpper); }
 
 size_t BIONIC_SYSV Wcslen(const wchar32* s) {
   size_t n = 0;
@@ -489,10 +468,12 @@ void RegisterLocale(SymbolTable& t) {
   L("mbsnrtowcs", Mbsnrtowcs);
   L("mbsrtowcs", Mbsrtowcs);
   L("wcsnrtombs", Wcsnrtombs);
+  L("iswalnum_l", Iswalnum);
   L("iswalpha_l", Iswalpha);
   L("iswblank_l", Iswblank);
   L("iswcntrl_l", Iswcntrl);
   L("iswdigit_l", Iswdigit);
+  L("iswgraph_l", Iswgraph);
   L("iswlower_l", Iswlower);
   L("iswupper_l", Iswupper);
   L("iswprint_l", Iswprint);
