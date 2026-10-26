@@ -232,6 +232,7 @@ public final class WindowSession extends IWindowSession.Stub {
         int configRotation;
         /** A top-level window: where the touch keyboard covers its client area (IME insets). */
         final Rect ime = new Rect();
+        boolean imeVisible;
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -453,7 +454,7 @@ public final class WindowSession extends IWindowSession.Stub {
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
-        if (!root.ime.isEmpty()) {
+        if (root.imeVisible) {
             // The touch keyboard over the app window (windows3 track): the IME's insets, as
             // the IME window's are on a device. adjustResize and adjustPan follow
             // (ViewRootImpl, DecorView).
@@ -669,7 +670,8 @@ public final class WindowSession extends IWindowSession.Stub {
 
     /**
      * gesher::WindowEvent::kInputPane (compat/hwui/window): the Windows touch keyboard
-     * (IFrameworkInputPane) covers rows a to b of the window's client area (a = -1: none).
+     * (IFrameworkInputPane) covers rows a to b of the window's client area
+     * (a = -1: none; a = -2: visible floating pane, no edge inset).
      */
     private static final int EVENT_INPUT_PANE = 30;
 
@@ -688,10 +690,13 @@ public final class WindowSession extends IWindowSession.Stub {
         if (w == null || w.nativeWindow == null || w.popup) return;
         Rect ime = top < 0 || bottom <= top ? new Rect()
                 : new Rect(0, top, w.nativeWindow.getWidth(), bottom);
-        if (ime.equals(w.ime)) return;
+        boolean visible = top == -2 || !ime.isEmpty();
+        if (ime.equals(w.ime) && visible == w.imeVisible) return;
         w.ime.set(ime);
+        w.imeVisible = visible;
         log("window \"" + w.title() + "\": the touch keyboard "
-                + (ime.isEmpty() ? "covers nothing (IME insets none)"
+                + (visible && ime.isEmpty() ? "floats over content (IME visible, edge insets none)"
+                        : ime.isEmpty() ? "covers nothing (IME insets none)"
                         : "covers rows " + top + "-" + bottom + " (IME insets "
                                 + ime.toShortString() + ")"));
         List<AppWindow> group = new ArrayList<>();
