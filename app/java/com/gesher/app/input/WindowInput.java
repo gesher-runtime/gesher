@@ -182,9 +182,9 @@ public final class WindowInput implements AutoCloseable {
   }
 
   /** The editor's caret in client pixels: the system caret and the IME's windows follow it. */
-  public synchronized void setCaret(int x, int y, int width, int height) {
+  public synchronized void setCaret(int x, int y, int width, int height, int epoch) {
     long ptr = mPtr;
-    if (ptr != 0) nSetCaret(ptr, x, y, width, height);
+    if (ptr != 0) nSetCaret(ptr, x, y, width, height, epoch);
   }
 
   /** Ends the IME's composition: committed, or cancelled. */
@@ -302,7 +302,7 @@ public final class WindowInput implements AutoCloseable {
       int offset, int epoch, int revision, boolean available);
   private static native void nSetGeometry(long ptr, int epoch, int start, String text, int[] rectangles);
   private static native int nRunTextServiceTest(long ptr);
-  private static native void nSetCaret(long ptr, int x, int y, int width, int height);
+  private static native void nSetCaret(long ptr, int x, int y, int width, int height, int epoch);
   private static native void nCompleteComposition(long ptr, boolean cancel);
   private static native void nFinishTextEvent(long ptr, int seq);
   private static native int nShowTouchKeyboard(long ptr, boolean show);

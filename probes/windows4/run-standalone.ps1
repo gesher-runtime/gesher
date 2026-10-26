@@ -19,8 +19,8 @@ foreach ($probe in @('windows4_text_store_probe', 'windows4_ime_tsf_probe', 'win
   $text = if ($drained) { $stdout.Result + $stderr.Result } else { 'Output pipe did not close' }
   [IO.File]::WriteAllText([IO.Path]::GetFullPath("$Logs/$probe.log"), $text)
   Write-Host $text
-  if ($timedOut -or -not $drained -or $process.ExitCode -ne 0 -or $text -match '(?m)^FAIL'
-      -or $text -notmatch '(?m)^0 windows4 .* check\(s\) failed\s*$') {
+  if ($timedOut -or -not $drained -or $process.ExitCode -ne 0 -or $text -match '(?m)^FAIL' -or
+      $text -notmatch '(?m)^0 windows4 .* check\(s\) failed\s*$') {
     Write-Host "FAIL Windows4 standalone: $probe exit $($process.ExitCode), timeout $timedOut, drained $drained"
     $failures++
   } else { Write-Host "PASS Windows4 standalone: $probe" }

@@ -118,6 +118,7 @@ struct ImeWindow::Impl {
   TextGeometry geometry;
   int32_t caret[4] = {0, 0, 0, 0};
   bool has_caret = false;
+  int32_t caret_epoch = -1;
 
   // The window's thread only.
   std::unordered_set<WPARAM> consumed;  // keys whose WM_KEYDOWN the input method took
@@ -418,7 +419,7 @@ struct ImeWindow::Impl {
         int32_t c[4];
         {
           std::lock_guard<std::mutex> lock(mutex);
-          if (!has_caret) return;
+          if (!has_caret || caret_epoch != state.editor_epoch) return;
           std::copy(caret, caret + 4, c);
         }
         if (!s.active) return;
@@ -688,6 +689,10 @@ void ImeWindow::SetTextInput(const TextInputState& state) {
     // Publication happens outside Java's editor lock. A delayed finish or
     // applyEditor must not disable/replace a newer focused editor.
     if (state.editor_epoch < impl_->state.editor_epoch) return;
+    if (state.editor_epoch != impl_->state.editor_epoch || !state.active) {
+      impl_->has_caret = false;
+      impl_->caret_epoch = -1;
+    }
     impl_->state = state;
     if (impl_->document.epoch != state.editor_epoch || !state.active || !state.ime) {
       impl_->document = TextDocument{};
@@ -734,14 +739,16 @@ int32_t ImeWindow::RunTextServiceTest() {
   return static_cast<int32_t>(result);
 }
 
-void ImeWindow::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height) {
+void ImeWindow::SetCaret(int32_t x, int32_t y, int32_t width, int32_t height, int32_t epoch) {
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->state.active || epoch != impl_->state.editor_epoch) return;
     impl_->caret[0] = x;
     impl_->caret[1] = y;
     impl_->caret[2] = width;
     impl_->caret[3] = height;
     impl_->has_caret = true;
+    impl_->caret_epoch = epoch;
   }
   Post(kOpCaret);
 }

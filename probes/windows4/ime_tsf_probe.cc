@@ -268,6 +268,16 @@ int main() {
   Check(ime->RunTextServiceTest() == S_OK,
       "a new native connection starts a fresh editor epoch lifecycle");
   ime.reset(); Drain();
+  Editor(window, 20);
+  ime->SetCaret(12, 34, 2, 20, 20); Drain();
+  TextInputState next_caret; next_caret.active = next_caret.ime = true; next_caret.editor_epoch = 21;
+  ime->SetTextInput(next_caret);
+  ime->SetCaret(56, 78, 2, 20, 21);
+  ime->SetCaret(1, 2, 2, 20, 20); Drain();
+  POINT position{};
+  Check(GetCaretPos(&position) && position.x == 56 && position.y == 78,
+      "a delayed old-editor caret cannot overwrite the newer editor's actual Windows caret");
+  ime.reset(); Drain();
   Editor(window, 12);
   observed_owner.store(TextServiceProbeAccess::Owner(ime.get()));
   owner_deletions.store(0);

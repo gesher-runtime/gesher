@@ -571,7 +571,7 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
             w.caret = caret;
         }
         if (in == null) return;
-        in.setCaret(cx, cy, 2, height);
+        in.setCaret(cx, cy, 2, height, epoch);
         CharSequence composingText = info.getComposingText();
         int compositionStart = info.getComposingTextStart();
         if (composingText != null && compositionStart >= 0

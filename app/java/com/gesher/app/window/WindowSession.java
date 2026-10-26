@@ -712,6 +712,16 @@ public final class WindowSession extends IWindowSession.Stub {
                     new android.util.MergedConfiguration(), new InsetsState(),
                     new android.view.InsetsSourceControl.Array());
             layout(v, v.requestedWidth, v.requestedHeight, result);
+            log("IME layout \"" + v.title() + "\": requested " + v.requestedWidth + "x" + v.requestedHeight
+                    + ", frame " + result.frames.frame.toShortString()
+                    + ", parent " + result.frames.parentFrame.toShortString()
+                    + ", client " + v.nativeWindow.getWidth() + "x" + v.nativeWindow.getHeight()
+                    + ", softInput 0x" + Integer.toHexString(v.attrs.softInputMode)
+                    + ", fitTypes 0x" + Integer.toHexString(v.attrs.getFitInsetsTypes())
+                    + ", fitSides 0x" + Integer.toHexString(v.attrs.getFitInsetsSides())
+                    + ", privateFlags 0x" + Integer.toHexString(v.attrs.privateFlags)
+                    + ", flags 0x" + Integer.toHexString(v.attrs.flags)
+                    + ", systemUi 0x" + Integer.toHexString(v.attrs.systemUiVisibility | v.attrs.subtreeSystemUiVisibility));
             if (v.popup) v.frame.set(result.frames.frame);
             try {
                 v.client.resized(result, false /* reportDraw */, true /* forceLayout */,
