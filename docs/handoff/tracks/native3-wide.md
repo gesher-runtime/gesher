@@ -135,6 +135,12 @@ Windows runtime results; no failure or runtime proof is inferred from it.
 origin/phase4/integration remains a06d930 and is included. The next full run
 uses this verified follow-up and is the required production acceptance run.
 
+Full ci 40421328934 at 27f9391 is pending. A separate source audit is
+checking the NDK's char signedness because pinned localeconv stores
+CHAR_MAX sentinel bytes; the shared Windows layout currently uses 127.
+The scoped workflow now prints both target macro sets before its ordinary
+fixture builds. Root was notified before any architecture-specific edit.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
