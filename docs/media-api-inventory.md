@@ -62,6 +62,10 @@ runners and both x86_64/arm64: 276 in libmediandk.so, 34 in libOpenSLES.so and
 3 in libaaudio.so. These are symbol-presence observations from that exact
 run, not semantics or a current-run reassessment.
 
+The same 34/3/276 missing-export counts are re-observed in ci 40318189310
+at 9158120, on both runners and both ABIs. None of the 313 entries is closed
+by the media3 Java/capture/session test results from that run.
+
 The AAudio entries are AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
 AAudio_setMMapPolicy. OpenSL's entries include unimplemented 3D/effect/device
 interface identifiers. libmediandk spans native codec/format/extractor/muxer,

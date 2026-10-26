@@ -67,10 +67,10 @@ bootstrap. Gesher now installs MediaFrameworkPlatformInitializer's manager
 and serves media_session over Binder. Session owners publish metadata,
 playback state, a queue and extras; controllers query them and forward
 transport commands to the owner's callback. Owner death removes its session.
-The controller round trip passes on both runners and in both modes in ci
-40305909645; Just Player's e2e launch also passes. The run still has one
-unrelated-to-sessions AAudio callback tone failure on windows-2022, so it is
-not a fully green stage-3 result. Windows
+The controller round trip and all 30 media3 checks pass on both runners
+and in both modes in ci 40318189310; Just Player's e2e launch also passes
+on both runners. The run still has two older output-measurement failures
+on windows-2022, so it is not a fully green integration result. Windows
 system transport controls, media-key receiver fallback, Session2/media
 communication, listener permission/user filtering and external volume-change
 notifications remain open work (docs/media.md and the explicit acceptance
