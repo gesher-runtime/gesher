@@ -107,6 +107,20 @@ public final class Exec3PropertiesTest {
         equal("native value", property(name));
         System.out.println("Exec3PropertiesTest PASS Java, getprop/setprop and ELF bionic share live properties");
 
+        File scratch = new File(System.getenv("ANDROID_DATA"), "exec3-property-scratch-" + suffix);
+        if (!scratch.mkdir()) throw new AssertionError("cannot create isolated property scratch directory");
+        try {
+            ProcessBuilder scratchTool = new ProcessBuilder("getprop", name);
+            scratchTool.environment().put("ANDROID_DATA", scratch.getAbsolutePath());
+            equal("native value\n", command(scratchTool, 0));
+            ProcessBuilder scratchNative = new ProcessBuilder(child, "property-get", name);
+            scratchNative.environment().put("ANDROID_DATA", scratch.getAbsolutePath());
+            equal("native value\n", command(scratchNative, 0));
+        } finally {
+            if (!scratch.delete()) throw new AssertionError("property children left files in the scratch data root");
+        }
+        System.out.println("Exec3PropertiesTest PASS ProcessBuilder tools and ELF children retain the boot property root with scratch ANDROID_DATA");
+
         Process watch = new ProcessBuilder(child, "property-watch", name).start();
         try {
             BufferedReader input = new BufferedReader(new InputStreamReader(watch.getInputStream(), StandardCharsets.UTF_8));

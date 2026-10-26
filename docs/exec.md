@@ -230,6 +230,11 @@ The bounded native child assertion failed before the correction (missing value
 and a nonempty scratch directory) and now passes with ten host assertions and
 zero failures. This source and the updated CI expectation need the final run;
 the active diagnostic still contains the earlier nine-assertion probe.
+The Java suite also now launches both getprop and the NDK child with a scratch
+ANDROID_DATA override, requires both to read the original boot value and then
+requires the scratch directory to be empty. Java source compilation passes;
+this ART/ProcessBuilder assertion runs standalone and in both APK modes in
+the final CI, rather than treating the native CreateProcess probe as its proof.
 The full track, pm/am and umask remain open until actual completed evidence.
 Applied the coordinator's complete four-file Process follow-up (source 644e7f8):
 readProcLines/readProcFile/parseProcLine, matching lightweight JNI declarations,

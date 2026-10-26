@@ -15,6 +15,7 @@ completed-geocoder fixes. After dispatch, merge 2ba2375 incorporates integration
 final CI. The active run's build/package pass; Windows and e2e remain running.
 The prepared property root inheritance regression passes ten native host checks
 locally; the active diagnostic still has the earlier nine-check probe.
+Matching Java ProcessBuilder scratch-root assertions compile and await final CI.
 See docs/exec.md for exact evidence and open umask/
 policy scope. The original brief below remains unchanged.
 
