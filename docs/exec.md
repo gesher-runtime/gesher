@@ -239,6 +239,11 @@ title. Tail now frames raw UTF-8 bytes into complete atomic lines, resets the
 pending fragment on truncation and emits an unterminated final fragment once,
 with a separating newline, only when finishing. The focused JDK regression
 passes; the real windows3 UI assertions remain unchanged and await next CI.
+Applied the coordinator/web3 completed-geocoder termination follow-up after
+the 30/45-second bounds: the isolated probe prints and flushes its genuine
+MapLocationFinder result, then terminates only itself to bypass a CLR/WinRT
+teardown hang. Errors exit 1 and incomplete answers still fail. PowerShell
+syntax passes; the real query remains for the next combined CI.
 
 Continuation history and exact evidence:
 
