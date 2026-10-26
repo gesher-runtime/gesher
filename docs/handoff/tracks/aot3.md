@@ -37,6 +37,14 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Frozen cloud stage is fully verified in ci 40408733247 at
+05ca072cad7a23d83403a0c039d47d4fec0c07b5. Every job, all 16 scoped aot3
+PASS lines per runner, both zero-failure summaries, actual installed
+input/uninstall cleanup and both required e2e logs personally read. See
+[the cloud-stage report](aot3-cloud.md). wip/aot3-cloud adds docs only;
+the later continuation on wip/aot3 is excluded from this stage. Shared-
+library contexts, secondary dex and boot-performance diagnosis stay open.
+
 Fast startup evidence is green in aot3-probes 40410450314 at bcddfb9:
 both actual logs read, saved profiles 18673/18661 bytes, each dump 23314
 rows/6666 methods including 3077 android-framework methods, zero failures.
@@ -53,9 +61,9 @@ New track 65 inspects PackageParser2.parsePackage and SystemFonts fallback
 compiled code in the shipped framework oat. Original size and 10%/30ms
 startup criteria are unchanged. This input is not yet compiled/CI verified.
 
-The current cloud/collector full run remains 40408733247 at 05ca072.
-Its frozen wip/aot3-cloud head 97e08e5 adds docs only and excludes these
-later probe/profile changes. Do not merge an unverified continuation tip.
+The cloud stage is merged as integration 6dc3f03 (frozen head b085b7d,
+docs only above verified source). This continuation includes current
+integration a0f32e1. The prepared startup supplement is not yet verified.
 
 Initial aot3-probes 40409910036 at 7bc3fd2 validates/downloads the selected
 artifacts but both collectors fail before startup: the standalone root
@@ -71,6 +79,12 @@ evidence only, not a full-CI/merge or performance claim.
 Initial workflow dispatch returned HTTP404 because the new workflow is not
 on the default branch. Its explicit branch/path push trigger uses recorded
 source run 40403284714/e928eec for development; no main change is needed.
+
+### Earlier collector history
+
+The pending statuses below are historical; the fully verified cloud and
+collector scope above supersedes them. The later startup supplement still
+requires its own complete CI result.
 
 Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
 current integration f520fd1; the sole new collector change enables its
