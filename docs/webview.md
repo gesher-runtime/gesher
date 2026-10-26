@@ -347,6 +347,13 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Coverage audit: the original 54-web3 geolocation scenario ran only in one
+  process, and the new NDK networking library was x86_64 only. The next final
+  run adds the same exact geolocation checks in the device app process and
+  builds/runs the same seven-API native regression as arm64 in both modes.
+  Native success identifies its compiled ABI. The current diagnostic run
+  remains useful and is not cancelled; these additions are not yet CI verified.
+
 - Running ci 40333695614 at 455e9fcb99807d502879024fdcf689fea8586f66,
   including the integrated aot2/surfaces code, exact UIA fixture corrections,
   native networking and ArrayBuffer messages. Watch output is preserved at
