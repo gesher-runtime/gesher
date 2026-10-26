@@ -11,6 +11,11 @@ establishing the cause of the earlier ntdll fault. Final CI is next for the
 narrow default-tag liblog follow-up 97e63e5 plus integration f520fd1; no local
 compilation. The full track's umask/permissions/console and architectural
 limitations remain explicit. Earlier continuation entries below are historical.
+Final combined CI 40410489251 now runs source
+51bbfaccddf1fd7f466cab2a493874fbf0e1cb01 (default-tag follow-up plus f520fd1).
+Watch C:\work\gesher-ci-review\exec3-watch-40410489251.log at 120 seconds.
+Do not change runtime code above this candidate while it is being verified;
+preserve the fully green 87d5ada evidence independently.
 
 Current continuation status (2026-10-26): full track remains open. Completed
 CI40393019261 at6a3289d passes EVERY exec3 Check on both runners, including the
