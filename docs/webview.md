@@ -347,6 +347,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running full ci 40353139413 at
+  `6270c9e84e0a8f3486a77824ecb113c563d2871d`, including the
+  completed-geocoder-probe exit fix and latest integration 46bc9e5
+  (documentation only). Watch output:
+  `C:/work/gesher-ci-review/web3-40353139413-watch.log`. No full-stage
+  milestone is closed until both complete Windows jobs pass with the
+  existing package/e2e gates. Web4/ADR 0072 owns the remaining WebView
+  contracts; net4/ADR 0070 owns the remaining network contracts.
+
 - ci 40345505558 at 2130071: all 14 web3 checks pass on each runner,
   including external Android/Chrome UIA actions, both NDK ABIs in both modes,
   all 70,000-byte binary-message checks and device geolocation. Package and
