@@ -10,6 +10,9 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
+  # The 2022 shutdown crash can exit inside ART's fatal handler. Keep its
+  # bounded pre-handler context in the failing process's actual diagnostic.
+  $psi.Environment['GESHER_TRACE_INVALID_SENTINEL'] = '1'
   $p = [Diagnostics.Process]::Start($psi)
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $stderr = $p.StandardError.ReadToEndAsync()
@@ -19,9 +22,20 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
     $p.WaitForExit()
   }
   $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   $out = $stdout.Result + $stderr.Result
   if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
+  if ($out.Contains('invalid sentinel before signal handler')) {
+    $symbolizer = Join-Path $PSScriptRoot '../../../tools/symbolize.py'
+    if ((Test-Path "$Dir/dalvikvm.map") -and (Test-Path -LiteralPath $symbolizer)) {
+      $resolved = @($out | python $symbolizer "$Dir/dalvikvm.map")
+      if ($LASTEXITCODE -eq 0) { $out = $resolved -join "`n" }
+    }
+    # Preserve the bounded context before DevCheck's category/200-line filter.
+    # That filter otherwise hides the native fault's RIP and registers.
+    ($out -split "`n" | Where-Object { $_ -match '^gesher-signal:' } |
+      Select-Object -First 96) | ForEach-Object { Write-Host $_ }
+  }
+  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   return $out
 }
 
@@ -53,6 +67,10 @@ Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
 $bcpDev = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $dvmDev = @("-Xbootclasspath:$bcpDev", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+Check 'devices: camera request selection is atomic against cancel and flush' {
+  DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
+    'gesher.services.CameraRequestRaceTest') 90
+} @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed')
 $d = 'devices: location: '
 
 # The location checks of devices.apk's LocationSteps (both modes).
