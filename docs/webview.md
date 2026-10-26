@@ -347,9 +347,18 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-- Running: ci 40300418334 at f87d5b8, including integration a98dda9.
-  Verify both accessibility paths/runners, the page's real action results,
-  external UIA controls, e2e and every job before merge.
+- ci 40300418334 at f87d5b8: package/e2e pass; both runners fail the two
+  external UIA checks (2022 also has the known audio timing failure).
+  Windows 2025's WebView provider now finds 12 nodes, the heading, button
+  and field; its real DOM click and text change pass in both modes. The
+  external UIA client still times out, as do later internal snapshots.
+- Merged integration 91c195d/native2 and cherry-picked the shared capture
+  fix from 061a67c: diagnostic PrintWindow must not block Android's UI
+  Looper while native providers are waiting for it. Native capture pins
+  its surface across close. Added bounded, opt-in GESHER_UIA_TRACE output
+  for WM_GETOBJECT, provider navigation and Java node lookup durations to
+  locate any remaining wait or tree cycle. CI must verify this combined
+  tree; the previous red result does not establish external accessibility.
 
 - ci 40292261578 at 63203c4 completed with two accessibility failures on
   each runner. Geolocation and compat pass; accessibility still has zero

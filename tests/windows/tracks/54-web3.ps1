@@ -47,6 +47,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
   $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
+  $psi.Environment['GESHER_UIA_TRACE'] = '1'
   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
