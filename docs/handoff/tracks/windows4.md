@@ -52,3 +52,17 @@ First full display-stage CI: **40377891527** at
 `dd6e65fe64196542ca8ae99d8953b8fdd39a7f89`; watch log
 `C:/work/gesher-ci-review/windows4-40377891527-watch.log`. Complete build,
 both Windows suites, actual package cleanup and both e2e results are pending.
+
+The first run's asm-port job failed before its checks on upstream promisor
+fetch HTTP 502/expected-packfile errors (job 121765852176, exit 123). Other jobs
+continue for diagnostics; this run cannot establish a fully green milestone.
+
+Separate WIP after that dispatch: extracted the real IFrameworkInputPane
+subscription into input_pane.cc, retaining the complete callback rectangle.
+Native COM-source probe exercises QueryInterface, AdviseWithHWND, Showing,
+Hiding, Location, opaque zero cookies, failed Advise and destruction through
+a real Gesher window's event queue. Its optional source factory is used only
+by the native probe; apps continue activating Windows' source. Module and probe
+compile with local g++ -Wall -Wextra -Werror (syntax only). CMake/graphics.yml
+build and collect the probe; actual CI runtime verification is still pending.
+Candidate-window discovery, TSF and old-target resize remain open.
