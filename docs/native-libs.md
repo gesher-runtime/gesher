@@ -751,7 +751,7 @@ _Last updated 2026-10-26 (stopped by the coordinator)._
   arm64 libc++ remove_all (open flags → fixed), and every dalvikvm-based
   check (the script ran dalvikvm from RUNNER_TEMP while $bcp is relative →
   fixed: N2Run now defaults to the current directory).
-- **ci 40285714522** (commit 0ee… tip before docs: setjmp, arm64 flags,
+- **ci 40285714522** (commit b6a7d88: setjmp, arm64 flags,
   cwd fix) was **in progress** at stop; build green; tests not seen. Check
   its `test (windows-2022/2025)` logs for `native2` lines first.
 - Not yet verified at all: the dalvikvm checks (extras/dlopen/files parts),
