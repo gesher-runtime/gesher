@@ -25,6 +25,10 @@ exports __android_log_set_default_tag. The real NDK log-abi regression now tests
 null/empty/default-tag filtering and writes; it is not in404053 and awaits the
 next combined run. Own host wrapper contract passes with a mocked upstream tag
 interface; no AOSP build or full ABI claim comes from that local check.
+Integration f520fd1's CI-only native-build rule is included in the prepared
+follow-up tree. All local compiler sessions ended before that instruction;
+process inspection confirmed no remaining compiler PID. Continue with source
+edits/read-only review and CI, including for small native fixtures.
 
 Earlier continuation evidence:
 
