@@ -183,3 +183,72 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
   ps, cat; ELF TLS in the executable.
 - Not done: ELF TLS in the executable (ADR 0055 explains why); `pm`/`am`
   decline; `setprop` does not persist; a real fork that does work before exec.
+
+_exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
+first agent ran on an older model and was replaced per the all-Opus rule._
+
+- **STOPPED by the coordinator mid-task (2026-10-26)**, project handed to a new
+  team. No exec3 CI run was ever started; nothing exec3 is verified yet. Last
+  fully-green exec/exec2 CI was `40260836601` on the merge base; exec3's own work
+  is all uncommitted-then-WIP-committed, unbuilt and unverified.
+- **State of the work (all WIP, not built in the real toolchain):**
+  - A new real `/system/bin/sh` is being written from scratch in
+    `compat/elf/exec/gesher_shell.{cc,h}` (ADR 0001: original code, not copied
+    from mksh/toybox — both are MIT/BSD-permissive and could be vendored instead,
+    but a self-contained shell avoids an AOSP fetch and the `fork` a real shell
+    expects). Design: lexer keeps words raw; recursive-descent parser builds an
+    AST (simple/pipeline/and-or/list/if/for/while/until/case/group/subshell/
+    funcdef); expansion does tilde, `${...}` (`:-` `:=` `:+` `:?` `#` `##` `%`
+    `%%` `/` `//` `:off:len` `${#x}`), `$(...)`/`` `...` ``, `$((...))`
+    arithmetic, IFS field splitting, pathname globbing, quote removal; pipelines
+    are meant to run as concurrent threads joined by real Win32 pipes (no fork:
+    subshells/stages/command-subs are shell-state copies on threads); signals via
+    gesher-base's mailbox with a `ShellSignalHook` (traps, foreground-pass).
+    **DONE and clean under `g++ -std=c++20 -fsyntax-only`:** the whole front end
+    — lexer, parser, variables/specials, arithmetic, glob matching, and the full
+    word-expansion engine. **NOT yet written:** redirection application
+    (files/here-docs/fd-dups/pipes), the executor (`ExecNode` and the per-kind
+    exec functions — currently only forward-declared), all builtins
+    (`cd pwd echo printf export unset set shift read test [ : true false exit
+    return break continue . source eval local trap command type getopts let
+    umask wait jobs kill exec`), and the real `RunShell` entry (arg parsing,
+    incremental stdin reading, EXIT trap). The file ends at the
+    `// Defined after the parser and executor` placeholder; `ExecNode` /
+    `RunProgramString` are declared but undefined, so it compiles to a syntax-OK
+    unit that does NOT link yet. `exec.cmake` still builds `gesher-exec` from
+    `gesher_exec.cc` (the old minimal `--sh`); it is NOT yet switched to
+    `gesher_shell.cc`, and `RunShell` is not yet wired into `main()`.
+  - `exec_spawn.{h,cc}` already extended (committed WIP): `PrepareLaunchInPath`
+    (honour the shell's own `$PATH`), `FindInPath`, and `SpawnWithFds`'
+    `extra_flags`. Tools/property-store/logcat/pm-am/ELF-TLS: NOT started.
+- **Exact next steps for a successor:**
+  1. Finish `gesher_shell.cc`: redirections (incl. here-docs via temp file and
+     `N>&M`), `ExecNode` dispatch, pipeline with real pipes + stage threads
+     (each stage a Shell copy; last stage's status, or pipefail), simple-command
+     exec (assignments-only sets vars; builtin vs function vs external via
+     `PrepareLaunchInPath` + `SpawnWithFds` with `ChildEnv`), the builtins list
+     above, and `RunShell` (parse `-c`/`-s`/script/stdin; read stdin one complete
+     command at a time so a Java process piping commands sees each result; run
+     the EXIT trap; install `gesher_signal_hook = ShellSignalHook`). Compile it
+     locally with `g++` (free, fast) and a tiny driver `int main(){return
+     gesher::exec::RunShell(args);}` before any CI.
+  2. Point `exec.cmake` at `gesher_shell.cc` and call `RunShell` from
+     `gesher_exec.cc`'s `--sh` branch (delete the old in-file minimal shell).
+  3. Shared property store + persistent `setprop`/`getprop`, device log ring for
+     `logcat -d/-s/-v/-c` (the system server sets `GESHER_LOG_FILE`; see
+     `gesher_tools.cc` and `app/java/.../SystemServer.java`), `pm`/`am` through
+     the system server, `ps`/`cat`/`kill`/`destroy(Forcibly)` CI checks.
+  4. ELF TLS local-exec in `compat/elf/fs_rewrite.cc` (the executable's own
+     `R_X86_64_TPOFF` sites): the `%fs` rewrite runs before relocations, so
+     recognise the executable's PT_TLS and rewrite local-exec `%fs:-N` forms, or
+     record precisely why not (ADR 0055 "Not done" explains the current trap).
+  5. Tests `tests/windows/tracks/45-exec3.ps1` + NDK programs + `.github/
+     workflows/exec.yml` additions; on-device variant of 43-exec2; keep 42/43/47
+     and e2e green; before final CI merge `origin/phase4/integration`.
+  6. Write ADR `docs/decisions/0060-exec3-shell-and-tools.md`; tick roadmap only
+     for what CI verifies.
+- **Pitfalls:** real llvm-mingw build is `-Werror` and MS x64 ABI (local `g++`
+  is only a syntax/logic smoke test; it will miss `sysv_abi`/JNI issues, but the
+  shell links no JNI so it is a fair check). NetFree may block some text. Never
+  build AOSP locally; CI only. `WindowsPath()` maps Linux paths; the shell keeps
+  its own cwd via `SetCurrentDirectoryW`/`GetCurrentDirectoryW`.
