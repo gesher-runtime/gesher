@@ -204,3 +204,18 @@ now conditionally skips apt when ffmpeg exists, bounds apt retries/timeouts,
 limits preparation to ten minutes and prints the version. Generators/assets
 and assertions are unchanged. Next: one new combined full CI, not a rerun of
 the same source looking for a different runtime outcome.
+
+Independent exec3 review found a P1 owner-lifetime gap in ApplyDocument:
+unlike the key/Pump/test-service routes, Focus/Update used the member
+shared_ptr without a local lease. A COM OnTextChange callback could detach
+and release the service while TextStore::Apply was still running. Both
+routes now retain a local owner and Focus checks detach before more work.
+The native IME fixture installs an actual COM sink over the active store,
+detaches from OnTextChange, observes the wrapper through a weak reference,
+and proves release happens after the callback returns. No fixture-held
+strong wrapper reference can hide the regression. A native-only weak
+inspection method and friend access expose no Java or environment hook.
+The pre-fix Update variant fails exactly that one ownership assertion;
+the fixed production adapter has zero failures locally under g++ Werror.
+This fix is newer than CI 40396019963 (source ed94b87); that source cannot
+be treated as mergeable even if its runtime checks pass.

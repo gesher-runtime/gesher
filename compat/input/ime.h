@@ -35,6 +35,8 @@
 namespace gesher {
 namespace input {
 
+class TextService;
+
 class ImeWindow {
  public:
   // Subclasses `hwnd`'s procedure (a Gesher window of this process). Null if
@@ -52,6 +54,9 @@ class ImeWindow {
   void SetTextInput(const TextInputState& state);
   void SetDocument(TextDocument document);
   int32_t RunTextServiceTest();
+  // Native fixture inspection only, on the window thread. A weak reference
+  // lets a COM sink prove ownership during reentrant detach without hiding it.
+  std::weak_ptr<TextService> TextServiceForTest();
   // The editor's caret in client pixels: the system caret (screen readers,
   // magnifiers, IMEs use it), the composition and candidate windows'
   // position, IMR_QUERYCHARPOSITION's answer. Applied on the window's thread.
