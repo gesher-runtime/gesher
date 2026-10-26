@@ -35,6 +35,12 @@ of native-libs.md, posix.md, arm64.md, plus ADRs 0011, 0014 and 0057 first.
   Route locale/time-zone limits to their locale owner with an explicit brief.
 - mremap currently moves anonymous regions by copying and rejects file views.
   Close the file-backed/shared-mapping limit without losing shared writes.
+- ADR 0009 epoll/poll limits: edge-trigger behavior, nested epolls, readiness
+  when polling an epoll fd, concurrent waiters and pipe polling. Coordinate
+  socket/legacy resolver gaps with web3; binder readiness belongs to binder2.
+- ADR 0017: System V JVMTI environment/callback tables for ELF agents and
+  linker namespace isolation. Verify actual agents and isolated dependency
+  lookup; a JNI-only library test does not cover either contract.
 
 Coordinate shared files through integration. Graphics/surface/HardwareBuffer
 and font APIs overlap surfaces/graphics; media APIs overlap media3; network

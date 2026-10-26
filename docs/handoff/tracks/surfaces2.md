@@ -29,6 +29,10 @@ bridge and the complete roadmap/ADR graphics limits before implementation.
   presence alone is insufficient: test real storage, usage/format/stride,
   ownership, fences and callbacks. Coordinate Bitmap hardware storage with
   native3 and media buffers with media3.
+- Remaining ADR 0030 GL paths: hardware Bitmap/HardwareBufferRenderer,
+  WebView functors, persistent shader cache and GPU memory budgeting.
+  Vulkan remains a separate native3 implementation contract. Keep real-GPU
+  verification explicitly open where the runners only provide WARP.
 
 ## Verification and domain
 
@@ -47,6 +51,6 @@ hardware; distinguish a tested software contract from real hardware evidence.
 
 ## Status and next steps
 
-Unstarted. The first surfaces stage is still awaiting full green CI and is
-not merged yet. Its retained open items move here when that merge happens;
-this reservation does not close them or claim hardware support.
+Unstarted. The first surfaces stage merged as 4f99afd after full ci
+40307919084 attempt 2; its retained open items are assigned here.
+This reservation does not close them or claim hardware support.
