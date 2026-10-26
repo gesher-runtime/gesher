@@ -67,10 +67,14 @@ bootstrap. Gesher now installs MediaFrameworkPlatformInitializer's manager
 and serves media_session over Binder. Session owners publish metadata,
 playback state, a queue and extras; controllers query them and forward
 transport commands to the owner's callback. Owner death removes its session.
-This addition and recordapp's controller round trip are awaiting CI; Windows
+The controller round trip passes on both runners and in both modes in ci
+40305909645; Just Player's e2e launch also passes. The run still has one
+unrelated-to-sessions AAudio callback tone failure on windows-2022, so it is
+not a fully green stage-3 result. Windows
 system transport controls, media-key receiver fallback, Session2/media
 communication, listener permission/user filtering and external volume-change
-notifications remain open work (docs/media.md).
+notifications remain open work (docs/media.md and the explicit acceptance
+checks in docs/handoff/tracks/media4.md).
 
 Recording works the same on a PC with a microphone and on CI, where the
 file source makes what is recorded known and checkable end to end (recorded,

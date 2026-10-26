@@ -9,6 +9,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -53,15 +54,18 @@ static void describe(const float* s, int n, int rate, char* out, size_t size) {
 
 struct Capture {
   float* buf;
-  int n, want, channels, callbacks;
+  _Atomic int n;
+  int want, channels, callbacks;
 };
 
 static aaudio_data_callback_result_t on_input(AAudioStream* s, void* user, void* data, int32_t frames) {
   struct Capture* c = (struct Capture*)user;
   const float* in = (const float*)data;
-  for (int32_t i = 0; i < frames && c->n < c->want; i++) c->buf[c->n++] = in[i * c->channels];
+  int n = atomic_load_explicit(&c->n, memory_order_relaxed);
+  for (int32_t i = 0; i < frames && n < c->want; i++) c->buf[n++] = in[i * c->channels];
+  atomic_store_explicit(&c->n, n, memory_order_release);
   c->callbacks++;
-  return c->n < c->want ? AAUDIO_CALLBACK_RESULT_CONTINUE : AAUDIO_CALLBACK_RESULT_STOP;
+  return n < c->want ? AAUDIO_CALLBACK_RESULT_CONTINUE : AAUDIO_CALLBACK_RESULT_STOP;
 }
 
 JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputCallback(JNIEnv* env, jclass cls) {
@@ -73,6 +77,9 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputCa
   AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
   AAudioStreamBuilder_setSampleRate(b, 48000);
   AAudioStreamBuilder_setChannelCount(b, 1);
+  // This is a lossless tone check, not a low-latency stress test. Leave a
+  // second of capture room if the runner preempts the callback thread.
+  AAudioStreamBuilder_setBufferCapacityInFrames(b, 48000);
   AAudioStreamBuilder_setInputPreset(b, AAUDIO_INPUT_PRESET_VOICE_RECOGNITION);
   struct Capture c = {0};
   c.want = 48000;
@@ -91,11 +98,12 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputCa
   for (int i = 0; i < 300 && c.n < c.want; i++) sleep_ms(10);
   AAudioStream_requestStop(s);
   int64_t read = AAudioStream_getFramesRead(s);
+  int32_t xruns = AAudioStream_getXRunCount(s);
   AAudioStream_close(s);
   describe(c.buf, c.n, rate, tones, sizeof tones);
-  snprintf(msg, sizeof msg, "direction %s, rate %d, %d frames, callbacks %s, frames read %s, %s",
+  snprintf(msg, sizeof msg, "direction %s, rate %d, %d frames, callbacks %s, frames read %s, xruns %d, %s",
            dir == AAUDIO_DIRECTION_INPUT ? "input" : "output", rate, c.n,
-           c.callbacks >= 50 ? "50+" : "few", read >= c.want ? "all" : "short", tones);
+           c.callbacks >= 50 ? "50+" : "few", read >= c.want ? "all" : "short", xruns, tones);
   free(c.buf);
   return (*env)->NewStringUTF(env, msg);
 }
@@ -135,6 +143,38 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
   return (*env)->NewStringUTF(env, msg);
 }
 
+JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputOverruns(JNIEnv* env, jclass cls) {
+  AAudioStreamBuilder* builder;
+  AAudioStream* stream;
+  char message[128];
+  if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK) return (*env)->NewStringUTF(env, "no builder");
+  AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_INPUT);
+  AAudioStreamBuilder_setSampleRate(builder, 48000);
+  AAudioStreamBuilder_setChannelCount(builder, 1);
+  AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
+  AAudioStreamBuilder_setBufferCapacityInFrames(builder, 480);
+  aaudio_result_t result = AAudioStreamBuilder_openStream(builder, &stream);
+  AAudioStreamBuilder_delete(builder);
+  if (result != AAUDIO_OK) return (*env)->NewStringUTF(env, "open failed");
+  int count = 0, valid = 1;
+  for (int cycle = 0; cycle < 3; cycle++) {
+    if (AAudioStream_requestStart(stream) != AAUDIO_OK) { valid = 0; break; }
+    // No reads: fill the small ring, then require a new overrun on each
+    // start. This checks a cumulative event count rather than a boolean.
+    int before = count;
+    for (int tick = 0; tick < 500 && count <= before; tick++) {
+      sleep_ms(10);
+      count = AAudioStream_getXRunCount(stream);
+    }
+    AAudioStream_requestStop(stream);
+    if (count <= before) { valid = 0; break; }
+  }
+  AAudioStream_close(stream);
+  if (valid && count >= 3) snprintf(message, sizeof message, "3 stop/start cycles, cumulative overruns 3+");
+  else snprintf(message, sizeof message, "failed cumulative overruns: %d", count);
+  return (*env)->NewStringUTF(env, message);
+}
+
 // --- OpenSL ES -----------------------------------------------------------------------
 
 #define SL_BUFFER_FRAMES 1600  // 100 ms at 16 kHz
@@ -142,13 +182,16 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
 struct Rec {
   int16_t bufs[2][SL_BUFFER_FRAMES];
   float* all;
-  int n, want, next, callbacks;
+  _Atomic int n;
+  int want, next, callbacks;
 };
 
 static void on_buffer(SLAndroidSimpleBufferQueueItf q, void* ctx) {
   struct Rec* r = (struct Rec*)ctx;
   int16_t* b = r->bufs[r->next];
-  for (int i = 0; i < SL_BUFFER_FRAMES && r->n < r->want; i++) r->all[r->n++] = b[i] / 32768.0f;
+  int n = atomic_load_explicit(&r->n, memory_order_relaxed);
+  for (int i = 0; i < SL_BUFFER_FRAMES && n < r->want; i++) r->all[n++] = b[i] / 32768.0f;
+  atomic_store_explicit(&r->n, n, memory_order_release);
   r->callbacks++;
   if (r->n < r->want) (*q)->Enqueue(q, b, sizeof(r->bufs[0]));
   r->next ^= 1;
@@ -184,6 +227,7 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_openslRecorde
   (*rec_obj)->GetInterface(rec_obj, SL_IID_RECORD, &record);
   (*rec_obj)->GetInterface(rec_obj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &queue);
   struct Rec* r = (struct Rec*)calloc(1, sizeof(struct Rec));
+  atomic_init(&r->n, 0);
   r->want = 16000;
   r->all = (float*)calloc((size_t)r->want, sizeof(float));
   (*queue)->RegisterCallback(queue, on_buffer, r);

@@ -438,9 +438,9 @@ int32_t SYSV GetFramesPerDataCallback(AAudioStream* s) {
   return s != nullptr ? s->b.frames_per_callback : kErrorNull;
 }
 int32_t SYSV GetXRunCount(AAudioStream* s) {
-  if (s == nullptr) return 0;
-  if (s->capture != nullptr) return s->capture->overrun_frames() > 0 ? 1 : 0;
-  return s->track->underrun_frames() > 0 ? 1 : 0;
+  if (s == nullptr) return kErrorNull;
+  if (s->capture != nullptr) return static_cast<int32_t>(s->capture->overrun_count());
+  return static_cast<int32_t>(s->track->underrun_count());
 }
 int32_t SYSV GetSampleRate(AAudioStream* s) { return s != nullptr ? s->b.sample_rate : kErrorNull; }
 int32_t SYSV GetChannelCount(AAudioStream* s) { return s != nullptr ? s->b.channels : kErrorNull; }
