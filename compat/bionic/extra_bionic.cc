@@ -16,6 +16,7 @@
 // usage and time, Linux system calls, flock. zlib_bionic.cc: libz.so.
 
 #include "extra_bionic.h"
+#include "unicode_bionic.h"
 
 #include <gesher/bionic_shim.h>
 
@@ -722,37 +723,20 @@ uint64_t BIONIC_SYSV StrtoulL(const char* s, char** e, int base, void*) { return
 // --- wide characters (bionic's wchar_t is 32-bit) ----------------------------------
 
 bool InBmp(uint32_t c) { return c < 0x10000; }
-void* UnicodeFunction(const char* name) {
-  static HMODULE module = [] {
-    HMODULE m = LoadLibraryExW(L"icu.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    return m != nullptr ? m : LoadLibraryExW(L"icuuc.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-  }();
-  return module != nullptr ? reinterpret_cast<void*>(GetProcAddress(module, name)) : nullptr;
-}
-// Use Unicode properties rather than the CRT's process-wide C locale. ICU
-// accepts the full 32-bit code point, including supplementary characters.
-#define WCLASS(name, icu)                                                       \
-  int BIONIC_SYSV W_##name(uint32_t c) {                                        \
-    using Predicate = int8_t(__cdecl*)(int32_t);                               \
-    static auto fn = reinterpret_cast<Predicate>(UnicodeFunction(icu));        \
-    if (c > 0x10ffff || (c >= 0xd800 && c <= 0xdfff)) return 0;                \
-    return fn != nullptr ? (fn(static_cast<int32_t>(c)) != 0 ? 1 : 0)           \
-                         : (InBmp(c) && ::name(static_cast<wint_t>(c)) != 0);  \
+#define WCLASS(name, property)                                                \
+  int BIONIC_SYSV W_##name(uint32_t c) {                                       \
+    return UnicodeValue(c, UnicodeProperty::property);                        \
   }
-WCLASS(iswalpha, "u_isalpha") WCLASS(iswalnum, "u_isalnum") WCLASS(iswdigit, "u_isdigit")
-WCLASS(iswxdigit, "u_isxdigit") WCLASS(iswspace, "u_isspace") WCLASS(iswupper, "u_isupper")
-WCLASS(iswlower, "u_islower") WCLASS(iswcntrl, "u_iscntrl") WCLASS(iswpunct, "u_ispunct")
-WCLASS(iswprint, "u_isprint") WCLASS(iswgraph, "u_isgraph") WCLASS(iswblank, "u_isblank")
+WCLASS(iswalpha, Alpha) WCLASS(iswalnum, Alnum) WCLASS(iswdigit, Digit)
+WCLASS(iswxdigit, Xdigit) WCLASS(iswspace, Space) WCLASS(iswupper, Upper)
+WCLASS(iswlower, Lower) WCLASS(iswcntrl, Cntrl) WCLASS(iswpunct, Punct)
+WCLASS(iswprint, Print) WCLASS(iswgraph, Graph) WCLASS(iswblank, Blank)
 #undef WCLASS
 uint32_t BIONIC_SYSV W_towlower(uint32_t c) {
-  using Map = int32_t(__cdecl*)(int32_t);
-  static auto fn = reinterpret_cast<Map>(UnicodeFunction("u_tolower"));
-  return fn != nullptr && c <= 0x10ffff ? static_cast<uint32_t>(fn(c)) : c;
+  return UnicodeValue(c, UnicodeProperty::ToLower);
 }
 uint32_t BIONIC_SYSV W_towupper(uint32_t c) {
-  using Map = int32_t(__cdecl*)(int32_t);
-  static auto fn = reinterpret_cast<Map>(UnicodeFunction("u_toupper"));
-  return fn != nullptr && c <= 0x10ffff ? static_cast<uint32_t>(fn(c)) : c;
+  return UnicodeValue(c, UnicodeProperty::ToUpper);
 }
 // wctype/iswctype and wctrans/towctrans: small integer handles.
 const char* const kClasses[] = {"alnum", "alpha", "blank", "cntrl", "digit", "graph",
@@ -785,13 +769,17 @@ uint64_t BIONIC_SYSV WctypeL(const char* name, void*) { return Wctype(name); }
 const void* BIONIC_SYSV Wctrans(const char* name) {
   if (std::strcmp(name, "tolower") == 0) return reinterpret_cast<const void*>(1);
   if (std::strcmp(name, "toupper") == 0) return reinterpret_cast<const void*>(2);
+  errno = EINVAL;
   return nullptr;
 }
 uint32_t BIONIC_SYSV Towctrans(uint32_t c, const void* t) {
   if (t == reinterpret_cast<const void*>(1)) return W_towlower(c);
   if (t == reinterpret_cast<const void*>(2)) return W_towupper(c);
+  errno = EINVAL;
   return c;
 }
+const void* BIONIC_SYSV WctransL(const char* name, void*) { return Wctrans(name); }
+uint32_t BIONIC_SYSV TowctransL(uint32_t c, const void* t, void*) { return Towctrans(c, t); }
 // wcwidth: 0 for NUL and combining marks, -1 for controls, 2 for East Asian wide.
 bool Wide(uint32_t c) {
   return (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0x303e) || (c >= 0x3041 && c <= 0x33ff) ||
@@ -1938,6 +1926,8 @@ void RegisterExtra(SymbolTable& t) {
   E("iswctype_l", IswctypeL);
   E("wctrans", Wctrans);
   E("towctrans", Towctrans);
+  E("wctrans_l", WctransL);
+  E("towctrans_l", TowctransL);
   E("wcwidth", Wcwidth);
   E("wcswidth", Wcswidth);
   E("wcscmp", Wcscmp);

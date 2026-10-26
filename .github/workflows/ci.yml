@@ -39,6 +39,8 @@ jobs:
           # Compile the new bridge before the full runtime to expose its
           # header/ABI errors without waiting for every AOSP object.
           ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
+          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
+          ninja -C out native3_unicode_test
           ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
@@ -631,6 +633,7 @@ jobs:
             tests
             tools/symbolize.py
             tools/boot-image
+            probes/native3/unicode
 
       - uses: actions/download-artifact@v4
         with:
