@@ -88,6 +88,10 @@ public final class WindowMode {
         WindowSession session = WindowSession.install(show);
         // Toasts are this process's popups too (no SystemUI draws them).
         ToastHost.install();
+        // What Activities ask of the activity task manager about themselves, seen on the way:
+        // moveTaskToBack minimizes their windows; the single process answers for its own
+        // Activity (windows3 track).
+        ActivityClientHook.install();
         return session;
     }
 
@@ -101,11 +105,18 @@ public final class WindowMode {
             throw new IllegalStateException("WindowMode.install first");
         }
         String name = activity.getComponentName().getClassName();
+        final android.os.IBinder activityToken = activity.getActivityToken();
+        // A relaunch (a configuration change the Activity does not handle: windows3 track)
+        // makes a new instance with the same token: the handlers act on the current one.
+        java.util.function.Supplier<Activity> current = () -> {
+            Activity a = android.app.GesherAppDriver.currentActivity();
+            return a != null && a.getActivityToken() == activityToken ? a : activity;
+        };
         session.setCloseHandler((s, window, attrs) -> {
-            if (attrs.token != null && attrs.token != activity.getActivityToken()) {
+            if (attrs.token != null && attrs.token != activityToken) {
                 return;  // another window (a dialog): only the Activity's ends the app
             }
-            GesherActivityWindow.finishAndDestroy(activity);
+            GesherActivityWindow.finishAndDestroy(current.get());
             log(name + " finished, destroyed");
             onClosed.run();
         });
@@ -114,12 +125,12 @@ public final class WindowMode {
         session.setLifecycleHandler(new WindowSession.LifecycleHandler() {
             @Override
             public void onTaskVisibility(android.os.IBinder token, int taskId, boolean visible) {
-                if (token != activity.getActivityToken()) return;
+                if (token != activityToken) return;
                 if (visible) {
-                    GesherActivityWindow.restart(activity);
+                    GesherActivityWindow.restart(current.get());
                     log(name + " restarted, resumed (its window was restored)");
                 } else {
-                    android.os.Bundle state = GesherActivityWindow.stop(activity);
+                    android.os.Bundle state = GesherActivityWindow.stop(current.get());
                     log(name + " paused, stopped (its window was minimized)"
                             + (state != null ? ", saved state of " + state.size() + " keys" : ""));
                 }
