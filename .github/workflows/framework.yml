@@ -383,6 +383,7 @@ jobs:
               --framework-res out/framework-res/framework-res.apk \
               --framework-classes out/framework/classes --core-classes out/coremod
           done
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
 
       - name: Collect framework artifacts
         run: |
@@ -397,6 +398,7 @@ jobs:
           cp out/app/lifeapp.apk dist-framework/
           cp out/app/localeapp.apk dist-framework/
           cp out/app/netapp.apk out/app/nonetapp.apk dist-framework/
+          cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
