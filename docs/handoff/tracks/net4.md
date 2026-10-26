@@ -55,6 +55,13 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
-Reserved on 2026-10-26. No successor implementation or CI yet. web3's current
-CI is 40333695614 at 455e9fc, still running; its eventual result must be read
-before dependent implementation. All contracts above remain open.
+Reserved on 2026-10-26. No successor implementation or CI yet. Web3's latest
+complete diagnostic is 40376044459 at
+939ec313d0fe5a2d8410ee700a927fad0538269e: all 14 Web3 checks pass on both
+runners, package and both required e2e jobs pass, but Windows 2022's boot-profile
+performance failure keeps the full stage red. The old 40333695614 run was
+superseded and supplies no complete runtime result. Web3 preparation includes
+verified runtime/exec3 integration 94ccde1. Verified Web3 must merge before
+dependent Net4 implementation in its own worktree. Every contract above remains
+open; the coordinator's startup diagnosis does not permit fishing for a green
+repeat or treating scoped passing checks as full-stage acceptance.

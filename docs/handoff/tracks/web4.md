@@ -38,7 +38,13 @@ integration before final full CI; read package cleanup and both e2e jobs.
 
 ## Status and next steps
 
-Reserved on 2026-10-26. No successor implementation or CI. web3's latest
-40353139413 passes all 14 WebView checks on both runners but the full run
-is red on the independent geocoder teardown/window-log framing issues.
-Its verified stage must merge before dependent web4 implementation.
+Reserved on 2026-10-26. No successor implementation or CI. Web3's latest
+complete diagnostic is 40376044459 at
+939ec313d0fe5a2d8410ee700a927fad0538269e: all 14 Web3 checks pass on both
+runners, package and both required e2e jobs pass, but Windows 2022's boot-profile
+performance failure keeps the full stage red. The older geocoder/log-framing
+failures above are superseded, not the current blocker. Web3 preparation now
+includes verified runtime/exec3 integration 94ccde1; no repeat run is dispatched
+while the coordinator diagnoses startup. Verified Web3 must merge before
+dependent Web4 implementation in its separate worktree. No contract above is
+closed by native-only Windows4 evidence or by this handoff correction.
