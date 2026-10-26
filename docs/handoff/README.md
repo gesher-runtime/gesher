@@ -111,6 +111,18 @@ Merged so far:
   surfaces (graphics); no guest JIT code, guest signal handlers, LSE, HFAs
   by value. The arm64 shim fallbacks (sem_*, wchar, libm, dlopen of
   platform libs) should move into compat/bionic for x86_64 too.
+- media stage 2 (video): merged (verified at 6aff13d, ci 40258833980, which
+  contains 9e449b0; only handoff docs differ, so the integration tree after
+  this merge is the CI-verified one). ADR 0052. MediaExtractor, MediaCodec
+  and MediaCodecList over Media Foundation (H.264; decoders only),
+  MediaPlayer video with A/V sync, VideoView, MediaMetadataRetriever frames,
+  output into TextureView/SurfaceView (compat/media/surface plus
+  frameworks/base patch 0300: the surfaces track decides whether to adopt
+  or replace it). The windows-2022 sound gap is fixed (feeder threads wait
+  on Track::WaitForRoom). Leftovers: VP8/VP9/AV1/H.265 software decoders and
+  the Matroska extractor on wip/media-soft (not verified yet); no DXVA,
+  encoders, MediaMuxer, DRM, ImageReader output, GLSurfaceView,
+  TextureView.lockCanvas; no F-Droid video app in e2e.
 - 2026-10-26 early morning: the spend limit stopped all seven agents
   (media, windows3, aot2, exec2, surfaces, native2, web3); each was resumed
   from its saved state after the reset.
