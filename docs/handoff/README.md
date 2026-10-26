@@ -137,6 +137,48 @@ Merged so far:
 - New wave-2 track: `webview2` (WebView leftovers, ADR 0050), on
   wip/webview2 in the C:\work\gesher-webview worktree.
 
+## Stopped at handover (2026-10-26)
+
+The owner stopped all track agents on 2026-10-26 to hand the project to a
+new team. Each open track committed and pushed its work and updated its
+"Status and next steps" section; continue from there. None of these tracks
+is merged. Read each in-progress run's logs with `gh run view <id> --log`
+or `gh api repos/gesher-runtime/gesher/actions/jobs/<job id>/logs`
+(artifact downloads are blocked by the local network filter).
+
+| Track | Branch (worktree) | Tip | Last CI read | In-progress run at stop | Status section |
+|---|---|---|---|---|---|
+| media3 | wip/media-soft (gesher-media-soft) | dc78223 | 40262576561: part-1 leftovers pass except MPEG-4 part 2 (csd from ESDS, fixed) and a VP8+Vorbis seek tolerance (fixed); 40285626240: stage 3 compiled, link failed (mkvwriter, fixed) | 40287172595 (first full stage 3 build) | docs/media.md "Status and next steps" |
+| surfaces | wip/surfaces (gesher-devices) | 8bb7076 | 40265921060 at bbff936: 31 surfaces PASS per runner; FAIL: surfacegl single process does not end after finish(); camera preview lines unread after a threshold fix | 40285764214 at 2e67a15 (hang dump, TIC-80 at 800x400) | docs/graphics.md "Surfaces (surfaces track): status and next steps" |
+| web3 | wip/web3 (gesher-webview) | 58566f8 | 40262184075: proxy/PAC, CONNECTIVITY_ACTION, local https for 56-net pass; the accessibility bridge broke other apps (fixed in 77d659a); WebViews in web3app never load | 40285810159 at 77d659a | docs/webview.md "Status and next steps (web3)" |
+| exec3 | wip/exec3 (gesher-exec) | 31d348e | none (no CI run yet) | none | docs/exec.md exec3 section |
+| aot2 | wip/aot2 (gesher-stack) | 8551382 | 40263271836 at 7de81ac: all green except two 61-aot2 app-image checks (app classes not in the app image) | 40285423159 at ad9d360 (`--boot-image=<dir>/boot.art:<dir>/*`) | docs/compiled-code.md "Status and next steps (aot2 track, ADR 0054)" |
+| windows3 | wip/windows3 (gesher-lifecycle) | see branch | see its status section | see its status section | docs/lifecycle.md or docs/windows3.md |
+| native2 | wip/native2 (gesher-arm64) | see branch | see its status section | see its status section | docs/native-libs.md / docs/posix.md |
+
+Notes per track:
+- media3: VERIFIED earlier is only media-soft (merged). Encoders on the
+  runners: Media Foundation AAC and H.264 only. Pin Just Player's SHA-256 in
+  tests/e2e/apps.json from the e2e log. docs/media-soft-video.md was folded
+  into docs/media.md on this branch (its false "verified by ci 40244779791"
+  claim corrected); the roadmap link to it changes when media3 merges.
+- surfaces: builds on compat/media/surface and patch 0300; TIC-80 still a
+  knownFailure (SDL's main thread never starts); no EGL14/GLES20 Java
+  natives yet (GLSurfaceView, updateTexImage into an external texture).
+- web3: accessibility bridge runs only while the screen-reader flag is set;
+  threads attached to ART must detach before they exit; WPAD must not
+  become a PAC proxy.
+- exec3: the new /system/bin/sh (compat/elf/exec/gesher_shell.cc) has its
+  front end (parser, expansions) but no executor, redirections or
+  builtins; it does not link yet and exec.cmake still builds the old
+  minimal shell. Everything else in its brief is not started.
+- aot2: verified: profile-guided boot image (framework oat 9.0 MB, was 72.2
+  MB; all oat 16.4 MB, was 96.3 MB), startup no worse, installer 88.9 MB
+  (was 112.5 MB), install-time dexopt, JIT profiles, profman merge,
+  background dexopt. ART patch 0540 implements LockedFile with LockFileEx
+  (native2 builds on it). Reconsider `-AllClasses` in boot-image.yml
+  (+6.6 MB). Use `gh workflow run ci.yml` (`ci` alone returns 422).
+
 Wave 3 (2026-10-25 evening), cut from phase4/integration 0b55fa2, briefs in
 [tracks/](tracks/), reusing merged worktrees:
 - `windows3` (C:\work\gesher-lifecycle): screen orientation, window thread
