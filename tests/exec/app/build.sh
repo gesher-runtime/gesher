@@ -20,7 +20,7 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/classes" "$work/dex" "$work/apk/lib/x86_64"
-cp "$out/libexec3jni.so" "$out/libexec2child.so" "$work/apk/lib/x86_64/"
+cp "$out/libexec3jni.so" "$out/libexec2child.so" "$out/libexec3tls.so" "$work/apk/lib/x86_64/"
 "$tools/aapt2" link -o "$work/unaligned.apk" -I "$android_jar" \
   --manifest "$app/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 28
 javac --release 11 -encoding UTF-8 -cp "$android_jar" -d "$work/classes" \
