@@ -226,6 +226,7 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- Running ci 40325234847 at 2de1e15 with the exception-free raw-DNS worker.
 - ci 40324592794 at 5e90b96 compiled the NDK test ELF, but the native
   build failed because raw-DNS used try/catch with exceptions disabled.
   Corrected to a native CreateThread worker; local syntax now checks
