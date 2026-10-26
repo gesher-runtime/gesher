@@ -54,6 +54,26 @@ void SetErrno(int e) {
 constexpr int kENOSYS = 38;
 constexpr int kEFAULT = 14;
 
+// arm64's wchar_t is unsigned; x86_64's common width entry takes signed wchar32.
+using WidthFn = int(GESHER_SYSV*)(uint32_t);
+WidthFn g_wcwidth = nullptr;
+
+int GESHER_SYSV GuestWcwidth(uint32_t c) {
+  // All out-of-range unsigned values have the same ICU properties. Keep them
+  // outside x86_64's signed C0 branch while sharing its exact Unicode logic.
+  return g_wcwidth(c >= UINT32_C(0x80000000) ? UINT32_C(0x110000) : c);
+}
+
+int GESHER_SYSV GuestWcswidth(const uint32_t* s, size_t n) {
+  int total = 0;
+  for (size_t i = 0; i < n && s[i] != 0; ++i) {
+    int width = GuestWcwidth(s[i]);
+    if (width == -1) return -1;
+    total += width;
+  }
+  return total;
+}
+
 // --- struct stat ---------------------------------------------------------------
 struct X64Stat {  // bionic x86-64 struct stat
   uint64_t st_dev, st_ino, st_nlink;
@@ -469,6 +489,11 @@ void InitGuestLibc() {
   }
 
   g_getauxval = Host("getauxval");
+  g_wcwidth = reinterpret_cast<WidthFn>(Host("wcwidth"));
+  if (g_wcwidth != nullptr) {
+    Override("wcwidth", reinterpret_cast<void*>(&GuestWcwidth));
+    Override("wcswidth", reinterpret_cast<void*>(&GuestWcswidth));
+  }
   Override("getauxval", reinterpret_cast<void*>(&GuestGetauxval));
 
   g_host_syscall = Host("syscall");

@@ -56,7 +56,11 @@ fn values(c: u32) -> [u32; 14] {
 
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("--width") {
-        width::print_reference();
+        width::print_reference(false);
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("--width-unsigned") {
+        width::print_reference(true);
         return;
     }
     let extra = [0x110000, 0x7fffffff, 0x80000000, 0xffffffff];

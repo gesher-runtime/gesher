@@ -32,6 +32,7 @@
 
 namespace gesher::bionic {
 
+// The common x86_64 entry uses signed wchar32; arm64 has guest width overrides.
 int UnicodeWidth(uint32_t wc) {
   // Fast-path ASCII.
   if (wc >= 0x20 && wc < 0x7f) return 1;
