@@ -47,3 +47,8 @@ f5ce6f6 is merged. No tests or roadmap milestones are complete. Next: inspect
 the first display-stage CI, then TSF document/reconversion, real COM-source
 input-pane callbacks/candidate occlusion and old-target adjustResize. ADR 0061
 records the work. The physical touch keyboard remains unverified.
+
+First full display-stage CI: **40377891527** at
+`dd6e65fe64196542ca8ae99d8953b8fdd39a7f89`; watch log
+`C:/work/gesher-ci-review/windows4-40377891527-watch.log`. Complete build,
+both Windows suites, actual package cleanup and both e2e results are pending.
