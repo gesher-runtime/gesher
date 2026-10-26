@@ -347,6 +347,10 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running: ci 40300418334 at f87d5b8, including integration a98dda9.
+  Verify both accessibility paths/runners, the page's real action results,
+  external UIA controls, e2e and every job before merge.
+
 - ci 40292261578 at 63203c4 completed with two accessibility failures on
   each runner. Geolocation and compat pass; accessibility still has zero
   page nodes and the external UIA client times out. The new phase diagnostic
