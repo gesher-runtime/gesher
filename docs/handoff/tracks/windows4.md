@@ -297,3 +297,18 @@ quoted Launcher command-line tokens blocking all three device scenarios.
 All native ACP/session/production-IME probes, layout-direction configuration
 and single-process EditText reconversion pass on both runners. The corrected
 source is newer than this run; no failed assertion is waived.
+
+The COM geometry failures led to a local native root reproducer: requesting
+a 400x4000 top-level client returned 400x1061 because CreateWindowEx with
+CW_USEDEFAULT clamps its initial size to the desktop work area. Android's
+later native-window setup resized it, but the standalone COM source had
+already queried the smaller initial client. Window creation now reapplies
+the exact requested client size before publishing creation or advising COM;
+initial desktop clamping is not queued as a user resize. The real HWND/COM
+probe adds a larger-than-desktop client and initial-event checks; the local
+condition-variable harness passes under g++ Werror. Its eventfd transport is
+still CI-only. Runtime CI must establish the runner geometry correction.
+
+Imported exec3's portable 5b772b7 quoted-Launcher fix as 3a03f40. Its pure-Java
+13-case parser fixture passed locally and in exec3 CI 40405306826's build job;
+actual Windows4 device/ART scenarios remain pending.
