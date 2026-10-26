@@ -157,6 +157,10 @@ Windows without them (no location service, no Media Foundation) gets clean
   not yet CI-verified; all remaining surfaces scope below stays open.
 - Running: ci 40297011754 at b8d6752, after merging integration a98dda9.
   framework.yml keeps both surfaceapp and winapp build/copy lines.
+- That run passed windows-2025/package/e2e; windows-2022 failed only the known
+  badssl timeout. All surfaces checks pass there. Merged integration 8b1b09d
+  (native2), and expanded e2e to both Windows runners to verify TIC-80.
+  New combined verification is required before merge.
 
 ### Done and verified
 - **hwsvc2 track, ci run 40214264956 at aaa1f90** (ADR 0051; every job green,

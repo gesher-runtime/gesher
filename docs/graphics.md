@@ -531,6 +531,17 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 
 Status and next steps (stopped by the coordinator, 2026-10-26):
 
+- Lead-engineer continuation: ci 40297011754 at b8d6752 passed windows-2025,
+  package and e2e (windows-2022). windows-2022's only failure is the known
+  badssl self-signed endpoint connection timeout (2 counted FAIL lines);
+  the surfaces checks pass. The locale restore race fix passes.
+  Merged integration 8b1b09d (native2), keeping both artifact downloads and
+  needs entries. e2e now has both Windows runners with unique result artifact
+  names, to establish TIC-80 coverage before removing its knownFailure.
+  The native2/surfaces combination and the expanded e2e matrix need a fresh
+  full run. GLES SurfaceTexture/external-OES, Java EGL/GLES/GLSurfaceView and
+  child SurfaceControl alpha/transforms remain open; do not tick them.
+
 - Continuation: read ci 40285764214's windows-2025 log (job 121451383191):
   `1 test(s) failed`, surfacegl's single-process shutdown only. The SIGQUIT
   dump shows the main thread idle in MessageQueue.nativePollOnce, not blocked
