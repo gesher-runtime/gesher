@@ -7,6 +7,15 @@ namespace gesher::input {
 TextStore::TextStore(HWND window, Emit emit, Schedule schedule)
     : window_(window), emit_(std::move(emit)), schedule_(std::move(schedule)) {}
 TextStore::~TextStore() { if (sink_ != nullptr) sink_->Release(); }
+void TextStore::Disconnect() {
+  // A manager retaining a closing COM object must never call its former
+  // window/Java owner or retain that editor's text.
+  emit_ = [](DocumentEdit) {};
+  schedule_ = [] {};
+  document_ = TextDocument{}; pending_document_.reset();
+  pending_lock_ = 0; pending_layout_ = false; composing_ = false;
+  window_ = nullptr;
+}
 HRESULT TextStore::QueryInterface(REFIID iid, void** out) {
   if (out == nullptr) return E_POINTER;
   *out = nullptr;

@@ -62,6 +62,7 @@ jobs:
           cp out/skia_probe.exe out/skia_gl_probe.exe out/window_probe.exe dist-graphics/
           cp out/windows4_input_pane_probe.exe dist-graphics/
           cp out/windows4_text_store_probe.exe dist-graphics/
+          cp out/windows4_tsf_service.dll dist-graphics/
           ls -la dist-graphics
 
       - uses: actions/upload-artifact@v4
