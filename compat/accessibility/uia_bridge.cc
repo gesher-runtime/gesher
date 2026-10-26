@@ -37,17 +37,35 @@ namespace {
 
 JavaVM* g_vm = nullptr;
 jclass g_bridge = nullptr;  // com.gesher.app.accessibility.UiaBridge
-jmethodID g_node = nullptr, g_node_at = nullptr, g_focused = nullptr, g_perform = nullptr,
-          g_client_seen = nullptr, g_setting_changed = nullptr;
+jmethodID g_node = nullptr, g_node_at = nullptr, g_focused = nullptr, g_perform = nullptr;
 
-JNIEnv* Env() {
-  JNIEnv* env = nullptr;
-  if (g_vm == nullptr) return nullptr;
-  if (g_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return env;
-  JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("UIA"), nullptr};
-  if (g_vm->AttachCurrentThreadAsDaemon(&env, &args) != JNI_OK) return nullptr;
-  return env;
-}
+// The calling thread's JNIEnv for one call into Java. UI Automation calls the
+// providers on threads of its own, which end whenever UIA likes: a thread
+// attached here is detached again (ART aborts when an attached thread exits).
+class ScopedEnv {
+ public:
+  ScopedEnv() {
+    if (g_vm == nullptr) return;
+    if (g_vm->GetEnv(reinterpret_cast<void**>(&env_), JNI_VERSION_1_6) == JNI_OK) return;
+    env_ = nullptr;
+    JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("UIA"), nullptr};
+    if (g_vm->AttachCurrentThreadAsDaemon(&env_, &args) == JNI_OK) {
+      attached_ = true;
+    } else {
+      env_ = nullptr;
+    }
+  }
+  ~ScopedEnv() {
+    if (attached_) g_vm->DetachCurrentThread();
+  }
+  ScopedEnv(const ScopedEnv&) = delete;
+  ScopedEnv& operator=(const ScopedEnv&) = delete;
+  JNIEnv* get() const { return env_; }
+
+ private:
+  JNIEnv* env_ = nullptr;
+  bool attached_ = false;
+};
 
 void Clear(JNIEnv* env) {
   if (env->ExceptionCheck()) {
@@ -152,7 +170,8 @@ Node Parse(const std::wstring& s) {
 constexpr int64_t kRoot = -1;
 
 Node GetNode(HWND hwnd, int64_t id) {
-  JNIEnv* env = Env();
+  ScopedEnv scoped;
+  JNIEnv* env = scoped.get();
   if (env == nullptr || g_bridge == nullptr) return Node();
   auto s = static_cast<jstring>(env->CallStaticObjectMethod(
       g_bridge, g_node, static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)), static_cast<jlong>(id)));
@@ -164,7 +183,8 @@ Node GetNode(HWND hwnd, int64_t id) {
 }
 
 int64_t NodeAt(HWND hwnd, POINT client) {
-  JNIEnv* env = Env();
+  ScopedEnv scoped;
+  JNIEnv* env = scoped.get();
   if (env == nullptr) return 0;
   jlong r = env->CallStaticLongMethod(g_bridge, g_node_at,
                                       static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)),
@@ -174,7 +194,8 @@ int64_t NodeAt(HWND hwnd, POINT client) {
 }
 
 int64_t Focused(HWND hwnd) {
-  JNIEnv* env = Env();
+  ScopedEnv scoped;
+  JNIEnv* env = scoped.get();
   if (env == nullptr) return 0;
   jlong r = env->CallStaticLongMethod(g_bridge, g_focused,
                                       static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)));
@@ -185,7 +206,8 @@ int64_t Focused(HWND hwnd) {
 enum Action : int32_t { kClick = 1, kFocus = 2, kSetText = 3, kShowOnScreen = 5 };
 
 bool Perform(HWND hwnd, int64_t id, int32_t action, const wchar_t* text) {
-  JNIEnv* env = Env();
+  ScopedEnv scoped;
+  JNIEnv* env = scoped.get();
   if (env == nullptr) return false;
   jstring jt = text != nullptr
       ? env->NewString(reinterpret_cast<const jchar*>(text), static_cast<jsize>(wcslen(text)))
@@ -526,9 +548,7 @@ class Element final : public IRawElementProviderSimple,
 
 std::mutex g_windows_mutex;
 std::map<HWND, WNDPROC> g_original;  // subclassed windows: their own window procedures
-std::atomic<bool> g_client_notified{false};
 
-void NotifyClientSeen(HWND hwnd);
 
 LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
   WNDPROC original = nullptr;
@@ -541,14 +561,7 @@ LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     Element* root = Element::Make(hwnd, kRoot);
     LRESULT r = UiaReturnRawElementProvider(hwnd, wparam, lparam, root);
     root->Release();
-    NotifyClientSeen(hwnd);
     return r;
-  }
-  if (msg == WM_SETTINGCHANGE && wparam == SPI_SETSCREENREADER) {
-    if (JNIEnv* env = Env()) {
-      env->CallStaticVoidMethod(g_bridge, g_setting_changed);
-      Clear(env);
-    }
   }
   if (msg == WM_NCDESTROY) {
     UiaReturnRawElementProvider(hwnd, 0, 0, nullptr);
@@ -557,20 +570,6 @@ LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
   }
   return original != nullptr ? CallWindowProcW(original, hwnd, msg, wparam, lparam)
                              : DefWindowProcW(hwnd, msg, wparam, lparam);
-}
-
-void NotifyClientSeen(HWND hwnd) {
-  if (g_client_notified.exchange(true)) return;
-  // Java from another thread: the window's thread must not wait for the app.
-  HANDLE t = CreateThread(nullptr, 0, [](void* p) -> DWORD {
-    if (JNIEnv* env = Env()) {
-      env->CallStaticVoidMethod(g_bridge, g_client_seen,
-                                static_cast<jlong>(reinterpret_cast<intptr_t>(p)));
-      Clear(env);
-    }
-    return 0;
-  }, hwnd, 0, nullptr);
-  if (t != nullptr) CloseHandle(t);
 }
 
 bool IsAppWindow(HWND hwnd) {
@@ -709,10 +708,7 @@ jint OnLoad(JavaVM* vm, void*) {
   g_node_at = env->GetStaticMethodID(c, "nodeAt", "(JII)J");
   g_focused = env->GetStaticMethodID(c, "focused", "(J)J");
   g_perform = env->GetStaticMethodID(c, "perform", "(JJILjava/lang/String;)Z");
-  g_client_seen = env->GetStaticMethodID(c, "clientSeen", "(J)V");
-  g_setting_changed = env->GetStaticMethodID(c, "settingChanged", "()V");
-  if (g_node == nullptr || g_node_at == nullptr || g_focused == nullptr || g_perform == nullptr ||
-      g_client_seen == nullptr || g_setting_changed == nullptr) {
+  if (g_node == nullptr || g_node_at == nullptr || g_focused == nullptr || g_perform == nullptr) {
     return JNI_ERR;
   }
   if (env->RegisterNatives(c, kMethods, sizeof(kMethods) / sizeof(kMethods[0])) != JNI_OK) {

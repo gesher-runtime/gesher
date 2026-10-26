@@ -22,7 +22,7 @@ import java.util.Map;
  * and, through {@code android.net.Proxy.setHttpProxyConfiguration} (as ActivityThread
  * applies it in every app process), the {@code http(s).proxyHost/Port/nonProxyHosts}
  * properties that {@code Proxy.getDefaultHost()}, HttpURLConnection and OkHttp use. A PAC
- * script (or WPAD) makes it a PAC proxy: the framework's PacProxySelector asks
+ * script makes it a PAC proxy (automatic detection, WPAD, is not followed): the framework's PacProxySelector asks
  * {@code com.android.net.IProxyService} for each URL, which this class serves in every
  * process with Windows' own evaluation of the script (WinHttpGetProxyForUrl). A watcher
  * applies Windows' changes. The natives are compat/net/windows_proxy.cc
@@ -34,8 +34,6 @@ public final class WindowsProxy {
 
     /** PacProxySelector.PROXY_SERVICE. */
     public static final String PROXY_SERVICE = "com.android.net.IProxyService";
-    /** The PAC URL a WPAD (automatic detection) setting is reported with. */
-    public static final String WPAD_URL = "http://wpad/wpad.dat";
 
     private static volatile boolean sLoaded;
     private static Boolean sAvailable;
@@ -95,8 +93,7 @@ public final class WindowsProxy {
     }
 
     /**
-     * Android's default proxy for Windows' settings: a PAC proxy for a PAC script or
-     * automatic detection, a direct proxy (host, port, exclusion list) for a proxy server,
+     * Android's default proxy for Windows' settings: a PAC proxy for a PAC script, a direct proxy (host, port, exclusion list) for a proxy server,
      * else null (no proxy).
      */
     public static android.net.ProxyInfo defaultProxy() {
@@ -118,7 +115,8 @@ public final class WindowsProxy {
             }
             return android.net.ProxyInfo.buildDirectProxy(host, port, exclusions(c.bypass));
         }
-        if (c.autoDetect) return android.net.ProxyInfo.buildPacProxy(Uri.parse(WPAD_URL));
+        // Automatic detection (WPAD) is on by default in Windows and finds nothing on most
+        // networks: it is not taken as a PAC proxy (every request would look for one).
         return null;
     }
 
@@ -158,11 +156,11 @@ public final class WindowsProxy {
         return out;
     }
 
-    /** Windows' answer for a URL under the current PAC script or WPAD: a PAC result. */
+    /** Windows' answer for a URL under the current PAC script: a PAC result. */
     public static String resolve(String url) {
         if (!load()) return null;
         Config c = config();
-        if (c.pacUrl.isEmpty() && !c.autoDetect) {
+        if (c.pacUrl.isEmpty()) {
             android.net.ProxyInfo p = defaultProxy(c);
             return p != null && p.getHost() != null ? "PROXY " + p.getHost() + ":" + p.getPort()
                     : "DIRECT";

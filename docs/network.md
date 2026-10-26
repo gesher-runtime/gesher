@@ -150,7 +150,8 @@ processes of packages without it; gesher-app applies it in its own process
   (`com.gesher.net.WindowsProxy`, natives in `compat/net/windows_proxy.cc`,
   libgesher_proxy.so): a proxy server becomes `ProxyInfo.buildDirectProxy(host, port,
   exclusions)` (per-scheme WinINet strings: http's server; `<local>` has no Android
-  equivalent), a PAC URL or automatic detection a PAC proxy. Every process applies it with
+  equivalent), a PAC URL a PAC proxy. Automatic detection (WPAD, on by default in Windows)
+  is not followed: every request would look for a script most networks do not have. Every process applies it with
   `Proxy.setHttpProxyConfiguration` (http(s).proxyHost/Port/nonProxyHosts, as
   ActivityThread at bind), so `Proxy.getDefaultHost()`, HttpURLConnection and OkHttp use
   it, and follows Windows' changes (RegNotifyChangeKeyValue on the settings' key). Under a

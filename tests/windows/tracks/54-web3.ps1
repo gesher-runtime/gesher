@@ -16,6 +16,9 @@ using System.Runtime.InteropServices;
 public static class GesherWeb3Win32 {
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool SystemParametersInfoW(uint action, uint param, IntPtr p, uint flags);
+  // Windows' screen reader flag (SPI_SETSCREENREADER), as Narrator sets it.
+  public static bool ScreenReader(bool on) { return SystemParametersInfoW(0x0047, on ? 1u : 0u, IntPtr.Zero, 2 /* SPIF_SENDCHANGE */); }
 }
 '@
 }
@@ -43,6 +46,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
+  $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
   $psi.Environment['GESHER_WEB3_PORTS'] = "$web3Proxy $web3Http"
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
@@ -81,14 +85,12 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     Write-Host "PASS  web3: $Name"
   } else {
     Write-Host "FAIL  web3: $Name ($($problems -join '; '))"
-    if (Test-Path "$Dir/dalvikvm.map") {
-      $text | python "$PSScriptRoot/../../../tools/symbolize.py" "$Dir/dalvikvm.map" | Select-Object -Last 200 | Out-Host
-    } else {
-      ($text -split "`n" | Select-Object -Last 200) | Out-Host
-    }
+    # What the app and Gesher said (not the thread dump of a killed process).
+    ($text -split "`n" | Where-Object { $_ -match '(Web3 |gesher-|Exception|Error|FATAL|Abort|chromium|^\s+at )' } |
+      Select-Object -First 150) | Out-Host
     $script:failed++
   }
-  ($text -split "`n" | Select-String -Pattern '^(Web3 |gesher-a11y: |gesher-net: |gesher-webview: (androidx|ProxyController|accessibility|geolocation))' |
+  ($text -split "`n" | Select-String -Pattern '^(Web3 |gesher-a11y: |gesher-net: |gesher-webview: )' |
     Select-Object -First 80 | ForEach-Object { "INFO  $_".TrimEnd() }) | Out-Host
   return $text
 }
@@ -113,7 +115,7 @@ function CompatProxied([string] $Name, [int] $Before) {
   if ($seen.Contains('proxy GET http://web3-proxied.test/compat.html')) {
     Write-Host "PASS  web3: $Name went through the ProxyController override (the test proxy served http://web3-proxied.test/compat.html)"
   } else {
-    Write-Host "FAIL  web3: $Name did not reach the test proxy"
+    Write-Host "FAIL  web3: $Name did not reach the test proxy (it saw: $($seen -replace "`n", ' | '))"
     $script:failed++
   }
 }
@@ -215,14 +217,21 @@ $a11yExpect = @(
   "heading 'Web content'",
   'Web3 a11y provider click true: title "pressed 1"',
   'Web3 a11y provider set text true: field "typed by accessibility"',
-  'gesher-a11y: accessibility enabled (a UI Automation client reads the app''s windows)',
+  'gesher-a11y: accessibility enabled (',
   'Web3 a11y AccessibilityManager enabled true',
   'gesher-a11y: announcement for UI Automation: Web3 announcement',
   'Web3 a11y UI Automation: clicks 1, text set true, toggled true, accessibility enabled true',
   'Web3 a11y done')
 $a11yName = 'web3app.apk''s A11yActivity: the WebView''s AccessibilityNodeProvider from WebView2''s UI Automation tree (heading, button clicked, field set), and a UI Automation client reading the app''s window (Android''s views as UIA Button, Edit, CheckBox: invoked, set, toggled; WebView2''s page under the WebView), AccessibilityManager enabled for it, an announcement'
+# Narrator sets Windows' screen reader flag: the app's accessibility is on while it is.
+function Web3ScreenReader([bool] $On) {
+  if (-not [GesherWeb3Win32]::ScreenReader($On)) { Write-Host "INFO  web3: SPI_SETSCREENREADER $On failed" }
+}
+Web3ScreenReader $true
+try {
 $null = Web3Run "$a11yName (single process)" @('com.gesher.app.Main', '--window', '--display', '400x800@160',
   '--activity', 'com.gesher.web3app.A11yActivity', (NoDrive "$Dir/web3app.apk")) ($a11yExpect + 'gesher-app: done') 'Web3 a11y done' 'Web3 a11y ready for UI Automation' $uiaClient
+} finally { Web3ScreenReader $false }
 
 # --- The Gesher device: app processes of a system server ------------------------------
 $savedData = $env:ANDROID_DATA
@@ -239,7 +248,10 @@ try {
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
 
-  $null = Web3Run "the Gesher device: $a11yName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.A11yActivity') $a11yExpect 'Web3 a11y done' 'Web3 a11y ready for UI Automation' $uiaClient
+  Web3ScreenReader $true
+  try {
+    $null = Web3Run "the Gesher device: $a11yName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.A11yActivity') $a11yExpect 'Web3 a11y done' 'Web3 a11y ready for UI Automation' $uiaClient
+  } finally { Web3ScreenReader $false }
 
   # Windows' proxy settings: a proxy server (the test proxy, which forwards what is not
   # its own), then a PAC script; the user's settings are restored whatever happens.

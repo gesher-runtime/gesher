@@ -264,15 +264,15 @@ no service, nothing was ever enabled and nothing read an app's views. Now:
   Windows the consumer of an app's accessibility is UI Automation, which reads each
   process's windows in that process. Its clients (AccessibilityManagers) are enabled
   (setState, relevant event types) while Windows' screen reader flag is set
-  (SPI_GETSCREENREADER: Narrator sets it; WM_SETTINGCHANGE follows it), once a UI
-  Automation client has read one of the process's windows, or with
-  `$GESHER_ACCESSIBILITY=1`. ViewRootImpl then registers its windows' interaction
+  (SPI_GETSCREENREADER: Narrator sets it; looked at every 2 s) or with
+  `$GESHER_ACCESSIBILITY=1`; the UI Automation bridge serves the windows only then (the
+  system's own UIA clients read windows all the time). ViewRootImpl then registers its windows' interaction
   connections; AccessibilityEvents become UIA events: focus, announcements
   (UiaRaiseNotificationEvent, Narrator speaks them), invoke, value and structure changes.
   `getWindowTransformationSpec` is the identity.
 - **The UI Automation bridge** (`compat/accessibility/uia_bridge.cc`, libgesher_a11y.so;
-  `UiaBridge`): every GesherWindow of the process is subclassed (a WinEvent hook finds
-  them) and answers WM_GETOBJECT(UiaRootObjectId) with a fragment root of free-threaded
+  `UiaBridge`): once accessibility is on, every GesherWindow of the process is subclassed
+  (a WinEvent hook finds them) and answers WM_GETOBJECT(UiaRootObjectId) with a fragment root of free-threaded
   providers. Each element is an AccessibilityNodeInfo read through the window's
   ViewRootImpl's direct accessibility connection (the AccessibilityInteractionController,
   as TalkBack reads it); class names map to control types (Button, Edit, CheckBox,
