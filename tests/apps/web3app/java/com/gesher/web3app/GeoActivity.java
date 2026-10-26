@@ -74,7 +74,7 @@ public class GeoActivity extends Activity {
                             Web3.log("geo getCurrentPosition: " + got);
                             setLocation(LAT2, LON2);
                             Web3.log("geo test location moved: " + LAT2 + " " + LON2);
-                            Web3.poll(view, "JSON.stringify(geoResult.watch)",
+                            Web3.poll(view, "geoResult.watch",
                                     v -> v.contains(String.format(java.util.Locale.ROOT, "%.4f", LAT2)), 30, watch -> {
                                         Web3.log("geo watchPosition: " + watch);
                                         disabled.setWebViewClient(new WebViewClient() {
