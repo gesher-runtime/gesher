@@ -176,8 +176,12 @@ Wave 4 (2026-10-26), cut from phase4/integration 8c7f163, briefs in
   a fuller sh; ELF TLS in executables; destroy()/destroyForcibly and
   logcat/ps/cat/kill unverified; pm/am; persistent setprop; the on-device
   variant; static executables (ENOEXEC).
+  Integration ci 40264089269 on 88722db (media stage 2, media-soft,
+  exec2): all green.
 - `exec3` (C:\work\gesher-exec, wip/exec3): exec2's leftovers. ADR 0060,
-  45-exec3.ps1.
+  45-exec3.ps1. Its first agent ran on an older model and stopped at the
+  spend limit (2026-10-26 morning); an Opus successor took over its
+  uncommitted shell draft. The other agents were resumed after the reset.
 - `media3` (C:\work\gesher-media-soft, branch wip/media-soft, continuing
   after its merge): stage 3: audio input, encoders, MediaMuxer,
   MediaRecorder, ImageReader output, a video app in e2e, plus media-soft's
