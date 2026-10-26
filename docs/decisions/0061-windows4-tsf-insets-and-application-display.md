@@ -66,6 +66,13 @@ TS_E_NOLAYOUT, and rich formatting/embedded objects are explicitly unsupported.
 See [RequestLock](https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-requestlock)
 for notification/reentrancy requirements. No TSF behavior is CI verified.
 Candidate-window discovery remains unimplemented.
+The actual Microsoft candidate HWND already observed by the SendInput IME
+fixture is now checked while visible: a floating candidate must leave Android
+IME edge insets empty and content unresized. This follows Android's
+[floating IME contract](https://developer.android.com/reference/android/view/WindowInsets.Type#ime()).
+That is a real candidate UI observation, not a claim that the runtime discovers
+arbitrary candidate windows or distinguishes candidate-only content/visible
+insets for every third-party IME. Its CI result is pending.
 A target-SDK-28 APK and show/hide resize fixture are added for old-target
 adjustResize, without manual app padding. Its result is not yet verified;
 no production resize change is justified before that observation. The Android

@@ -175,3 +175,11 @@ result. It now checks actual Windows-to-InputConnection fidelity rather than
 the runner dictionary's word length. This is an explicit assertion change,
 not a reclassification of the old failure; runtime CI and coordinator review
 are required before acceptance.
+
+The real Microsoft candidate window already inspected by the SendInput fixture
+now has an explicit Android insets check while it remains visible: candidate
+geometry is floating above the client's bottom; a new composing-state snapshot
+must show zero IME edge insets and an unchanged decor/client size. This tests
+Android's actual floating-candidate behavior without inventing a keyboard-sized
+inset. CI remains pending, as do arbitrary third-party candidate discovery and
+candidate-only content/visible-inset distinctions.
