@@ -9,7 +9,7 @@
 #    checkout of frameworks/av of its own (and frameworks/native-media one of
 #    frameworks/native's media_plugin headers), so the framework build's sparse
 #    sets are untouched;
-#  - the extractors (MP3, MPEG-4/M4A, Ogg, FLAC, WAV, AAC ADTS), each built
+#  - the extractors (MP3, MPEG-4/M4A, Ogg, FLAC, WAV, AAC ADTS, Matroska/WebM), each built
 #    with its GETEXTRACTORDEF renamed, as each is a plugin of its own on Android;
 #  - the decoders: libstagefright_mp3dec (MP3), libvorbisidec (Tremolo:
 #    Vorbis), libopus (Opus), libFLAC (FLACExtractor decodes FLAC itself).
@@ -104,6 +104,13 @@ gesher_media_extractor(ogg ${_ex}/ogg/OggExtractor.cpp)
 gesher_media_extractor(flac ${_ex}/flac/FLACExtractor.cpp)
 gesher_media_extractor(wav ${_ex}/wav/WAVExtractor.cpp)
 gesher_media_extractor(aac ${_ex}/aac/AACExtractor.cpp)
+# Matroska/WebM: libwebm's mkvparser and libstagefright_flacdec (FLAC's CodecPrivate)
+# built in, with ColorUtils_ndk.cpp (libstagefright_foundation_colorutils_ndk).
+gesher_media_extractor(mkv ${_ex}/mkv/MatroskaExtractor.cpp
+  ${AOSP_DIR}/external/libwebm/mkvparser/mkvparser.cc
+  ${_mod}/codecs/flac/dec/FLACDecoder.cpp
+  ${_fnd}/ColorUtils_ndk.cpp)
+target_include_directories(extractor_mkv PRIVATE ${AOSP_DIR}/external/libwebm ${_mod}/codecs/flac/dec)
 
 # --- libvorbisidec (Tremolo, C only) ----------------------------------------------------
 set(_t "${_trem}/Tremolo")
@@ -132,6 +139,7 @@ target_compile_definitions(FLAC PUBLIC FLAC__NO_DLL PRIVATE HAVE_CONFIG_H FLAC__
   FLAC__INTEGER_ONLY_LIBRARY _REENTRANT PIC U_COMMON_IMPLEMENTATION)
 target_compile_options(FLAC PRIVATE -Wno-unused-parameter -Wno-unreachable-code-loop-increment)
 target_link_libraries(extractor_flac PRIVATE FLAC)
+target_link_libraries(extractor_mkv PRIVATE FLAC)
 
 # --- libopus (fixed point, C) -----------------------------------------------------------
 add_library(opus STATIC
@@ -311,12 +319,15 @@ target_include_directories(stagefright_mp3dec PUBLIC ${_mp3}/include ${_mp3}/src
 target_compile_options(stagefright_mp3dec PRIVATE -Wno-unused-parameter
   "SHELL:-include ${_media_aosp}/include/gesher_media_aosp.h")
 
+# The software video decoders (libvpx, libdav1d, libhevc).
+include(${CMAKE_CURRENT_LIST_DIR}/media_video_codecs.cmake)
+
 # Everything the player (cmake/aosp/media.cmake) links.
 add_library(gesher_media_codecs INTERFACE)
 target_link_libraries(gesher_media_codecs INTERFACE ${GESHER_MEDIA_EXTRACTORS}
-  stagefright_foundation vorbisidec FLAC opus stagefright_mp3dec)
+  stagefright_foundation vorbisidec FLAC opus stagefright_mp3dec ${GESHER_SOFT_VIDEO_LIBS})
 
 # Everything of the port under one name (kept for a `ninja media_codecs_all`
 # while debugging; the default build now carries all of it into dalvikvm).
 add_custom_target(media_codecs_all DEPENDS ${GESHER_MEDIA_EXTRACTORS} stagefright_foundation
-  vorbisidec FLAC opus stagefright_mp3dec)
+  vorbisidec FLAC opus stagefright_mp3dec ${GESHER_SOFT_VIDEO_LIBS})
