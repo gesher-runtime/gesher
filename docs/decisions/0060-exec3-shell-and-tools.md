@@ -206,7 +206,12 @@ pm/am list/path/start/broadcast/force-stop, and the whole Windows-2022 suite.
 Only a Windows-2025 device-mode post-steps crash remains in the combined run;
 all build/package/e2e jobs pass. Its preserved record locates RIP in ntdll, so
 the product caller and root cause remain open. Media's ownership/race fixes
-have independent comparison proof and are being combined with verified Native3.
+have independent comparison proof and are combined with verified Native3
+integration117. Track58 invokes their actual-class1000 cancel/flush selection
+regression under ART in the next run; local JDK execution passes. This is not
+proof of the ntdll fault's cause. Zygote's VM-prefix extraction also now decodes
+complete Windows argument tokens, fixing quoted Launcher main-class startup;
+thirteen host cases pass and actual combined runtime proof remains pending.
 
 CI 40385411337 verifies the complete shared property and log suites in
 standalone ART and both APK modes, including scratch-root ProcessBuilder,

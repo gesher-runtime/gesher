@@ -9,8 +9,12 @@ exit0. Preserved record now shows ntdll.dll+0x9a7e7, fault address-1 and UTF16-
 like pointer-register values; no caller/cause inferred. A narrow safe stack-word/
 access-kind extension is prepared (eight candidate words/512bytes per captured
 record, eight records/96 published lines maximum); own-file fatal contracts pass
-with exit unchanged. Next combine verified integration117 and media ownership
-corrections; retain all real assertions and open umask/policy scope.
+with exit unchanged. Verified integration117 and media ownership corrections are
+combined. The actual-class1000 cancel/flush race passes locally and track58 now
+invokes it under ART; that ART invocation is pending. Quote-aware Launcher main
+token parsing fixes a Windows4 startup defect and passes13 host cases. The next
+combined run retains all real assertions and open umask/policy scope; neither
+camera ownership proof nor stack-word candidates establish the ntdll cause.
 
 Earlier continuation evidence:
 
