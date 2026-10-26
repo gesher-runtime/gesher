@@ -62,6 +62,18 @@ jobs:
           "$bin/llvm-readelf" -h -l -d dist-exec/libexectest.so | grep -E 'Type:|Entry|INTERP|interpreter|NEEDED|FLAGS'
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexectest.so | awk '$7 == "UND" && $8 != "" {print $4, $5, $8}' | sort -u
 
+      - name: Build the exec2 test programs (native processes from native code)
+        run: |
+          set -euo pipefail
+          bin="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # API 29: posix_spawn and friends (added at API 28) are available.
+          "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
+            -o dist-exec/libexec2child.so tests/exec/exec2_child.c
+          "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
+            -o dist-exec/libexec2test.so tests/exec/exec2_test.c
+          echo "--- libexec2test.so UND imports ---"
+          "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexec2test.so | awk '$7 == "UND" && $8 != "" {print $8}' | sort -u
+
       - name: Cache d8
         id: r8
         uses: actions/cache@v4
