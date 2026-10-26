@@ -923,6 +923,8 @@ public class RecordActivity extends Activity {
         final CameraDevice[] device = new CameraDevice[1];
         final CameraCaptureSession[] session = new CameraCaptureSession[1];
         CountDownLatch opened = new CountDownLatch(1), configured = new CountDownLatch(1);
+        CountDownLatch closed = new CountDownLatch(1);
+        AtomicInteger closeCallbacks = new AtomicInteger();
         String id = ids[ids.length - 1];
         cm.openCamera(id, new CameraDevice.StateCallback() {
             @Override
@@ -940,6 +942,12 @@ public class RecordActivity extends Activity {
             public void onError(CameraDevice d, int error) {
                 say("recorder camera: open error " + error);
                 opened.countDown();
+            }
+
+            @Override
+            public void onClosed(CameraDevice d) {
+                closeCallbacks.incrementAndGet();
+                closed.countDown();
             }
         }, h);
         if (!opened.await(10, TimeUnit.SECONDS) || device[0] == null) {
@@ -1011,8 +1019,13 @@ public class RecordActivity extends Activity {
         long drainStopNs = System.nanoTime();
         r.release();
         device[0].close();
+        boolean closedBeforeQuit = closed.await(5, TimeUnit.SECONDS) && ht.isAlive()
+                && closeCallbacks.get() == 1;
         ht.quitSafely();
         ht.join(2000);
+        closedBeforeQuit &= closeCallbacks.get() == 1;
+        say("recorder camera close: onClosed exactly once before callback thread quit "
+                + closedBeforeQuit + ", callback thread stopped " + !ht.isAlive());
         say("recorder camera trace: request " + requestId + ", started " + captureStarted.get()
                 + ", completed " + captureCompleted.get() + ", failed " + captureFailed.get()
                 + ", buffers lost " + buffersLost.get() + ", source ns " + firstSourceNs.get() + ".." + lastSourceNs.get()
