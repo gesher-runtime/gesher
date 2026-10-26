@@ -1,0 +1,31 @@
+diff --git a/libartbase/base/scoped_flock.cc b/libartbase/base/scoped_flock.cc
+index 3f44e25..8417efd 100644
+--- a/libartbase/base/scoped_flock.cc
++++ b/libartbase/base/scoped_flock.cc
+@@ -35,7 +35,7 @@ using android::base::StringPrintf;  // NOLINT - StringPrintf is actually used
+ 
+ /* static */ ScopedFlock LockedFile::Open(const char* filename, int flags, bool block,
+                                           std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher has flock (LockFileEx, ADR 0057).
+   // TODO: implement file locking for Windows.
+   UNUSED(filename);
+   UNUSED(flags);
+@@ -102,7 +102,7 @@ using android::base::StringPrintf;  // NOLINT - StringPrintf is actually used
+ 
+ ScopedFlock LockedFile::DupOf(const int fd, const std::string& path,
+                               const bool read_only_mode, std::string* error_msg) {
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)  // Gesher has flock (LockFileEx, ADR 0057).
+   // TODO: implement file locking for Windows.
+   UNUSED(fd);
+   UNUSED(path);
+@@ -133,7 +133,7 @@ ScopedFlock LockedFile::DupOf(const int fd, const std::string& path,
+ }
+ 
+ void LockedFile::ReleaseLock() {
+-#ifndef _WIN32
++#if !defined(_WIN32) || defined(GESHER)
+   if (this->Fd() != -1) {
+     int flock_result = TEMP_FAILURE_RETRY(flock(this->Fd(), LOCK_UN));
+     if (flock_result != 0) {

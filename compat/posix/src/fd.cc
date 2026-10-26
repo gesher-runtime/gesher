@@ -174,7 +174,9 @@ int write(int fd, const void* buf, unsigned int count) {
   if (!gesher::LookupSocket(fd, &state)) {
     int result;
     if (gesher::WriteEventObject(fd, buf, count, &result)) return result;
-    return gesher::CrtResult(_write(fd, buf, count));
+    result = gesher::CrtResult(_write(fd, buf, count));
+    if (result > 0) gesher::InotifyNoteWrite(fd);
+    return result;
   }
   gesher::ws::Buffer buffer = {const_cast<void*>(buf), count};
   return static_cast<int>(gesher::ws::Send(state.socket, &buffer, 1, 0, nullptr));

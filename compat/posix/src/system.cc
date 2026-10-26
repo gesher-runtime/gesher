@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -320,6 +321,43 @@ int fcntl(int fd, int cmd, ...) {
     default:
       return errno = EINVAL, -1;
   }
+}
+
+// flock: a lock on one byte far beyond any file's data (LockFileEx locks
+// are mandatory on Windows, so a range over the data would block reads and
+// writes through other handles; this one blocks nothing but other locks).
+// Windows keeps a lock per open file object, as Linux keeps flock's per open
+// file description: dup()s share it, and it goes when the last handle closes.
+// A lock is converted by dropping it first, as Linux may.
+int flock(int fd, int operation) {
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  int kind = operation & ~LOCK_NB;
+  if (kind != LOCK_SH && kind != LOCK_EX && kind != LOCK_UN) return errno = EINVAL, -1;
+  if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
+  OVERLAPPED ov = {};
+  ov.Offset = 0xfffffffe;
+  ov.OffsetHigh = 0x7fffffff;
+  // Drop what this open file holds (none: ERROR_NOT_LOCKED).
+  UnlockFileEx(h, 0, 1, 0, &ov);
+  if (kind == LOCK_UN) return 0;
+  DWORD flags = (kind == LOCK_EX ? LOCKFILE_EXCLUSIVE_LOCK : 0) |
+                ((operation & LOCK_NB) != 0 ? LOCKFILE_FAIL_IMMEDIATELY : 0);
+  memset(&ov, 0, sizeof(ov));
+  ov.Offset = 0xfffffffe;
+  ov.OffsetHigh = 0x7fffffff;
+  if (!LockFileEx(h, flags, 0, 1, 0, &ov)) {
+    DWORD error = GetLastError();
+    if (error == ERROR_IO_PENDING) {  // an overlapped handle: wait for the lock
+      DWORD n;
+      if (GetOverlappedResult(h, &ov, &n, TRUE)) return 0;
+      error = GetLastError();
+    }
+    if (error == ERROR_LOCK_VIOLATION) return errno = EWOULDBLOCK, -1;
+    SetLastError(error);
+    return gesher::FailWithLastError();
+  }
+  return 0;
 }
 
 int posix_fadvise(int, off_t, off_t, int) { return 0; }
