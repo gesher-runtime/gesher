@@ -62,6 +62,23 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+ci 40365301342 at 9361064 was cancelled after media3's diagnostic run
+40359757434 exposed four early native/Looper/resource failures: the new
+readProcLines registration lacked its lightweight tests/dex-natives Process
+declaration. That declaration is now included. No green result is claimed.
+
+The same detailed daemon stack exposed missing Process.readProcFile in
+post-GC memory metrics. The follow-up implements readProcFile and
+parseProcLine using android-16.0.0_r4's common field/output-index contract,
+with dynamic file reads capped at the pinned 64 MiB limit. Both natives
+have matching lightweight stub declarations. Native3ProcessTest adds real
+procfs memory pages, long files, signed/full-width integers, floats, quoted
+and parenthesized strings, combined separators, character output, shared
+array indices, truncation, sanitized bytes and argument errors. Its own
+Java sources compile with JDK21; runtime/C++ verification requires CI.
+No AOSP build ran locally. The camera's pacing deficit remains unproven;
+no capture threshold was changed.
+
 New independent fix, pending CI: media3 exposed an UnsatisfiedLinkError for
 android.os.Process.readProcLines in ReferenceQueueDaemon. The explicit
 Process table now registers a parser over gesher-base's real procfs, matching
