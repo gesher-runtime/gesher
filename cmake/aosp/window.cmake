@@ -33,3 +33,11 @@ add_executable(windows4_input_pane_probe ${CMAKE_SOURCE_DIR}/probes/windows4/inp
 target_link_libraries(windows4_input_pane_probe PRIVATE gesher_window)
 target_compile_options(windows4_input_pane_probe PRIVATE -Wall -Wextra -Werror)
 set_target_properties(windows4_input_pane_probe PROPERTIES EXCLUDE_FROM_ALL ON)
+
+add_executable(windows4_text_store_probe
+  ${CMAKE_SOURCE_DIR}/probes/windows4/text_store_probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/input/text_store.cc)
+target_include_directories(windows4_text_store_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/input)
+target_compile_options(windows4_text_store_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(windows4_text_store_probe PRIVATE user32 ole32 uuid)
+set_target_properties(windows4_text_store_probe PROPERTIES EXCLUDE_FROM_ALL ON)
