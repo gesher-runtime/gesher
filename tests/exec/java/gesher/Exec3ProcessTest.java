@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.FutureTask;
@@ -116,5 +117,47 @@ public final class Exec3ProcessTest {
         } finally {
             sleep.destroyForcibly();
         }
+
+        Process shell = new ProcessBuilder("/system/bin/sh").start();
+        try {
+            BufferedReader input = new BufferedReader(new InputStreamReader(shell.getInputStream(), StandardCharsets.UTF_8));
+            OutputStream commands = shell.getOutputStream();
+            commands.write("trap 'echo idle-trap' USR1; echo ready:$$\n".getBytes(StandardCharsets.UTF_8));
+            commands.flush();
+            String ready = lineFromReader(input);
+            if (ready == null || !ready.startsWith("ready:")) throw new AssertionError(ready);
+            String pid = ready.substring("ready:".length());
+            Process signal = new ProcessBuilder("/system/bin/kill", "-USR1", pid).start();
+            signal.getOutputStream().close();
+            status(signal, 0);
+            String trapped = lineFromReader(input);
+            if (!"idle-trap".equals(trapped)) throw new AssertionError("idle trap: " + trapped);
+            commands.write("trap 'echo read-trap' USR1; echo reading; read value; echo read-status:$?\n".getBytes(StandardCharsets.UTF_8));
+            commands.flush();
+            if (!"reading".equals(lineFromReader(input))) throw new AssertionError("read did not start");
+            Thread.sleep(200); // Leave the read builtin waiting with its input still open.
+            signal = new ProcessBuilder("/system/bin/kill", "-USR1", pid).start();
+            signal.getOutputStream().close();
+            status(signal, 0);
+            if (!"read-trap".equals(lineFromReader(input)) ||
+                    !"read-status:138".equals(lineFromReader(input))) {
+                throw new AssertionError("read was not interrupted by its caught signal");
+            }
+            commands.write("echo alive; exit 0\n".getBytes(StandardCharsets.UTF_8));
+            commands.close();
+            if (!"alive".equals(lineFromReader(input))) throw new AssertionError("shell did not resume");
+            status(shell, 0);
+            System.out.println("Exec3ProcessTest PASS mailbox traps run while stdin is idle and interrupt the read builtin");
+        } finally {
+            shell.destroyForcibly();
+        }
+    }
+
+    private static String lineFromReader(BufferedReader input) throws Exception {
+        FutureTask<String> task = new FutureTask<>(input::readLine);
+        Thread thread = new Thread(task, "exec3-shell-trap-output");
+        thread.setDaemon(true);
+        thread.start();
+        return task.get(20, TimeUnit.SECONDS);
     }
 }

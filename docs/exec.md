@@ -273,6 +273,15 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   Six added exact cases cover groups, functions, pipelines, extra descriptors
   and close/restore. All 57 local cases pass, and those six outputs/statuses
   also match Bash in POSIX mode. Real-launcher CI for these fixes is pending.
+- Pipe input now checks queued mailbox traps while waiting for bytes, both at
+  the shell command loop and inside read. An interrupted read returns
+  128+signal; command-boundary traps use restored command I/O. A new ART test
+  sends SIGUSR1 from the real kill tool with stdin left open, then during a
+  blocked read, and expects immediate trap output/read status 138. Own-file
+  -Werror build, 57 local shell cases, Java compilation and the local JDK
+  incremental-stdin test pass. Real mailbox delivery and this test's on-device
+  variant remain pending CI. Native console input is not covered by the pipe
+  polling path. Active CI 40320290754 predates this change.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,

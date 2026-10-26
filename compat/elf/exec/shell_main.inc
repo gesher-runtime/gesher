@@ -131,8 +131,7 @@ int RunShell(const std::vector<std::string>& argv) {
     std::string pending;
     for (;;) {
       char c;
-      DWORD count = 0;
-      bool eof = !ReadFile(input, &c, 1, &count, nullptr) || !count;
+      bool eof = ReadByte(&sh, sh.io, input, &c, false) == 0;
       if (eof && pending.empty()) break;
       if (!eof) {
         pending += c;

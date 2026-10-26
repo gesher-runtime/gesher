@@ -34,6 +34,10 @@ fd duplication, background jobs/wait, common builtins and getopts. Exit traps
 run with the original status. Caught mailbox signals are queued without
 calling the parser from the mailbox thread and dispatched between commands.
 Default signals are forwarded to foreground children before shell exit.
+For synchronous pipe input, the command loop and read builtin check pending
+traps while waiting for bytes. A caught signal interrupts read with 128+signal
+and the main command loop keeps accepting input. Native console input does
+not use this pipe polling path.
 Persistent descriptors carry a generation in command I/O: an inherited exec
 redirect does not override a newer temporary group/function redirect. Scoped
 redirections restore their descriptors after the command, including nested
@@ -120,8 +124,9 @@ its Java/package/script checks alone do not establish on-device behavior.
   restoration have four added local checks; persistent descriptor scopes
   have six, also compared with a POSIX shell. Their real-launcher CI remains
   pending (57 local cases total).
-- Signal interruption while blocked reading input, real mailbox traps and
-  Process.destroy/destroyForcibly verification.
+- Real mailbox CI for idle pipe input and interrupted read, plus
+  Process.destroy/destroyForcibly verification. Native console interruption
+  remains unverified.
 - Shared-property ART/NDK CI proof, complete bionic serial encoding and waits,
   property permissions/notifications, logcat
   formats/filter/clear and real pm/am service calls.

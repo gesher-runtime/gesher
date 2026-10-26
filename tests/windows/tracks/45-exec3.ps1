@@ -23,7 +23,8 @@ Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, p
     'Exec3ProcessTest PASS destroyForcibly kills with status 137',
     'Exec3ProcessTest PASS kill sends SIGTERM through the native signal mailbox',
     'Exec3ProcessTest PASS cat preserves binary stdin and stdout',
-    'Exec3ProcessTest PASS sleep delays for the requested duration')
+    'Exec3ProcessTest PASS sleep delays for the requested duration',
+    'Exec3ProcessTest PASS mailbox traps run while stdin is idle and interrupt the read builtin')
 
 Check 'exec3: shared properties through Java, native ELF and tools (read-only, serials, persistence)' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
