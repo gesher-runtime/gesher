@@ -737,7 +737,15 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
 
 ### Status and next steps
 
-_Last updated 2026-10-26 (stopped by the coordinator)._
+_Last updated 2026-10-26 (continuation after handover)._
+
+- Read ci 40285714522's windows-2025 job log (121456663287): it ends with
+  `12 test(s) failed`. The dalvikvm and APK checks all call the missing
+  `android_get_device_api_level` and abort with exit -1073740791; the loader
+  names that unresolved function. Added the System V entry to the common shim,
+  reading `ro.build.version.sdk` through the existing property bridge for both
+  ABIs. The existing extras check compares it with that property. Not verified
+  yet: rerun full CI after merging the current integration branch.
 
 - Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
 - **ci 40263281040** (commit before the setjmp fix, both runners): build
