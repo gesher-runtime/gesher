@@ -12,7 +12,7 @@ struct TextDocument {
   bool reversed = false;
 };
 struct DocumentEdit {
-  enum Kind { kReplace, kSelect, kCompositionRange, kCompositionEnd };
+  enum Kind { kReplace, kSelect, kCompositionRange, kCompositionEnd, kCompositionText };
   Kind kind = kReplace;
   std::u16string text;
   int32_t start = 0, end = 0;

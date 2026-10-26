@@ -139,8 +139,8 @@ void TestWindowsTextService(HWND window) {
   HRESULT result = FAILED(initialized) ? initialized : run();
   bool replaced = false, ended = false;
   for (const auto& edit : edits) {
-    replaced |= edit.kind == DocumentEdit::kReplace && edit.text == u"\u65e5\u672c" && edit.start == 7 && edit.end == 11;
-    ended |= edit.kind == DocumentEdit::kCompositionEnd;
+    replaced |= edit.kind == DocumentEdit::kCompositionText && edit.text == u"\u65e5\u672c" && edit.start == 7 && edit.end == 11;
+    ended |= edit.kind == DocumentEdit::kCompositionEnd && edit.text == u"\u65e5\u672c";
   }
   Check(SUCCEEDED(result) && replaced && ended,
         "Windows TSF delivers reconversion replacement and composition completion to the ACP document");

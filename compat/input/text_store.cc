@@ -194,14 +194,36 @@ HRESULT TextStore::SetText(DWORD, LONG start, LONG end, const WCHAR* text, ULONG
   if (revision_ == INT_MAX) return E_FAIL;
   if (!Range(start, end) || count > LONG_MAX || document_.text.size() - (end - start) > LONG_MAX - count)
     return TS_E_INVALIDPOS;
+  bool composition_text = composing_ && start >= composition_start_ && end <= composition_end_;
+  if (composing_ && !composition_text && revision_ >= INT_MAX - 1) return E_FAIL;
+  LONG old_composition_start = composition_start_, old_composition_end = composition_end_;
+  if (composing_) {
+    auto adjust = [&](LONG position, bool after) -> LONG {
+      if (position < start) return position;
+      if (position > end) return position - (end - start) + static_cast<LONG>(count);
+      return start + (after ? static_cast<LONG>(count) : 0);
+    };
+    composition_start_ = adjust(composition_start_, false);
+    composition_end_ = adjust(composition_end_, true);
+  }
   std::u16string inserted;
   if (count != 0) inserted.assign(text, text + count);
   document_.text.replace(start, end - start, inserted);
   document_.start = document_.end = start + static_cast<LONG>(count);
   document_.reversed = false;
   *change = TS_TEXTCHANGE{start, end, document_.end};
-  DocumentEdit edit; edit.kind = DocumentEdit::kReplace; edit.start = start; edit.end = end;
-  edit.text = std::move(inserted); Publish(std::move(edit)); return S_OK;
+  DocumentEdit edit;
+  edit.kind = composition_text ? DocumentEdit::kCompositionText : DocumentEdit::kReplace;
+  edit.start = composition_text ? old_composition_start : start;
+  edit.end = composition_text ? old_composition_end : end;
+  edit.text = composition_text ? document_.text.substr(composition_start_, composition_end_ - composition_start_)
+                               : std::move(inserted);
+  Publish(std::move(edit));
+  if (composing_ && !composition_text) {
+    DocumentEdit range; range.kind = DocumentEdit::kCompositionRange;
+    range.start = composition_start_; range.end = composition_end_; Publish(std::move(range));
+  }
+  return S_OK;
 }
 HRESULT TextStore::InsertTextAtSelection(DWORD flags, const WCHAR* text, ULONG count,
                                        LONG* start, LONG* end, TS_TEXTCHANGE* change) {
@@ -255,9 +277,25 @@ HRESULT TextStore::GetACPFromPoint(TsViewCookie view, const POINT* point, DWORD,
   if (!PtInRect(&caret_, *point)) return TS_E_NOLAYOUT;
   *position = document_.end; return S_OK;
 }
-HRESULT TextStore::OnStartComposition(ITfCompositionView*, BOOL* okay) {
+HRESULT TextStore::OnStartComposition(ITfCompositionView* composition, BOOL* okay) {
   if (!okay) return E_POINTER;
-  *okay = document_.available; composing_ = *okay != FALSE; return S_OK;
+  *okay = document_.available;
+  composition_start_ = document_.start; composition_end_ = document_.end;
+  if (*okay && composition != nullptr) {
+    ITfRange* range = nullptr; ITfRangeACP* acp = nullptr;
+    LONG start = 0, length = 0;
+    HRESULT result = composition->GetRange(&range);
+    if (SUCCEEDED(result)) result = range->QueryInterface(IID_ITfRangeACP, reinterpret_cast<void**>(&acp));
+    if (SUCCEEDED(result)) result = acp->GetExtent(&start, &length);
+    bool valid = SUCCEEDED(result) && start >= 0 && length >= 0
+        && static_cast<size_t>(start) <= document_.text.size()
+        && static_cast<size_t>(length) <= document_.text.size() - start;
+    if (valid) { composition_start_ = start; composition_end_ = start + length; }
+    else *okay = FALSE;
+    if (acp != nullptr) acp->Release();
+    if (range != nullptr) range->Release();
+  }
+  composing_ = *okay != FALSE; return S_OK;
 }
 HRESULT TextStore::OnUpdateComposition(ITfCompositionView* composition, ITfRange* range) {
   if (!composing_) return S_OK;
@@ -271,6 +309,7 @@ HRESULT TextStore::OnUpdateComposition(ITfCompositionView* composition, ITfRange
         static_cast<size_t>(start) <= document_.text.size() &&
         static_cast<size_t>(length) <= document_.text.size() - start && revision_ != INT_MAX) {
       DocumentEdit edit; edit.kind = DocumentEdit::kCompositionRange; edit.start = start; edit.end = start + length;
+      composition_start_ = start; composition_end_ = start + length;
       Publish(std::move(edit));
     }
     acp->Release();
@@ -282,7 +321,12 @@ HRESULT TextStore::OnEndComposition(ITfCompositionView*) {
   if (composing_) {
     composing_ = false;
     if (revision_ == INT_MAX) return E_FAIL;
-    DocumentEdit edit; edit.kind = DocumentEdit::kCompositionEnd; Publish(std::move(edit));
+    DocumentEdit edit; edit.kind = DocumentEdit::kCompositionEnd;
+    if (Range(composition_start_, composition_end_)) {
+      edit.start = composition_start_; edit.end = composition_end_;
+      edit.text = document_.text.substr(composition_start_, composition_end_ - composition_start_);
+    }
+    Publish(std::move(edit));
   }
   return S_OK;
 }

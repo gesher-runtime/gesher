@@ -713,12 +713,30 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
             switch (kind) {
                 case WindowInput.DOCUMENT_REPLACE:
                     ic.replaceText(command, start, end, text, 1, null); break;
+                case WindowInput.DOCUMENT_COMPOSITION_TEXT:
+                    // replaceText commits/removes composing spans. TSF text inside
+                    // its active composition must reach the real composing API.
+                    ic.setComposingRegion(command, start, end);
+                    ic.setComposingText(command, text, 1);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = true; w.composeStart = start; }
+                    }
+                    break;
                 case WindowInput.DOCUMENT_SELECT:
                     ic.setSelection(command, start, end); break;
                 case WindowInput.DOCUMENT_COMPOSITION_RANGE:
-                    ic.setComposingRegion(command, start, end); break;
+                    ic.setComposingRegion(command, start, end);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = end > start; w.composeStart = start; }
+                    }
+                    break;
                 case WindowInput.DOCUMENT_COMPOSITION_END:
-                    ic.finishComposingText(command); break;
+                    log("commit \"" + escape(text) + "\"");
+                    ic.finishComposingText(command);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = false; w.composeStart = -1; }
+                    }
+                    break;
                 default: input.finishTextEvent(seq); return;
             }
             AndroidFuture<Integer> applied = new AndroidFuture<>();

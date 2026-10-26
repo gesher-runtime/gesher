@@ -72,6 +72,7 @@ class TextStore final : public ITextStoreACP, public ITfContextOwnerCompositionS
   DWORD sink_mask_ = 0, lock_ = 0, pending_lock_ = 0;
   bool pumping_ = false, composing_ = false, pending_layout_ = false;
   int32_t revision_ = 0;
+  LONG composition_start_ = 0, composition_end_ = 0;
   TextDocument document_;
   std::optional<TextDocument> pending_document_;
   RECT caret_ = {};
