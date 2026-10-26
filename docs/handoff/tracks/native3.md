@@ -62,6 +62,18 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+The Unicode/Process stage below is merged as integration 117629e. This
+continuation starts from 7826cbe (the following README-only milestone).
+Next scope: replace approximate wcwidth/wcswidth with the pinned bionic
+decision order and ICU data. The initial CI-only reference uses the locked
+ICU4X wrapper, every code point/four invalid values and 33 targeted rows.
+No production-width verification is claimed yet. Preserve all existing
+Unicode classification/case digests and their separate provenance.
+
+Also retain the observed Windows ART global ThreadCpuNanoTime() unimplemented
+diagnostic as an open native/clock-consumer gap. Thread::GetCpuNanoTime()
+already has a supported thread-clock implementation; these are distinct.
+
 Verified Unicode/Process stage: full ci 40386670586 at
 6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
 integration 634a273. Every job personally read (22 success/six skipped),

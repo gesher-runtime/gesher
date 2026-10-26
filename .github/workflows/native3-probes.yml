@@ -44,6 +44,11 @@ jobs:
           cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml > unicode-reference.log
           cat unicode-reference.log
           python3 probes/native3/unicode/verify.py unicode-reference.log
+      - name: Compute initial pinned bionic character-width reference
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml -- --width
 
   build:
     runs-on: ubuntu-24.04

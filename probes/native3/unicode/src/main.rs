@@ -5,6 +5,7 @@
 // reference exercises the wctype contract only.
 #[allow(dead_code)]
 mod bionic_icu4x;
+mod width;
 
 const NAMES: [&str; 14] = [
     "alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print",
@@ -54,6 +55,10 @@ fn values(c: u32) -> [u32; 14] {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--width") {
+        width::print_reference();
+        return;
+    }
     let extra = [0x110000, 0x7fffffff, 0x80000000, 0xffffffff];
     let mut hashes = [0xcbf29ce484222325u64; 14];
     for cp in (0..=0x10ffff).chain(extra) {
