@@ -221,6 +221,16 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
+- Running full CI **40402212195** at
+  **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
+  117629e and the original 36-check/recording/boot gates. Media
+  **121853665655** passes in 52 seconds: ffmpeg was absent, canonical HTTPS
+  preparation actually downloaded 62.8 MB in three seconds, installed the
+  same 6.1.1-3ubuntu5 version, ran all three unchanged generators and built
+  all three APKs. Package **121854114264** passes installed oatdump,
+  window/input and full uninstall cleanup. Windows **121854138856** (2022)
+  / **121854139106** (2025) and both e2e jobs are active; no runtime or
+  internal JNI result is claimed yet.
 - Diagnostic full CI **40398992353** at
   **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
   117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase
@@ -371,10 +381,9 @@ the microphone (looped, from its start each time recording starts);
   session/Windows controls and permission/user filtering remain explicit
   follow-ups. services3 owns advanced Camera2 contracts. No broad roadmap
   completion box is ticked; the coordinator transfers the 313 entry owners.
-- Next: full CI of the approved JNI entry/body/exit trace, atomic
-  request-selection repair and current integration. Preserve collection
-  duration and every acceptance threshold; inspect phase evidence before
-  selecting a runtime fix.
+- Next: read both runtime logs, internal JNI entry/body/exit phases and
+  e2e results in 40402212195, then select a source fix from that evidence.
+  Preserve collection duration and every acceptance threshold.
   No integration/main merge or release action here.
 
 ### Done and verified
