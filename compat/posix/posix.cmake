@@ -16,6 +16,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/internal.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/libcap.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/links.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/logging.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/memalign.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/mman.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/misc.cc
@@ -32,6 +33,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/system_properties.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/thread_register.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/unistd.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/users.cc

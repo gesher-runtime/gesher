@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.exec3target" android:versionCode="1" android:versionName="1.0">
+    <application android:label="Exec3 command target" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name="gesher.TargetActivity" android:exported="true" />
+        <receiver android:name="gesher.TargetReceiver" android:exported="true">
+            <intent-filter><action android:name="com.gesher.exec3.COMMAND_TEST" /></intent-filter>
+        </receiver>
+    </application>
+</manifest>

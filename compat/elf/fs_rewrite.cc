@@ -184,7 +184,7 @@ void WriteI32(uint8_t* p, int32_t v) { std::memcpy(p, &v, 4); }
 // instruction. Sets *adj (the register to add the thread pointer to) and
 // *restore (whether to subtract it again afterwards). Returns nullptr if it
 // can, else the reason.
-const char* PlanStub(const X86Insn& in, int* adj, bool* restore) {
+const char* PlanStub(const X86Insn& in, int* adj, bool* restore, bool* writes_sp = nullptr) {
   if (in.vex) return "a VEX/EVEX instruction with a register-based %fs operand";
   if (in.addrsize) return "a 32-bit address-size %fs operand";
   int base = in.base(), index = in.index();
@@ -250,6 +250,14 @@ const char* PlanStub(const X86Insn& in, int* adj, bool* restore) {
     return "an unsupported opcode";
   }
   size = byte_op ? 8 : (in.rex & 8) ? 64 : in.opsize ? 16 : 32;
+  if (writes_sp) {
+    bool reg_operand = kind != kNoRegWrite ||
+        (in.map == 0 && (op <= 0x3B || op == 0x84 || op == 0x85 || op == 0x88 || op == 0x89));
+    bool byte_register = byte_op || (kind == kNoRegWrite && reg_operand && (op & 1) == 0);
+    int operand = in.reg();
+    if (byte_register && !in.rex && operand >= 4 && operand < 8) operand -= 4;
+    *writes_sp = reg_operand && operand == 4;
+  }
 
   *restore = true;
   if (kind != kNoRegWrite) {
@@ -263,6 +271,61 @@ const char* PlanStub(const X86Insn& in, int* adj, bool* restore) {
     }
   }
   return nullptr;
+}
+
+const char* PlanAbsoluteStub(const X86Insn& in, int* scratch) {
+  if (in.vex) return "a VEX/EVEX local-exec TLS instruction";
+  if (in.addrsize) return "a 32-bit address-size local-exec TLS instruction";
+  // SIMD and x87 memory operands do not use a GPR for their value. Keep their
+  // original instruction bytes and preserve the scratch GPR around them.
+  if ((in.map == 0 && in.opcode >= 0xD8 && in.opcode <= 0xDF) ||
+      (in.map == 1 && (in.opcode == 0x10 || in.opcode == 0x11 || in.opcode == 0x28 ||
+                      in.opcode == 0x29 || in.opcode == 0x2E || in.opcode == 0x2F ||
+                      in.opcode == 0x6E || in.opcode == 0x6F || in.opcode == 0x7E ||
+                      in.opcode == 0x7F || (in.opcode >= 0x54 && in.opcode <= 0x5F)))) {
+    *scratch = 0;
+    return nullptr;
+  }
+  // Avoid both the ModRM register and its legacy high-byte alias.
+  *scratch = (in.reg() & 3) == 0 ? 1 : 0;
+  if (in.map == 1 && (in.opcode == 0x2C || in.opcode == 0x2D))
+    return in.reg() == 4 ? "a local-exec TLS conversion using the stack pointer" : nullptr;
+  X86Insn replay = in;
+  replay.rex &= ~1;
+  replay.modrm = static_cast<uint8_t>((in.modrm & 0x38) | 0x84); // mod=2, SIB
+  replay.sib = static_cast<uint8_t>(0x20 | *scratch); // no index, scratch base
+  int adjusted = -1;
+  bool restore = true, writes_sp = false;
+  const char* why = PlanStub(replay, &adjusted, &restore, &writes_sp);
+  if (why) return why;
+  return writes_sp ? "a local-exec TLS instruction using the stack pointer" : nullptr;
+}
+
+uint8_t* EmitAbsoluteStub(uint8_t* out, const uint8_t* site, const X86Insn& in,
+                          int scratch, int32_t slot) {
+  const uint8_t down[] = {0x48, 0x8D, 0x64, 0x24, 0x80};
+  const uint8_t up[] = {0x48, 0x8D, 0xA4, 0x24, 0x80, 0, 0, 0};
+  std::memcpy(out, down, sizeof(down));
+  out += sizeof(down);
+  *out++ = static_cast<uint8_t>(0x50 + scratch); // push below the red zone
+  *out++ = 0x65;
+  *out++ = 0x48;
+  *out++ = 0x8B;
+  *out++ = static_cast<uint8_t>((scratch << 3) | 4);
+  *out++ = 0x25;
+  WriteI32(out, slot);
+  out += 4; // mov %gs:slot,scratch; no flags changed
+  for (size_t i = 0; i < in.length; ++i) {
+    if (i < in.opcode_off && site[i] == 0x64) continue;
+    uint8_t byte = site[i];
+    if (i < in.opcode_off && (byte & 0xF0) == 0x40) byte &= ~1;
+    if (i == in.modrm_off) byte = static_cast<uint8_t>((byte & 0x38) | 0x84);
+    if (i == in.modrm_off + 1) byte = static_cast<uint8_t>(0x20 | scratch);
+    *out++ = byte;
+  }
+  *out++ = static_cast<uint8_t>(0x58 + scratch);
+  std::memcpy(out, up, sizeof(up));
+  return out + sizeof(up);
 }
 
 // Emits `lea -128(%rsp),%rsp; pushfq; add|sub %gs:slot,%reg; popfq;
@@ -422,7 +485,8 @@ bool RegionsFromEhFrameHdr(const uint8_t* hdr, uint8_t* load_bias, std::vector<R
 }  // namespace
 
 bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
-                       uint8_t* load_bias, FsRewriteStats* stats, std::string* error) {
+                       uint8_t* load_bias, FsRewriteStats* stats, std::string* error,
+                       size_t executable_tls_size) {
   *stats = FsRewriteStats{};
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(file);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(file + ehdr->e_phoff);
@@ -557,6 +621,35 @@ bool RewriteFsAccesses(const char* name, const uint8_t* file, size_t file_size,
       }
       if (in.absolute()) {
         int32_t disp = ReadI32(site + in.disp_off);
+        if (disp < 0 && static_cast<uint64_t>(-static_cast<int64_t>(disp)) <= executable_tls_size) {
+          int scratch = -1;
+          if (const char* why = PlanAbsoluteStub(in, &scratch)) {
+            unsupported(site, in, why);
+            continue;
+          }
+          if (!need_slot()) return false;
+          uint8_t* stub = alloc_stub(kMaxStub);
+          if (!stub) {
+            if (error) *error = std::string(name) + ": out of memory for local-exec TLS stubs";
+            return false;
+          }
+          uint8_t* tail = EmitAbsoluteStub(stub, site, in, scratch, slot);
+          const uint8_t jump[] = {0xFF, 0x25, 0, 0, 0, 0};
+          std::memcpy(tail, jump, sizeof(jump));
+          uint64_t back = reinterpret_cast<uint64_t>(site + in.length);
+          std::memcpy(tail + sizeof(jump), &back, 8);
+          ++stats->stubbed;
+          uintptr_t next = reinterpret_cast<uintptr_t>(site) + 5;
+          if (in.length >= 5 && Rel32Reachable(next, reinterpret_cast<uintptr_t>(stub))) {
+            site[0] = 0xE9;
+            WriteI32(site + 1, static_cast<int32_t>(reinterpret_cast<intptr_t>(stub) -
+                                                  static_cast<intptr_t>(next)));
+            for (size_t i = 5; i < in.length; ++i) site[i] = 0xCC;
+          } else {
+            add_trap(site, in, reinterpret_cast<uintptr_t>(stub), nullptr);
+          }
+          continue;
+        }
         int32_t to;
         if (disp == kBionicStackGuard) {
           to = kTebSelf;

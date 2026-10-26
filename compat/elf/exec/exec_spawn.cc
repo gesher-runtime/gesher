@@ -60,7 +60,7 @@ bool IsShName(const std::string& name) {
 // The tool name of a bare name or a /system/bin path, or "".
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
-                                       "ps",      "pm",      "kill",   "sleep", "toybox"};
+                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {
@@ -77,10 +77,13 @@ std::string ToolName(const std::string& name) {
 
 // The directories of PATH: ';'-separated on Windows; a Linux-style ':' list
 // is accepted too (a drive letter's colon is not a separator there).
-std::vector<std::wstring> PathDirectories() {
-  std::vector<std::wstring> dirs;
+std::wstring ProcessPath() {
   const wchar_t* env = _wgetenv(L"PATH");
-  std::wstring path = env != nullptr ? env : L"";
+  return env != nullptr ? env : L"";
+}
+
+std::vector<std::wstring> PathDirectories(const std::wstring& path) {
+  std::vector<std::wstring> dirs;
   wchar_t sep = path.find(L';') != std::wstring::npos ? L';' : L':';
   size_t start = 0;
   while (start <= path.size()) {
@@ -118,7 +121,8 @@ int Finish(Launch* launch) {
   return launch->command_line.size() + 1 > kMaxCommandLine ? kE2BIG : 0;
 }
 
-int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch);
+int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch,
+              const std::wstring& path_value);
 
 // The launch for the file found at `path`, run as `argv`.
 int LaunchFile(const std::wstring& path, const std::string& head, const std::vector<std::string>& argv,
@@ -190,7 +194,7 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
     args.push_back(argv[0]);
     args.insert(args.end(), argv.begin() + 1, argv.end());
     Launch inner;
-    int r = PrepareAt(args, dir, depth + 1, &inner);
+    int r = PrepareAt(args, dir, depth + 1, &inner, ProcessPath());
     if (r != 0) return r == kENOENT ? kENOENT : kENOEXEC;
     inner.kind = "script";
     *launch = inner;
@@ -331,7 +335,7 @@ std::wstring LauncherPath() {
 namespace {
 
 int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv, const std::string& dir,
-                   int depth, bool search, Launch* launch) {
+                   int depth, bool search, Launch* launch, const std::wstring& path_value) {
   if (argv.empty() || prog.empty()) return kENOENT;
   if (IsShName(prog)) {
     launch->kind = "sh";
@@ -366,7 +370,7 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
   bool has_ext = !Extension(Widen(prog)).empty();
   static const wchar_t* const kExtensions[] = {L"", L".exe", L".com", L".cmd", L".bat"};
   int seen = kENOENT;
-  for (const std::wstring& d : PathDirectories()) {
+  for (const std::wstring& d : PathDirectories(path_value)) {
     for (const wchar_t* e : kExtensions) {
       if (has_ext && *e != 0) break;
       std::wstring candidate = d;
@@ -386,26 +390,50 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
   return seen;
 }
 
-int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch) {
+int PrepareAt(const std::vector<std::string>& argv, const std::string& dir, int depth, Launch* launch,
+              const std::wstring& path_value) {
   if (argv.empty()) return kENOENT;
-  return PrepareProgram(argv[0], argv, dir, depth, true, launch);
+  return PrepareProgram(argv[0], argv, dir, depth, true, launch, path_value);
 }
 
 }  // namespace
 
 int PrepareLaunch(const std::vector<std::string>& argv, const std::string& dir, Launch* launch) {
-  return PrepareAt(argv, dir, 0, launch);
+  return PrepareAt(argv, dir, 0, launch, ProcessPath());
+}
+
+int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string& dir, const std::string& path,
+                        Launch* launch) {
+  return PrepareAt(argv, dir, 0, launch, Widen(path));
+}
+
+std::wstring FindInPath(const std::string& name, const std::string& path) {
+  if (name.empty() || IsShName(name) || !ToolName(name).empty()) return L"";
+  bool has_ext = !Extension(Widen(name)).empty();
+  static const wchar_t* const kExtensions[] = {L"", L".exe", L".com", L".cmd", L".bat"};
+  for (const std::wstring& d : PathDirectories(Widen(path))) {
+    for (const wchar_t* e : kExtensions) {
+      if (has_ext && *e != 0) break;
+      std::wstring candidate = d;
+      if (!candidate.empty() && candidate.back() != L'\\' && candidate.back() != L'/') candidate += L'\\';
+      candidate += Widen(name) + e;
+      std::wstring full = WindowsPath(Narrow(candidate));
+      DWORD attributes = GetFileAttributesW(full.c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return full;
+    }
+  }
+  return L"";
 }
 
 int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
                          const std::string& dir, bool search_path, Launch* launch) {
-  return PrepareProgram(program, argv, dir, 0, search_path, launch);
+  return PrepareProgram(program, argv, dir, 0, search_path, launch, ProcessPath());
 }
 
 bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
-                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info) {
+                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags) {
   int count = 3;
   for (const ChildFd& f : fds) {
     if (f.fd >= count) count = f.fd + 1;
@@ -488,7 +516,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   si.StartupInfo.lpReserved2 = block.data();
   si.lpAttributeList = attributes;
   std::wstring cmd = launch.command_line;
-  DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
+  DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | extra_flags;
   BOOL ok = CreateProcessW(launch.application.c_str(), cmd.data(), nullptr, nullptr, inherit.empty() ? FALSE : TRUE,
                            flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(),
                            &si.StartupInfo, info);
