@@ -170,6 +170,23 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
 $geoScript = Join-Path $root 'devices-geocode.ps1'
 Set-Content -Path $geoScript -Encoding UTF8 -Value @'
+$ErrorActionPreference = 'Stop'
+# Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the
+# completed answer. This isolated probe owns only its current process.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class GesherGeocoderProbeExit {
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  static extern bool TerminateProcess(IntPtr process, uint code);
+  public static void Exit(uint code) {
+    if (!TerminateProcess(GetCurrentProcess(), code))
+      throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  }
+}
+"@
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 [Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
@@ -179,11 +196,11 @@ try {
   [Console]::Out.WriteLine('status: ' + $t.Result.Status)
   [Console]::Out.Flush()
   # WinRT/COM teardown can keep PowerShell alive after the genuine answer.
-  [Environment]::Exit(0)
+  [GesherGeocoderProbeExit]::Exit(0)
 } catch {
   [Console]::Out.WriteLine('error: ' + $_.Exception.Message)
   [Console]::Out.Flush()
-  [Environment]::Exit(1)
+  [GesherGeocoderProbeExit]::Exit(1)
 }
 '@
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
