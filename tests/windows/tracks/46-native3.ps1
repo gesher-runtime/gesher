@@ -22,6 +22,13 @@ $n3Width = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../../probes/na
 Check 'native3: wcwidth matches pinned bionic ICU4X for every code point and signed invalid input' {
   N2Run "$n2Dir/native3_unicode_test.exe" @()
 } @("HOST_WIDTH wcwidth $($n3Width.wcwidth)")
+Check 'native3: ART CPU clocks measure the real caller and process, including a busy worker' {
+  N2Run "$n2Dir/native3_cpu_clock_test.exe" @()
+} @('PASS  native3 clocks: ART current-thread CPU time matches GetThreadTimes',
+  'PASS  native3 clocks: ART process CPU time matches GetProcessTimes',
+  'PASS  native3 clocks: a busy worker has its own measured CPU time',
+  'PASS  native3 clocks: the waiting caller keeps its own CPU clock while another thread runs',
+  'PASS  native3 clocks: the process CPU clock includes worker CPU time', '0 test(s) failed')
 Check 'native3: Process proc natives use real procfs, full-width values and the Android field format' {
   N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$n3Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native3ProcessTest',
