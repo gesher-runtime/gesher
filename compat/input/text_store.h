@@ -21,6 +21,7 @@ class TextStore final : public ITextStoreACP, public ITfContextOwnerCompositionS
   TextStore(HWND window, Emit emit, Schedule schedule);
   void Update(TextDocument document);
   void Caret(const RECT& screen);
+  void Geometry(TextGeometry geometry);
   void Pump();
   void Disconnect();
 
@@ -62,6 +63,8 @@ class TextStore final : public ITextStoreACP, public ITfContextOwnerCompositionS
   bool ReadLock() const;
   bool WriteLock() const;
   bool Range(LONG, LONG) const;
+  bool FitsReplacement(LONG, LONG, ULONG) const;
+  bool GeometryMatches() const;
   void Publish(DocumentEdit);
   void Apply(TextDocument);
   HWND window_;
@@ -74,6 +77,7 @@ class TextStore final : public ITextStoreACP, public ITfContextOwnerCompositionS
   int32_t revision_ = 0;
   LONG composition_start_ = 0, composition_end_ = 0;
   TextDocument document_;
+  TextGeometry geometry_;
   std::optional<TextDocument> pending_document_;
   RECT caret_ = {};
 };

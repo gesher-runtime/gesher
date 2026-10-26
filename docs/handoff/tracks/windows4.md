@@ -340,3 +340,29 @@ offsets, partial composition updates and the final native commit. The real
 Windows service/production-IME probes still pass locally under g++ Werror.
 Actual Microsoft composing spans and candidate geometry need fresh CI; the
 existing real-IME assertions and thresholds are retained.
+
+CI-only native validation is now mandatory; no new local C/C++ compilation
+will run. All local before/after observations above predate that rule. The
+standalone windows4-probes workflow compiles only Gesher-owned sources with
+the pinned llvm-mingw and production Werror/no-exceptions flags, then runs
+the real COM/TSF fixtures on Windows 2022 and 2025. It has independent
+concurrency and does not fetch/build AOSP. Its window fixture explicitly
+uses the production HWND/COM/condition-variable queue with eventfd disabled;
+the full CI still validates real gesher-base/eventfd and Android integration.
+
+Prepared source, not yet verified: composing-character geometry now comes
+from actual CursorAnchorInfo bounds, with editor epoch and exact text
+identity. The ACP store unions measured character rectangles, maps them to
+screen coordinates, clips them and hit-tests actual characters; missing or
+stale measurements return TS_E_NOLAYOUT. No invented caret rectangle stands
+in for a text range. CursorAnchorInfo work also rejects old editor epochs.
+The native fixture adds measured extents/hit testing and stale-text cases.
+Replacement limits now include the ExtractedText offset without overflow.
+
+Independent review found a partial-composition cursor mismatch in 451a41b:
+replacing the middle of a composition published its full text through
+setComposingText (which moves to the composition end), while native ACP had
+placed the caret after the inserted substring. The corrected source emits
+an additional ordered selection transaction only when needed, with revision
+capacity checked before mutation. A native partial-edit fixture is prepared;
+actual InputConnection coverage and CI results remain pending.

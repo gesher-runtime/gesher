@@ -61,8 +61,10 @@ owner teardown. A real EditText fixture exercises both process modes in the
 next CI; Java syntax passes against saved framework/core classes. TSF key
 filtering runs before TranslateMessage queues character messages; existing
 IMM32, password/number, caret and action paths still need full regression CI.
-Only caret geometry is defined; other range geometry returns
-TS_E_NOLAYOUT, and rich formatting/embedded objects are explicitly unsupported.
+Caret geometry and actual CursorAnchorInfo composing-character bounds are
+defined. Measured ranges are accepted only for matching editor epoch/text,
+with screen mapping, clipping and hit testing; missing/stale measurements
+return TS_E_NOLAYOUT. Rich formatting/embedded objects are unsupported.
 See [RequestLock](https://learn.microsoft.com/en-us/windows/win32/api/textstor/nf-textstor-itextstoreacp-requestlock)
 for notification/reentrancy requirements. No TSF behavior is CI verified.
 Candidate-window discovery remains unimplemented.

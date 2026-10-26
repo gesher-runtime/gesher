@@ -59,6 +59,7 @@ void TextService::Retire() {
 }
 void TextService::Update(TextDocument document) { if (!retired_) store_->Update(std::move(document)); }
 void TextService::Caret(const RECT& screen) { if (!retired_) store_->Caret(screen); }
+void TextService::Geometry(TextGeometry geometry) { if (!retired_) store_->Geometry(std::move(geometry)); }
 void TextService::Pump() { if (!retired_) store_->Pump(); }
 void TextService::Focus(bool focused) { if (!retired_ && manager_ != nullptr) manager_->SetFocus(focused ? document_ : nullptr); }
 bool TextService::Key(UINT message, WPARAM key, LPARAM flags) {

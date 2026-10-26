@@ -166,8 +166,10 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
 
         @Override
         public void updateCursorAnchorInfo(CursorAnchorInfo info) {
-            Handler h = handler;
-            if (h != null && info != null) h.post(() -> applyCursorAnchorInfo(this, info));
+            Handler h;
+            int epoch;
+            synchronized (this) { h = handler; epoch = documentEpoch; }
+            if (h != null && info != null) h.post(() -> applyCursorAnchorInfo(this, info, epoch));
         }
 
         @Override
@@ -534,7 +536,8 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
     }
 
     /** The editor's cursor as the window's caret (on the window's thread). */
-    private void applyCursorAnchorInfo(Window w, CursorAnchorInfo info) {
+    private void applyCursorAnchorInfo(Window w, CursorAnchorInfo info, int epoch) {
+        synchronized (w) { if (w.documentEpoch != epoch) return; }
         float x = info.getInsertionMarkerHorizontal();
         float top = info.getInsertionMarkerTop();
         float bottom = info.getInsertionMarkerBottom();
@@ -561,6 +564,7 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         WindowInput in;
         boolean changed;
         synchronized (w) {
+            if (w.documentEpoch != epoch) return;
             in = w.input;
             int[] caret = {cx, cy, 2, height};
             changed = w.caret == null || !java.util.Arrays.equals(w.caret, caret);
@@ -568,6 +572,32 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         }
         if (in == null) return;
         in.setCaret(cx, cy, 2, height);
+        CharSequence composingText = info.getComposingText();
+        int compositionStart = info.getComposingTextStart();
+        if (composingText != null && compositionStart >= 0
+                && composingText.length() <= Integer.MAX_VALUE / 6) {
+            int[] rectangles = new int[composingText.length() * 6];
+            for (int i = 0; i < composingText.length(); i++) {
+                int at = i * 6;
+                rectangles[at] = -1;
+                RectF bounds = info.getCharacterBounds(compositionStart + i);
+                if (bounds == null) continue;
+                RectF mapped = new RectF(bounds);
+                if (m != null) m.mapRect(mapped);
+                if (!Float.isFinite(mapped.left) || !Float.isFinite(mapped.top)
+                        || !Float.isFinite(mapped.right) || !Float.isFinite(mapped.bottom)) continue;
+                rectangles[at] = compositionStart + i;
+                rectangles[at + 1] = (int) Math.floor(mapped.left) - origin[0];
+                rectangles[at + 2] = (int) Math.floor(mapped.top) - origin[1];
+                rectangles[at + 3] = (int) Math.ceil(mapped.right) - origin[0];
+                rectangles[at + 4] = (int) Math.ceil(mapped.bottom) - origin[1];
+                rectangles[at + 5] = (info.getCharacterBoundsFlags(compositionStart + i)
+                        & CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION) != 0 ? 1 : 0;
+            }
+            in.setTextGeometry(epoch, compositionStart, composingText.toString(), rectangles);
+        } else {
+            in.setTextGeometry(epoch, 0, "", new int[0]);
+        }
         if (changed) {
             log("caret in window \"" + w.title + "\" at " + cx + "," + cy + " height " + height);
         }

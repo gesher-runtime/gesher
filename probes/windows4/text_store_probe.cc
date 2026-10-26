@@ -2,6 +2,7 @@
 // and InputConnection integration are separate from these ACP invariants.
 #include <windows.h>
 #include <cstdio>
+#include <climits>
 #include <functional>
 #include <string>
 #include <vector>
@@ -209,6 +210,54 @@ int main() {
           && edits.back().kind == DocumentEdit::kCompositionEnd
           && edits.back().text == u"\u306b\u307b\u3093",
         "TSF composition transactions preserve full composing text, UTF-16 replacement ranges, offsets and the native final commit");
+  gesher::input::TextGeometry geometry; geometry.epoch = 3; geometry.start = 41;
+  geometry.text = u"\u306b\u307b\u3093";
+  geometry.characters = {{41, 20, 20, 30, 42, false}, {42, 30, 20, 40, 42, false},
+      {43, 40, 20, 50, 42, false}};
+  store->Geometry(geometry);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = TRUE;
+    POINT expected{20, 20}; ClientToScreen(window, &expected);
+    HRESULT result = store->GetTextExt(0, 1, 4, &rectangle, &clipped);
+    Check(SUCCEEDED(result) && !clipped && rectangle.left == expected.x && rectangle.top == expected.y
+            && rectangle.right == expected.x + 30 && rectangle.bottom == expected.y + 22,
+        "TSF composing-range extents use actual measured UTF-16 character bounds in screen coordinates");
+    POINT second{35, 30}; ClientToScreen(window, &second); LONG acp = -1;
+    Check(store->GetACPFromPoint(0, &second, 0, &acp) == S_OK && acp == 2,
+        "measured character hit testing preserves ExtractedText offset and ACP indices");
+    LONG first = 0, last = 0;
+    Check(store->QueryInsert(0, 0, static_cast<ULONG>(LONG_MAX), &first, &last) == TS_E_INVALIDPOS,
+        "replacement limits include the absolute extracted-text offset without integer overflow");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  geometry.text = u"old"; store->Geometry(geometry);
+  sink->action = [&](DWORD) -> HRESULT {
+    RECT rectangle{}; BOOL clipped = FALSE;
+    Check(store->GetTextExt(0, 1, 4, &rectangle, &clipped) == TS_E_NOLAYOUT,
+        "stale measured text never supplies invented TSF range geometry");
+    return S_OK;
+  };
+  sink->Lock(store); sink->action = nullptr;
+  TextDocument partial; partial.available = true; partial.epoch = 4;
+  partial.text = u"abcd"; partial.start = 0; partial.end = 4;
+  store->Update(partial);
+  size_t partial_edits = edits.size();
+  sink->action = [&](DWORD) -> HRESULT {
+    BOOL allowed = FALSE; TS_TEXTCHANGE change;
+    HRESULT result = store->OnStartComposition(nullptr, &allowed);
+    if (SUCCEEDED(result) && allowed) result = store->SetText(0, 1, 2, L"X", 1, &change);
+    if (SUCCEEDED(result)) result = store->OnEndComposition(nullptr);
+    return result;
+  };
+  HRESULT partial_result = sink->Lock(store); sink->action = nullptr;
+  Check(SUCCEEDED(partial_result) && edits.size() == partial_edits + 3
+          && edits[partial_edits].kind == DocumentEdit::kCompositionText
+          && edits[partial_edits].text == u"aXcd"
+          && edits[partial_edits + 1].kind == DocumentEdit::kSelect
+          && edits[partial_edits + 1].start == 2 && edits[partial_edits + 1].end == 2
+          && edits.back().kind == DocumentEdit::kCompositionEnd && edits.back().text == u"aXcd",
+        "a partial edit inside a TSF composition restores the native insertion caret after publishing the full composing text");
   Check(SUCCEEDED(store->UnadviseSink(sink)), "the actual sink can unsubscribe by canonical COM identity");
   store->Release(); sink->Release();
   TestWindowsTextService(window);

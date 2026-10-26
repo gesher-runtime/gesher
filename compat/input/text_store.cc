@@ -13,6 +13,7 @@ void TextStore::Disconnect() {
   emit_ = [](DocumentEdit) {};
   schedule_ = [] {};
   document_ = TextDocument{}; pending_document_.reset();
+  geometry_ = TextGeometry{};
   pending_lock_ = 0; pending_layout_ = false; composing_ = false;
   window_ = nullptr;
 }
@@ -62,6 +63,11 @@ bool TextStore::ReadLock() const { return (lock_ & TS_LF_READ) != 0; }
 bool TextStore::WriteLock() const { return (lock_ & TS_LF_READWRITE) == TS_LF_READWRITE; }
 bool TextStore::Range(LONG start, LONG end) const {
   return start >= 0 && end >= start && static_cast<size_t>(end) <= document_.text.size();
+}
+bool TextStore::FitsReplacement(LONG start, LONG end, ULONG count) const {
+  size_t maximum = static_cast<size_t>(LONG_MAX - document_.offset);
+  return Range(start, end) && count <= maximum
+      && document_.text.size() - (end - start) <= maximum - count;
 }
 HRESULT TextStore::RequestLock(DWORD flags, HRESULT* session) {
   if (session == nullptr) return E_POINTER;
@@ -116,7 +122,7 @@ void TextStore::Apply(TextDocument document) {
       || document.reversed != document_.reversed;
   bool status = document.available != document_.available;
   TS_TEXTCHANGE delta = {0, static_cast<LONG>(document_.text.size()), static_cast<LONG>(document.text.size())};
-  if (document.epoch != document_.epoch) { revision_ = 0; composing_ = false; }
+  if (document.epoch != document_.epoch) { revision_ = 0; composing_ = false; geometry_ = TextGeometry{}; }
   if (!document.available) composing_ = false;
   document_ = std::move(document);
   if (sink_ == nullptr) return;
@@ -128,6 +134,28 @@ void TextStore::Caret(const RECT& screen) {
   if (EqualRect(&caret_, &screen)) return;
   caret_ = screen;
   pending_layout_ = true; schedule_();
+}
+void TextStore::Geometry(TextGeometry geometry) {
+  if (geometry.epoch != document_.epoch || geometry.start < 0 || geometry.text.size() > LONG_MAX
+      || static_cast<size_t>(geometry.start) > LONG_MAX - geometry.text.size()) return;
+  int32_t previous = -1;
+  for (const auto& bounds : geometry.characters) {
+    if (bounds.index <= previous || bounds.index < geometry.start
+        || static_cast<size_t>(bounds.index - geometry.start) >= geometry.text.size()
+        || bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+    previous = bounds.index;
+  }
+  if (geometry_.epoch == geometry.epoch && geometry_.start == geometry.start
+      && geometry_.text == geometry.text && geometry_.characters == geometry.characters) return;
+  geometry_ = std::move(geometry);
+  pending_layout_ = true; schedule_();
+}
+bool TextStore::GeometryMatches() const {
+  if (!document_.available || geometry_.epoch != document_.epoch
+      || geometry_.start < document_.offset) return false;
+  size_t first = static_cast<size_t>(geometry_.start - document_.offset);
+  return first <= document_.text.size() && geometry_.text.size() <= document_.text.size() - first
+      && document_.text.compare(first, geometry_.text.size(), geometry_.text) == 0;
 }
 void TextStore::Publish(DocumentEdit edit) {
   edit.epoch = document_.epoch; edit.revision = ++revision_;
@@ -142,7 +170,7 @@ HRESULT TextStore::GetStatus(TS_STATUS* status) {
 HRESULT TextStore::QueryInsert(LONG start, LONG end, ULONG count, LONG* first, LONG* last) {
   if (!ReadLock()) return TS_E_NOLOCK;
   if (first == nullptr || last == nullptr) return E_POINTER;
-  if (!Range(start, end) || count > LONG_MAX || document_.text.size() - (end - start) > LONG_MAX - count)
+  if (!FitsReplacement(start, end, count))
     return TS_E_INVALIDPOS;
   *first = start; *last = end; return S_OK;
 }
@@ -192,20 +220,23 @@ HRESULT TextStore::SetText(DWORD, LONG start, LONG end, const WCHAR* text, ULONG
   if (change == nullptr || (count != 0 && text == nullptr)) return E_POINTER;
   if (!document_.available) return TS_E_READONLY;
   if (revision_ == INT_MAX) return E_FAIL;
-  if (!Range(start, end) || count > LONG_MAX || document_.text.size() - (end - start) > LONG_MAX - count)
+  if (!FitsReplacement(start, end, count))
     return TS_E_INVALIDPOS;
   bool composition_text = composing_ && start >= composition_start_ && end <= composition_end_;
-  if (composing_ && !composition_text && revision_ >= INT_MAX - 1) return E_FAIL;
   LONG old_composition_start = composition_start_, old_composition_end = composition_end_;
+  LONG new_composition_start = composition_start_, new_composition_end = composition_end_;
   if (composing_) {
     auto adjust = [&](LONG position, bool after) -> LONG {
       if (position < start) return position;
       if (position > end) return position - (end - start) + static_cast<LONG>(count);
       return start + (after ? static_cast<LONG>(count) : 0);
     };
-    composition_start_ = adjust(composition_start_, false);
-    composition_end_ = adjust(composition_end_, true);
+    new_composition_start = adjust(composition_start_, false);
+    new_composition_end = adjust(composition_end_, true);
   }
+  bool select_after_composing = composition_text && start + static_cast<LONG>(count) != new_composition_end;
+  if (composing_ && (!composition_text || select_after_composing) && revision_ >= INT_MAX - 1) return E_FAIL;
+  composition_start_ = new_composition_start; composition_end_ = new_composition_end;
   std::u16string inserted;
   if (count != 0) inserted.assign(text, text + count);
   document_.text.replace(start, end - start, inserted);
@@ -219,6 +250,10 @@ HRESULT TextStore::SetText(DWORD, LONG start, LONG end, const WCHAR* text, ULONG
   edit.text = composition_text ? document_.text.substr(composition_start_, composition_end_ - composition_start_)
                                : std::move(inserted);
   Publish(std::move(edit));
+  if (select_after_composing) {
+    DocumentEdit selection; selection.kind = DocumentEdit::kSelect;
+    selection.start = selection.end = document_.end; Publish(std::move(selection));
+  }
   if (composing_ && !composition_text) {
     DocumentEdit range; range.kind = DocumentEdit::kCompositionRange;
     range.start = composition_start_; range.end = composition_end_; Publish(std::move(range));
@@ -231,7 +266,7 @@ HRESULT TextStore::InsertTextAtSelection(DWORD flags, const WCHAR* text, ULONG c
   if ((flags & TS_IAS_NOQUERY) != 0 && (flags & TS_IAS_QUERYONLY) != 0) return E_INVALIDARG;
   if ((flags & ~(TS_IAS_NOQUERY | TS_IAS_QUERYONLY)) != 0) return E_INVALIDARG;
   if ((flags & TS_IAS_NOQUERY) == 0 && (start == nullptr || end == nullptr)) return E_POINTER;
-  if (count > LONG_MAX || document_.text.size() - (document_.end - document_.start) > LONG_MAX - count)
+  if (!FitsReplacement(document_.start, document_.end, count))
     return TS_E_INVALIDPOS;
   LONG cursor = document_.start + static_cast<LONG>(count);
   if (start != nullptr) *start = cursor;
@@ -267,15 +302,38 @@ HRESULT TextStore::GetTextExt(TsViewCookie view, LONG start, LONG end, RECT* rec
   if (!ReadLock()) return TS_E_NOLOCK;
   if (!rectangle || !clipped) return E_POINTER;
   if (view != 0 || !Range(start, end)) return TS_E_INVALIDPOS;
-  if (start != end || start != document_.end || caret_.bottom <= caret_.top) return TS_E_NOLAYOUT;
-  *rectangle = caret_; *clipped = FALSE; return S_OK;
+  if (start == end && start == document_.end && caret_.bottom > caret_.top) {
+    *rectangle = caret_; *clipped = FALSE; return S_OK;
+  }
+  if (start == end || !GeometryMatches()) return TS_E_NOLAYOUT;
+  LONG first = start + document_.offset, last = end + document_.offset;
+  auto character = std::lower_bound(geometry_.characters.begin(), geometry_.characters.end(), first,
+      [](const TextCharacterBounds& bounds, LONG index) { return bounds.index < index; });
+  RECT combined{}; bool cut = false;
+  for (LONG index = first; index < last; ++index, ++character) {
+    if (character == geometry_.characters.end() || character->index != index) return TS_E_NOLAYOUT;
+    RECT bounds{character->left, character->top, character->right, character->bottom};
+    if (index == first) combined = bounds; else UnionRect(&combined, &combined, &bounds);
+    cut |= character->clipped;
+  }
+  RECT client{}, visible{};
+  if (!GetClientRect(window_, &client) || !IntersectRect(&visible, &combined, &client)) return TS_E_NOLAYOUT;
+  cut |= !EqualRect(&visible, &combined);
+  MapWindowPoints(window_, nullptr, reinterpret_cast<POINT*>(&visible), 2);
+  *rectangle = visible; *clipped = cut; return S_OK;
 }
 HRESULT TextStore::GetACPFromPoint(TsViewCookie view, const POINT* point, DWORD, LONG* position) {
   if (!ReadLock()) return TS_E_NOLOCK;
   if (!point || !position) return E_POINTER;
   if (view != 0) return E_INVALIDARG;
-  if (!PtInRect(&caret_, *point)) return TS_E_NOLAYOUT;
-  *position = document_.end; return S_OK;
+  if (PtInRect(&caret_, *point)) { *position = document_.end; return S_OK; }
+  if (!GeometryMatches()) return TS_E_NOLAYOUT;
+  POINT client = *point; ScreenToClient(window_, &client);
+  for (const auto& character : geometry_.characters) {
+    RECT bounds{character.left, character.top, character.right, character.bottom};
+    if (PtInRect(&bounds, client)) { *position = character.index - document_.offset; return S_OK; }
+  }
+  return TS_E_NOLAYOUT;
 }
 HRESULT TextStore::OnStartComposition(ITfCompositionView* composition, BOOL* okay) {
   if (!okay) return E_POINTER;

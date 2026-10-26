@@ -43,7 +43,7 @@ UINT FilterKeyMessage() {
 enum Op : int {
   kOpState = 1, kOpCaret = 2, kOpComplete = 3, kOpCancel = 4, kOpShowKeyboard = 5,
   kOpHideKeyboard = 6,
-  kOpDocument = 7, kOpPump = 8, kOpTestService = 9,
+  kOpDocument = 7, kOpPump = 8, kOpTestService = 9, kOpGeometry = 10,
 };
 
 LRESULT CALLBACK ImeProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -115,6 +115,7 @@ struct ImeWindow::Impl {
   std::deque<TextEvent> events;
   TextInputState state;
   TextDocument document;
+  TextGeometry geometry;
   int32_t caret[4] = {0, 0, 0, 0};
   bool has_caret = false;
 
@@ -204,6 +205,7 @@ struct ImeWindow::Impl {
         service->Focus(GetFocus() == hwnd);
         if (detached) return;
         Apply(kOpCaret);
+        Apply(kOpGeometry);
       }
     } else {
       // Update can notify a COM sink which pumps a nested detach. Retain the
@@ -459,6 +461,14 @@ struct ImeWindow::Impl {
         }
         break;
       case kOpDocument: ApplyDocument(); break;
+      case kOpGeometry: {
+        TextGeometry current;
+        { std::lock_guard<std::mutex> lock(mutex); current = geometry; }
+        if (auto service = tsf; service && s.active && s.ime
+            && s.editor_epoch == tsf_epoch && current.epoch == tsf_epoch)
+          service->Geometry(std::move(current));
+        break;
+      }
       case kOpPump: if (auto service = tsf) service->Pump(); break;
       default:
         break;
@@ -682,6 +692,8 @@ void ImeWindow::SetTextInput(const TextInputState& state) {
     if (impl_->document.epoch != state.editor_epoch || !state.active || !state.ime) {
       impl_->document = TextDocument{};
       impl_->document.epoch = state.editor_epoch;
+      impl_->geometry = TextGeometry{};
+      impl_->geometry.epoch = state.editor_epoch;
     }
   }
   Post(kOpState);
@@ -698,6 +710,15 @@ void ImeWindow::SetDocument(TextDocument document) {
     impl_->document = std::move(document);
   }
   Post(kOpDocument);
+}
+
+void ImeWindow::SetGeometry(TextGeometry geometry) {
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->state.active || !impl_->state.ime || geometry.epoch != impl_->state.editor_epoch) return;
+    impl_->geometry = std::move(geometry);
+  }
+  Post(kOpGeometry);
 }
 
 std::weak_ptr<TextService> ImeWindow::TextServiceForTest() {
