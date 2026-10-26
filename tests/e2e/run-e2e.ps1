@@ -363,6 +363,12 @@ foreach ($a in $manifestData.apps) {
     $why = FirstProblem ((ReadText $appLog) + "`n" + $log)
     $line = "$name`: $($problems -join '; '). First problem in the logs: $why"
     if ($known) { Report "KNOWN-FAIL  e2e: $line (known failure: $known)" } else { Report "FAIL  e2e: $line"; $script:failed++ }
+    # "diagnoseLog" (apps.json, optional): a regex; the logs' matching lines (up to 60)
+    # are printed after a failure, for apps whose logs the summary would not show.
+    if ($a.diagnoseLog) {
+      (((ReadText $appLog) + "`n" + $log) -split "`n") | Where-Object { $_ -match $a.diagnoseLog } |
+        Select-Object -Last 60 | ForEach-Object { Write-Host "INFO  e2e: ${pkg} log: $($_.TrimEnd())" }
+    }
   }
 }
 

@@ -147,6 +147,10 @@ public final class NotificationManagerService extends INotificationManager.Defau
         if (importance == NotificationManager.IMPORTANCE_NONE) {
             shown = "not shown: its channel is blocked";
         } else {
+            // Its intents outlive this system server, as its toast does (ADR 0051).
+            if (WindowsHost.inSystemServer()) {
+                NotificationStore.save(am(), sbn.getKey(), pkg, tag, id, notification);
+            }
             int hr = showToast(r, update);
             shown = hr == 0 ? "a toast of " + AppShell.appUserModelId(pkg)
                     : String.format("no toast (0x%08x)", hr);
@@ -166,7 +170,22 @@ public final class NotificationManagerService extends INotificationManager.Defau
         synchronized (this) {
             r = mPosted.remove(key(pkg, tag, id));
         }
-        if (r == null) return;
+        String sbnKey = new StatusBarNotification(pkg, pkg, id, tag, android.os.Process.myUid(),
+                0, new Notification(), UserHandle.SYSTEM, null, 0).getKey();
+        if (r == null) {
+            // Posted by an earlier run of the device: its toast may still be in Windows'
+            // notification center.
+            if (NotificationStore.load(pkg, sbnKey) != null) {
+                NotificationStore.delete(pkg, sbnKey);
+                int hr = WindowsHost.removeToast(AppShell.appUserModelId(pkg),
+                        toastTag(tag, id), TOAST_GROUP);
+                SystemServer.log("notification " + id + " of " + pkg + " (an earlier run's)"
+                        + " cancelled" + (hr == 0 ? ", its toast removed"
+                                : String.format(" (toast: 0x%08x)", hr)));
+            }
+            return;
+        }
+        NotificationStore.delete(pkg, r.sbn.getKey());
         int hr = WindowsHost.removeToast(AppShell.appUserModelId(pkg), toastTag(tag, id),
                 TOAST_GROUP);
         SystemServer.log("notification " + id + " of " + pkg + " cancelled"
@@ -307,11 +326,48 @@ public final class NotificationManagerService extends INotificationManager.Defau
         WindowsHost.addListener(this);
     }
 
+    /**
+     * The persistent device serves Gesher's toast activator (ADR 0051): clicks on its apps'
+     * toasts come here, also for toasts an earlier run of the device posted.
+     */
+    void startActivator() {
+        startEvents();
+        int hr = WindowsHost.registerToastActivator(false);
+        SystemServer.log(hr == 0
+                ? "notification: serving the toast activator " + WindowsHost.TOAST_ACTIVATOR_CLSID
+                : String.format("notification: the toast activator %s is not served (0x%08x)",
+                        WindowsHost.TOAST_ACTIVATOR_CLSID, hr));
+    }
+
     @Override
     public void onWindowsEvents(int events) {
         if ((events & WindowsHost.EVENT_TOAST_ACTIVATED) == 0) return;
         String[] a;
-        while ((a = WindowsHost.nextActivation()) != null) activated(a[3]);
+        while ((a = WindowsHost.nextActivation()) != null) {
+            activated(a[0], a[3], a[1].isEmpty() ? "the toast activator" : "the toast");
+        }
+    }
+
+    // The last click taken (a click may come both through the activator and the toast's
+    // Activated event): guarded by this.
+    private String mLastActivation;
+    private long mLastActivationTime;
+
+    /**
+     * A click on a toast of {@code appId}, from {@code source} (the toast's Activated
+     * event, the activator, or a launcher the activator started).
+     */
+    void activated(String appId, String arguments, String source) {
+        long now = android.os.SystemClock.uptimeMillis();
+        synchronized (this) {
+            String what = appId + "\n" + arguments;
+            if (what.equals(mLastActivation) && now - mLastActivationTime < 5000) return;
+            mLastActivation = what;
+            mLastActivationTime = now;
+        }
+        SystemServer.log("notification: a click on a toast of " + appId + " (through " + source
+                + "): " + arguments);
+        activated(arguments);
     }
 
     /** A toast or one of its buttons was clicked: "n|key" or "a|index|key". */
@@ -339,7 +395,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
             }
         }
         if (r == null) {
-            SystemServer.log("notification: a toast was clicked whose notification is gone");
+            activatedStored(key, action);
             return;
         }
         Notification n = r.n();
@@ -360,6 +416,40 @@ public final class NotificationManagerService extends INotificationManager.Defau
         if (action < 0 && (n.flags & Notification.FLAG_AUTO_CANCEL) != 0) {
             cancel(r.sbn.getPackageName(), r.sbn.getTag(), r.sbn.getId(),
                     NotificationListenerService.REASON_CLICK);
+        }
+    }
+
+    /**
+     * A click on a toast whose notification this system server did not post (an earlier
+     * run of the device did; NotificationStore kept its intents).
+     */
+    private void activatedStored(String key, int action) {
+        String[] parts = key.split("\\|", 5);  // user|package|id|tag|uid
+        NotificationStore.Stored s = parts.length >= 3
+                ? NotificationStore.load(parts[1], key) : null;
+        if (s == null) {
+            SystemServer.log("notification: a toast was clicked whose notification is gone");
+            return;
+        }
+        NotificationStore.Intended intent = action < 0 ? s.content
+                : action < s.actions.length ? s.actions[action] : null;
+        SystemServer.log("notification " + s.id + " of " + s.packageName + " (an earlier run's):"
+                + " its toast was clicked" + (action >= 0 ? " (action " + action + ")" : "")
+                + (intent != null ? ", sending its " + PendingIntents.typeName(intent.type)
+                        + " intent " + intent.intents[intent.intents.length - 1]
+                        : ", nothing to send"));
+        ActivityManagerService am = am();
+        if (intent != null && am != null) {
+            try {
+                NotificationStore.send(am, intent);
+            } catch (Throwable t) {
+                SystemServer.log("notification: sending the stored intent failed: " + t);
+            }
+        }
+        if (action < 0 && (s.flags & Notification.FLAG_AUTO_CANCEL) != 0) {
+            NotificationStore.delete(s.packageName, key);
+            WindowsHost.removeToast(AppShell.appUserModelId(s.packageName),
+                    toastTag(s.tag, s.id), TOAST_GROUP);
         }
     }
 
@@ -537,6 +627,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
         String appId = AppShell.appUserModelId(pkg);
         for (Record r : removed) {
+            NotificationStore.delete(pkg, r.sbn.getKey());
             WindowsHost.removeToast(appId, toastTag(r.sbn.getTag(), r.sbn.getId()), TOAST_GROUP);
         }
         SystemServer.log("notification: all of " + pkg + " cancelled (" + removed.size() + ")");
@@ -545,18 +636,25 @@ public final class NotificationManagerService extends INotificationManager.Defau
         }
     }
 
-    /** Removes every notification of the package (it is uninstalled or stopped for good). */
+    /**
+     * Removes every notification of the package, its toasts, the notifications kept for
+     * clicks and its app id's registration (HKCU\Software\Classes\AppUserModelId): it is
+     * uninstalled (Installer.uninstall).
+     */
     void packageRemoved(String pkg) {
         synchronized (this) {
             mPosted.keySet().removeIf(k -> k.startsWith(pkg + "/"));
             mChannels.keySet().removeIf(k -> k.startsWith(pkg + "/"));
         }
         String appId = AppShell.appUserModelId(pkg);
-        WindowsHost.clearToasts(appId);
-        WindowsHost.unregisterAppId(appId);
+        int cleared = WindowsHost.clearToasts(appId);
+        int unregistered = WindowsHost.unregisterAppId(appId);
+        NotificationStore.deleteAll(pkg);
         synchronized (this) {
             mRegisteredAppIds.remove(appId);
         }
+        SystemServer.log(String.format("notification: %s removed: its toasts (0x%08x) and %s's"
+                + " registration (0x%08x)", pkg, cleared, appId, unregistered));
     }
 
     @Override

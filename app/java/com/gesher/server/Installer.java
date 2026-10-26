@@ -155,7 +155,10 @@ final class Installer {
             throw new IllegalStateException("base.apk is " + p.packageName);
         }
         p.setDataDir(Device.dataDir() + "/data/" + p.packageName);
-        p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.ABI);
+        // lib/x86_64, or lib/arm64 for an arm64-v8a-only APK (docs/arm64.md).
+        String abi = NativeLibs.forApk(e.codePath + "/base.apk");
+        p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.instructionSetDir(abi));
+        p.setPrimaryCpuAbi(NativeLibs.abiFor(e.codePath + "/base.apk"));
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
         new File(p.dataDir()).mkdirs();
         return p;
@@ -198,8 +201,8 @@ final class Installer {
         code.mkdirs();
         File base = new File(code, "base.apk");
         copy(source, base);
-        int libs = NativeLibs.extract(base.getPath(),
-                new File(code, "lib/" + NativeLibs.ABI).getPath());
+        int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
+                + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
         // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
         Dexopt.onInstall(pkg, code.getPath());
         long now = System.currentTimeMillis();
@@ -214,7 +217,8 @@ final class Installer {
         }
         String what = old != null ? "updated" : "installed";
         SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
-                + (libs > 0 ? ", " + libs + " native libraries" : ""));
+                + (libs > 0 ? ", " + libs + " native libraries (" + NativeLibs.forApk(base.getPath())
+                        + ")" : ""));
         return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
     }
 
@@ -229,6 +233,9 @@ final class Installer {
         delete(new File(e.codePath));
         delete(new File(Device.dataDir(), "data/" + packageName));
         Dexopt.deleteProfiles(packageName);
+        // Its toasts and its AppUserModelID's registration go too (hwsvc2, ADR 0051).
+        NotificationManagerService notifications = NotificationManagerService.sLast;
+        if (notifications != null) notifications.packageRemoved(packageName);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;
     }

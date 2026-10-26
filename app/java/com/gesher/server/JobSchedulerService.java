@@ -43,7 +43,10 @@ import java.util.Objects;
  * network list manager: connected to the internet, unmetered when asked), charging (AC
  * power, or a PC without a battery), battery not low, device idle (no user input for
  * 30 minutes) and storage not low (always); an override deadline runs them regardless.
- * Content URI triggers are not watched. A ready job runs in its package's process
+ * Content URI triggers ({@code addTriggerContentUri}) watch {@link ContentService}'s changes
+ * (a provider's {@code notifyChange}): such a job runs once its update delay passed without
+ * another change, or its maximum delay after the first, with the changed URIs and
+ * authorities in its JobParameters (hwsvc2, ADR 0051). A ready job runs in its package's process
  * (started if none runs): the system server binds the JobService (BIND_JOB_SERVICE),
  * {@code startJob}, and the app answers through IJobCallback (acknowledgeStartMessage,
  * jobFinished, dequeueWork and completeWork for enqueued work); a job is stopped
@@ -80,6 +83,11 @@ final class JobSchedulerService extends IJobScheduler.Default
         final Map<Integer, JobWorkItem> delivered = new HashMap<>();
         int nextWorkId = 1;
         Run run;                // while it runs
+        // Content URI triggers: the changes seen since it last ran (elapsedRealtime).
+        final java.util.LinkedHashSet<android.net.Uri> changedUris = new java.util.LinkedHashSet<>();
+        final java.util.LinkedHashSet<String> changedAuthorities = new java.util.LinkedHashSet<>();
+        long firstChange;
+        long lastChange;
 
         Job(String packageName, String namespace, JobInfo info) {
             this.packageName = packageName;
@@ -116,8 +124,37 @@ final class JobSchedulerService extends IJobScheduler.Default
             }
         };
 
+        // The content changes that made it run (JobParameters' triggered URIs and
+        // authorities): taken from the job when it starts (with the scheduler's lock).
+        final android.net.Uri[] triggeredUris;
+        final String[] triggeredAuthorities;
+        // The network that met its network constraint (JobParameters.getNetwork), or null.
+        final android.net.Network network;
+
         Run(Job job) {
             this.job = job;
+            android.net.Network n = null;
+            if (needsNetwork(job.info)) {
+                try {
+                    n = satisfyingNetwork(job.info);
+                } catch (LinkageError | RuntimeException e) {
+                    // no connectivity classes
+                }
+            }
+            network = n;
+            if (job.changedAuthorities.isEmpty()) {
+                triggeredUris = null;
+                triggeredAuthorities = null;
+            } else {
+                // JobStatus.MAX_URIS_TO_REPORT: more than that and only the authorities.
+                triggeredUris = job.changedUris.size() <= 50
+                        ? job.changedUris.toArray(new android.net.Uri[0]) : null;
+                triggeredAuthorities = job.changedAuthorities.toArray(new String[0]);
+                job.changedUris.clear();
+                job.changedAuthorities.clear();
+                job.firstChange = 0;
+                job.lastChange = 0;
+            }
         }
 
         void started(IBinder binder) {
@@ -129,8 +166,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                         job.info.getClipData(), job.info.getClipGrantFlags(),
                         SystemClock.elapsedRealtime() >= job.latest /* deadline expired */,
                         job.info.isExpedited(), job.info.isUserInitiated(),
-                        null /* triggered content uris */, null /* authorities */,
-                        null /* network: the default one (ConnectivityManager's) */);
+                        triggeredUris, triggeredAuthorities, network);
             }
             try {
                 binder.linkToDeath(this, 0);
@@ -241,6 +277,8 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
         mTimeScale = scale;
         DeviceWork.add(this);
+        // Content URI triggers watch the content service's changes (hwsvc2, ADR 0051).
+        ContentService.addChangeListener(this::contentChanged);
         // Persisted jobs run again from the system server's start.
         if (WindowsHost.inSystemServer()) start();
     }
@@ -526,6 +564,10 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
                 for (Job j : mJobs) {
                     if (j.run == null && j.latest > now) next = Math.min(next, j.latest);
+                    if (j.run == null && hasTriggers(j.info)) {
+                        long at = triggerReadyAt(j);
+                        if (at > now && at != Long.MAX_VALUE) next = Math.min(next, at);
+                    }
                     if (j.run != null && now - j.run.started >= EXECUTION_LIMIT_MS
                             && !j.run.stopping) {
                         Run r = j.run;
@@ -569,11 +611,66 @@ final class JobSchedulerService extends IJobScheduler.Default
                 && WindowsHost.idleMillis() < IDLE_AFTER_MS) {
             return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE;
         }
-        JobInfo.TriggerContentUri[] triggers = info.getTriggerContentUris();
-        if (triggers != null && triggers.length > 0) {
+        if (hasTriggers(info) && triggerReadyAt(j) > now) {
             return JobScheduler.PENDING_JOB_REASON_CONSTRAINT_CONTENT_TRIGGER;
         }
         return JobScheduler.PENDING_JOB_REASON_UNDEFINED;
+    }
+
+    // --- content URI triggers (ContentObserverController) --------------------------------------
+
+    /** ContentObserverController's defaults for a trigger's update and maximum delays. */
+    private static final long DEFAULT_TRIGGER_UPDATE_DELAY_MS = 10_000;
+    private static final long DEFAULT_TRIGGER_MAX_DELAY_MS = 2 * 60_000;
+
+    private static boolean hasTriggers(JobInfo info) {
+        JobInfo.TriggerContentUri[] t = info.getTriggerContentUris();
+        return t != null && t.length > 0;
+    }
+
+    /**
+     * When a job with content URI triggers may run (elapsedRealtime): once no change came
+     * for its update delay, or its maximum delay after the first change; never without a
+     * change (Long.MAX_VALUE). Guarded by this.
+     */
+    private long triggerReadyAt(Job j) {
+        if (j.changedAuthorities.isEmpty()) return Long.MAX_VALUE;
+        long update = j.info.getTriggerContentUpdateDelay();
+        long max = j.info.getTriggerContentMaxDelay();
+        if (update < 0) update = DEFAULT_TRIGGER_UPDATE_DELAY_MS;
+        if (max < 0) max = DEFAULT_TRIGGER_MAX_DELAY_MS;
+        return Math.min(j.lastChange + update, j.firstChange + max);
+    }
+
+    /** ContentService's changes: jobs whose triggers they match take note, and may run. */
+    private void contentChanged(android.net.Uri[] uris, int flags) {
+        boolean any = false;
+        long now = SystemClock.elapsedRealtime();
+        synchronized (this) {
+            for (Job j : mJobs) {
+                JobInfo.TriggerContentUri[] triggers = j.info.getTriggerContentUris();
+                if (triggers == null) continue;
+                for (android.net.Uri uri : uris) {
+                    for (JobInfo.TriggerContentUri t : triggers) {
+                        boolean descendants = (t.getFlags()
+                                & JobInfo.TriggerContentUri.FLAG_NOTIFY_FOR_DESCENDANTS) != 0;
+                        if (!ContentService.matches(t.getUri(), descendants, uri, flags)) {
+                            continue;
+                        }
+                        if (j.changedAuthorities.isEmpty()) j.firstChange = now;
+                        j.lastChange = now;
+                        j.changedUris.add(uri);
+                        j.changedAuthorities.add(uri.getAuthority());
+                        any = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (any) {
+            SystemServer.log("jobscheduler: content changed: " + java.util.Arrays.toString(uris));
+            kick();
+        }
     }
 
     private static boolean needsNetwork(JobInfo info) {
@@ -584,8 +681,40 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
     }
 
+    /**
+     * The network that satisfies the job's NetworkRequest, as ConnectivityManager describes
+     * Windows' networks (the net track's connectivity: capabilities from the snapshot of
+     * Windows' interfaces and the Network List Manager; hwsvc2, ADR 0051): the default
+     * network if it does, else another; null if none does. Throws LinkageError or
+     * RuntimeException when the connectivity classes cannot answer.
+     */
+    private static android.net.Network satisfyingNetwork(JobInfo info) {
+        android.net.NetworkRequest request = info.getRequiredNetwork();
+        com.gesher.net.WindowsNetworks.Snapshot s = com.gesher.net.WindowsNetworks.parse(
+                com.gesher.net.WindowsNetworks.snapshot());
+        com.gesher.net.WindowsNetworks.Net chosen = null;
+        com.gesher.net.WindowsNetworks.Net def = s.defaultNetwork();
+        if (def != null && request.canBeSatisfiedBy(
+                android.net.ConnectivityManager.capabilitiesOf(s, def))) {
+            chosen = def;
+        } else {
+            for (com.gesher.net.WindowsNetworks.Net n : s.networks) {
+                if (request.canBeSatisfiedBy(android.net.ConnectivityManager.capabilitiesOf(s, n))) {
+                    chosen = n;
+                    break;
+                }
+            }
+        }
+        return chosen != null ? new android.net.Network(chosen.netId()) : null;
+    }
+
     /** The job's network constraint against Windows' networks (unknown: met). */
     private static boolean networkOk(JobInfo info) {
+        try {
+            return satisfyingNetwork(info) != null;
+        } catch (LinkageError | RuntimeException e) {
+            // No connectivity classes: the Network List Manager's view, below.
+        }
         int state = WindowsHost.networkState();
         if (state < 0) return true;
         boolean internet = (state & 2) != 0;
@@ -726,6 +855,11 @@ final class JobSchedulerService extends IJobScheduler.Default
         if (info.isRequireDeviceIdle()) c.add("idle");
         if (info.isRequireStorageNotLow()) c.add("storage not low");
         if (info.isPersisted()) c.add("persisted");
+        if (hasTriggers(info)) {
+            for (JobInfo.TriggerContentUri t : info.getTriggerContentUris()) {
+                c.add("content " + t.getUri());
+            }
+        }
         return c.isEmpty() ? "" : " (" + String.join(", ", c) + ")";
     }
 

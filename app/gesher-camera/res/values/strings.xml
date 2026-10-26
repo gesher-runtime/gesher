@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gesher Camera</string>
+    <string name="take">Take photo</string>
+    <string name="cancel">Cancel</string>
+</resources>

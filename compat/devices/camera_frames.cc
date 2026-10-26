@@ -636,21 +636,142 @@ const JNINativeMethod gPublicFormatUtilsMethods[] = {
     {"nativeGetPublicFormat", "(II)I", GESHER_JNI(PublicFormat_getPublicFormat)},
 };
 
-// --- android.hardware.Camera (the legacy API): no cameras, cleanly -----------------------
-// Apps on the legacy API see none (Camera2 has them all); opening one fails as
-// with no camera service: RuntimeException("Fail to connect to camera service").
+// --- android.hardware.Camera (the legacy API) --------------------------------------------
+// Over the same devices as Camera2 (hwsvc2 track, ADR 0051): each native calls
+// com.gesher.server.LegacyCamera (gesher-app.jar, on the boot class path) with the
+// Camera; its exceptions reach the app as the natives' would.
 
-jint LegacyCamera_getNumberOfCameras(JNIEnv*, jclass, jobject, jint) { return 0; }
-
-void LegacyCamera_getCameraInfo(JNIEnv* env, jclass, jint, jobject, jobject, jint, jobject) {
-  jniThrowRuntimeException(env, "Unknown camera ID");
+jclass LegacyClass(JNIEnv* env) {
+  static jclass cls = nullptr;
+  if (cls == nullptr) {
+    jclass local = env->FindClass("com/gesher/server/LegacyCamera");
+    if (local == nullptr) return nullptr;
+    cls = static_cast<jclass>(env->NewGlobalRef(local));
+    env->DeleteLocalRef(local);
+  }
+  return cls;
 }
 
-jint LegacyCamera_setup(JNIEnv*, jobject, jobject, jint, jobject, jboolean, jobject, jint) {
-  return -19;  // -ENODEV
+jmethodID LegacyMethod(JNIEnv* env, const char* name, const char* sig) {
+  jclass cls = LegacyClass(env);
+  return cls != nullptr ? env->GetStaticMethodID(cls, name, sig) : nullptr;
 }
 
-void LegacyCamera_release(JNIEnv*, jobject) {}
+#define LEGACY_CAMERA "Landroid/hardware/Camera;"
+
+// A void call with the Camera and up to two more arguments.
+template <typename... Args>
+void LegacyVoid(JNIEnv* env, const char* name, const char* sig, jobject thiz, Args... args) {
+  jmethodID m = LegacyMethod(env, name, sig);
+  if (m != nullptr) env->CallStaticVoidMethod(LegacyClass(env), m, thiz, args...);
+}
+
+jint LegacyCamera_getNumberOfCameras(JNIEnv* env, jclass, jobject, jint) {
+  jmethodID m = LegacyMethod(env, "count", "()I");
+  return m != nullptr ? env->CallStaticIntMethod(LegacyClass(env), m) : 0;
+}
+
+void LegacyCamera_getCameraInfo(JNIEnv* env, jclass, jint id, jobject, jobject, jint,
+                                jobject info) {
+  jmethodID m = LegacyMethod(env, "info", "(ILandroid/hardware/Camera$CameraInfo;)V");
+  if (m != nullptr) env->CallStaticVoidMethod(LegacyClass(env), m, id, info);
+}
+
+jint LegacyCamera_setup(JNIEnv* env, jobject thiz, jobject weakThis, jint id, jobject, jboolean,
+                        jobject, jint) {
+  jmethodID m = LegacyMethod(env, "setup", "(" LEGACY_CAMERA "Ljava/lang/Object;I)I");
+  return m != nullptr ? env->CallStaticIntMethod(LegacyClass(env), m, thiz, weakThis, id)
+                      : -19;  // -ENODEV
+}
+
+void LegacyCamera_release(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "release", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+// unlock, lock, reconnect, cancelAutoFocus, stopSmoothZoom, stopFaceDetection,
+// setDisplayOrientation, enableFocusMoveCallback, setPreviewCallbackSurface: nothing to
+// do for an open camera (one process, fixed focus, frames are not rotated).
+void LegacyCamera_check(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "check", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+void LegacyCamera_checkInt(JNIEnv* env, jobject thiz, jint) { LegacyCamera_check(env, thiz); }
+
+void LegacyCamera_checkObject(JNIEnv* env, jobject thiz, jobject) {
+  LegacyCamera_check(env, thiz);
+}
+
+void LegacyCamera_setPreviewSurface(JNIEnv* env, jobject thiz, jobject surface) {
+  LegacyVoid(env, "setPreviewSurface", "(" LEGACY_CAMERA "Landroid/view/Surface;)V", thiz,
+             surface);
+}
+
+void LegacyCamera_setPreviewTexture(JNIEnv* env, jobject thiz, jobject texture) {
+  LegacyVoid(env, "setPreviewTexture", "(" LEGACY_CAMERA "Ljava/lang/Object;)V", thiz, texture);
+}
+
+void LegacyCamera_startPreview(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "startPreview", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+void LegacyCamera_stopPreview(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "stopPreview", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+jboolean LegacyCamera_previewEnabled(JNIEnv* env, jobject thiz) {
+  jmethodID m = LegacyMethod(env, "previewEnabled", "(" LEGACY_CAMERA ")Z");
+  return m != nullptr ? env->CallStaticBooleanMethod(LegacyClass(env), m, thiz) : JNI_FALSE;
+}
+
+void LegacyCamera_setHasPreviewCallback(JNIEnv* env, jobject thiz, jboolean installed,
+                                        jboolean manual) {
+  LegacyVoid(env, "setHasPreviewCallback", "(" LEGACY_CAMERA "ZZ)V", thiz, installed, manual);
+}
+
+void LegacyCamera_addCallbackBuffer(JNIEnv* env, jobject thiz, jbyteArray buffer, jint type) {
+  LegacyVoid(env, "addCallbackBuffer", "(" LEGACY_CAMERA "[BI)V", thiz, buffer, type);
+}
+
+void LegacyCamera_autoFocus(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "autoFocus", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+void LegacyCamera_takePicture(JNIEnv* env, jobject thiz, jint msgType) {
+  LegacyVoid(env, "takePicture", "(" LEGACY_CAMERA "I)V", thiz, msgType);
+}
+
+void LegacyCamera_startSmoothZoom(JNIEnv* env, jobject thiz, jint value) {
+  LegacyVoid(env, "startSmoothZoom", "(" LEGACY_CAMERA "I)V", thiz, value);
+}
+
+void LegacyCamera_startFaceDetection(JNIEnv* env, jobject thiz, jint type) {
+  LegacyVoid(env, "startFaceDetection", "(" LEGACY_CAMERA "I)V", thiz, type);
+}
+
+jboolean LegacyCamera_enableShutterSound(JNIEnv* env, jobject thiz, jboolean) {
+  LegacyCamera_check(env, thiz);
+  return JNI_TRUE;
+}
+
+void LegacyCamera_setParameters(JNIEnv* env, jobject thiz, jstring params) {
+  LegacyVoid(env, "setParameters", "(" LEGACY_CAMERA "Ljava/lang/String;)V", thiz, params);
+}
+
+jstring LegacyCamera_getParameters(JNIEnv* env, jobject thiz) {
+  jmethodID m = LegacyMethod(env, "getParameters", "(" LEGACY_CAMERA ")Ljava/lang/String;");
+  return m != nullptr
+             ? static_cast<jstring>(env->CallStaticObjectMethod(LegacyClass(env), m, thiz))
+             : nullptr;
+}
+
+void LegacyCamera_setAudioRestriction(JNIEnv* env, jobject thiz, jint mode) {
+  LegacyVoid(env, "setAudioRestriction", "(" LEGACY_CAMERA "I)V", thiz, mode);
+}
+
+jint LegacyCamera_getAudioRestriction(JNIEnv* env, jobject thiz) {
+  jmethodID m = LegacyMethod(env, "getAudioRestriction", "(" LEGACY_CAMERA ")I");
+  return m != nullptr ? env->CallStaticIntMethod(LegacyClass(env), m, thiz) : 0;
+}
 
 const JNINativeMethod gLegacyCameraMethods[] = {
     {"_getNumberOfCameras", "(Landroid/os/Parcel;I)I", GESHER_JNI(LegacyCamera_getNumberOfCameras)},
@@ -662,8 +783,34 @@ const JNINativeMethod gLegacyCameraMethods[] = {
      "(Ljava/lang/Object;ILandroid/content/res/CameraCompatibilityInfo;ZLandroid/os/Parcel;I)I",
      GESHER_JNI(LegacyCamera_setup)},
     {"native_release", "()V", GESHER_JNI(LegacyCamera_release)},
+    {"unlock", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"lock", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"reconnect", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"setPreviewSurface", "(Landroid/view/Surface;)V", GESHER_JNI(LegacyCamera_setPreviewSurface)},
+    {"setPreviewTexture", "(Landroid/graphics/SurfaceTexture;)V",
+     GESHER_JNI(LegacyCamera_setPreviewTexture)},
+    {"startPreview", "()V", GESHER_JNI(LegacyCamera_startPreview)},
+    {"_stopPreview", "()V", GESHER_JNI(LegacyCamera_stopPreview)},
+    {"previewEnabled", "()Z", GESHER_JNI(LegacyCamera_previewEnabled)},
+    {"setHasPreviewCallback", "(ZZ)V", GESHER_JNI(LegacyCamera_setHasPreviewCallback)},
+    {"_addCallbackBuffer", "([BI)V", GESHER_JNI(LegacyCamera_addCallbackBuffer)},
+    {"setPreviewCallbackSurface", "(Landroid/view/Surface;)V",
+     GESHER_JNI(LegacyCamera_checkObject)},
+    {"native_autoFocus", "()V", GESHER_JNI(LegacyCamera_autoFocus)},
+    {"native_cancelAutoFocus", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"enableFocusMoveCallback", "(I)V", GESHER_JNI(LegacyCamera_checkInt)},
+    {"native_takePicture", "(I)V", GESHER_JNI(LegacyCamera_takePicture)},
+    {"startSmoothZoom", "(I)V", GESHER_JNI(LegacyCamera_startSmoothZoom)},
+    {"stopSmoothZoom", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"setDisplayOrientation", "(I)V", GESHER_JNI(LegacyCamera_checkInt)},
+    {"_enableShutterSound", "(Z)Z", GESHER_JNI(LegacyCamera_enableShutterSound)},
+    {"_startFaceDetection", "(I)V", GESHER_JNI(LegacyCamera_startFaceDetection)},
+    {"_stopFaceDetection", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"native_setParameters", "(Ljava/lang/String;)V", GESHER_JNI(LegacyCamera_setParameters)},
+    {"native_getParameters", "()Ljava/lang/String;", GESHER_JNI(LegacyCamera_getParameters)},
+    {"setAudioRestriction", "(I)V", GESHER_JNI(LegacyCamera_setAudioRestriction)},
+    {"getAudioRestriction", "()I", GESHER_JNI(LegacyCamera_getAudioRestriction)},
 };
-
 // ImageReader's static initializer loads libmedia_jni.so: when no other part of
 // Gesher provides it, an empty one does (the natives are registered here).
 jint MediaJniOnLoad(JavaVM*, void*) { return JNI_VERSION_1_6; }

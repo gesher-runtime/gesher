@@ -120,3 +120,9 @@ target_compile_options(fsbase_probe PRIVATE -Wall -Wextra -Werror -mfsgsbase)
 add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
+
+# Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
+# translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
+add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
+target_compile_options(arm64_elf_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(arm64_elf_test PRIVATE gesher_bionic gesher_elf)
