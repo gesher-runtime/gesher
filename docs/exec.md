@@ -189,7 +189,29 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** CI 40385411337 completed at
+**Current review:** CI 40393019261 completed at
+6a3289d2162359aa4f59d22a39b52d724b61517b. Every exec3 Check passes on both
+runners, including all exact installed-device pm/am expectations (actual list/
+path, separate resumed target/receiver and force-stop). Windows-2022's entire
+suite has zero failures. Windows-2025 has nine devices Checks affected by one
+post-steps device-process crash; single-process devices also pass. All build,
+media, package and both e2e jobs pass. Both e2e logs show zero unexpected, all
+nine apps including TIC-80, four transport fixtures and Puzzles generators
+3672/8816 exiting 0. Installed oatdump/image, UI/input and cleanup pass.
+
+The preserved native record now identifies Windows-2025 thread6624, address
+0xffffffffffffffff, RIP ntdll.dll+0x9a7e7 and RSP0x18e92ff070. RCX and RDI
+contain UTF-16-like path fragments. Access direction and the calling product
+code are not present in that record, so no cause is inferred. A prepared narrow
+extension records the original access kind and at most eight candidate code
+addresses from a safe 512-byte stack snapshot. These are labelled stack words,
+not validated frames; at most eight records/96 published lines are allowed.
+Own-file -Werror and enabled/disabled fatal-child/publication contracts pass,
+with the same exit7. The crash remains open pending an actual runtime fix and
+combined CI. Verified Native3 integration117 and media's independently proven
+callback/handle/request ownership corrections are the next combined foundation.
+
+**Previous review:** CI 40385411337 completed at
 80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both
 required e2e jobs pass. Both e2e logs have zero unexpected failures, all nine
 apps including TIC-80, four transport fixtures and Puzzles generators 4076/7544

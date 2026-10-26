@@ -33,7 +33,7 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
     # Preserve the bounded context before DevCheck's category/200-line filter.
     # That filter otherwise hides the native fault's RIP and registers.
     ($out -split "`n" | Where-Object { $_ -match '^gesher-signal:' } |
-      Select-Object -First 32) | ForEach-Object { Write-Host $_ }
+      Select-Object -First 96) | ForEach-Object { Write-Host $_ }
   }
   $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   return $out
