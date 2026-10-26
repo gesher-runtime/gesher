@@ -347,6 +347,13 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running final combined ci 40338521188 at
+  `010551b16f54c6eb9040e77c18f2082e1abf1a2a`. Watch output is
+  `C:/work/gesher-ci-review/web3-40338521188-watch.log`. Superseded
+  40333695614 cancellation was requested only after this dispatch succeeded.
+  No new runtime milestone is closed until both complete Windows test jobs,
+  package and both required e2e jobs pass.
+
 - Final coverage dispatch is ready after merging integration ac50d41
   (verified aot2 code plus central net4 ownership documentation). It includes
   device geolocation and both native ABIs in both process modes. Diagnostic
