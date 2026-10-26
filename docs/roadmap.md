@@ -318,8 +318,9 @@ needs: [framework-build.md](framework-build.md).
         real time zone change (TIMEZONE_CHANGED, processes' default zone reset)
   - [x] The legacy android.hardware.Camera over Media Foundation; Gesher
         Camera for ACTION_IMAGE_CAPTURE; geocoder final (no key: IOException)
-  - [ ] Camera preview into SurfaceView/TextureView (their child surfaces need
-        a native window from the graphics stack)
+  - [x] Camera preview into SurfaceView/TextureView: legacy preview display
+        and texture, Camera2 into both surfaces at once, in both execution
+        modes (surfaces, ci 40307919084 attempt 2, both runners)
 - [x] `.apk` file association from the installer (per user; see
       `docs/installer.md`), tested in CI by the package job
 - [x] Installed apps in the Start menu: a shortcut per launchable package
@@ -498,9 +499,9 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       (exercised by nativeactivity-arm64.apk, ci 40217845117)
 - [x] arm64-v8a ELF executables through gesher-exec and ProcessBuilder
       (ci 40217845117)
-- [ ] A real arm64-only F-Droid app in the e2e job: TIC-80 1.01.00 is listed;
-      its arm64 libraries load and its JNI runs translated, but it waits on a
-      SurfaceView Surface Gesher does not provide yet (known failure)
+- [x] A real arm64-only F-Droid app in e2e: TIC-80 1.01.00 installs, draws a
+      nonblank frame, reacts to input, closes and ends its process on both
+      Windows runners; knownFailure removed (ci 40307919084 attempt 2)
 - [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
       compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
 

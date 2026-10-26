@@ -64,6 +64,8 @@
 #define WIN32_LEAN_AND_MEAN 1
 #include <windows.h>
 
+#include "egl_child_surface.h"  // surfaces track: windows without an HWND
+
 #ifndef EGL_PLATFORM_ANGLE_ANGLE
 #define EGL_PLATFORM_ANGLE_ANGLE 0x3202
 #define EGL_PLATFORM_ANGLE_TYPE_ANGLE 0x3203
@@ -375,6 +377,22 @@ EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_wi
   auto create = MS(eglCreateWindowSurface);
   auto* window = static_cast<ANativeWindow*>(native_window);
   HWND hwnd = window != nullptr ? static_cast<HWND>(gesher_window_hwnd(window)) : nullptr;
+  if (hwnd == nullptr && window != nullptr) {
+    // surfaces track: an ANativeWindow without an HWND (a SurfaceView's or a
+    // SurfaceTexture's surface) renders into a hidden helper window and gets
+    // each frame posted before the swap (egl_child_surface.cc).
+    HWND helper = CreateChildHelper(window);
+    if (helper != nullptr) {
+      EGLSurface surface = create(dpy, config, helper, attribs);
+      if (surface == EGL_NO_SURFACE) {
+        DestroyChildHelper(helper);
+        return surface;
+      }
+      ANativeWindow_acquire(window);
+      ChildSurfaceCreated(surface, window, helper);
+      return surface;
+    }
+  }
   if (hwnd == nullptr) {
     if (!g_said_not_gesher.exchange(true)) {
       Log("eglCreateWindowSurface: the ANativeWindow is not a Gesher window (no HWND)");
@@ -427,6 +445,12 @@ EGLSurface BIONIC_SYSV CreatePlatformWindowSurfaceExt(EGLDisplay dpy, EGLConfig 
 
 EGLBoolean BIONIC_SYSV DestroySurface(EGLDisplay dpy, EGLSurface surface) {
   EGLBoolean ok = MS(eglDestroySurface)(dpy, surface);
+  // A child surface (surfaces track): its helper window goes, its ANativeWindow is released.
+  if (ANativeWindow* child = ChildSurfaceWindow(surface)) {
+    ChildSurfaceDestroyed(surface);
+    ANativeWindow_release(child);
+    return ok;
+  }
   WindowSurface ws{nullptr, nullptr};
   {
     std::lock_guard<std::mutex> lock(g_surface_mutex);
@@ -441,6 +465,24 @@ EGLBoolean BIONIC_SYSV DestroySurface(EGLDisplay dpy, EGLSurface surface) {
     ANativeWindow_release(ws.window);
   }
   return ok;
+}
+
+// surfaces track: a child surface's frame goes to its ANativeWindow before ANGLE swaps.
+EGLBoolean BIONIC_SYSV SwapBuffers(EGLDisplay dpy, EGLSurface surface) {
+  ChildSurfaceBeforeSwap(dpy, surface);
+  return MS(eglSwapBuffers)(dpy, surface);
+}
+
+EGLBoolean BIONIC_SYSV SwapBuffersWithDamageKhr(EGLDisplay dpy, EGLSurface surface,
+                                                const EGLint* rects, EGLint n_rects) {
+  ChildSurfaceBeforeSwap(dpy, surface);
+  return MS(eglSwapBuffersWithDamageKHR)(dpy, surface, rects, n_rects);
+}
+
+EGLBoolean BIONIC_SYSV SwapBuffersWithDamageExt(EGLDisplay dpy, EGLSurface surface,
+                                                const EGLint* rects, EGLint n_rects) {
+  ChildSurfaceBeforeSwap(dpy, surface);
+  return MS(eglSwapBuffersWithDamageEXT)(dpy, surface, rects, n_rects);
 }
 
 // --- callbacks -----------------------------------------------------------------------------------
@@ -538,6 +580,9 @@ const GlThunk kHandwritten[] = {
     {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(&CreatePlatformWindowSurface)},
     {"eglCreatePlatformWindowSurfaceEXT", reinterpret_cast<void*>(&CreatePlatformWindowSurfaceExt)},
     {"eglDestroySurface", reinterpret_cast<void*>(&DestroySurface)},
+    {"eglSwapBuffers", reinterpret_cast<void*>(&SwapBuffers)},
+    {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(&SwapBuffersWithDamageKhr)},
+    {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(&SwapBuffersWithDamageExt)},
     {"eglDebugMessageControlKHR", reinterpret_cast<void*>(&DebugMessageControlKhr)},
     {"eglSetBlobCacheFuncsANDROID", reinterpret_cast<void*>(&SetBlobCacheFuncs)},
     {"glDebugMessageCallback", reinterpret_cast<void*>(&DebugMessageCallback)},
