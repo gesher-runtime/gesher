@@ -203,6 +203,16 @@ public class SurfaceActivity extends Activity {
     private void phase2() {
         mFixed = true;
         mA.getHolder().setFixedSize(50, 25);
+        // TextureView.lockCanvas: a magenta frame into T's SurfaceTexture.
+        Canvas c = mT.lockCanvas();
+        if (c == null) {
+            say("T lockCanvas answered null");
+        } else {
+            String size = c.getWidth() + "x" + c.getHeight();
+            c.drawColor(Color.MAGENTA);
+            mT.unlockCanvasAndPost(c);
+            say("T lockCanvas: drew magenta " + size);
+        }
         mMain.postDelayed(() -> {
             say("phase 2 ready");
             mMain.postDelayed(this::phase3, HOLD_MS);
