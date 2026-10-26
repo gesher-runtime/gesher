@@ -226,10 +226,10 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
-- Running ci 40324592794 at 5e90b96: interface bindings/DNS/captive state,
-  all seven NDK networking exports and real ELF checks in both process
-  modes, combined with the UIA override-option fix and integration 8590f4b.
-  Do not close these gaps until both Windows runners verify the new checks.
+- ci 40324592794 at 5e90b96 compiled the NDK test ELF, but the native
+  build failed because raw-DNS used try/catch with exceptions disabled.
+  Corrected to a native CreateThread worker; local syntax now checks
+  `-fno-exceptions` too. Runtime checks remain pending a new full CI.
 - ci 40318144247 at 722f86b verifies the local negative-certificate fixture
   tests on both Windows runners: `PASS net: DNS and HTTPS on the internet,
   local expired/wrong-host/self-signed/untrusted certificates rejected`.
