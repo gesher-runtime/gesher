@@ -152,6 +152,9 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
 if (Test-Path "$Dir/recordapp.apk") {
   $bcpRec = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
   $dvmRec = @("-Xbootclasspath:$bcpRec", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+  CheckTimed 'media3: Camera2 request selection is atomic against 1000 contended cancel/flush calls, with ordered frame numbers and queued-capture priority' "$Dir/dalvikvm.exe" `
+    @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraRequestRaceTest')) `
+    @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed') 120
   $env:GESHER_CAMERA_TEST = '1'
   $env:GESHER_MEDIA_TRACE_RECORD = '1'
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-single'
