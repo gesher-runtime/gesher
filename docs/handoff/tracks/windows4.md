@@ -219,3 +219,20 @@ The pre-fix Update variant fails exactly that one ownership assertion;
 the fixed production adapter has zero failures locally under g++ Werror.
 This fix is newer than CI 40396019963 (source ed94b87); that source cannot
 be treated as mergeable even if its runtime checks pass.
+
+Follow-up independent review found no established standard-IME feedback loop,
+but the COM contract permits layout -> identical selection -> host caret ->
+layout feedback. Equal carets and identical selection/direction now produce
+no redundant notification/edit. A real sink closes this loop and observes
+one notification, while a changed reverse selection still emits exactly once.
+No claim about a physical IME looping is made.
+
+Publication across Java/native threads is now explicitly ordered by editor
+epoch. finishInput captures its epoch under the editor lock; the native state
+rejects older publications and a document snapshot must match the current
+epoch. A late reply cannot replace a newer snapshot waiting in the queue or
+disable the new editor. Real native adapter fixtures cover delayed finish,
+delayed snapshot, and a fresh connection restarting epoch numbering. Both
+native TSF probes pass locally with g++ Werror; Java syntax compiles against
+the saved framework/core. These follow-ups and integration 117629e are newer
+than the running ed94 CI and require fresh combined verification.
