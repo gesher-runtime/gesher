@@ -18,13 +18,18 @@ in this worktree, no stash, and watch only with the prescribed 120s interval.
 - Audit which duplicate wide/UTF-8 entries actually win registration in
   extra_bionic.cc and locale_bionic.cc; consolidate behavior rather than
   correcting a fallback callers never reach.
-- Complete strict UTF-8 encoding/decoding and restartable conversions over
+- Complete pinned-bionic UTF-8 encoding/decoding and restartable conversions over
   Android's 32-bit wchar_t and 8-byte mbstate_t. Cover split input, pending
   state, reset, NUL, length queries, bounded output and exact source-pointer
-  updates. Reject overlong forms, surrogates, bad continuation and out-of-range
-  values with Android errno, without consuming or writing beyond the contract.
+  updates. Match each pinned function's acceptance/rejection and Android errno
+  for overlong forms, surrogates, bad continuation and out-of-range values,
+  without consuming or writing beyond its contract. Preserve and explicitly
+  test baseline quirks/asymmetries instead of imposing a stricter inferred
+  Unicode policy or claiming general standards conformance from this work.
 - Implement real mbrtoc16/mbrtoc32 and matching C11 conversion/state behavior
-  where missing, including supplementary UTF-16 pairs and pending output.
+  where missing, including supplementary UTF-16 pairs, pending output and the
+  pinned state/NUL behavior. Derive unusual boundaries from a reference CI
+  before choosing behavior; do not silently repair an upstream quirk.
 - Finish wide integer conversions and intmax aliases, signed/unsigned 64-bit
   LP64 bounds, base detection, overflow/underflow and full-width end pointers.
   Audit double/float conversion and missing locale-suffixed forms against the
