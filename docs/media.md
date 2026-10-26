@@ -234,6 +234,10 @@ the microphone (looped, from its start each time recording starts);
   diagnostic log output: the first exception shown is a missing positions
   file, which alone does not establish the launch failure's cause. Stage 3
   remains unverified and needs a new full run after integration is merged.
+- Running: ci 40292991000 at fc99140, after integration 7d6a82e (windows3).
+  Read 38-media and 59-media3 on both runners, confirm that the test scripts
+  reach their zero-failure summaries, and read Just Player's diagnostic lines
+  in e2e. Do not infer stage 3 coverage from a successful build alone.
 - Branch wip/media-soft. Last fully green run: 40258938663 (b57bb74, stage 2 +
   software decoders). In progress when stopped: **ci 40287172595** (the first
   build of all the stage 3 code that links; read its test logs first).
