@@ -102,9 +102,9 @@
       "source": "https://github.com/nesbox/TIC-80",
       "why": "Ships native code only for arm64-v8a (Phase 7, docs/arm64.md): the TIC-80 fantasy console and SDL2 in C (lib/arm64-v8a), run by the arm64 translator; SDLActivity's JNI both ways, native threads, EGL/GLES 2 on the Activity's window.",
       "expectLog": [ "is arm64-v8a: translated", "V/SDL: nativeSetupJNI()" ],
-      "knownFailure": "its arm64-v8a libraries load and run translated (SDL's JNI_OnLoad and three nativeSetupJNI calls into ART) and its window opens, but SDL draws into an SDLSurface (a SurfaceView), which Gesher's graphics stack does not give a Surface yet (docs/media.md, docs/devices.md), so SDL's main thread never starts and the window stays black (ci 40237320424)",
-      "diagnoseLog": "gesher arm64|Fatal signal|Cause:|#[0-9][0-9] pc|FATAL|AndroidRuntime|UnsatisfiedLink|stubbed|SDL|TIC|gesher elf|Exception|exited",
-      "actions": [ { "click": [200, 400] } ]
+      "display": "800x400",
+      "diagnoseLog": "gesher arm64|Fatal signal|Cause:|#[0-9][0-9] pc|FATAL|AndroidRuntime|UnsatisfiedLink|stubbed|SDL|TIC|gesher elf|Exception|exited|EGL|surface|Surface",
+      "actions": [ { "click": [400, 200] } ]
     }
   ]
 }
