@@ -32,7 +32,7 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   - a **PE** image (`MZ`) runs as itself; a **`.cmd`/`.bat`** through
     `cmd.exe /d /s /c`;
   - **`sh`, `/system/bin/sh`, `/bin/sh`** (also `/system/xbin`, `/vendor/bin`)
-    and **`#!...sh` scripts** run in gesher-exec's minimal shell; other `#!`
+    and **`#!...sh` scripts** run in gesher-exec's shell; other `#!`
     interpreters are looked up like programs; a text file without `#!` runs
     with the shell, as the JDK's `execvp` fallback does;
   - anything else is `ENOEXEC`; a directory is `EACCES`; nothing found is
@@ -188,8 +188,9 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** code through 5b5411b is prepared, including integration
-8590f4b. Active CI 40320290754 tests 1189dc4. Build, package and both e2e jobs
+**Current review:** exec3 code through 5b5411b and integration 1d49642 are
+prepared (merged in e86aae). Active CI 40320290754 tests 1189dc4 and predates
+the AOT integration merge. Build, package and both e2e jobs
 pass with zero unexpected failures, required TIC-80 and Puzzles' generator
 exiting 0. Windows-2025 passes the 47-case real-shell suite, ART incremental
 stdin and native-handler Java destroy/tool checks; its only failure is the
@@ -307,6 +308,11 @@ Continuation history and exact evidence:
   startup. No property assertion ran in that failed Check. Both e2e runners
   have zero unexpected failures, including required TIC-80 and Puzzles with
   generator status 0; package passed. Windows-2022 is still pending.
+- Merged the coordinator's verified AOT integration 1d49642 in e86aae while
+  retaining the current Windows-2022 watch. The merge is clean and preserves
+  the boot-image/CI artifacts, test 61, app/window/service changes and the
+  existing libbase ScopedFlock work. Next combined CI must verify this tree;
+  AOT's separate green run does not verify it together with exec3 changes.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
