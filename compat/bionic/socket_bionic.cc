@@ -31,6 +31,7 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -123,6 +124,68 @@ int64_t BIONIC_SYSV Recvfrom(int fd, void* buf, size_t n, int flags, sockaddr* a
   return recvfrom(fd, buf, n, flags, a, an);
 }
 int64_t BIONIC_SYSV Recvmsg(int fd, msghdr* m, int flags) { return recvmsg(fd, m, flags); }
+cmsghdr* BIONIC_SYSV CmsgNxthdr(msghdr* m, cmsghdr* c) { return __cmsg_nxthdr(m, c); }
+
+int BIONIC_SYSV Sendmmsg(int fd, mmsghdr* messages, unsigned count, int flags) {
+  if (count != 0 && messages == nullptr) return errno = kEFAULT, -1;
+  unsigned sent = 0;
+  for (; sent < count && sent < 1024; ++sent) {
+    int64_t n = sendmsg(fd, &messages[sent].msg_hdr, flags);
+    if (n < 0) return sent != 0 ? static_cast<int>(sent) : -1;
+    messages[sent].msg_len = static_cast<unsigned>(n);
+  }
+  return static_cast<int>(sent);
+}
+
+int BIONIC_SYSV Recvmmsg(int fd, mmsghdr* messages, unsigned count, int flags,
+                        LinuxTimespec* timeout) {
+  if (count != 0 && messages == nullptr) return errno = kEFAULT, -1;
+  if (timeout != nullptr && (timeout->tv_sec < 0 || timeout->tv_nsec < 0 ||
+                            timeout->tv_nsec >= 1000000000)) return errno = kEINVAL, -1;
+  int fd_flags = fcntl(fd, F_GETFL, 0);
+  if (fd_flags < 0) return -1;
+  constexpr int kWaitForOne = 0x10000;
+  bool wait_for_one = (flags & kWaitForOne) != 0;
+  flags &= ~kWaitForOne;
+  if ((fd_flags & O_NONBLOCK) != 0) flags |= MSG_DONTWAIT;
+  auto start = std::chrono::steady_clock::now();
+  LinuxTimespec limit = timeout != nullptr ? *timeout : LinuxTimespec{};
+  auto remaining = [&] {
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    LinuxTimespec left{limit.tv_sec - elapsed / 1000000000,
+                       limit.tv_nsec - elapsed % 1000000000};
+    if (left.tv_nsec < 0) --left.tv_sec, left.tv_nsec += 1000000000;
+    return left.tv_sec < 0 ? LinuxTimespec{} : left;
+  };
+  auto result = [&](int n) {
+    if (timeout != nullptr) *timeout = remaining();
+    return n;
+  };
+  unsigned received = 0;
+  while (received < count && received < 1024) {
+    DeliverPendingSignals();
+    if (timeout != nullptr && (flags & MSG_DONTWAIT) == 0) {
+      LinuxTimespec left = remaining();
+      int64_t millis = left.tv_sec > 2147483 ? 0x7fffffff
+                       : left.tv_sec * 1000 + (left.tv_nsec + 999999) / 1000000;
+      int ms = millis > 0x7fffffff ? 0x7fffffff : static_cast<int>(millis);
+      pollfd p{fd, POLLIN, 0};
+      int ready = poll(&p, 1, ms);
+      if (ready < 0) return result(received != 0 ? static_cast<int>(received) : -1);
+      if (ready == 0) {
+        left = remaining();
+        if (left.tv_sec != 0 || left.tv_nsec != 0) continue;
+        break;
+      }
+    }
+    int64_t n = recvmsg(fd, &messages[received].msg_hdr, flags);
+    if (n < 0) return result(received != 0 ? static_cast<int>(received) : -1);
+    messages[received++].msg_len = static_cast<unsigned>(n);
+    if (wait_for_one) flags |= MSG_DONTWAIT;
+  }
+  return result(static_cast<int>(received));
+}
 
 // --- name resolution ----------------------------------------------------------
 
@@ -432,9 +495,12 @@ void RegisterSocket(SymbolTable& t) {
   E("send", Send);
   E("sendto", Sendto);
   E("sendmsg", Sendmsg);
+  E("sendmmsg", Sendmmsg);
   E("recv", Recv);
   E("recvfrom", Recvfrom);
   E("recvmsg", Recvmsg);
+  E("recvmmsg", Recvmmsg);
+  E("__cmsg_nxthdr", CmsgNxthdr);
   E("__sendto_chk", SendtoChk);
   E("__recvfrom_chk", RecvfromChk);
   E("getaddrinfo", Getaddrinfo);

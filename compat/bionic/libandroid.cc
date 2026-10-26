@@ -31,6 +31,7 @@
 //  - ANativeActivity_*, AInputQueue_*/AInputEvent_* and AChoreographer_* are
 //    in native_activity.cc and choreographer.cc.
 
+#include "extra_bionic.h"
 #include "jni_bridge.h"
 #include "shim_internal.h"
 
@@ -39,6 +40,7 @@
 
 #include <android/asset_manager.h>
 #include <android_runtime/android_util_AssetManager.h>
+#include <android-base/properties.h>
 #include <androidfw/Asset.h>
 #include <androidfw/AssetDir.h>
 #include <androidfw/AssetManager2.h>
@@ -561,6 +563,15 @@ void Register() {
 #undef CFG
 #undef E
   for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+  // __system_property_* read and write the runtime's properties (what
+  // gesher-app loaded from build.prop), as an app's code sees them on a
+  // device (extra_bionic.cc).
+  SetPropertyAccessors(
+      [](const char* name, std::string* value) {
+        *value = android::base::GetProperty(name, "");
+        return !value->empty();
+      },
+      [](const char* name, const char* value) { return android::base::SetProperty(name, value); });
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);
