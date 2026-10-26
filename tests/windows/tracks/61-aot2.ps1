@@ -287,14 +287,29 @@ if ($verifyOk) {
     }
     # Startup, median of 3: from the APK, the verify oat file, the app image.
     $st = [ordered]@{ apk = @(); verify = @(); image = @() }
-    $bak = Join-Path $aotRoot 'oat-bak'
+    # Use a separate copy for the APK-only case. A runtime can recreate an
+    # empty oat directory, making Move-Item restore the backup inside it.
+    $apkOnlyDir = Join-Path $aotRoot 'apk-only'
+    New-Item -ItemType Directory -Force $apkOnlyDir | Out-Null
+    $apkOnly = Join-Path $apkOnlyDir 'lifecycle.apk'
+    Copy-Item -LiteralPath $apk -Destination $apkOnly
+    $apkPath = NoDrive $apk
+    $apkOnlyArgs = @($appArgs | ForEach-Object { if ($_ -eq $apkPath) { NoDrive $apkOnly } else { $_ } })
+    $startupModesOk = $true
     for ($i = 0; $i -lt 3; $i++) {
       foreach ($k in 'image', 'apk') {
-        if ($k -eq 'apk') { Move-Item (Join-Path $single 'oat') $bak }
-        $rs = Aot2Startup $appArgs 'LifecycleActivity onCreate'
-        if ($k -eq 'apk') { Move-Item $bak (Join-Path $single 'oat') }
+        $timingArgs = if ($k -eq 'image') { $appArgs } else { $apkOnlyArgs }
+        $rs = Aot2Startup $timingArgs 'LifecycleActivity onCreate' $logEnv
+        $loadedAppImage = $rs.Out -match 'gesher: app image loaded: .*lifecycle\.art:'
+        if ($loadedAppImage -ne ($k -eq 'image')) {
+          $startupModesOk = $false
+          Aot2Fail "startup measurement $k did not use its expected app-image mode" $rs.Out
+        }
         if ($rs.Exit -eq 0 -and $null -ne $rs.At) { $st[$k] += @($rs.At) }
       }
+    }
+    if ($startupModesOk -and $st['image'].Count -eq 3 -and $st['apk'].Count -eq 3) {
+      Write-Host 'PASS  aot2: every app startup sample uses its claimed APK-only or app-image path, without moving compiled artifacts'
     }
     if ($st['image'].Count -eq 3 -and $st['apk'].Count -eq 3) {
       Write-Host ("INFO  aot2: lifecycle.apk startup to Activity.onCreate with the JIT (median of 3): {0} ms from the APK, {1} ms with its app image and speed-profile code" -f
