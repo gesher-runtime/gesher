@@ -25,6 +25,7 @@ public final class ExecActivity extends Activity {
             Exec3ProcessTest.main(new String[]{directory});
             Exec3PropertiesTest.main(new String[]{directory});
             Exec3LogTest.main(new String[]{directory});
+            if (getIntent().getBooleanExtra("exec3.commands", false)) Exec3CommandsTest.main(new String[0]);
             System.out.println("Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device");
             view.setText("Exec3 process checks passed");
         } catch (Throwable failure) {

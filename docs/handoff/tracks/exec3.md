@@ -11,6 +11,8 @@ semantics and structured Java/NDK logcat. Local native/tool checks pass; their
 new ART/APK assertions are running in CI 40352529279 at dc19ee2 after merging
 integration 46bc9e5. See docs/exec.md for exact evidence and open
 pm/am, umask and policy scope. The original brief below remains unchanged.
+The pm/am Binder client and separate installed target APK are prepared after
+that dispatch; only their source checks have passed so far.
 
 Native process leftovers reported by the exec2 track. The original brief
 given to the first agent of this track (2026-10-26), kept verbatim. A

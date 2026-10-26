@@ -100,6 +100,18 @@ overlapped I/O bounded by a monotonic deadline and broker lifetime. Only then
 does it start servicemanager. The ten-case native probe includes delayed,
 malformed, stalled, exited and wrong-pid brokers. RTL assertions stay intact.
 
+The next pm/am slice now has a real Binder client on the boot class path.
+Native tools start this helper with the same device environment and runtime
+jars/image. pm list packages/path query IPackageManager; am start uses the
+activity-task service, force-stop delegates through IActivityManager to its
+existing process termination implementation, and broadcast calls the actual
+broadcast controller. Broadcast submission is asynchronous, with no fabricated
+ordered result. A second installed APK lets the device test observe Activity
+resume, receiver delivery and actual pid disappearance after force-stop.
+User 0 and the implemented intent options are explicit; unsupported commands
+fail. Java and native source checks pass, but this slice is absent from active
+CI 40352529279 and still requires real device evidence.
+
 ## Fork and static-executable feasibility review
 
 The native fork trampoline saves the calling thread's register/stack return

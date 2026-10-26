@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -316,17 +317,49 @@ int Sleep_(const std::vector<std::string>& args) {
 
 // --- pm ------------------------------------------------------------------------
 //
-// Package management is the system server's (Installer); from a native process
-// there is no binder here, so pm answers the few harmless queries and declines
-// the rest, as a shell without the right permissions would.
-
-int Pm(const std::vector<std::string>& args) {
-  if (!args.empty() && args[0] == "path") {
-    std::fprintf(stderr, "pm: not available from a native process\n");
-    return 1;
+// Keep the Binder client in the boot-classpath helper, with the runtime's real
+// package/activity interfaces. Native callers inherit the same device namespace.
+int DeviceCommand(const std::string& tool, const std::vector<std::string>& args) {
+  if (EnvOr("GESHER_BINDER", "").empty()) { std::fprintf(stderr, "%s: no Gesher device namespace\n", tool.c_str()); return 1; }
+  std::wstring directory = LauncherPath();
+  size_t slash = directory.find_last_of(L"/\\");
+  if (slash == std::wstring::npos) return 126;
+  directory.resize(slash + 1);
+  std::wstring image = WindowsPath(EnvOr("ANDROID_ROOT", "/system") + "/framework/boot.art");
+  if (GetFileAttributesW(image.c_str()) == INVALID_FILE_ATTRIBUTES) image = directory + L"framework\\boot.art";
+  if (GetFileAttributesW(image.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    std::fprintf(stderr, "%s: the runtime boot image is unavailable\n", tool.c_str());
+    return 126;
   }
-  std::fprintf(stderr, "pm: not available from a native process\n");
-  return 1;
+  auto vm_path = [&](std::wstring path) {
+    // Boot class paths use ':' separators. Rooted paths on the VM's current
+    // drive avoid interpreting the Windows drive colon as another entry.
+    if (path.size() > 2 && path[1] == L':' && directory.size() > 2 &&
+        (path[0] | 0x20) == (directory[0] | 0x20)) path.erase(0, 2);
+    std::replace(path.begin(), path.end(), L'\\', L'/');
+    return Narrow(path);
+  };
+  std::string boot_class_path = "-Xbootclasspath:";
+  for (const wchar_t* jar : {L"core-oj.jar", L"core-libart.jar", L"core-icu4j.jar", L"framework.jar", L"gesher-app.jar"}) {
+    if (boot_class_path.back() != ':') boot_class_path += ':';
+    boot_class_path += vm_path(directory + jar);
+  }
+  std::vector<std::string> command{Narrow(directory + L"dalvikvm.exe"),
+      boot_class_path, "-Ximage:" + vm_path(image), "-Xint", "-Xusejit:false", "com.gesher.server.RuntimeCommands", tool};
+  command.insert(command.end(), args.begin(), args.end());
+  Launch launch;
+  int error = PrepareLaunch(command, Narrow(directory), &launch);
+  if (error) { std::fprintf(stderr, "%s: %s\n", tool.c_str(), ErrorText(error)); return 126; }
+  PROCESS_INFORMATION process{};
+  DWORD failed = SpawnWithFds(launch, nullptr, directory,
+      {{0, GetStdHandle(STD_INPUT_HANDLE)}, {1, GetStdHandle(STD_OUTPUT_HANDLE)}, {2, GetStdHandle(STD_ERROR_HANDLE)}}, &process);
+  if (failed) { std::fprintf(stderr, "%s: %s\n", tool.c_str(), ErrorText(ErrnoFromWin32(failed))); return 126; }
+  CloseHandle(process.hThread);
+  WaitForSingleObject(process.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(process.hProcess, &code);
+  CloseHandle(process.hProcess);
+  return ExitStatus(code);
 }
 
 }  // namespace
@@ -334,7 +367,7 @@ int Pm(const std::vector<std::string>& args) {
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm am\n");
       std::fflush(stdout);
       return 0;
     }
@@ -349,7 +382,7 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "logcat") return Logcat(args);
   if (name == "kill") return Kill(args);
   if (name == "sleep") return Sleep_(args);
-  if (name == "pm" || name == "am") return Pm(args);
+  if (name == "pm" || name == "am") return DeviceCommand(name, args);
   std::fprintf(stderr, "%s: not found\n", name.c_str());
   return 127;
 }
