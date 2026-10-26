@@ -225,6 +225,13 @@ the microphone (looped, from its start each time recording starts);
   and the coordinator's reliability patch. No results from this run are
   verified yet. Watch with interval 120; read actual counters before changing
   any recording capacity, collection duration or frame/tone threshold.
+- The run's main/framework/native/graphics builds and boot image pass, but
+  media job 121646773927 remains in Generate the test media for over 20
+  minutes. Its active logs endpoint returns 404, so the stalled command is
+  not identified. Prepared workflow change: use an existing ffmpeg before
+  attempting apt, bound apt network waits/retries and cap generation at 10
+  minutes. Generator scripts and asset/check thresholds are unchanged. No
+  recording runtime result is available while the media artifact is blocked.
 - Latest full CI: 40330465222 at d1bbc028a57cbbfbe5524ef8f1a2577782d6c7f1,
   including integration 4d144663/AOT2. All metadata and both test logs are
   read: windows-2025 job 121604055608 ends `0 test(s) failed`;
