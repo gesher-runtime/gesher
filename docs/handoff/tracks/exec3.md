@@ -10,7 +10,10 @@ capture. Their prepared corrections pass native host/mocked-wrapper checks;
 actual ART/Java proof is running in CI 40372171824 at 7ae515f. The tree includes
 integration d68ec795 on f677944 and the complete coordinator Process follow-up,
 prepared pm/am, one-shot readiness, UTF-8/long-value, Launcher framing and
-completed-geocoder fixes. See docs/exec.md for exact evidence and open umask/
+completed-geocoder fixes. After dispatch, merge 2ba2375 incorporates integration
+634a273 (docs on verified AOT3 oatdump f5ce6f6); that combined tree still needs
+final CI. The active run's build/package pass; Windows and e2e remain running.
+See docs/exec.md for exact evidence and open umask/
 policy scope. The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
