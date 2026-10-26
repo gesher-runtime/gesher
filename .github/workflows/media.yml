@@ -61,6 +61,8 @@ jobs:
           sudo apt-get update -q > /dev/null
           sudo apt-get install -y --no-install-recommends ffmpeg > /dev/null
           tests/apps/mediaapp/gen-media.sh
+          # videoapp's clips (stage 2): a color per half second, one per codec.
+          tests/apps/videoapp/gen-media.sh
           # Gesher's default ringtone, notification and alarm sounds, for the
           # tests and the installer.
           compat/media/sounds/gen-system-sounds.sh out
@@ -92,6 +94,9 @@ jobs:
           (cd work/framework-classes && unzip -q ../framework-classes.zip)
           (cd work/coremod && unzip -q ../coremod.zip)
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/mediaapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/videoapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           ls -la out
