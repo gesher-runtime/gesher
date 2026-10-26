@@ -233,6 +233,18 @@ the microphone (looped, from its start each time recording starts);
   Read both current test logs before the next dispatch, then merge current
   integration (native2, 8b1b09d or later) and fix/diagnose the actual missing
   dependency. Do not count package success as app/session verification.
+- Windows results are now read: 5 failures on 2022 (badssl timeouts plus
+  the two session checks), 3 on 2025 (known audio timing plus the two
+  session checks). NDK read/recorder tones and H.264 picture counts now
+  pass in both modes/runners. Session creation is the common remaining
+  NoClassDefFoundError, also seen by Just Player. The pinned constructor
+  unconditionally casts a null media_communication service to the optional
+  mainline MediaCommunicationManager, whose runtime class is not shipped.
+  Framework patch 0591 guards that cast when the service is absent; the
+  test logs whether that optional class is present and still requires the
+  complete legacy-session round trip. This is pending CI, not proof that
+  the missing Session2/media module is implemented. Added its source path
+  to aosp.lock for patch application.
 - Lead-engineer continuation: ci 40292991000 at fc99140 completed with
   4 failures on windows-2022 and 5 on windows-2025; package passed, e2e
   had 1 unexpected failure. The recording/mux/recorder/ImageReader paths
