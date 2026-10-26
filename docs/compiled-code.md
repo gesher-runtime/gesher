@@ -328,11 +328,12 @@ package and e2e:
 
 ## Status and next steps (aot3 track, ADR 0065)
 
-Pinned oatdump is built and packaged; its framework/app code/image/negative
-checks all pass on both runners in ci 40352810247 at f949321. That full run
-is red only on the old completed WinRT probe teardown. Combined verification
-40368334642 at 96ef687 includes the latest native foundation and focused
-probe/log-framing/audio-fixture fixes; no full green result is claimed yet.
+Pinned oatdump is built and packaged; full ci 40368334642 at 96ef687 passes
+all jobs, all four new checks and both zero-failure Windows summaries, the
+installed-copy/input/uninstall checks and both required e2e jobs (0 unexpected
+failures). No retry. The frozen stage merged as f5ce6f6 through
+wip/aot3-oatdump; head d038b75 adds docs only. Its report is
+handoff/tracks/aot3-oatdump.md. The aggregate compilation contracts stay open.
 
 Prepared after that dispatch, pending CI: install-time .dm validation and
 copying, profman's checksum/type/method validation and installed-path key

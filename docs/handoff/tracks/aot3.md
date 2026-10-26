@@ -37,9 +37,14 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
-Current full CI: 40368334642 at 96ef68790fc59098758ddead6b5f58be9eb5d648,
-with foundation f677944 and the shared reliability fixes below. Watching at
-interval 120; Windows jobs are still pending, so no full green claim.
+Verified oatdump stage: full ci 40368334642 at
+96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. Personally read every
+job (22 success/six skipped), all four aot3 and 14 aot2 PASS lines per runner,
+both zero-failure summaries, installed-copy/cleanup and both Puzzles/TIC-80
+e2e logs (0 unexpected failures). Merged into integration as f5ce6f6 through
+the frozen aot3-oatdump branch; its head d038b75 adds docs only. The merged
+tree differs from the verified source only in docs, so no extra integration
+CI is needed. This continuation now includes current integration 634a273.
 
 Prepared follow-up, not part of that run: install-time paired .dm archive
 validation through pinned DexMetadataHelper, copied base.dm, unchanged-APK
@@ -56,6 +61,9 @@ own-Java compile attempt failed because saved dependencies lack generated
 app classes/android.system/dalvik classes; it is not a passing compile.
 No local AOSP build was attempted. Shared-library contexts and secondary
 dex remain open and are not silently covered by this profile implementation.
+### Earlier CI history
+
+Pending-run statements below are historical and superseded by this result.
 
 ci 40352810247 at f949321: all four aot3 checks pass on both Windows
 versions, including actual nonempty compiled code and app-image loading.
