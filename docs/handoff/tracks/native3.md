@@ -62,6 +62,20 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Prepared Unicode production follow-up, not yet CI verified: replace Windows'
+changing ICU/16-bit CRT predicates with an isolated bridge over the pinned
+ICU4C data, matching bionic's ASCII and binary-property/category rules. Plain
+and locale forms share that bridge; add missing iswalnum_l/iswgraph_l and
+wctrans_l/towctrans_l, including invalid-transform EINVAL. A native host
+executable computes all-code-point hashes through actual System V shim
+entries for all 14 plain/locale functions, compared with the independent
+ICU4X oracle. Native2 adds 11 full-width boundary rows through dlsym,
+wctype/wctrans, locale aliases and errors in both ABIs/process modes.
+ICU4C equivalence is a hypothesis to be tested by these hashes, not a claim
+based on the library name. No local AOSP/ICU build ran; PowerShell parses.
+The branch now includes verified oatdump integration 634a273. The earlier
+Process run below remains valuable but does not verify this new source.
+
 Independent Unicode reference verified in ci 40374405950 at c5a9f95:
 all four probe jobs succeed; the pinned bionic ICU4X wrapper and exact
 2.0.0-beta2 crate/data versions produce 14 whole-code-point predicate/case
@@ -72,9 +86,13 @@ dependencies pinned to beta2. Future fetch/run use --locked. This is not a
 production change or proof of Windows ICU parity; that gap stays open.
 No Rust/AOSP build ran locally and no Actions artifact was downloaded.
 
-Current full CI: 40367959106 at 644e7f8, including integration f677944.
-Watching with --exit-status --interval 120. This combined proc-native/stub
-follow-up and shared reliability changes are not verified yet.
+Verified Process follow-up: full ci 40367959106 at
+644e7f8c6596b0de10233f947504f2bcf5a5de98, with integration f677944. Every
+job personally read (22 success/six skipped), all five native3/four APK PASS
+lines per runner, both 0 test(s) failed summaries, actual package input/
+uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected
+failures). No retry. New Unicode source and the newer oatdump integration
+were not part of this run; the combined branch needs the next full CI.
 
 ci 40365301342 at 9361064 was cancelled after media3's diagnostic run
 40359757434 exposed four early native/Looper/resource failures: the new
