@@ -220,100 +220,84 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — remaining camera-source timing gate, 2026-10-26
-- Running source-phase CI **40377453079** at
-  **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, with current integration
-  634a273 and the new opt-in camera timings. This is a changed diagnostic
-  tree, not a rerun claim about a known flake. No result is verified yet;
-  camera and boot-startup criteria remain unchanged. Watch interval 120.
-- Latest full CI **40368511782**, attempt 1, exact source SHA
-  **43cfe4e1d59032ae493836f8c32571617950069a**, includes integration d68ec79
-  and the verified native3 Bitmap/Minikin foundation. All job metadata and
-  both runtime logs are read: 21 success, six skipped, one failed job.
-  Windows-2025 **121737427649** ends `0 test(s) failed`: all **33 media3**,
-  **12 part-1 device**, 32 surfaces, five native3 and 13 AOT2 PASS checks.
-  Windows-2022 **121737427665** ends `2 test(s) failed`: device camera and
-  boot-profile-vs-speed startup with JIT; 32 media3, 12 part-1 device,
-  32 surfaces, five native3 and 12 AOT2 PASS checks. No fully green claim.
-- The complete Process fix is verified: the focused procfs/field-format
-  regression passes on both runners, all lightweight native/Looper/resource
-  checks pass again, and both recording modes complete without uncaught app/
-  daemon exceptions. Java RECORD_AUDIO denial is explicitly verified in both
-  modes. Package-log clearing prevents stale device output on repeated runs.
-- All four AudioRecord mode/runner cases still show zero lost frames and
-  overruns. Every NDK callback/read, cumulative input-xrun, session, codec,
-  mux, audio/Surface recorder and ImageReader check passes. The earlier
-  uninstrumented AudioRecord frequency failure remains unexplained, with no
-  evidence justifying a buffer or signal-threshold change.
-- Camera source evidence: single-process camera accepts/encodes/muxes 60
-  frames on each runner. Device camera accepts/encodes/muxes exactly **30
-  (2025)** and **16 (2022)**, with zero rejects, queue drops, encode failures,
-  pending frames at stop or extra drained packets; drain succeeds. Device
-  callbacks are 31/31 and 17/17, source frame numbers contiguous, over about
-  2.1/2.0 seconds. Correct picture/order remain intact. Production/delivery
-  is the low-count boundary, and fixing the real post-GC native failures
-  does not establish camera-pacing causality.
-- Prepared diagnostics, not a collection change: CameraDeviceUser now emits
-  opt-in phase total/max timings for next/setup/native-read/started-callback/
-  delivery/metadata/result/tail, source/delivery errors and final idle wait.
-  The capture thread owns all counters; 59-media3 prints the trace in both
-  modes. Five own Java sources compile with release 11 and PowerShell parses.
-  The original 2-second recording, 30+ frames, picture, duration, queue and
-  tone thresholds remain unchanged. This new instrumentation needs CI.
-- Exact unrelated 2022 startup failure: JIT boot-image medians **559 ms
-  profile / 476 ms speed** (to exit 591/508), interpreter 658/684. JIT
-  onCreate samples profile 602.8, 433.7, 577.2, 500.9, 559.3 versus speed
-  457.4, 512.9, 476.1, 558.5, 459.6 ms; warmups excluded. The 10%/30 ms
-  criterion is unchanged. The incoming AOT3 APK-vs-app-image sample-artifact
-  fix addresses a different fixture and is not a demonstrated fix for this
-  boot timing result. The coordinator has the exact evidence.
-- Main build **121732623396** compiles native_fonts and the complete Process
-  source and links dalvikvm. Media **121736854606** builds all three APKs.
-  Package **121737427680** passes actual installed-window/input and all
-  device/data/association/toast/Start-menu uninstall cleanup. E2e2025
-  **121738574174** / e2e2022 **121738574255** each pass four pinned transport
-  fixtures, all ten apps including Just Player 0.217 and required TIC-80
-  1.01.00, association/shortcut launch and `0 unexpected failures`.
-- The completed-only geocoder probe passes genuine InvalidCredentials on
-  both runners. It flushes the actual WinRT answer and terminates only its
-  own probe; errors remain exit 1 and incomplete answers fail 30/45-second
-  guards. No local geocoder/network/termination operation was executed.
-- Previous diagnostic **40359757434** at 20b1d38 had five failures each:
-  four missing lightweight Process declarations plus device camera (19/22
-  frames). It exposed readProcFile in ProcfsMemoryUtil -> MetricsLoggerWrapper
-  -> ActivityThread -> VMRuntime.onPostCleanup -> ReferenceQueueDaemon.
-  Root's complete follow-up 644e7f8 adds readProcFile/parseProcLine, all three
-  stub declarations and the direct regression; current CI verifies those.
-- Earlier **40349479693** at 1361200 had three failures each: two package-list
-  fixture failures from installed videoapp (now fixed by its own uninstall)
-  and device camera (17/22 frames). All 12 new part-1 device cases passed.
-  **40330465222** at d1bbc028 had zero failures on 2025, two on 2022
-  (uninstrumented AudioRecord and camera); **40318189310** passed all 30
-  earlier media3 checks but failed two output measurements. Finite AAudio
-  prefill and explicit silence between WebM clips retain original tone/frame/
-  duration checks and pass repeatedly on both runners. 40329138943 and
-  40343220358 were cancelled when superseded; the latter's delay was quiet
-  apt setup, now bounded. No generator assets/assertions were changed.
-- Camera recording is the real GESHER_CAMERA_TEST -> Camera2 -> recorder
-  Surface -> H.264 MP4 -> independently decoded picture pipeline. Ordinary
-  H.264 encoding actually uses libavc after MF I420 rejection on these
-  runners; positive MF encoding/explicit forced-soft coverage remain scoped
-  follow-ups. CI has no physical microphone and uses a known WAV source.
+### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
+- Latest full CI **40377453079**, attempt 1, exact source SHA
+  **ad004619c279877dfbfa2927b0cc1114a9c8e7a0**, includes integration
+  634a273 (README-only above verified oatdump integration f5ce6f64). All
+  28 job conclusions and both runtime logs are read: 20 success, six skipped,
+  two failed jobs. Windows-2022 **121769036527** and Windows-2025
+  **121769038194** each end `1 test(s) failed`: only device camera throughput.
+  Each passes **32 media3**, **12 part-1 device**, 32 surfaces, five native3,
+  14 AOT2 and four AOT3 checks. There is no fully green claim.
+- The real GESHER_CAMERA_TEST -> Camera2 -> recorder Surface -> H.264 MP4 ->
+  independent decoded-picture pipeline records **61 frames in single process**
+  on both runners, **20 device frames (2022)** and **27 (2025)**. Every accepted
+  frame is encoded/muxed, with zero rejected frames, queue drops, encode
+  failures or pending frames; drain succeeds. Picture/order remain correct.
+  Original recording duration (2 seconds), 30+ frame requirement and all
+  picture/tone/length thresholds remain unchanged.
+- Opt-in phase evidence distinguishes active throughput from teardown. Device
+  native-read phase totals/maxima are **1,720,977/182,060 us (2022)** and
+  **1,329,584/131,342 us (2025)**. Delivery totals are 22,260/621,418 us;
+  2022 also has one 158,542 us metadata operation. The 2022 result callback's
+  5,039,719 us maximum is terminal work after collection, not five seconds of
+  active production. Single-process traces also have terminal ~5 s started
+  callbacks. Native/JNI sub-phase diagnostics are prepared to distinguish
+  MF pacing/ReadSample/conversion/copy from JNI and delivery waits.
+- A separate terminal lock cycle is established by the pinned framework's
+  bytecode: CameraDeviceImpl.close holds mInterfaceLock across disconnect;
+  its local started/result callbacks acquire that lock; CameraDeviceUser
+  joins the capture thread for 5 s inside disconnect. Prepared fix queues
+  callbacks serially, as the interface's FLAG_ONEWAY proxy does, retaining
+  arguments/order and logging target errors. It drains that queue without
+  joining the callback executor; the capture thread alone closes its native
+  handle after its last read. The fixture now waits for exactly one onClosed
+  before quitting/joining its callback HandlerThread, with a separate PASS
+  assertion in each mode (35 media3 checks expected). These new changes need
+  full CI; they are not yet proved to improve active frame throughput.
+- Own six Java service sources and RecordActivity compile with release 11;
+  a focused real-dispatcher lock/order/error/lifetime check passes on the JDK,
+  59-media3 parses, and the portable native trace header passes C++17
+  -Wall/-Wextra/-Werror syntax checking. Native AOSP-facing builds remain CI-only.
+- All four AudioRecord mode/runner cases report zero lost frames/overruns.
+  NDK callback/read and cumulative input-xrun, Binder session, codec/mux,
+  audio/Surface recorder, permission-denial and ImageReader checks pass.
+  The complete Process regression passes on both runners; both modes finish
+  without uncaught app/daemon exceptions. The earlier uninstrumented audio
+  frequency failure remains unexplained; no signal/buffer threshold changed.
+- Boot profile-vs-speed startup passes this run: 2022 JIT **419/429 ms**,
+  interpreter 555/582; 2025 JIT **463/491 ms**, interpreter 646/689. The original
+  10%/30 ms criterion is unchanged. Previous 40368511782 failed 2022 JIT
+  **559/476 ms**, and the APK-vs-app-image artifact fix is not a demonstrated
+  cause of the changed boot timing. The coordinator owns repeat boot timing
+  diagnosis; retain the previous failure rather than claiming a known flake.
+- Main build **121764302707** compiles Process/native_fonts and links both
+  oatdump/dalvikvm. Media **121768388471** builds all three APKs/NDK libraries.
+  Actual package **121769036621** passes installed oatdump inspection,
+  window/input and device/data/association/toast/Start-menu uninstall cleanup.
+  E2e2025 **121770110767** / e2e2022 **121770111046** each pass four pinned
+  transport fixtures, all ten apps (Just Player 0.217 and required TIC-80
+  1.01.00 included), association/shortcut launch and `0 unexpected failures`.
+- Previous 40368511782 at 43cfe4e had 2025 zero failures/33 media3 PASS, 2022
+  two failures (device camera 16 frames and boot JIT timing)/32 media3 PASS.
+  40359757434 at 20b1d38 exposed four missing Process stub declarations plus
+  device camera (19/22 frames); root's complete 644e7f8 follow-up is now
+  independently verified. 40349479693 had videoapp fixture uninstall failures
+  (fixed by its own uninstall) plus camera; 40330465222 had an uninstrumented
+  AudioRecord failure and camera on 2022. Output prefill/separators preserve
+  tone thresholds and pass repeatedly. 40329138943/40343220358 were superseded;
+  the latter's quiet apt setup is now bounded. No generator assets changed.
 - Keep the [source API inventory](media-api-inventory.md), preserved
   [313 missing NDK exports](handoff/native-api-coverage.json) and
-  [media4](handoff/tracks/media4.md) (ADR 0064 reserved). WebM mux proof is
-  Opus audio only; video/audio interleaving and Java MediaCrypto/DRM remain
-  explicit follow-ups alongside session/Windows controls, permission/user
-  filtering, recorder lifecycle/limits, physical routes, persistent surfaces,
-  legacy Camera, effects and hardware. services3 owns advanced Camera2
-  service contracts. No broad roadmap completion box is ticked.
-- Current integration is merged: 634a273de497f042408cdb13df5b6e26bd030903,
-  a README-only update above verified oatdump integration f5ce6f64
-  (source 96ef687, ci 40368334642). The existing complete Process fix,
-  completed-only geocoder exit, Just Player pin, transport fixtures and
-  missing-class trace are retained. The boot startup criterion is unchanged.
-- Next: read the opt-in camera-phase diagnostics without changing collection, and retain
-  the separate boot startup failure until its own evidence resolves it.
+  [media4](handoff/tracks/media4.md) (ADR 0064 reserved). Ordinary H.264 actually
+  uses libavc after MF I420 rejection; successful MF/forced-soft coverage,
+  physical audio routes, legacy Camera, recorder lifecycle/limits, output
+  cumulative-xrun cycles, WebM video/audio interleaving, Java DRM/crypto,
+  session/Windows controls and permission/user filtering remain explicit
+  follow-ups. services3 owns advanced Camera2 contracts. No broad roadmap
+  completion box is ticked; the coordinator transfers the 313 entry owners.
+- Next: full CI of the separate terminal fix and native source/delivery
+  diagnostics; inspect actual phase evidence before changing collection.
   No integration/main merge or release action here.
 
 ### Done and verified
