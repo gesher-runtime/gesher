@@ -49,8 +49,13 @@ lines remain visible and separate from canonical results. This is native-only
 evidence, not Android/JNI, real base/eventfd, package or e2e verification.
 
 Full diagnostic 40413109702 at 74d1346 cannot reach Android because its framework
-job failed on the graphics-dex server dependency described below; its independent
-main native build continues. Targeted framework diagnostic **40416561427** at
+job failed on the graphics-dex server dependency described below; it is now
+complete red, with that one failed job among 25 success/failure/skipped jobs.
+Its independent main native build succeeds: the actual job 121888554943 log
+shows connection/IME/text-store/text-service/input_jni compilation and
+`203 assembly boundaries checked, 0 problem(s)`. This is full-toolchain build
+evidence at that SHA, not Android/package/e2e runtime evidence.
+Targeted framework diagnostic **40416561427** at
 d50084d checks the dispatcher dependency correction without canceling that build.
 The next full combined run must use the merged runtime integration above and
 read actual Android IME/composition, Application Resources and legacy layout
