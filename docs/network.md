@@ -226,6 +226,11 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (web3)
 
+Running full ci **40376044459** at
+`939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
+and bounded TLS fixture cleanup. Watch output is
+`C:/work/gesher-ci-review/web3-40376044459-watch.log`. Full results pending.
+
 Completed diagnostic ci **40364697280**, exact source
 `eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
 `C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. Both runners
