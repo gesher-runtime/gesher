@@ -28,6 +28,7 @@ public final class ApplicationDisplay {
     private static final RemoteCallbackList<IDisplayManagerCallback> CALLBACKS =
             new RemoteCallbackList<>();
     private static volatile int sRotation = Surface.ROTATION_0;
+    private static long sSequence;
 
     private ApplicationDisplay() {
     }
@@ -40,6 +41,10 @@ public final class ApplicationDisplay {
             info.appHeight = info.logicalHeight = DeviceProfile.WIDTH;
         }
         info.rotation = rotation;
+        int small = Math.min(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
+        int large = Math.max(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);
+        info.smallestNominalAppWidth = info.smallestNominalAppHeight = small;
+        info.largestNominalAppWidth = info.largestNominalAppHeight = large;
         return info;
     }
 
@@ -53,10 +58,19 @@ public final class ApplicationDisplay {
 
     /** Called outside the activity manager's lock, before focus notifications. */
     public static void update(int rotation) {
+        synchronized (CALLBACKS) {
+            update(rotation, sSequence + 1);
+        }
+    }
+
+    /** An older focus calculation must not overwrite a newer concurrent one. */
+    public static void update(int rotation, long sequence) {
         if (rotation < Surface.ROTATION_0 || rotation > Surface.ROTATION_270) {
             throw new IllegalArgumentException("display rotation " + rotation);
         }
         synchronized (CALLBACKS) {
+            if (sequence <= sSequence) return;
+            sSequence = sequence;
             if (rotation == sRotation) return;
             sRotation = rotation;
             DisplayManagerGlobal.invalidateLocalDisplayInfoCaches();

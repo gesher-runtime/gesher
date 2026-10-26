@@ -27,9 +27,9 @@ updates it in the system server with the top-resumed task.
 
 ## Open verification
 
-Add executable cases for existing Display objects and registered listeners,
-multiple visible portrait/landscape tasks, focus changes and both process
-modes. The new display helper and TaskConfiguration compile against saved
+54-windows4.ps1 has executable cases for existing Display objects and registered
+listeners, multiple visible portrait/landscape tasks, focus changes and both
+process modes; their runtime result is pending. The new display helper and TaskConfiguration compile against saved
 framework/core classes locally; that is syntax evidence only. No runtime
 behavior or roadmap milestone is claimed.
 
