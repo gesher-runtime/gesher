@@ -8,7 +8,8 @@ suites fail the new device APK harness; Windows-2022 also fails broker startup
 before the RTL app runs. The next prepared tree uses real APK installation,
 adds a bounded broker protocol readiness check, correct property serial/wait
 semantics and structured Java/NDK logcat. Local native/tool checks pass; their
-new ART/APK assertions await CI. See docs/exec.md for exact evidence and open
+new ART/APK assertions are running in CI 40352529279 at dc19ee2 after merging
+integration 46bc9e5. See docs/exec.md for exact evidence and open
 pm/am, umask and policy scope. The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
