@@ -47,6 +47,15 @@ processes. A Windows PC may have a microphone or not; CI runners have none
   camera records through Camera2 with the recorder's Surface as a session
   output (VIDEO_SOURCE_SURFACE); the legacy Camera's recording
   (VIDEO_SOURCE_CAMERA with setCamera) is not provided.
+- **Local Camera2 callbacks** go through CameraCallbacks' serial executor,
+  preserving ICameraDeviceCallbacks' one-way ordering and argument lifetimes.
+  CameraDeviceImpl holds its interface lock while calling disconnect, and
+  its callbacks need that same lock: synchronously calling a callback from
+  the capture thread while disconnect joins it creates a lock cycle. Only
+  the capture thread owns/closes the native capture handle; disconnect never
+  joins the callback executor. Clients keep their callback executor alive
+  until onClosed, then shut it down. This fixes terminal ordering separately
+  from the still-open device camera throughput gate in docs/media.md.
 - **Container writers** of Gesher's own (compat/media/mux): MPEG-4/3GPP (the
   samples in one mdat as they come, the moov at the end: avcC, esds, dOps,
   stts/stss/stsz/co64, an edit list where a track starts late), WebM through
