@@ -347,6 +347,14 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Running combined ci 40345505558 at
+  `21300715416f076ac32219b23d7ec0db97d9ca15`, after the fixture
+  lifetime/ABI-selection fixes and coordinator reliability patch. Watch output:
+  `C:/work/gesher-ci-review/web3-40345505558-watch.log`. Previous
+  40338521188 completed with exactly three web3 fixture failures per runner;
+  its runtime successes are bounded by the observations below. No milestone
+  is closed pending complete green Windows/package/e2e verification.
+
 - ci 40338521188 at 010551b completed: package and both e2e jobs pass
   (all nine apps, including required TIC-80; zero unexpected failures).
   Both Windows test jobs report exactly three failures, all in web3 fixtures:
