@@ -44,7 +44,18 @@ public final class GesherAppDriver {
 
     /** Keeps the LoadedApk alive: ActivityThread's mPackages holds it weakly. */
     private static LoadedApk sLoadedApk;
-    private static Activity sActivity;
+    private static volatile Activity sActivity;
+    // The launched Activity's record (what ActivityClientRecord keeps; windows3 track): its
+    // token, info and title, its window's config callback (to whichever instance has the
+    // token), its override configuration, the orientation it asks for and the rotation its
+    // task's display is turned to.
+    private static Binder sToken;
+    private static ActivityInfo sInfo;
+    private static CharSequence sTitle;
+    private static android.view.ViewRootImpl.ActivityConfigCallback sConfigCallback;
+    private static Configuration sOverride;
+    private static int sRequestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+    private static int sRotation = android.view.Surface.ROTATION_0;
 
     private GesherAppDriver() {
     }
@@ -166,9 +177,39 @@ public final class GesherAppDriver {
                 .setComponent(component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Binder token = new Binder();
+        // Its orientation requests and moveTaskToBack, which no system server answers in
+        // this process (windows3 track): the window's ActivityClientHook asks here.
+        final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+        com.gesher.app.window.ActivityClientHook.setLocal(token,
+                new com.gesher.app.window.ActivityClientHook.Local() {
+                    @Override
+                    public void setRequestedOrientation(android.os.IBinder t, int orientation) {
+                        // After the call, as the server's transaction would come (the call
+                        // may be in onCreate).
+                        main.post(() -> GesherAppDriver.setRequestedOrientation(orientation));
+                    }
 
+                    @Override
+                    public int getRequestedOrientation(android.os.IBinder t) {
+                        return GesherAppDriver.getRequestedOrientation();
+                    }
+                });
+
+        // The orientation it asks for turns its task's display (windows3 track): it starts
+        // with the turned display's configuration, as the system server would launch it.
+        sRequestedOrientation = info.screenOrientation;
+        sRotation = com.gesher.app.window.TaskConfiguration.rotationFor(info.screenOrientation,
+                android.view.Surface.ROTATION_0);
+        Configuration override = taskOverride(sRotation);
+        sOverride = override;
+        if (override != null) {
+            log(info.name + " asks for orientation "
+                    + ActivityInfo.screenOrientationToString(info.screenOrientation)
+                    + ": its task's display turned to "
+                    + com.gesher.app.window.TaskConfiguration.rotationName(sRotation));
+        }
         ContextImpl context = ContextImpl.createActivityContext(thread, apk, info, token,
-                Display.DEFAULT_DISPLAY, null /* overrideConfiguration */);
+                Display.DEFAULT_DISPLAY, override);
         ClassLoader cl = context.getClassLoader();
         Activity activity = instrumentation.newActivity(cl, component.getClassName(), intent);
         intent.setExtrasClassLoader(cl);
@@ -182,18 +223,24 @@ public final class GesherAppDriver {
         Configuration config = new Configuration(
                 thread.mConfiguration != null ? thread.mConfiguration
                         : DeviceProfile.configuration());
+        if (override != null) config.updateFrom(override);
+        sToken = token;
+        sInfo = info;
+        sTitle = title;
 
         context.setOuterContext(activity);
         // The configuration its window gets (a resized window: docs/lifecycle.md) reaches the
-        // Activity as ActivityThread's activity config callback takes it there.
+        // Activity as ActivityThread's activity config callback takes it there: to the
+        // instance that has the token now (a relaunch makes a new one).
         android.view.ViewRootImpl.ActivityConfigCallback configCallback =
                 new android.view.ViewRootImpl.ActivityConfigCallback() {
                     @Override
                     public void onConfigurationChanged(Configuration overrideConfig,
                             int displayId) {
-                        configurationChanged(activity, token, info, overrideConfig, displayId);
+                        configurationChanged(sActivity, token, info, overrideConfig, displayId);
                     }
                 };
+        sConfigCallback = configCallback;
         activity.attach(context, thread, instrumentation, token, 0 /* ident */, app, intent,
                 info, title, null /* parent */, null /* embeddedID */,
                 null /* lastNonConfigurationInstances */, config, null /* referrer */,
@@ -230,21 +277,179 @@ public final class GesherAppDriver {
         // manager and makeVisible(); headless, the Activity stays resumed and unshown.
         activity.performResume(false /* followedByPause */, "gesher-app");
         log(info.name + " onResume");
+        // The only Activity: the top resumed one (Android 10's onTopResumedActivityChanged).
+        activity.performTopResumedActivityChanged(true, "gesher-app");
         return activity;
     }
+
+    /** The override of a task turned to {@code rotation} (null: not turned). */
+    private static Configuration taskOverride(int rotation) {
+        if (rotation == android.view.Surface.ROTATION_0) return null;
+        return com.gesher.app.window.TaskConfiguration.override(
+                com.gesher.app.window.TaskConfiguration.display(rotation), rotation);
+    }
+
+    /**
+     * Activity.setRequestedOrientation in the single process (windows3 track; the window's
+     * ActivityClientHook asks): the orientation turns the task's display as the system
+     * server turns a task's (TaskConfiguration.rotationFor); the Activity gets the turned
+     * display's configuration as a configuration change (told if it handles it, else
+     * relaunched), its window takes the turned shape (WindowSession). On the main thread,
+     * after the call, as the server's transaction would come.
+     */
+    public static void setRequestedOrientation(int orientation) {
+        Activity a = sActivity;
+        if (a == null || sToken == null) return;
+        sRequestedOrientation = orientation;
+        int rotation = com.gesher.app.window.TaskConfiguration.rotationFor(orientation, sRotation);
+        if (rotation == sRotation) {
+            log(sInfo.name + " asks for orientation "
+                    + ActivityInfo.screenOrientationToString(orientation)
+                    + ": its task stays as it is");
+            return;
+        }
+        log(sInfo.name + " asks for orientation "
+                + ActivityInfo.screenOrientationToString(orientation) + ": its task's display"
+                + " turned from " + com.gesher.app.window.TaskConfiguration.rotationName(sRotation)
+                + " to " + com.gesher.app.window.TaskConfiguration.rotationName(rotation));
+        sRotation = rotation;
+        Configuration override = taskOverride(rotation);
+        configurationChanged(a, sToken, sInfo, override != null ? override : new Configuration(),
+                Display.DEFAULT_DISPLAY);
+    }
+
+    /** What setRequestedOrientation set last (else the manifest's). */
+    public static int getRequestedOrientation() {
+        return sRequestedOrientation;
+    }
+
+    /**
+     * ActivityThread.handleRelaunchActivity with its window preserved, scaled down (windows3
+     * track: the single process relaunches its Activity for configuration changes it does not
+     * handle, as the system server has the device's relaunched): onPause, onStop,
+     * onSaveInstanceState, onDestroy (isChangingConfigurations, its non-configuration
+     * instance kept), then a new instance with the same token in the same window (its content
+     * cleared: the decor view, its ViewRootImpl and Win32 window stay) and the new
+     * configuration: onCreate with the saved state, onStart, onRestoreInstanceState,
+     * onPostCreate, onResume. Returns the new instance.
+     */
+    private static Activity relaunch(Activity old, Configuration overrideConfig, int changes)
+            throws Exception {
+        ActivityThread thread = ActivityThread.currentActivityThread();
+        Instrumentation instrumentation = thread.mInstrumentation;
+        Application app = thread.mInitialApplication;
+        ActivityInfo info = sInfo;
+        boolean resumed = old.isResumed();
+        boolean stopped = old.mStopped;
+        Intent intent = old.getIntent();
+        log(info.name + " relaunching for configuration changes 0x"
+                + Integer.toHexString(changes) + " it does not handle (single process)");
+        old.mConfigChangeFlags |= changes;
+        old.mChangingConfigurations = true;
+        if (resumed) {
+            old.performTopResumedActivityChanged(false, "relaunch");
+            old.performPause();
+        }
+        Bundle state = new Bundle();
+        boolean preP = info.applicationInfo.targetSdkVersion < android.os.Build.VERSION_CODES.P;
+        if (!stopped) {
+            if (preP) instrumentation.callActivityOnSaveInstanceState(old, state);
+            old.performStop(true /* preserveWindow */, "relaunch");
+            if (!preP) instrumentation.callActivityOnSaveInstanceState(old, state);
+        } else {
+            instrumentation.callActivityOnSaveInstanceState(old, state);
+        }
+        Activity.NonConfigurationInstances retained = old.retainNonConfigurationInstances();
+        android.view.Window window = old.getWindow();
+        android.view.View decor = old.mDecor;
+        instrumentation.callActivityOnDestroy(old);
+        // Only the part of the view hierarchy the framework controls stays.
+        if (window != null) window.clearContentView();
+        old.mDecor = null;
+
+        // The new instance (performLaunchActivity with r.mPendingRemoveWindow).
+        sOverride = overrideConfig;
+        ContextImpl context = ContextImpl.createActivityContext(thread, sLoadedApk, info, sToken,
+                Display.DEFAULT_DISPLAY, overrideConfig);
+        ClassLoader cl = context.getClassLoader();
+        Activity activity = instrumentation.newActivity(cl, info.name, intent);
+        intent.setExtrasClassLoader(cl);
+        Configuration config = new Configuration(thread.mConfiguration != null
+                ? thread.mConfiguration : DeviceProfile.configuration());
+        if (overrideConfig != null) config.updateFrom(overrideConfig);
+        context.setOuterContext(activity);
+        activity.attach(context, thread, instrumentation, sToken, 0 /* ident */, app, intent,
+                info, sTitle, null /* parent */, null /* embeddedID */, retained, config,
+                null /* referrer */, null /* voiceInteractor */, window /* preserved */,
+                sConfigCallback, null /* assistToken */, null /* shareableActivityToken */,
+                null /* initialCallerInfoAccessToken */);
+        activity.mStartedActivity = false;
+        int theme = info.getThemeResource();
+        if (theme != 0) activity.setTheme(theme);
+        sActivity = activity;
+        activity.mCalled = false;
+        instrumentation.callActivityOnCreate(activity, state);
+        if (!activity.mCalled) {
+            throw new SuperNotCalledException("Activity " + info.name
+                    + " did not call through to super.onCreate()");
+        }
+        log(info.name + " onCreate (relaunched)");
+        activity.performStart("gesher-app relaunch");
+        instrumentation.callActivityOnRestoreInstanceState(activity, state);
+        activity.mCalled = false;
+        instrumentation.callActivityOnPostCreate(activity, state);
+        if (!activity.mCalled) {
+            throw new SuperNotCalledException("Activity " + info.name
+                    + " did not call through to super.onPostCreate()");
+        }
+        // handleResumeActivity with r.mPreserveWindow: the decor view is the window's already.
+        if (decor != null) {
+            activity.mDecor = decor;
+            activity.mWindowAdded = true;
+            android.view.WindowManager.LayoutParams l = activity.getWindow().getAttributes();
+            l.type = android.view.WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
+            android.view.ViewRootImpl impl = decor.getViewRootImpl();
+            if (impl != null) {
+                impl.notifyChildRebuilt();
+                impl.setActivityConfigCallback(sConfigCallback);
+            }
+        }
+        if (resumed) {
+            activity.performResume(false /* followedByPause */, "gesher-app relaunch");
+            log(info.name + " onResume (relaunched)");
+            activity.performTopResumedActivityChanged(true, "gesher-app relaunch");
+        } else if (stopped) {
+            // It was stopped (its window minimized): it ends stopped again.
+            activity.performStop(true /* preserveWindow */, "gesher-app relaunch");
+        }
+        if (decor != null && !stopped) {
+            activity.mVisibleFromServer = true;
+            if (activity.mVisibleFromClient) {
+                activity.onWindowAttributesChanged(activity.getWindow().getAttributes());
+                activity.makeVisible();
+            }
+        }
+        return activity;
+    }
+
+    private static boolean sRelaunchPending;
+    private static int sRelaunchChanges;
 
     /**
      * ActivityThread.handleActivityConfigurationChanged, scaled down: the Activity's
      * resources take its window's override configuration (ResourcesManager), it gets
      * onConfigurationChanged for the changes it handles (android:configChanges); the
-     * ones it does not handle would relaunch it, which the single process does not do (it is
-     * told on stdout); then its window updates (ViewRootImpl.updateConfiguration).
+     * ones it does not handle relaunch it (windows3 track: {@link #relaunch}, from the main
+     * Looper, as the server's ActivityRelaunchItem comes); then its window updates
+     * (ViewRootImpl.updateConfiguration).
      */
     private static void configurationChanged(Activity activity, Binder token, ActivityInfo info,
             Configuration overrideConfig, int displayId) {
+        if (activity == null) return;
         Configuration old = new Configuration(activity.getResources().getConfiguration());
         ResourcesManager.getInstance().updateResourcesForActivity(token, overrideConfig,
                 Display.DEFAULT_DISPLAY);
+        sOverride = overrideConfig;
         Configuration now = new Configuration(activity.getResources().getConfiguration());
         int diff = old.diff(now) & ~(ActivityInfo.CONFIG_WINDOW_CONFIGURATION
                 | ActivityInfo.CONFIG_ASSETS_PATHS);
@@ -259,8 +464,24 @@ public final class GesherAppDriver {
                             + " did not call through to super.onConfigurationChanged()");
                 }
             } else {
-                log(info.name + ": configuration changes 0x" + Integer.toHexString(unhandled)
-                        + " it does not handle; not relaunched (single process)");
+                sRelaunchChanges |= unhandled;
+                if (!sRelaunchPending) {
+                    sRelaunchPending = true;
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                        sRelaunchPending = false;
+                        int changes = sRelaunchChanges;
+                        sRelaunchChanges = 0;
+                        Activity current = sActivity;
+                        if (current == null || current.mFinished || current.isDestroyed()) {
+                            return;
+                        }
+                        try {
+                            relaunch(current, sOverride, changes);
+                        } catch (Exception e) {
+                            throw new RuntimeException("relaunching " + info.name, e);
+                        }
+                    });
+                }
             }
         }
         android.view.View decor = activity.mDecor;
