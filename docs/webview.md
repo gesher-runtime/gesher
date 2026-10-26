@@ -475,3 +475,15 @@ for screen-reader state rather than every ambient UIA client; restore the
 runner's proxy settings after tests; preserve byte pins across cache/mirrors.
 Use job logs, not artifact downloads, for review. Local checks are limited to
 own Java/native syntax and small focused fixtures; AOSP builds remain CI-only.
+
+Recovery update (2026-10-27): current integration a0f32e1 (including verified
+AOT runtime merge 6dc3f03) is merged into the Web3 preparation branch. The
+coordinator's new native CI-only rule applies to every C/C++ fixture as well;
+there will be no local native compilation or execution. Web3's latest own
+full diagnostic remains 40376044459 at 939ec313d0fe5a2d8410ee700a927fad0538269e:
+all 14 Web3 checks pass on both runners, with package and both e2e jobs green;
+Windows 2022's boot performance failure still prevents full-stage acceptance.
+No new Web3 run is dispatched while the coordinator diagnoses the startup
+profile; a later combined source must use the latest verified integration.
+The separate Windows4/native evidence does not establish Web3 or release
+completion. No roadmap item or release gate is closed by this merge.
