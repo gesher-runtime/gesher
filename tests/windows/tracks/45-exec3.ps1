@@ -15,3 +15,12 @@ Check 'exec3: ProcessBuilder shell with an open stdin (incremental output, read 
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3Test
 } @('Exec3Test PASS incremental stdin, read, multiline loop, pipeline, substitution, EXIT trap and status')
+
+Check 'exec3: Java process signals and binary tools (destroy, destroyForcibly, ps, kill, cat, sleep)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3ProcessTest (NoDrive $Dir)
+} @('Exec3ProcessTest PASS destroy runs the native SIGTERM handler and ps lists its pid',
+    'Exec3ProcessTest PASS destroyForcibly kills with status 137',
+    'Exec3ProcessTest PASS kill sends SIGTERM through the native signal mailbox',
+    'Exec3ProcessTest PASS cat preserves binary stdin and stdout',
+    'Exec3ProcessTest PASS sleep delays for the requested duration')

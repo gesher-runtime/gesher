@@ -64,14 +64,15 @@ int main(int argc, char** argv) {
   if (strcmp(mode, "exit") == 0 && argc > 2) {
     return atoi(argv[2]);
   }
-  if (strcmp(mode, "sigloop") == 0) {
+  if (strcmp(mode, "sigloop") == 0 || strcmp(mode, "sigloop-pid") == 0) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_usr1;
     sigaction(SIGUSR1, &sa, NULL);
     sa.sa_handler = on_term;
     sigaction(SIGTERM, &sa, NULL);
-    printf("child-ready\n");
+    if (strcmp(mode, "sigloop-pid") == 0) printf("child-ready:%d\n", getpid());
+    else printf("child-ready\n");
     fflush(stdout);
     for (;;) pause();
   }
