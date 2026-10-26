@@ -221,6 +221,12 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-26
+- Running **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
+  atomic request-selection repair, 1,000-race regression and the approved
+  ART array entry/decode/body/exit diagnostic. Expected media3 count is 36;
+  all recording, picture, permission and boot-timing gates are unchanged.
+  No build/runtime result is claimed yet. The final acceptance run must
+  also include the coordinator's next verified integration source.
 - Prepared after source 6293a20 (not part of CI 40386129131): request
   availability, selection and frame numbering now share one mLock section.
   Previously cancelRequest/flush could clear mRepeating between the two lock
