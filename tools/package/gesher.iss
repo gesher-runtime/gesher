@@ -18,6 +18,11 @@
 AppId={{6A1F3C2E-5B7D-4E8A-9C0F-1D2E3F4A5B6C}
 AppName=Gesher
 AppVersion={#AppVersion}
+; Keep both the numeric PE resource and displayed metadata tied to the tested version.
+VersionInfoVersion={#AppVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=Gesher
 DefaultDirName={localappdata}\Programs\Gesher
 DisableDirPage=yes

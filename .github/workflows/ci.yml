@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Optional exact release version (0.1.0); blank keeps ordinary CI numbering'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -170,6 +176,8 @@ jobs:
         with:
           sparse-checkout: |
             tools/package
+            tools/release
+            tests/release
             tests/windows/shell
             tests/windows/graphics
 
@@ -209,12 +217,27 @@ jobs:
           name: media
           path: dist
 
+      - name: Test release guards
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests/release -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/release/version.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build installer
+        id: package-version
+        env:
+          GESHER_RELEASE_VERSION: ${{ inputs.release_version }}
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
-          $version = "0.1.${{ github.run_number }}"
+          . tools/package/version.ps1
+          $selection = Get-GesherPackageVersion $env:GESHER_RELEASE_VERSION $env:GITHUB_RUN_NUMBER
+          $version = $selection.Version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "selection=$($selection.Selection)" >> $env:GITHUB_OUTPUT
           & $iscc /Qp "/DBuildDir=$PWD\dist" "/DAppVersion=$version" "/O$PWD\installer" tools\package\gesher.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem installer
@@ -222,9 +245,11 @@ jobs:
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
       - uses: actions/upload-artifact@v4
+        id: installer-artifact
         with:
           name: gesher-setup
           path: installer/*.exe
+          if-no-files-found: error
 
       - name: Install, run Hello, uninstall
         shell: pwsh
@@ -510,6 +535,25 @@ jobs:
           Remove-Item $sentinel
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      # A separate post-smoke receipt does not change the early installer upload
+      # used by e2e diagnostics when package checks fail.
+      - name: Write package receipt
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ steps.package-version.outputs.version }}
+          PACKAGE_SELECTION: ${{ steps.package-version.outputs.selection }}
+          SETUP_ARTIFACT_ID: ${{ steps.installer-artifact.outputs.artifact-id }}
+          SETUP_ARTIFACT_DIGEST: ${{ steps.installer-artifact.outputs.artifact-digest }}
+        run: |
+          $setup = (Get-ChildItem installer/gesher-setup-*.exe).FullName
+          tools/release/write-receipt.ps1 -Installer $setup -Output receipt -Version $env:PACKAGE_VERSION -Selection $env:PACKAGE_SELECTION -ArtifactId ([long]$env:SETUP_ARTIFACT_ID) -ArtifactDigest $env:SETUP_ARTIFACT_DIGEST
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gesher-package-receipt
+          path: receipt/*
+          if-no-files-found: error
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid

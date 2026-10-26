@@ -43,8 +43,16 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
-Reserved after the explicit owner release instruction on 2026-10-26.
-No implementation, tag or release yet. The repository currently has no
-published release/tag from this work (read with gh release list / tags API).
-The package job currently uses 0.1.<run_number>; exact 0.1.0 versioning and
-tested-artifact promotion still need implementation and CI proof.
+Preparation is owned by the web3 agent in this separate worktree. The root
+coordinator alone merges integration/main, creates tags and publishes; do not
+interpret the broad completion gates above as authorization for this agent to
+perform those final actions.
+
+Implemented locally, not yet CI verified: exact 0.1.0 selection with ordinary
+CI numbering retained, explicit PE metadata, post-smoke manifest/checksum
+receipts, and pure promotion guards. Thirteen offline test methods (including
+negative subcases) and the version selection fixture pass. ADR 0071 records
+the mechanism. Remaining: GitHub transport/promotion workflow, candidate and
+released-byte install/run/uninstall verification, final release notes, review
+and full branch CI with release_version=0.1.0 after verified web3 integration.
+No tag, release or local artifact download has occurred.
