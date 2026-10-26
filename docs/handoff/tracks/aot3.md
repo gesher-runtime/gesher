@@ -40,6 +40,8 @@ explicit brief rather than disappearing when this stage is green.
 First implementation on 2026-10-26: worktree C:\work\gesher-aot3,
 branch wip/aot3, current integration b9f93f0 included. Added real ART
 oatdump/disassembler CMake targets, installer entry/installed-copy check and
-62-aot3's independent oat/app-image checks. No local AOSP build; no CI
-verification yet. All four contracts above remain open. Next: compile and
+62-aot3's independent oat/app-image checks. Running full CI 40334251458 at
+47224d88838189c43724746d1075199bb2d77cd5; watching at interval 120.
+No local AOSP build and no CI verification yet. All four contracts above
+remain open. Next: compile and
 execute this first slice in CI before implementing the remaining dexopt work.
