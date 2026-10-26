@@ -431,41 +431,42 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     /** The next frame to make, or null when disconnected; reports idleness. */
     private Frame next() {
-        boolean reportIdle = false;
-        synchronized (mLock) {
-            mBusy = false;
-            mLock.notifyAll();
-            while (!mDisconnected && mQueue.isEmpty() && mRepeating == null) {
-                if (!mIdleReported) {
-                    mIdleReported = true;
-                    reportIdle = true;
-                    break;
+        for (;;) {
+            synchronized (mLock) {
+                mBusy = false;
+                mLock.notifyAll();
+                boolean reportIdle = false;
+                while (!mDisconnected && mQueue.isEmpty() && mRepeating == null) {
+                    if (!mIdleReported) {
+                        mIdleReported = true;
+                        reportIdle = true;
+                        break;
+                    }
+                    try {
+                        mLock.wait();
+                    } catch (InterruptedException e) {
+                        return null;
+                    }
                 }
-                try {
-                    mLock.wait();
-                } catch (InterruptedException e) {
-                    return null;
+                if (!reportIdle) {
+                    if (mDisconnected) return null;
+                    mBusy = true;
+                    Frame f = mQueue.poll();
+                    if (f != null) return f;
+                    // Select and number this frame under the same lock that
+                    // established a request exists. cancelRequest/flush may clear
+                    // mRepeating as soon as this lock is released.
+                    Request r = mRepeating[0];
+                    f = new Frame(r, 0, mNextFrameNumber++);
+                    mRepeatingLastFrame = f.frameNumber;
+                    return f;
                 }
             }
-        }
-        if (reportIdle) {
             try {
                 mCallbacks.onDeviceIdle();
             } catch (RemoteException e) {
                 // gone
             }
-            return next();
-        }
-        synchronized (mLock) {
-            if (mDisconnected) return null;
-            mBusy = true;
-            Frame f = mQueue.poll();
-            if (f != null) return f;
-            // The repeating request's next frame (its first request, for a burst).
-            Request r = mRepeating[0];
-            f = new Frame(r, 0, mNextFrameNumber++);
-            mRepeatingLastFrame = f.frameNumber;
-            return f;
         }
     }
 
