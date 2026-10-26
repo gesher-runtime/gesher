@@ -161,7 +161,14 @@ if ($code -eq 0 -and -not $missing) {
 # libraries, services, ...), run here in this script's scope: Check, RunDex,
 # NoDrive, $root, $bcp and $failed are theirs to use.
 foreach ($t in Get-ChildItem (Join-Path $PSScriptRoot 'tracks') -Filter *.ps1 -ErrorAction SilentlyContinue | Sort-Object Name) {
-  . $t.FullName
+  try {
+    . $t.FullName
+  } catch {
+    Write-Host "FAIL  test script $($t.Name): $_"
+    Write-Host $_.InvocationInfo.PositionMessage
+    Write-Host $_.ScriptStackTrace
+    throw
+  }
 }
 
 Write-Host "`n$failed test(s) failed"

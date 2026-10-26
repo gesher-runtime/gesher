@@ -220,6 +220,20 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — stopped by the coordinator, 2026-10-26
+- Continuation: read ci 40287172595's windows-2022 job 121463451415 and
+  e2e job 121464252568. The MPEG-4 part 2 decoder produces no frames (1x1
+  output); prepend csd-0's VOL to its first sample as well as setting the
+  sequence-header attribute, and resend configuration after flush. Unverified.
+- The test job stops before any media3 checks with a null-valued-expression
+  error: 59-media3's no-endpoint branch overwrites PowerShell's $Matches with
+  a second regex, then dereferences the discarded capture. Preserve the
+  capture by ordering that regex last. Added track/line/stack diagnostics to
+  the test dispatcher so future script exceptions remain visible in job logs.
+- Just Player fails to reach its first frame (launcher exit 1); e2e has
+  `1 unexpected failures`. Pinned its SHA-256 from that log and enabled its
+  diagnostic log output: the first exception shown is a missing positions
+  file, which alone does not establish the launch failure's cause. Stage 3
+  remains unverified and needs a new full run after integration is merged.
 - Branch wip/media-soft. Last fully green run: 40258938663 (b57bb74, stage 2 +
   software decoders). In progress when stopped: **ci 40287172595** (the first
   build of all the stage 3 code that links; read its test logs first).
