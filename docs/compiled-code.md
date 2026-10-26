@@ -210,6 +210,8 @@ package and e2e:
       device launch reports 11 methods with AOT code, none interpreted.
 
 ### Continuation (2026-10-26)
+- Running: ci 40297189562 at 0e0262f, including integration a98dda9. Every
+  job and both zero-failure summaries must be checked before merge.
 - Verified ci 40285423159 personally from every job's conclusion and logs:
   both Windows test jobs end with `0 test(s) failed`, package succeeds and
   e2e reports `0 unexpected failures`.
