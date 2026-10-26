@@ -1,0 +1,42 @@
+diff --git a/libdexfile/dex/dex_file_loader.cc b/libdexfile/dex/dex_file_loader.cc
+index 96dd263..18cf93a 100644
+--- a/libdexfile/dex/dex_file_loader.cc
++++ b/libdexfile/dex/dex_file_loader.cc
+@@ -230,14 +230,36 @@ bool DexFileLoader::GetMultiDexChecksum(std::optional<uint32_t>* checksum,
+   return true;
+ }
+ 
++#if defined(GESHER)
++// Gesher (docs/posix.md, ADR 0057): is any prefix of `path` a symbolic link?
++// realpath on Windows also normalizes the case of names and 8.3 short names,
++// which must not change the locations of ordinary dex files (oat and boot
++// image matching), so only a location with a link in it is resolved.
++static bool HasSymbolicLinkComponent(const std::string& path) {
++  for (size_t i = 1; i <= path.size(); ++i) {
++    if (i < path.size() && path[i] != '/') continue;
++    struct stat st;
++    if (lstat(path.substr(0, i).c_str(), &st) == 0 && S_ISLNK(st.st_mode)) return true;
++  }
++  return false;
++}
++#endif
++
+ std::string DexFileLoader::GetDexCanonicalLocation(const char* dex_location) {
+   CHECK_NE(dex_location, static_cast<const char*>(nullptr));
+   std::string base_location = GetBaseLocation(dex_location);
+   const char* suffix = dex_location + base_location.size();
+   DCHECK(suffix[0] == 0 || suffix[0] == kMultiDexSeparator);
+-#ifdef _WIN32
++#if defined(_WIN32) && !defined(GESHER)
+   // Warning: No symbolic link processing here.
+   PLOG(WARNING) << "realpath is unsupported on Windows.";
++#elif defined(GESHER)
++  if (HasSymbolicLinkComponent(base_location)) {
++    UniqueCPtr<const char[]> path(realpath(base_location.c_str(), nullptr));
++    if (path != nullptr && path.get() != base_location) {
++      return std::string(path.get()) + suffix;
++    }
++  }
+ #else
+   // Warning: Bionic implementation of realpath() allocates > 12KB on the stack.
+   // Do not run this code on a small stack, e.g. in signal handler.

@@ -18,6 +18,12 @@
 // modified file is no longer open for writing by anyone, which the worker
 // checks every 50 ms by opening it with write sharing denied. IN_OPEN,
 // IN_ACCESS and IN_CLOSE_NOWRITE are never reported.
+//
+// NTFS reports a write only when it updates the file's directory entry,
+// often not before the writer closes the file. Writes through this
+// process's write()/pwrite() therefore report IN_MODIFY themselves
+// (InotifyNoteWrite, ADR 0057); ReadDirectoryChangesW's later report of the
+// same change is another IN_MODIFY, as a second write would be on Linux.
 #include <sys/inotify.h>
 
 #include <errno.h>
@@ -25,6 +31,8 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -44,6 +52,7 @@ namespace {
 constexpr DWORD kBufferSize = 64 * 1024;
 constexpr size_t kMaxQueued = 16384;  // Linux's max_queued_events
 constexpr ULONG_PTR kQuit = 0;
+constexpr ULONG_PTR kWake = 1;  // a write was noted: probe for IN_CLOSE_WRITE
 constexpr DWORD kNotifyFilter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
                                 FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
                                 FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_CREATION |
@@ -93,6 +102,11 @@ struct Watch {
 
 }  // namespace
 
+struct Inotify;
+std::mutex g_live_mutex;
+std::vector<Inotify*> g_live;  // every Inotify, for InotifyNoteWrite
+std::atomic<int> g_live_count{0};
+
 struct Inotify {
   std::mutex mutex;
   std::condition_variable changed;
@@ -105,6 +119,14 @@ struct Inotify {
   std::thread worker;
 
   ~Inotify() {
+    {
+      std::lock_guard<std::mutex> lock(g_live_mutex);
+      auto it = std::find(g_live.begin(), g_live.end(), this);
+      if (it != g_live.end()) {
+        g_live.erase(it);
+        g_live_count.fetch_sub(1);
+      }
+    }
     if (worker.joinable()) {
       PostQueuedCompletionStatus(port, 0, kQuit, nullptr);
       worker.join();
@@ -330,7 +352,7 @@ void Inotify::Run() {
     BOOL ok = GetQueuedCompletionStatus(port, &bytes, &key, &ov, probing ? 50 : INFINITE);
     DWORD error = ok ? 0 : GetLastError();
     if (ov == nullptr) {
-      if (!ok && error == WAIT_TIMEOUT) {
+      if ((!ok && error == WAIT_TIMEOUT) || (ok && key == kWake)) {
         ProbeWriters();
         continue;
       }
@@ -380,6 +402,42 @@ void Inotify::Run() {
   }
 }
 
+void InotifyNoteWrite(int fd) {
+  if (g_live_count.load(std::memory_order_relaxed) == 0) return;
+  HANDLE h = HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_DISK) return;
+  std::wstring full(32768, L' ');
+  DWORD n = GetFinalPathNameByHandleW(h, full.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (n == 0 || n >= 32768) return;
+  full.resize(n);
+  size_t slash = full.find_last_of(L'\\');
+  if (slash == std::wstring::npos) return;
+  std::wstring dir = full.substr(0, slash), name = full.substr(slash + 1);
+  auto same = [](const std::wstring& a, const std::wstring& b) {
+    return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
+  };
+  std::lock_guard<std::mutex> live(g_live_mutex);
+  for (Inotify* in : g_live) {
+    bool noted = false;
+    {
+      std::lock_guard<std::mutex> lock(in->mutex);
+      for (auto& [wd, w] : in->watches) {
+        if (w->removed || !same(w->dir, dir)) continue;
+        if (w->file.empty()) {
+          in->EmitFor(*w, IN_MODIFY, 0, name);
+          if (!w->removed) w->writing.insert(name);
+          noted = true;
+        } else if (same(w->file, name)) {
+          in->EmitFor(*w, IN_MODIFY, 0, L"");
+          if (!w->removed) w->writing.insert(L"");
+          noted = true;
+        }
+      }
+    }
+    if (noted) PostQueuedCompletionStatus(in->port, 0, kWake, nullptr);
+  }
+}
+
 int ReadInotify(Inotify& in, void* buf, unsigned int count) {
   std::unique_lock<std::mutex> lock(in.mutex);
   while (in.queue.empty()) {
@@ -412,6 +470,11 @@ int inotify_init1(int flags) {
   if (in->ready == nullptr || in->port == nullptr) return gesher::FailWithLastError();
   Inotify* raw = in.get();
   in->worker = std::thread([raw] { raw->Run(); });
+  {
+    std::lock_guard<std::mutex> lock(gesher::g_live_mutex);
+    gesher::g_live.push_back(raw);
+    gesher::g_live_count.fetch_add(1);
+  }
   // Every fd gesher-base reserves is uninheritable: IN_CLOEXEC holds always.
   std::shared_ptr<gesher::EventFd> ready = in->ready;
   return gesher::RegisterInotify(std::move(in), std::move(ready));
