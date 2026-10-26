@@ -4,8 +4,8 @@
 
 Gesher (Hebrew: *bridge*) is a compatibility runtime. It ports AOSP ART and the
 Android framework to Windows and connects them to Win32, Windows graphics and
-host services. It runs Android code in Windows processes without an Android
-virtual machine or emulator image.
+host services. It runs Android code in Windows processes without booting a
+guest Android operating system or an emulator image.
 
 ART runs Java/DEX code, and selected real APKs run with their Android user
 interfaces and native libraries. This is an actively developed compatibility
