@@ -55,13 +55,16 @@ int FromHandle(HANDLE h, struct stat* buf) {
   // Windows version lacks it): the name stays until the last handle closes,
   // but Linux's count has already dropped.
   if (standard.DeletePending && buf->st_nlink > 0) buf->st_nlink--;
-  // Permissions are not modelled: what the CRT reports, without its guess
-  // at executables from the file name.
+  // Permissions are not modelled beyond the read-only attribute. Windows has
+  // no execute permission and access(X_OK) holds for every file (fsops.cc:
+  // apps check File.canExecute() before starting their ELF programs), so
+  // regular files show the execute bits too, as an NTFS volume mounted on
+  // Linux does (ADR 0057).
   bool read_only = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
   if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
     buf->st_mode = S_IFDIR | 0755;
   } else {
-    buf->st_mode = S_IFREG | (read_only ? 0444 : 0644);
+    buf->st_mode = S_IFREG | (read_only ? 0555 : 0755);
     buf->st_size = standard.EndOfFile.QuadPart;
   }
   buf->st_blocks = (standard.AllocationSize.QuadPart + 511) / 512;

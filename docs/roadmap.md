@@ -423,6 +423,18 @@ needs: [framework-build.md](framework-build.md).
 
 ## Phase 6 checklist
 
+- [x] Common x86-64/arm64 shim additions and platform dlopen handles checked
+      through dalvikvm and APKs (single process and device); zlib, libpng,
+      libjpeg-turbo, SQLite, OpenSSL and libc++ executable tests; imports of
+      those programs and e2e libraries resolve in their shim/launcher context
+      (native2, ADR 0057, ci 40296960603, both runners). Full public NDK API
+      coverage remains open in native3.
+- [x] Filesystem consistency: stat execute bits, symbolic-link dex locations,
+      flock/ART ScopedFlock, same-process IN_MODIFY before close; both ABIs'
+      native checks and ART gtests (233/120 passed; ci 40296960603).
+- [ ] Native3: remaining public NDK APIs/platform handles, fcntl record locks,
+      cross-process inotify and the POSIX/ABI limits in
+      [its brief](handoff/tracks/native3.md) (ADR 0062 reserved).
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
