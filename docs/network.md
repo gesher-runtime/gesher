@@ -226,6 +226,20 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (2026-10-25)
 
+- ci 40345505558 at 2130071: all 14 web3 checks pass on each runner,
+  including external Android/Chrome UIA actions, both NDK ABIs in both modes,
+  all 70,000-byte binary-message checks and device geolocation. Package and
+  both e2e jobs pass (all nine apps, TIC-80, four new transport fixtures,
+  zero unexpected failures). Windows 2025 has `0 test(s) failed`.
+  Windows 2022 has one failure only: the geocoder probe printed the genuine
+  `status: InvalidCredentials`, then remained alive until the 45-second
+  process guard. That timeout remains a failure, not a passing probe.
+- Minimal shared fix 58d7dc6 flushes the completed result and immediately
+  exits the probe with code zero; exceptions and inner timeouts print their
+  error and exit one. The 30-second result wait and 45-second process guard
+  remain. A local no-answer probe was still terminated by the outer guard;
+  successful completion and full green CI remain pending the next run.
+
 - Running combined ci 40345505558 at
   `21300715416f076ac32219b23d7ec0db97d9ca15`, after the fixture
   lifetime/ABI-selection fixes and coordinator reliability patch. Watch output:
