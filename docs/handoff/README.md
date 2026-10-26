@@ -153,7 +153,9 @@ Remaining windows3/input gaps are assigned to windows4 (ADR 0061 reserved;
 [brief](tracks/windows4.md)): TSF reconversion/document access, candidate
 insets, real IFrameworkInputPane callback coverage, old-target adjustResize
 and Application-context Display rotation. Physical keyboard coverage remains
-explicitly unverified. native3 reserves ADR 0062; next free ADR: 0063.
+explicitly unverified. native3 reserves ADR 0062. The remaining GL/graphics
+scope is assigned to [surfaces2](tracks/surfaces2.md), ADR 0063 reserved;
+unstarted until the first surfaces stage merges. Next free ADR: 0064.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
