@@ -1,13 +1,15 @@
 # Track brief: exec3
 
-Current continuation status (2026-10-26): the full track remains open. The
-shared property backend now has prepared Android serial encoding, wait and
-wait_any, stable readonly callbacks and long-value legacy behavior, with local
-native checks passing and actual ART/NDK tests pending. CI 40338806524 predates
-those ABI corrections: build/package and Windows-2022 e2e pass; Windows-2025
-e2e fails before install on APK DNS errors; both Windows suites are still
-running. See docs/exec.md for the exact evidence and remaining scope. The
-original brief below remains unchanged.
+Current continuation status (2026-10-26): the full track remains open. CI
+40338806524 passes 57 shell cases, real mailbox/process tools, main-executable
+TLS and basic shared properties on both runners. Build/package and Windows-2022
+e2e pass; Windows-2025 e2e fails before install on APK DNS errors. Both Windows
+suites fail the new device APK harness; Windows-2022 also fails broker startup
+before the RTL app runs. The next prepared tree uses real APK installation,
+adds a bounded broker protocol readiness check, correct property serial/wait
+semantics and structured Java/NDK logcat. Local native/tool checks pass; their
+new ART/APK assertions await CI. See docs/exec.md for exact evidence and open
+pm/am, umask and policy scope. The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
 given to the first agent of this track (2026-10-26), kept verbatim. A

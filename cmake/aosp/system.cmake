@@ -22,9 +22,10 @@ set(_l "${AOSP_DIR}/system/logging/liblog")
 add_library(log STATIC
   ${_l}/log_event_list.cpp ${_l}/log_event_write.cpp ${_l}/logger_name.cpp
   ${_l}/logger_read.cpp ${_l}/logger_write.cpp ${_l}/logprint.cpp
-  ${_l}/properties.cpp)
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/android_log.cc)
 target_include_directories(log PUBLIC ${_l}/include)
-target_include_directories(log PRIVATE ${_b}/include ${_core}/libcutils/include)
+target_include_directories(log PRIVATE ${_l} ${_b}/include ${_core}/libcutils/include)
+target_link_options(log INTERFACE -Wl,-u,gesher_android_log_anchor)
 target_compile_definitions(log PRIVATE
   LIBLOG_LOG_TAG=1006 SNET_EVENT_LOG_TAG=1397638484 ANDROID_DEBUGGABLE=0)
 target_compile_options(log PRIVATE -Wall -Wextra)

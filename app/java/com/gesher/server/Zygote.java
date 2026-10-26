@@ -35,6 +35,7 @@ public final class Zygote {
     static native long nativeCreateEvent(String name);
     static native boolean nativeWaitEvent(long handle, int timeoutMs);
     static native boolean nativeSignalEvent(String name);
+    static native boolean nativeWaitForBinder(String device, int pid, int timeoutMs);
     static native String nativeCommandLine();
     static native String nativeExePath();
 
@@ -101,6 +102,9 @@ public final class Zygote {
 
     public static boolean signalEvent(String name) {
         return nativeSignalEvent(name);
+    }
+    public static boolean waitForBinder(String device, int pid, int timeoutMs) {
+        return nativeWaitForBinder(device, pid, timeoutMs);
     }
 
     /** The full path of this process's executable (dalvikvm.exe). */

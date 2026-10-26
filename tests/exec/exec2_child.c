@@ -146,8 +146,41 @@ static int property_wait(const char* mode, const char* name) {
   return 0;
 }
 
+static int log_abi(const char* tag) {
+  int (*loggable)(int, const char*, int) = dlsym(RTLD_DEFAULT, "__android_log_is_loggable");
+  int (*loggable_len)(int, const char*, size_t, int) = dlsym(RTLD_DEFAULT, "__android_log_is_loggable_len");
+  int (*set_minimum)(int) = dlsym(RTLD_DEFAULT, "__android_log_set_minimum_priority");
+  int (*get_minimum)(void) = dlsym(RTLD_DEFAULT, "__android_log_get_minimum_priority");
+  if (!loggable || !loggable_len || !set_minimum || !get_minimum) return 5;
+  char key[256], full_tag[256], full_key[512];
+  snprintf(key, sizeof(key), "log.tag.%s", tag);
+  snprintf(full_tag, sizeof(full_tag), "%s.extra", tag);
+  snprintf(full_key, sizeof(full_key), "log.tag.%s", full_tag);
+  int previous = set_minimum(0);
+  int failed = 0;
+  if (__system_property_set(key, "E") || __system_property_set(full_key, "V")) failed = 1;
+  if (loggable(3, tag, 2) || !loggable(6, tag, 2)) failed = 1;
+  if (loggable_len(3, full_tag, strlen(tag), 2) || !loggable_len(3, full_tag, strlen(full_tag), 2)) failed = 1;
+  set_minimum(5);
+  if (get_minimum() != 5 || loggable(3, tag, 2) || !loggable(5, tag, 2)) failed = 1;
+  if (__system_property_set(key, "")) failed = 1;
+  set_minimum(0);
+  if (!loggable(3, tag, 2) || loggable(3, tag, 6)) failed = 1;
+  set_minimum(previous);
+  if (failed) return 6;
+  puts("log-abi:PASS length-limited tags, property priorities, defaults and minimum priority");
+  return 0;
+}
+
 int main(int argc, char** argv) {
   const char* mode = argc > 1 ? argv[1] : "echo";
+  if (strcmp(mode, "log-abi") == 0 && argc > 2) return log_abi(argv[2]);
+  if (strcmp(mode, "log-write") == 0 && argc > 4) {
+    int (*write_log)(int, const char*, const char*) = dlsym(RTLD_DEFAULT, "__android_log_write");
+    if (!write_log) return 5;
+    write_log(atoi(argv[3]), argv[2], argv[4]);
+    return 0;
+  }
   if (strcmp(mode, "echo") == 0) {
     for (int i = 2; i < argc; ++i) printf("%s%s", i > 2 ? " " : "", argv[i]);
     printf("\n");

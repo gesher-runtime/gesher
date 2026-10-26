@@ -8,6 +8,7 @@
 #include "exec_spawn.h"
 
 #include <gesher/system_properties.h>
+#include <gesher/logging.h>
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -15,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -201,40 +203,67 @@ int Setprop(const std::vector<std::string>& args) {
 // sets it per app process); -d dumps it and exits, otherwise it follows.
 
 int Logcat(const std::vector<std::string>& args) {
-  bool dump = false;
-  for (const std::string& a : args) {
-    if (a == "-d" || a == "--dump") dump = true;
-    if (a == "-c" || a == "--clear") return 0;  // nothing to clear
+  bool dump = false, clear = false;
+  int default_priority = 2;
+  std::string format = "brief";
+  std::map<std::string, int> filters;
+  for (size_t i = 0; i < args.size(); ++i) {
+    const std::string& argument = args[i];
+    if (argument == "-d" || argument == "--dump") { dump = true; continue; }
+    if (argument == "-c" || argument == "--clear") { clear = true; continue; }
+    if (argument == "-s" || argument == "--silent") { default_priority = 8; continue; }
+    if (argument == "-v" || argument == "--format") {
+      if (++i == args.size()) { std::fprintf(stderr, "logcat: -v needs a format\n"); return 1; }
+      format = args[i];
+      if (format != "brief" && format != "process" && format != "tag" && format != "thread" &&
+          format != "raw" && format != "time" && format != "threadtime" && format != "long" && format != "epoch") {
+        std::fprintf(stderr, "logcat: unsupported format %s\n", format.c_str());
+        return 1;
+      }
+      continue;
+    }
+    if (argument.empty() || argument[0] == '-') {
+      std::fprintf(stderr, "logcat: unsupported option %s\n", argument.c_str());
+      return 1;
+    }
+    size_t colon = argument.rfind(':');
+    int priority = 2;
+    std::string tag = argument;
+    if (colon != std::string::npos) {
+      if (colon + 2 != argument.size() || (priority = logging::Priority(argument.back())) < 0) {
+        std::fprintf(stderr, "logcat: invalid filter %s\n", argument.c_str());
+        return 1;
+      }
+      tag = argument.substr(0, colon);
+    }
+    if (tag.empty()) { std::fprintf(stderr, "logcat: empty tag\n"); return 1; }
+    if (tag == "*") default_priority = priority;
+    else filters[tag] = priority;
   }
-  std::string path = EnvOr("GESHER_LOG_FILE", "");
-  if (path.empty()) {
-    std::fprintf(stderr, "logcat: no log for this process (GESHER_LOG_FILE is unset)\n");
-    return 0;
-  }
-  FILE* f = _wfopen(WindowsPath(path).c_str(), L"rb");
-  if (f == nullptr) {
-    std::fprintf(stderr, "logcat: %s: No such file or directory\n", path.c_str());
+  std::string error;
+  if (clear) {
+    if (logging::Clear(&error)) return 0;
+    std::fprintf(stderr, "logcat: %s\n", error.c_str());
     return 1;
   }
-  char buf[65536];
-  size_t n;
-  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) std::fwrite(buf, 1, n, stdout);
-  std::fflush(stdout);
-  if (!dump) {
-    // Follow: read what is appended until stdout breaks (the reader left).
-    for (;;) {
-      Sleep(200);
-      while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-        if (std::fwrite(buf, 1, n, stdout) != n) {
-          std::fclose(f);
-          return 0;
-        }
-      }
-      std::fflush(stdout);
-      clearerr(f);
+  size_t consumed = 0;
+  uint64_t last_timestamp = 0;
+  do {
+    std::vector<logging::Entry> entries;
+    if (!logging::Read(&entries, &error)) { std::fprintf(stderr, "logcat: %s\n", error.c_str()); return 1; }
+    if (entries.size() < consumed || (consumed && entries[consumed - 1].timestamp != last_timestamp)) consumed = 0;
+    for (size_t i = consumed; i < entries.size(); ++i) {
+      const auto& entry = entries[i];
+      auto filter = filters.find(entry.tag);
+      if (entry.priority < (filter == filters.end() ? default_priority : filter->second)) continue;
+      std::string line = logging::Format(entry, format);
+      if (std::fwrite(line.data(), 1, line.size(), stdout) != line.size()) return 0;
     }
-  }
-  std::fclose(f);
+    if (std::fflush(stdout) != 0) return 0;
+    consumed = entries.size();
+    last_timestamp = consumed ? entries.back().timestamp : 0;
+    if (!dump) Sleep(200);
+  } while (!dump);
   return 0;
 }
 
