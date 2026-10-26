@@ -66,7 +66,10 @@ Native test compilation passed; the main build failed before Windows tests:
 `hwui/MinikinSkia.h` was not found. Its pinned source is under
 libs/hwui/hwui, so the private include root is corrected to libs/hwui.
 CI now compiles this own bridge object before the full runtime so further
-header/ABI errors are reported early. Current integration 1d49642, including
+header/ABI errors are reported early. ci 40332803102 at e3e3a0b reached the
+bridge early and failed on upstream Minikin is_pod deprecations and hwui
+missing-override annotations. These two external include roots are now SYSTEM
+includes; the bridge retains -Wall/-Wextra/-Werror. Current integration b9f93f0, including
 verified aot2, is now merged locally; the combined tree needs a subsequent
 full CI before merge. Do not treat this in-progress run as verification.
 
