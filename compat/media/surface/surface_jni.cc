@@ -264,7 +264,7 @@ jboolean JNICALL TV_lockCanvas(JNIEnv* env, jclass, jlong native_window, jobject
   if (rect.top < 0) rect.top = 0;
   if (rect.right > buffer.width) rect.right = buffer.width;
   if (rect.bottom > buffer.height) rect.bottom = buffer.height;
-  graphics::Canvas canvas(env, canvas_obj);
+  android::graphics::Canvas canvas(env, canvas_obj);
   canvas.setBuffer(&buffer, ADATASPACE_UNKNOWN);
   canvas.clipRect({rect.left, rect.top, rect.right, rect.bottom});
   if (dirty != nullptr) {
@@ -278,7 +278,7 @@ jboolean JNICALL TV_lockCanvas(JNIEnv* env, jclass, jlong native_window, jobject
 }
 
 void JNICALL TV_unlockCanvasAndPost(JNIEnv* env, jclass, jlong native_window, jobject canvas_obj) {
-  graphics::Canvas canvas(env, canvas_obj);
+  android::graphics::Canvas canvas(env, canvas_obj);
   canvas.setBuffer(nullptr, ADATASPACE_UNKNOWN);
   if (auto* window = reinterpret_cast<ANativeWindow*>(native_window)) {
     ANativeWindow_unlockAndPost(window);
