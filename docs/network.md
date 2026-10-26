@@ -226,12 +226,24 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (web3)
 
-Running full ci **40364697280**, exact source
+Completed diagnostic ci **40364697280**, exact source
 `eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
-`C:/work/gesher-ci-review/web3-40364697280-watch.log`. This includes the
-verified native3 foundation, native probe exit and executable log-framing
-regression below. No full-stage milestone is closed pending its complete
-Windows/package/e2e results.
+`C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. Both runners
+pass all 14 web3 checks; 2022 has zero failed tests and actual package cleanup
+and both nine-app e2e jobs pass with required TIC-80/Puzzles. Windows 2025
+times out at 60 minutes, with its last PASS at 17:26:36 UTC after the entire
+internet/TLS/local-negative-certificate group and no later output before
+cancellation at 18:08:55. Its zero-failure summary is absent; no merge gate
+is satisfied by that partial run.
+
+The next combined source includes verified AOT3 foundation f5ce6f6. The local
+TLS server fixture now owns its accepted sockets, cancels authentication/reads
+and joins within fixed limits. Own Windows idle-accept, incomplete-handshake
+and idle-read cleanup cases pass. Cleanup markers bracket server stop, store
+removal and certificate disposal; the previous log alone does not identify
+which call blocked. This follows the documented requirement to
+[close accepted connections separately](https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.tcplistener.stop).
+Real DNS/HTTPS/TLS and all negative certificate assertions remain enabled.
 
 Next combined CI is ready with verified native3 foundation f677944f merged,
 native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes

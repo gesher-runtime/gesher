@@ -138,30 +138,12 @@ $serverCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($le
 $rootPublic = [Security.Cryptography.X509Certificates.X509Certificate2]::new($rootCert.Export(
   [Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
-$tls = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$tls.Start()
-$tlsPort = $tls.LocalEndpoint.Port
-$tlsServe = {
-  param($listener, $cert)
-  while ($true) {
-    $c = $listener.AcceptTcpClient()
-    try {
-      $ssl = [Net.Security.SslStream]::new($c.GetStream(), $false)
-      $ssl.ReadTimeout = 20000
-      $ssl.AuthenticateAsServer($cert, $false, [Security.Authentication.SslProtocols]::Tls12, $false)
-      $head = ''
-      $b = [byte[]]::new(1)
-      while (-not $head.EndsWith("`r`n`r`n") -and $ssl.Read($b, 0, 1) -eq 1) { $head += [char]$b[0] }
-      $body = [Text.Encoding]::ASCII.GetBytes('trusted through the Windows ROOT store')
-      $reply = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: text/plain`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
-      $ssl.Write($reply); $ssl.Write($body); $ssl.Flush()
-      $ssl.Close()
-    } catch { } finally { $c.Close() }
-  }
-}
-$tlsJob = Start-ThreadJob -ArgumentList $tls, $serverCert -ScriptBlock $tlsServe
+if (-not ('GesherNetTlsServer' -as [type])) { Add-Type -Path "$PSScriptRoot/../net/TlsServer.cs" }
+[GesherNetTlsServerFixture]::Test($serverCert)
+Write-Host 'PASS  net fixture: idle accept, incomplete TLS handshake and accepted idle HTTP read stop with no surviving clients'
+$tlsServer = [GesherNetTlsServer]::new($serverCert)
 $machineRoot = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
-$url = "https://localhost:$tlsPort/"
+$url = "https://localhost:$($tlsServer.Port)/"
 try {
   $null = NetDex 'a test root not in Windows'' store is not trusted' @('https', $url, 'reject') 180
   $machineRoot.Open('ReadWrite')
@@ -182,9 +164,12 @@ try {
   $machineRoot.Close()
   $null = NetDex 'the test root removed from Windows'' store is not trusted any more' @('https', $url, 'reject') 180
 } finally {
-  try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
-  $tls.Stop()
-  $tlsJob | Stop-Job -PassThru | Remove-Job -Force
+  Write-Host 'INFO  net TLS cleanup: root-test server stop'
+  try { $tlsServer.Dispose() } finally {
+    Write-Host 'INFO  net TLS cleanup: root-test certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  }
+  Write-Host 'INFO  net TLS cleanup: root-test complete'
 }
 
 # Keep real internet DNS/HTTPS/TLS 1.3/SNI checks, but serve all four negative
@@ -197,8 +182,7 @@ $unknownRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::n
 $unknownRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
 $unknownRoot = $unknownRequest.CreateSelfSigned($now.AddDays(-1), $now.AddDays(30))
 $negativeCertificates = @()
-$negativeListeners = @()
-$negativeJobs = @()
+$negativeServers = @()
 try {
   $negativeCertificates = @(
     (New-NetTestCertificate 'localhost' $rootCert $now.AddHours(-2) $now.AddHours(-1)),
@@ -207,22 +191,29 @@ try {
     (New-NetTestCertificate 'localhost' $unknownRoot $now.AddHours(-1) $now.AddDays(1)))
   $negativeUrls = @()
   foreach ($certificate in $negativeCertificates) {
-    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-    $listener.Start()
-    $negativeListeners += $listener
-    $negativeJobs += Start-ThreadJob -ArgumentList $listener, $certificate -ScriptBlock $tlsServe
-    $negativeUrls += "https://localhost:$($listener.LocalEndpoint.Port)/"
+    $server = [GesherNetTlsServer]::new($certificate)
+    $negativeServers += $server
+    $negativeUrls += "https://localhost:$($server.Port)/"
   }
   $machineRoot.Open('ReadWrite'); $machineRoot.Add($rootPublic); $machineRoot.Close()
   $null = NetDex 'DNS and HTTPS on the internet, local expired/wrong-host/self-signed/untrusted certificates rejected' @('internet') 300 @{
     GESHER_TLS_REJECTION_URLS = $negativeUrls -join ','
   }
 } finally {
-  try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
-  foreach ($listener in $negativeListeners) { $listener.Stop() }
-  $negativeJobs | Stop-Job -PassThru | Remove-Job -Force
-  foreach ($certificate in $negativeCertificates) { $certificate.Dispose() }
-  $unknownRoot.Dispose(); $unknownKey.Dispose()
+  try {
+    foreach ($server in $negativeServers) {
+      Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stop (active clients $($server.ActiveClients))"
+      $server.Dispose()
+      Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stopped"
+    }
+  } finally {
+    Write-Host 'INFO  net TLS cleanup: negative certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+    Write-Host 'INFO  net TLS cleanup: negative certificates dispose'
+    foreach ($certificate in $negativeCertificates) { $certificate.Dispose() }
+    $unknownRoot.Dispose(); $unknownKey.Dispose()
+  }
+  Write-Host 'INFO  net TLS cleanup: negative complete'
 }
 
 # Apps (tests/apps/netapp, nonetapp) through gesher-app: ConnectivityManager over the
@@ -266,13 +257,11 @@ function NetExpect([string] $Name, [string] $Out, [int] $Code, [string[]] $Expec
 # 40240210807 failed on windows-2025 when example.com did not answer): the test root back
 # in the machine's ROOT store and an HTTPS server with its certificate for localhost, until
 # the end of this script. ($GESHER_NETAPP_HTTPS; app processes inherit it.)
-$appTls = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-$appTls.Start()
-$appTlsJob = Start-ThreadJob -ArgumentList $appTls, $serverCert -ScriptBlock $tlsServe
+$appTls = [GesherNetTlsServer]::new($serverCert)
 $machineRoot.Open('ReadWrite')
 $machineRoot.Add($rootPublic)
 $machineRoot.Close()
-$env:GESHER_NETAPP_HTTPS = "https://localhost:$($appTls.LocalEndpoint.Port)/"
+$env:GESHER_NETAPP_HTTPS = "https://localhost:$($appTls.Port)/"
 try {
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/netapp.apk")) 400
 NetExpect 'netapp.apk in one process: ConnectivityManager (Windows'' active network, its capabilities, link properties and NetworkInfo), a default and a request callback, HTTPS through HttpsURLConnection, cleartext refused (target SDK 36)' $out $LASTEXITCODE @(
@@ -359,7 +348,10 @@ if ($failed -ne $failedBefore) {
 }
 } finally {
   Remove-Item Env:GESHER_NETAPP_HTTPS -ErrorAction SilentlyContinue
-  try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
-  $appTls.Stop()
-  $appTlsJob | Stop-Job -PassThru | Remove-Job -Force
+  Write-Host 'INFO  net TLS cleanup: app server stop'
+  try { $appTls.Dispose() } finally {
+    Write-Host 'INFO  net TLS cleanup: app certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  }
+  Write-Host 'INFO  net TLS cleanup: app complete'
 }
