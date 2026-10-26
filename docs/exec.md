@@ -188,8 +188,8 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** the prepared tree includes integration 1d49642 (merge
-e86aae). Completed CI 40320290754 at 1189dc4 predates the AOT merge and later
+**Current review:** the prepared tree includes integration ac50d412 (merge
+9839076, including verified AOT code). Completed CI 40320290754 at 1189dc4 predates the AOT merge and later
 exec3 fixes. Build/package and both e2e jobs pass with zero unexpected
 failures, required TIC-80 and Puzzles' generator exiting 0. Both Windows jobs
 pass the 47-case real-shell suite, ART incremental stdin, native-handler Java
@@ -200,6 +200,12 @@ after its last devsvc output; no zero-failure claim is made for that job.
 The prepared 57-case tree, idle/read traps, JNI-on-device APK and executable
 local-exec TLS are not CI-verified. Complete property serial/wait/readonly-
 pointer semantics, logcat and pm/am remain open. The whole track is open.
+
+**Running now:** combined CI 40338806524 at 983907652ea9ff6fd85c392d562e868b7161a7b5.
+It includes the property bootstrap fix, 57 shell cases, idle/read mailbox
+tests, JNI device APK and executable TLS. Watch with the prescribed 120-second
+interval; log C:\work\gesher-ci-review\exec3-watch-40338806524.log. Do not infer
+NDK startup, real mailbox delivery or device behavior from the local checks.
 
 Continuation history and exact evidence:
 
@@ -260,7 +266,7 @@ Continuation history and exact evidence:
   NDK header/stub. The test now resolves that export with dlsym (and links
   libdl) instead of declaring an unavailable NDK API. Supersede that run with
   the correction; the shared-property implementation remains unverified in CI.
-- Running: corrected combined CI 40320290754 at 1189dc4. Watch log is
+- Earlier corrected combined CI 40320290754 at 1189dc4. Watch log is
   C:\work\gesher-ci-review\exec3-watch-40320290754.log (120-second interval).
   Verify the NDK artifact first, then the real shell/property/signal checks on
   both Windows runners, package and e2e before recording any new completion.
