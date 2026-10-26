@@ -235,9 +235,33 @@ public class SurfaceActivity extends Activity {
             mA.setVisibility(View.VISIBLE);
             mMain.postDelayed(() -> {
                 say("phase 4 ready");
-                mMain.postDelayed(this::phase5, HOLD_MS);
+                mMain.postDelayed(this::minimize, HOLD_MS);
             }, 2000);
         }, 1500);
+    }
+
+    // The test minimizes the window (the Activity stops, the surfaces go) and restores it
+    // (they come back); phase 5 follows the restore, or 40 s regardless.
+    private boolean mAwaitRestore;
+    private boolean mStoppedOnce;
+
+    private void minimize() {
+        mAwaitRestore = true;
+        say("minimize now");
+        mMain.postDelayed(() -> {
+            if (mAwaitRestore) {
+                mAwaitRestore = false;
+                say("no restore within 40 s");
+                phase5();
+            }
+        }, 40000);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        say("onStop");
+        if (mAwaitRestore) mStoppedOnce = true;
     }
 
     // --- cameras -------------------------------------------------------------------------
@@ -416,5 +440,9 @@ public class SurfaceActivity extends Activity {
     protected void onResume() {
         super.onResume();
         say("onResume");
+        if (mAwaitRestore && mStoppedOnce) {
+            mAwaitRestore = false;
+            mMain.postDelayed(this::phase5, 3000);
+        }
     }
 }
