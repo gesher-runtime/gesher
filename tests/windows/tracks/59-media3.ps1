@@ -129,12 +129,14 @@ $recordChecks = @(
      P = @("${t}recorder surface: getSurface the same true, 2 track\(s\) \[video/avc 320x240, audio/mp4a-latm 44100 Hz 1 ch\], [12]\.\d s; video 45\+ frames, colors \[red, lime, blue, white\], frame at 1\.25 s 320x240 blue; audio 750 Hz then 1250 Hz") },
   @{ Name = 'MediaRecorder, video from the camera (Camera2: GESHER_CAMERA_TEST''s camera, a repeating request into getSurface()): H.264 in MPEG-4 with the test picture'
      P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true") },
+  @{ Name = 'Camera2 close delivers onClosed exactly once before its callback thread quits'
+     P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
   @{ Name = 'MediaCodec''s output into an ImageReader''s Surface (YUV_420_888 Images): every color in order'
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
-      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:'
+      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }

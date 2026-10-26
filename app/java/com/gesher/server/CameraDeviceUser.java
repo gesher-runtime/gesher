@@ -131,6 +131,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private final String mCameraId;
     private final WindowsCamera.Device mDevice;
     private final ICameraDeviceCallbacks mCallbacks;
+    private final CameraCallbacks mCallbackQueue;
 
     private final Object mLock = new Object();
     private final Map<Integer, Stream> mStreams = new HashMap<>();
@@ -152,7 +153,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         mService = service;
         mCameraId = cameraId;
         mDevice = device;
-        mCallbacks = callbacks;
+        mCallbackQueue = new CameraCallbacks(cameraId, callbacks);
+        mCallbacks = mCallbackQueue;
     }
 
     // --- configuration -----------------------------------------------------------------------
@@ -386,7 +388,6 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             thread = mThread;
             mLock.notifyAll();
         }
-        WindowsCamera.Capture capture = mCapture;
         if (thread != null && thread != Thread.currentThread()) {
             try {
                 thread.join(5000);
@@ -394,7 +395,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 Thread.currentThread().interrupt();
             }
         }
-        if (capture != null) capture.close();
+        mCallbackQueue.close();
         mService.closed(mCameraId, this);
         CameraService.log("disconnect " + mCameraId);
     }
@@ -469,6 +470,19 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     }
 
     private void captureLoop() {
+        try {
+            captureFrames();
+        } finally {
+            // The capture thread alone owns the native handle. A blocked native
+            // read may outlive disconnect's bounded join; never free it under that
+            // read, or miss a handle opened after disconnect began.
+            WindowsCamera.Capture capture = mCapture;
+            mCapture = null;
+            if (capture != null) capture.close();
+        }
+    }
+
+    private void captureFrames() {
         CaptureTiming timing = "1".equals(System.getenv("GESHER_MEDIA_TRACE_RECORD"))
                 ? new CaptureTiming() : null;
         byte[] nv12 = null;
