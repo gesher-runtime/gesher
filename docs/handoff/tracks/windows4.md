@@ -260,3 +260,14 @@ latest epoch/snapshot instead of losing consumed queued messages. The fixed
 real-COM fixture has zero failures locally under g++ Werror; CI is pending.
 Review also identified the separate normal-HWND-destruction owner cleanup
 path, which is being checked before final dispatch.
+
+The normal destruction leak is also reproduced: DestroyWindow followed by
+connection release left the Impl owner reference forever, preventing watch
+storage from being deleted. A standalone fixture observes the exact owner's
+deallocation without retaining it or adding a production runtime hook; the
+old destructor fails that assertion and all other checks pass. WM_NCDESTROY
+now publishes an atomic destroyed flag after removing the subclass/property.
+Connection release drops its owner reference after known destruction (also
+safe after HWND reuse), while active procedure leases protect outer calls.
+The hung/live foreign-subclass fallback still retains its reachable owner.
+The fixed native fixture reports zero failures locally; full CI is pending.

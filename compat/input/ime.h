@@ -74,6 +74,7 @@ class ImeWindow {
   struct Impl;
 
  private:
+  friend struct TextServiceProbeAccess;
   explicit ImeWindow(void* hwnd, Impl* impl) : hwnd_(hwnd), impl_(impl) {}
   void Post(int op);
 
