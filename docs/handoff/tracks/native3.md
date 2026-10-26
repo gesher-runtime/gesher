@@ -71,10 +71,24 @@ arguments. Java compiles and PowerShell parses locally; no AOSP build was
 run locally. Do not infer that this fixes camera pacing; media3 will retain
 its counters and original capture thresholds.
 
-Font/bitmap run 40344682373 at 1e881b5 is now green on attempt 2 after the
-permitted failed-job rerun of the known output tone timing check. Final
-personal log review is in progress; the newer rounding probe and process
-implementation are separate changes and do not inherit that full-run result.
+Prepared shared CI fixes: the finite AAudio output fixture now preloads all
+8820 frames before start, retaining exact frame/frequency/duration checks;
+this is the source-only ac12cbb slice with scoped output proof on both
+runners in ci 40330465222, not a green media3 claim. The completed WinRT
+geocoder probe now flushes its genuine result and terminates only itself
+through Win32, retaining 30/45-second failure bounds. Launcher child logs
+are forwarded as atomic complete UTF-8 byte lines, with truncation/final
+fragment handling and an executed JDK regression in exec.yml. These minimal
+outside-domain changes need the next full combined run; UI assertions and
+recording thresholds are unchanged.
+
+Font/bitmap run 40344682373 at 1e881b5 is fully reviewed and green on attempt
+2 after the permitted failed-job rerun of the known output tone timing
+check. The frozen foundation merged into integration as f677944; the newer
+rounding probe and process implementation do not inherit that full result.
+The expanded binary128 rounding probe is separately verified in ci
+40355164049 at d02ad7c: all 17 checks and zero-failure summaries personally
+read on both Windows versions. This still does not implement libm APIs.
 
 Current full CI: 40333703940 at
 f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
