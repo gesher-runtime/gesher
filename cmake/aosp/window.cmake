@@ -6,7 +6,8 @@
 # ANativeWindow_toSurface, which build with hwui (core/jni's Surface natives).
 set(_win ${CMAKE_SOURCE_DIR}/compat/hwui/window)
 
-add_library(gesher_window STATIC ${_win}/gesher_window.cc ${_win}/gesher_popup.cc)
+add_library(gesher_window STATIC ${_win}/gesher_window.cc ${_win}/gesher_popup.cc
+  ${_win}/input_pane.cc)
 target_include_directories(gesher_window PUBLIC ${_win})
 target_compile_options(gesher_window PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher_window PUBLIC user32 gdi32 ole32)
@@ -27,3 +28,8 @@ target_link_libraries(window_probe PRIVATE gesher_window_surface skia)
 target_compile_options(window_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 gesher_graphics_cxx(window_probe)
 set_target_properties(window_probe PROPERTIES EXCLUDE_FROM_ALL ON)
+
+add_executable(windows4_input_pane_probe ${CMAKE_SOURCE_DIR}/probes/windows4/input_pane_probe.cc)
+target_link_libraries(windows4_input_pane_probe PRIVATE gesher_window)
+target_compile_options(windows4_input_pane_probe PRIVATE -Wall -Wextra -Werror)
+set_target_properties(windows4_input_pane_probe PROPERTIES EXCLUDE_FROM_ALL ON)

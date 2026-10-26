@@ -2,6 +2,13 @@
 # simultaneous task overrides. 51-windows3 supplies the real HWND/log helpers.
 if (-not (Get-Command W3Wait -ErrorAction SilentlyContinue)) { throw 'Windows4 requires the windows3 HWND/log helpers' }
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
+$w4Pane = & "$Dir/windows4_input_pane_probe.exe" 2>&1 | Out-String
+$w4PaneCode = $LASTEXITCODE
+Write-Host $w4Pane
+if ($w4PaneCode -ne 0 -or $w4Pane -notmatch '0 windows4 COM input pane check\(s\) failed') {
+  Write-Host "FAIL  windows4: actual IFrameworkInputPane COM source callbacks and lifetime (exit $w4PaneCode)"
+  $script:failed++
+} else { Write-Host 'PASS  windows4: actual IFrameworkInputPane COM source callbacks, window events, geometry and lifetime' }
 $w4Bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $w4Apk = NoDrive "$Dir/winapp.apk"

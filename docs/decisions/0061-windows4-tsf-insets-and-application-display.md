@@ -33,6 +33,16 @@ process modes; their runtime result is pending. The new display helper and TaskC
 framework/core classes locally; that is syntax evidence only. No runtime
 behavior or roadmap milestone is claimed.
 
-TSF document/reconversion, COM-source IFrameworkInputPane callback tests,
-candidate-window occlusion and old-target adjustResize are not implemented.
+The COM-source IFrameworkInputPane test is implemented but not CI verified.
+It exercises the same subscription/handler as real windows, including an
+actual window's queued events, full rectangle geometry and reference/cookie
+lifetime. Apps keep the OS COM source; only a native probe supplies a factory.
+An input pane horizontally outside a window no longer obscures that window's
+rows. Physical keyboard/IME behavior is not inferred from this source fixture.
+See Microsoft's [IFrameworkInputPane](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-iframeworkinputpane)
+and [Showing](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iframeworkinputpanehandler-showing)
+contracts for the interface and screen rectangle.
+
+TSF document/reconversion, candidate-window occlusion and old-target
+adjustResize are not implemented.
 Physical touch keyboard behavior requires hardware and remains unverified.
