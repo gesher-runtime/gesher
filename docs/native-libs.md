@@ -767,6 +767,8 @@ _Last updated 2026-10-26 (continuation after handover)._
   with the build's WIN32_LEAN_AND_MEAN/NOMINMAX defines (the first invocation
   omitted them and hit Winsock header collisions in socket.cc). The NDK tests
   and runtime behavior still need CI.
+- Running: ci 40296960603 at d380a3e, including integration a98dda9
+  (windows3). Verify both ABIs, both runners and the full job set before merge.
 
 - Tip includes merge of origin/phase4/integration 8ff9219 (exec2).
 - **ci 40263281040** (commit before the setjmp fix, both runners): build
