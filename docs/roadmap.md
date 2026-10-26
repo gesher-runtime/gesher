@@ -144,6 +144,9 @@ Each phase ends with something demonstrable, built and tested in CI.
       framework oat 9.1 MB versus 72.2 MB, whole image 74.7 MB versus 162.6 MB;
       startup passes the unchanged 10%/30 ms comparison on both runners
       (aot2, ci 40320549410; package install/run/uninstall and both e2e pass).
+- [x] Aot3 oatdump: inspect shipped framework/app oat code, actual app image
+      and missing-file errors with pinned ART; verify the installed tool.
+      Full ci 40368334642 at 96ef687, both Windows runners and package/e2e.
 - [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
       dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a

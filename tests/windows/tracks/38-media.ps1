@@ -174,7 +174,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
     $global:LASTEXITCODE = $mediaExit
     $mediaOut
   } @('MediaTest ndk aaudio callback: rate 48000, channels 2, float 1, state AAUDIO_STREAM_STATE_STOPPED, burst ok, frames ok',
-      'MediaTest ndk aaudio write: rate 22050, written 8820, read all',
+      'MediaTest ndk aaudio write: rate 22050, written 8820, read all, prefilled true, xruns ',
       'MediaTest ndk aaudio input: AAUDIO_ERROR_UNAVAILABLE',
       'MediaTest ndk opensl queue: playing 1, buffers left 0, taken 12, callbacks all',
       'MediaTest ndk opensl fd: realize 0, duration ok, at end 1')
