@@ -455,6 +455,11 @@ needs: [framework-build.md](framework-build.md).
       callbacks/decode and error paths; x86_64/arm64 through dalvikvm and
       APKs in both modes (native3, ci 40305973210, both runners). Hardware
       Bitmap/HardwareBuffer rendering and remaining NDK coverage stay open.
+- [x] NDK AFontMatcher/AFont/ASystemFontIterator over the real Minikin map:
+      readable font files, UTF-16 mixed-script runs, style/variable-axis values
+      and owned metadata lifetime; x86_64/arm64 through framework dalvikvm
+      and APKs in both modes (native3 foundation, ci 40344682373 attempt 2,
+      both Windows runners). Standalone native bootstrap/font updates stay open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

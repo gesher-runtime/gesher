@@ -62,6 +62,15 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Authoritative foundation result: ci 40344682373 at
+1e881b508b9a663f6d4cdd6f43ad629b8782a8ea, attempt 2, is fully green.
+The bitmap/font slice is frozen on wip/native3-foundation for integration;
+see that brief for the personally reviewed jobs, PASS lines and scope.
+The coordinator continues the remaining scope on wip/native3. New process
+native, math rounding and later diagnostic changes there are not included
+in the frozen verified code. Historical pending-run notes below are
+superseded by this result and do not close the remaining contracts.
+
 Current full CI: 40333703940 at
 f24223c7508a56722bc4e06d29d79b34026f559f, including verified aot2 and
 integration b9f93f0. Watching with interval 120; no result is claimed yet.
