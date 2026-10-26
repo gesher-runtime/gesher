@@ -202,6 +202,9 @@ first agent ran on an older model and was replaced per the all-Opus rule._
   has no Gesher signal mailbox, so it does not verify signal delivery or ART.
   CI checks are in 45-exec3 and exec.yml's existing Java-source glob builds
   Exec3Test. No AOSP build was run locally. No exec3 work is CI-verified yet.
+- Running: ci 40311734733 at 8c90ac2, including integration 91c195d/native2.
+  Check both shell suites through the real launcher/ART, all existing track
+  checks, package and e2e. The implementation below still has open scope.
 - Still open: umask (reports unsupported rather than claiming permissions),
   broader shell conformance (including special-builtin assignment scopes and
   persistent-descriptor nesting), caught signals during a blocked input read,
