@@ -154,6 +154,39 @@ function CameraTestCheck([string] $Mode, [string] $Out, [int] $Code) {
   }
 }
 
+# The legacy android.hardware.Camera over the same test camera (hwsvc2, ADR 0051).
+function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
+  DevCheck "devices: camera ($Mode): the legacy android.hardware.Camera over GESHER_CAMERA_TEST's camera: info, parameters, a 320x240 NV21 preview into callback buffers, autoFocus, takePicture (shutter, raw, JPEG), release" $Out @(
+    ,@("${cm}legacy android.hardware.Camera.getNumberOfCameras() 1", "${cm}legacy Camera.open() answers a camera",
+      "${cm}legacy 1 cameras, 0 facing 0, orientation 0", "${cm}legacy open(0) opened",
+      "${cm}legacy parameters: preview sizes [640x480, 320x240], preview format 17, picture sizes [640x480, 320x240], focus fixed, zoom false, flash null",
+      "${cm}legacy preview at 320x240: first frame 115200 bytes, Y(10,100)=", 'previewEnabled true',
+      "${cm}legacy preview frames keep coming: true", "${cm}legacy autoFocus true",
+      "${cm}legacy takePicture: shutter, raw null, JPEG starts FFD8 true, decodes to 320x240; previewEnabled after false",
+      "${cm}legacy released")) $Code "legacy $Mode"
+}
+
+# Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
+# Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
+$geoScript = Join-Path $root 'devices-geocode.ps1'
+Set-Content -Path $geoScript -Encoding UTF8 -Value @'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+[Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
+try {
+  $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @([Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)))
+  $null = $t.Wait(30000)
+  'status: ' + $t.Result.Status
+} catch { 'error: ' + $_.Exception.Message }
+'@
+$geo = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $geoScript 2>&1 | Out-String).Trim()
+if ($geo -match 'status: ([A-Za-z]+)') {
+  Write-Host "PASS  devices: geocoder: Windows.Services.Maps without a map service key answers $($Matches[1]) (Geocoder stays absent: isPresent false, IOException)"
+} else {
+  Write-Host "FAIL  devices: geocoder: Windows.Services.Maps did not answer: $geo"
+  $script:failed++
+}
+
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400
 $code = $LASTEXITCODE
@@ -167,6 +200,7 @@ $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$D
 $code = $LASTEXITCODE
 SensorsTestCheck 'single process' $out $code
 CameraTestCheck 'single process' $out $code
+LegacyCameraCheck 'single process' $out $code
 Remove-Item Env:GESHER_DEVICES_STEPS
 # An app that asks for neither permission (tests/apps/nodevices): refused, as on Android.
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/nodevices.apk")) 400
@@ -190,6 +224,28 @@ $out += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.devices.log') -Raw
 LocationChecks 'Gesher device' $out $code $true
 SensorsTestCheck 'Gesher device' $out $code
 CameraTestCheck 'Gesher device' $out $code
+LegacyCameraCheck 'Gesher device' $out $code
+# ACTION_IMAGE_CAPTURE: the device installed Gesher Camera (the PC has a camera: the test
+# one); devices.apk's CaptureTestActivity asks it for a thumbnail and for a photo written
+# to its provider's EXTRA_OUTPUT (Gesher Camera's auto-capture extra takes them).
+$capOut = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'launch', (NoDrive "$Dir/devices.apk"), '--activity', '.CaptureTestActivity', '--keep-task') 400
+$capCode = $LASTEXITCODE
+$capOut += "`n" + (Get-Content $serverLog -Raw -ErrorAction SilentlyContinue)
+$capOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.devices.log') -Raw -ErrorAction SilentlyContinue)
+$capOut += "`n" + (Get-Content (Join-Path $root 'logs/com.gesher.camera.log') -Raw -ErrorAction SilentlyContinue)
+# (Its thumbnail Bitmap reaches the caller only where Bitmaps parcel: Gesher's hwui build
+# does not parcel them, so "data" is absent there; ADR 0051.)
+$thumb = if ($capOut -match 'devices: capture: thumbnail result OK, data (\S+)') { $Matches[1] } else { '?' }
+DevCheck "devices: camera (Gesher device): ACTION_IMAGE_CAPTURE resolves to Gesher Camera (installed by the device as the PC has a camera); without EXTRA_OUTPUT it answers RESULT_OK (thumbnail: $thumb), with it it writes a 640x480 JPEG to the caller's provider's content URI" $capOut @(
+  @('camera app: com.gesher.camera '),
+  @('devices: capture: ACTION_IMAGE_CAPTURE resolves to com.gesher.camera/.CaptureActivity',
+    'devices: capture: thumbnail result OK, data ',
+    'devices: capture: EXTRA_OUTPUT result OK, the file: ', 'starts FFD8 true, decodes to 640x480',
+    'devices: capture: done')) $capCode 'capture'
+if (-not $capOut.Contains('devices: capture: done')) {
+  Write-Host '--- com.gesher.camera.log'
+  Get-Content (Join-Path $root 'logs/com.gesher.camera.log') -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
+}
 Remove-Item Env:GESHER_SENSOR_TEST
 Remove-Item Env:GESHER_CAMERA_TEST
 $null = DevRun "$Dir/dalvikvm.exe" ($launcherDev + 'shutdown') 120

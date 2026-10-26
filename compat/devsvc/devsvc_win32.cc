@@ -500,6 +500,27 @@ std::u16string TimeZoneKeyName() {
   return U16(tz.TimeZoneKeyName);
 }
 
+std::u16string IanaZone(const std::u16string& windows_id) {
+  // Windows' own ICU (icu.dll, Windows 10 1903 and later): CLDR's windowsZones, for the
+  // "001" territory. Looked up at run time; empty without it.
+  typedef int32_t(__cdecl * IdForWindowsId)(const char16_t* winid, int32_t len,
+                                               const char* region, char16_t* id,
+                                               int32_t capacity, int* status);
+  static IdForWindowsId fn = [] {
+    HMODULE m = LoadLibraryExW(L"icu.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    return m != nullptr ? reinterpret_cast<IdForWindowsId>(
+                              reinterpret_cast<void*>(
+                                  GetProcAddress(m, "ucal_getTimeZoneIDForWindowsID")))
+                        : nullptr;
+  }();
+  if (fn == nullptr || windows_id.empty()) return std::u16string();
+  char16_t id[128];
+  int status = 0;  // U_ZERO_ERROR; failures are > 0
+  int32_t n = fn(windows_id.c_str(), static_cast<int32_t>(windows_id.size()), nullptr, id,
+                 static_cast<int32_t>(sizeof(id) / sizeof(id[0])), &status);
+  if (status > 0 || n <= 0 || n >= 128) return std::u16string();
+  return std::u16string(id, static_cast<size_t>(n));
+}
 // --- toasts -----------------------------------------------------------------------------
 
 long ShowToast(const std::u16string& app_id, const std::u16string& tag,
@@ -524,13 +545,34 @@ long ClearToasts(const std::u16string& app_id) {
   return gesher_toast_clear(W(app_id));
 }
 
+const char16_t kToastActivatorClsid[] = u"{C18D9445-A7F0-472E-985F-AC354EBEB660}";
+
+namespace {
+
+// Whether the activator is registered as a local server (the installer's key).
+bool ActivatorInstalled() {
+  std::wstring key = L"Software\\Classes\\CLSID\\";
+  key += W(kToastActivatorClsid);
+  key += L"\\LocalServer32";
+  for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+    HKEY h = nullptr;
+    if (RegOpenKeyExW(root, key.c_str(), 0, KEY_QUERY_VALUE, &h) == ERROR_SUCCESS) {
+      RegCloseKey(h);
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 long RegisterAppId(const std::u16string& app_id, const std::u16string& display_name,
                    const std::u16string& icon) {
   std::wstring key = L"Software\\Classes\\AppUserModelId\\";
   key += W(app_id);
   HKEY h = nullptr;
-  LONG r = RegCreateKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, nullptr, 0, KEY_SET_VALUE,
-                           nullptr, &h, nullptr);
+  LONG r = RegCreateKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, nullptr, 0,
+                           KEY_SET_VALUE | KEY_QUERY_VALUE, nullptr, &h, nullptr);
   if (r != ERROR_SUCCESS) return HRESULT_FROM_WIN32(r);
   r = RegSetValueExW(h, L"DisplayName", 0, REG_SZ, reinterpret_cast<const BYTE*>(W(display_name)),
                      static_cast<DWORD>((display_name.size() + 1) * sizeof(wchar_t)));
@@ -538,9 +580,30 @@ long RegisterAppId(const std::u16string& app_id, const std::u16string& display_n
     r = RegSetValueExW(h, L"IconUri", 0, REG_SZ, reinterpret_cast<const BYTE*>(W(icon)),
                        static_cast<DWORD>((icon.size() + 1) * sizeof(wchar_t)));
   }
+  // Clicks go to Gesher's activator (also when no Gesher process runs) only where it
+  // is registered; without it they reach the toast's Activated event while the system
+  // server runs.
+  if (r == ERROR_SUCCESS) {
+    if (ActivatorInstalled()) {
+      std::u16string clsid(kToastActivatorClsid);
+      r = RegSetValueExW(h, L"CustomActivator", 0, REG_SZ,
+                         reinterpret_cast<const BYTE*>(W(clsid)),
+                         static_cast<DWORD>((clsid.size() + 1) * sizeof(wchar_t)));
+    } else {
+      RegDeleteValueW(h, L"CustomActivator");
+    }
+  }
   RegCloseKey(h);
   return r == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(r);
 }
+
+long RegisterActivator(bool single_use) {
+  HRESULT hr = EnsureCom();
+  if (FAILED(hr)) return hr;
+  return gesher_activator_register(single_use ? 1 : 0);
+}
+
+void RevokeActivator() { gesher_activator_revoke(); }
 
 long UnregisterAppId(const std::u16string& app_id) {
   std::wstring key = L"Software\\Classes\\AppUserModelId\\";

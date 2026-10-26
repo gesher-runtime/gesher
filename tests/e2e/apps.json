@@ -91,6 +91,20 @@
       "why": "NDK: the puzzles are C code (lib/x86_64/libpuzzles.so) driven over JNI, drawing on a Canvas through Java callbacks; new games come from lib/x86_64/libpuzzlesgen.so, an ELF executable run with ProcessBuilder (docs/exec.md); AndroidX AppCompat.",
       "waitLog": "gesher: exec pid [0-9]+ exited with status 0",
       "actions": [ { "click": [100, 200] } ]
+    },
+    {
+      "package": "com.nesbox.tic",
+      "label": "TIC-80",
+      "versionName": "1.01.00",
+      "versionCode": 10100,
+      "sha256": "42c078a05dedcef2fad5ba608db8240cb751598b49714217b0f67cb219f28f69",
+      "license": "MIT",
+      "source": "https://github.com/nesbox/TIC-80",
+      "why": "Ships native code only for arm64-v8a (Phase 7, docs/arm64.md): the TIC-80 fantasy console and SDL2 in C (lib/arm64-v8a), run by the arm64 translator; SDLActivity's JNI both ways, native threads, EGL/GLES 2 on the Activity's window.",
+      "expectLog": [ "is arm64-v8a: translated", "V/SDL: nativeSetupJNI()" ],
+      "knownFailure": "its arm64-v8a libraries load and run translated (SDL's JNI_OnLoad and three nativeSetupJNI calls into ART) and its window opens, but SDL draws into an SDLSurface (a SurfaceView), which Gesher's graphics stack does not give a Surface yet (docs/media.md, docs/devices.md), so SDL's main thread never starts and the window stays black (ci 40237320424)",
+      "diagnoseLog": "gesher arm64|Fatal signal|Cause:|#[0-9][0-9] pc|FATAL|AndroidRuntime|UnsatisfiedLink|stubbed|SDL|TIC|gesher elf|Exception|exited",
+      "actions": [ { "click": [200, 400] } ]
     }
   ]
 }

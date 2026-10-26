@@ -218,6 +218,43 @@ public final class WindowsHost {
         return available() ? nativeUnregisterAppId(appId) : 0x80004001;
     }
 
+    /**
+     * Gesher's toast activator (ADR 0051): the CLSID that each app id names as its
+     * CustomActivator, registered by the installer as a local server running
+     * {@code gesher-app toast-activated}.
+     */
+    public static final String TOAST_ACTIVATOR_CLSID = "{C18D9445-A7F0-472E-985F-AC354EBEB660}";
+
+    /**
+     * Serves the toast activator from this process (COM class object): every click
+     * ({@code singleUse} false, the system server) or one (the launcher COM started).
+     * Returns the HRESULT (0: registered).
+     */
+    public static int registerToastActivator(boolean singleUse) {
+        return available() ? nativeRegisterActivator(singleUse) : 0x80004001;
+    }
+
+    public static void revokeToastActivator() {
+        if (available()) nativeRevokeActivator();
+    }
+
+    /**
+     * Waits up to {@code timeoutMs} for a toast activation (the activator's or a toast's
+     * Activated event): app id, tag, group, arguments; null on a time-out. For a process
+     * that has no event listeners (the launcher).
+     */
+    public static String[] waitActivation(int timeoutMs) {
+        if (!available()) return null;
+        long deadline = android.os.SystemClock.uptimeMillis() + timeoutMs;
+        while (true) {
+            String[] a = nativeNextActivation();
+            if (a != null) return a;
+            long left = deadline - android.os.SystemClock.uptimeMillis();
+            if (left <= 0) return null;
+            nativeWaitEvents((int) Math.min(left, 1000));
+        }
+    }
+
     /** A drive-less path as Windows names it (with the current drive). */
     public static String fullPath(String path) {
         return available() ? nativeFullPath(path) : path;
@@ -246,4 +283,17 @@ public final class WindowsHost {
             String iconPath);
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
+    /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */
+    public static String ianaZone(String windowsId) {
+        if (!available() || windowsId == null) return null;
+        try {
+            return nativeIanaZone(windowsId);
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
+    private static native String nativeIanaZone(String windowsId);
+    private static native int nativeRegisterActivator(boolean singleUse);
+    private static native void nativeRevokeActivator();
 }

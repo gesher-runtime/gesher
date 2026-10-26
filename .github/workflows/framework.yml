@@ -362,6 +362,10 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/devsvc/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Gesher Camera (hwsvc2, ADR 0051): ACTION_IMAGE_CAPTURE's app, shipped with Gesher.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-camera" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/popupapp/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -388,6 +392,7 @@ jobs:
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk dist-framework/
           cp out/app/popupapp.apk dist-framework/
+          cp out/app/gesher-camera.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
           cp out/app/imeapp.apk dist-framework/
           cp out/app/lifeapp.apk dist-framework/
