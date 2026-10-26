@@ -60,8 +60,8 @@ tar -xzf "$src/jpeg.tar.gz" -C "$src"
 cmake -S "$src/libjpeg-turbo-3.0.4" -B "$src/jpeg-build" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" -DANDROID_ABI="$abi" \
   -DANDROID_PLATFORM=android-$api -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_SIMD=ON >/dev/null
-cmake --build "$src/jpeg-build" --target tjunittest -j "$jobs" >/dev/null
-cp "$src/jpeg-build/tjunittest" "$out/tjunittest"
+cmake --build "$src/jpeg-build" --target tjunittest-static -j "$jobs" >/dev/null
+cp "$src/jpeg-build/tjunittest-static" "$out/tjunittest"
 
 # --- SQLite -------------------------------------------------------------------------
 fetch https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip sqlite.zip
