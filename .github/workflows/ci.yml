@@ -93,6 +93,11 @@ jobs:
   arm64:
     uses: ./.github/workflows/arm64.yml
 
+  # The native2 track's NDK test programs (shim extras, platform dlopen,
+  # popular NDK libraries' self-tests): .github/workflows/native2.yml.
+  native2:
+    uses: ./.github/workflows/native2.yml
+
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
@@ -530,7 +535,7 @@ jobs:
           path: e2e-results/
 
   test:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64]
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, native2]
     strategy:
       fail-fast: false
       matrix:
@@ -604,6 +609,11 @@ jobs:
         with:
           name: media
           path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: native2
+          path: dist/native2
 
       - name: Run tests
         shell: pwsh
