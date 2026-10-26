@@ -30,6 +30,14 @@ int main() {
       std::printf("FAIL pinned wide: %s (errno %d)\n", what.c_str(), errno);
     }
   });
+  WideFloatingContracts(static_cast<double (*)(const wchar_t*, wchar_t**)>(pinned::wcstod),
+      pinned::wcstof, [&](bool ok, const std::string& what) {
+        ++checks;
+        if (!ok) {
+          ++failures;
+          std::printf("FAIL pinned float grammar: %s (errno %d)\n", what.c_str(), errno);
+        }
+      });
   std::printf("%s pinned wide: %u conversion/state/boundary/LP64 assertions, %u failures\n",
               failures ? "FAIL" : "PASS", checks, failures);
   return failures != 0;

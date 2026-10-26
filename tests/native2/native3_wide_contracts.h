@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cerrno>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -246,4 +247,45 @@ void WideContracts(const Api& api, Check check) {
   errno = 0;
   check(api.integer(long_input.c_str(), &end, 10) == 123 && end == long_input.c_str() + 603 && errno == 0,
         "integer has no fixed input buffer");
+}
+
+template <class Double, class Float, class Check>
+void WideFloatingContracts(Double to_double, Float to_float, Check check) {
+  const struct { const wchar_t* text; double value; size_t end; } numbers[] = {
+      {L"\u2003-0x1.8p2!", -6, 9}, {L"0xap0!", 10, 5},
+      // bionic/wcstod.cpp's candidate alphabet excludes b/c/d hex digits.
+      {L"0xabc!", 10, 3}, {L"0x.p2!", 0, 1}, {L"1e+!", 1, 1},
+      {L"1.25e-2!", 0.0125, 7}, {L".5!", 0.5, 2}, {L" \t+!", 0, 0}};
+  for (const auto& sample : numbers) {
+    wchar_t* end;
+    errno = 0;
+    double value = to_double(sample.text, &end);
+    check(value == sample.value && end == sample.text + sample.end && errno == 0,
+          "pinned floating grammar/value/end");
+  }
+  for (const wchar_t* text : {L"nan(a)!", L"nan(b)!", L"NAN!"}) {
+    wchar_t* end;
+    size_t expected = text[3] == '(' && text[4] == 'a' ? 6 : 3;
+    check(std::isnan(to_double(text, &end)) && end == text + expected,
+          "pinned NaN payload candidate/rollback");
+  }
+  const wchar_t* infinity = L"+infinity!";
+  wchar_t* end;
+  check(std::isinf(to_double(infinity, &end)) && end == infinity + 9, "pinned infinity end");
+  const wchar_t* overflow = L"1e9999!";
+  errno = 0;
+  check(std::isinf(to_double(overflow, &end)) && errno == 34 && end == overflow + 6,
+        "floating overflow errno/end");
+  const wchar_t* underflow = L"-1e-9999!";
+  errno = 0;
+  double zero = to_double(underflow, &end);
+  check(zero == 0 && std::signbit(zero) && errno == 34 && end == underflow + 8,
+        "floating underflow sign/errno/end");
+  const wchar_t* rounded = L"16777217!";
+  check(to_float(rounded, &end) == 16777216.0f && to_double(rounded, &end) == 16777217.0 &&
+            end == rounded + 8, "binary32 rounds directly");
+  std::wstring long_float(600, L'0');
+  long_float += L"1.25e2!";
+  check(to_double(long_float.c_str(), &end) == 125 && end == long_float.c_str() + 606,
+        "floating input/end beyond 255 characters");
 }

@@ -29,6 +29,7 @@ files = [
     "upstream-openbsd/lib/libc/locale/mbstowcs.c",
     "upstream-openbsd/lib/libc/locale/wcstombs.c",
     "bionic/strtol.cpp",
+    "stdio/parsefloat.c", "bionic/wcstod.cpp",
 ]
 parts = [(root / "reference-prefix.h").read_text()]
 for file in files:
@@ -36,6 +37,10 @@ for file in files:
     # Only environment directives are adapted; no function body rewriting.
     source = re.sub(r'^\s*#include[^\n]*$', '', source, flags=re.M)
     source = source.replace('#pragma once', '')
+    if file == "stdio/parsefloat.c":
+        # Compile only the original narrow parser used by wcstod. Wide scanf
+        # and its separate wparsefloat implementation remain outside scope.
+        source = source.split("size_t wparsefloat(", 1)[0]
     parts.append(f'\n#line 1 "{file}"\n{source}')
 parts.append((root / "reference-main.cpp").read_text())
 Path(sys.argv[1]).write_text("\n".join(parts))

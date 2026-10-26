@@ -67,7 +67,8 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
-Prepared, not yet CI verified. The effective multibyte registrations now
+Prepared; scoped reference/compilation verified, production runtime pending.
+The effective multibyte registrations now
 consolidate in locale_bionic.cc; the unused extra_bionic conversions are
 removed. State uses the actual four sequence bytes and preserves LP64's
 four reserved bytes. C11 conversions preserve the pinned encoder/decoder
@@ -82,8 +83,8 @@ SHA-256 manifest, under probes/native3/wide/upstream. Include-only adapters
 compile the pinned conversion/legacy/integer bodies on Linux and run shared
 contract assertions. native3-wide.yml also compiles the production locale
 object with pinned llvm-mingw/-Werror and both NDK library ABIs. Compilation
-and fixture execution are CI-only. The first scoped push has no result yet;
-full CI and dedicated test66 mode assertions remain to be completed.
+and fixture execution are CI-only. test66 asserts each actual ABI/mode log;
+production runtime and full CI remain pending.
 
 Scoped run 40419128672 at 9bff75d failed before runtime: the production
 object needed the C++ cstdlib header for std::malloc/free, and GCC rejects
@@ -97,6 +98,15 @@ warning in a malformed-input fixture. The byte string is now explicit;
 no assertion or production behavior was relaxed. test66 now checks the
 actual test44 process logs for all six ABI/mode cases, avoiding duplicate
 Activity runs. No runtime proof is claimed until the next scoped/full run.
+
+Scoped 40419402781 at 908125d is green; all three actual job logs were read.
+The pinned reference prints "PASS pinned wide: 186 conversion/state/boundary/
+LP64 assertions, 0 failures". Production locale compiles with pinned
+llvm-mingw/-Werror, and both NDK library ABIs compile. This is independent
+expected-behavior/compile evidence, not production runtime proof. The next
+scoped run adds the actual pinned wcstod/parsefloat grammar reference with
+an explicitly limited host rounding/finite-stream adapter and locale-alias
+calls. ADR 0073 records the registration audit, quirks and open boundaries.
 
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
