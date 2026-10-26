@@ -217,8 +217,10 @@ package and e2e:
   full run. Removed the diagnostic `-AllClasses` boot-image option: the app
   image fix is the explicit boot-image extension list, not extra boot classes.
   The smaller image, startup and app-image checks need fresh CI verification.
-- Next: dispatch ci.yml on wip/aot2, read all 61-aot2 PASS lines and both test
-  summaries, package and e2e before marking the track ready to merge. The
+- Running: ci 40290847953 at 19014a2 (without -AllClasses, with integration
+  a462e9c). Read all 61-aot2 PASS lines and both test summaries, package and
+  e2e. Integration has since merged windows3 (80cb28b), so merge the latest
+  integration and run final CI again before merging this track. The
   historical handoff below records the predecessor's state.
 
 ### Handoff (2026-10-26, stopped by the coordinator)
