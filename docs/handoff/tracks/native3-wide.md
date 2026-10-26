@@ -67,8 +67,24 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
-Reserved, not started. Root has separately verified Unicode width in full
-ci 40404678100 at 581e88f; that source is not yet integrated with the new
-cloud/exec baseline. This subtrack starts from integration 94ccde1 and must
-not reimplement the already verified width/classification work. The global
-CPU-clock follow-up is owned by root and still needs combined CI.
+Prepared, not yet CI verified. The effective multibyte registrations now
+consolidate in locale_bionic.cc; the unused extra_bionic conversions are
+removed. State uses the actual four sequence bytes and preserves LP64's
+four reserved bytes. C11 conversions preserve the pinned encoder/decoder
+asymmetry and C16/NUL quirks, rather than imposing extra Unicode restrictions.
+Integer parsing removes the 255-character limit and handles LP64 bounds,
+binary prefixes and end pointers directly. Added locale aliases, bounded
+C collation/transform and UTF-32 wcsftime over the existing narrow formatter.
+No narrow time or tm-layout implementation was changed.
+
+Independent CI reference sources are saved verbatim, with licenses and
+SHA-256 manifest, under probes/native3/wide/upstream. Include-only adapters
+compile the pinned conversion/legacy/integer bodies on Linux and run shared
+contract assertions. native3-wide.yml also compiles the production locale
+object with pinned llvm-mingw/-Werror and both NDK library ABIs. Compilation
+and fixture execution are CI-only. The first scoped push has no result yet;
+full CI and dedicated test66 mode assertions remain to be completed.
+
+Root separately verified Unicode width in ci 40404678100 at 581e88f; this
+track does not modify its classification/case/width implementations or
+ART patch 0572. Final verification must first include current integration.

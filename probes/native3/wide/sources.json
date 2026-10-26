@@ -1,0 +1,22 @@
+{
+  "tag": "android-16.0.0_r4",
+  "source": "https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/",
+  "sha256": {
+    "bionic/c16rtomb.cpp": "5fe6ed2d00d972556730a1cf6443f62c547b5823d6399bf8da517964d5312b8f",
+    "bionic/c32rtomb.cpp": "faebfcc29bc4a2101c033cb8c8c792dec65db21c260fca07dba07b9db40fe6c3",
+    "bionic/mblen.cpp": "c00d06d3cc6392ac026a02e0e4b33817e5e78f91e1be7f3cc6d5defb68c30461",
+    "bionic/mbrtoc16.cpp": "c1c783972914efc6e04c47f58d575cba9009d14b88ca31060d2f3e707180664d",
+    "bionic/mbrtoc32.cpp": "96d520b284fc3fc93e01a380a827dea920db328f0b4c664f7485fd5255a70b52",
+    "bionic/stdlib_l.cpp": "f2a4af3ba17ee9a3b7661fba91569b093ec948ec8fa03bd6efead980b60cce99",
+    "bionic/strtol.cpp": "c115a8b25f78803d2aed817e77cc05d892e9ebf891d35902426e59b5da8ca80d",
+    "bionic/wchar.cpp": "642555658b92bc9ed25287a609b9952839eb42f6eba7ff56649abf8ca5999aef",
+    "bionic/wcstod.cpp": "b144284d2e0a7e40291ec2b977bed8a9266a379731b7751ef27caca1d729eb60",
+    "private/bionic_mbstate.h": "66539d8c2bc92321fd07d0fb187c5285d5be21ad5a0154696bdf06d024490a88",
+    "upstream-freebsd/lib/libc/locale/wcsftime.c": "3cafeee5aec0adb2b45cd93dd63b155afe047128662e1ccc6c3c328c47e7f4de",
+    "upstream-openbsd/lib/libc/locale/mbrlen.c": "02ad7e109eaadf737cd1e9f467d5bcb287b4c62eb359dca5062f409dc91d860c",
+    "upstream-openbsd/lib/libc/locale/mbstowcs.c": "57005ed77d1b2fb51fb86def5701cf37f47fd79ba45333f596b76587746b6105",
+    "upstream-openbsd/lib/libc/locale/mbtowc.c": "fbddd2a5a4095b40ac80f3997414e89617399f25dfcd089b3abe84e81b87b399",
+    "upstream-openbsd/lib/libc/locale/wcstombs.c": "d97dd5d2bcdc4030a7ff79a4bf4ac40671b8833f6e4c39269869447e2483824a",
+    "upstream-openbsd/lib/libc/locale/wctomb.c": "39bc4b674327271facb52ceb6eedaf72b63a53ea8b97a14ee0c552b988f7d199"
+  }
+}

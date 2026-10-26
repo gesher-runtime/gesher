@@ -68,6 +68,8 @@
 #include <thread>
 #include <vector>
 
+#include "native3_wide_contracts.h"
+
 namespace {
 
 struct Part {
@@ -688,9 +690,10 @@ std::vector<std::string> Symbols(const std::string& path) {
 }
 
 #include "native3_unicode.inc"
+#include "native3_wide.inc"
 
 std::string Run(const std::string& dir, const std::string& symbols) {
-  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir)};
+  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir)};
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {
