@@ -62,6 +62,11 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Combined full ci 40418638643 at b15ecea is pending. It includes verified
+cloud/exec integration 94ccde1 plus current rule/brief docs, the previously
+verified width implementation and the new real ART CPU-clock host checks.
+No CPU-clock or combined-runtime claim until that run is fully read.
+
 Full width ci 40404678100 at 581e88f is fully green: every job personally
 read (22 success/six skipped), both zero-failure summaries, whole-code-point
 width/classification parity, both NDK ABIs and four APK cases per runner,
