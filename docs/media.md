@@ -226,7 +226,10 @@ the microphone (looped, from its start each time recording starts);
   verified camera ownership/race correction). It adds the initial atomic
   suspend/barrier/flip/checkpoint observations and bounded ART suspension
   causes described below. Source patch application and PowerShell parsing
-  pass; compilation and runtime evidence are pending in CI. All original
+  pass. Main **121901592754** succeeds in 3m39s: both changed ART objects
+  (jni_internal.cc and thread_list.cc) compile with -Werror and dalvikvm /
+  oatdump link. Host tools **121901593406** succeed in 20m24s and graphics
+  succeed in 16m17s; framework/runtime evidence is pending. All original
   36 media3, two-second/30-frame and boot-timing criteria are retained.
 - Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
