@@ -70,6 +70,14 @@ struct Launch {
 // ENOEXEC (not a format Gesher runs), E2BIG (command line too long).
 int PrepareLaunch(const std::vector<std::string>& argv, const std::string& dir, Launch* launch);
 
+// The same with `path` as PATH's value (the shell's own PATH variable).
+int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string& dir, const std::string& path,
+                        Launch* launch);
+
+// The Windows file a bare name would run from `path` (as PrepareLaunchInPath
+// finds it), or "" if there is none. Tools and sh are not files: "".
+std::wstring FindInPath(const std::string& name, const std::string& path);
+
 // The same for exec*(path, argv): `program` is the file to run (found in PATH
 // when `search_path` and it has no '/', as execvp; else a path, as execv),
 // `argv` what it gets, argv[0] included.
@@ -98,7 +106,7 @@ struct ChildFd {
 // numbers. Handles are duplicated inheritable for the call only; nothing else
 // is inherited. A missing 0-2 is NUL. Returns 0 or the Win32 error.
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
-                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info);
+                   const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags = 0);
 
 // CreateProcessW for `launch` with exactly the three standard handles
 // inherited (they must be inheritable; duplicates and null are fine), no
