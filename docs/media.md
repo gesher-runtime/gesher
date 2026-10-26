@@ -221,6 +221,11 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — source-flow diagnosis, 2026-10-26
+- Running: **40359757434** at **20b1d3863e10ff01c10e0db18b74a32955b69abc**,
+  combining the source-only Process fix, videoapp uninstall and complete
+  failure-stack logging. Camera diagnostics, 2-second collection and 30+
+  frame/picture/duration thresholds remain unchanged. Watch interval 120;
+  no result from this new run is verified yet.
 - Latest completed CI: **40349479693**, attempt 1, exact tested SHA
   **1361200103e4ab74b8051be0cba53d2eb8d13e1c**. All job metadata and both
   runtime logs are read. Windows-2022 job **121670240001** and Windows-2025
@@ -252,19 +257,19 @@ the microphone (looped, from its start each time recording starts);
   Its causal relationship to low camera throughput is not proven. Camera
   service and surfaces stay in the app process in both modes. The original
   2-second collection, 30+ frame, picture and duration checks are unchanged.
-- Prepared for the next CI: the coordinator's source-only Process fix from
+- Included in the running CI: the coordinator's source-only Process fix from
   native3 commit 95e70c18ec76f5a5d83cc6be0133031d69d1c09e applies cleanly.
   The only imported file is compat/framework/android_runtime.cc: explicit
   readProcLines registration and pinned numeric-prefix/procfs/array/null/
   missing-file semantics. Its separate native3 Java/PowerShell regression
   passed local checks; compilation/runtime and any camera effect remain
-  unverified until CI. No other native3 or integration changes are imported.
+  unverified until this CI. No other native3 or integration changes are imported.
 - Pending source changes: 38-media now uninstalls its own videoapp after
   each device run, checks the cleanup result and then shuts down. The log's
   extra third installed package was exactly com.gesher.videoapp; 50-services'
   original exact package-count assertions remain unchanged. 59-media now
   retains tab-prefixed Java stack frames in failure output. These changes
-  need the next CI together with the coordinator's process fix.
+  are included with the coordinator's process fix in the running CI.
 - Output fixture fixes pass again on both runners: the complete finite
   AAudio write tone is prefilled before start, then measured at **1480.0 Hz,
   0.405 s**, with exact written/read and prefilled assertions. Explicit silence
@@ -306,8 +311,8 @@ the microphone (looped, from its start each time recording starts);
   recorder lifecycle/limits, physical routes, persistent surfaces, legacy
   Camera, DRM and hardware remain explicit gaps. services3 owns the remaining
   Camera2 service contracts. No broad roadmap completion box is ticked.
-- Next: preserve the camera diagnostics/thresholds, run the coordinator's
-  framework/process fix, then verify fixture cleanup and camera throughput
+- Next: read the new run's actual failure stacks/counters, verify fixture
+  cleanup and camera throughput
   on both runners before final acceptance. No integration/main merge here.
 
 ### Done and verified
