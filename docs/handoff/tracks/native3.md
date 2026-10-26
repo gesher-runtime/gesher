@@ -52,6 +52,10 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Running: ci 40305973210 at e94f760, including integration 91c195d. Read
+the bitmap build/link results and all ABI/mode checks, both zero-failure
+Windows summaries, package and e2e before claiming this implementation.
+
 First implementation (not CI-verified): libjnigraphics' six bitmap entry
 points over hwui's real ABitmap storage, with System V entries/JNIEnv
 conversion and a compression callback trampoline. Builds AOSP's existing
