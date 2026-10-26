@@ -44,6 +44,9 @@ void Unlock(intptr_t handle);
 intptr_t MakeEvent(const std::u16string& name);
 bool WaitEvent(intptr_t handle, int timeout_ms);
 bool SignalEvent(const std::u16string& name);
+// Connects to the expected broker pid and completes its process handshake.
+// No libbinder process state is initialized; timeout and broker exit are bounded.
+bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms);
 
 std::u16string CommandLine();
 std::u16string ExePath();

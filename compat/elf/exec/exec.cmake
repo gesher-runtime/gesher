@@ -1,7 +1,7 @@
 # gesher-exec: Android ELF executables as Windows processes (docs/exec.md).
 # gesher_exec_spawn finds and starts programs as execvp would; libcore's
 # process natives (compat/libcore/process.cc) link it into dalvikvm, and the
-# launcher gesher-exec.exe uses it for its minimal shell. The launcher loads
+# launcher gesher-exec.exe uses it for its shell. The launcher loads
 # an ELF executable with the ELF loader and the bionic shim as its main
 # program.
 add_library(gesher_exec_spawn STATIC
@@ -10,6 +10,24 @@ add_library(gesher_exec_spawn STATIC
 target_include_directories(gesher_exec_spawn PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
 
-add_executable(gesher-exec ${CMAKE_CURRENT_LIST_DIR}/gesher_exec.cc)
+add_executable(gesher-exec
+  ${CMAKE_CURRENT_LIST_DIR}/gesher_exec.cc
+  ${CMAKE_CURRENT_LIST_DIR}/gesher_shell.cc)
 target_compile_options(gesher-exec PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher-exec PRIVATE gesher_exec_spawn gesher_bionic gesher_elf bcrypt shell32)
+
+add_executable(exec3_tls_probe ${CMAKE_SOURCE_DIR}/tests/exec/fs-local-exec-probe.cc)
+target_include_directories(exec3_tls_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
+target_compile_options(exec3_tls_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec3_tls_probe PRIVATE gesher_elf)
+
+add_executable(exec3_binder_ready_probe
+  ${CMAKE_SOURCE_DIR}/tests/exec/binder-ready-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc)
+target_include_directories(exec3_binder_ready_probe PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
+target_compile_options(exec3_binder_ready_probe PRIVATE -Wall -Wextra -Werror)
+
+add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
+target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec3_property_host_probe PRIVATE utils)
