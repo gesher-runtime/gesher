@@ -36,6 +36,7 @@ jobs:
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
           ninja -C out native3_unicode_test
+          ninja -C out native3_cpu_clock_test
           ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
