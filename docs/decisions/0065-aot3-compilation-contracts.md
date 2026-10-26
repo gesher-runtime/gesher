@@ -3,8 +3,14 @@
 Status: accepted for the oatdump/tool inspection stage, verified in full ci
 40368334642 at 96ef687 (attempt 1). All four new checks and zero-failure
 summaries pass on both runners; installed-copy cleanup and both e2e jobs
-also pass. Shared-library contexts, cloud profiles and secondary dex remain
+also pass. Shared-library contexts and secondary dex remain
 proposed/open. See [the frozen report](../handoff/tracks/aot3-oatdump.md).
+
+Revision: install-time cloud profiles are also accepted, verified in full
+ci 40408733247 at 05ca072. Both runners pass all 11 cloud checks and the
+startup collector, with zero failures; actual package and both e2e results
+pass. Shared-library contexts and secondary dex remain open. See the
+[cloud-stage report](../handoff/tracks/aot3-cloud.md).
 
 ADR 0054's app/profile/image model is verified in ci 40320549410 at ae75766.
 Its remaining contracts belong to this track, as listed in
@@ -22,7 +28,7 @@ code and the real app image produced by 61-aot2, then rejects a missing file.
 These checks supplement ART's execution logs; listing compiled code alone
 does not prove that an app executed it.
 
-## Install-time cloud profiles (pending CI)
+## Install-time cloud profiles
 
 The installer validates a paired .dm archive with the pinned framework's
 DexMetadataHelper before changing the existing installed package, and copies
@@ -43,7 +49,7 @@ cloud-profile temporary file.
 including independently inspected selected code, app-image execution,
 malformed update preservation, invalid/mismatched/missing-profile fallbacks,
 metadata replacement for identical APK bytes and uninstall cleanup. These
-new checks are not yet CI verified. The first local Java attempt could not
+new checks are now verified in full ci 40408733247. The first local Java attempt could not
 resolve the incomplete saved app/generated dependency set; the actual app
 compilation is left to CI, with no local AOSP build.
 
@@ -51,13 +57,15 @@ First full cloud run 40375696804 proves validation/copy/profman acceptance
 and selected compiled code on both runners, but is red: the fixture forced
 interpret while requiring AOT execution, and malformed ZIP validation leaked
 the input descriptor when StrictJarFile's native opening failed before its
-cleanup try. The next source uses the production JIT/AOT path and framework
-patch 0650 closes that failed-constructor descriptor. All remaining fallback/
-cleanup scenarios still require the next full run; no cloud box is closed.
+cleanup try. The corrected source uses the production JIT/AOT path and
+framework patch 0650 closes that failed-constructor descriptor. The first
+run did not close a cloud box; full ci 40408733247 subsequently verifies all
+fallback/cleanup scenarios above.
 
 ## Remaining contracts
 
-Shared-library loader contexts, validated `.dm` install profiles and
-secondary dex compilation/invalidation remain open. Only the scoped
-oatdump row is closed with its verifying run; the aggregate remains open.
+Shared-library loader contexts and secondary dex compilation/invalidation
+remain open. The scoped oatdump and cloud rows are closed with their
+verifying runs; the aggregate remains open. The later boot-startup profile
+supplement still requires full CI and the original performance criteria.
 No local AOSP build was run.
