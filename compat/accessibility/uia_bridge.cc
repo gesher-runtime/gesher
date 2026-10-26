@@ -24,6 +24,9 @@
 #include <uiautomation.h>
 
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <mutex>
 #include <string>
@@ -34,6 +37,18 @@
 #include <nativehelper/jni_macros.h>
 
 namespace {
+
+void Trace(const char* format, ...) {
+  static const bool enabled = std::getenv("GESHER_UIA_TRACE") != nullptr;
+  static std::atomic<unsigned> count{0};
+  if (!enabled || count.fetch_add(1) >= 512) return;
+  std::fprintf(stderr, "gesher-a11y: provider thread %lu: ", GetCurrentThreadId());
+  va_list args;
+  va_start(args, format);
+  std::vfprintf(stderr, format, args);
+  va_end(args);
+  std::fputc('\n', stderr);
+}
 
 JavaVM* g_vm = nullptr;
 jclass g_bridge = nullptr;  // com.gesher.app.accessibility.UiaBridge
@@ -170,14 +185,20 @@ Node Parse(const std::wstring& s) {
 constexpr int64_t kRoot = -1;
 
 Node GetNode(HWND hwnd, int64_t id) {
+  DWORD started = GetTickCount();
+  Trace("node %lld of %p: attach", static_cast<long long>(id), hwnd);
   ScopedEnv scoped;
   JNIEnv* env = scoped.get();
   if (env == nullptr || g_bridge == nullptr) return Node();
+  Trace("node %lld of %p: Java query", static_cast<long long>(id), hwnd);
   auto s = static_cast<jstring>(env->CallStaticObjectMethod(
       g_bridge, g_node, static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)), static_cast<jlong>(id)));
   Clear(env);
   if (s == nullptr) return Node();
   Node n = Parse(Str(env, s));
+  Trace("node %lld: parent %lld, %zu children, hosted %p, %lu ms",
+        static_cast<long long>(id), static_cast<long long>(n.parent), n.children.size(), n.hosted,
+        GetTickCount() - started);
   env->DeleteLocalRef(s);
   return n;
 }
@@ -385,6 +406,7 @@ class Element final : public IRawElementProviderSimple,
 
   HRESULT STDMETHODCALLTYPE GetOverrideProviderForHwnd(HWND hosted,
                                                        IRawElementProviderSimple** out) override {
+    Trace("override child %p under %p", hosted, hwnd_);
     if (out == nullptr) return E_POINTER;
     *out = nullptr;
     std::vector<int64_t> pending{kRoot};
@@ -403,6 +425,7 @@ class Element final : public IRawElementProviderSimple,
   // IRawElementProviderFragment
   HRESULT STDMETHODCALLTYPE Navigate(NavigateDirection direction,
                                      IRawElementProviderFragment** out) override {
+    Trace("navigate %lld direction %d", static_cast<long long>(id_), static_cast<int>(direction));
     if (out == nullptr) return E_POINTER;
     *out = nullptr;
     Node n = Get();
@@ -585,8 +608,10 @@ LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     if (it != g_original.end()) original = it->second;
   }
   if (msg == WM_GETOBJECT && static_cast<LONG>(lparam) == UiaRootObjectId) {
+    Trace("WM_GETOBJECT %p: enter", hwnd);
     Element* root = Element::Make(hwnd, kRoot);
     LRESULT r = UiaReturnRawElementProvider(hwnd, wparam, lparam, root);
+    Trace("WM_GETOBJECT %p: returned", hwnd);
     root->Release();
     return r;
   }
