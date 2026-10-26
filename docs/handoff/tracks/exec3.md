@@ -14,6 +14,8 @@ The tree includes integration 634a273 (docs on verified AOT3 oatdump f5ce6f6).
 The additional property root inheritance fix passes ten native host checks;
 matching Java ProcessBuilder assertions compile and await final CI. Keep all
 real assertions and open umask/policy scope. See docs/exec.md for exact evidence.
+CI 40382268730 now runs source 4568c71 with that combined correction/diagnostic;
+watch C:\work\gesher-ci-review\exec3-watch-40382268730.log at 120 seconds.
 The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief

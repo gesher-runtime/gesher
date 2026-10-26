@@ -216,6 +216,13 @@ Only devices children enable its narrow environment flag; existing signal
 disposition is unchanged. Own-file syntax and a fatal-handler native contract
 probe pass (same exit with diagnostics enabled/disabled). The devices helper
 symbolizes captured addresses with the runner's existing map on failure.
+Combined diagnostic/full CI 40382268730 is now running at
+4568c71db6ee033bcd7e4c4014e9f36cae8e71b5, including integration 634a273,
+the fixture namespace correction, inherited boot-root/ART regressions and the
+narrow sentinel trace. Watch log:
+C:\work\gesher-ci-review\exec3-watch-40382268730.log (120-second interval).
+It is diagnostic evidence pending review, not a waiver for the shutdown fault;
+a final combined run must follow the actual fixes and latest integration.
 
 **Previous review:** completed CI 40352529279 at
 dc19ee29190961bb6238081d1978d0882ab77f44 includes integration 46bc9e5.
