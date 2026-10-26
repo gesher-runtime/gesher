@@ -1763,7 +1763,7 @@
     {
       "library": "libc.so",
       "symbol": "__dn_comp",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1775,7 +1775,7 @@
     {
       "library": "libc.so",
       "symbol": "__dn_count_labels",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1787,7 +1787,7 @@
     {
       "library": "libc.so",
       "symbol": "__dn_skipname",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -1955,7 +1955,7 @@
     {
       "library": "libc.so",
       "symbol": "__hostalias",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2321,7 +2321,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_close",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2333,7 +2333,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_dnok",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2345,7 +2345,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_hnok",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2357,7 +2357,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_hostalias",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2369,7 +2369,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_isourserver",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2381,7 +2381,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_mailok",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2393,7 +2393,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nameinquery",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2405,7 +2405,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nclose",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2417,7 +2417,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_ninit",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2429,7 +2429,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nmkquery",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2441,7 +2441,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nquery",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2453,7 +2453,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nquerydomain",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2465,7 +2465,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nsearch",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2477,7 +2477,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_nsend",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2489,7 +2489,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_ownok",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2501,7 +2501,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_queriesmatch",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2513,7 +2513,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_querydomain",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2525,7 +2525,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_randomid",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2537,7 +2537,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_send",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2549,7 +2549,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_send_setqhook",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2561,7 +2561,7 @@
     {
       "library": "libc.so",
       "symbol": "__res_send_setrhook",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2693,7 +2693,7 @@
     {
       "library": "libc.so",
       "symbol": "_resolv_delete_cache_for_net",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2705,7 +2705,7 @@
     {
       "library": "libc.so",
       "symbol": "_resolv_flush_cache_for_net",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -2717,7 +2717,7 @@
     {
       "library": "libc.so",
       "symbol": "_resolv_set_nameservers_for_net",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3149,7 +3149,7 @@
     {
       "library": "libc.so",
       "symbol": "dn_expand",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3161,7 +3161,7 @@
     {
       "library": "libc.so",
       "symbol": "endhostent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3185,7 +3185,7 @@
     {
       "library": "libc.so",
       "symbol": "endnetent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3197,7 +3197,7 @@
     {
       "library": "libc.so",
       "symbol": "endprotoent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3209,7 +3209,7 @@
     {
       "library": "libc.so",
       "symbol": "endservent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3485,7 +3485,7 @@
     {
       "library": "libc.so",
       "symbol": "freeifaddrs",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3737,7 +3737,7 @@
     {
       "library": "libc.so",
       "symbol": "gethostbyaddr_r",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3749,7 +3749,7 @@
     {
       "library": "libc.so",
       "symbol": "gethostbyname2",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3761,7 +3761,7 @@
     {
       "library": "libc.so",
       "symbol": "gethostbyname2_r",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3773,7 +3773,7 @@
     {
       "library": "libc.so",
       "symbol": "gethostbyname_r",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3785,7 +3785,7 @@
     {
       "library": "libc.so",
       "symbol": "gethostent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3797,7 +3797,7 @@
     {
       "library": "libc.so",
       "symbol": "getifaddrs",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3845,7 +3845,7 @@
     {
       "library": "libc.so",
       "symbol": "getnetbyaddr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3857,7 +3857,7 @@
     {
       "library": "libc.so",
       "symbol": "getnetbyname",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3869,7 +3869,7 @@
     {
       "library": "libc.so",
       "symbol": "getnetent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3893,7 +3893,7 @@
     {
       "library": "libc.so",
       "symbol": "getprotobyname",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3905,7 +3905,7 @@
     {
       "library": "libc.so",
       "symbol": "getprotobynumber",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3917,7 +3917,7 @@
     {
       "library": "libc.so",
       "symbol": "getprotoent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -3953,7 +3953,7 @@
     {
       "library": "libc.so",
       "symbol": "getservent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4205,7 +4205,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_lnaof",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4217,7 +4217,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_makeaddr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4229,7 +4229,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_netof",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4241,7 +4241,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_network",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4253,7 +4253,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_nsap_addr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4265,7 +4265,7 @@
     {
       "library": "libc.so",
       "symbol": "inet_nsap_ntoa",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4769,7 +4769,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_format_ttl",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4781,7 +4781,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_get16",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4793,7 +4793,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_get32",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4805,7 +4805,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_initparse",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4817,7 +4817,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_makecanon",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4829,7 +4829,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_msg_getflag",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4841,7 +4841,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_compress",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4853,7 +4853,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_ntol",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4865,7 +4865,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_ntop",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4877,7 +4877,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_pack",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4889,7 +4889,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_pton",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4901,7 +4901,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_rollback",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4913,7 +4913,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_skip",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4925,7 +4925,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_uncompress",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4937,7 +4937,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_name_unpack",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4949,7 +4949,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_parserr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4961,7 +4961,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_put16",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4973,7 +4973,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_put32",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4985,7 +4985,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_samename",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -4997,7 +4997,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_skiprr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5009,7 +5009,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_sprintrr",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5021,7 +5021,7 @@
     {
       "library": "libc.so",
       "symbol": "ns_sprintrrf",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5429,7 +5429,7 @@
     {
       "library": "libc.so",
       "symbol": "res_init",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5441,7 +5441,7 @@
     {
       "library": "libc.so",
       "symbol": "res_mkquery",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5453,7 +5453,7 @@
     {
       "library": "libc.so",
       "symbol": "res_query",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5465,7 +5465,7 @@
     {
       "library": "libc.so",
       "symbol": "res_search",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5573,7 +5573,7 @@
     {
       "library": "libc.so",
       "symbol": "setdomainname",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5645,7 +5645,7 @@
     {
       "library": "libc.so",
       "symbol": "sethostent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5693,7 +5693,7 @@
     {
       "library": "libc.so",
       "symbol": "setnetent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5741,7 +5741,7 @@
     {
       "library": "libc.so",
       "symbol": "setprotoent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
@@ -5801,7 +5801,7 @@
     {
       "library": "libc.so",
       "symbol": "setservent",
-      "owner": "native3",
+      "owner": "net4",
       "baseline_status": "missing",
       "observed_in": [
         "windows-2022/x86_64",
