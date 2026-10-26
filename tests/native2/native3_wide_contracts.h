@@ -83,7 +83,7 @@ void WideContracts(const Api& api, Check check) {
   }
   const char* invalid[] = {"\x80", "\xc0\x80", "\xc1\xbf", "\xe0\x80\x80",
       "\xed\xa0\x80", "\xf0\x80\x80\x80", "\xf4\x90\x80\x80", "\xf5\x80\x80\x80",
-      "\xf8\x80\x80\x80", "\xe2" "A", "\xe2\x82"};
+      "\xf8\x80\x80\x80", "\xe2\x41", "\xe2\x82"};
   for (const char* bytes : invalid) {
     State state = initialized();
     wchar_t out = 0x55;
