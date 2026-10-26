@@ -226,6 +226,14 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Status and next steps (web3)
 
+Next combined CI is ready with verified native3 foundation f677944f merged,
+native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes
+8eac61c/d2a5f7b. The native3 merge retained the newer native probe exit when
+resolving its older geocoder helper. The forwarding regression passes locally
+for partial UTF-8 titles, concurrent complete lines, log truncation and final
+fragments; exec.yml now checks out its helper and runs that JDK regression.
+Window/frame/action assertions remain unchanged. Full CI still must pass.
+
 Full-stage gate awaits a next combined CI with native geocoder probe exit
 1f1cc96 and exec3's Launcher line-framing fix. Completed ci 40353139413 at
 `6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3 checks
