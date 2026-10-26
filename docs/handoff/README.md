@@ -156,6 +156,8 @@ and Application-context Display rotation. Physical keyboard coverage remains
 explicitly unverified. native3 reserves ADR 0062. The remaining GL/graphics
 scope is assigned to [surfaces2](tracks/surfaces2.md), ADR 0063 reserved;
 unstarted until the first surfaces stage merges. Next free ADR: 0064.
+media4 reserves ADR 0064 for the remaining media service/native contracts
+([brief](tracks/media4.md)); next free ADR is now 0065.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
@@ -169,16 +171,34 @@ and POSIX work is assigned to [native3](tracks/native3.md), ADR 0062;
 complete public NDK API coverage is not claimed. Open tracks must include
 this new integration code before their final verification/merge.
 
+surfaces is merged as 4f99afd: verified at b1b59a65d30eef81bdc7208a4c88dbfdeab5e35c
+(ci 40307919084, attempt 2), head 180782f adds docs only. All 28 jobs are
+success/skipped, both test summaries say 0 test(s) failed, and all 32
+surfaces checks pass per runner. Package install/run/input/uninstall cleanup
+passes. Both e2e jobs pass now-required TIC-80 and end with 0 unexpected
+failures. Attempt 1 failed only the known badssl connection timeout on 2025;
+the failed job passed on rerun. The merged code is the verified tree, so
+no integration rerun is needed for this merge. Remaining GL, layer, hardware,
+JPEG_R and parcel-storage contracts belong to surfaces2, ADR 0063.
+
+The baseline NDK ownership inventory is in
+[native-api-coverage.json](native-api-coverage.json), with later verification
+attached per entry. It records symbol presence, not complete API semantics.
+Property APIs belong to exec3; Android socket/process binding, resolver and
+per-network DNS APIs belong to web3. The four baseline bitmap exports are
+verified in native3 ci 40305973210, but that branch's remaining scope is
+still open and its code is not merged yet.
+
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | ci 40297189562 failed one real WebView navigation/capture race on 2022; 2025/package/e2e pass. Merged integration 91c195d/native2 and moved debug PrintWindow off the Android UI Looper. ci 40307691668 then exposed a patch collision: removed 0540's duplicate scoped_flock diff in favor of integrated 0571. | ci 40309659362 at 7373128; full combined verification pending. |
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
-| surfaces | ci 40302030881 passes surfaces and TIC-80 on both runners. Removed TIC-80's knownFailure. ci 40307919084 passes 2022/package/both e2e jobs; 2025 fails only the known wrong.host.badssl.com connection timeout (2 counted failures). | ci 40307919084 at b1b59a6, attempt 2 reruns failed jobs only; not green yet. |
-| web3 | ci 40300418334: both external UIA cases still fail on both runners (2022 also has the known audio timing failure); 2025's Android WebView provider finds 12 nodes and its DOM actions pass. Package/e2e pass. Merged native2 and shared debug capture fix; added bounded provider tracing. | ci 40309961504 at e3209d6; external UIA still requires verification. |
-| media3 | ci 40299212277 confirms NDK tones and H.264 frame counts in both modes/runners, but session tests and Just Player hit NoClassDefFoundError. Added an optional MediaCommunicationManager cast guard and boot-descriptor diagnostics; merged integration 91c195d/native2. | ci 40305909645 at 4a2a28e; new runtime results pending. |
+| surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
+| web3 | ci 40309961504 still fails both external UIA tests per runner. The new investigation finds a wrong host-view sentinel: virtual id -1 was compared with UNDEFINED_ITEM_ID. Fixed HOST_VIEW_ID and added regression/phase logs; local TLS rejection fixtures included; surfaces integrated. | ci 40318144247 at 722f86b; full combined verification pending. |
+| media3 | ci 40305909645: 2025/package/e2e pass, Just Player passes, both session round trips pass. 2022 fails one callback tone check (640/963.3 vs 750/1250 Hz). Added explicit lossless buffer/xrun assertion, atomic callback counts, cumulative xrun test and counters, stopped-capture guard; surfaces integrated. | ci 40318189310 at 9158120; full combined verification pending; remaining contracts assigned to media4/ADR 0064. |
 | exec3 | Executor/builtins/RunShell now replace the minimal shell. Local own-file -Werror build, 47 output/status checks and incremental ProcessBuilder test pass with a small driver; actual ART/mailbox and the remaining tools/TLS/shell conformance are unverified. ADR 0060 records remaining scope. | ci 40311734733 at 8c90ac2, first exec3 CI. |
-| native3 | Six bitmap NDK entries now use hwui's real pixel storage and callbacks; direct aliasing/PNG/data-space/error tests added for both ABIs/modes. Local Java/patch checks pass; C++ builds reached runtime CI. The complete remaining NDK/POSIX scope is open. | ci 40305973210 at e94f760; first bitmap runtime verification pending. |
+| native3 | Six bitmap NDK entries verified through real hwui storage and callbacks, both ABIs/modes. Every job success/skipped, both test summaries zero, package cleanup/e2e pass. Remaining NDK/POSIX scope open; branch unmerged. | ci 40305973210 at e94f760; later commits docs only. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
