@@ -525,13 +525,18 @@ class Element final : public IRawElementProviderSimple,
 
   // The node, read again when 200 ms old (a UIA client asks many properties in a row).
   Node Get() {
-    std::lock_guard<std::mutex> lock(mutex_);
     DWORD now = GetTickCount();
-    if (!cached_ || now - read_at_ > 200) {
-      node_ = GetNode(hwnd_, id_);
-      cached_ = true;
-      read_at_ = now;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (cached_ && now - read_at_ <= 200) return node_;
     }
+    // Java can raise a UIA event while answering the query. Do not hold this
+    // provider's lock across that callback: UIA may query the same element again.
+    Node node = GetNode(hwnd_, id_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    node_ = std::move(node);
+    cached_ = true;
+    read_at_ = GetTickCount();
     return node_;
   }
 

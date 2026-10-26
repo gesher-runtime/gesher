@@ -17,6 +17,8 @@
 #include <uiautomation.h>
 
 #include <chrono>
+#include <atomic>
+#include <cstdio>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -37,6 +39,7 @@ std::condition_variable g_cv;
 std::deque<std::function<void()>> g_jobs;
 bool g_started = false;
 IUIAutomation* g_uia = nullptr;  // the UIA thread's
+std::atomic<const char*> g_phase{"starting"};
 
 DWORD WINAPI UiaMain(void*) {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -140,6 +143,7 @@ enum : uint32_t {
 // "id\tparent\tcontrolType\tname\tvalue\tl t r b\tflags\tautomationId\thelp"
 // (screen coordinates; parent -1 for the top level).
 std::wstring Snapshot(HWND hwnd, int max_nodes) {
+  g_phase.store("snapshot setup");
   ReleaseElements();
   g_generation++;
   std::wstring out = L"gen\t" + std::to_wstring(g_generation) + L"\n";
@@ -160,6 +164,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
   IUIAutomationTreeWalker* walker = nullptr;
   g_uia->get_ControlViewWalker(&walker);
   IUIAutomationElement* root = nullptr;
+  g_phase.store("ElementFromHandleBuildCache");
   if (walker == nullptr || FAILED(g_uia->ElementFromHandleBuildCache(hwnd, cache, &root)) ||
       root == nullptr) {
     if (walker != nullptr) walker->Release();
@@ -175,6 +180,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
   // The container itself (Gesher's window) is not a node: its subtree is.
   IUIAutomationElement* child = nullptr;
   std::vector<IUIAutomationElement*> top;
+  g_phase.store("first child");
   walker->GetFirstChildElementBuildCache(root, cache, &child);
   while (child != nullptr) {
     top.push_back(child);
@@ -185,6 +191,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
   for (auto it = top.rbegin(); it != top.rend(); ++it) stack.push_back({*it, -1, 0});
   root->Release();
   while (!stack.empty() && static_cast<int>(g_elements.size()) < max_nodes) {
+    g_phase.store("element properties");
     Item item = stack.back();
     stack.pop_back();
     IUIAutomationElement* e = item.element;
@@ -226,6 +233,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
     if (item.depth >= 64) continue;
     std::vector<IUIAutomationElement*> kids;
     IUIAutomationElement* c = nullptr;
+    g_phase.store("element children");
     walker->GetFirstChildElementBuildCache(e, cache, &c);
     while (c != nullptr) {
       kids.push_back(c);
@@ -238,6 +246,7 @@ std::wstring Snapshot(HWND hwnd, int max_nodes) {
   for (Item& left : stack) left.element->Release();
   walker->Release();
   cache->Release();
+  g_phase.store("idle");
   return out;
 }
 
@@ -324,6 +333,8 @@ jstring UiaClient_nativeSnapshot(JNIEnv* env, jclass, jlong hwnd, jint max_nodes
   HWND h = reinterpret_cast<HWND>(static_cast<intptr_t>(hwnd));
   if (!RunOnUiaThread([h, max_nodes, result] { *result = Snapshot(h, max_nodes); },
                       static_cast<DWORD>(timeout_ms))) {
+    std::fprintf(stderr, "gesher-a11y: UIA snapshot of %p timed out at %s\n",
+                 static_cast<void*>(h), g_phase.load());
     return nullptr;
   }
   return env->NewString(reinterpret_cast<const jchar*>(result->data()),
