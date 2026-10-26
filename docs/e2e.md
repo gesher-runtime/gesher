@@ -1,12 +1,26 @@
 # End-to-end: real apps on the installed Gesher
 
-The `e2e` job of `.github/workflows/ci.yml` (windows-2022, after the `package`
+The `e2e` job of `.github/workflows/ci.yml` (windows-2022 and windows-2025, after the `package`
 job) installs the Gesher installer that job built on a clean runner and runs
 real, unmodified open-source Android apps from F-Droid on it
 (`tests/e2e/run-e2e.ps1`, [0034](decisions/0034-e2e-real-apps.md)). The apps
 are pinned in `tests/e2e/apps.json` by version code and SHA-256 and are
 downloaded from `https://f-droid.org/repo/<package>_<versionCode>.apk` in CI
 only.
+
+The transport uses a CI cache keyed by the manifest and verifies every SHA-256
+again on cache hits. Downloads go to a temporary file and are renamed only
+after the pin matches. If the primary repository fails, it tries the configured
+mirror (ftp.fau.de, listed in [F-Droid's mirror documentation](https://f-droid.org/eu/docs/Running_a_Mirror/)).
+Versions, pins and app assertions are unchanged. The transport regression uses
+tiny own fixture bytes to exercise DNS fallback, cache reuse, corrupt cache
+replacement and rejection of mismatched downloads; no APK is downloaded locally.
+These transport changes are pending full CI after the DNS failure in
+40334251458's windows-2022 e2e job.
+
+The table and failure history below describe the initial e2e stage. Puzzles
+and the later required TIC-80 checks now pass on both runners in ci 40320549410;
+remaining service contracts are tracked in services3, not waived by smoke tests.
 
 For each app the script:
 
