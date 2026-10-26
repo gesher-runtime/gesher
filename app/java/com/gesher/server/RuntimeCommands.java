@@ -131,6 +131,14 @@ public final class RuntimeCommands {
             if (args.length == 0) throw new IllegalArgumentException("missing tool name");
             if (args[0].equals("pm")) result = pm(args);
             else if (args[0].equals("am")) result = am(args);
+            else if (args[0].equals("wait-binder")) {
+                if (args.length != 4) throw new IllegalArgumentException("wait-binder DEVICE PID TIMEOUT_MS");
+                if (!Zygote.waitForBinder(args[1], Integer.parseInt(args[2]), Integer.parseInt(args[3]))) {
+                    throw new IllegalStateException("the broker did not complete its connection handshake");
+                }
+                System.out.println("binder endpoint accepted a protocol connection: " + args[1]);
+                result = 0;
+            }
             else throw new IllegalArgumentException("unknown tool " + args[0]);
         } catch (Throwable failure) {
             System.err.println((args.length == 0 ? "pm/am" : args[0]) + ": " + failure);
