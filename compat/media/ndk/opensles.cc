@@ -206,8 +206,10 @@ void FeedLoop(Object* o) {
     }
     if (cb != nullptr) {
       cb(reinterpret_cast<Itf>(&o->queue_itf), ctx);
-    } else {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } else if (o->track != nullptr) {
+      // The track is full: woken by the mixer as it plays (not a sleep, which under
+      // load wakes late and lets the queue run dry).
+      o->track->WaitForRoom(256, 20);
     }
   }
 }

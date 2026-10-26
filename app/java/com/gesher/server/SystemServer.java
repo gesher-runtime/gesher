@@ -245,6 +245,8 @@ public final class SystemServer {
         }
 
         void start() throws Exception {
+            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
+            CameraApp.sync(mInstaller, mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
             ready.getParentFile().mkdirs();
@@ -280,6 +282,9 @@ public final class SystemServer {
                 idle.setDaemon(true);
                 idle.start();
             }
+            // Clicks on the apps' toasts, also those of earlier runs (hwsvc2, ADR 0051).
+            NotificationManagerService notifications = NotificationManagerService.sLast;
+            if (notifications != null) notifications.startActivator();
             log("the Gesher device is ready (idle timeout "
                     + (mIdleTimeoutMs > 0 ? (mIdleTimeoutMs / 1000) + " s" : "none") + ")");
         }
@@ -287,6 +292,12 @@ public final class SystemServer {
         @Override
         public void touch() {
             mLastCall = SystemClock.uptimeMillis();
+        }
+
+        @Override
+        public void toastActivated(String appId, String arguments) {
+            NotificationManagerService n = NotificationManagerService.sLast;
+            if (n != null) n.activated(appId, arguments, "a launcher the toast activator started");
         }
 
         @Override

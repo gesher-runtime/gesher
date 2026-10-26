@@ -9,8 +9,15 @@
 
 #include "../audio/engine.h"
 #include "../audio/log.h"
+#include "../video/video_decoder.h"
 #include "decoder.h"
 #include "extractor.h"
+
+// hostgraphics' ANativeWindow references (dalvikvm defines them).
+extern "C" {
+void ANativeWindow_acquire(ANativeWindow* window);
+void ANativeWindow_release(ANativeWindow* window);
+}
 
 namespace gesher::media {
 namespace {
@@ -52,19 +59,39 @@ class Playback : public std::enable_shared_from_this<Playback> {
       if (source_ != nullptr) source_->Cancel();
     }
     cv_.notify_all();
-    if (thread_.joinable()) {
-      if (thread_.get_id() == std::this_thread::get_id()) {
-        thread_.detach();
+    for (std::thread* th : {&thread_, &video_thread_}) {
+      if (!th->joinable()) continue;
+      if (th->get_id() == std::this_thread::get_id()) {
+        th->detach();
       } else {
-        thread_.join();
+        th->join();
       }
     }
     std::shared_ptr<Track> t;
+    ANativeWindow* window;
     {
       std::lock_guard<std::mutex> lock(mu_);
       t = std::move(track_);
+      window = window_;
+      window_ = nullptr;
     }
     if (t != nullptr) t->Release();
+    if (window != nullptr) ANativeWindow_release(window);
+  }
+
+  // The Surface the video is drawn into (a reference of its own).
+  void SetWindow(ANativeWindow* window) {
+    if (window != nullptr) ANativeWindow_acquire(window);
+    ANativeWindow* old;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      old = window_;
+      window_ = window;
+      // A paused player shows its current frame in the new surface.
+      show_current_ = true;
+    }
+    cv_.notify_all();
+    if (old != nullptr) ANativeWindow_release(old);
   }
 
   void Start() {
@@ -77,6 +104,10 @@ class Playback : public std::enable_shared_from_this<Playback> {
     }
     playing_ = true;
     if (track_ != nullptr) track_->Start();
+    if (!clock_running_) {
+      clock_anchor_ = std::chrono::steady_clock::now();
+      clock_running_ = true;
+    }
     cv_.notify_all();
   }
 
@@ -84,6 +115,8 @@ class Playback : public std::enable_shared_from_this<Playback> {
     std::lock_guard<std::mutex> lock(mu_);
     playing_ = false;
     if (track_ != nullptr) track_->Pause();
+    clock_base_us_ = WallClockLocked();
+    clock_running_ = false;
     cv_.notify_all();
   }
 
@@ -105,6 +138,16 @@ class Playback : public std::enable_shared_from_this<Playback> {
     std::lock_guard<std::mutex> lock(mu_);
     if (completed_) return duration_us_ > 0 ? duration_us_ : last_us_;
     if (seek_us_ >= 0) return seek_us_;
+    return MediaUsLocked();
+  }
+
+  // The media time now (with mu_ held): the audio's played position, or, for
+  // a video alone, the wall clock since the start.
+  int64_t MediaUsLocked() {
+    if (decoder_ == nullptr) {
+      last_us_ = WallClockLocked();
+      return last_us_;
+    }
     int64_t played = track_ != nullptr ? track_->Position() : 0;
     if (segments_.empty() || rate_ == 0) return base_us_;
     const Segment* seg = &segments_.front();
@@ -176,6 +219,31 @@ class Playback : public std::enable_shared_from_this<Playback> {
     Format file = extractor_->FileFormat();
     file.GetInt64("durationUs", &file_duration);
     std::string unsupported;
+    // The first video track a decoder takes.
+    for (size_t i = 0; i < extractor_->TrackCount(); i++) {
+      Format f = extractor_->TrackFormat(i);
+      std::string mime = f.Mime();
+      if (mime.rfind("video/", 0) != 0) continue;
+      video_decoder_ = VideoDecoder::Create(f, &error);
+      if (video_decoder_ == nullptr) {
+        MEDIA_LOGW("player: %s", error.c_str());
+        continue;
+      }
+      video_reader_ = extractor_->OpenTrack(i);
+      int32_t w = 0, h = 0;
+      f.GetInt32("width", &w);
+      f.GetInt32("height", &h);
+      int64_t d = -1;
+      if (!f.GetInt64("durationUs", &d)) d = file_duration;
+      std::lock_guard<std::mutex> lock(mu_);
+      video_width_ = w;
+      video_height_ = h;
+      if (d > duration_us_) duration_us_ = d;
+      MEDIA_LOGI("player: %s, %s %dx%d, %.3f s (%s extractor, %s)", source_->Uri().c_str(),
+                 mime.c_str(), w, h, d / 1e6, extractor_->Name().c_str(),
+                 video_decoder_->Name().c_str());
+      break;
+    }
     for (size_t i = 0; i < extractor_->TrackCount(); i++) {
       Format f = extractor_->TrackFormat(i);
       std::string mime = f.Mime();
@@ -189,18 +257,222 @@ class Playback : public std::enable_shared_from_this<Playback> {
       int64_t d = -1;
       if (!f.GetInt64("durationUs", &d)) d = file_duration;
       std::lock_guard<std::mutex> lock(mu_);
-      duration_us_ = d;
+      if (d > duration_us_) duration_us_ = d;
       MEDIA_LOGI("player: %s, %s %u Hz %u ch, %.3f s (%s extractor)", source_->Uri().c_str(),
                  mime.c_str(), decoder_->info().rate, decoder_->info().channels, d / 1e6,
                  extractor_->Name().c_str());
       break;
     }
-    if (decoder_ == nullptr || reader_ == nullptr) {
-      MEDIA_LOGE("player: no playable audio track (%s)", unsupported.c_str());
+    if ((decoder_ == nullptr || reader_ == nullptr) && reader_ != nullptr) reader_.reset();
+    if (decoder_ == nullptr) reader_.reset();
+    if (decoder_ == nullptr && video_decoder_ == nullptr) {
+      MEDIA_LOGE("player: no playable audio or video track (%s)", unsupported.c_str());
       Notify(kMediaError, kMediaErrorUnsupported, 0);
       return false;
     }
     return true;
+  }
+
+  // --- Video: decoded on a thread of its own, each frame shown at its time on
+  // the media clock (the audio's position; the wall clock without audio).
+
+  int64_t WallClockLocked() {
+    int64_t us = clock_base_us_;
+    if (clock_running_) {
+      us += static_cast<int64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - clock_anchor_).count() *
+                                 speed_);
+    }
+    return us;
+  }
+
+  // With mu_ held: video restarts at `us` (a seek, a loop); `exact` drops the
+  // frames before it (SEEK_CLOSEST), else the sync frame before it is shown.
+  void VideoSeekLocked(int64_t us, bool exact) {
+    video_seek_us_ = us;
+    video_seek_exact_ = exact;
+    video_generation_++;
+    video_done_ = false;
+    cv_.notify_all();
+  }
+
+  void Render(const VideoFrame& f) {
+    ANativeWindow* window;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      window = window_;
+      if (window != nullptr) ANativeWindow_acquire(window);
+    }
+    if (window == nullptr) return;
+    RenderFrame(window, f);
+    ANativeWindow_release(window);
+  }
+
+  void VideoRun() {
+    std::deque<VideoFrame> frames;  // decoded, in presentation order
+    Sample sample;
+    bool have_sample = false, input_done = false;
+    uint64_t generation = 0;
+    int64_t drop_before = -1;
+    bool first = true;
+    for (;;) {
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [&] {
+          return quit_ || video_generation_ != generation || show_current_ ||
+                 (!video_done_ && (first || (playing_ && !completed_)));
+        });
+        if (quit_) return;
+        if (show_current_) {
+          show_current_ = false;
+          if (!last_frame_.data.empty() && video_generation_ == generation) {
+            VideoFrame copy = last_frame_;
+            lock.unlock();
+            Render(copy);
+            continue;
+          }
+        }
+        if (video_generation_ != generation) {
+          generation = video_generation_;
+          int64_t us = video_seek_us_;
+          bool exact = video_seek_exact_;
+          lock.unlock();
+          int status = video_reader_->Read(&sample, std::max<int64_t>(us, 0), SeekMode::kPreviousSync);
+          have_sample = status == 0;
+          input_done = status != 0;
+          video_decoder_->Flush();
+          frames.clear();
+          drop_before = exact ? us : -1;
+          first = true;
+          continue;
+        }
+      }
+      if (frames.empty()) {
+        if (input_done) {
+          std::vector<VideoFrame> out;
+          video_decoder_->Drain(&out);
+          for (VideoFrame& f : out) frames.push_back(std::move(f));
+          if (frames.empty()) {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (video_generation_ == generation) video_done_ = true;
+            cv_.notify_all();
+          }
+          continue;
+        }
+        if (!have_sample) {
+          int status = video_reader_->Read(&sample);
+          have_sample = status == 0;
+          input_done = status != 0;
+          if (status < 0) MEDIA_LOGE("player: reading the video track failed (%d)", status);
+          continue;
+        }
+        have_sample = false;
+        std::vector<VideoFrame> out;
+        if (!video_decoder_->Decode(sample, &out)) {
+          MEDIA_LOGE("player: the video decoder failed at %.3f s", sample.time_us / 1e6);
+          input_done = true;
+          continue;
+        }
+        for (VideoFrame& f : out) frames.push_back(std::move(f));
+        continue;
+      }
+      VideoFrame& f = frames.front();
+      if (drop_before >= 0 && f.time_us + 1000 < drop_before) {
+        frames.pop_front();
+        continue;
+      }
+      if (first) {
+        // The first frame after the start or a seek is shown at once (also when
+        // paused, as on Android).
+        first = false;
+        drop_before = -1;
+        Render(f);
+        std::lock_guard<std::mutex> lock(mu_);
+        last_frame_ = std::move(f);
+        frames.pop_front();
+        continue;
+      }
+      // Wait for the frame's time on the media clock.
+      bool show = true, interrupted = false;
+      for (;;) {
+        std::unique_lock<std::mutex> lock(mu_);
+        if (quit_ || video_generation_ != generation) {
+          interrupted = true;
+          break;
+        }
+        if (!playing_ || completed_) {
+          cv_.wait_for(lock, std::chrono::milliseconds(20));
+          continue;
+        }
+        // Past the audio's end (a longer video), frames follow one another at once.
+        if (decoder_ != nullptr && track_ != nullptr && track_->stopped()) break;
+        int64_t now = MediaUsLocked();
+        int64_t ahead = f.time_us - now;
+        if (ahead <= 2000) {
+          // Too late to be worth showing (and more frames are waiting): dropped.
+          show = ahead > -100000 || frames.size() == 1;
+          break;
+        }
+        cv_.wait_for(lock, std::chrono::microseconds(std::min<int64_t>(ahead, 10000)));
+      }
+      if (interrupted) continue;
+      if (show) Render(f);
+      std::lock_guard<std::mutex> lock(mu_);
+      if (show) {
+        last_frame_ = std::move(f);
+        video_shown_++;
+      } else {
+        video_dropped_++;
+      }
+      frames.pop_front();
+    }
+  }
+
+  // A video without audio: the playback thread keeps the clock, the seeks and
+  // the end (VideoRun draws).
+  void VideoOnlyRun() {
+    for (;;) {
+      int64_t seek_us;
+      int seek_mode;
+      bool notify_seek;
+      {
+        std::unique_lock<std::mutex> lock(mu_);
+        cv_.wait(lock, [this] {
+          return quit_ || seek_us_ >= 0 || (video_done_ && playing_ && !completed_);
+        });
+        if (quit_) return;
+        seek_us = seek_us_;
+        seek_mode = seek_mode_;
+        notify_seek = seek_notify_;
+        if (seek_us >= 0) {
+          clock_base_us_ = seek_us;
+          clock_anchor_ = std::chrono::steady_clock::now();
+          VideoSeekLocked(seek_us, seek_mode == 3);
+          if (seek_us_ == seek_us) seek_us_ = -1;
+          if (seek_us_ < 0) seek_notify_ = false;
+        }
+      }
+      if (seek_us >= 0) {
+        if (notify_seek) Notify(kMediaSeekComplete, 0, 0);
+        continue;
+      }
+      bool loop;
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        loop = loop_;
+        if (loop) {
+          clock_base_us_ = 0;
+          clock_anchor_ = std::chrono::steady_clock::now();
+          VideoSeekLocked(0, false);
+        } else {
+          completed_ = true;
+          playing_ = false;
+          clock_base_us_ = duration_us_ > 0 ? duration_us_ : WallClockLocked();
+          clock_running_ = false;
+        }
+      }
+      if (!loop) Notify(kMediaPlaybackComplete, 0, 0);
+    }
   }
 
   // The track for the decoder's output, created at the first start.
@@ -281,18 +553,31 @@ class Playback : public std::enable_shared_from_this<Playback> {
     // frame's time is the position.
     segments_.push_back({0, mode == 3 ? us : start});
     base_us_ = segments_.back().start_us;
+    if (video_decoder_ != nullptr) VideoSeekLocked(us, mode == 3);
     return true;
   }
 
   void Run() {
     RaiseAudioThreadPriority(false);
     if (!Open()) return;
+    int vw, vh;
     {
       std::lock_guard<std::mutex> lock(mu_);
       segments_.push_back({0, 0});
+      vw = video_width_;
+      vh = video_height_;
+    }
+    if (video_decoder_ != nullptr) {
+      Notify(kMediaSetVideoSize, vw, vh);
+      auto self = shared_from_this();
+      video_thread_ = std::thread([self] { self->VideoRun(); });
     }
     Notify(kMediaPrepared, 0, 0);
     if (source_->IsNetwork()) Notify(kMediaBufferingUpdate, 100, 0);
+    if (decoder_ == nullptr) {
+      VideoOnlyRun();
+      return;
+    }
 
     Sample sample;
     bool have_sample = false;
@@ -363,6 +648,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
         std::lock_guard<std::mutex> lock(mu_);
         segments_.push_back({written_, 0});
         while (segments_.size() > 8) segments_.pop_front();
+        if (video_decoder_ != nullptr) VideoSeekLocked(0, false);
         continue;
       }
       std::shared_ptr<Track> t;
@@ -372,8 +658,9 @@ class Playback : public std::enable_shared_from_this<Playback> {
       }
       t->Stop();
       bool interrupted = false;
-      while (!t->stopped()) {
+      for (;;) {
         std::unique_lock<std::mutex> lock(mu_);
+        if (t->stopped() && (video_decoder_ == nullptr || video_done_)) break;
         if (quit_ || seek_us_ >= 0 || loop_) {
           interrupted = true;
           break;
@@ -421,6 +708,23 @@ class Playback : public std::enable_shared_from_this<Playback> {
   std::unique_ptr<TrackReader> reader_;
   std::unique_ptr<AudioDecoder> decoder_;
   std::shared_ptr<Track> track_;
+  // Video.
+  std::thread video_thread_;
+  std::unique_ptr<TrackReader> video_reader_;
+  std::unique_ptr<VideoDecoder> video_decoder_;
+  ANativeWindow* window_ = nullptr;
+  int video_width_ = 0, video_height_ = 0;
+  uint64_t video_generation_ = 0;
+  int64_t video_seek_us_ = 0;
+  bool video_seek_exact_ = false;
+  bool video_done_ = false;
+  bool show_current_ = false;
+  VideoFrame last_frame_;
+  uint64_t video_shown_ = 0, video_dropped_ = 0;
+  // The wall clock of a video without audio.
+  int64_t clock_base_us_ = 0;
+  std::chrono::steady_clock::time_point clock_anchor_;
+  bool clock_running_ = false;
   uint32_t rate_ = 0;
   size_t frame_size_ = 1;
   int64_t written_ = 0;
@@ -460,6 +764,7 @@ int Player::PrepareAsync() {
   playback_->SetLooping(loop_);
   playback_->SetVolume(left_, right_);
   playback_->SetSpeed(speed_);
+  if (window_ != nullptr) playback_->SetWindow(window_);
   state_ = kPreparing;
   playback_->Begin();
   return kPlayerOk;
@@ -595,8 +900,14 @@ int Player::Reset() {
 
 void Player::Release() {
   Reset();
-  std::lock_guard<std::mutex> lock(mu_);
-  listener_ = nullptr;
+  ANativeWindow* window;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    listener_ = nullptr;
+    window = window_;
+    window_ = nullptr;
+  }
+  if (window != nullptr) ANativeWindow_release(window);
 }
 
 int Player::SetLooping(bool loop) {
@@ -647,6 +958,27 @@ float Player::speed() {
 
 void Player::ReportError(int status) { Notify(kMediaError, status, 0); }
 
+int Player::SetVideoWindow(ANativeWindow* window) {
+  std::shared_ptr<Playback> pb;
+  ANativeWindow* old;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (window != nullptr) ANativeWindow_acquire(window);
+    old = window_;
+    window_ = window;
+    pb = playback_;
+  }
+  if (pb != nullptr) pb->SetWindow(window);
+  if (old != nullptr) ANativeWindow_release(old);
+  return kPlayerOk;
+}
+
+void Player::VideoSize(int* width, int* height) {
+  std::lock_guard<std::mutex> lock(mu_);
+  *width = video_width_;
+  *height = video_height_;
+}
+
 void Player::Notify(int what, int arg1, int arg2) {
   bool send = true;
   Listener listener;
@@ -665,6 +997,10 @@ void Player::Notify(int what, int arg1, int arg2) {
         break;
       case kMediaPlaybackComplete:
         if (!loop_) state_ = kPlaybackComplete;
+        break;
+      case kMediaSetVideoSize:
+        video_width_ = arg1;
+        video_height_ = arg2;
         break;
       case kMediaError:
         MEDIA_LOGE("MediaPlayer: error (%d, %d)", arg1, arg2);

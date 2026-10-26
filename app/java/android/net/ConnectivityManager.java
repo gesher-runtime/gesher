@@ -190,7 +190,9 @@ public class ConnectivityManager {
         }
     }
 
-    static NetworkCapabilities capabilitiesOf(WindowsNetworks.Snapshot s, WindowsNetworks.Net n) {
+    /** @hide Also the job scheduler's network constraints (hwsvc2, ADR 0051). */
+    public static NetworkCapabilities capabilitiesOf(WindowsNetworks.Snapshot s,
+            WindowsNetworks.Net n) {
         NetworkCapabilities nc = new NetworkCapabilities();
         nc.clearAll();
         switch (n.kind) {
