@@ -159,7 +159,12 @@ the first surfaces stage is now merged and this continuation is unstarted.
 media4 reserves ADR 0064 for the remaining media service/native contracts
 ([brief](tracks/media4.md)). aot3 reserves ADR 0065 for shared-library
 class-loader contexts, cloud profiles, secondary dex and oatdump
-([brief](tracks/aot3.md)); next free ADR is now 0066.
+([brief](tracks/aot3.md)). The post-aot2 audit also reserves locale2/0066,
+arm64-2/0067, binder2/0068 and services3/0069 (briefs in tracks/).
+net4 reserves ADR 0070 for the legacy resolver ABI, remaining socket/DNS
+contracts and network details ([brief](tracks/net4.md)); its 84 libc
+inventory entries move from native3 to net4. Next free ADR is now 0071.
+These are open work, not completion claims.
 
 native2 is merged as 4459570: verified at
 d380a3e0190f5b418cfa3ee042691db601092e25 (ci 40296960603), head 0fc20d0
@@ -197,7 +202,8 @@ The baseline NDK ownership inventory is in
 [native-api-coverage.json](native-api-coverage.json), with later verification
 attached per entry. It records symbol presence, not complete API semantics.
 Property APIs belong to exec3; Android socket/process binding, resolver and
-per-network DNS APIs belong to web3. The four baseline bitmap exports are
+per-network DNS APIs belong to web3, with remaining libc resolver/socket
+contracts assigned to net4. The four baseline bitmap exports are
 verified in native3 ci 40305973210, but that branch's remaining scope is
 still open and its code is not merged yet.
 
@@ -207,10 +213,11 @@ still open and its code is not merged yet.
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
-| web3 | Previous CI still fails external UIA traversal. A native-only reproduction proves the HWND override must advertise OverrideProvider; fixed that and HOST_VIEW_ID. Local TLS fixtures pass both runners. Added real per-network binding/resolver APIs and ELF checks. | ci 40325234847 at 2de1e15; full result pending, aot2 not yet included. |
-| media3 | ci 40318189310: all 30 media3 checks pass each runner, 2025/package/both e2e pass including Just Player. 2022 fails two output checks; test fixes prefill the finite tone and separate adjacent WebM clips. | ci 40329138943 at ac12cbb; pending, aot2 not yet included; remaining contracts belong to media4/ADR 0064. |
+| web3 | ci 40325234847: routing/DNS/source/process checks pass both; UIA reads the tree and edits/toggles controls. Fixed exact button casing, Chromium131 heading fallback and absolute NDK load path; added typed ArrayBuffer checks. Current integration/aot2 merged. | ci 40333695614 at 455e9fc; full result pending. Legacy resolver ABI/socket remainder assigned to net4/ADR 0070. |
+| media3 | ci 40318189310: all 30 media3 checks pass each runner, 2025/package/both e2e pass. Fixed finite output-tone prefill and adjacent WebM clip separation; aot2 merged. Current package cleanup and both actual Just Player/TIC-80 e2e results pass. | ci 40330465222 at d1bbc02; both full Windows test jobs pending; remainder belongs to media4/ADR 0064. |
 | exec3 | ci 40320290754: package/both e2e pass. 2025 real ART shell/NDK signal/tool checks pass; property test bootstrap fails before assertions, fixed for the next run. 2022 still running. Later shell scope/trap and device checks have only local verification. | ci 40320290754 at 1189dc4; incomplete/red, aot2 not yet included. |
-| native3 | Software bitmap stage green in ci 40305973210, both ABIs/modes. Added 18 font exports over Minikin/shipped metadata with real font-file, ownership and mixed-script tests. Remaining NDK/POSIX scope open; branch unmerged. | ci 40328565752 at 9c4d380; new fonts unverified, aot2 not yet included. |
+| native3 | Software bitmap stage green in ci 40305973210. Fonts CI40328565752 failed a wrong include root; early compile in 40332803102 found upstream header warnings. Fixed external include roots while retaining -Werror; aot2/current integration merged. Remaining NDK/POSIX scope open, branch unmerged. | ci 40333703940 at f24223c; font build/runtime unverified. |
+| aot3 | Added pinned ART oatdump/disassembler targets, installer entry/installed-copy check and independent framework/app oat and app-image checks. All remaining compilation contracts stay open. | ci 40334251458 at 47224d8; first compile/runtime verification pending. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
