@@ -168,5 +168,18 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
   build job, rerun): every exec2 check passes on windows-2022 and windows-2025;
   the test's expected SUMMARY count was off by one (9 checks, fixed). package
   and e2e green.
+- 466f6b1: merged origin/phase4/integration (arm64; exec_spawn keeps both the
+  EM_AARCH64 acceptance and the ET_EXEC refusal). **ci 40260836601: fully green**
+  — build, package, e2e (`0 unexpected failures`, Puzzles' generator through
+  gesher-exec), test on windows-2022 and windows-2025 (440 PASS / 0 FAIL each),
+  including
+  `PASS  exec2: native processes from native code (fork+exec, system, popen, posix_spawn, signals, waitpid)`,
+  `PASS  exec2: execv() outside a fork replaces the image (exit 17)`,
+  `PASS  exec2: /system/bin/ls lists a directory`,
+  `PASS  exec2: /system/bin/id prints the uid`,
+  `PASS  exec2: /system/bin/getprop returns a default for an unset property`.
+  Roadmap Phase 6 box ticked for what CI checked; the rest stays in an open box.
+- Next (not done): a fuller sh; CI checks for destroy/destroyForcibly, logcat,
+  ps, cat; ELF TLS in the executable.
 - Not done: ELF TLS in the executable (ADR 0055 explains why); `pm`/`am`
   decline; `setprop` does not persist; a real fork that does work before exec.
