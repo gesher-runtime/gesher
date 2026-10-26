@@ -37,16 +37,98 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
-Verified oatdump stage: full ci 40368334642 at
-96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. The coordinator
-personally read every job (22 success/six skipped), all four aot3 and all
-14 aot2 PASS lines per runner, both zero-failure summaries, the actual
-installed-copy/cleanup checks and both required Puzzles/TIC-80 e2e logs
-(0 unexpected failures). The frozen stage report is aot3-oatdump.md.
-Shared-library contexts, install-time .dm profiles and secondary dex remain
-open. The later unverified cloud-profile follow-up stays on wip/aot3 and
-is not part of this frozen stage.
+Frozen cloud stage is fully verified in ci 40408733247 at
+05ca072cad7a23d83403a0c039d47d4fec0c07b5. Every job, all 16 scoped aot3
+PASS lines per runner, both zero-failure summaries, actual installed
+input/uninstall cleanup and both required e2e logs personally read. See
+[the cloud-stage report](aot3-cloud.md). wip/aot3-cloud adds docs only;
+the later continuation on wip/aot3 is excluded from this stage. Shared-
+library contexts, secondary dex and boot-performance diagnosis stay open.
 
+Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
+current integration f520fd1; the sole new collector change enables its
+required log and records actual size/marker diagnostics. All native
+compilation and fixture execution now goes to CI.
+
+ci 40403284714 at e928eec: all 11 cloud checks and four oatdump checks
+pass on both runners; both original boot performance gates pass (JIT
+411/430 ms on 2022, 469/478 ms on 2025). All other jobs pass/skip, actual
+installed oatdump/input/uninstall and both nine-app e2e logs read with zero
+unexpected failures. Each Windows suite still has one collector failure:
+ART boot startup profile was not saved (exit 0). The fixture demanded the
+saved-at-exit log marker without setting GESHER_LOG_EXECUTION, which gates
+that marker in ART patch 0540. Set the flag and print actual file size/marker
+before the assertion; do not infer an empty profile from that combined
+failure. No timing threshold or runtime change. Combined CI remains required.
+Latest integration f520fd1 includes the binding CI-only local compiler rule.
+
+Combined ci 40403284714 at e928eec is pending. It includes integration
+117629e, the supported startup-collector arguments, portable bounded TLS
+fixture shutdown and only media3's bounded/canonical-mirror preparation
+block (no recordapp dependency or test-asset changes). No new verification
+or timing-cause claim until the actual Windows results are read.
+
+ci 40389331018 at 31adc99: all 11 cloud-profile checks pass on both Windows
+versions, including first app-image/AOT execution, failed-archive descriptor
+cleanup, corrupt/mismatched/missing-profile fallback, identical-APK metadata
+replacement and uninstall. Framework patch 0650 compiles in CI. All other
+jobs pass/skip, but each Windows suite has one failure in the new startup
+profile collector: the runtime rejects save-resolved-classes-delayed-ms:0.
+That spelling appears in parsed_options help but not the actual pinned
+ProfileSaverOptions parser; the actual delay/hot-sampling options are
+deprecated no-ops. Remove both unnecessary arguments, retaining supported
+boot/AOT profiling and save settings. No performance criterion changes,
+and no full green/cloud roadmap claim until the corrected combined run.
+
+ci 40385898668 at 9831182 failed before framework compilation: patch 0650's
+Java source was absent from aosp.lock's sparse fetch. Add exactly
+core/java/android/util/jar/StrictJarFile.java to frameworks/base's existing
+paths, retaining every other entry. The failed run does not verify either
+the descriptor cleanup or boot-profile learning. No compile error is
+inferred from the missing-file patch-application error.
+
+ci 40375696804 at 9ba2df5: real app/installer compilation, package and both
+e2e jobs pass. Both Windows suites have two cloud-fixture failures. Matching
+DM validation/copy/profman acceptance, selected onCreate compiled code,
+malformed-update preservation and the old installed app's execution pass.
+The fixture forced interpret while demanding AOT execution; it now uses the
+production JIT/AOT path. Rewriting the malformed input then exposed a real
+failed-constructor descriptor leak: StrictJarFile calls nativeOpenJarFile
+before its cleanup try. Framework patch 0650 closes that owned descriptor
+and marks the failed instance closed when native opening throws. The patch
+applies to the pinned source; no AOSP compilation ran locally.
+
+Repeated BOOT profile-vs-speed JIT failures in media3/web3 are owned here.
+The 10%/30ms criterion is unchanged; no known-flake waiver or causal claim
+for the unrelated app-artifact fixture fix. New 64-aot3-boot-profile uses
+pinned ART's boot/AOT profile-saver options and profman to log the actual
+framework startup methods as evidence for a targeted profile improvement.
+The current supplied boot profiles and performance gate are unchanged.
+
+Verified oatdump stage: full ci 40368334642 at
+96ef68790fc59098758ddead6b5f58be9eb5d648, attempt 1. Personally read every
+job (22 success/six skipped), all four aot3 and 14 aot2 PASS lines per runner,
+both zero-failure summaries, installed-copy/cleanup and both Puzzles/TIC-80
+e2e logs (0 unexpected failures). Merged into integration as f5ce6f6 through
+the frozen aot3-oatdump branch; its head d038b75 adds docs only. The merged
+tree differs from the verified source only in docs, so no extra integration
+CI is needed. This continuation now includes current integration 634a273.
+
+Prepared follow-up, not part of that run: install-time paired .dm archive
+validation through pinned DexMetadataHelper, copied base.dm, unchanged-APK
+metadata comparison and profman's real checksum/type/method-key validation.
+Only successful staged profiles commit atomically; invalid profile data
+falls back to verify without failing installation, while invalid ZIP
+metadata rejects an update before replacing the current package. New
+63-aot3-cloud covers actual selected-code inspection and app-image execution,
+corrupt/mismatched/missing-profile fallback, valid-metadata replacement with
+identical APK bytes, preservation after malformed metadata and uninstall
+cleanup including interrupted import files. PowerShell parses locally;
+actual app compilation and runtime checks require the next CI. The local
+own-Java compile attempt failed because saved dependencies lack generated
+app classes/android.system/dalvik classes; it is not a passing compile.
+No local AOSP build was attempted. Shared-library contexts and secondary
+dex remain open and are not silently covered by this profile implementation.
 ### Earlier CI history
 
 Pending-run statements below are historical and superseded by this result.

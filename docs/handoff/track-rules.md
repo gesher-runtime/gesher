@@ -5,6 +5,10 @@ Project: gesher ports AOSP ART and the Android framework to Windows (github.com/
 Read first: docs/architecture.md, docs/roadmap.md, docs/framework-natives.md, docs/framework-build.md, docs/decisions/0004..0013 (esp. 0005 posix layer, 0006 managed ABI, 0008 linux ABI, 0011-0013), app/README.md, CMakeLists.txt, cmake/aosp/*.cmake, compat/, tools/fetch-aosp.sh + aosp.lock, .github/workflows/ci.yml and framework.yml, tests/windows/run-tests.ps1.
 
 Working rules:
+- Owner's local-load follow-up (2026-10-26): use CI for C/C++ compilation,
+  including small Gesher-only fixtures. Do not start local compilers or
+  native build/run fixtures; prepare their sources and CI checks instead.
+  Local source inspection, edits and lightweight script checks may continue.
 - Work ONLY in your worktree, on your branch. Commit and push to your branch often (small commits, English, existing style). Every commit message ends with: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never merge into other branches or main, never open PRs: the coordinator merges.
 - Stay in your file domain (given in your brief). Shared files (CMakeLists.txt, .github/workflows/ci.yml, docs/roadmap.md, app/Main.java) get minimal, additive edits only; list each such edit in your final report.
 - Windows tests: put your checks in tests/windows/tracks/NN-<track>.ps1 (dot-sourced by run-tests.ps1; use Check, RunDex, NoDrive, $Dir, $root, $bcp, $failed). Heavy new CI build work goes in your own reusable workflow (.github/workflows/<track>.yml with workflow_call) wired into ci.yml with a job + `needs`, like framework.yml; artifacts it adds must be downloaded by the test/package jobs.
