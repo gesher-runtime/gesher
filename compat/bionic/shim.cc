@@ -12,6 +12,7 @@
 // InstallBionicShim() registers the resolver with the ELF loader.
 
 #include "shim_internal.h"
+#include "extra_bionic.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
@@ -341,12 +342,6 @@ int BIONIC_SYSV Getpid() { return static_cast<int>(GetCurrentProcessId()); }
 int BIONIC_SYSV Gettid() { return static_cast<int>(GetCurrentThreadId()); }
 int BIONIC_SYSV Getpagesize() { return 4096; }
 
-// Android system properties: none are set; reads return the empty string.
-int BIONIC_SYSV SystemPropertyGet(const char* /*name*/, char* value) {
-  if (value) value[0] = 0;
-  return 0;
-}
-
 // rand/random: the CRT's rand is 15 bits; random() promises 31.
 uint32_t g_random_state = 1;
 std::mutex g_random_mutex;
@@ -602,28 +597,74 @@ int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
 thread_local std::string t_dlerror;
 thread_local bool t_has_dlerror = false;
 
+// dlopen: the platform's libraries the shim implements (libc.so,
+// libEGL.so, libz.so, ... by name or by their /system/lib64 path) are handles
+// of their own (extra_bionic.cc); an object already loaded is found by its
+// soname; a bare name is looked up, as an app's linker namespace does, in the
+// directories app libraries came from and $LD_LIBRARY_PATH; a path is loaded.
+bool Exists(const std::string& path) {
+  struct stat st;
+  return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+std::string DirOf(const std::string& path) {
+  size_t slash = path.find_last_of('/');
+  return slash == std::string::npos ? std::string() : path.substr(0, slash == 0 ? 1 : slash);
+}
 void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  std::string error;
-  const char* base = std::strrchr(filename, '/');
-  if (gesher::elf::Library* existing = gesher::elf::Find(base ? base + 1 : filename)) {
-    return existing;
+  if (void* platform = PlatformLibraryHandle(filename)) return platform;
+  const char* slash = std::strrchr(filename, '/');
+  const char* base = slash ? slash + 1 : filename;
+  if (gesher::elf::Library* existing = gesher::elf::Find(base)) return existing;
+  std::string path = filename;
+  std::vector<std::string> dirs = LibraryDirectories();
+  if (slash == nullptr) {
+    path.clear();
+    for (const std::string& d : dirs) {
+      if (Exists(d + "/" + filename)) {
+        path = d + "/" + filename;
+        break;
+      }
+    }
+    if (path.empty()) {
+      t_dlerror = std::string("dlopen failed: library \"") + filename + "\" not found";
+      t_has_dlerror = true;
+      return nullptr;
+    }
   }
-  gesher::elf::Library* lib = gesher::elf::Load(filename, &error);
+  gesher::elf::LoadOptions options;
+  std::string dir = DirOf(path);
+  if (!dir.empty()) options.search_paths.push_back(dir);
+  for (const std::string& d : dirs) options.search_paths.push_back(d);
+  std::string error;
+  gesher::elf::Library* lib = gesher::elf::Load(path.c_str(), &error, options);
   if (lib == nullptr) {
     t_dlerror = "dlopen failed: " + error;
     t_has_dlerror = true;
+  } else if (!dir.empty()) {
+    NoteLibraryDirectory(dir);
   }
   return lib;
 }
+// dlsym: the shim's own symbols stand in for the libraries it implements, as
+// bionic's search reaches libc.so & co. through a library's dependencies.
 void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
-  void* p;
-  // RTLD_DEFAULT is 0 and RTLD_NEXT -1 on bionic LP64.
-  if (handle == nullptr || handle == reinterpret_cast<void*>(-1) ||
-      handle == reinterpret_cast<void*>(-2)) {
+  void* p = nullptr;
+  if (symbol == nullptr) {
+    t_dlerror = "dlsym: null symbol name";
+    t_has_dlerror = true;
+    return nullptr;
+  }
+  if (IsPlatformLibraryHandle(handle)) {
+    p = LookupBionicSymbol(symbol);
+  } else if (handle == nullptr || handle == reinterpret_cast<void*>(-1) ||
+             handle == reinterpret_cast<void*>(-2)) {
+    // RTLD_DEFAULT is 0 and RTLD_NEXT -1 on bionic LP64; -2 is dlopen(NULL).
     p = gesher::elf::LookupGlobal(symbol);
+    if (p == nullptr) p = LookupBionicSymbol(symbol);
   } else {
     p = gesher::elf::Lookup(static_cast<gesher::elf::Library*>(handle), symbol);
+    if (p == nullptr) p = LookupBionicSymbol(symbol);
   }
   if (p == nullptr) {
     t_dlerror = std::string("undefined symbol: ") + symbol;
@@ -866,7 +907,6 @@ void RegisterLibc(SymbolTable& t) {
   ENTRY("getpid", Getpid);
   ENTRY("gettid", Gettid);
   ENTRY("getpagesize", Getpagesize);
-  ENTRY("__system_property_get", SystemPropertyGet);
   ENTRY("rand", Rand);
   ENTRY("srand", Srandom);
   ENTRY("random", Random);
@@ -966,6 +1006,7 @@ namespace {
 SymbolTable& Table() {
   static SymbolTable* t = [] {
     auto* table = new SymbolTable();
+    RegisterExtra(*table);  // first: the core files' definitions replace these
     RegisterLibc(*table);
     RegisterStdio(*table);
     RegisterPthread(*table);

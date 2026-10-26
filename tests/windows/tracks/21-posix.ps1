@@ -86,14 +86,10 @@ if (Test-Path $artGtests) {
         # CommonRuntimeTest starts a runtime on the host's whole boot class path.
         'FlagsTests*',
         # Registration is a no-op in Gesher's membarrier (patch 0014).
-        'membarrier.private_expedited', 'membarrier.private_expedited_sync_core',
-        # ART's LockedFile is unsupported under _WIN32.
-        'ScopedFlockTest.TestLocking'))) { $failed++ }
+        'membarrier.private_expedited', 'membarrier.private_expedited_sync_core'))) { $failed++ }
     if (-not (Invoke-ArtGtest 'art_libdexfile_tests' -Exclude @(
         # VerifierDeps is smali, which the build does not assemble.
-        'ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile',
-        # DexFileLoader does not resolve symbolic links on Windows (no realpath).
-        'ArtDexFileLoaderTest.GetDexCanonicalLocation'))) { $failed++ }
+        'ArtDexFileLoaderTest.GetMultiDexChecksumsDexFile'))) { $failed++ }
   } finally {
     foreach ($v in $saved.Keys) { [Environment]::SetEnvironmentVariable($v, $saved[$v]) }
     Remove-Item -Recurse -Force $artTop -ErrorAction SilentlyContinue
