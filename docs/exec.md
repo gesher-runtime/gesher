@@ -216,6 +216,11 @@ C:\work\gesher-ci-review\exec3-40352529279-windows-*.log.
 The prepared tree also merges verified native3 integration f677944 (merge
 333b1d6). Its separate green CI does not verify this combination. No replacement
 CI has been dispatched yet; the full track, pm/am and umask remain open.
+Applied the coordinator's complete four-file Process follow-up (source 644e7f8):
+readProcLines/readProcFile/parseProcLine, matching lightweight JNI declarations,
+the full-width/procfs parser regression and native3 test wiring. The coordinator
+has compiled/linked its C++ in CI, and local Java/script checks pass here; the
+combined runtime test remains pending the next exec3 dispatch.
 
 Prepared after this dispatch: pm/am now invoke a boot-classpath Binder client
 for actual package list/path, activity start, force-stop and asynchronous

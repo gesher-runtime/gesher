@@ -43,6 +43,14 @@ public class Process {
 
   public static native int getGidForName(String name);
 
+  public static native void readProcLines(String file, String[] fields, long[] values);
+
+  public static native boolean readProcFile(String file, int[] format,
+      String[] strings, long[] longs, float[] floats);
+
+  public static native boolean parseProcLine(byte[] buffer, int start, int end,
+      int[] format, String[] strings, long[] longs, float[] floats);
+
   public static void setThreadPriority(int tid, int priority) {
     setThreadPriorityNative(tid, priority);
   }
