@@ -350,6 +350,11 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+Current source includes verified exec3 integration 94ccde1, merged without
+conflicts at 131b335. The latest own full diagnostic and its open boot-profile
+gate below remain unchanged. No new Web3 run or acceptance claim follows from
+this integration update.
+
 Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
 and bounded TLS fixture cleanup. All 14 web3 checks pass per runner; the new
