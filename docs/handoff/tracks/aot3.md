@@ -37,6 +37,14 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Frozen cloud stage is fully verified in ci 40408733247 at
+05ca072cad7a23d83403a0c039d47d4fec0c07b5. Every job, all 16 scoped aot3
+PASS lines per runner, both zero-failure summaries, actual installed
+input/uninstall cleanup and both required e2e logs personally read. See
+[the cloud-stage report](aot3-cloud.md). wip/aot3-cloud adds docs only;
+the later continuation on wip/aot3 is excluded from this stage. Shared-
+library contexts, secondary dex and boot-performance diagnosis stay open.
+
 Corrected combined ci 40408733247 at 05ca072 is pending. Source includes
 current integration f520fd1; the sole new collector change enables its
 required log and records actual size/marker diagnostics. All native
