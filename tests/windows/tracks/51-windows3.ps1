@@ -69,6 +69,18 @@ function W3Wait([scriptblock] $ReadLog, [int] $Mark, [string] $Pattern, [int] $S
   return $m
 }
 
+# Waits until a match of $Pattern after $Mark satisfies $Where (given the groups); returns it.
+function W3WaitWhere([scriptblock] $ReadLog, [int] $Mark, [string] $Pattern, [scriptblock] $Where, [int] $Seconds = 60) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  do {
+    foreach ($m in [regex]::Matches((W3After $ReadLog $Mark), $Pattern)) {
+      if (& $Where $m.Groups) { return $m }
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  return [regex]::Match('', 'x')
+}
+
 # The entries of $Want (plain text) missing from, or out of order in, the log after $Mark.
 function W3Order([scriptblock] $ReadLog, [int] $Mark, [string[]] $Want, [string] $What) {
   $t = W3After $ReadLog $Mark
@@ -199,24 +211,22 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
 }
 
 # The touch keyboard's rows over the bottom 300 pixels (as IFrameworkInputPane reports
-# them): MainActivity's content (adjustResize) is 300 pixels shorter, ime() visible.
+# them): ime() visible with those rows; MainActivity (edge to edge) pads its content by them.
 function W3ImeChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog) {
   $out = @()
   $c = [GesherW3Win32]::ClientOnScreen($app)
   $h = $c[3] - $c[1]
   $mark = W3Mark $ReadLog
   [void][GesherW3Win32]::PostMessageW($app, $w3Input, [IntPtr]($c[3] - 300), [IntPtr]$c[3])
-  $m = W3Wait $ReadLog $mark 'MainActivity laid out: content \d+x(\d+),[^\r\n]*edit bottom (\d+), ime visible true, bottom 300' 30
-  if (-not $m.Success) { $out += 'no layout with the IME insets (ime visible, bottom 300)' } else {
-    # Target SDK 36 is edge to edge: the window keeps its size and the app pads its
-    # content by the IME insets (as Android 15 and later have adjustResize apps do).
-    if ([int]$m.Groups[2].Value -gt $h - 300) { $out += "the EditText's bottom is at $($m.Groups[2].Value), under the keyboard" }
-  }
+  # Target SDK 36 is edge to edge: the window keeps its size and the app pads its
+  # content by the IME insets (as Android 15 and later have adjustResize apps do).
+  $m = W3WaitWhere $ReadLog $mark 'MainActivity laid out: [^\r\n]*ime visible true, bottom 300 \(edit top in parent (\d+), padding (\d+)\)' { param($g) [int]$g[2].Value -eq 300 -and [int]$g[1].Value -lt $h - 300 } 30
+  if (-not $m.Success) { $out += 'no layout with the IME insets (ime visible, bottom 300) and the EditText above them' }
   if (-not (W3After $ReadLog $mark).Contains("the touch keyboard covers rows $($h - 300)-$h")) { $out += 'the window session did not report the keyboard''s rows' }
   $seen = $m.Value
   $mark = W3Mark $ReadLog
   [void][GesherW3Win32]::PostMessageW($app, $w3Input, [IntPtr]::Zero, [IntPtr]::Zero)
-  $m = W3Wait $ReadLog $mark "MainActivity laid out: [^\r\n]*edit bottom $h, ime visible false, bottom 0" 30
+  $m = W3Wait $ReadLog $mark "MainActivity laid out: [^\r\n]*ime visible false, bottom 0 \(edit top in parent \d+, padding 0\)" 30
   if (-not $m.Success) { $out += 'the content did not grow back when the keyboard went' }
   W3Check $Mode 'the touch keyboard''s rows (IFrameworkInputPane) are WindowInsets.Type.ime() of the window: the app (edge to edge, adjustResize) keeps its EditText above them, and back down when the keyboard goes' $out $seen
 }
@@ -395,12 +405,11 @@ W3Run "$single, PanActivity" 'Gesher windows3 pan' @('com.gesher.app.Main', '--w
   $h = $c[3] - $c[1]
   $mark = W3Mark $readLog
   [void][GesherW3Win32]::PostMessageW($app, $w3Input, [IntPtr]($c[3] - 300), [IntPtr]$c[3])
-  $m = W3Wait $readLog $mark 'PanActivity drawn: edit top (-?\d+), edit bottom (-?\d+), content \d+x(\d+), ime visible true, bottom 300' 30
+  # The pan animates (ViewRootImpl's Scroller): the frames until the EditText is above the keyboard.
+  $m = W3WaitWhere $readLog $mark 'PanActivity drawn: edit top (-?\d+), edit bottom (-?\d+), content \d+x(\d+), ime visible true, bottom 300' { param($g) [int]$g[2].Value -le $h - 300 } 30
   if (-not $before.Success) { $out += 'no first report' }
-  if (-not $m.Success) { $out += 'no frame with the IME insets' } else {
-    if ([int]$m.Groups[2].Value -gt $h - 300) { $out += "the EditText's bottom is at $($m.Groups[2].Value) in the window, under the keyboard (from row $($h - 300)): not panned" }
-    if ($before.Success -and [int]$m.Groups[3].Value -ne [int]$before.Groups[3].Value) { $out += "the content's height changed ($($before.Groups[3].Value) to $($m.Groups[3].Value)): resized, not panned" }
-  }
+  if (-not $m.Success) { $out += "no frame with the EditText above the keyboard (from row $($h - 300)): not panned" }
+  elseif ($before.Success -and [int]$m.Groups[3].Value -ne [int]$before.Groups[3].Value) { $out += "the content's height changed ($($before.Groups[3].Value) to $($m.Groups[3].Value)): resized, not panned" }
   W3Check $single 'adjustPan: the touch keyboard''s IME insets pan the window''s content so the focused EditText under them shows, without resizing it' $out "$($before.Value) / $($m.Value)"
 } @('gesher-app: done')
 
