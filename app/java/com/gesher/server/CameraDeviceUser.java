@@ -80,6 +80,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private final String mCameraId;
     private final WindowsCamera.Device mDevice;
     private final ICameraDeviceCallbacks mCallbacks;
+    private final CameraCallbacks mCallbackQueue;
 
     private final Object mLock = new Object();
     private final Map<Integer, Stream> mStreams = new HashMap<>();
@@ -101,7 +102,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         mService = service;
         mCameraId = cameraId;
         mDevice = device;
-        mCallbacks = callbacks;
+        mCallbackQueue = new CameraCallbacks(cameraId, callbacks);
+        mCallbacks = mCallbackQueue;
     }
 
     // --- configuration -----------------------------------------------------------------------
@@ -335,7 +337,6 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
             thread = mThread;
             mLock.notifyAll();
         }
-        WindowsCamera.Capture capture = mCapture;
         if (thread != null && thread != Thread.currentThread()) {
             try {
                 thread.join(5000);
@@ -343,7 +344,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 Thread.currentThread().interrupt();
             }
         }
-        if (capture != null) capture.close();
+        mCallbackQueue.close();
         mService.closed(mCameraId, this);
         CameraService.log("disconnect " + mCameraId);
     }
@@ -379,45 +380,59 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     /** The next frame to make, or null when disconnected; reports idleness. */
     private Frame next() {
-        boolean reportIdle = false;
-        synchronized (mLock) {
-            mBusy = false;
-            mLock.notifyAll();
-            while (!mDisconnected && mQueue.isEmpty() && mRepeating == null) {
-                if (!mIdleReported) {
-                    mIdleReported = true;
-                    reportIdle = true;
-                    break;
+        for (;;) {
+            synchronized (mLock) {
+                mBusy = false;
+                mLock.notifyAll();
+                boolean reportIdle = false;
+                while (!mDisconnected && mQueue.isEmpty() && mRepeating == null) {
+                    if (!mIdleReported) {
+                        mIdleReported = true;
+                        reportIdle = true;
+                        break;
+                    }
+                    try {
+                        mLock.wait();
+                    } catch (InterruptedException e) {
+                        return null;
+                    }
                 }
-                try {
-                    mLock.wait();
-                } catch (InterruptedException e) {
-                    return null;
+                if (!reportIdle) {
+                    if (mDisconnected) return null;
+                    mBusy = true;
+                    Frame f = mQueue.poll();
+                    if (f != null) return f;
+                    // Select and number this frame under the same lock that
+                    // established a request exists. cancelRequest/flush may clear
+                    // mRepeating as soon as this lock is released.
+                    Request r = mRepeating[0];
+                    f = new Frame(r, 0, mNextFrameNumber++);
+                    mRepeatingLastFrame = f.frameNumber;
+                    return f;
                 }
             }
-        }
-        if (reportIdle) {
             try {
                 mCallbacks.onDeviceIdle();
             } catch (RemoteException e) {
                 // gone
             }
-            return next();
-        }
-        synchronized (mLock) {
-            if (mDisconnected) return null;
-            mBusy = true;
-            Frame f = mQueue.poll();
-            if (f != null) return f;
-            // The repeating request's next frame (its first request, for a burst).
-            Request r = mRepeating[0];
-            f = new Frame(r, 0, mNextFrameNumber++);
-            mRepeatingLastFrame = f.frameNumber;
-            return f;
         }
     }
 
     private void captureLoop() {
+        try {
+            captureFrames();
+        } finally {
+            // The capture thread alone owns the native handle. A blocked native
+            // read may outlive disconnect's bounded join; never free it under that
+            // read, or miss a handle opened after disconnect began.
+            WindowsCamera.Capture capture = mCapture;
+            mCapture = null;
+            if (capture != null) capture.close();
+        }
+    }
+
+    private void captureFrames() {
         byte[] nv12 = null;
         Frame f;
         while ((f = next()) != null) {

@@ -147,6 +147,11 @@ Each phase ends with something demonstrable, built and tested in CI.
 - [x] Aot3 oatdump: inspect shipped framework/app oat code, actual app image
       and missing-file errors with pinned ART; verify the installed tool.
       Full ci 40368334642 at 96ef687, both Windows runners and package/e2e.
+- [x] Aot3 install-time cloud profiles: validate/copy paired DM, accept only
+      matching profman data, execute selected AOT/app-image code on first
+      launch, preserve malformed updates, handle rejected/missing profiles
+      and remove all metadata/profile staging on uninstall. Full ci
+      40408733247 at 05ca072, both Windows runners and package/e2e.
 - [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
       dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
@@ -489,11 +494,17 @@ needs: [framework-build.md](framework-build.md).
       `waitpid` status decoding (exit codes, WIFSIGNALED); signals between
       processes (`kill` to the target's SIGUSR1/SIGTERM handlers, signal 0,
       SIGKILL); `/system/bin` `ls`, `id`, `getprop`
-- [ ] The rest of exec2 (implemented, not exercised by CI): `Process.destroy()`
-      running the program's SIGTERM handler and `destroyForcibly()` (libcore
-      patch 0003), `logcat`, `ps`, `cat`, `kill`, `sleep`; still not done: a
-      fuller `sh` (pipes, redirections, control flow), ELF TLS in the executable,
-      `pm`/`am`, a persistent `setprop`; static executables are refused (ADR 0055)
+- [x] Exec3's verified continuation ([exec.md](exec.md), ADR 0060;
+      ci 40405306826/40410489251, both Windows whole suites zero failures): actual
+      `Process.destroy()`/`destroyForcibly()`, `ps`, `cat`, `kill`, `sleep`;
+      shell57 pipes/redirections/control-flow cases; Java/NDK `logcat` records,
+      filtering/default tags, nine formats, clear/follow; shared/boot/persistent `setprop`;
+      executable local-exec TLS; installed-device `pm`/`am` list/path/start,
+      broadcast and force-stop, with actual target/receiver process assertions
+- [ ] Exec3 compatibility beyond that verified slice: shell umask and real
+      permission behavior, broader shell conformance, native console interruption,
+      property caller policy and Binder report/poke notifications. General
+      fork-before-exec and static executables remain unsupported (ADR 0055/0060).
 
 ## Phase 7 checklist (arm64 translation)
 
