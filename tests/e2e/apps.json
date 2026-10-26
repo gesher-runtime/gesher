@@ -1,6 +1,7 @@
 {
   "comment": "Real, unmodified open-source apps from F-Droid's official repository (https://f-droid.org/repo), pinned by version and SHA-256, for tests/e2e/run-e2e.ps1 (docs/e2e.md). APKs are downloaded in CI only. knownFailure: why the app does not pass yet (docs/e2e.md); its FAIL line does not fail the job. display: WxH, the app runs on a device of its own with that display (GESHER_DISPLAY). waitLog: a regex the app's log must show after the actions (waited for up to 120 s).",
   "repo": "https://f-droid.org/repo",
+  "mirrors": ["https://ftp.fau.de/fdroid/repo"],
   "apps": [
     {
       "package": "com.ath0.rpn",
