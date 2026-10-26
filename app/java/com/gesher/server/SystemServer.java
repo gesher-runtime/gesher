@@ -198,6 +198,7 @@ public final class SystemServer {
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
+                    "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
                             + com.gesher.app.shell.AppShell.appUserModelId(packageName),
