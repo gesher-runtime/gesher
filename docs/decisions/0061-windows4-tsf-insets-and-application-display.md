@@ -1,7 +1,7 @@
 # 0061. Text services, IME occlusion and the shared Application display
 
 Status: proposed (windows4). Native fixture scope verified in standalone CI
-40414421254 at a827d5c; current Android/JNI and full-suite verification is pending.
+40415866523 at d50084d; current Android/JNI and full-suite verification is pending.
 
 ## Context
 
