@@ -484,6 +484,11 @@ public final class WindowSession extends IWindowSession.Stub {
             // Activity's orientation (windows3 track) has the display's rotation too.
             override = TaskConfiguration.override(bounds, root.rotation);
         }
+        // A portrait task retains rotation zero while the shared Application
+        // display follows a different focused landscape task.
+        override.windowConfiguration.setRotation(root.rotation);
+        override.windowConfiguration.setDisplayRotation(root.rotation);
+        override.windowConfiguration.setMaxBounds(TaskConfiguration.display(root.rotation));
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
     }

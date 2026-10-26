@@ -223,7 +223,8 @@ public final class Services {
     public static final class DisplayManager extends IDisplayManager.Default {
         @Override
         public DisplayInfo getDisplayInfo(int displayId) {
-            return displayId == Display.DEFAULT_DISPLAY ? DeviceProfile.displayInfo() : null;
+            return displayId == Display.DEFAULT_DISPLAY
+                    ? com.gesher.app.window.ApplicationDisplay.info() : null;
         }
 
         @Override
@@ -233,12 +234,13 @@ public final class Services {
 
         @Override
         public void registerCallback(IDisplayManagerCallback callback) {
-            // The display never changes.
+            com.gesher.app.window.ApplicationDisplay.register(callback, -1L);
         }
 
         @Override
         public void registerCallbackWithEventMask(IDisplayManagerCallback callback,
                 long eventsMask) {
+            com.gesher.app.window.ApplicationDisplay.register(callback, eventsMask);
         }
 
         @Override
