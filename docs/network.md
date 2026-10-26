@@ -190,8 +190,11 @@ plain Java on the core boot class path) and `tests/apps/netapp`,
   (`$GESHER_NETAPP_HTTPS`; web3 track: ci 40240210807 had failed when example.com did not
   answer);
 - on the internet: DNS, HTTPS GETs (example.com, google.com), TLS 1.3 with SNI
-  and hostname verification, badssl.com's expired, wrong-host, self-signed and
-  untrusted-root certificates rejected;
+  and hostname verification. The four rejection cases (expired, wrong host,
+  self-signed and unknown root) now use local TLS endpoints in 56-net with
+  separately generated certificates and only the intended test CA trusted.
+  Manual NetTest internet runs retain the public badssl defaults when
+  GESHER_TLS_REJECTION_URLS is unset;
 - netapp.apk in one process: ConnectivityManager's state, a default and a
   request callback, HTTPS through HttpsURLConnection with the network
   security config, cleartext refused (target SDK 36);
@@ -217,6 +220,15 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 - Captive portals are not detected.
 
 ## Status and next steps (2026-10-25)
+
+- Continuation (2026-10-26), pending CI: replaced the four badssl rejection
+  endpoints in 56-net with local certificate fixtures. Real internet
+  DNS/HTTPS/TLS 1.3/SNI assertions remain. Rejection must now have a
+  CertificateException in its cause chain or SSLPeerUnverifiedException;
+  an unrelated SSL handshake failure or timeout is not accepted. Local
+  Java compilation, PowerShell parsing and fixture key/date/SAN/custom-root
+  chain checks pass. No Windows ROOT store was changed locally. Runtime
+  Conscrypt validation still requires a new full CI run.
 
 **Branch** `wip/net` (worktree C:/work/gesher-net). **CI-verified green**: ci
 40141520320 (66d71de) and ci 40143168361 (47a4aeb, merged with
