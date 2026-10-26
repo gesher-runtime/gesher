@@ -79,6 +79,9 @@ jstring JNICALL NativeFonts(JNIEnv* env, jclass) {
       uint32_t tag = AFont_getAxisTag(font, static_cast<uint32_t>(i));
       float value = AFont_getAxisValue(font, static_cast<uint32_t>(i));
       good = good && tag != 0 && std::isfinite(value);
+      if (tag == 0x77676874 || tag == 0x77647468)  // wght / wdth
+        good = good && value >= 1 && value <= 1000;
+      if (tag == 0x6974616c) good = good && (value == 0 || value == 1);  // ital
       ++axes;
     }
     return good;
@@ -102,7 +105,7 @@ jstring JNICALL NativeFonts(JNIEnv* env, jclass) {
     AFont_close(font);
   }
   ASystemFontIterator_close(iterator);
-  p.Check(count > 10 && count < 4096 && all_files && has_locale,
+  p.Check(count > 10 && count < 4096 && all_files && has_locale && axes > 0,
           "enumerated real shipped font files and locale metadata");
   p.Check(retained != nullptr &&
               retained_path == AFont_getFontFilePath(retained) &&
