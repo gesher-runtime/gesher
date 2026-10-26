@@ -83,6 +83,15 @@ Watch: `C:/work/gesher-ci-review/windows4-40417632512-watch.log`, interval 120.
 It is diagnostic until every required result is read; no threshold or runtime
 assertion was relaxed. The independent old main build was not canceled.
 
+On 40417632512, main build 121903818145 now succeeds in 40m12 and boot-image
+compile in 29 seconds. The actual main log shows current connection/TSF/JNI
+objects building and `203 assembly boundaries checked, 0 problem(s)`. Framework
+121913653312 also succeeds (actual javac zero errors, graphics dex and both
+Windows4 APKs built); media preparation succeeds in 46 seconds. Runtime has
+started: Windows 2022 job 121919469641, Windows 2025 job 121919469507 and package
+121919469612. Those jobs have no final result yet; build success does not close
+the Android, package or e2e gates.
+
 Shared edits to review at final handoff (relative to integration 94ccde1):
 - framework.yml adds the winlegacy build/copy lines; graphics.yml builds and
   collects the three full-native probes and test-service DLL. The separate
