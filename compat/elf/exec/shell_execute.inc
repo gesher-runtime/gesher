@@ -514,7 +514,7 @@ bool IsSpecialBuiltin(const std::string& name) {
 
 int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io);
 int Simple(Shell* sh, const NodeP& node, Io io, bool* retain_redirs);
-void RunPendingSignals(Shell* sh, Io io);
+int RunPendingSignals(Shell* sh, Io io);
 
 int ExecNode(Shell* sh, const NodeP& node, Io io) {
   if (!node || sh->exiting || sh->returning || sh->breaking || sh->continuing)
@@ -711,7 +711,7 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
   }
   sh->io = saved;
   sh->status = status;
-  RunPendingSignals(sh, io);
+  RunPendingSignals(sh, saved);
   status = sh->status;
   if (status && sh->opt_e && sh->cond_depth == 0 && node->kind != Node::AndOr &&
       !node->negate)
@@ -730,7 +730,8 @@ int RunProgramString(Shell* sh, const std::string& src, Io io) {
   return ExecNode(sh, program, io);
 }
 
-void RunPendingSignals(Shell* sh, Io io) {
+int RunPendingSignals(Shell* sh, Io io) {
+  int caught = 0;
   for (int word = 0; word < 2; ++word) {
     uint64_t pending = g_pending_signals[word].exchange(0);
     for (int bit = 0; bit < 64; ++bit) {
@@ -738,10 +739,33 @@ void RunPendingSignals(Shell* sh, Io io) {
       int signal = word * 64 + bit;
       auto trap = sh->traps.find(signal);
       if (trap == sh->traps.end()) continue;
+      caught = signal;
       std::string action = trap->second;
       int status = sh->status;
       RunProgramString(sh, action, io);
       if (!sh->exiting) sh->status = status;
     }
+  }
+  return caught;
+}
+
+// ProcessBuilder and shell pipeline input are synchronous Win32 pipes. Do not
+// block in ReadFile with no data: mailbox traps must run on the shell thread.
+// Return one byte, EOF, or minus the caught signal for an interruptible read.
+int ReadByte(Shell* sh, Io io, HANDLE input, char* value, bool interruptible) {
+  for (;;) {
+    int caught = RunPendingSignals(sh, io);
+    if (sh->exiting) return 0;
+    if (caught && interruptible) return -caught;
+    if (GetFileType(input) == FILE_TYPE_PIPE) {
+      DWORD available = 0;
+      if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) return 0;
+      if (!available) {
+        Sleep(10);
+        continue;
+      }
+    }
+    DWORD count = 0;
+    return ReadFile(input, value, 1, &count, nullptr) && count ? 1 : 0;
   }
 }

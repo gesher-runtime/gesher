@@ -269,10 +269,16 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
       if (!IsName(key)) return fail("invalid name: " + key);
     std::string line;
     bool escaped = false, eof = false;
+    int interrupted = 0;
     for (;;) {
       char c;
-      DWORD count = 0;
-      if (!ReadFile(io->fd[0], &c, 1, &count, nullptr) || !count) {
+      int result = ReadByte(sh, *io, io->fd[0], &c, true);
+      if (sh->exiting) return sh->status;
+      if (result < 0) {
+        interrupted = -result;
+        break;
+      }
+      if (!result) {
         eof = true;
         break;
       }
@@ -303,7 +309,7 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
       SetVar(sh, names[i], line.substr(at, end - at));
       at = end;
     }
-    return eof ? 1 : 0;
+    return interrupted ? 128 + interrupted : eof ? 1 : 0;
   }
   if (name == "trap") {
     if (args.size() == 1 || (args.size() == 2 && args[1] == "-p")) {
