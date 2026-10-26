@@ -77,10 +77,15 @@ JNIEXPORT jstring JNICALL Java_com_gesher_mediaapp_MediaActivity_aaudioWriteTone
   AAudioStreamBuilder* b;
   AAudioStream* s;
   char msg[256];
+  const int32_t frames = 22050 * ms / 1000;
   AAudio_createStreamBuilder(&b);
   AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
   AAudioStreamBuilder_setChannelCount(b, 1);
   AAudioStreamBuilder_setSampleRate(b, 22050);
+  // This checks the samples written, not low-latency scheduling under load.
+  // Queue the entire finite tone before starting so writer preemption cannot
+  // insert silence into its frequency measurement.
+  AAudioStreamBuilder_setBufferCapacityInFrames(b, frames);
   AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_GAME);
   aaudio_result_t r = AAudioStreamBuilder_openStream(b, &s);
   AAudioStreamBuilder_delete(b);
@@ -88,22 +93,23 @@ JNIEXPORT jstring JNICALL Java_com_gesher_mediaapp_MediaActivity_aaudioWriteTone
     snprintf(msg, sizeof msg, "open %s", AAudio_convertResultToText(r));
     return (*env)->NewStringUTF(env, msg);
   }
-  int32_t frames = 22050 * ms / 1000;
   static int16_t pcm[22050 * 4];
   for (int32_t i = 0; i < frames; i++) pcm[i] = (int16_t)(16383 * sin(2 * M_PI * hz * i / 22050.0));
-  AAudioStream_requestStart(s);
   int32_t done = 0;
   while (done < frames) {
     int32_t n = AAudioStream_write(s, pcm + done, frames - done, 1000000000LL);
     if (n <= 0) break;
     done += n;
   }
-  // Let it play out.
-  while (AAudioStream_getFramesRead(s) < frames) sleep_ms(10);
+  const int prefilled = done == frames;
+  AAudioStream_requestStart(s);
+  // Let it play out, but do not hang forever if the stream stops progressing.
+  for (int tick = 0; tick < 500 && AAudioStream_getFramesRead(s) < frames; tick++) sleep_ms(10);
   AAudioStream_requestStop(s);
-  snprintf(msg, sizeof msg, "rate %d, written %lld, read %s", AAudioStream_getSampleRate(s),
+  snprintf(msg, sizeof msg, "rate %d, written %lld, read %s, prefilled %s, xruns %d", AAudioStream_getSampleRate(s),
            (long long)AAudioStream_getFramesWritten(s),
-           AAudioStream_getFramesRead(s) >= frames ? "all" : "short");
+           AAudioStream_getFramesRead(s) >= frames ? "all" : "short", prefilled ? "true" : "false",
+           AAudioStream_getXRunCount(s));
   AAudioStream_close(s);
   return (*env)->NewStringUTF(env, msg);
 }
