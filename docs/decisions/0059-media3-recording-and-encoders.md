@@ -62,6 +62,16 @@ processes. A Windows PC may have a microphone or not; CI runners have none
   YUV_420_888 Images.
 
 ## Consequences
+The Just Player e2e run (ci 40292991000) also exposed missing session-service
+bootstrap. Gesher now installs MediaFrameworkPlatformInitializer's manager
+and serves media_session over Binder. Session owners publish metadata,
+playback state, a queue and extras; controllers query them and forward
+transport commands to the owner's callback. Owner death removes its session.
+This addition and recordapp's controller round trip are awaiting CI; Windows
+system transport controls, media-key receiver fallback, Session2/media
+communication, listener permission/user filtering and external volume-change
+notifications remain open work (docs/media.md).
+
 Recording works the same on a PC with a microphone and on CI, where the
 file source makes what is recorded known and checkable end to end (recorded,
 encoded, muxed, read back, decoded, measured). No AMR, Vorbis or VP8/VP9/HEVC

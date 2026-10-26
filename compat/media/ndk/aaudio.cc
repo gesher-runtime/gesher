@@ -414,7 +414,9 @@ int32_t SYSV Read(AAudioStream* s, void* data, int32_t frames, int64_t timeout_n
     if (done >= frames || timeout_ns <= 0) break;
     const int64_t left = end - Now();
     if (left <= 0) break;
-    s->capture->WaitForData(static_cast<size_t>(frames - done),
+    // A caller can request more than the ring's capacity. Drain each burst
+    // instead of waiting for an impossible full request while capture overruns.
+    s->capture->WaitForData(static_cast<size_t>(std::min(frames - done, s->burst)),
                             static_cast<int>(std::min<int64_t>(left / 1000000 + 1, 100)));
   }
   return done;
