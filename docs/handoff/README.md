@@ -169,28 +169,24 @@ this new integration code before their final verification/merge.
 
 | Track | Result read / change | New verification |
 |---|---|---|
-| aot2 | ci 40290847953 at 19014a2: only windows-2022 media tone timing failed (1441.3 Hz vs 1480 Hz); windows-2025/package/e2e pass. Read all aot2 PASS: image 74.6 vs 162.5 MB, startup medians comparable, app classes/compiled methods present without -AllClasses, AOT methods not interpreted. Merged integration a98dda9. | ci 40297189562 at 0e0262f; every job and both zero-failure summaries still required. |
+| aot2 | ci 40297189562 failed one real WebView navigation/capture race on 2022; 2025/package/e2e pass. Merged integration 91c195d/native2 and moved debug PrintWindow off the Android UI Looper. ci 40307691668 then exposed a patch collision: removed 0540's duplicate scoped_flock diff in favor of integrated 0571. | ci 40309659362 at 7373128; full combined verification pending. |
 | windows3 | Merged as 80cb28b after personally checking every job, all 17 track PASS lines per runner, both zero-failure summaries, package cleanup and e2e. | ci 40285476400 at a15ade4; head 063b051 docs only. |
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
-| surfaces | ci 40291437446 at 025fda1: windows-2022/package/e2e pass; windows-2025 has only a locale resend/shutdown race, with restored callback and values present. 49-locale now accepts that completed broadcast while retaining state assertions. Merged integration a98dda9, keeping both surfaceapp/winapp build lines. TIC-80 still needs both-runner confirmation. | ci 40297011754 at b8d6752; not verified yet. |
-| web3 | ci 40292261578: two accessibility failures per runner; timeout at ElementFromHandleBuildCache. Geolocation/compat pass; e2e first server startup fails. Added async WebView snapshots/actions and UIA events, embedded HWND override, correct pattern interface pointers and per-window snapshot generations; added server startup log diagnostics. Merged integration a98dda9. | ci 40300418334 at f87d5b8; accessibility and e2e remain unverified. |
-| media3 | ci 40292991000: 4 failures on 2022, 5 on 2025; package pass, e2e 1 unexpected failure. Fixed AAudio waits larger than the ring, capture idle transition loss and config-buffer frame counting. Just Player log exposes missing MediaServiceManager; added bootstrap, Binder media_session and controller round-trip tests. New session limits remain explicit in docs/media.md/ADR 0059. Merged integration a98dda9. | ci 40299212277 at a1a0f43; recording/session changes unverified; 2025 WebM output failure also requires diagnosis. |
-| exec3 | WIP 21bfdcf: nested quote/substitution/incomplete-input and expansion fixes; shell_execute.inc drafts process-isolated pipelines/subshells, redirections and helpers. Not included in build; Simple/Builtin/RunShell still missing. Status doc records that earlier syntax-only results did not establish correctness. | No run; current WIP is not compiled or linked. |
+| surfaces | ci 40302030881 passes surfaces and TIC-80 on both runners. Removed TIC-80's knownFailure. ci 40307919084 passes 2022/package/both e2e jobs; 2025 fails only the known wrong.host.badssl.com connection timeout (2 counted failures). | ci 40307919084 at b1b59a6, attempt 2 reruns failed jobs only; not green yet. |
+| web3 | ci 40300418334: both external UIA cases still fail on both runners (2022 also has the known audio timing failure); 2025's Android WebView provider finds 12 nodes and its DOM actions pass. Package/e2e pass. Merged native2 and shared debug capture fix; added bounded provider tracing. | ci 40309961504 at e3209d6; external UIA still requires verification. |
+| media3 | ci 40299212277 confirms NDK tones and H.264 frame counts in both modes/runners, but session tests and Just Player hit NoClassDefFoundError. Added an optional MediaCommunicationManager cast guard and boot-descriptor diagnostics; merged integration 91c195d/native2. | ci 40305909645 at 4a2a28e; new runtime results pending. |
+| exec3 | Executor/builtins/RunShell now replace the minimal shell. Local own-file -Werror build, 47 output/status checks and incremental ProcessBuilder test pass with a small driver; actual ART/mailbox and the remaining tools/TLS/shell conformance are unverified. ADR 0060 records remaining scope. | ci 40311734733 at 8c90ac2, first exec3 CI. |
+| native3 | Six bitmap NDK entries now use hwui's real pixel storage and callbacks; direct aliasing/PNG/data-space/error tests added for both ABIs/modes. Local Java/patch checks pass; C++ builds reached runtime CI. The complete remaining NDK/POSIX scope is open. | ci 40305973210 at e94f760; first bitmap runtime verification pending. |
 
 Watches use gh run watch with --exit-status --interval 120. Review logs are
 saved outside the worktrees under C:\work\gesher-ci-review (no artifacts were
 downloaded). No roadmap box was ticked for the new, unverified fixes.
 
-Latest follow-up: surfaces 40297011754 passed windows-2025 and its own
-checks on windows-2022; the latter failed only the known badssl timeout.
-Merged native2 into surfaces and started ci 40302030881 at e73be53, now
-with e2e on both runners and unique artifacts. Media3 40299212277 builds
-and packages, but Just Player still fails with an unnamed preallocated
-NoClassDefFoundError. Opt-in ART missing-boot-class diagnostics are being
-prepared on that branch; read the still-running Windows tests before its
-next dispatch, and include current integration/native2. web3 40300418334
-and aot2 40297189562 are also still running. native3's branch/worktree are
-created at 8b1b09d; implementation has not started.
+All current runs above include native2/integration 91c195d (surfaces includes
+the same integration code at 8b1b09d). The WebView capture fix was also
+cherry-picked into web3; it is not merged into integration yet. Do not merge
+any red or partially inspected run. No main merge or final PR is authorized
+until every gap is closed and the owner explicitly approves that PR in chat.
 
 The open tracks do not cover every ADR limit: aot2's ADR 0054 also lists
 shared-library class-loader contexts, cloud profiles, secondary dex and oatdump;
