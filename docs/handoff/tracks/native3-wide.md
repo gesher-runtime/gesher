@@ -113,6 +113,13 @@ scoped run adds the actual pinned wcstod/parsefloat grammar reference with
 an explicitly limited host rounding/finite-stream adapter and locale-alias
 calls. ADR 0073 records the registration audit, quirks and open boundaries.
 
+Expanded scoped ci 40420020504 at 9ea7ef5 is green; all three job logs read.
+The reference now prints "PASS pinned wide: 202 conversion/state/boundary/
+LP64 assertions, 0 failures", including the original wide floating grammar.
+Production locale and both NDK ABI builds also pass. Current integration
+a06d930 is merged as 6bec63d before the first full runtime CI dispatch.
+No production runtime, package or e2e claim is made yet.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
