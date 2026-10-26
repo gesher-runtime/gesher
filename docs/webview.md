@@ -347,6 +347,10 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Current run: ci 40309961504 at e3209d6. Its complete UIA diagnostics must
+  be read before the next dispatch. Pending test fix: 56-net now serves the
+  four certificate rejection cases locally, retaining live internet tests
+  and requiring actual certificate/hostname failures. See network.md.
 - ci 40300418334 at f87d5b8: package/e2e pass; both runners fail the two
   external UIA checks (2022 also has the known audio timing failure).
   Windows 2025's WebView provider now finds 12 nodes, the heading, button
