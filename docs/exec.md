@@ -189,7 +189,43 @@ _exec2 track (branch `wip/exec2`, ADR 0055):_
 _exec3 track (branch `wip/exec3`, ADR 0060 reserved). Opus 5.5 successor; the
 first agent ran on an older model and was replaced per the all-Opus rule._
 
-**Current review:** CI 40372171824 completed at
+**Current review:** CI 40385411337 completed at
+80bf3947bee2dabf428b2c5c07b7c672dec0a947. All build/media/package and both
+required e2e jobs pass. Both e2e logs have zero unexpected failures, all nine
+apps including TIC-80, four transport fixtures and Puzzles generators 4076/7544
+exiting 0. Actual package proof includes installed oatdump/boot image, device
+apps and input, and full uninstall cleanup.
+
+Both Windows suites pass shell57, signals/tools/TLS, binder readiness, the ten
+native host assertions, full standalone Java properties/logcat and the complete
+single-process APK. The installed-device APK also passes its native nine-process
+suite, shell/signals/TLS, properties and logcat before pm starts. Java/ELF/tool
+properties now prove scratch-root inheritance, readonly/long values, serial ABI,
+foreach, waits/wait_any, explicit reportSyspropChanged and boot/persist behavior
+in all three modes. The readonly fixture collision is corrected without any
+write-policy relaxation. Native3 Process, libartbase233/libdexfile120, windows3
+and AOT2/oatdump checks pass on both runners.
+
+Remaining actual failures: Windows-2025 has ten Checks, Windows-2022 fourteen.
+Each has one installed exec3 failure: pm exits126 before contacting Binder
+because DeviceCommand checks the logical framework/boot.art as a physical file.
+The real image is in framework/x86_64/boot.art; ART resolves that subdirectory
+from the logical -Ximage option. The prepared resolver now accepts that layout
+while passing the logical option, with five native launch-contract checks for
+root/flat/fallback/missing images. Those checks use an own child executable,
+not ART/Binder; actual pm/am success remains for the next combined CI.
+
+The other nine/thirteen Checks follow actual devices process crashes after all
+expected steps: device mode on both runners, plus single-process sensors/camera
+on 2022, at fault address -1 and exit1. The native trace did trigger, but my test
+helper used a tracks-relative ../../tools path and then filtered out its signal
+context. The prepared correction uses ../../../tools and prints the bounded
+context before the category/200-line filter. An own fatal-child probe verifies
+publication beyond 300 preceding lines, symbolizer invocation and original
+exit7 preservation. No new native diagnostic or runtime cause is claimed.
+The camera callback work remains separately owned/coordinated by media3_next.
+
+**Previous review:** CI 40372171824 completed at
 7ae515fdd4a7dd84af4a65f15e19392d6517a437. All build/package and both e2e jobs
 pass; both e2e logs have zero unexpected failures, nine apps including TIC-80,
 four transport fixtures and Puzzles generator pids 2560/8992 exiting 0. Both

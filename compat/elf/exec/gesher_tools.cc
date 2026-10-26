@@ -325,9 +325,22 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
   size_t slash = directory.find_last_of(L"/\\");
   if (slash == std::wstring::npos) return 126;
   directory.resize(slash + 1);
+  auto has_image = [](const std::wstring& path) {
+    auto file = [](const std::wstring& candidate) {
+      DWORD attributes = GetFileAttributesW(candidate.c_str());
+      return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    };
+    if (file(path)) return true;
+    // ART accepts the logical framework/boot.art option and selects its host
+    // instruction-set subdirectory itself. Do not reject that normal layout
+    // merely because there is no physical boot.art beside x86_64/boot.art.
+    size_t separator = path.find_last_of(L"/\\");
+    return separator != std::wstring::npos &&
+           file(path.substr(0, separator + 1) + L"x86_64\\" + path.substr(separator + 1));
+  };
   std::wstring image = WindowsPath(EnvOr("ANDROID_ROOT", "/system") + "/framework/boot.art");
-  if (GetFileAttributesW(image.c_str()) == INVALID_FILE_ATTRIBUTES) image = directory + L"framework\\boot.art";
-  if (GetFileAttributesW(image.c_str()) == INVALID_FILE_ATTRIBUTES) {
+  if (!has_image(image)) image = directory + L"framework\\boot.art";
+  if (!has_image(image)) {
     std::fprintf(stderr, "%s: the runtime boot image is unavailable\n", tool.c_str());
     return 126;
   }

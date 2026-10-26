@@ -1,25 +1,21 @@
 # Track brief: exec3
 
 Current continuation status (2026-10-26): the full track remains open. Completed
-CI 40372171824 at 7ae515f passes all build/package/both e2e jobs (zero unexpected),
-57 shell cases, signals/tools/TLS, readiness, native3 Process proc, libartbase/
-libdexfile scratch cleanup, standalone Java/NDK logcat and unchanged windows3 UI
-assertions. Windows-2025 has three failed Checks from one readonly fixture-name
-collision, now corrected without relaxing policy; later Java callbacks and
-complete APK/pm/am proof remain blocked. Windows-2022 has those three plus
-thirteen devices Checks affected by two actual post-steps SIGSEGV exits at -1.
-Cause remains open; a coordinator-authorized bounded pre-handler diagnostic
-and devices-only enablement/symbolization are prepared for the next combined CI.
-The tree includes integration 634a273 (docs on verified AOT3 oatdump f5ce6f6).
-The additional property root inheritance fix passes ten native host checks;
-matching Java ProcessBuilder assertions compile and await final CI. Keep all
-real assertions and open umask/policy scope. See docs/exec.md for exact evidence.
-CI 40382268730 at 4568c71 was superseded once on coordinator instruction after
-909 seconds in media generation, before Windows jobs started; build proof is
-retained, without an inferred infrastructure error/cause. Replacement full CI
-40385411337 now runs 80bf394 with the coordinator/media3 ffmpeg preparation-only
-workflow patch. Watch C:\work\gesher-ci-review\exec3-watch-40385411337.log at
-120 seconds. All real assertions and the narrow sentinel diagnosis remain.
+CI 40385411337 at 80bf394 passes all build/media/package/both e2e jobs (zero
+unexpected), shell57, signals/tools/TLS/readiness, ten host assertions, complete
+properties/logcat in standalone and both APK modes, and the single-process APK.
+Java callbacks, scratch-root inheritance, serial/wait/wait_any and boot/persist
+are now actual ART proof. The installed APK stops at pm's logical-image file
+check before Binder; an ISA-layout correction and five native launch-contract
+checks are prepared, but real pm/am remain pending. Windows-2025 has ten failed
+Checks;2022 fourteen. Other failures follow post-steps devices crashes at -1
+(device both, single2022). Trace capture did trigger; a helper path/filter
+mistake hid it. The prepared publication-only correction passes an actual native
+fatal-child/PowerShell contract with 300 preceding lines and preserved exit7.
+No native cause is claimed. media3_next separately owns camera callbacks work.
+The tree includes integration634a273; root reports cd0b849 is docs-only above it.
+Before final CI merge current integration. Keep every real assertion and open
+umask/policy scope. See docs/exec.md for complete evidence and earlier runs.
 The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief

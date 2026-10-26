@@ -24,9 +24,16 @@ function DevRun([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 300
   $null = $stdout.Wait(10000), $stderr.Wait(10000)
   $out = $stdout.Result + $stderr.Result
   if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
-  if ($out.Contains('invalid sentinel before signal handler') -and (Test-Path "$Dir/dalvikvm.map")) {
-    $resolved = @($out | python "$PSScriptRoot/../../tools/symbolize.py" "$Dir/dalvikvm.map")
-    if ($LASTEXITCODE -eq 0) { $out = $resolved -join "`n" }
+  if ($out.Contains('invalid sentinel before signal handler')) {
+    $symbolizer = Join-Path $PSScriptRoot '../../../tools/symbolize.py'
+    if ((Test-Path "$Dir/dalvikvm.map") -and (Test-Path -LiteralPath $symbolizer)) {
+      $resolved = @($out | python $symbolizer "$Dir/dalvikvm.map")
+      if ($LASTEXITCODE -eq 0) { $out = $resolved -join "`n" }
+    }
+    # Preserve the bounded context before DevCheck's category/200-line filter.
+    # That filter otherwise hides the native fault's RIP and registers.
+    ($out -split "`n" | Where-Object { $_ -match '^gesher-signal:' } |
+      Select-Object -First 32) | ForEach-Object { Write-Host $_ }
   }
   $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
   return $out
