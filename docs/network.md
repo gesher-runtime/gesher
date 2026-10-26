@@ -143,6 +143,32 @@ affected (`<gesher/inet.h>`). The system server sets `GESHER_INET=0` for app
 processes of packages without it; gesher-app applies it in its own process
 (single process and `--system-server`).
 
+## Proxy and broadcasts (web3 track, ADR 0058)
+
+- **Windows' proxy settings** (the user's Internet Options as WinHTTP reads them:
+  `WinHttpGetIEProxyConfigForCurrentUser`) are Android's default proxy
+  (`com.gesher.net.WindowsProxy`, natives in `compat/net/windows_proxy.cc`,
+  libgesher_proxy.so): a proxy server becomes `ProxyInfo.buildDirectProxy(host, port,
+  exclusions)` (per-scheme WinINet strings: http's server; `<local>` has no Android
+  equivalent), a PAC URL or automatic detection a PAC proxy. Every process applies it with
+  `Proxy.setHttpProxyConfiguration` (http(s).proxyHost/Port/nonProxyHosts, as
+  ActivityThread at bind), so `Proxy.getDefaultHost()`, HttpURLConnection and OkHttp use
+  it, and follows Windows' changes (RegNotifyChangeKeyValue on the settings' key). Under a
+  PAC script, the framework's PacProxySelector asks `com.android.net.IProxyService`, which
+  every process serves itself with `WinHttpGetProxyForUrl` (Windows fetches and runs the
+  script, in process). `ConnectivityManager.getDefaultProxy()` and `getProxyForNetwork`
+  return it.
+- **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
+  sticky query, as BatteryService's battery broadcast) and sends it when the default
+  network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
+  EXTRA_NO_CONNECTIVITY.
+- **PendingIntent requests and listens** (`requestNetwork`, `registerNetworkCallback` with
+  a PendingIntent): the app's ConnectivityManager sends the PendingIntent with
+  EXTRA_NETWORK and EXTRA_NETWORK_REQUEST when a matching network is available;
+  `releaseNetworkRequest`/`unregisterNetworkCallback(PendingIntent)` end them.
+- Tests: tests/windows/tracks/54-web3.ps1 (web3app.apk's NetActivity on the Gesher device,
+  with Windows' settings set to the test's proxy, then to a PAC script, and restored).
+
 ## Tests
 
 `tests/windows/tracks/56-net.ps1`, with `tests/dex-net` (`net-tests.dex`,
@@ -158,6 +184,10 @@ plain Java on the core boot class path) and `tests/apps/netapp`,
   a certificate for localhost from it is rejected, trusted once the root is in
   the machine's ROOT store, rejected with `GESHER_WINDOWS_CERTS=0`, and
   rejected again once the root is removed;
+- netapp.apk's HTTPS check (`NetApp https`) goes to an HTTPS server of the script with a
+  certificate from the test root, kept in the machine's ROOT store while the apps run
+  (`$GESHER_NETAPP_HTTPS`; web3 track: ci 40240210807 had failed when example.com did not
+  answer);
 - on the internet: DNS, HTTPS GETs (example.com, google.com), TLS 1.3 with SNI
   and hostname verification, badssl.com's expired, wrong-host, self-signed and
   untrusted-root certificates rejected;
@@ -175,9 +205,9 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Known gaps
 
-- No `CONNECTIVITY_ACTION` broadcast; `PendingIntent` network requests are
-  accepted and never fire.
-- Windows' proxy settings are not carried over (`getDefaultProxy()` is null).
+- (web3 track, ADR 0058: `CONNECTIVITY_ACTION` and `PendingIntent` requests, and Windows'
+  proxy settings, are done; see "Proxy and broadcasts" below.) PendingIntent requests are
+  kept by the app's process and end with it.
 - Binding a socket or a process to a Network is accepted but Windows picks the
   route; no per-network DNS.
 - VPNs are recognized by adapter type and name, a heuristic.
