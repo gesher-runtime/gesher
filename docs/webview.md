@@ -347,4 +347,14 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-- Branch wip/web3 (worktree C:\work\gesher-webview). First CI run: ci 40262184075 (in progress).
+- Branch wip/web3 (worktree C:\work\gesher-webview).
+- ci 40261113581: web3app's build.sh was not executable (fixed).
+- ci 40262184075 (b44730c): everything built (glue, UIA bridge, proxy natives); NetActivity
+  showed Windows' proxy as getDefaultProxy/Proxy.getDefaultHost, the sticky CONNECTIVITY_ACTION
+  and a PendingIntent request working (cleartext was refused: the test app now permits it).
+  Failures: the system's own UIA clients read every window, which turned accessibility on in
+  every app, and UIA's threads exited while attached to the VM (ART aborts: webapp, ime,
+  popups failed); Windows' WPAD default became a PAC proxy for every request. Fixed: the
+  UIA bridge serves windows only while the screen reader flag is set (the test sets it, as
+  Narrator), threads attach per call and detach; WPAD is not followed.
+- ci 40285810159: in progress.
