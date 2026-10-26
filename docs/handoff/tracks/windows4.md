@@ -94,3 +94,12 @@ document. No system IME profile is registered. The source/probe compile with
 g++ -Wall -Wextra -Werror; CMake/graphics.yml and a 45-second bounded Windows
 test wrapper are added for eventual CI. This still does not connect Android's
 InputConnection to TSF; runtime activation/Java plumbing and CI remain open.
+
+Additional local native proof: the new window-owned TextService adapter uses
+AssociateFocus, retains/restores the previous document, and loads an explicit
+test-service DLL until after context/thread-manager teardown. Its real DLL
+reconverts the adapter's own document and cleanup passes. Portable snapshot/edit
+types are in text_document.h; a disconnect clears retained document data and
+owner callbacks before COM teardown. These classes are still not wired into
+the production input method. Next: epoch/revision JNI/Java snapshot/edit
+plumbing and pre-TranslateMessage TSF keystroke routing, preserving IMM32.

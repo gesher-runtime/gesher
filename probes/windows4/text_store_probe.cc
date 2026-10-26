@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "text_store.h"
+#include "text_service.h"
 
 namespace {
 using gesher::input::DocumentEdit;
@@ -160,6 +161,27 @@ int main() {
   Check(SUCCEEDED(store->UnadviseSink(sink)), "the actual sink can unsubscribe by canonical COM identity");
   store->Release(); sink->Release();
   TestWindowsTextService(window);
+  HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (SUCCEEDED(initialized)) {
+    std::vector<DocumentEdit> attached_edits;
+    TextDocument initial = original; initial.epoch = 20;
+    HRESULT attached = E_FAIL;
+    auto service = gesher::input::TextService::Attach(window, initial,
+        [&](DocumentEdit edit) { attached_edits.push_back(std::move(edit)); }, [] {}, &attached);
+    wchar_t executable[32768] = {};
+    DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
+    std::wstring path(executable, executable + length);
+    size_t slash = path.find_last_of(L"\\/");
+    path = path.substr(0, slash + 1) + L"windows4_tsf_service.dll";
+    HRESULT result = service != nullptr ? service->RunTestService(path.c_str()) : attached;
+    bool replacement = false;
+    for (const auto& edit : attached_edits)
+      replacement |= edit.kind == DocumentEdit::kReplace && edit.text == u"\u65e5\u672c" && edit.start == 7 && edit.end == 11;
+    Check(SUCCEEDED(result) && replacement, "the window-owned TSF adapter executes the real test-service DLL against its own document");
+    service.reset();
+    Check(SUCCEEDED(result), "window-owned TSF teardown restores focus and deactivates before releasing its service DLL");
+    CoUninitialize();
+  } else { Check(false, "the fixture STA initializes for the window-owned adapter"); }
   DestroyWindow(window);
   std::printf("%d windows4 TSF store check(s) failed\n", failures);
   return failures;

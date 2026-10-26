@@ -99,6 +99,7 @@ class ReconversionService final : public ITfTextInputProcessor {
   TfClientId client_ = 0;  // TF_CLIENTID_NULL (absent from some mingw SDK headers)
 };
 
+#ifndef GESHER_TSF_SERVICE_DLL
 void TestWindowsTextService(HWND window) {
   HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   ITfThreadMgr* manager = nullptr;
@@ -154,4 +155,5 @@ void TestWindowsTextService(HWND window) {
   store->Release();
   if (SUCCEEDED(initialized)) CoUninitialize();
 }
+#endif
 }  // namespace
