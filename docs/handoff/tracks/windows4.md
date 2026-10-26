@@ -236,3 +236,14 @@ delayed snapshot, and a fresh connection restarting epoch numbering. Both
 native TSF probes pass locally with g++ Werror; Java syntax compiles against
 the saved framework/core. These follow-ups and integration 117629e are newer
 than the running ed94 CI and require fresh combined verification.
+
+Recovery verification at b215be8: both current native TSF probes were built
+again from their production sources with local g++ -std=c++17
+-Wall -Wextra -Werror and completed with zero failures. This includes the
+weak-owner OnTextChange detach regression, editor-epoch publication ordering
+and the real COM layout/selection/caret feedback fixture. The Windows4
+PowerShell wrapper parses. Independent static re-review confirms the 3634e97
+owner lease closes its original P1; review of 106dcdd is pending. The older
+ed94 CI has successful builds, media, package and both e2e jobs while its two
+Windows suites are still running. These are partial diagnostic results only;
+no new runtime or roadmap claim is accepted before final combined CI.
