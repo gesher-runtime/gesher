@@ -198,6 +198,14 @@ not used as proof that the complete ELF startup works.
 
 ## Verification
 
+CI 40372171824 passes the 57 shell cases, process/TLS suites, readiness,
+standalone Java/NDK logcat, unchanged windows3 and all build/package/e2e jobs.
+Its complete property/APK/pm-am checks stop at a readonly fixture-name collision,
+now corrected without changing write-once semantics. Java report and later
+property assertions remain pending. Windows-2022 also has two real post-steps
+devices process crashes at address -1; the shutdown cause remains open and a
+bounded, env-gated pre-handler context trace is prepared for the next run.
+
 Local checks compile/link only Gesher's own C++ with -Werror, using a small
 launcher driver without the real signal mailbox. Forty-seven exact output
 and status assertions cover quoting, positional/parameter expansion, control

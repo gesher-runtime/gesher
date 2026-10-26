@@ -1,23 +1,20 @@
 # Track brief: exec3
 
-Current continuation status (2026-10-26): the full track remains open. CI
-40352529279 at dc19ee2 passes build/package/both e2e jobs (zero unexpected),
-57 shell cases, mailbox/process tools, TLS, broker readiness, JNI's nine process
-checks in both APK modes and NDK property serial/wait ABI assertions on both
-runners. Both Windows suites have seven failed Checks from log DEFAULT handling,
-scratch property-area creation, discarded Win32 callbacks and replaced logger
-capture. Their prepared corrections pass native host/mocked-wrapper checks;
-actual ART/Java proof is running in CI 40372171824 at 7ae515f. The tree includes
-integration d68ec795 on f677944 and the complete coordinator Process follow-up,
-prepared pm/am, one-shot readiness, UTF-8/long-value, Launcher framing and
-completed-geocoder fixes. After dispatch, merge 2ba2375 incorporates integration
-634a273 (docs on verified AOT3 oatdump f5ce6f6); that combined tree still needs
-final CI. The active run's build/package pass; Windows and e2e remain running.
-The prepared property root inheritance regression passes ten native host checks
-locally; the active diagnostic still has the earlier nine-check probe.
-Matching Java ProcessBuilder scratch-root assertions compile and await final CI.
-See docs/exec.md for exact evidence and open umask/
-policy scope. The original brief below remains unchanged.
+Current continuation status (2026-10-26): the full track remains open. Completed
+CI 40372171824 at 7ae515f passes all build/package/both e2e jobs (zero unexpected),
+57 shell cases, signals/tools/TLS, readiness, native3 Process proc, libartbase/
+libdexfile scratch cleanup, standalone Java/NDK logcat and unchanged windows3 UI
+assertions. Windows-2025 has three failed Checks from one readonly fixture-name
+collision, now corrected without relaxing policy; later Java callbacks and
+complete APK/pm/am proof remain blocked. Windows-2022 has those three plus
+thirteen devices Checks affected by two actual post-steps SIGSEGV exits at -1.
+Cause remains open; a coordinator-authorized bounded pre-handler diagnostic
+and devices-only enablement/symbolization are prepared for the next combined CI.
+The tree includes integration 634a273 (docs on verified AOT3 oatdump f5ce6f6).
+The additional property root inheritance fix passes ten native host checks;
+matching Java ProcessBuilder assertions compile and await final CI. Keep all
+real assertions and open umask/policy scope. See docs/exec.md for exact evidence.
+The original brief below remains unchanged.
 
 Native process leftovers reported by the exec2 track. The original brief
 given to the first agent of this track (2026-10-26), kept verbatim. A
