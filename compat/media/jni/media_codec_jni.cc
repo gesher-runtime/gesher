@@ -1238,8 +1238,13 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     const int mh = e->max_height > 0 ? e->max_height : 1088;
     details.strings["size-range"] = "2x2-" + std::to_string(mw) + "x" + std::to_string(mh);
     details.strings["alignment"] = "2x2";
-    details.strings["block-size"] = "16x16";
-    const int64_t blocks = static_cast<int64_t>((mw + 15) / 16) * ((mh + 15) / 16);
+    // The codec's own block size (MediaCodecInfo scales the block counts by its
+    // ratio to the level limits' blocks: 8x8 for H.265, VP9 and AV1).
+    const bool small_blocks = e->mime == "video/hevc" || e->mime == "video/x-vnd.on2.vp9" ||
+                              e->mime == "video/av01";
+    const int bs = small_blocks ? 8 : 16;
+    details.strings["block-size"] = small_blocks ? "8x8" : "16x16";
+    const int64_t blocks = static_cast<int64_t>((mw + bs - 1) / bs) * ((mh + bs - 1) / bs);
     details.strings["block-count-range"] = "1-" + std::to_string(blocks);
     details.strings["blocks-per-second-range"] = "1-" + std::to_string(blocks * 60);
     details.strings["bitrate-range"] = "1-120000000";
@@ -1260,6 +1265,15 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
                                       "([Landroid/media/MediaCodecInfo$CodecProfileLevel;[IZ"
                                       "Ljava/util/Map;Ljava/util/Map;)V");
     impl = env->NewObject(impl_class, ctor, pl_array, color_array, JNI_FALSE, default_map, details_map);
+    if (env->ExceptionCheck()) {
+      // Not an abort in the FindClass below: say why, and give no capabilities.
+      CheckException(env, ("MediaCodecList.getCodecCapabilities(" + e->name + ")").c_str());
+      env->DeleteLocalRef(default_map);
+      env->DeleteLocalRef(details_map);
+      env->DeleteLocalRef(pl_array);
+      env->DeleteLocalRef(color_array);
+      return nullptr;
+    }
   }
   jobject caps = nullptr;
   CheckException(env, "MediaCodecList: CodecCapsLegacyImpl");

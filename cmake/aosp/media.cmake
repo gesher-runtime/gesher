@@ -61,6 +61,13 @@ target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-un
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
   -Wno-deprecated-copy)
 set_target_properties(gesher_media_player PROPERTIES CXX_STANDARD 23)
+# The software video decoders' headers (cmake/aosp/media_video_codecs.cmake), as system
+# headers: -Werror holds for soft_video.cc itself.
+set(_soft_video_isystem)
+foreach(_d ${GESHER_SOFT_VIDEO_INCLUDES})
+  list(APPEND _soft_video_isystem "-isystem${_d}")
+endforeach()
+set_source_files_properties(${_media}/video/soft_video.cc PROPERTIES COMPILE_OPTIONS "${_soft_video_isystem}")
 add_dependencies(media_codecs_all gesher_media_player)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media_player)
