@@ -176,8 +176,15 @@ $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
 try {
   $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @([Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)))
   if (-not $t.Wait(30000)) { throw 'MapLocationFinder did not complete within 30 seconds' }
-  'status: ' + $t.Result.Status
-} catch { 'error: ' + $_.Exception.Message }
+  [Console]::Out.WriteLine('status: ' + $t.Result.Status)
+  [Console]::Out.Flush()
+  # WinRT/COM teardown can keep PowerShell alive after the genuine answer.
+  [Environment]::Exit(0)
+} catch {
+  [Console]::Out.WriteLine('error: ' + $_.Exception.Message)
+  [Console]::Out.Flush()
+  [Environment]::Exit(1)
+}
 '@
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
