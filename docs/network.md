@@ -212,15 +212,38 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 - (web3 track, ADR 0058: `CONNECTIVITY_ACTION` and `PendingIntent` requests, and Windows'
   proxy settings, are done; see "Proxy and broadcasts" below.) PendingIntent requests are
   kept by the app's process and end with it.
-- Binding a socket or a process to a Network is accepted but Windows picks the
-  route; no per-network DNS.
+- Pending CI (web3 continuation): socket/process bindings select Windows'
+  outgoing interface (both sides of dual-stack sockets); per-network DNS
+  uses `DnsQueryEx.InterfaceIndex` without falling back to another adapter.
+  `Network`'s socket factory and HTTP connection factory use these bindings.
 - VPNs are recognized by adapter type and name, a heuristic.
 - No Wi-Fi details (`TransportInfo`, SSID, signal strength).
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
-- Captive portals are not detected.
+- Pending CI (web3 continuation): the Network List Manager's
+  `NA_InternetConnectivityV4/V6` `WEBHIJACK` flags map to
+  `NET_CAPABILITY_CAPTIVE_PORTAL`, suppressing `VALIDATED` for that adapter.
+  A runner without a captive portal cannot verify a real portal transition.
 
 ## Status and next steps (2026-10-25)
 
+- Continuation (2026-10-26), pending CI: interface-specific socket/process
+  binding, DNS, `Network.getSocketFactory/openConnection`, and NLM captive
+  state are implemented. Local checks compile the changed POSIX files with
+  `-Werror`, compile `Network/WindowsNetworks/NetActivity` against the saved
+  Android classes, and parse the PowerShell tests. A small native executable
+  using the actual changed Winsock code passes IPv4/dual-stack kernel
+  option readback, unbinding, process inheritance, invalid-network binding
+  preservation, and A/AAAA DNS through interface 8. The native JNI file has
+  a syntax check with JDK headers/a thunk-macro stand-in; CI must validate
+  the real SysV JNI build and Android runtime. New 54-web3 checks require
+  the HTTP server to observe the selected adapter's source address and
+  reject DNS on a missing network. No adapter configuration was changed.
+  Next: the seven native networking exports assigned from native3's API
+  inventory, including pollable raw DNS results and cancellation.
+- Additional file ownership approved by the coordinator: minimal edits in
+  `compat/posix/{src/socket.cc,src/winsock.cc,src/netdb.cc,src/socket_internal.h,
+  include/gesher/inet.h}` and related bionic wrappers; the original web3
+  domain also needs the additive `oleaut32` link in `cmake/aosp/conscrypt.cmake`.
 - Continuation (2026-10-26), pending CI: replaced the four badssl rejection
   endpoints in 56-net with local certificate fixtures. Real internet
   DNS/HTTPS/TLS 1.3/SNI assertions remain. Rejection must now have a

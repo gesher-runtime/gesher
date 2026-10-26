@@ -347,6 +347,10 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+- Network continuation is being prepared after the running UIA/TLS SHA:
+  real interface socket/process binding, per-interface DNS, bound HTTP and
+  NLM captive state; local checks and the added runtime assertions are in
+  network.md. The seven native networking exports remain the next step.
 - Merged integration 4f99afd (surfaces, ci 40307919084 attempt 2) before
   the combined UIA host-id/TLS fixture verification run. Both the surfaces
   window integration and the diagnostic capture worker remain present.

@@ -275,6 +275,12 @@ try {
       'Web3 net CONNECTIVITY_ACTION received: ', ' connected true',
       'Web3 net CONNECTIVITY_ACTION delivered true',
       'Web3 net PendingIntent request: ', ' for request true',
+      'Web3 net per-network DNS resolved example.com true',
+      'Web3 net bound SocketFactory kernel interface and source address true',
+      'Web3 net explicit TCP and UDP socket binding true',
+      'Web3 net Network.openConnection server observed the selected source address true',
+      'Web3 net process socket and DNS binding, invalid network preservation, unbind true',
+      'Web3 net missing-network DNS refused fallback true',
       'Web3 net http://web3-proxied.test/net: 200 proxied by the test proxy for web3-proxied.test',
       'Web3 net done') 'Web3 net done'
 

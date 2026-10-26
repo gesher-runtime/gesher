@@ -30,7 +30,7 @@ public static class GesherWeb3Servers {
 
   public static string Start() {
     proxy = new TcpListener(IPAddress.Loopback, 0); proxy.Start();
-    http = new TcpListener(IPAddress.Loopback, 0); http.Start();
+    http = new TcpListener(IPAddress.Any, 0); http.Start();
     ProxyPort = ((IPEndPoint)proxy.LocalEndpoint).Port;
     HttpPort = ((IPEndPoint)http.LocalEndpoint).Port;
     new Thread(() => Accept(proxy, true)) { IsBackground = true }.Start();
@@ -151,6 +151,8 @@ public static class GesherWeb3Servers {
               "function FindProxyForURL(url, host) {\n"
               + "  if (host == 'pac-proxied.test') return 'PROXY 127.0.0.1:" + ProxyPort + "';\n"
               + "  return 'DIRECT';\n}\n");
+        } else if (path.StartsWith("/network-binding")) {
+          Reply(s, 200, "text/plain", ((IPEndPoint)c.Client.RemoteEndPoint).Address.ToString());
         } else if (path.StartsWith("/direct")) {
           Reply(s, 200, "text/plain", "direct from the test server");
         } else {

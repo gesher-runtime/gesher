@@ -76,6 +76,18 @@ ever enabled and nothing read an app's views.
   the default network changes; **PendingIntent requests and listens** are kept by the
   app's ConnectivityManager and sent (EXTRA_NETWORK, EXTRA_NETWORK_REQUEST) when a matching
   network is available.
+- **Network bindings use Windows' interfaces.** A netId identifies an adapter
+  index plus 100. Socket binding sets `IP_UNICAST_IF` and, for dual-stack
+  endpoints, `IPV6_UNICAST_IF`; process binding applies to future internet
+  sockets and name lookups. Explicit lookups use `DnsQueryEx.InterfaceIndex`
+  with cache bypass, so a missing network fails instead of resolving on a
+  different adapter. Socket pairs used for Android's local IPC retain their
+  loopback transport regardless of the process binding. Network HTTP
+  connections use Android's OkHttp connection factory with the selected
+  DNS and socket factory. Pending full CI verification.
+- **Captive portals follow Windows' NCSI state.** The Network List Manager's
+  `WEBHIJACK` flags become the adapter's captive-portal capability. This
+  consumes Windows' detection and does not run a second external probe.
 
 ## Consequences
 
