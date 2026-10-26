@@ -112,6 +112,14 @@ gesher_media_extractor(mkv ${_ex}/mkv/MatroskaExtractor.cpp
   ${_fnd}/ColorUtils_ndk.cpp)
 target_include_directories(extractor_mkv PRIVATE ${AOSP_DIR}/external/libwebm ${_mod}/codecs/flac/dec)
 
+# libwebm's mkvmuxer: the WebM writer under MediaMuxer and MediaRecorder (media3, ADR 0059).
+add_library(webm_mkvmuxer STATIC
+  ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvmuxer.cc
+  ${AOSP_DIR}/external/libwebm/mkvmuxer/mkvmuxerutil.cc)
+target_include_directories(webm_mkvmuxer PRIVATE ${AOSP_DIR}/external/libwebm)
+target_compile_options(webm_mkvmuxer PRIVATE -w)
+set_target_properties(webm_mkvmuxer PROPERTIES CXX_STANDARD 17)
+
 # --- libvorbisidec (Tremolo, C only) ----------------------------------------------------
 set(_t "${_trem}/Tremolo")
 add_library(vorbisidec STATIC
@@ -325,7 +333,8 @@ include(${CMAKE_CURRENT_LIST_DIR}/media_video_codecs.cmake)
 # Everything the player (cmake/aosp/media.cmake) links.
 add_library(gesher_media_codecs INTERFACE)
 target_link_libraries(gesher_media_codecs INTERFACE ${GESHER_MEDIA_EXTRACTORS}
-  stagefright_foundation vorbisidec FLAC opus stagefright_mp3dec ${GESHER_SOFT_VIDEO_LIBS})
+  stagefright_foundation vorbisidec FLAC opus stagefright_mp3dec ${GESHER_SOFT_VIDEO_LIBS}
+  webm_mkvmuxer)
 
 # Everything of the port under one name (kept for a `ninja media_codecs_all`
 # while debugging; the default build now carries all of it into dalvikvm).

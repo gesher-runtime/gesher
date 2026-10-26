@@ -86,6 +86,12 @@ jobs:
         run: |
           mkdir -p tests/apps/mediaapp/lib/x86_64
           android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang             -shared -fPIC -O2 -Wall -Werror -Wno-unused-parameter -Wl,-soname,libmedia_ndk_test.so             -o tests/apps/mediaapp/lib/x86_64/libmedia_ndk_test.so tests/apps/mediaapp/jni/media_ndk_test.c             -laaudio -lOpenSLES -lm
+          # recordapp's (media3): AAudio input, an OpenSL ES recorder.
+          mkdir -p tests/apps/recordapp/lib/x86_64
+          android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang \
+            -shared -fPIC -O2 -Wall -Werror -Wno-unused-parameter -Wl,-soname,librecord_ndk_test.so \
+            -o tests/apps/recordapp/lib/x86_64/librecord_ndk_test.so tests/apps/recordapp/jni/record_ndk_test.c \
+            -laaudio -lOpenSLES -lm
 
       - name: Build mediaapp.apk
         run: |
@@ -97,6 +103,11 @@ jobs:
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/videoapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          # media3: recording (tests/apps/recordapp).
+          chmod +x tests/apps/recordapp/build.sh
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/recordapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           ls -la out

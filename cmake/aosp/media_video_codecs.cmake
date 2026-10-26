@@ -222,6 +222,7 @@ target_link_libraries(m4vh263dec PRIVATE log)
 # The headers soft_video.cc includes (as system headers: no warnings from them).
 set(GESHER_SOFT_VIDEO_INCLUDES ${_vpx} ${_dav1d}/include ${_hevc}/common ${_hevc}/decoder)
 # soft_video_avc.cc's (libavc's common/ivd.h is libhevc's name too) and soft_video_m4v.cc's.
-set(GESHER_SOFT_AVC_INCLUDES ${_avc}/common ${_avc}/decoder ${_avc}/encoder)
+set(GESHER_SOFT_AVC_INCLUDES ${_avc}/common ${_avc}/decoder)
+set(GESHER_SOFT_AVCENC_INCLUDES ${_avc}/common ${_avc}/encoder)
 set(GESHER_SOFT_M4V_INCLUDES ${_m4v}/include)
 set(GESHER_SOFT_VIDEO_LIBS vpx dav1d hevcdec avc m4vh263dec)

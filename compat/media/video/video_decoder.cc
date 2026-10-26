@@ -7,6 +7,8 @@
 #include <cstring>
 #include <mutex>
 
+#include <media/NdkMediaFormat.h>
+
 #include "../audio/log.h"
 
 namespace gesher::media {
@@ -55,6 +57,7 @@ bool VideoDecoder::Supports(const std::string& mime) {
 
 std::unique_ptr<VideoDecoder> VideoDecoder::Create(const Format& track, std::string* error) {
   std::string mime = track.Mime();
+  AddCsdFromEsds(track);
   for (const VideoCodecInfo& c : Available()) {
     if (c.mime != mime) continue;
     std::unique_ptr<VideoDecoder> d = c.backend == "mf" ? CreateMfVideoDecoder(track, error)
@@ -77,6 +80,50 @@ std::unique_ptr<VideoDecoder> VideoDecoder::Create(const Format& track, std::str
 }
 
 // --- Codec-specific data ------------------------------------------------------------------
+
+bool EsdsCodecSpecificInfo(const uint8_t* p, size_t n, std::vector<uint8_t>* out) {
+  // ES_Descriptor (3) > DecoderConfigDescriptor (4) > DecoderSpecificInfo (5).
+  size_t i = 0;
+  auto length = [&](size_t* len) {
+    *len = 0;
+    for (int k = 0; k < 4 && i < n; k++) {
+      uint8_t b = p[i++];
+      *len = (*len << 7) | (b & 0x7f);
+      if ((b & 0x80) == 0) return true;
+    }
+    return i <= n;
+  };
+  while (i < n) {
+    const uint8_t tag = p[i++];
+    size_t len;
+    if (!length(&len)) return false;
+    if (tag == 3) {
+      if (i + 3 > n) return false;
+      const uint8_t flags = p[i + 2];
+      i += 3;
+      if (flags & 0x80) i += 2;                     // streamDependenceFlag
+      if ((flags & 0x40) && i < n) i += 1 + p[i];   // URL_Flag
+      if (flags & 0x20) i += 2;                     // OCRstreamFlag
+    } else if (tag == 4) {
+      i += 13;
+    } else if (tag == 5) {
+      if (i + len > n) return false;
+      out->assign(p + i, p + i + len);
+      return true;
+    } else {
+      i += len;
+    }
+  }
+  return false;
+}
+
+void AddCsdFromEsds(const Format& track) {
+  std::vector<uint8_t> have, esds, csd;
+  if (track.GetBuffer("csd-0", &have) || !track.GetBuffer("esds", &esds)) return;
+  if (EsdsCodecSpecificInfo(esds.data(), esds.size(), &csd) && !csd.empty()) {
+    AMediaFormat_setBuffer(track.get(), "csd-0", csd.data(), csd.size());
+  }
+}
 
 namespace {
 
@@ -212,6 +259,34 @@ void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, i
       int b = (c + 2066 * u + 512) >> 10;
       d[x] = 0xff000000u | (static_cast<uint32_t>(Clamp8(b)) << 16) |
              (static_cast<uint32_t>(Clamp8(g)) << 8) | Clamp8(r);
+    }
+  }
+}
+
+void RgbaToI420(const uint32_t* src, int src_w, int src_h, VideoFrame* f) {
+  const int w = f->width, h = f->height;
+  if (src_w <= 0 || src_h <= 0 || w <= 0 || h <= 0) return;
+  uint8_t* yp = f->data.data();
+  uint8_t* up = yp + static_cast<size_t>(f->stride_y) * h;
+  uint8_t* vp = up + static_cast<size_t>(f->stride_uv) * ((h + 1) / 2);
+  auto at = [&](int x, int y) {
+    const int sx = static_cast<int>(static_cast<int64_t>(x) * src_w / w);
+    const int sy = static_cast<int>(static_cast<int64_t>(y) * src_h / h);
+    return src[static_cast<size_t>(sy) * src_w + sx];
+  };
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      const uint32_t c = at(x, y);
+      const int r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+      yp[static_cast<size_t>(y) * f->stride_y + x] = Clamp8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+    }
+  }
+  for (int y = 0; y < (h + 1) / 2; y++) {
+    for (int x = 0; x < (w + 1) / 2; x++) {
+      const uint32_t c = at(std::min(2 * x, w - 1), std::min(2 * y, h - 1));
+      const int r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+      up[static_cast<size_t>(y) * f->stride_uv + x] = Clamp8(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
+      vp[static_cast<size_t>(y) * f->stride_uv + x] = Clamp8(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
     }
   }
 }

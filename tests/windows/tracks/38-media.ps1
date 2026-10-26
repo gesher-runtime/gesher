@@ -170,7 +170,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
     $mediaOut
   } @('MediaTest ringtone defaults: ringtone file:.../Gesher_Ring.ogg, notification file:.../Gesher_Notification.ogg, alarm file:.../Gesher_Alarm.ogg',
       'MediaTest ringtone notification: playing true, ended true')
-  Check 'media: AAudio and OpenSL ES from an app''s NDK library (mediaapp.apk''s libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; no input streams yet' {
+  Check 'media: AAudio and OpenSL ES from an app''s NDK library (mediaapp.apk''s libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; input refused without RECORD_AUDIO (media3)' {
     $global:LASTEXITCODE = $mediaExit
     $mediaOut
   } @('MediaTest ndk aaudio callback: rate 48000, channels 2, float 1, state AAUDIO_STREAM_STATE_STOPPED, burst ok, frames ok',
@@ -326,10 +326,10 @@ public static class GesherMediaCapture {
     $global:LASTEXITCODE = $videoExit
     $videoOut
   } @('VideoTest extractor h264.mp4: 2 tracks [video/avc 320x240, audio/mp4a-latm 44100 Hz 2 ch], duration ok, csd-0 SPS true, csd-1 true, 60 samples, 4 sync, Annex B true, last at 1966 ms')
-  Check 'media: MediaCodecList in videoapp.apk: the decoders this machine has (H.264 through Media Foundation, the audio decoders), their capabilities; no encoders' {
+  Check 'media: MediaCodecList in videoapp.apk: the decoders this machine has (H.264 through Media Foundation, the audio decoders), their capabilities; the H.264 encoder (media3)' {
     $global:LASTEXITCODE = $videoExit
     $videoOut
-  } @('VideoTest codec list: avc decoder c2.gesher.avc.decoder, aac decoder c2.gesher.aac.decoder, avc encoder null, 1920x1080 true, flexible YUV true, profiles 5, software true')
+  } @('VideoTest codec list: avc decoder c2.gesher.avc.decoder, aac decoder c2.gesher.aac.decoder, avc encoder c2.gesher.avc.encoder, 1920x1080 true, flexible YUV true, profiles 5, software true')
   Check 'media: MediaCodec in videoapp.apk: H.264 decoded to I420 ByteBuffers and an Image (synchronous), with a callback (asynchronous), a seek with flush; every frame in order, each quarter''s color; the AAC track to PCM' {
     $global:LASTEXITCODE = $videoExit
     $videoOut
