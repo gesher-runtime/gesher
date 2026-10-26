@@ -315,9 +315,11 @@ needs: [framework-build.md](framework-build.md).
   - [x] Camera2 over Media Foundation (characteristics, sessions, YUV and
         JPEG ImageReaders, CAMERA permission), checked with a test camera
         that is a Media Foundation media source
-- [ ] Device services completed (hwsvc2 track, ADR 0051, docs/services.md
+- [x] Device services below completed (hwsvc2 track, ADR 0051, docs/services.md
       "Status and next steps (hwsvc2)", docs/devices.md; ci runs 40214264956 at
-      aaa1f90 and 40235213023 at 85f49eb; all but the last sub-item)
+      aaa1f90 and 40235213023 at 85f49eb; final camera preview in ci
+      40307919084 attempt 2, all sub-items rechecked in ci 40320549410).
+      Additional service/device contracts remain open in services3, ADR 0069.
   - [x] Toast clicks after the device stopped (Gesher's COM toast activator,
         registered by the installer); uninstalling removes the app's toasts
         and AppUserModelID
@@ -369,10 +371,12 @@ needs: [framework-build.md](framework-build.md).
         window remain unverified (docs/windows3.md).
   - [x] Ctrl+C/V/X in EditText with Windows' clipboard (ci 40285476400)
 
-- [ ] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
+- [x] Real apps end to end ([e2e.md](e2e.md), ADR 0034): the installer runs
       pinned F-Droid apps in CI (`e2e` job: install, first frame not blank,
       input changes the window, close ends the process; the `.apk`
-      association's command and a Start menu shortcut)
+      association's command and a Start menu shortcut; ci 40320549410,
+      both e2e runners: all required apps including TIC-80/Puzzles pass,
+      0 unexpected failures)
   - [x] RPN calculator, Editor, Currency, NoNonsense Notes and Unit
         Converter Ultimate pass; the `.apk` association and Start menu
         shortcut start RPN (ci run 40077182991)
@@ -446,6 +450,16 @@ needs: [framework-build.md](framework-build.md).
 - [ ] Native3: remaining public NDK APIs/platform handles, fcntl record locks,
       cross-process inotify and the POSIX/ABI limits in
       [its brief](handoff/tracks/native3.md) (ADR 0062 reserved).
+- [x] libjnigraphics software Bitmap interoperability: real locked pixel
+      storage, data space, native writes visible in Java, PNG compression
+      callbacks/decode and error paths; x86_64/arm64 through dalvikvm and
+      APKs in both modes (native3, ci 40305973210, both runners). Hardware
+      Bitmap/HardwareBuffer rendering and remaining NDK coverage stay open.
+- [x] NDK AFontMatcher/AFont/ASystemFontIterator over the real Minikin map:
+      readable font files, UTF-16 mixed-script runs, style/variable-axis values
+      and owned metadata lifetime; x86_64/arm64 through framework dalvikvm
+      and APKs in both modes (native3 foundation, ci 40344682373 attempt 2,
+      both Windows runners). Standalone native bootstrap/font updates stay open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
