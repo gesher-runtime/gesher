@@ -136,7 +136,7 @@ $recordChecks = @(
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
-      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:'
+      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:|camera JNI array trace:'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }

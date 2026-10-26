@@ -1,0 +1,150 @@
+diff --git a/runtime/jni/jni_internal.cc b/runtime/jni/jni_internal.cc
+--- a/runtime/jni/jni_internal.cc
++++ b/runtime/jni/jni_internal.cc
+@@ -19,6 +19,8 @@
+ #include <log/log.h>
+ 
+ #include <cstdarg>
++#include <cstdio>
++#include <cstdlib>
+ #include <memory>
+ #include <utility>
+ 
+@@ -33,6 +35,7 @@
+ #include "base/pointer_size.h"
+ #include "base/safe_map.h"
+ #include "base/stl_util.h"
++#include "base/time_utils.h"
+ #include "class_linker-inl.h"
+ #include "class_root-inl.h"
+ #include "dex/dex_file-inl.h"
+@@ -74,6 +77,72 @@
+ namespace art HIDDEN {
+ 
+ namespace {
++
++#if defined(_WIN32) && defined(GESHER)
++// Diagnose native camera-array transitions independently of MF work. Declared
++// before ScopedObjectAccess, so its destructor also measures the SOA exit.
++class GesherCameraArrayTrace {
++ public:
++  GesherCameraArrayTrace(const char* api, size_t component_size)
++      : api_(api), active_(component_size == 1 && Active()) {
++    if (active_) {
++      start_ = NanoTime();
++      cpu_start_ = Thread::Current()->GetCpuNanoTime();
++    }
++  }
++  void Entered() { if (active_) entered_ = NanoTime(); }
++  void Decoded() { if (active_) decoded_ = NanoTime(); }
++  void BodyDone() { if (active_) body_ = NanoTime(); }
++  ~GesherCameraArrayTrace() {
++    if (!active_) return;
++    const uint64_t end = NanoTime();
++    if (end - start_ < 2'000'000) return;
++    static thread_local unsigned emitted = 0;
++    if (emitted++ >= 64) return;
++    const uint64_t cpu_end = Thread::Current()->GetCpuNanoTime();
++    const int64_t cpu = cpu_start_ != UINT64_MAX && cpu_end != UINT64_MAX && cpu_end >= cpu_start_
++        ? static_cast<int64_t>(cpu_end - cpu_start_) / 1000 : -1;
++    if (entered_ == 0 || decoded_ == 0 || body_ == 0) {
++      fprintf(stderr, "camera JNI array trace: %s, tid %d, wall/cpu us %lld/%lld; "
++              "incomplete/error path, phase boundaries unavailable\n", api_,
++              static_cast<int>(Thread::Current()->GetTid()),
++              static_cast<long long>((end - start_) / 1000), static_cast<long long>(cpu));
++      fflush(stderr);
++      return;
++    }
++    const uint64_t entered = entered_ != 0 ? entered_ : end;
++    const uint64_t decoded = decoded_ != 0 ? decoded_ : entered;
++    const uint64_t body = body_ != 0 ? body_ : end;
++    fprintf(stderr, "camera JNI array trace: %s, tid %d, wall/cpu us %lld/%lld; "
++            "entry %lld, decode %lld, body %lld, exit %lld\n", api_,
++            static_cast<int>(Thread::Current()->GetTid()),
++            static_cast<long long>((end - start_) / 1000), static_cast<long long>(cpu),
++            static_cast<long long>((entered - start_) / 1000),
++            static_cast<long long>((decoded - entered) / 1000),
++            static_cast<long long>((body - decoded) / 1000),
++            static_cast<long long>((end - body) / 1000));
++    fflush(stderr);
++  }
++ private:
++  static bool Active() {
++    static const bool requested = [] {
++      const char* value = getenv("GESHER_MEDIA_TRACE_RECORD");
++      return value != nullptr && value[0] == '1' && value[1] == '\0';
++    }();
++    if (!requested) return false;
++    static thread_local const bool camera = [] {
++      std::string name;
++      // This overload requires no managed transition or locking.
++      Thread::Current()->GetThreadName(name);
++      return name.compare(0, 7, "camera-") == 0;
++    }();
++    return camera;
++  }
++  const char* api_;
++  const bool active_;
++  uint64_t start_ = 0, entered_ = 0, decoded_ = 0, body_ = 0, cpu_start_ = 0;
++};
++#endif
+ 
+ // Frees the given va_list upon destruction.
+ // This also guards the returns from inside of the CHECK_NON_NULL_ARGUMENTs.
+@@ -3069,13 +3138,25 @@
+   template <typename ArrayT, typename ElementT, typename ArtArrayT>
+   static void ReleasePrimitiveArray(JNIEnv* env, ArrayT java_array, ElementT* elements, jint mode) {
+     CHECK_NON_NULL_ARGUMENT_RETURN_VOID(java_array);
+-    ScopedObjectAccess soa(env);
++#if defined(_WIN32) && defined(GESHER)
++    GesherCameraArrayTrace trace("ReleaseArrayElements", sizeof(ElementT));
++#endif
++    ScopedObjectAccess soa(env);
++#if defined(_WIN32) && defined(GESHER)
++    trace.Entered();
++#endif
+     ObjPtr<ArtArrayT> array = DecodeAndCheckArrayType<ArrayT, ElementT, ArtArrayT>(
+         soa, java_array, "ReleaseArrayElements", "release");
++#if defined(_WIN32) && defined(GESHER)
++    trace.Decoded();
++#endif
+     if (array == nullptr) {
+       return;
+     }
+     ReleasePrimitiveArray(soa, array, sizeof(ElementT), elements, mode);
++#if defined(_WIN32) && defined(GESHER)
++    trace.BodyDone();
++#endif
+   }
+ 
+   static void ReleasePrimitiveArray(ScopedObjectAccess& soa,
+@@ -3142,9 +3223,18 @@
+   static void SetPrimitiveArrayRegion(JNIEnv* env, JArrayT java_array,
+                                       jsize start, jsize length, const ElementT* buf) {
+     CHECK_NON_NULL_ARGUMENT_RETURN_VOID(java_array);
+-    ScopedObjectAccess soa(env);
++#if defined(_WIN32) && defined(GESHER)
++    GesherCameraArrayTrace trace("SetArrayRegion", sizeof(ElementT));
++#endif
++    ScopedObjectAccess soa(env);
++#if defined(_WIN32) && defined(GESHER)
++    trace.Entered();
++#endif
+     ObjPtr<ArtArrayT> array = DecodeAndCheckArrayType<JArrayT, ElementT, ArtArrayT>(
+         soa, java_array, "SetPrimitiveArrayRegion", "set region of");
++#if defined(_WIN32) && defined(GESHER)
++    trace.Decoded();
++#endif
+     if (array != nullptr) {
+       if (start < 0 || length < 0 || length > array->GetLength() - start) {
+         ThrowAIOOBE(soa, array, start, length, "dst");
+@@ -3154,6 +3244,9 @@
+         memcpy(data + start, buf, length * sizeof(ElementT));
+       }
+     }
++#if defined(_WIN32) && defined(GESHER)
++    trace.BodyDone();
++#endif
+   }
+ };
+ 
