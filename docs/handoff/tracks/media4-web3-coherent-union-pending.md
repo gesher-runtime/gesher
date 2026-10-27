@@ -1,5 +1,28 @@
 # Prepared coherent Web3/Media/AOT/Native/Env/Libcore/Exec/process union
 
+Latest authoritative state,2026-10-28: new canonical full40596167427 is
+ACTIVE at exact frozen30db7709838839d28be68d8b467a57b26a3ac667, not accepted.
+Required watch97520 uses interval120 and writes
+C:/work/gesher-ci-review/coherent-web3-union-full-40596167427-watch.log.
+The prescribed ci.yml command was dispatched once after confirming no live
+same-ref full. Do not dispatch/restart a duplicate or infer runtime proof.
+
+Merge30db imports only reviewed primary correction34ba544b (docs-only above
+12db63e5). Entire non-doc delta from failed4a47 is host_roles.py alone;
+all other code/workflows/fixtures are byte-identical, inventory exact55e03c68.
+The separate preflight workflow was excluded. Actual configuration-only
+preflight40595401850/source9bda/job122509916936 is independently read/green:
+OFF/ON compiler/launcher/metadata dictionaries equal, compiler-first export
+with configured ccache, exactly four query objects differ by the one private
+flag, and four actual generated-evidence negatives reject. The helper blob
+7889dd3e is identical in that preflight, frozen primary and new union.
+This is provenance-mechanism proof only; every normal/hook/full/package/e2e
+gate below remains required in the new current-source full. Failed4a47/
+40588525037 is preserved. No phase4 code/main/PR/tag/release merge occurred.
+
+Earlier preparation and run statuses below are retained historical context;
+the latest state above supersedes their pending/unpushed descriptions.
+
 LOCAL unqualified source120f8120b00e258469864ad6a589179976196ff2 on
 wip/media4-web3-union-pending, C:/work/gesher-media4-muxer. It is not pushed,
 dispatched or merged into phase4. Original f4/7beb/eaa checkpoint refs and
