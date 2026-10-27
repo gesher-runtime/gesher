@@ -170,6 +170,10 @@ conflicts. Its code was verified by root at42cc1c0 / full CI40432541082;
 absent from9f25080. The new combined source requires its own full CI before
 acceptance. Concurrent Native3 width/CPU and monotonic-clock candidates remain
 outside it. Future spawn semantics stay in a separate next-source slice.
+Final combined full CI40438421809 runs at exact merge source
+b42922049201d5dc7ef1c1ca61cd7fb2db404220 on wip/exec4. Watch:
+C:\work\gesher-ci-review\exec4-final-combined-watch-40438421809.log,
+interval120. No combined result is claimed yet.
 No integration/main, PR or release operation was performed by this track.
 CMakeLists.txt adds only exec4_environment_test; no authored ci.yml or
 production Main.java edit was made.
