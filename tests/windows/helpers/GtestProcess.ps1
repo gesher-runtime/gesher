@@ -1,5 +1,29 @@
 # Finite process/output completion for the two real gtest callers. Test parsing
 # and every original timeout/exclusion remain in their respective tracks.
+if (-not ('GtestProcessNativeHandles' -as [type])) {
+  # This test infrastructure is compiled only when the CI scripts execute.
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class GtestProcessNativeHandles {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+  public static bool CloseOwnedReader(StreamReader reader, SafeFileHandle owned) {
+    var file = reader.BaseStream as FileStream;
+    bool same = file != null && Object.ReferenceEquals(file.SafeFileHandle, owned);
+    IntPtr value = owned.DangerousGetHandle();
+    reader.Dispose();
+    uint flags;
+    // Pair the exact owned SafeFileHandle with its stream BEFORE disposal.
+    // No allocation/open occurs between that disposal and the native probe.
+    // A concurrently reused value that is valid is conservatively a failure.
+    return same && owned.IsClosed && !GetHandleInformation(value, out flags) && Marshal.GetLastWin32Error() == 6;
+  }
+}
+'@
+}
 function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
                              [string] $WorkingDirectory, [int] $TimeoutSec) {
   $Executable = (Resolve-Path -LiteralPath $Executable -ErrorAction Stop).Path
@@ -84,12 +108,16 @@ function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
       $result.ReaderTasksComplete = @($tasks | Where-Object { -not $_.IsCompleted }).Count -eq 0
       if (-not $result.ReaderTasksComplete) { $problems += 'gtest readers did not stop within five seconds after cancellation' }
     }
-    foreach ($reader in @($outReader, $errReader)) {
-      if ($null -ne $reader) {
-        try { $reader.Dispose() } catch { $problems += "gtest reader dispose: $_" }
+    $closedPipes = 0
+    foreach ($pipe in @(@{ Reader = $outReader; Handle = $outHandle }, @{ Reader = $errReader; Handle = $errHandle })) {
+      if ($null -ne $pipe.Reader) {
+        try {
+          if ([GtestProcessNativeHandles]::CloseOwnedReader($pipe.Reader, $pipe.Handle)) { $closedPipes++ }
+          else { $problems += 'gtest owned pipe did not prove native invalidity immediately after disposal' }
+        } catch { $problems += "gtest reader dispose: $_" }
       }
     }
-    $result.PipesClosed = $null -ne $outHandle -and $null -ne $errHandle -and $outHandle.IsClosed -and $errHandle.IsClosed
+    $result.PipesClosed = $closedPipes -eq 2
     try { $cancellation.Dispose() } catch { $problems += "gtest cancellation dispose: $_" }
     try { $process.Dispose(); $result.Disposed = $null -eq $handle -or $handle.IsClosed }
     catch { $problems += "gtest dispose: $_" }
