@@ -28,19 +28,33 @@ jstring CurrentEndpoint(JNIEnv* env, jclass) {
   const char* endpoint = getenv("GESHER_BINDER");
   return endpoint ? env->NewStringUTF(endpoint) : nullptr;
 }
+jint ProbeEndpoint(JNIEnv* env, jclass, jstring endpoint) {
+  std::string value;
+  if (!CopyString(env, endpoint, &value) || value.empty()) return EINVAL;
+  const char* previous = binder_sg_fixture::selected_device;
+  binder_sg_fixture::selected_device = value.c_str();
+  int fd = binder_sg_fixture::OpenDriver();
+  const int error = fd >= 0 ? 0 : errno;
+  binder_sg_fixture::selected_device = previous;
+  if (fd >= 0) close(fd);
+  return error;
+}
 }  // namespace
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
   const JNINativeMethod methods[]{
       {"run", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", reinterpret_cast<void*>(&Run)},
-      {"currentEndpoint", "()Ljava/lang/String;", reinterpret_cast<void*>(&CurrentEndpoint)}};
+      {"currentEndpoint", "()Ljava/lang/String;", reinterpret_cast<void*>(&CurrentEndpoint)},
+      {"probeEndpoint", "(Ljava/lang/String;)I", reinterpret_cast<void*>(&ProbeEndpoint)}};
   bool registered = false;
   for (const char* name : {"gesher/BinderSgActor", "com/gesher/bindersg/SgActivity"}) {
     jclass type = env->FindClass(name);
     if (!type) { env->ExceptionClear(); continue; }
-    registered |= env->RegisterNatives(type, methods, 2) == JNI_OK;
+    const jint status = env->RegisterNatives(type, methods, 3);
     env->DeleteLocalRef(type);
+    if (status != JNI_OK || env->ExceptionCheck()) return JNI_ERR;
+    registered = true;
   }
   return registered ? JNI_VERSION_1_6 : JNI_ERR;
 }
