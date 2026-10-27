@@ -62,6 +62,119 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Full ci 40430425743 at b3ecc85 is verified, attempt 1: root read all 28
+jobs (22 success/six skipped), both zero-failure Windows summaries, actual
+per-ABI whole-range width checks, four APK modes, production ART CPU-clock
+check, package input/uninstall and both required e2e logs (zero unexpected).
+See native3-width-clock.md. Frozen wip/native3-width-clock adds docs only;
+integration rule g still gates the merge. The corrected signed/unsigned
+width and current-thread/process CPU contracts are scoped closures.
+Locked reference/Windows-helper ci 40426388584 at 5229764 independently
+passes both width digests/33 rows and both 17-case binary128 helper logs;
+the latter does not implement the remaining binary128 libm functions.
+Monotonic elapsed/deadline clocks continue on native3-time/ADR0075.
+
+CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
+2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
+finish within the unchanged 5s wait, then 27/28 recorded tones). Both actual
+ART CPU-clock host checks pass, as do both boot performance gates. This is
+scoped clock evidence, not full acceptance or corrected ARM-width proof.
+Media3 read the AAC case: INVALID_OPERATION follows the timeout, and the
+worker's decoder-open log arrives about 6.4s after the start. It is not
+classified as a tone-only flake.
+
+The next candidate includes the independently verified startup input from
+ca46e99/ci 40414859801 and media3's opt-in bounded prepare-phase observation.
+It changes no MediaPlayer state, HRESULT, waiting/assertion or tone criteria;
+100ms slow events are capped at 16/process and use steady_clock. Root reviewed
+the patch and applied it; its compilation and any new AAC timing evidence
+must come from the next combined full run. CPU/ARM correctness remains pending.
+
+Unsigned reference ci 40423333599 at a449d02 is green; all four jobs and
+the complete reference rows/digest were inspected. It retains the signed
+digest 566ac5b76f65a70b and produces separate unsigned 3650764a32c5bf03.
+Prepared NDK tests select the frozen data from the actual target wchar
+type, compute the complete width digest through both actual ABI paths,
+and use the correct per-ABI wcswidth invalid-character result. Guest
+override/code and these stronger checks are not yet full-CI verified.
+
+Additional explicit Native3 clock/GC contracts from source audit: global
+NanoTime/MicroTime/MilliTime still use the Windows wall-clock fallback;
+monotonic selection needs separate implementation and native-bracket tests.
+ART Heap::GetNativeBytes also uses the non-bionic/glibc constant malloc
+fallback on Windows; real native allocator accounting remains open. Media3
+coordinates a zero-CPU ratio guard in ART0593 with root's exact CPU patch
+0572; neither is a demonstrated FPS fix until actual runtime evidence.
+
+ARM width correction is now open: the native3-wide target macro audit found
+unsigned wchar32 on Android arm64, while root's width oracle assumed signed
+on both ABIs. Full ci 40404678100/581e88f verified the signed oracle and the
+old shared test expectations; it does not prove the missing unsigned
+high-bit cases. Width roadmap closure is withdrawn. Root prepares a separate
+unsigned pinned oracle and guest wcwidth/wcswidth overrides; the current
+combined 40418638643 is retained as diagnostic/clock evidence, not mergeable
+proof of the corrected unsigned-width contract. No local compile or run.
+
+Combined full ci 40418638643 at b15ecea is pending. It includes verified
+cloud/exec integration 94ccde1 plus current rule/brief docs, the previously
+verified width implementation and the new real ART CPU-clock host checks.
+No CPU-clock or combined-runtime claim until that run is fully read.
+
+Full width ci 40404678100 at 581e88f is fully green: every job personally
+read (22 success/six skipped), both zero-failure summaries, whole-code-point
+width/classification parity, both NDK ABIs and four APK cases per runner,
+actual package input/uninstall and both required e2e logs (zero unexpected).
+See [the scoped report](native3-width.md). Locked-reference ci 40404677936
+at that source also passes every old/new digest, row and lock check.
+Independent width and CPU-clock static reviews found no additional issue.
+
+Current source includes integration 94ccde1 plus docs-only a06d930 and the
+CPU-clock follow-up 0572/host executable. The new combined full run must
+verify that code before integration; the frozen width proof does not cover
+it. Wide/multibyte/locale/numeric/time ABI work is delegated to
+[native3-wide](native3-wide.md), ADR0073/test66. Root keeps the clock,
+binary128, remaining NDK/POSIX and cross-thread clock lifetime contracts.
+
+### Earlier preparation history
+
+Pending width statements below are historical and superseded by the scoped
+full-width verification above. Other native3 contracts remain open.
+
+The Unicode/Process stage below is merged as integration 117629e. This
+continuation starts from 7826cbe (the following README-only milestone).
+Next scope: replace approximate wcwidth/wcswidth with the pinned bionic
+decision order and ICU data. The initial CI-only reference uses the locked
+ICU4X wrapper, every code point/four invalid values and 33 targeted rows.
+No production-width verification is claimed yet. Preserve all existing
+Unicode classification/case digests and their separate provenance.
+
+Initial width reference ci 40403945297 at f8871df is fully green: all four
+jobs read, old 14 classification/case digests unchanged, 33 width rows and
+whole-code-point digest 566ac5b76f65a70b recorded separately, both binary128
+17-case/zero-failure logs read. Prepared production follows the pinned
+wcwidth decision order with the pinned ICU4C data, including signed wchar_t,
+Hangul/ignorable ordering, supplementary marks and special CJK widths. New
+host parity and both-ABI native2/APK checks cover widths, bounded strings,
+NUL termination and invalid inputs. Also import portable bounded TLS cleanup
+and only the verified media-preparation block. Runtime verification pending.
+
+Prepared CPU-clock follow-up, outside that frozen stage: ART patch 0572
+uses the supported thread/process CPU clock paths in libartbase/time_utils
+on Windows, replacing the global -1/thread and wall-time/process fallbacks.
+Failures return an explicit sentinel without reading an uninitialized time.
+The new own host executable compares actual ART values with independent
+GetThreadTimes/GetProcessTimes brackets, including a busy worker and a
+waiting caller; no AOSP build ran locally. The patch applies to the exact
+pinned source, but compilation/runtime verification is still required.
+This makes no claim about camera FPS or boot-timing causality.
+
+Thread::Current()->GetCpuNanoTime() already uses the current CPU clock;
+the separate pthread_getcpuclockid implementation still ignores a requested
+non-current thread, so cross-thread clock selection remains open here.
+Also retain ziparchive's observed Windows SetCloseOnExec-not-supported
+diagnostic as a descriptor-inheritance contract to audit, not a package
+smoke-test failure or an assumed out-of-memory error.
+
 Verified Unicode/Process stage: full ci 40386670586 at
 6f6ac6fa9519207797ee5b997e0ae1e5b9e77049, attempt 1, including oatdump
 integration 634a273. Every job personally read (22 success/six skipped),
