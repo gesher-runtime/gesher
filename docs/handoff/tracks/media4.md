@@ -171,6 +171,13 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Corrected full ci **40476766790** is running at
+**d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, with integration db84749b
+already contained. This source is frozen; later commits are docs only.
+The bounded native peer review found no concrete source blocker in the
+signed16 normalization and actual-result fixtures. No local compilation or
+native/JVM/C# execution ran. Every runtime/full-suite gate remains required.
+
 Full ci **40470959941** is complete RED at
 **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
 integration db84749b (docs above fresh-exit30deb08c). All28 conclusions were
