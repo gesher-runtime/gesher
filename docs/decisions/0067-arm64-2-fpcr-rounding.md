@@ -41,8 +41,9 @@ The next sticky-FPSR slice uses reserved test75. Scoped40475532910 at
 93f7637a is green: all six actual executed logs were read, both Windows
 hosts match all10384 independent QEMU numeric/status cases and retain every
 cold/nested/thread assertion. Full product acceptance is still pending;
-the working branch now imports accepted exit integration db84749b above
-30deb08c and must import later accepted Windows prerequisites before full.
+the working branch includes accepted exit and exact Windows160e25e8,
+followed by latest integration6297e80a with no additional non-doc changes.
+The combined full candidate is ready; product acceptance remains pending.
 It uses real dynarmic status state, pinned mask 0x9f including denormal,
 preserves QC, and propagates status through threads/nested entries. Tests
 compare the original pinned bodies and actual MSR/MRS/arithmetic/SQADD,

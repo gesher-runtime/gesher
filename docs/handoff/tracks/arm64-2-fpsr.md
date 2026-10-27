@@ -10,8 +10,12 @@ This is not full product acceptance. Actual FPSR execution through native2
 JNI/dalvikvm, single/device APKs, native ELF, package and both required e2e
 suites is prepared but pending full CI. Merge b839c307 imports accepted
 root integration db84749b (docs above 30deb08c, including verified exit
-freshness) into the working branch. Later accepted Windows prerequisites
-must still be imported before the coherent full candidate is dispatched.
+freshness) into the working branch. Root then independently accepted exact
+Windows source160e25e8/full40466021634. Merge b946a69a imports that exact
+source, preserving all ARM production code unchanged from scoped93f7637a.
+Merge c39767a8 includes latest integration6297e80a; its additional non-doc
+diff is empty. The combined full candidate is ready; actual product gates
+remain pending. Unaccepted spawn/Media follow-ups are not imported.
 Root alone merges into integration/main. Immutable FPCR reference
 wip/arm64-2-fpcr-verified/dab49ab0 and original wide/e7c1b06 are unchanged.
 
