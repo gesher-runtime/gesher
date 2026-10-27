@@ -37,6 +37,10 @@ Windows/package/e2e gates. Follow the common merge/report rules; root merges.
 
 ## Status and next steps
 
+Temporary agent-slot handoff: see the compact [recovery checkpoint](exec4-recovery.md).
+Final combined CI40438421809 is monitored by root; leave its interval120 watch
+running and keep source/frozen refs unchanged until work resumes.
+
 Active own-runtime crash triage on wip/exec4, based on a06d930 (verified
 integration 94ccde1 code plus documentation). Frozen wip/exec3 is unchanged.
 Windows4 diagnostic CI40417632512 at cde1c79: Windows-2022 passes exec3;
