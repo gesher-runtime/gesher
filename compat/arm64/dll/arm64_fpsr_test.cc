@@ -176,9 +176,21 @@ void CompareIndependentMatrix(const char* filename) {
       }
     }
   }
+  size_t cumulative_mismatches = mismatches - baseline_mismatches;
+  for (uint64_t mode = 0; mode < 4; ++mode) for (uint64_t dn = 0; dn < 2; ++dn) for (uint64_t fz = 0; fz < 2; ++fz) {
+    uint64_t control = (mode << 22) | (dn << 25) | (fz << 24);
+    for (uint64_t width : {32, 64}) for (uint64_t operation = 0; operation < 4; ++operation) {
+      for (const auto& vector : ArmFpsrBoundaryVectors) for (uint64_t seed : {UINT64_C(0), UINT64_C(0x08000081)}) {
+        uint64_t left = width == 32 ? vector.left32 : vector.left64;
+        uint64_t right = width == 32 ? vector.right32 : vector.right64;
+        if (!compare(operation, width, control, left, right, seed,
+                     width == 32 ? 9 + operation : operations64[operation])) return;
+      }
+    }
+  }
   std::string extra;
-  bool complete = rows == 8336 && !(input >> extra);
-  Check(complete, "all original 8192 and supplemental 144 independent rows are consumed once with no trailing data");
+  bool complete = rows == 10384 && !(input >> extra);
+  Check(complete, "all original 8192, cumulative144 and boundary2048 independent rows are consumed with no trailing data");
   std::printf("INFO arm64 FPSR matrix classification: numeric=%zu status=%zu setup=%zu query=%zu native=%zu "
               "missing_IDC=%zu extra_IXC=%zu other_status=%zu\n",
               numeric_mismatches, status_mismatches, setup_mismatches, query_mismatches,
@@ -190,8 +202,11 @@ void CompareIndependentMatrix(const char* filename) {
   if (complete && baseline_mismatches == 0) {
     std::puts("PASS  arm64 FPSR: 8192 independent QEMU numeric/status cases, scalar32/64 add sub mul div, all modes DN/FZ and NaN/inf/subnormal rules");
   }
-  if (complete && mismatches == baseline_mismatches) {
+  if (complete && cumulative_mismatches == 0) {
     std::puts("PASS  arm64 FPSR: 144 independent QEMU cumulative cases preserve seeded and same-block IXC before and after FZ underflow");
+  }
+  if (complete && mismatches == baseline_mismatches + cumulative_mismatches) {
+    std::puts("PASS  arm64 FPSR: 2048 independent QEMU normal-operand boundary cases preserve numeric bits and status near smallest normal");
   }
 }
 }  // namespace

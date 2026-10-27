@@ -5,8 +5,9 @@
   "version": "9.2.4",
   "target": "aarch64-linux-user",
   "cpu": "cortex-a53",
-  "cases": 8336,
+  "cases": 10384,
   "baseline_cases": 8192,
   "baseline_matrix_sha256": "434b73d47dbd4d73fadda6a8879b0cf3fe4bf5a1419f5359148bc7b30b8210bb",
-  "cumulative_cases": 144
+  "cumulative_cases": 144,
+  "boundary_cases": 2048
 }

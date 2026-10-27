@@ -41,3 +41,16 @@ static const struct ArmFpsrVector ArmFpsrVectors[] = {
     {UINT64_C(0x7ff8000000000456), UINT64_C(0x7ff0000000000123), UINT32_C(0x7fc00456), UINT32_C(0x7f800123)},
     {UINT64_C(0x7ff0000000000123), UINT64_C(0xfff0000000000456), UINT32_C(0x7f800123), UINT32_C(0xff800456)}};
 enum { ARM_FPSR_VECTOR_COUNT = sizeof(ArmFpsrVectors) / sizeof(ArmFpsrVectors[0]) };
+
+// Normal operands around the FZ round-before/after boundary. Append these
+// inputs separately so the original 8192 reference rows stay byte-identical.
+static const struct ArmFpsrVector ArmFpsrBoundaryVectors[] = {
+    {UINT64_C(0x0010000000000000), UINT64_C(0x3fefffffffffffff), UINT32_C(0x00800000), UINT32_C(0x3f7fffff)},
+    {UINT64_C(0x8010000000000000), UINT64_C(0x3fefffffffffffff), UINT32_C(0x80800000), UINT32_C(0x3f7fffff)},
+    {UINT64_C(0x0010000000000000), UINT64_C(0x3feffffffffffffe), UINT32_C(0x00800000), UINT32_C(0x3f7ffffe)},
+    {UINT64_C(0x8010000000000000), UINT64_C(0x3feffffffffffffe), UINT32_C(0x80800000), UINT32_C(0x3f7ffffe)},
+    {UINT64_C(0x0010000000000000), UINT64_C(0x3ff0000000000001), UINT32_C(0x00800000), UINT32_C(0x3f800001)},
+    {UINT64_C(0x3ff0000000000001), UINT64_C(0x0010000000000000), UINT32_C(0x3f800001), UINT32_C(0x00800000)},
+    {UINT64_C(0x0010000000000000), UINT64_C(0x0010000000000001), UINT32_C(0x00800000), UINT32_C(0x00800001)},
+    {UINT64_C(0x0010000000000001), UINT64_C(0x0010000000000000), UINT32_C(0x00800001), UINT32_C(0x00800000)}};
+enum { ARM_FPSR_BOUNDARY_COUNT = sizeof(ArmFpsrBoundaryVectors) / sizeof(ArmFpsrBoundaryVectors[0]) };

@@ -11,9 +11,9 @@ import subprocess
 HERE = Path(__file__).resolve().parent
 
 
-def vectors():
+def vectors(name="ArmFpsrVectors", count=32):
     text = (HERE / "vectors.h").read_text()
-    body = text.split("ArmFpsrVectors[] = {", 1)[1].split("};", 1)[0]
+    body = text.split(name + "[] = {", 1)[1].split("};", 1)[0]
     output = []
     for row in re.findall(r"\{([^{}]+)\}", body):
         fields = [re.sub(r"UINT(?:32|64)_C\(([^)]+)\)", r"\1", item.strip()) for item in row.split(",")]
@@ -21,7 +21,7 @@ def vectors():
         values = tuple(int(item, 0) for item in fields)
         assert all(0 <= item < (1 << (64 if index < 2 else 32)) for index, item in enumerate(values))
         output.append(values)
-    assert len(output) == 32
+    assert len(output) == count
     return output
 
 
@@ -40,6 +40,13 @@ def inputs():
             minimum = 0x00800000 if width == 32 else 0x0010000000000000
             for operation, seed in itertools.product(range(4, 7), (0, 0x08000081, 0x08000091)):
                 yield operation, width, control, minimum, minimum, seed
+    for mode, dn, fz in itertools.product(range(4), range(2), range(2)):
+        control = (mode << 22) | (dn << 25) | (fz << 24)
+        for width, operation in itertools.product((32, 64), range(4)):
+            for left64, right64, left32, right32 in vectors("ArmFpsrBoundaryVectors", 8):
+                left, right = (left32, right32) if width == 32 else (left64, right64)
+                for seed in (0, 0x08000081):
+                    yield operation, width, control, left, right, seed
 
 
 def digest(path):
@@ -85,6 +92,8 @@ def main():
                 assert result == 0, (number, "FZ cumulative result sanity")
             if control == 0x01000000:
                 print(f"QEMU_CUMULATIVE op={operation} width={width} fpcr={control:08x} seed={seed:08x} result={result:016x} status={status:08x}")
+        if number > lock["baseline_cases"] + lock["cumulative_cases"] and operation == 2 and control == 0x01000000 and seed == 0:
+            print(f"QEMU_FZ_BOUNDARY width={width} left={left:016x} right={right:016x} result={result:016x} status={status:08x}")
         if ((control >> 22) & 3) == 0 and control & (1 << 24) and seed == 0 and nan_denormal_pair(width, left, right):
             print(f"QEMU_NAN_DENORMAL op={operation} width={width} fpcr={control:08x} left={left:016x} right={right:016x} result={result:016x} status={status:08x}")
         one = 0x3f800000 if width == 32 else 0x3ff0000000000000
@@ -113,6 +122,7 @@ def main():
         print("ACTUAL_FPSR_MATRIX", manifest["matrix_sha256"])
     print("PASS independent QEMU AArch64 oracle:", len(expected), "numeric/status cases; all modes DN/FZ, both widths, NaN/inf/subnormal pairs")
     print("PASS independent QEMU cumulative controls: original 8192 rows unchanged; 144 seeded and same-block UF/IX sequences")
+    print("PASS independent QEMU boundary controls: 2048 normal-operand numeric/status cases near smallest normal")
 
 
 if __name__ == "__main__":
