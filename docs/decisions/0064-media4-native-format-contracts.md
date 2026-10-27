@@ -1,6 +1,6 @@
-# 0064: Native media format contracts over the pinned AOSP backend
+# 0064: Native media format and bounded OpenSL contracts
 
-Status: accepted (media4 format slice; full ci 40459815375)
+Status: accepted (format ci40459815375; bounded OpenSL ci40476766790/40477536464)
 
 ## Context
 
@@ -81,29 +81,66 @@ This source predates the coordinator's separately verified Java exit-status
 freshness fix. Combined integration CI must verify that prerequisite with
 this slice before the coordinator accepts the integrated tree.
 
-## Proposed follow-up: OpenSL contracts
+## Accepted follow-up: OpenSL identifiers and capability contracts
 
-The active Media4 source adds canonical OpenSL UUID pointer objects from
-pinned OpenSLES_IID.cpp, copied-value lookup and typed engine queries. It
-validates required/optional interface arrays, exposes only requested or
-implicit interfaces, permits the pinned prerealize cases, and uses the
-actual 0x0B native recording-permission error. Test76 prepares real NDK JNI
-callers and manifest-allowed/denied single-ABI APKs for both ABIs/runners.
-This follow-up is not accepted by the format run above; its own full CI and
-exact semantic logs are required before inventory/roadmap acceptance.
+Reuse pinned OpenSLES_IID.cpp's53 real16-byte UUID pointer objects (correct
+the existing19 and add34 old missing symbols), including full source notice.
+Compare copied UUID values rather than pointer identity. Use the exact typed
+engine/global query signatures and supported class subsets; validate output,
+index/object/null and required/optional arrays, reset failed outputs, and
+expose only implicit/requested interfaces with pinned prerealize behavior.
+Unsupported effects/3D/device identifiers retain explicit unsupported results.
+Use actual0x0B recording denial with no object. The production manifest gate
+is unchanged; bare-core ART without a framework media identity also denies.
+Normalize the volume argument's low16 bits explicitly at the host boundary:
+the ARM guest does not promise incoming short sign extension. Actual current
+CI records raw64936→signed16 -600, with set/get/value success at -600/-32768/
+-1/0. No register contents are inferred for the previous failing source.
 
-The standalone OpenSL backend still depends on player/video/window/JNI
-factoring and remains open; no placeholder is linked into gesher-exec.
-Canonical effect/3D identifiers support exact unsupported results, not
-effects or 3D audio. Full configuration, loss-of-control, output-mix and
-device-policy behavior remain separate Media4 contracts.
+Full ci **40476766790**, attempt1 at **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**,
+contains accepted integration db84749b/freshExit30deb08c and passes22 jobs/
+six skipped. Windows122099872570/122099872556 finish0 failures, with14 test76
+PASS each: ten ABI/context combinations plus four device shutdowns. All50
+semantic rows and40 volume result rows per runner were read, including real
+manifest-allowed/denied single/device APKs and bare-core denial. Actual
+package122099872538 passes23 checks and e2e122100699777/122100699799 each
+passes ten apps/four transports/association/shortcut with0 unexpected
+failures. Exactly34 new IID inventory verification objects preserve all
+historical fields and143 prior format proofs.136 old media entries remain.
+No effect/3D method or full OpenSL engine is established by those constants.
 
-The separate native-launcher continuation proposes factoring pure audio,
-player/video and NDK targets into both hosts, with actual hostgraphics/window
-dependencies and no JNI player in gesher-exec. Its recording gate denies a
-native process without an identity provider; ART installs the unchanged
-Java manifest decision. The JNI and native callback paths share the actual
-once-per-thread ELF TLS initializer in bionic. Both-ABI standalone callers
-and real callback/TLS checks are prepared; no compilation or runtime proof
-is claimed before its separate CI. App-child recording identity propagation
-still needs a service-authorized contract and remains explicitly open.
+The earlier full40470959941/2b343aa7 remains RED: both runners exactly six
+test76 failures from the core fixture's incorrect grant assumption and the
+ARM signed16 boundary. Corrected source was verified above without retrying
+that unchanged candidate. The same green run also verifies the stronger
+lossless AAudio fixture: requested/effective44100-frame capacity, original
+750/1250Hz/44100-frame gate, zero lost/xruns and a controlled small-ring loss
+versus configured-ring zero-loss case. Old1153.3Hz cause remains unproved.
+
+## Accepted follow-up: standalone functional backend and guest-thread entry
+
+Source e5693412 factors pure audio/player-core/NDK OBJECT files into both
+dalvikvm and gesher-exec with the actual window/graphics dependencies,
+keeping Java/JNI layers on ART. Move the exact old once-per-thread guest
+entry guard and SetupThreadTls call into the bionic shim; JNI delegates to
+that same implementation. A pure permission provider defaults to deny when
+no recording identity is installed, while ART registers the unchanged
+MayRecordAudio manifest/bare-core decision. No recording grant is invented.
+
+Full **40477536464**, attempt1 at
+**e569341230b3970cadaeb48a235a12a4645da74a**, passes22 jobs/six skipped,
+both whole0, actual package23 and both ten-app/four-transport e2e0. Actual
+logs and all60 semantic rows/48 volume rows/12 callback traces per runner
+were read. The same NDK fixture runs through core JNI, genuine standalone
+ELF and allowed/denied single/device APKs on both ABIs;16 PASS include four
+device shutdowns. Every context requires one real PCM callback with valid
+independent guest TLS and unchanged caller TLS. Native processes without
+identity correctly deny11/no object, while real APK grants/denials remain
+independent. Actual both-host links and203 assembly boundaries/zero
+problems pass. Only documentation changes follow the verified source.
+
+Native-child recording identity, full configuration, loss-of-control,
+output-mix/effects/device contracts remain open. Separate AAudio API36 MMAP
+source/test78 and installed-notice verification are prepared on another
+branch and are not accepted by this run. Full builder validation,
+platform-policy getters, routing and error callbacks remain open as well.
