@@ -11,13 +11,17 @@ native/JVM execution is allowed; use CI for every build/runtime check.
 
 ## Status and next steps
 
-Full ci 40433469320 at c168b23 is running. No native compilation/runtime
-result is claimed before inspecting its actual jobs and logs.
+Full ci 40433469320 at c168b23 was cancelled after independent source review
+found InitTimeSpec still called the excluded wall-clock helper. No compiler
+or runtime result is accepted from that source. The corrected patch also
+selects its existing clock_gettime branch, honoring the requested deadline
+clock, and adds direct monotonic/UTC offset and relative-duration checks.
+The next full candidate must verify all ten new checks and the original gates.
 
 Prepared source only. The patch selects CLOCK_MONOTONIC for NanoTime,
 MicroTime and MilliTime and excludes their unused wall-clock helper. The
-actual linked artbase fixture adds seven independent Win32 QPC/ordering/
-elapsed/concurrent checks, including a wall-clock-domain counterexample.
+actual linked artbase fixture adds ten independent Win32 QPC/ordering/
+elapsed/concurrent/deadline checks, including a wall-clock-domain counterexample.
 The original CPU clock checks and all full-suite timing gates are retained.
 Patch 0573 applies after exact 0572 in a source-only apply check. Compilation,
 runtime tests, package and both e2e results remain unverified until full CI.
