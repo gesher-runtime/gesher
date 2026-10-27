@@ -170,9 +170,15 @@ job or artifact download is needed. tests/windows/tracks/71-media4-format.ps1
 owns the new checks, with bounded processes, fresh device roots and native
 ABI/caller markers. All compilation and fixture execution are CI-only.
 
-Full ci **40456299720** is running at
+Full ci **40456299720** is complete RED at
 **92e914238cc8655aef472887ad9f494eec5c8a97** (source 9f4dee5 after merging
-current integration 808ea746's docs). Source is frozen while it runs.
+integration 808ea746's docs): 15 successful, ten skipped and one failed job.
+Main build 122030308024 fails on the new bridge at object 3093/3187:
+NdkMediaFormat.h has 12 `unknown type name 'int32_t'/'int64_t'` errors with
+mingw because it relies on bionic's transitive fixed-width definitions.
+The correction includes cstdint before that header and adds an early CI
+compile of the exact bridge object before the full AOSP graph. This is a
+new-source correction, not an unchanged rerun; no native build runs locally.
 PowerShell AST, XML/YAML, embedded-Python and Bash syntax/source checks pass;
 the 21 registrations and 152 names/values match the pinned source exactly.
 No compiler/native/JVM/C# fixture was run locally. Media job 122033620469
@@ -180,8 +186,10 @@ passes in 1m32s: its actual log shows Werror NDK builds of both ABI libraries
 and independent ELF executables, and both single-ABI APKs/dex published.
 Framework 122030408664 passes in 10m39s; actual NetApp/services dex logs were
 read. Root independently reviewed the source/ABI/data/wiring and found no
-actionable issue within that review. The main host build is still compiling;
-host linkage and all runtime behavior remain unverified. Read every job, both
+actionable issue within that bounded review; actual CI exposed the header
+dependency above. No Windows matrix, package or e2e job ran. Host linkage and
+all runtime behavior remain unverified. Merge current integration before a
+new full candidate and read every job, both
 complete zero-failure Windows summaries, all test71 parts, package and
 required e2e before acceptance. The native API baseline metadata and roadmap
 are unchanged. All remaining contracts listed above stay open; later work

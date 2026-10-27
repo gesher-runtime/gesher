@@ -1,5 +1,7 @@
 // The NDK's AMediaFormat for loaded ELF code (ADR 0064): the actual pinned
 // AOSP implementation, with System V entries and its pointer data objects.
+#include <cstdint>
+
 #include <media/NdkMediaFormat.h>
 
 #include <gesher/bionic_shim.h>
