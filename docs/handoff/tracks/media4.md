@@ -192,6 +192,13 @@ not a policy-only library; native full40477536464 is still pending. Full
 builder validation, platform-policy getters, routing and error callbacks
 remain open. Only PS AST/Bash/XML/YAML/source checks ran locally.
 
+This separate AAudio candidate also applies the exact prepared OpenSL
+installer-notice proposal (f9c4197c patch): the preserved Khronos notice is
+installed under licenses and package CI compares its SHA256 to the source.
+Neither frozen d10/e569 candidate changes. Installed-byte proof is pending
+the new candidate's package job; this is no general license-completeness
+claim and preserves all23 existing installer PASS gates.
+
 Corrected full ci **40476766790** is complete GREEN at
 **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt 1 without retries,
 with accepted integration db84749b/freshExit30deb08c contained. All 28 job

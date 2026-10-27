@@ -262,6 +262,14 @@ jobs:
                       'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'gesher-camera.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
+          $openSlNotice = Join-Path $app 'licenses\OPENSL-NOTICES.txt'
+          $openSlNoticeSource = Join-Path $env:GITHUB_WORKSPACE 'tools/package/OPENSL-NOTICES.txt'
+          if (-not (Test-Path -LiteralPath $openSlNotice) -or
+              (Get-FileHash -LiteralPath $openSlNotice -Algorithm SHA256).Hash -ne
+              (Get-FileHash -LiteralPath $openSlNoticeSource -Algorithm SHA256).Hash) {
+            throw 'The installed OpenSL notice differs from the source notice'
+          }
+          Write-Host "INFO  installer: OpenSL notice SHA256 $((Get-FileHash -LiteralPath $openSlNotice -Algorithm SHA256).Hash)"
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0 -or $oatdumpOutput -notmatch 'speed-profile') { throw "Installed oatdump could not inspect the installed framework: $oatdumpOutput" }
           'PASS  installer: the installed oatdump inspects the installed speed-profile framework oat' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
