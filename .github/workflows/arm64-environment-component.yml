@@ -20,13 +20,52 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  prerequisite:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require exact verified coherent API3 prerequisite and reviewed environment delta
+        shell: pwsh
+        run: |
+          $source = '942f2c16b1219cd25bcb1c1ca4215f41639cc88f'
+          $proof = gh api repos/${{ github.repository }}/actions/runs/40556015168 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $source -or $proof.name -cne 'arm64-varargs-component' -or
+              $proof.conclusion -cne 'success' -or $proof.run_attempt -ne 1) { throw 'Unverified coherent API3 prerequisite' }
+          $jobs = gh api repos/${{ github.repository }}/actions/runs/40556015168/jobs --paginate | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs).Count -ne 9 -or
+              @($jobs.jobs | Where-Object { $_.conclusion -notin 'success','skipped' }).Count -ne 0) {
+            throw 'Unexpected coherent prerequisite job set'
+          }
+          foreach ($name in 'test (windows-2022)','test (windows-2025)') {
+            $job = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].head_sha -cne $source -or $job[0].run_attempt -ne 1 -or
+                $job[0].conclusion -cne 'success') { throw "Unverified coherent runtime $name" }
+          }
+          $allowed = @('.github/workflows/arm64-environment-component.yml', '.github/workflows/arm64-varargs-component.yml',
+            '.github/workflows/arm64.yml', 'compat/arm64/dll/guest_libc.cc', 'tests/native/arm64_env_contracts.h',
+            'tests/native/arm64_env_exec.c', 'tests/native2/native2_test.cpp', 'tests/windows/run-arm64-component.ps1',
+            'tests/windows/run-arm64-environment-component.ps1', 'tests/windows/tracks/85-arm64-environment.ps1')
+          $changed = @(git diff --name-only $source HEAD -- . ':!docs/**')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compare coherent prerequisite source' }
+          foreach ($path in $changed) {
+            if ($path -cnotin $allowed) { throw "Unreviewed source difference from coherent prerequisite $path" }
+          }
+          Write-Host "ACTUAL_ENVIRONMENT_PREREQUISITE run=$($proof.id) source=$source attempt=1 coherentWindows=success reviewed-files=$($changed.Count)"
   framework:
+    needs: prerequisite
     uses: ./.github/workflows/framework.yml
   ndk:
+    needs: prerequisite
     uses: ./.github/workflows/native2.yml
   translator:
+    needs: prerequisite
     uses: ./.github/workflows/arm64.yml
   host:
+    needs: prerequisite
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
