@@ -7,6 +7,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +18,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -329,6 +332,44 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
       "; tracks " + std::to_string(data.tracks.size()) + "; samples " + std::to_string(data.packets.size()) + "\n";
 }
 
+void OggBoundaries(const Api& api, const Dataset& data, const std::string& root, Report* report) {
+  std::array<bool, 3> results{};
+  std::array<std::thread, 3> workers;
+  std::atomic<unsigned> ready{0};
+  std::atomic<bool> go{false};
+  for (size_t count : {0u, 1u, 2u}) {
+    workers[count] = std::thread([&, count] {
+      ready.fetch_add(1, std::memory_order_release);
+      while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+      const std::string path = root + "/opus-boundary-" + std::to_string(count) + ".ogg";
+      const int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+      Muxer muxer(fd >= 0 ? api.create(fd, AMEDIAMUXER_OUTPUT_FORMAT_OGG) : nullptr, MuxerDelete{&api});
+      if (fd >= 0) close(fd);
+      bool ok = muxer && data.tracks.size() == 1 && data.packets.size() >= count;
+      ok = ok && api.add(muxer.get(), data.tracks[0].get()) == 0 && api.start(muxer.get()) == AMEDIA_OK;
+      for (size_t index = 0; ok && index < count; ++index) {
+        const Packet& packet = data.packets[index];
+        AMediaCodecBufferInfo info = {0, static_cast<int32_t>(packet.data.size()), packet.time, packet.flags};
+        ok = api.write(muxer.get(), 0, packet.data.data(), &info) == AMEDIA_OK;
+      }
+      // The explicit zero-byte EOS buffer must not become an encoded packet.
+      uint8_t dummy = 0;
+      AMediaCodecBufferInfo eos = {0, 0, 0, 4};
+      ok = ok && api.write(muxer.get(), 0, &dummy, &eos) == AMEDIA_OK && api.stop(muxer.get()) == AMEDIA_OK;
+      muxer.reset();
+      results[count] = ok;
+    });
+  }
+  while (ready.load(std::memory_order_acquire) != workers.size()) std::this_thread::yield();
+  go.store(true, std::memory_order_release);
+  for (auto& worker : workers) worker.join();
+  for (size_t count : {0u, 1u, 2u}) {
+    report->text += "media4 muxer Ogg boundary: packets " + std::to_string(count) +
+        " result=" + (results[count] ? "ok\n" : "FAILED\n");
+    if (!results[count]) ++report->failures;
+  }
+}
+
 std::string Run() {
   Report report;
 #if defined(__aarch64__)
@@ -359,6 +400,8 @@ std::string Run() {
       const bool loaded = Load(std::string(fixtures) + "/" + test.input + ".bin", &data);
       report.Check(loaded, std::string("independent-encoded-fixture ") + test.input);
       if (!loaded) continue;
+      // Race the first Ogg writers, before any ordinary Ogg output warms CRC.
+      if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_OGG) OggBoundaries(api, data, output, &report);
       for (bool blocked : {false, true}) {
         if (blocked && test.format == AMEDIAMUXER_OUTPUT_FORMAT_OGG) continue;
         const std::string path = std::string(output) + "/" + test.input +

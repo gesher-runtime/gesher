@@ -1,21 +1,9 @@
 name: media4-muxer-build
 
-# Compile-first evidence only. Actual Windows behavior still requires full ci.
+# Fresh producer for the component and compile-first dispatches. Full ci remains mandatory.
 on:
   workflow_dispatch:
-  push:
-    branches: [wip/media4-muxer]
-    paths:
-      - .github/workflows/media4-muxer-build.yml
-      - cmake/aosp/media.cmake
-      - compat/media/ndk/media_muxer.cc
-      - compat/media/ndk/media_muxer_abi.h
-      - compat/media/encode/codec_config.*
-      - compat/media/mux/**
-      - tests/media/ndk-muxer/*.cc
-      - tests/media/ndk-muxer/*.py
-      - tests/media/ndk-muxer/build.sh
-      - tests/apps/mediamuxerapp/**
+  workflow_call:
 
 permissions:
   contents: read
@@ -37,10 +25,17 @@ jobs:
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: runtime
-      - name: Compile the actual bridge and link the independent reader oracle
+      - name: Build matching current hosts and independent reader oracle
         run: |
           ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
-          ninja -C out media_muxer_verify
+          ninja -C out dalvikvm gesher-exec media_muxer_verify
+          mkdir -p current-host
+          cp out/dalvikvm.exe out/gesher-exec.exe out/media_muxer_verify.exe current-host/
+          printf '%s\n' "$GITHUB_SHA" > current-host/muxer-host-source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxer-current-host
+          path: current-host/
 
   fixtures:
     runs-on: ubuntu-24.04
@@ -58,20 +53,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          framework_source_sha=$(gh api repos/gesher-runtime/gesher/actions/runs/40507882249 --jq '.head_sha')
-          test "$framework_source_sha" = 06d30d403481d3833f0c7d5f99db456841b72062
+          framework_source_sha=$(gh api repos/gesher-runtime/gesher/actions/runs/40527788805 --jq '.head_sha')
+          test "$framework_source_sha" = 5d9e24d3df1e9caa77c21dbae360a1f32988b943
           printf 'Pinned framework source: %s\n' "$framework_source_sha"
       - uses: actions/download-artifact@v4
         with:
           name: framework-classes
           path: work
-          run-id: 40507882249
+          run-id: 40527788805
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/download-artifact@v4
         with:
           name: framework
           path: work/framework
-          run-id: 40507882249
+          run-id: 40527788805
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Restore the Android NDK
         uses: actions/cache@v4
@@ -126,3 +121,11 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediamuxerapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
+          printf '%s\n' "$GITHUB_SHA" > out/muxer-fixture-source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxer-current-fixtures
+          path: |
+            out/mediamuxerapp-*.apk
+            out/media/ndk-muxer/
+            out/muxer-fixture-source.txt

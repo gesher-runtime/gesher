@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include <array>
 #include <cstring>
 
 #include "../encode/codec_config.h"
@@ -15,16 +16,15 @@ namespace gesher::media {
 namespace {
 
 uint32_t OggCrc(const uint8_t* p, size_t n) {
-  static uint32_t table[256];
-  static bool init = false;
-  if (!init) {
+  static constexpr auto table = [] {
+    std::array<uint32_t, 256> result{};
     for (uint32_t i = 0; i < 256; i++) {
       uint32_t r = i << 24;
       for (int k = 0; k < 8; k++) r = (r & 0x80000000u) ? (r << 1) ^ 0x04C11DB7u : r << 1;
-      table[i] = r;
+      result[i] = r;
     }
-    init = true;
-  }
+    return result;
+  }();
   uint32_t crc = 0;
   for (size_t i = 0; i < n; i++) crc = (crc << 8) ^ table[((crc >> 24) ^ p[i]) & 0xff];
   return crc;
@@ -55,7 +55,7 @@ class OggMuxer : public Muxer {
     return true;
   }
 
-  bool WriteSample(int, const uint8_t* data, size_t size, int64_t time_us, int flags,
+  bool WriteSample(int, const uint8_t* data, size_t size, int64_t, int flags,
                    std::string* error) override {
     if (!started_) {
       *error = "not started";
@@ -65,20 +65,33 @@ class OggMuxer : public Muxer {
       if (head_.empty() && size >= 19) head_.assign(data, data + size);
       return true;
     }
+    if (size == 0) {
+      if (flags & 4) return true;  // An EOS notification is not an Opus packet.
+      *error = "Ogg: empty Opus audio packet";
+      return false;
+    }
     if (!headers_written_ && !WriteHeaders(error)) return false;
+    // Retain one real packet so Stop can mark its page EOS without adding a
+    // zero-byte packet, which an Opus decoder can interpret as packet loss.
+    if (!pending_.empty() && !Page(pending_.data(), pending_.size(), granule_, 0, error)) return false;
     // One packet a page; the granule position counts 48 kHz samples to the packet's end.
-    if (first_us_ < 0) first_us_ = time_us;
     const uint64_t samples = PacketSamples(data, size);
     granule_ += samples;
-    return Page(data, size, granule_ + pre_skip_, 0, error);
+    pending_.assign(data, data + size);
+    return true;
   }
 
   bool Stop(std::string* error) override {
-    if (!headers_written_ && !WriteHeaders(error)) return false;
-    // The last page: an empty packet with the end-of-stream flag.
-    if (!Page(nullptr, 0, granule_ + pre_skip_, 0x04, error)) return false;
+    if (!headers_written_) {
+      // Header-only empty output terminates on OpusTags, without audio data.
+      if (!WriteHeaders(error, true)) return false;
+    } else if (!Page(pending_.data(), pending_.size(), granule_, 0x04, error)) {
+      return false;
+    }
+    pending_.clear();
     close(fd_);
     fd_ = -1;
+    started_ = false;
     return true;
   }
 
@@ -99,15 +112,14 @@ class OggMuxer : public Muxer {
     return static_cast<uint64_t>(kFrame[config]) * frames;
   }
 
-  bool WriteHeaders(std::string* error) {
+  bool WriteHeaders(std::string* error, bool end_stream = false) {
     if (head_.size() < 19) head_ = OpusHead(channels_, 312, rate_);
-    pre_skip_ = static_cast<uint64_t>(head_[10] | (head_[11] << 8));
     if (!Page(head_.data(), head_.size(), 0, 0x02, error)) return false;
     static const char kVendor[] = "Gesher";
     std::vector<uint8_t> tags = {'O', 'p', 'u', 's', 'T', 'a', 'g', 's', 6, 0, 0, 0};
     tags.insert(tags.end(), kVendor, kVendor + 6);
     tags.insert(tags.end(), {0, 0, 0, 0});
-    if (!Page(tags.data(), tags.size(), 0, 0, error)) return false;
+    if (!Page(tags.data(), tags.size(), 0, end_stream ? 0x04 : 0, error)) return false;
     headers_written_ = true;
     return true;
   }
@@ -143,9 +155,9 @@ class OggMuxer : public Muxer {
   bool have_track_ = false, started_ = false, headers_written_ = false;
   uint32_t channels_ = 1, rate_ = 48000;
   std::vector<uint8_t> head_;
-  uint64_t granule_ = 0, pre_skip_ = 0;
+  std::vector<uint8_t> pending_;
+  uint64_t granule_ = 0;
   uint32_t serial_ = 0x47657368, sequence_ = 0;
-  int64_t first_us_ = -1;
   int64_t bytes_ = 0;
 };
 
