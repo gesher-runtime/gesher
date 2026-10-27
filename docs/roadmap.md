@@ -477,6 +477,13 @@ needs: [framework-build.md](framework-build.md).
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
       Remaining NDK/POSIX scope stays open.
+- [x] Pinned multibyte/C11 conversion states and bounds, LP64 wide numbers,
+      locale aliases/CHAR_MAX layout, C collation and UTF-32 wide-time
+      wrapper behavior: independent 248-case reference ci 40439801814 and
+      actual x86_64/arm64 dalvikvm/single/device cases in full ci
+      combined 40439802052 at 7302b20, attempt 1, with corrected widths/CPU
+      and startup input; both Windows suites/package/required e2e pass.
+      Binary128, wide stdio/scanf and independent narrow tzcode remain open.
 - [x] Pinned bionic wcwidth/wcswidth: separate signed x86_64 and unsigned
       ARM64 locked ICU4X digests cover all code points/four invalid sentinels;
       actual whole-range NDK calls, 33 boundaries and bounded UTF-32 strings
@@ -492,12 +499,6 @@ needs: [framework-build.md](framework-build.md).
       concurrent ordering, elapsed sleep and relative rollover. Full ci
       40434741055 at bdfb230, both Windows suites/package/required e2e;
       original image-size/startup gates pass without changes or retries.
-- [x] Pinned multibyte/C11 conversion states and bounds, LP64 wide numbers,
-      locale aliases/CHAR_MAX layout, C collation and UTF-32 wide-time
-      wrapper behavior: independent 248-case reference ci 40425021540 and
-      actual x86_64/arm64 dalvikvm/single/device cases in full ci
-      40425393716 at 57782e5, attempt 2, both Windows suites/package/e2e.
-      Binary128, wide stdio/scanf and independent narrow tzcode remain open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

@@ -72,6 +72,41 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
+Combined wide acceptance is verified in full ci 40439802052 at
+7302b20432e9b31e30897ced7b372f0e835c4603, attempt 1. Personally read all
+28 conclusions (22 success/six skipped), all 22 successful job logs, both
+final zero-failure summaries and all six actual test66 ABI/mode PASS lines
+per runner. Signed/unsigned whole-range width digests, 33 boundary rows,
+all four APK cases and actual ART CPU-clock checks also pass. No retry.
+This source includes current-at-dispatch integration 2f8ed7a and corrected
+width/CPU prerequisite c8f30ec, preserving both localeconv and unsigned-width
+guest adapters and their registrations. Exact test44 evidence capture and
+both tracks' acceptance records remain intact. Same-source scoped ci
+40439801814 was read in full: upstream provenance, 248 reference assertions
+with zero failures, production locale/guest -Werror and both NDK builds.
+
+Actual package job 121990064884 passes all 23 installer checks, including
+installed oatdump/image/fonts, install/dexopt, associations/shortcuts, real
+window/click/keyboard/wheel/resize input and complete uninstall cleanup.
+Both actual e2e jobs 121990574707/121990574682 pass nine apps including
+required Puzzles/TIC-80, four transport fixtures and association/shortcut
+launches; each ends with 0 unexpected failures. Exact test jobs and scope
+are in native3-wide-verified.md. Fourteen baseline entries gain only scoped
+verification metadata; native3 ownership, historical counts and baseline
+source/observations remain unchanged. wcstold_l remains missing/open.
+
+Only documentation may advance above verified source 7302b20. The original
+frozen native3-wide-verified ref is unchanged at e7c1b06. Root has since
+verified and integrated 0573/time68 as 8922a3e; this run predates it. The
+separate ARM FPCR candidate includes that newer integration and the frozen
+wide prerequisite, with coherent full ci 40444486511 at e0f9601 pending.
+Root alone merges integration/main and decides that combined acceptance.
+Binary128/libm, wide scanf/stdio, independent narrow gdtoa/tzcode and the
+remaining native3/POSIX contracts remain explicitly open. All compilation
+and native/JVM fixture execution were CI-only.
+
+### Earlier scoped acceptance and source history
+
 Root acceptance checkpoint while the scoped agent is interrupted: full ci
 40425393716 at 57782e5, attempt 2, is fully green. Root read all 28
 conclusions (22 success/six skipped), both zero-failure summaries, all six

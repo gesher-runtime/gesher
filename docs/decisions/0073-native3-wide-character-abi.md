@@ -1,11 +1,12 @@
 # 0073. native3-wide: pinned multibyte and LP64 wide ABI
 
 Status: accepted for the scoped multibyte/C11, LP64 numeric, locale, C
-collation and wide-time contracts in full ci 40425393716 at 57782e5,
-attempt 2. Independent reference/compilation ci 40425021540 at eb9f964
-also passes. Root inspected both Windows suites, package and both required
-e2e logs. Final combination with newer integration remains pending;
-this does not close native3/0062.
+collation and wide-time contracts in combined full ci 40439802052 at
+7302b20, attempt 1, with current startup integration and corrected per-ABI
+width/CPU prerequisites. Same-source reference/compilation ci 40439801814
+also passes. All jobs, both zero summaries, actual package and both required
+e2e logs were personally read. Newer 0573/time68 and the ARM FPCR slice are
+in separate pending combined full ci 40444486511; this does not close native3/0062.
 
 ## Context
 
@@ -98,13 +99,15 @@ The original FreeBSD wide-time wrapper also runs with pinned conversions
 and a host narrow C formatter, verifying its own UTF-32 buffers and error
 precedence without claiming an independent bionic tzcode implementation.
 
-Scoped ci 40425021540 verifies 248 reference assertions with zero failures,
+Scoped ci 40439801814 verifies 248 reference assertions with zero failures,
 the production object under pinned llvm-mingw/-Werror and both NDK library
 builds. test66 consumes actual test44 process logs for x86_64/arm64 dalvikvm
 and APK single/device modes. All six cases pass per runner in full ci
-40425393716 attempt 2; both full suites have zero failures. Attempt 1 failed
-only the known external badssl connect timeout. Package and both required
-e2e results pass. No local native/Java compilation or fixture ran.
+40439802052 attempt 1; both full suites have zero failures. Every successful
+job log, all six ABI/mode cases per runner, actual installed input/uninstall
+cleanup and both nine-app e2e zero summaries were read. The earlier scoped
+full 40425393716 at 57782e5 passed attempt 2 after only known external badssl
+timeouts in attempt 1. No local native/Java compilation or fixture ran.
 
 Unicode properties/case/width, binary128/libm, wide stdio/scanf and generic
 POSIX remain outside this decision. The baseline inventory stays under

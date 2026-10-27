@@ -3,9 +3,10 @@
 Wide/multibyte continuation: [ADR 0073](decisions/0073-native3-wide-character-abi.md)
 and [native3-wide status](handoff/tracks/native3-wide.md) document the pinned
 UTF/state, LP64 numeric, C collation and wide-time contracts. The independent
-reference and compilation pass ci 40425021540; full ci 40425393716 at
-57782e5, attempt 2, verifies both Windows suites, actual package and both
-required e2e. Final combination with newer integration remains pending.
+reference and compilation pass ci 40439801814; combined full ci 40439802052
+at 7302b20, attempt 1, verifies both Windows suites, actual package and both
+required e2e, including corrected per-ABI widths and current startup input.
+Newer runtime clocks/ARM FPCR are in separate pending combined ci 40444486511.
 Binary128 conversion and wide stdio/scanf stay open.
 
 Many Android apps ship native code as ELF `.so` files built by the NDK for

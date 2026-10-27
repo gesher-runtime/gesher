@@ -3030,7 +3030,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned C11 UTF-8/16/32 conversion/state, reset/NUL and encoder/decoder asymmetries, errno, reserved state bytes, guards and exact source/buffer bounds; independent 248-case source reference ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -3042,7 +3049,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned C11 UTF-8/16/32 conversion/state, reset/NUL and encoder/decoder asymmetries, errno, reserved state bytes, guards and exact source/buffer bounds; independent 248-case source reference ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -4736,7 +4750,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned C11 UTF-8/16/32 conversion/state, reset/NUL and encoder/decoder asymmetries, errno, reserved state bytes, guards and exact source/buffer bounds; independent 248-case source reference ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -4748,7 +4769,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned C11 UTF-8/16/32 conversion/state, reset/NUL and encoder/decoder asymmetries, errno, reserved state bytes, guards and exact source/buffer bounds; independent 248-case source reference ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6759,7 +6787,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned UTF-32 wide-time wrapper, 56-byte tm/zone layout, narrow byte output bound, guards and error precedence, plain/locale aliases. Existing narrow formatter is retained; full independent bionic tzcode behavior remains open."
+      }
     },
     {
       "library": "libc.so",
@@ -6771,7 +6806,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Pinned UTF-32 wide-time wrapper, 56-byte tm/zone layout, narrow byte output bound, guards and error precedence, plain/locale aliases. Existing narrow formatter is retained; full independent bionic tzcode behavior remains open."
+      }
     },
     {
       "library": "libc.so",
@@ -6783,7 +6825,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. C-locale float/double grammar, Unicode whitespace, long input and exact end pointers, range errors and direct binary32 rounding. Host CRT supplies rounding; full independent Android gdtoa/binary128 behavior remains open."
+      }
     },
     {
       "library": "libc.so",
@@ -6795,7 +6844,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. C-locale float/double grammar, Unicode whitespace, long input and exact end pointers, range errors and direct binary32 rounding. Host CRT supplies rounding; full independent Android gdtoa/binary128 behavior remains open."
+      }
     },
     {
       "library": "libc.so",
@@ -6807,7 +6863,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6819,7 +6882,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6843,7 +6913,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6855,7 +6932,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6867,7 +6951,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
@@ -6879,7 +6970,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40439802052,
+        "attempt": 1,
+        "sha": "7302b20432e9b31e30897ced7b372f0e835c4603",
+        "status": "verified-pinned-wide-abi-contexts",
+        "scope": "Both Android LP64 ABIs through dalvikvm and APK single/device modes on Windows 2022/2025. Signed/unsigned 64-bit LP64 parsing, base/prefix rules, saturation/ERANGE and full-width end pointers including long input; plain/intmax/locale aliases. Independent pinned integer bodies in ci 40439801814."
+      }
     },
     {
       "library": "libc.so",
