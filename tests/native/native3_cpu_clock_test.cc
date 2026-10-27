@@ -41,9 +41,73 @@ bool MatchesNativeCpu(bool process) {
   }
   return true;
 }
+
+uint64_t NativeMonotonic(uint64_t scale) {
+  LARGE_INTEGER frequency, counter;
+  if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0 ||
+      !QueryPerformanceCounter(&counter) || counter.QuadPart < 0) {
+    return UINT64_MAX;
+  }
+  return static_cast<uint64_t>(static_cast<unsigned __int128>(counter.QuadPart) * scale /
+                               static_cast<uint64_t>(frequency.QuadPart));
+}
+
+bool MatchesNativeMonotonic(uint64_t (*clock)(), uint64_t scale) {
+  uint64_t before = NativeMonotonic(scale);
+  uint64_t actual = clock();
+  uint64_t after = NativeMonotonic(scale);
+  if (before == UINT64_MAX || after == UINT64_MAX || actual < before || actual > after) {
+    std::printf("INFO  native3 clocks: scale %" PRIu64 " QPC bracket %" PRIu64
+                " <= ART %" PRIu64 " <= %" PRIu64 "\n", scale, before, actual, after);
+    return false;
+  }
+  return true;
+}
+
+bool MonotonicSequence() {
+  uint64_t nano = art::NanoTime(), micro = art::MicroTime(), milli = art::MilliTime();
+  for (unsigned i = 0; i < 256; ++i) {
+    uint64_t next_nano = art::NanoTime(), next_micro = art::MicroTime(), next_milli = art::MilliTime();
+    if (next_nano < nano || next_micro < micro || next_milli < milli) return false;
+    nano = next_nano;
+    micro = next_micro;
+    milli = next_milli;
+  }
+  return MatchesNativeMonotonic(art::NanoTime, UINT64_C(1000000000)) &&
+         MatchesNativeMonotonic(art::MicroTime, UINT64_C(1000000)) &&
+         MatchesNativeMonotonic(art::MilliTime, UINT64_C(1000));
+}
+
+bool RejectsWallClock() {
+  uint64_t before = NativeMonotonic(UINT64_C(1000000));
+  FILETIME time;
+  GetSystemTimePreciseAsFileTime(&time);
+  uint64_t wall = (FileTimeValue(time) - UINT64_C(116444736000000000)) / 10;
+  uint64_t after = NativeMonotonic(UINT64_C(1000000));
+  return before != UINT64_MAX && after != UINT64_MAX && (wall < before || wall > after);
+}
 }  // namespace
 
 int main() {
+  Check(MatchesNativeMonotonic(art::NanoTime, UINT64_C(1000000000)),
+        "ART nanoseconds match the independent QPC bracket");
+  Check(MatchesNativeMonotonic(art::MicroTime, UINT64_C(1000000)),
+        "ART microseconds match the independent QPC bracket");
+  Check(MatchesNativeMonotonic(art::MilliTime, UINT64_C(1000)),
+        "ART milliseconds match the independent QPC bracket");
+  Check(RejectsWallClock(), "the monotonic bracket rejects the old wall-clock domain");
+  Check(MonotonicSequence(), "all ART monotonic clocks keep their order and units");
+  uint64_t nano_before = art::NanoTime();
+  Sleep(20);
+  uint64_t nano_after = art::NanoTime();
+  Check(nano_after >= nano_before && nano_after - nano_before >= UINT64_C(1000000) &&
+            MatchesNativeMonotonic(art::NanoTime, UINT64_C(1000000000)),
+        "the ART elapsed clock advances across Sleep");
+  bool other_monotonic = false;
+  std::thread other([&] { other_monotonic = MonotonicSequence(); });
+  bool caller_monotonic = MonotonicSequence();
+  other.join();
+  Check(caller_monotonic && other_monotonic, "concurrent callers share the QPC clock domain");
   Check(MatchesNativeCpu(false), "ART current-thread CPU time matches GetThreadTimes");
   Check(MatchesNativeCpu(true), "ART process CPU time matches GetProcessTimes");
   uint64_t process_before = art::ProcessCpuNanoTime();
