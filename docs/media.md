@@ -220,8 +220,28 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — runtime gates pass; full CI blocked by external TCP timeouts, 2026-10-27
+### media3 (stage 3) — runtime gates pass; combined full CI pending, 2026-10-27
 
+- **Next combined candidate prepared, not yet CI-verified:** verified
+  integration **630c20c243a49c469fcbe67b45e018996783e9e5** (coordinator's
+  full 40432541082 at 42cc1c0, docs-only head) is merged at 131e89d.
+  Source **06dbe8f** adds the coordinator-approved, three-file test slice
+  from frozen Web3 2755f21 / original ec111f78: real local expired,
+  wrong-host, self-signed and untrusted-root certificates replace only the
+  four external negative endpoints for this invocation. Existing positive
+  internet DNS/HTTPS/TLS1.3/SNI and all app tests are unchanged. Rejection
+  now requires a certificate cause or SSLPeerUnverifiedException; TCP
+  timeout/refusal and unrelated handshake errors fail. Existing bounded
+  TlsServer is byte-identical to the baseline; no runtime or workflow
+  change is imported, and Web3's pending full CI is not accepted as proof.
+  Patch SHA256 c9c8da5caa8b082432b90ef0bae81445d7d9ee3458e0cadd4314a8374e1ea4f3
+  and all three result hashes match the source audit. eba9bbf also removes
+  duplicate whole GC timing groups by full native timestamp/pid/tid header,
+  preserving repeated phase rows and the 64-group/4,096-row bounds. Only
+  source/hash checks, PowerShell parsing and a lightweight synthetic log
+  publication check run locally. Full combined CI is required for all
+  37 media3 checks, all four actual certificate rejections, both complete
+  Windows summaries, package and both e2e jobs before this is mergeable.
 - Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
   **40430522654**, has actual **37 media3 PASS on both Windows runners**.
   Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
