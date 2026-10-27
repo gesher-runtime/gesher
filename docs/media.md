@@ -245,6 +245,16 @@ the microphone (looped, from its start each time recording starts);
   request. Resume tails are only tens of microseconds. This identifies GC
   suspension, but does not yet identify KernelPreparation or another phase
   within CompactionPause as the expensive operation.
+- Source follow-up, awaiting corrected runtime proof: the current Windows
+  global ThreadCpuNanoTime returns UINT64_MAX. GarbageCollector::Run
+  subtracts two such values, recording zero CPU duration; an already-run
+  collector therefore has zero mean CPU time. Heap::GrowForUtilization can
+  then divide next/current mean CPU times as 0/0 and convert the resulting
+  NaN to size_t when estimating the next concurrent-GC threshold. The
+  coordinator owns the clock correction; a source-only guard proposal
+  retains the observed allocation estimate when the current mean is zero.
+  Neither the guard nor a functional mremap change is in this branch. The
+  measured FPS effect of a corrected clock/estimate still needs CI.
 - Compilation/publication in 40416959340: main **121901592754** succeeds in
   3m39s, compiling both changed ART objects with -Werror and linking dalvikvm /
   oatdump; framework **121909747843** succeeds (javac no errors, service dex
