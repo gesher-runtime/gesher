@@ -472,7 +472,13 @@ needs: [framework-build.md](framework-build.md).
       match pinned bionic ICU4X over every code point and invalid sentinels;
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
-      Widths, collation and remaining NDK/POSIX scope stay open.
+      Widths and remaining NDK/POSIX scope stay open.
+- [x] Pinned multibyte/C11 conversion states and bounds, LP64 wide numbers,
+      locale aliases/CHAR_MAX layout, C collation and UTF-32 wide-time
+      wrapper behavior: independent 248-case reference ci 40425021540 and
+      actual x86_64/arm64 dalvikvm/single/device cases in full ci
+      40425393716 at 57782e5, attempt 2, both Windows suites/package/e2e.
+      Binary128, wide stdio/scanf and independent narrow tzcode remain open.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
