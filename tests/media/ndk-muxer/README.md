@@ -21,8 +21,15 @@ uint32 payload size and actual encoded payload.
 Source for real typed NDK JNI/ELF/APK callers now includes both ABIs,
 offset/ownership/lifecycle/error/FD-access controls and both interleaved and
 track-blocked packet arrival. It is uncompiled/unexecuted preparation.
-Independent container metadata/packet/decoded color/tone checks and the
-test79 runner are still required before component CI. The native bridge's ten entries
-and MP4 location source remain unverified. Append, HEIF, B-frame/DTS/CTS
+The independent host oracle now links the actual AOSP readers/decoders
+without the container writers. It requires exact60-frame four-color video,
+real two-second PCM and1661/880/660Hz tones within2%, positive amplitude,
+actual codec/track metadata, rotation matrix and exact ISO-6709 bytes.
+Test79 requires both ABIs through core JNI, ELF, single APK and fresh-device
+APK, with18 semantic parts,12 FD-mode controls and ten independently decoded
+containers per context, including active-delete finalization. Its new
+process/kill/pipe waits are bounded. All this is source-only preparation;
+review, compilation and runtime CI remain pending. The native bridge's ten
+entries and MP4 location source remain unverified. Append, HEIF, B-frame/DTS/CTS
 and advanced metadata contracts remain open and must not be reported as
 covered by these presentation-ordered fixtures.
