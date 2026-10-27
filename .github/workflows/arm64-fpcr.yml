@@ -10,9 +10,11 @@ on:
       - tests/native2/**
       - tests/apps/native2app/**
       - probes/arm64/fpcr/**
+      - probes/arm64/fpsr/**
       - .github/workflows/native2.yml
       - .github/workflows/arm64.yml
       - .github/workflows/arm64-fpcr.yml
+      - .github/workflows/arm64-fpsr-oracle.yml
   workflow_dispatch:
 jobs:
   reference:
@@ -44,5 +46,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & dist/arm64_fpcr_test.exe dist/arm64-fpcr-code.bin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & dist/arm64_fpsr_test.exe dist/arm64-fpcr-code.bin
+          & dist/arm64_fpsr_test.exe dist/arm64-fpcr-code.bin dist/arm64-fpsr-reference.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -20,6 +20,16 @@ arm64_fpcr_code:
   b.eq .Lmultiply
   cmp x0, #8
   b.eq .Lsaturate
+  cmp x0, #9
+  b.eq .Ladd32
+  cmp x0, #10
+  b.eq .Lsubtract32
+  cmp x0, #11
+  b.eq .Lmultiply32
+  cmp x0, #12
+  b.eq .Ldivide32
+  cmp x0, #13
+  b.eq .Lsubtract
   mrs x0, fpcr
   ret
 .Lwrite:
@@ -61,5 +71,35 @@ arm64_fpcr_code:
   movi v1.16b, #1
   sqadd v0.16b, v0.16b, v1.16b
   mrs x0, fpsr
+  ret
+.Ladd32:
+  fmov s0, w1
+  fmov s1, w2
+  fadd s0, s0, s1
+  fmov w0, s0
+  ret
+.Lsubtract32:
+  fmov s0, w1
+  fmov s1, w2
+  fsub s0, s0, s1
+  fmov w0, s0
+  ret
+.Lmultiply32:
+  fmov s0, w1
+  fmov s1, w2
+  fmul s0, s0, s1
+  fmov w0, s0
+  ret
+.Ldivide32:
+  fmov s0, w1
+  fmov s1, w2
+  fdiv s0, s0, s1
+  fmov w0, s0
+  ret
+.Lsubtract:
+  fmov d0, x1
+  fmov d1, x2
+  fsub d0, d0, d1
+  fmov x0, d0
   ret
 .size arm64_fpcr_code, .-arm64_fpcr_code

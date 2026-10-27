@@ -40,6 +40,16 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def nan_denormal_pair(width, left, right):
+    fraction = (1 << (23 if width == 32 else 52)) - 1
+    exponent = ((1 << (8 if width == 32 else 11)) - 1) << (23 if width == 32 else 52)
+    def nan(bits):
+        return bits & exponent == exponent and bits & fraction != 0
+    def denormal(bits):
+        return bits & exponent == 0 and bits & fraction != 0
+    return (nan(left) and denormal(right)) or (denormal(left) and nan(right))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("matrix", nargs="?")
@@ -61,11 +71,13 @@ def main():
         assert len(fields) == 8 and fields[:6] == source, (number, "input/schema mismatch")
         operation, width, control, left, right, seed, result, status = fields
         assert 0 <= result < (1 << width) and status & ~0x0800009f == 0
+        if ((control >> 22) & 3) == 0 and control & (1 << 24) and seed == 0 and nan_denormal_pair(width, left, right):
+            print(f"QEMU_NAN_DENORMAL op={operation} width={width} fpcr={control:08x} left={left:016x} right={right:016x} result={result:016x} status={status:08x}")
         one = 0x3f800000 if width == 32 else 0x3ff0000000000000
         half = 0x33800000 if width == 32 else 0x3ca0000000000000
         if left == one and right == one:
             two = 0x40000000 if width == 32 else 0x4000000000000000
-            zero = (1 << (width - 1)) if (control >> 22) & 3 == 2 else 0
+            zero = (1 << (width - 1)) if ((control >> 22) & 3) == 2 else 0
             assert result == (two, zero, one, one)[operation] and status == seed, (number, "normal arithmetic sanity")
         if left == one and right == half and operation in (2, 3):
             reciprocal = 0x4b800000 if width == 32 else 0x4340000000000000

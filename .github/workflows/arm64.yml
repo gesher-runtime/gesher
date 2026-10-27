@@ -43,7 +43,10 @@ env:
   R8_VERSION: "9.5.26"
 
 jobs:
+  fpsr-reference:
+    uses: ./.github/workflows/arm64-fpsr-oracle.yml
   build:
+    needs: fpsr-reference
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +58,7 @@ jobs:
             tests/apps/nativeactivity
             tests/exec
             probes/arm64/fpcr
+            probes/arm64/fpsr
 
       - name: Cache toolchain
         id: toolchain
@@ -261,6 +265,12 @@ jobs:
           tests/apps/nativeactivity/build.sh dist-arm64 --ndk "$PWD/$NDK_DIR" \
             --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" \
             --abi arm64-v8a --apk nativeactivity-arm64.apk
+
+      - name: Include the independent numeric and status reference
+        uses: actions/download-artifact@v4
+        with:
+          name: arm64-fpsr-reference
+          path: dist-arm64/
 
       - uses: actions/upload-artifact@v4
         with:
