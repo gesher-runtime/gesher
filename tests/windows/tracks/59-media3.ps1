@@ -10,6 +10,11 @@
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
 
+CheckTimed 'media3: actual ART GC CPU estimate preserves finite/unknown cases and guards zero CPU duration (pristine guard negative control)' `
+  "$Dir/media_gc_estimate_test.exe" @() @(
+    'MediaGcEstimateTest: 7 finite/zero/unknown production estimates passed',
+    'MediaGcEstimateTest: pristine zero-CPU guard selects scaling; patched guard preserves estimate') 30
+
 # The microphone's file: 48000 Hz mono 16-bit.
 function WriteMicWav([string] $path) {
   $rate = 48000
@@ -141,7 +146,7 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }
   # ART already supplies per-collection exclusive/total phase timings through
-  # -verbose:heap. Keep complete timing groups, including unknown heavy phases,
+  # -verbose:heap. Keep timing groups, including unknown heavy phases,
   # instead of assuming KernelPreparation is the cause. Bound publication even
   # if a runtime produces an unexpectedly large number of collections/rows.
   $gcTimingGroups = 0
@@ -157,6 +162,9 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
       ++$gcTimingRows
     }
     if ($trace -match ': end, [0-9]') { $gcTiming = $false }
+  }
+  if ($gcTimingRows -eq 4096) {
+    Write-Host "INFO  media3 GC phase ($Mode): publication reached 4096 rows; final group may be incomplete"
   }
   # A completed test must not hide a crashed daemon behind successful media
   # round trips (post-GC metrics previously killed ReferenceQueueDaemon).

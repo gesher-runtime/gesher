@@ -221,6 +221,51 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-27
+- Latest full diagnostic **40425000165**, source
+  **487c5e54917a4b4747d1852312fe7d7c5e862cb5**, is complete. All 28 job
+  conclusions are read: **21 success, six skipped, one failed**. Windows
+  **121931002560** (2025) has `0 test(s) failed` and all 36 media3 PASS,
+  including device camera (34 source callbacks). Windows **121931002372**
+  (2022) has `3 test(s) failed`: device camera (14 encoded/decoded frames,
+  15 started / 14 completed callbacks) and two net checks after a 15-second
+  TCP connection timeout to self-signed.badssl.com. This is not a TLS trust
+  rejection or a green full source. Both original boot gates pass (2022
+  interpreter 576/615 and JIT 478/452 ms; 2025 618/642 and 475/486 ms).
+  All race/onClosed/RECORD_AUDIO checks pass. Package **121931002529**
+  passes actual installed oatdump, window/input and full uninstall cleanup.
+  E2e **121932494938** (2022) / **121932494905** (2025) each pass all four
+  transport fixtures, ten apps including Just Player/TIC-80/Puzzles,
+  association/shortcut launch and `0 unexpected failures`.
+- Existing ART TimingLogger data now identifies **KernelPreparation** as
+  the dominant part of CompactionPause. For 22 retained app collections,
+  2022 pid 2784 has 5,386,514 us KernelPreparation / 5,423,036 us compaction
+  (99.33%), median 251,506 us, range 152,832..280,639 us. 2025 pid 5472 has
+  2,337,774 / 2,372,928 us (98.52%), median 106,134 us, range 92,447..121,248 us.
+  The 4,096-row publication bound clips later collections; these are not
+  whole-process totals. No mremap, collector selection or scheduling change
+  is made from this observation. ART NanoTime markers and steady/QPC
+  camera clocks are separate domains; overlap analysis uses ART markers only.
+- **New candidate, not yet CI-verified:** import coordinator's exact ART0572
+  CPU-clock patch (SHA256 2a643cad9529c1f92673917dcf756ee18a680f981d2f9fbbde18dbd0c9493db4)
+  and ART0593's single positive-current-CPU guard. 0572 compiled/linked in
+  coordinator CI 40418638643 and has an actual Windows-2025 clock PASS;
+  this is not a fully green source or a camera-performance proof. The guard
+  preserves the observed allocation estimate when current mean CPU duration
+  is zero, avoiding 0/0-to-size_t; finite scaling and unknown-next behavior
+  retain their existing policy. The new CI-only executable is generated
+  from the actual patched Heap::GrowForUtilization arithmetic block; seven
+  finite/zero/unknown cases execute it. Pristine/patched guard probes provide
+  a negative control without executing undefined NaN conversion. It tests
+  that production block, not a full Heap object. This adds one independent
+  check: **37 expected, all original 36 retained**. Two-second/30-frame,
+  picture/tone/permission/terminal and boot criteria are unchanged. Only
+  source application/generation and parsers run locally; native compilation
+  and fixture execution await the candidate's full CI. Native3 owns the
+  separate NanoTime monotonic and malloc-pressure accounting gaps.
+
+#### Earlier runs and repairs
+
+Local fixture results in this history predate the owner's CI-only rule.
 - Full diagnostic CI **40416959340** at **fe137c83667bf927d3ec331dc10a30ac2b8ef866**
   includes verified integration 94ccde1 (AOT cloud/Exec3 and the independently
   verified camera ownership/race correction). All 28 job conclusions are
@@ -245,7 +290,7 @@ the microphone (looped, from its start each time recording starts);
   request. Resume tails are only tens of microseconds. This identifies GC
   suspension, but does not yet identify KernelPreparation or another phase
   within CompactionPause as the expensive operation.
-- Source follow-up, awaiting corrected runtime proof: the current Windows
+- Source follow-up discovered from the baseline: its Windows
   global ThreadCpuNanoTime returns UINT64_MAX. GarbageCollector::Run
   subtracts two such values, recording zero CPU duration; an already-run
   collector therefore has zero mean CPU time. Heap::GrowForUtilization can
@@ -253,8 +298,8 @@ the microphone (looped, from its start each time recording starts);
   NaN to size_t when estimating the next concurrent-GC threshold. The
   coordinator owns the clock correction; a source-only guard proposal
   retains the observed allocation estimate when the current mean is zero.
-  Neither the guard nor a functional mremap change is in this branch. The
-  measured FPS effect of a corrected clock/estimate still needs CI.
+  The guard and clock correction are now in the unverified candidate above;
+  no functional mremap change is included. Their FPS effect still needs CI.
 - Compilation/publication in 40416959340: main **121901592754** succeeds in
   3m39s, compiling both changed ART objects with -Werror and linking dalvikvm /
   oatdump; framework **121909747843** succeeds (javac no errors, service dex
@@ -265,19 +310,6 @@ the microphone (looped, from its start each time recording starts);
   **121914371093** (2022) / **121914371153** (2025) each pass four transport
   fixtures, all ten apps including Just Player/TIC-80/Puzzles,
   association/shortcut launch and `0 unexpected failures`.
-- Diagnostic full CI **40425000165** is running at **487c5e5**, using ART's
-  existing `-verbose:heap` only in record VMs; it will
-  retain complete exclusive/total collection timing groups (at most 64
-  groups / 4,096 rows per mode). The standalone race fixture keeps its
-  original VM options. This observes all phases without presuming the
-  expensive one, adds no ART patch and changes no GC/scheduler behavior or
-  acceptance criterion. Integration a06d930 (coordination docs only above
-  94ccde1) is merged. Source/PowerShell checks pass; new runtime phase
-  evidence is pending. No local compilation or fixture execution is allowed.
-#### Earlier runs and repairs
-
-Local fixture results in this history predate the owner's CI-only rule.
-
 - Full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
