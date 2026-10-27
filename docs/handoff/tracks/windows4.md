@@ -50,9 +50,11 @@ and JNI building, with 203 assembly boundaries/zero problems. Framework
 121958450006 and its app/graphics dex/winlegacy build log were also read.
 Package 121966922162 succeeds in 2m32; actual installed compiler/oatdump,
 boot/runtime, HWND/input/resize and uninstall cleanup PASS lines were read.
-Windows 2022 job 121966922116, Windows 2025 job 121966922207 and e2e jobs
-121967761169/121967761098 are still running. Their final actual results
-are required before any source acceptance.
+Both actual e2e logs are now read: 121967761169 (2022) and 121967761098
+(2025) pass all nine apps including Puzzles/TIC-80, four pinned-byte transport
+fixtures, APK association and Start menu shortcut, with zero unexpected
+failures each. Windows jobs 121966922116/121966922207 are still running;
+their final actual results are required before any source acceptance.
 
 Full diagnostic **40417632512** at exact cde1c79 is COMPLETE RED: 28 jobs,
 20 success, six skipped, both Windows jobs failed. Both actual Windows logs
