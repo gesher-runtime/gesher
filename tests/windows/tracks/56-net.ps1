@@ -185,6 +185,7 @@ $negativeCertificates = @()
 $negativeServers = @()
 $positiveCertificates = @()
 $positiveServer = $null
+$httpServer = $null
 try {
   $negativeCertificates = @(
     (New-NetTestCertificate 'localhost' $rootCert $now.AddHours(-2) $now.AddHours(-1)),
@@ -198,6 +199,9 @@ try {
   $virtualHosts.Add('sni-one.gesher.invalid', $positiveCertificates[0])
   $virtualHosts.Add('sni-two.gesher.invalid', $positiveCertificates[1])
   $positiveServer = [GesherNetTlsServer]::new($serverCert, $virtualHosts)
+  # Keep HTTP200 traffic off the SNI listener: localhost may omit SNI and
+  # must not supply the empty-name evidence required from the missing-SNI control.
+  $httpServer = [GesherNetTlsServer]::new($serverCert)
   $negativeUrls = @()
   foreach ($certificate in $negativeCertificates) {
     $server = [GesherNetTlsServer]::new($certificate)
@@ -206,7 +210,7 @@ try {
   }
   $machineRoot.Open('ReadWrite'); $machineRoot.Add($rootPublic); $machineRoot.Close()
   $null = NetDex 'internet DNS/Google HTTPS/TLS1.3, local HTTP200/virtual hosts and four certificate rejections' @('internet') 300 @{
-    GESHER_TLS_POSITIVE_URL = "https://localhost:$($positiveServer.Port)/"
+    GESHER_TLS_POSITIVE_URL = "https://localhost:$($httpServer.Port)/"
     GESHER_TLS_SNI_PORT = "$($positiveServer.Port)"
     GESHER_TLS_REJECTION_URLS = $negativeUrls -join ','
   }
@@ -232,10 +236,18 @@ try {
         Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stopped"
       }
     } finally {
-      if ($null -ne $positiveServer) {
-        Write-Host "INFO  net TLS cleanup: positive virtual-host server $($positiveServer.Port) stop"
-        $positiveServer.Dispose()
-        Write-Host 'INFO  net TLS cleanup: positive virtual-host server stopped'
+      try {
+        if ($null -ne $positiveServer) {
+          Write-Host "INFO  net TLS cleanup: positive virtual-host server $($positiveServer.Port) stop"
+          $positiveServer.Dispose()
+          Write-Host 'INFO  net TLS cleanup: positive virtual-host server stopped'
+        }
+      } finally {
+        if ($null -ne $httpServer) {
+          Write-Host "INFO  net TLS cleanup: positive HTTP server $($httpServer.Port) stop"
+          $httpServer.Dispose()
+          Write-Host 'INFO  net TLS cleanup: positive HTTP server stopped'
+        }
       }
     }
   } finally {
