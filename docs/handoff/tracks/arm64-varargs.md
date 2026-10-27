@@ -88,3 +88,9 @@ their own compilation and actual coherent full execution. Locale2 full
 40516054280 is red for three Windows2025 Web3 lifecycle/launch failures;
 its source and the accepted FPSR leaf remain frozen. Full-environment/test85
 work waits for stable Locale integration rather than changing either leaf.
+
+Native2 compile-only40529197932 at64f33ff3 is now green, attempt1. Actual
+job122277019774 and its metadata were personally read: both libraries/APKs,
+javac/d8, original third-party/symbol pipeline and artifact publication pass.
+No actual ART/APK execution or full product/Surface acceptance follows from
+this compilation-only result. Production matches scoped928a09b7 exactly.
