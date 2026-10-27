@@ -55,6 +55,18 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
-Reserved on 2026-10-26. No successor implementation or CI yet. web3's current
-CI is 40333695614 at 455e9fc, still running; its eventual result must be read
-before dependent implementation. All contracts above remain open.
+Root now owns C:\work\gesher-net4, branch wip/net4, from verified native
+integration 8922a3e. The first shared test-fixture slice is prepared with
+Media3: four real local certificate rejections, NetApp HTTPS and deterministic
+HTTP200/two-host SNI selection with missing/unknown-name controls, retaining
+actual example/Google DNS and Google HTTPS204/TLS1.3/SNI/hostname checks.
+Source review is pending; no Net4 runtime/API closure or inventory rewrite.
+The complete Media3 candidate will provide fresh CI proof before integration.
+
+Earlier Media3 full 40438975894/0148698 remains red only on 2025's five
+external-network failures, despite all media gates passing; no timeout is
+accepted as a certificate result. The first positive proposal's server
+evidence could be polluted by an earlier localhost HTTP connection. Separate
+HTTP and SNI listeners are required before acceptance. All contracts above,
+including the 84 assigned libc/resolver entries, remain open. Every compiler
+and native/JVM fixture runs in CI only.
