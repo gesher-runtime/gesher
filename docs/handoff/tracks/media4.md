@@ -175,6 +175,23 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Separate AAudio policy source is prepared on wip/media4-aaudio in
+C:\work\gesher-media4-aaudio, from accepted OpenSL/docs58a24583. Test78 is
+reserved (next79), ADR0064 retained. It supplies the three old missing
+API36 entries: process-global requested policy starts UNSPECIFIED, accepts
+0/1/2/3 and preserves the previous value on invalid signed32 input; actual
+shared Windows streams retain non-MMAP identity across policy changes.
+ALWAYS fails new input/output opens with NO_SERVICE(-881)/null because no
+Android MMAP service exists; format validation takes priority. Typed dynamic
+calls use exact pinned API36 signatures with the older r27 NDK, alongside
+real legacy PCM output and manifest-aware capture/read/stop/close cases.
+Both-ABI libraries, four allowed/denied APKs, core DEX and strict test78
+markers are prepared. No compilation/runtime proof or inventory change is
+claimed. Standalone coverage must use the separately verified real backend,
+not a policy-only library; native full40477536464 is still pending. Full
+builder validation, platform-policy getters, routing and error callbacks
+remain open. Only PS AST/Bash/XML/YAML/source checks ran locally.
+
 Corrected full ci **40476766790** is complete GREEN at
 **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt 1 without retries,
 with accepted integration db84749b/freshExit30deb08c contained. All 28 job

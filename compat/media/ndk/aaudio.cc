@@ -54,6 +54,10 @@ constexpr aaudio_result_t kErrorUnavailable = -889;
 constexpr aaudio_result_t kErrorNull = -886;
 constexpr aaudio_result_t kErrorTimeout = -885;
 constexpr aaudio_result_t kErrorInvalidFormat = -883;
+constexpr aaudio_result_t kErrorNoService = -881;
+
+enum : int32_t { kMMapUnspecified = 0, kMMapNever = 1, kMMapAuto = 2, kMMapAlways = 3 };
+std::atomic<int32_t> g_mmap_policy{kMMapUnspecified};
 
 enum : int32_t { kDirectionOutput = 0, kDirectionInput = 1 };
 enum : int32_t { kFormatUnspecified = 0, kFormatI16 = 1, kFormatFloat = 2, kFormatI24 = 3, kFormatI32 = 4 };
@@ -93,6 +97,7 @@ struct Builder {
 
 struct AAudioStream {
   Builder b;
+  const bool mmap_used = false;  // The Windows engine uses shared tracks/capture, not Android MMAP.
   std::shared_ptr<Track> track;
   std::shared_ptr<CaptureStream> capture;  // input streams
   PcmFormat pcm;
@@ -189,6 +194,16 @@ void CallbackLoop(AAudioStream* s) {
 
 // --- AAudioStreamBuilder --------------------------------------------------------------
 
+int32_t SYSV GetMMapPolicy() { return g_mmap_policy.load(std::memory_order_relaxed); }
+
+aaudio_result_t SYSV SetMMapPolicy(int32_t policy) {
+  if (policy < kMMapUnspecified || policy > kMMapAlways) return kErrorIllegalArgument;
+  g_mmap_policy.store(policy, std::memory_order_relaxed);
+  return kOk;
+}
+
+bool SYSV IsMMapUsed(AAudioStream* s) { return s->mmap_used; }
+
 aaudio_result_t SYSV CreateStreamBuilder(Builder** out) {
   if (out == nullptr) return kErrorNull;
   *out = new Builder();
@@ -282,7 +297,16 @@ aaudio_result_t OpenInputStream(Builder* b, AAudioStream** out) {
 }
 
 aaudio_result_t SYSV OpenStream(Builder* b, AAudioStream** out) {
-  if (b == nullptr || out == nullptr) return kErrorNull;
+  if (out == nullptr) return kErrorNull;
+  *out = nullptr;
+  if (b == nullptr) return kErrorNull;
+  if (b->format != kFormatUnspecified && b->format != kFormatI16 &&
+      b->format != kFormatFloat && b->format != kFormatI24 && b->format != kFormatI32) {
+    return kErrorInvalidFormat;
+  }
+  // Android 16 rejects ALWAYS when the system has no MMAP service. Preserve
+  // format-error priority before choosing/opening a legacy backend.
+  if (GetMMapPolicy() == kMMapAlways) return kErrorNoService;
   if (b->direction == kDirectionInput) return OpenInputStream(b, out);
   auto s = std::make_unique<AAudioStream>();
   s->b = *b;
@@ -507,6 +531,7 @@ const char* SYSV ResultToText(aaudio_result_t r) {
     case kErrorNull: return "AAUDIO_ERROR_NULL";
     case kErrorTimeout: return "AAUDIO_ERROR_TIMEOUT";
     case kErrorInvalidFormat: return "AAUDIO_ERROR_INVALID_FORMAT";
+    case kErrorNoService: return "AAUDIO_ERROR_NO_SERVICE";
     default: return "Unrecognized AAudio error";
   }
 }
@@ -524,6 +549,9 @@ const char* SYSV StateToText(int32_t state) {
 void Register() {
   using gesher::bionic::AddBionicSymbol;
 #define E(name, fn) AddBionicSymbol(name, reinterpret_cast<void*>(&fn))
+  E("AAudio_getMMapPolicy", GetMMapPolicy);
+  E("AAudio_setMMapPolicy", SetMMapPolicy);
+  E("AAudioStream_isMMapUsed", IsMMapUsed);
   E("AAudio_createStreamBuilder", CreateStreamBuilder);
   E("AAudio_convertResultToText", ResultToText);
   E("AAudio_convertStreamStateToText", StateToText);

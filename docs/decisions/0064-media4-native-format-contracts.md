@@ -128,3 +128,23 @@ backend is accepted. Native-child recording identity, configuration,
 loss-of-control callbacks, output-mix and full effects/device-policy behavior
 remain open. The installer notice proposal also needs package-CI proof
 before release; no installed-notice claim follows from source preservation.
+
+## Proposed follow-up: AAudio MMAP capability and policy
+
+Requested process policy and effective backend capability are separate.
+Keep the API override initially UNSPECIFIED(0), accept exactly0/1/2/3 with
+invalid values preserving the previous selection, and store actual stream
+identity independently. The current shared Windows engine has no Android
+MMAP service. NEVER/AUTO/UNSPECIFIED can open actual legacy tracks/capture;
+ALWAYS must return Android16's NO_SERVICE(-881), nulling failed outputs,
+after the format-error check. Existing stream identity and I/O survive later
+global policy changes. This does not implement hardware MMAP or every builder
+validation/policy option.
+
+Separate source wip/media4-aaudio prepares typed dynamic API36 calls (the
+CI r27 NDK predates these declarations), real output/read/close and independent
+manifest grant/denial through both ABIs/core/single/device APKs in test78.
+All three historical coverage entries remain unverified. Standalone ELF
+must use the genuine backend continuation only after its full CI passes;
+no library is advertised by policy-only exports. New platform-policy getters,
+full builder validation, error callbacks and routing remain open.

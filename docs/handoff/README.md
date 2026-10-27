@@ -221,7 +221,8 @@ spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
 NDK ABI callers, but production/runtime acceptance awaits full CI
 ([brief](tracks/exec4-actions.md)). Test75 is the ARM sticky-FPSR slice,
 76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
-([brief](tracks/exec4-spawn.md)); next free test is78.
+([brief](tracks/exec4-spawn.md));78 belongs to the separate source-only
+Media4 AAudio MMAP policy/legacy-stream identity slice; next free test is79.
 Shared-library implementation and the new slices are
 not verified AOT3/exec4/FPSR completion.
 

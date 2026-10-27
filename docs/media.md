@@ -220,6 +220,13 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Separate wip/media4-aaudio prepares the three API36 MMAP policy/identity
+  entries with actual legacy I/O and permission-aware both-ABI fixtures in
+  test78. Requested policy starts0, invalid values preserve it, and mandatory
+  MMAP fails NO_SERVICE(-881)/null on the shared Windows backend. This is
+  source only; no inventory/roadmap acceptance or native backend claim.
+  Existing OpenSL/format candidates stay frozen. Follow the Media4 brief.
+
 - Corrected OpenSL full ci **40476766790** is GREEN at
   **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt1:22 success/six
   skipped, both Windows whole0 and14 test76 PASS each. Both ABIs pass core
