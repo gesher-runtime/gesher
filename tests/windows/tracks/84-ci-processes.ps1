@@ -19,6 +19,7 @@ $process84SavedDir = $Dir
 $process84SavedSlHost = $slHost
 $process84SavedSurfaceVm = $dvmSurfaces
 $process84SavedWindowVm = $dvmWindows
+$process84SavedTrace = $env:GESHER_CI_PROCESS_TRACE
 $process84SurfaceDir = Join-Path $process84Root 'surface-helper'
 New-Item -ItemType Directory $process84SurfaceDir | Out-Null
 $process84SurfaceExe = Join-Path $process84SurfaceDir 'dalvikvm.exe'
@@ -28,6 +29,7 @@ try {
   $slHost = $process84SurfaceDir
   $dvmSurfaces = @()
   $dvmWindows = @()
+  $env:GESHER_CI_PROCESS_TRACE = '1'
   foreach ($helper in 'SurfaceRun', 'InvokeOpenSl') {
     foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                        @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
@@ -136,11 +138,61 @@ try {
       }
     }
   }
+  $process84N2Work = Join-Path $process84Root 'native2-cwd'
+  New-Item -ItemType Directory $process84N2Work | Out-Null
+  $process84N2Value = 'process84-' + [guid]::NewGuid().ToString('N')
+  foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
+                     @{ Mode = 'timeout'; Expected = 124 }, @{ Mode = 'retained'; Expected = 124 },
+                     @{ Mode = 'environment'; Expected = 0 })) {
+    $pidFile = Join-Path $process84Root "N2Run-$($case.Mode).pid"
+    $limit = if ($case.Mode -eq 'timeout') { 3 } else { 15 }
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+      $text = N2Run $process84Exe @($case.Mode, $pidFile) $process84N2Work @{ GESHER_PROCESS84_ENV = $process84N2Value } $limit | Out-String
+      $code = $LASTEXITCODE
+      $timer.Stop()
+      $correct = $code -eq $case.Expected -and $timer.Elapsed.TotalSeconds -lt ($limit + 25) -and
+        $text -match 'INFO N2 process cleanup: pid=\d+ native handle closed=True'
+      if ($case.Mode -in @('normal', 'nonzero', 'environment')) {
+        $correct = $correct -and $text.Contains("process84 stdout $($case.Mode)") -and
+          $text.Contains("process84 stderr $($case.Mode)")
+        if ($case.Mode -eq 'environment') {
+          $correct = $correct -and $text.Contains("process84 cwd $process84N2Work") -and
+            $text.Contains("process84 environment $process84N2Value")
+        }
+      } elseif ($case.Mode -eq 'timeout') {
+        $correct = $correct -and $text.Contains('TIMEOUT after 3 s:') -and (Test-Path -LiteralPath $pidFile)
+      } else {
+        $correct = $correct -and $text.Contains('did not complete within ten seconds') -and (Test-Path -LiteralPath $pidFile)
+      }
+      if ($correct) {
+        Write-Host "PASS  CI processes: actual N2Run $($case.Mode) status$code workdir/environment/stream output and disposed native handle"
+      } else {
+        Write-Host "FAIL  CI processes: actual N2Run $($case.Mode) status$code expected$($case.Expected) after$($timer.Elapsed.TotalSeconds): $text"
+        $script:failed++
+      }
+    } finally {
+      if (Test-Path -LiteralPath $pidFile) {
+        $ownedProcess = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+        if ($ownedProcess) {
+          try {
+            if ($ownedProcess.Path -ne $process84Exe) { throw 'N2Run PID is not the owned fixture' }
+            $ownedProcess.Kill($true)
+            if (-not $ownedProcess.WaitForExit(5000)) { throw 'N2Run fixture survived bounded cleanup' }
+          } catch {
+            Write-Host "FAIL  CI processes: actual N2Run $($case.Mode) cleanup: $_"
+            $script:failed++
+          } finally { $ownedProcess.Dispose() }
+        }
+      }
+    }
+  }
 } finally {
   $Dir = $process84SavedDir
   $slHost = $process84SavedSlHost
   $dvmSurfaces = $process84SavedSurfaceVm
   $dvmWindows = $process84SavedWindowVm
+  $env:GESHER_CI_PROCESS_TRACE = $process84SavedTrace
 }
 foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                    @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {

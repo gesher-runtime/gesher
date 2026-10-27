@@ -39,3 +39,9 @@ split start/wait protocol and10s output bounds; real split-process controls
 are added to84. Those two source sites are no longer unbounded, but their
 changed-source CI and all later full gates remain pending. The table above
 retains the pinned6dd5 inventory rather than silently deleting its history.
+
+Split40554769899 now proves both split helpers in actual CI. The following
+N2Run/test44 source removes its two unbounded waits/unfinished-reader reads
+and adds real working-directory/environment/status124/disposal controls.
+Its source and component status are recorded in ci-processes.md; the pinned
+inventory and unproved aggregate/full/helper scopes remain preserved here.

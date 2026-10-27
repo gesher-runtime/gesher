@@ -29,19 +29,30 @@ function N2Run([string] $Exe, [string[]] $Arguments, [string] $WorkDir = (Get-Lo
   $psi.RedirectStandardError = $true
   foreach ($k in $Environment.Keys) { $psi.Environment[$k] = $Environment[$k] }
   $p = [Diagnostics.Process]::Start($psi)
+  $nativeId = $p.Id
+  $nativeHandle = $p.SafeHandle
+  try {
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $stderr = $p.StandardError.ReadToEndAsync()
-  if (-not $p.WaitForExit($Seconds * 1000)) {
-    $p.Kill($true)
-    $p.WaitForExit()
+  $incomplete = -not $p.WaitForExit($Seconds * 1000)
+  if ($incomplete) {
+    try { $p.Kill($true) } catch { Write-Output "N2 process kill failed: $_" }
+    if (-not $p.WaitForExit(5000)) { Write-Output 'N2 process still alive five seconds after kill' }
     Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
-    $global:LASTEXITCODE = 124
-  } else {
-    $p.WaitForExit()
-    $global:LASTEXITCODE = $p.ExitCode
   }
-  $stdout.Result
-  $stderr.Result
+  foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+    try {
+      if ($pipe.Task.Wait(10000)) { Write-Output $pipe.Task.Result }
+      else { $incomplete = $true; Write-Output "N2 $($pipe.Name) did not complete within ten seconds" }
+    } catch { $incomplete = $true; Write-Output "N2 $($pipe.Name) read failed: $_" }
+  }
+  $global:LASTEXITCODE = if ($incomplete) { 124 } else { $p.ExitCode }
+  } finally {
+    $p.Dispose()
+    if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+      Write-Output "INFO N2 process cleanup: pid=$nativeId native handle closed=$($nativeHandle.IsClosed)"
+    }
+  }
 }
 
 $abis = @(@{ Abi = 'x86_64'; Tag = 'x86_64' }, @{ Abi = 'arm64-v8a'; Tag = 'arm64' })

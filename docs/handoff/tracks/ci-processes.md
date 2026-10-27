@@ -6,6 +6,21 @@ Build and execute process fixtures only in CI.
 
 ## Status and next steps
 
+Split40554769899/source3d6979f2 is GREEN both Windows hosts; actual
+logs122367758689/122367759184 were read. Each has20 real controls and0failed,
+including all eight new split-start/wait cases and actual disposed native
+handles. This remains component-only proof, without a coherent full.
+
+The next source corrects actual N2Run/test44: its600s process default,
+working directory, environment and streamed stdout/stderr contract remain;
+timeouts or unfinished output return124, post-kill has5s and each reader10s.
+Finally disposes the real native handle. An opt-in CI diagnostic reports the
+actual SafeHandle.IsClosed only for test84; default output is unchanged.
+Five new actual cases include normal23/timeout/retained pipes plus child cwd
+and environment. All20 earlier cases remain. Changed-source CI is pending.
+
+### Earlier verified helper slices
+
 Corrected40552781028/source6dd5cc88 is GREEN both Windows hosts. Actual
 logs122360699800/122360700049 were read:12 controls each, all real
 RunTimed/SurfaceRun/InvokeOpenSl normal23/timeout/retained-output cases,
