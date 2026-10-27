@@ -361,6 +361,14 @@ Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log, interval 120.
 All C/C++/Java compilation and native/JVM fixtures remain CI-only.
 No stage acceptance is claimed before every actual required result is read.
 
+The current main build succeeds in 40m21 and its actual ABI check reports
+203 boundaries/zero problems. Framework job 121955313869 was read: javac
+zero errors and actual AndroidX WebKit 1.18.0 web3app build. Package job
+121967311150 succeeds in 2m1; the actual log confirms installed oatdump/boot/
+runtime, app HWND/input/resize and full uninstall cleanup. Windows jobs
+121967311074/121967311081 and e2e jobs 121967975250/121967975130 are still
+running; no Web3 milestone is closed by these build/package results.
+
 Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
 and bounded TLS fixture cleanup. All 14 web3 checks pass per runner; the new
