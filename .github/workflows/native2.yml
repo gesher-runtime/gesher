@@ -12,6 +12,13 @@ name: native2
 #     the NDK's public API import (symbols.py).
 # ci.yml calls this workflow.
 on:
+  push:
+    branches: ['wip/net4-resolver']
+    paths:
+      - '.github/workflows/native2.yml'
+      - 'tests/native2/net4_resolver*'
+      - 'tests/native2/java/gesher/Net4ResolverTest.java'
+      - 'tests/apps/net4resolverapp/**'
   workflow_dispatch:
   workflow_call:
 
@@ -37,6 +44,7 @@ jobs:
           sparse-checkout: |
             tests/native2
             tests/apps/native2app
+            tests/apps/net4resolverapp
             tests/e2e
 
       - name: Cache the Android NDK
@@ -103,6 +111,10 @@ jobs:
               -o "$o/libcxx2_test" tests/native2/libcxx2_test.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_ifaddrs_test" tests/native2/net4_ifaddrs_main.cpp
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 -fstack-protector-strong -Wall -Werror \
+              -Wl,-soname,libnet4resolver.so -o "$o/libnet4resolver.so" tests/native2/net4_resolver_jni.cpp
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
+              -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
             echo "--- $abi libnative2.so: needed"
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
@@ -114,6 +126,10 @@ jobs:
           common=(--ndk "$PWD/$NDK_DIR" --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" --r8 "$PWD/r8.jar")
           tests/apps/native2app/build.sh dist native2app.apk x86_64 "${common[@]}"
           tests/apps/native2app/build.sh dist native2app-arm64.apk arm64-v8a "${common[@]}"
+          for abi in x86_64 arm64-v8a; do
+            bash tests/apps/net4resolverapp/build.sh "$PWD/dist" "$abi" \
+              --android-jar "$PWD/sdk/android.jar" --build-tools "$PWD/sdk/build-tools" --r8 "$PWD/r8.jar"
+          done
           cp tests/native2/sqlite_test.sql dist/
 
       - name: Cache the third-party test programs
@@ -164,6 +180,7 @@ jobs:
             for exe in zlib_example zlib_minigzip pngtest tjunittest sqlite3 openssl; do sets+=("$exe=$o/$exe"); done
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
+            sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
             sets+=("libc++_shared=$o/libc++_shared.so")
             for app in apks/*; do
               if [ -d "$app/$abi" ]; then

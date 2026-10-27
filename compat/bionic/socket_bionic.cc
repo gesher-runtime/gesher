@@ -401,7 +401,14 @@ int BIONIC_SYSV Getnameinfo(const sockaddr* a, uint32_t alen, char* host, uint32
                             char* serv, uint32_t servlen, int flags) {
   return EaiOut(getnameinfo(a, alen, host, hostlen, serv, servlen, NiFlagsIn(flags)));
 }
-// struct hostent and servent have the same layout in both.
+// gesher-base constructs Linux-layout, deeply owned thread-local database
+// results. Winsock's short fields and Win64 servent ordering never escape.
+static_assert(sizeof(hostent) == 32 && alignof(hostent) == 8);
+static_assert(offsetof(hostent, h_addrtype) == 16 && sizeof(hostent::h_addrtype) == 4);
+static_assert(offsetof(hostent, h_length) == 20 && offsetof(hostent, h_addr_list) == 24);
+static_assert(sizeof(servent) == 32 && alignof(servent) == 8);
+static_assert(offsetof(servent, s_port) == 16 && sizeof(servent::s_port) == 4);
+static_assert(offsetof(servent, s_proto) == 24);
 hostent* BIONIC_SYSV Gethostbyname(const char* name) { return gethostbyname(name); }
 hostent* BIONIC_SYSV Gethostbyaddr(const void* a, uint32_t len, int type) {
   return gethostbyaddr(a, len, type);
