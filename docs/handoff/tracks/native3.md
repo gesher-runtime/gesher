@@ -62,6 +62,22 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Unsigned reference ci 40423333599 at a449d02 is green; all four jobs and
+the complete reference rows/digest were inspected. It retains the signed
+digest 566ac5b76f65a70b and produces separate unsigned 3650764a32c5bf03.
+Prepared NDK tests select the frozen data from the actual target wchar
+type, compute the complete width digest through both actual ABI paths,
+and use the correct per-ABI wcswidth invalid-character result. Guest
+override/code and these stronger checks are not yet full-CI verified.
+
+Additional explicit Native3 clock/GC contracts from source audit: global
+NanoTime/MicroTime/MilliTime still use the Windows wall-clock fallback;
+monotonic selection needs separate implementation and native-bracket tests.
+ART Heap::GetNativeBytes also uses the non-bionic/glibc constant malloc
+fallback on Windows; real native allocator accounting remains open. Media3
+coordinates a zero-CPU ratio guard in ART0593 with root's exact CPU patch
+0572; neither is a demonstrated FPS fix until actual runtime evidence.
+
 ARM width correction is now open: the native3-wide target macro audit found
 unsigned wchar32 on Android arm64, while root's width oracle assumed signed
 on both ABIs. Full ci 40404678100/581e88f verified the signed oracle and the

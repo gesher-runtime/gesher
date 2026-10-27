@@ -1,0 +1,152 @@
+{
+  "source_ci": 40423333599,
+  "source_sha": "a449d02beea86f0ea18397198639577a33af0829",
+  "wcwidth_source_sha256": "401b0bbd9349d3209a990ab25cb23741248a343c543bc99fc7e4bb224a6b74fa",
+  "lock_sha256": "327e35387c66cc9c3e44f873ecc124cf21888ad602ce668e697fd0415618a392",
+  "algorithm": "FNV-1a-64 of signed 32-bit little-endian widths",
+  "first": 0,
+  "last": 1114111,
+  "extra": [
+    1114112,
+    2147483647,
+    2147483648,
+    4294967295
+  ],
+  "wcwidth": "3650764a32c5bf03",
+  "samples": [
+    {
+      "codepoint": 0,
+      "width": 0
+    },
+    {
+      "codepoint": 31,
+      "width": -1
+    },
+    {
+      "codepoint": 32,
+      "width": 1
+    },
+    {
+      "codepoint": 127,
+      "width": -1
+    },
+    {
+      "codepoint": 159,
+      "width": -1
+    },
+    {
+      "codepoint": 160,
+      "width": -1
+    },
+    {
+      "codepoint": 161,
+      "width": 1
+    },
+    {
+      "codepoint": 173,
+      "width": 1
+    },
+    {
+      "codepoint": 768,
+      "width": 0
+    },
+    {
+      "codepoint": 837,
+      "width": 0
+    },
+    {
+      "codepoint": 847,
+      "width": 0
+    },
+    {
+      "codepoint": 888,
+      "width": 1
+    },
+    {
+      "codepoint": 1564,
+      "width": 0
+    },
+    {
+      "codepoint": 2307,
+      "width": 1
+    },
+    {
+      "codepoint": 4447,
+      "width": 2
+    },
+    {
+      "codepoint": 4448,
+      "width": 0
+    },
+    {
+      "codepoint": 4520,
+      "width": 0
+    },
+    {
+      "codepoint": 8205,
+      "width": 0
+    },
+    {
+      "codepoint": 12288,
+      "width": 2
+    },
+    {
+      "codepoint": 12872,
+      "width": 2
+    },
+    {
+      "codepoint": 19904,
+      "width": 2
+    },
+    {
+      "codepoint": 44032,
+      "width": 2
+    },
+    {
+      "codepoint": 44033,
+      "width": 2
+    },
+    {
+      "codepoint": 55296,
+      "width": 1
+    },
+    {
+      "codepoint": 94180,
+      "width": 0
+    },
+    {
+      "codepoint": 119143,
+      "width": 0
+    },
+    {
+      "codepoint": 128512,
+      "width": 2
+    },
+    {
+      "codepoint": 129769,
+      "width": 2
+    },
+    {
+      "codepoint": 1114111,
+      "width": 1
+    },
+    {
+      "codepoint": 1114112,
+      "width": 1
+    },
+    {
+      "codepoint": 2147483647,
+      "width": 1
+    },
+    {
+      "codepoint": 2147483648,
+      "width": 1
+    },
+    {
+      "codepoint": 4294967295,
+      "width": 1
+    }
+  ],
+  "abi": "arm64",
+  "wchar_unsigned": true
+}

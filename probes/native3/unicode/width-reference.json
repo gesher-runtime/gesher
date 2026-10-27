@@ -146,5 +146,7 @@
       "codepoint": 4294967295,
       "width": -1
     }
-  ]
+  ],
+  "abi": "x86_64",
+  "wchar_unsigned": false
 }
