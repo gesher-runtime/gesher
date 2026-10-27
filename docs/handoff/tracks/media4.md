@@ -195,6 +195,17 @@ contract stay open. Separate AAudio full40487303965/afebf1ec is immutable;
 its three policy entries and installed-notice proof remain unverified.
 Only source reading, Git and lightweight script checks have run locally.
 
+A separate source-checked e2e log-review job reads already-recorded TIC-80
+launcher/app logs only inside CI and prints bounded text; no app/runtime
+is rerun and no assertion changes. This diagnoses AAudio404873 attempt2's
+Windows2025 blank first capture (its2022 e2e passes). The new workflow is
+triggered only when its own file changes on wip/media4-muxer, because a
+workflow-dispatch lookup requires the file on the default branch. Frozen
+AAudio/OpenSL/native source branches remain unchanged. A shared SurfaceView
+pending-invalidation latch defect is source-backed; its causal link to the
+observed TIC-80 result is still unproved and any fix requires peer review
+and fresh CI, preserving the original blank/text assertions.
+
 Native OpenSL full ci **40477536464** is complete GREEN at
 **e569341230b3970cadaeb48a235a12a4645da74a**, attempt 1 without retries.
 All 28 conclusions were read:22 success/six skipped. Main122099364029

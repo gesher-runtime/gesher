@@ -1,6 +1,9 @@
 name: media4 e2e log review
 
 on:
+  push:
+    branches: [wip/media4-muxer]
+    paths: [.github/workflows/media4-e2e-diagnostics.yml]
   workflow_dispatch:
     inputs:
       source_run:
@@ -29,8 +32,8 @@ jobs:
       - name: Verify the exact existing source
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN: ${{ inputs.source_run }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SOURCE_RUN: ${{ inputs.source_run || '40487303965' }}
+          EXPECTED_SHA: ${{ inputs.expected_sha || 'afebf1ec28308673bb9b0a7745547753c6123da8' }}
         run: |
           [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -45,7 +48,7 @@ jobs:
           name: e2e-results-${{ matrix.runner }}
           path: results
           repository: ${{ github.repository }}
-          run-id: ${{ inputs.source_run }}
+          run-id: ${{ inputs.source_run || '40487303965' }}
           github-token: ${{ github.token }}
 
       - name: Print bounded existing TIC-80 logs
