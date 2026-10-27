@@ -177,8 +177,12 @@ public final class GesherAppProcess {
         // The zygote's child starts its binder thread pool (ZygoteInit.nativeZygoteInit);
         // here two Java threads join it, before the server can call in.
         com.gesher.server.SystemServer.startBinderThreads("app", 2);
+        com.gesher.app.window.ApplicationDisplay.installClient();
         // Cameras are served in the app's own process (docs/devices.md): media.camera.
         com.gesher.server.CameraService.installInProcess();
+        // Accessibility over UI Automation and Windows' proxy (web3 track, ADR 0058).
+        com.gesher.app.accessibility.AccessibilityService.installInProcess();
+        com.gesher.net.WindowsProxy.installInProcess();
 
         withoutSystemFonts();
         // No vsync source yet (DisplayEventReceiver's natives are stand-ins that never

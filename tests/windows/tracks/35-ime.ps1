@@ -67,13 +67,19 @@ function WaitCount([scriptblock] $ReadLog, [string] $Pattern, [int] $Count, [int
 # an earlier request late).
 function SwitchTo([IntPtr] $hwnd, [string] $Klid, [int] $Lang) {
   $deadline = (Get-Date).AddSeconds(30)
+  $checkBroker = $script:imeBrokerHangs -and $Lang -eq 0x0409
   do {
     [void][ImeInput]::SwitchLayout($hwnd, $Klid)
     $until = (Get-Date).AddSeconds(2)
     while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $until) {
       Start-Sleep -Milliseconds 200
     }
-  } while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $deadline)
+    # WM_INPUTLANGCHANGEREQUEST can publish the new HKL before its IME worker
+    # finishes. Toggling the IME off may also have restarted the known-broken
+    # Server2022 broker after the earlier cleanup. Observe actual thread progress.
+    $responsive = -not $checkBroker -or [ImeInput]::ThreadResponsive($hwnd)
+    if (-not $responsive) { EndImeBroker 'while completing the US layout switch' }
+  } while (((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -or -not $responsive) -and (Get-Date) -lt $deadline)
   Start-Sleep -Milliseconds 500
 }
 
@@ -192,16 +198,43 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   Start-Sleep -Seconds 1
   $windows = [ImeInput]::ProcessWindows($ProcessId)
   $caret = [ImeInput]::Caret($hwnd)
+  # Android floating IMEs do not create edge insets. Observe the real Microsoft
+  # candidate while it is still visible, without moving focus or committing.
+  $candidateBeforeCommit = $windows | Where-Object { $_ -match 'cand' } | Select-Object -First 1
+  $candidateFloating = $false
+  if ($candidateBeforeCommit -and $null -ne $caret) {
+    $candidateBounds = ($candidateBeforeCommit -split '@')[1] -split ','
+    $client = [GesherWin32]::ClientSize($hwnd)
+    $clientBottom = $caret[5] - $caret[1] + $client[1]
+    $candidateFloating = [int]$candidateBounds[1] + [int]$candidateBounds[3] -lt $clientBottom
+    $insetPattern = "ImeActivity composing IME insets 0,0,0,0 decor $($client[0])x$($client[1])"
+    $beforeInsets = LogCount $ReadLog $insetPattern
+    $noneWhileVisible = WaitCount $ReadLog $insetPattern ($beforeInsets + 1) 5
+    ImeCheck $Mode 'a real floating Microsoft candidate window keeps Android IME edge insets empty and content unresized' ($candidateFloating -and $noneWhileVisible) "candidate $candidateBeforeCommit, native client $($client -join 'x'), new composing inset snapshot $noneWhileVisible"
+  } else {
+    ImeCheck $Mode 'a real floating Microsoft candidate window keeps Android IME edge insets empty and content unresized' $false 'candidate/caret unavailable'
+  }
+  $commitMark = "$(& $ReadLog)".Length
   [void][ImeInput]::Keys(0x0D)  # commit
   $t = ''
+  $nativeCommit = ''
+  $committed = $false
   $deadline = (Get-Date).AddSeconds(150)
   do {
     $t = ImeText $ReadLog 'last'
-    if ($t -match '^(\\u[4-9][0-9a-f]{3}){2}$') { break }
+    $all = "$(& $ReadLog)"
+    $afterCommit = if ($all.Length -gt $commitMark) { $all.Substring($commitMark) } else { '' }
+    $results = [regex]::Matches($afterCommit, 'gesher-ime: commit "([^"\r\n]+)"')
+    if ($results.Count -gt 0) { $nativeCommit = $results[$results.Count - 1].Groups[1].Value }
+    # Candidate ordering depends on the runner's Microsoft IME dictionary:
+    # both two- and three-kanji selections are valid. Require fidelity to the
+    # actual Windows result, all kanji, and no remaining composing region instead
+    # of assuming a particular dictionary word length.
+    $committed = $t -match '^(\\u[4-9][0-9a-f]{3})+$' -and $t -ceq $nativeCommit
+    if ($committed) { break }
     Start-Sleep -Milliseconds 200
   } while ((Get-Date) -lt $deadline)
-  $committed = $t -match '^(\\u[4-9][0-9a-f]{3}){2}$'
-  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon, as hiragana), converted to kanji, committed by Enter (commitText, no composing region left)' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; committed: $t" -f $script:imeTsf)
+  ImeCheck $Mode 'IME composition (Microsoft IME, Japanese, typed with SendInput): setComposingText while composing (nihon, as hiragana), converted to kanji, Enter preserves the exact Windows result with no composing region left' ($composed -and $converted -and $committed) ("TSF 0x{0:x8}, layout $jaLayout; composing: $composed ($compose); converted: $converted; Windows result: $nativeCommit; committed: $t" -f $script:imeTsf)
   $cand = $windows | Where-Object { $_ -match 'cand' } | Select-Object -First 1
   $inline = -not ($windows | Where-Object { $_ -match 'Composition' })
   if ($cand -and $null -ne $caret) {
@@ -215,6 +248,10 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   [void][ImeInput]::Keys(0x19)  # the IME off
   SwitchTo $hwnd '00000409' 0x0409
   Start-Sleep -Seconds 1
+
+  $usLayout = ([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -eq 0x0409
+  $usResponsive = [ImeInput]::ThreadResponsive($hwnd)
+  ImeCheck $Mode 'returning to the US layout leaves the actual window thread responsive before password input' ($usLayout -and $usResponsive) "layout US $usLayout, responsive $usResponsive"
 
   # A password field takes keys, and no compositions.
   [GesherWin32]::Click($hwnd, 200, 270)
