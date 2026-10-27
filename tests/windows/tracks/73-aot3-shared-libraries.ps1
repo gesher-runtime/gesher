@@ -1,5 +1,6 @@
 # Real system Java jars, LoadedApk dependency loaders and matching ART artifacts.
 function Aot3SharedCheck([string] $Name, [bool] $Okay, [string] $Output) {
+  if ($sharedLoaderCase.Descriptor -eq 'DLC') { $Name = "DelegateLast: $Name" }
   if ($Okay) { Write-Host "PASS  aot3 shared libraries: $Name" }
   else {
     Write-Host "FAIL  aot3 shared libraries: $Name"
@@ -8,7 +9,10 @@ function Aot3SharedCheck([string] $Name, [bool] $Okay, [string] $Output) {
   }
 }
 
-$sharedRoot = Join-Path $aotRoot 'shared-libraries'
+foreach ($sharedLoaderCase in @(
+    @{ Apk = 'sharedlibraryapp.apk'; Descriptor = 'PCL'; Loader = 'dalvik.system.PathClassLoader' },
+    @{ Apk = 'sharedlibrarydlc.apk'; Descriptor = 'DLC'; Loader = 'dalvik.system.DelegateLastClassLoader' })) {
+$sharedRoot = Join-Path $aotRoot $(if ($sharedLoaderCase.Descriptor -eq 'PCL') { 'shared-libraries' } else { 'shared-libraries-DLC' })
 $sharedPackage = 'com.gesher.sharedapp'
 $sharedConfig = Join-Path $root 'system/etc/permissions/gesher-shared73.xml'
 $sharedBase = Join-Path $root 'system/framework/gesher-shared73-base.jar'
@@ -48,7 +52,7 @@ try {
   $entryAttribute = [Security.SecurityElement]::Escape((NoDrive $sharedEntry))
   [IO.File]::WriteAllText($sharedConfig, "<permissions><library name=`"gesher.shared.base`" file=`"$baseAttribute`"/><library name=`"gesher.shared.entry`" file=`"$entryAttribute`" dependency=`"gesher.shared.base`"/></permissions>", [Text.UTF8Encoding]::new($false))
   $sharedApk = Join-Path $sharedRoot 'sharedlibraryapp.apk'
-  Copy-Item "$Dir/sharedlibraryapp.apk" $sharedApk
+  Copy-Item (Join-Path $Dir $sharedLoaderCase.Apk) $sharedApk
   $profileText = Join-Path $sharedRoot 'profile.txt'
   $sharedProfile = Join-Path $sharedRoot 'primary.prof'
   [IO.File]::WriteAllText($profileText, "Lcom/gesher/sharedapp/SharedActivity;`nHSLcom/gesher/sharedapp/SharedActivity;->onCreate(Landroid/os/Bundle;)V`nHSLcom/gesher/sharedapp/SharedActivity;->hot(I)I`n", [Text.UTF8Encoding]::new($false))
@@ -75,7 +79,7 @@ try {
     $header = Aot2Run "$Dir/oatdump.exe" @("--oat-file=$odex", '--header-only', '--no-disassemble')
     Aot3SharedCheck "$Phase oatdump header contains the real nested dependency context and speed-profile filter" `
       ($header.Exit -eq 0 -and $header.Out -match 'compiler-filter\s*=\s*speed-profile' -and
-       $header.Out -match 'class-loader-context\s*=\s*PCL\[\]\{PCL\[' -and
+       $header.Out -match ('class-loader-context\s*=\s*' + [regex]::Escape($sharedLoaderCase.Descriptor) + '\[\]\{PCL\[') -and
        $header.Out.Contains('gesher-shared73-entry.jar') -and $header.Out.Contains('gesher-shared73-base.jar')) $header.Out
     $code = Aot2Run "$Dir/oatdump.exe" @("--oat-file=$odex", "--dex-file=$sharedCode/base.apk", '--method-filter=hot', '--no-disassemble')
     Aot3SharedCheck "$Phase selected SharedActivity.hot has independently inspected compiled code" `
@@ -109,7 +113,8 @@ try {
       }
       $expectedText = "SharedActivity result=$Expected;"
       $passed = $run.Exit -eq 0 -and $fresh -and $out.Contains($expectedText) -and
-        $out.Contains('order=library-before; distinct app/entry/dependency loaders=true') -and $compiled
+        $out.Contains('order=library-before; distinct app/entry/dependency loaders=true') -and
+        $out.Contains("app loader=$($sharedLoaderCase.Loader)") -and $compiled
       $kind = if ($Aot) { 'matching compiled code/image' } else { 'stale code/image rejected without reinstall' }
       Aot3SharedCheck "$mode result $Expected uses $kind and separate real library loaders" $passed $out
       foreach ($line in @($out -split "`n" | Where-Object { $_ -match 'SharedActivity result=|gesher: app (oat:|image loaded:|methods at exit:)|the process of com.gesher.sharedapp ended' })) {
@@ -175,4 +180,5 @@ try {
       }
     }
   }
+}
 }

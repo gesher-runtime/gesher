@@ -37,6 +37,14 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Resumed test73 source extends the bounded shared-library component to an
+actual manifest-selected DelegateLastClassLoader APK, retaining all original
+PCL graph/runtime checks. Fresh CI-built Java fixtures and matching rebuilt
+images are required; independent DLC context/oat code/app image, Main/device,
+stale dependency/recompile/update-preservation and cleanup gates are pending.
+See aot3-shared-diagnostic.md. No new scope is accepted from source changes;
+after-resource/staticSDK/secondary/factory-loader contracts remain open.
+
 Owner-requested checkpoint: work stops above docs-onlyb93b5562511c701b193c4b951738efe1316ee1f3;
 no active own full/scoped CI remains. The latest source1120e8a6c9303890bc5d267286e4cc29c3d24438
 component40524933356 is green, actual jobs122261802698/122261801862 read21scopedPASS

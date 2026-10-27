@@ -1,5 +1,24 @@
 # Shared Java libraries: bounded component evidence
 
+## Resumed DelegateLastClassLoader source
+
+The resumed test73 source retains every PCL control and adds a real APK
+whose manifest selects dalvik.system.DelegateLastClassLoader. Its separately
+packaged duplicate Marker class must still lose to the real before-app
+shared library, while the actual app loader class must be DelegateLast.
+Independent oatdump must report DLC[] with the real nested PCL dependencies,
+selected hot compiled code and a readable app image. Both Main/device modes
+must preserve the original result, separate loaders, stale-library rejection,
+same-APK recompilation and failed-update preservation/cleanup assertions.
+
+The component now builds fresh framework fixtures from its exact source;
+the existing runtime supplier remains40512344714/96b and its successful
+producers/artifact identities remain pinned. Every new jar/image pair is
+rebuilt coherently in CI before execution. Source/script checks alone do
+not establish DLC execution; changed-source component and full CI are pending.
+After-resource, static/SDK libraries, secondary dex and arbitrary factory
+loaders remain explicitly open.
+
 This is component proof, not a complete CI result or merge acceptance.
 Diagnostic **40524933356**, harness source
 `1120e8a6c9303890bc5d267286e4cc29c3d24438`, attempt 1, is green on both

@@ -27,6 +27,7 @@ public final class SharedActivity extends Activity {
         }
         System.out.println("SharedActivity result=" + hot(1000)
                 + "; dependency=" + Base.value() + "; order=" + Marker.value()
-                + "; distinct app/entry/dependency loaders=true");
+                + "; distinct app/entry/dependency loaders=true"
+                + "; app loader=" + app.getClass().getName());
     }
 }

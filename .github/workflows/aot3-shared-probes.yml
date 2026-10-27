@@ -7,19 +7,23 @@ on:
       - '.github/workflows/aot3-shared-probes.yml'
       - 'tests/windows/aot3-shared-probe.ps1'
       - 'tests/windows/tracks/73-aot3-shared-libraries.ps1'
+      - 'tests/apps/sharedlibraryapp/**'
 permissions:
   contents: read
   actions: read
 env:
   SOURCE_RUN: '40512344714'
   SOURCE_SHA: '96b12ab6f9b5146870c7a373e337f762010eb6f1'
-  FRAMEWORK_RUN: '40523146557'
-  FRAMEWORK_SHA: 'f4378a98ccbd4d42496d44ba4dd3a7437c128ba0'
+  FRAMEWORK_RUN: '${{ github.run_id }}'
+  FRAMEWORK_SHA: '${{ github.sha }}'
 concurrency:
   group: aot3-shared-probes-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
   shared-runtime:
+    needs: framework
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +48,9 @@ jobs:
           $paths = git diff --name-only $env:SOURCE_SHA HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect runtime-source equality' }
           $harness = @('.github/workflows/aot3-shared-probes.yml','tests/windows/aot3-shared-probe.ps1','tests/windows/tracks/73-aot3-shared-libraries.ps1')
-          $allow = $harness + 'app/java/android/app/GesherAppDriver.java'
+          $allow = $harness + @('app/java/android/app/GesherAppDriver.java',
+            'tests/apps/sharedlibraryapp/build.sh',
+            'tests/apps/sharedlibraryapp/java/com/gesher/sharedapp/SharedActivity.java')
           foreach ($path in $paths) {
             if ($path -notlike 'docs/*' -and $path -notin $allow) { throw "Runtime/build source drift: $path" }
           }
@@ -73,9 +79,9 @@ jobs:
           # All current compiled Java/build sources must match that revision.
           $framework = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:FRAMEWORK_RUN" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read the selected Java compiler run' }
-          if ($framework.head_sha -cne $env:FRAMEWORK_SHA -or $framework.status -cne 'completed' -or
-              $framework.conclusion -cne 'success' -or $framework.run_attempt -ne 1 -or
-              $framework.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or $framework.name -cne 'framework') {
+          if ($framework.head_sha -cne $env:FRAMEWORK_SHA -or $framework.status -notin @('in_progress','completed') -or
+              $framework.run_attempt -ne 1 -or
+              $framework.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or $framework.name -cne 'aot3-shared-probes') {
             throw 'Wrong or unverified Java compiler source'
           }
           $javaPaths = git diff --name-only $env:FRAMEWORK_SHA HEAD
@@ -85,7 +91,7 @@ jobs:
           }
           $javaJobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:FRAMEWORK_RUN/attempts/1/jobs?per_page=100" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $javaJobs.total_count -gt 100) { throw 'Cannot verify Java jobs' }
-          foreach ($name in 'host-tools','framework') {
+          foreach ($name in 'framework / host-tools','framework / framework') {
             $selected = @($javaJobs.jobs | Where-Object { $_.name -ceq $name })
             if ($selected.Count -ne 1 -or $selected[0].conclusion -cne 'success' -or
                 $selected[0].head_sha -cne $env:FRAMEWORK_SHA) { throw "Unverified Java job $name" }

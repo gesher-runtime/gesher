@@ -57,10 +57,16 @@ for ((i=0; i<${#args[@]}; ++i)); do
   fi
 done
 APP_DIR="$here" R8_JAR="$r8" "$root/tests/apps/lifecycle/build.sh" "$out" "${appArgs[@]}"
+# The same actual app/library classes under Android's manifest-selected DLC.
+mkdir -p "$work/sharedlibrarydlc"
+cp -R "$here/java" "$here/res" "$work/sharedlibrarydlc/"
+sed 's/<application /<application android:classLoader="dalvik.system.DelegateLastClassLoader" /' \
+  "$here/AndroidManifest.xml" > "$work/sharedlibrarydlc/AndroidManifest.xml"
+APP_DIR="$work/sharedlibrarydlc" R8_JAR="$r8" "$root/tests/apps/lifecycle/build.sh" "$out" "${appArgs[@]}"
 # Same package, changed required library: installer must preserve the working old APK.
 mkdir -p "$work/sharedlibrarybad"
 cp -R "$here/java" "$here/res" "$work/sharedlibrarybad/"
 sed -e 's/gesher.shared.entry/gesher.shared.missing/' -e 's/versionCode="1"/versionCode="2"/' \
   "$here/AndroidManifest.xml" > "$work/sharedlibrarybad/AndroidManifest.xml"
 APP_DIR="$work/sharedlibrarybad" R8_JAR="$r8" "$root/tests/apps/lifecycle/build.sh" "$out" "${appArgs[@]}"
-echo "shared Java jars, sharedlibraryapp.apk and sharedlibrarybad.apk written to $out"
+echo "shared Java jars, PCL/DLC apps and sharedlibrarybad.apk written to $out"
