@@ -44,9 +44,8 @@ complete diagnostic is 40376044459 at
 runners, package and both required e2e jobs pass, but Windows 2022's boot-profile
 performance failure keeps the full stage red. The older geocoder/log-framing
 failures are superseded, not the current blocker. Web3 preparation now
-includes verified runtime/exec3 integration 94ccde1; no repeat run is dispatched
-while the coordinator diagnoses startup. That hold now has a changed-source
-follow-up:40432795403 at2755f21 includes the coordinator's verified startup
-profile merge2ba9a11 and is running, without a threshold waiver. Verified Web3 must merge before
+includes verified runtime/exec3 integration 94ccde1 and has one changed-source
+follow-up: 40432795403 at 2755f21 includes the coordinator's verified startup
+profile merge 2ba9a11 and is running with unchanged thresholds. Verified Web3 must merge before
 dependent Web4 implementation in its separate worktree. No contract above is
 closed by native-only Windows4 evidence or by this handoff correction.
