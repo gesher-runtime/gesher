@@ -94,6 +94,32 @@ public final class AudioService extends IAudioService.Default {
         }
     }
 
+    /**
+     * Whether this process's app may record audio (media3, ADR 0059): its manifest asks for
+     * android.permission.RECORD_AUDIO (Gesher grants what a manifest asks for, as it does
+     * the camera's; docs/devices.md). AudioRecord, AAudio and OpenSL ES input and
+     * MediaRecorder ask this (their natives, compat/media) before they capture, as
+     * AudioFlinger checks the record permission on a phone. A process without an app
+     * (a tool on the boot class path) may.
+     */
+    public static boolean recordAudioAllowed() {
+        String pkg = android.app.ActivityThread.currentPackageName();
+        if (pkg == null) return true;
+        try {
+            android.content.pm.PackageInfo info = android.app.ActivityThread.getPackageManager()
+                    .getPackageInfo(pkg, android.content.pm.PackageManager.GET_PERMISSIONS, 0);
+            if (info == null || info.requestedPermissions == null) return false;
+            for (String p : info.requestedPermissions) {
+                if (android.Manifest.permission.RECORD_AUDIO.equals(p)) return true;
+            }
+            Log.w(TAG, pkg + " does not have " + android.Manifest.permission.RECORD_AUDIO);
+            return false;
+        } catch (RemoteException | RuntimeException e) {
+            Log.w(TAG, "checking " + pkg + "'s permissions: " + e);
+            return false;
+        }
+    }
+
     static boolean valid(int stream) {
         return stream >= 0 && stream < ALIAS.length;
     }

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "core_jni_helpers.h"
+#include "camera_trace.h"
 
 // libandroid_runtime's host ANativeWindow_fromSurface and the ANativeWindow
 // functions dalvikvm defines (docs/graphics.md, docs/native-libs.md).
@@ -389,39 +390,58 @@ bool QueueFrame(JNIEnv* env, Reader* r, const uint8_t* nv12, int w, int h, int64
 
 // CameraFrames.nativeDeliver: 0 delivered, 1 the target cannot take it (no native
 // window, or a JPEG reader without JPEG bytes), -1 an error.
+gesher::devices::camera::TraceStats gDeliveryTrace{
+    "JNI delivery (process cumulative)",
+    {"validate", "pin arrays", "lookup target", "target/lock", "convert", "post", "release"}};
+
 jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12, jint w, jint h,
                           jlong ts, jbyteArray jpeg) {
+  gesher::devices::camera::TraceSample trace(gDeliveryTrace);
   if (surface == nullptr || nv12 == nullptr) return -1;
   jsize size = env->GetArrayLength(nv12);
   if (size < w * h * 3 / 2) return -1;
+  trace.Step(0);
   jbyte* frame = env->GetByteArrayElements(nv12, nullptr);
   jbyte* jpegBytes = jpeg != nullptr ? env->GetByteArrayElements(jpeg, nullptr) : nullptr;
+  trace.Step(1);
   jint result = 1;
-  if (Reader* r = ReaderForSurface(env, surface)) {
+  Reader* r = ReaderForSurface(env, surface);
+  trace.Step(2);
+  if (r != nullptr) {
     result = QueueFrame(env, r, reinterpret_cast<uint8_t*>(frame), w, h, ts,
                         reinterpret_cast<uint8_t*>(jpegBytes),
                         jpeg != nullptr ? env->GetArrayLength(jpeg) : 0)
                  ? 0
                  : 1;
-  } else if (ANativeWindow* window = ANativeWindow_fromSurface(env, surface)) {
-    // A window: drawn at the window's size, RGBA.
-    int ww = ANativeWindow_getWidth(window), wh = ANativeWindow_getHeight(window);
-    if (ww <= 0 || wh <= 0) {
-      ww = w;
-      wh = h;
+    trace.Step(3);
+  } else {
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+    trace.Step(2);
+    if (window != nullptr) {
+      // A window: drawn at the window's size, RGBA.
+      int ww = ANativeWindow_getWidth(window), wh = ANativeWindow_getHeight(window);
+      if (ww <= 0 || wh <= 0) {
+        ww = w;
+        wh = h;
+      }
+      ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
+      ANativeWindow_Buffer buffer;
+      int locked = ANativeWindow_lock(window, &buffer, nullptr);
+      trace.Step(3);
+      if (locked == 0) {
+        Nv12ToRgba(reinterpret_cast<uint8_t*>(frame), w, h, static_cast<uint8_t*>(buffer.bits),
+                   buffer.stride, std::min(buffer.width, ww), std::min(buffer.height, wh));
+        trace.Step(4);
+        ANativeWindow_unlockAndPost(window);
+        trace.Step(5);
+        result = 0;
+      }
+      ANativeWindow_release(window);
     }
-    ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
-    ANativeWindow_Buffer buffer;
-    if (ANativeWindow_lock(window, &buffer, nullptr) == 0) {
-      Nv12ToRgba(reinterpret_cast<uint8_t*>(frame), w, h, static_cast<uint8_t*>(buffer.bits),
-                 buffer.stride, std::min(buffer.width, ww), std::min(buffer.height, wh));
-      ANativeWindow_unlockAndPost(window);
-      result = 0;
-    }
-    ANativeWindow_release(window);
   }
   if (jpegBytes != nullptr) env->ReleaseByteArrayElements(jpeg, jpegBytes, JNI_ABORT);
   env->ReleaseByteArrayElements(nv12, frame, JNI_ABORT);
+  trace.Step(6);
   return result;
 }
 
@@ -820,6 +840,10 @@ const gesher_builtin_symbol kMediaJni[] = {
 };
 
 }  // namespace
+
+void LogCameraDeliveryTrace() {
+  gDeliveryTrace.Log();
+}
 
 int register_gesher_camera_frames(JNIEnv* env) {
   RegisterGesherNatives(env, "android/media/ImageReader", gImageReaderMethods,
