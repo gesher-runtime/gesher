@@ -49,3 +49,17 @@ Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted; no new
 implementation or CI. The audit must separate superseded historical limits
 with cited evidence from still-open contracts, retaining every unresolved
 item until its own verification exists.
+
+Locale2's pinned-source audit (2026-10-27, accepted runtime6297e80a) confirms
+concrete identity/permission gaps that remain owned here:
+ApkPackage.java415 assigns Process.myUid to every app;
+PackageManagerService.java258-259 returns every package for any uid;
+ActivityManagerService.java368-374 grants checkPermission and
+checkPermissionForDevice unconditionally. Copying AOSP's UID ownership checks
+on top of these answers would authorize every app. Implement and verify the
+actual identity/permission authority, including negative package/UID/device
+controls, before treating privileged/installer/IME locale access or other
+services as protected. Locale2 may use registered caller PID/package for its
+bounded ordinary owner operations; that does not close these global gaps.
+PackageManagerService.getInstallerPackageName263-264 also returns null;
+installer identity/broadcast coverage needs a real install-source contract.
