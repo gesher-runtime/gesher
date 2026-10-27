@@ -235,12 +235,20 @@ no-console fixture observes a valid raw stdin handle (88/104/108) rather
 than the expected-2. Expected child127, failed-action short circuit,
 close-on-exec, caller PATH and closed-parent-stdin controls pass. Root is
 investigating both failures; neither cause nor runtime acceptance is claimed.
+Subsequent actual scoped40520772723/9b9f625b passes host/NDK and both Windows
+jobs, each four required action/no-console ABI passes and0 failed. Two fixture
+defects were corrected without removing assertions: DETACHED_PROCESS gives
+natural raw-2, and closed-fd checks precede the caller's next open reusing that
+slot. The original full127 is not explained by these focused runs. Fresh
+full40521839555/b4c350b8 includes current3577 integration and phase diagnostics;
+whole-suite/package/e2e acceptance remains pending.
 Test75 is the ARM sticky-FPSR slice,
 76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
 ([brief](tracks/exec4-spawn.md));78 belongs to AAudio policy,79 to NDK muxer,
 80 to Surface invalidation,81 to Locale2 persistence,82 to Net4 legacy
-resolver,83 to libcore file-copy natives and84 to bounded CI process cleanup
-(next free85).
+resolver,83 to libcore file-copy natives,84 to bounded CI process cleanup,
+85 to ARM full environment/default object and86 to ARM variadic-list
+conversion (next free87).
 Shared-library implementation and the new slices are
 not verified AOT3/exec4/FPSR completion.
 
@@ -259,6 +267,13 @@ AOT shared-library full40503913306/c35abe7c failed both Windows runners on
 the real missing UnixCopyFile.transfer JNI entry before graph assertions;
 [libcore-io](tracks/libcore-io.md) owns that gap. Corrected fixture-only
 stream-copy source96b12ab6 is in full40512344714 after accepted Net4bc6.
+That full is now red: all15 graph controls pass on both hosts, but the active
+server-log read shares incorrectly; Windows2025 also repeats Web3 teardown
+and subsequent launch failures. Scoped40520811180/d62b3645 fixes only the
+log read and preserves artifact/source guards. Device DAG/AOT/image/update
+controls then pass, while four single-process controls fail. Source review
+finds GesherAppDriver manually overrides LoadedApk's graph with a bare PCL;
+the owning AOT3 track is correcting that path, with no runtime waiver.
 Neither the earlier corrected compile-only40499783709/a79ae0f1 nor bounded
 source peer review establishes runtime completion. Empty default after-library resource, actual
 DLC paths, secondary dex and static SDK libraries remain explicit gaps.
@@ -275,6 +290,13 @@ TIC80 on Windows2025; both whole suites0/16 policy passes, package23/notice
 hash and Windows2022 e2e0 do not waive that failure. A separate Surface
 candidate is being prepared with strict producer-only/no-input regression;
 the invalidation-latch source defect is not yet proved to have caused TIC80.
+Surface full40507882249/06d30d40 is red: Windows2022 has4 test80 failures
+(x86 phase/captures and both ARM modes), Windows2025 has2 (both ARM modes).
+All seven controlled production-gate cases pass; package23/notice hash and
+both actual default ten-app e2e plus separate mandatory traced TIC scenarios
+pass. Those results do not waive the failing new fixtures. Native owns the
+separate [ARM variadic-list follow-up](tracks/arm64-varargs.md), ADR0079/test86;
+the crash cause remains under investigation.
 Locale2/ADR0066 scoped40512781936/004fff10 passes21 actual groups on each
 Windows runner. Its coherent full40516054280/ca4ed3cf imports accepted Net4
 and the frozen FPSR leaf; package/e2e/full-suite acceptance is pending.
@@ -303,7 +325,8 @@ as a passing Net4 runtime check.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0079 after reserving libcore-io/0077 for the observed Files.copy JNI
+ADR is 0080 after reserving arm64-varargs/0079 for the observed variadic-call
+seam ([brief](tracks/arm64-varargs.md)), libcore-io/0077 for the observed Files.copy JNI
 gap ([brief](tracks/libcore-io.md)) and ci-processes/0078 for legacy process
 cleanup waits ([brief](tracks/ci-processes.md)); exec4-spawn/0076 covers ordered child file actions
 ([brief](tracks/exec4-spawn.md)), native3-time/0075 for ART monotonic elapsed clocks
@@ -312,6 +335,13 @@ cleanup waits ([brief](tracks/ci-processes.md)); exec4-spawn/0076 covers ordered
 ([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/
 certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
 notes below are historical.
+
+Libcore-io source2913d484 is in full40522376074 on current3577 integration.
+The pinned source list already builds UnixCopyFile.c; the candidate exposes
+its real JNICALL symbol through the existing built-in table. Fifteen public/
+native groups cover real bytes, offsets, ownership, cancellation and error
+ordering. Bounded peer review found no source blocker; compile/runtime,
+package/e2e proof is pending. No new copy implementation or accepted claim.
 
 The handover tables below are historical. windows3 is now merged as 80cb28b:
 code verified at a15ade4 (ci 40285476400), branch head 063b051 adds docs only.
