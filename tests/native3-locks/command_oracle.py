@@ -131,6 +131,20 @@ def run(executable):
 
             command(0, 'open 0 0 2')
             command(1, 'open 0 0 2')
+            # Compare actual native handle inheritance, not only logical flags.
+            # This checks final state; overlapping spawn atomicity is separate.
+            for source_flags in (0, 1):
+                command(0, f'setfd 0 {source_flags}')
+                for operation, expected_flags in (('dupfd', 0), ('dupfdce', 1)):
+                    assert command(0, f'{operation} 0 1 40')['minimum_offset'] == 0
+                    flags = command(0, 'getfd 1 0')
+                    assert flags['flags'] == expected_flags and flags['inherited'] == (expected_flags == 0)
+                    command(0, 'close 1')
+                    assert command(0, 'getfd 0 0')['flags'] == source_flags
+            command(0, 'dupfd 0 1 8192', -1, 22)
+            command(0, 'dupfd 31 1 8192', -1, 9)
+            assert command(0, 'dupfd 0 1 8191')['minimum_offset'] == 0
+            command(0, 'close 1')
             lock(0)
             query(True)
             lock(1, expected=-1, error=11)
