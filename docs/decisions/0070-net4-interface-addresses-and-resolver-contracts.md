@@ -40,6 +40,14 @@ mutation and free of another list, with disjoint entries and names.
 existing all-passed verdict also requires that part. Test72 runs both ELF
 ABIs against an independent .NET Windows snapshot of active adapters, MACs,
 addresses, prefix lengths and IPv6 scopes. It does not alter adapter settings.
+The oracle's domain is active IPv4/IPv6-bound adapters, matching the backend's
+AF_UNSPEC query without GAA_FLAG_INCLUDE_ALL_INTERFACES. Narrow CI40466896274
+records why the original oracle failed: nine Up NDIS-only filter/switch
+interfaces per runner have neither IP protocol bound and both property calls
+throw10043. Corrected40467169771 preserves that counterexample and collects
+all nine actual link/IP records on both Windows versions. Unbound interfaces
+are logged explicitly; every IP-bound index and address assertion remains
+strict. This oracle collection proof does not establish ELF/API acceptance.
 Builds and every fixture execution run only in CI. Local PS AST/source/hash
 checks are not runtime evidence. Both complete Windows suites, actual package
 window/input/uninstall cleanup and both complete pinned e2e sets remain

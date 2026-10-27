@@ -55,6 +55,24 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Corrected narrow40467169771 at55a17156 is complete green. Actual Windows
+jobs122065270702/122065270474 retain the nine old missing-index observations
+and produce nine real AF_UNSPEC records each: physical, loopback and vEthernet
+links plus their six IPv4/IPv6 addresses, prefixes, scopes and MACs. This proves
+the Windows oracle collection only; both standalone ELF comparisons and full
+acceptance still need a new full run.
+
+The next candidate includes verified exit-freshness integration30deb08c and
+the exact reviewed four-file AAudio diagnostic/lossless-fixture slice78ee5e12
+(patch SHA256c38d41acbb60560b328d5c3ed06b8257b15c24c7d18cd69ad9893ff348e80179).
+Each imported result hash matches its audit. It requests a real one-second
+blocking-input buffer, requires actual capacity/frame/xrun/zero-loss telemetry,
+and contrasts unread small/large rings fed by the same capture engine.
+750/1250Hz,2% tolerance,44100 frames and the separate three-cycle overrun
+assertions remain unchanged. The old1153.3Hz result had no loss counters and
+is not claimed to have a proven overrun cause. Runtime proof remains pending.
+The independently running coherent Windows4/Web3 source160e25e8 is untouched.
+
 Narrow40466896274 at4904ecc3 reproduces the oracle error on both Windows:
 nine active NDIS filter/switch interfaces have neither IPv4 nor IPv6 bound;
 both .NET protocol-property calls throw10043. The actual physical, loopback
