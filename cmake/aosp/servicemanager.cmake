@@ -36,6 +36,8 @@ add_executable(binder_sg_actor ${CMAKE_SOURCE_DIR}/tests/binder/sg-actor.cc)
 target_compile_options(binder_sg_actor PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 add_executable(binder_sg_wire_peer ${CMAKE_SOURCE_DIR}/tests/binder/sg-wire-peer.cc)
 target_compile_options(binder_sg_wire_peer PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
+add_executable(binder_sg_finish_relay ${CMAKE_SOURCE_DIR}/tests/binder/sg-finish-relay.cc)
+target_compile_options(binder_sg_finish_relay PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
 add_executable(libbinder_probe ${CMAKE_SOURCE_DIR}/probes/binder/libbinder_probe.cc)
 target_link_libraries(libbinder_probe PRIVATE binder)

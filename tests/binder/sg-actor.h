@@ -206,14 +206,26 @@ struct Payload {
   }
 };
 
-inline bool Verify(Driver* driver, const binder_transaction_data& tr, Report* report) {
-  bool valid = report->Check(tr.data_size == 136 && tr.offsets_size == 24 &&
+inline int ReceivedFd(const binder_transaction_data& tr) {
+  if (tr.data_size != 160 || tr.offsets_size != 32) return -1;
+  binder_fd_object object;
+  memcpy(&object, reinterpret_cast<const uint8_t*>(tr.data.ptr.buffer) + 136, sizeof(object));
+  return object.hdr.type == BINDER_TYPE_FD ? static_cast<int>(object.fd) : -1;
+}
+inline bool FileIdentity(int fd) {
+  static const char expected[] = "sg-owned-file";
+  char actual[sizeof(expected)]{};
+  return fd >= 0 && pread(fd, actual, sizeof(actual), 0) == static_cast<ssize_t>(sizeof(actual)) &&
+      memcmp(actual, expected, sizeof(expected)) == 0;
+}
+inline bool Verify(Driver* driver, const binder_transaction_data& tr, Report* report, bool with_fd = false) {
+  bool valid = report->Check(tr.data_size == (with_fd ? 160u : 136u) && tr.offsets_size == (with_fd ? 32u : 24u) &&
       driver->InMapping(tr.data.ptr.buffer, tr.data_size) &&
       driver->InMapping(tr.data.ptr.offsets, tr.offsets_size), "data and offsets belong to receiver mapping");
   if (!valid) return false;
-  binder_size_t offsets[3];
-  memcpy(offsets, reinterpret_cast<const void*>(tr.data.ptr.offsets), sizeof(offsets));
-  if (!report->Check(offsets[0] == 16 && offsets[1] == 56 && offsets[2] == 96, "ordered object table retained")) return false;
+  binder_size_t offsets[4]{};
+  memcpy(offsets, reinterpret_cast<const void*>(tr.data.ptr.offsets), static_cast<size_t>(tr.offsets_size));
+  if (!report->Check(offsets[0] == 16 && offsets[1] == 56 && offsets[2] == 96 && (!with_fd || offsets[3] == 136), "ordered object table retained")) return false;
   binder_buffer_object objects[3];
   const size_t sizes[]{64, 32, 17};
   for (size_t i = 0; i < 3; ++i) {
@@ -237,6 +249,7 @@ inline bool Verify(Driver* driver, const binder_transaction_data& tr, Report* re
     }
     valid &= report->Check(same, "copied payload survives sender mutation/free/death");
   }
+  if (with_fd) valid &= report->Check(FileIdentity(ReceivedFd(tr)), "actual adopted descriptor reads independent sender file identity");
   return valid;
 }
 
@@ -268,10 +281,11 @@ inline int Client(const char* scenario, const std::string& prefix) {
     }
   }
   const bool wire = !strncmp(scenario, "wire-", 5);
+  const bool public_loss = !strcmp(scenario, "public-finishloss");
   const bool oneway = !strcmp(scenario, "oneway") || !strcmp(scenario, "wire-queue");
   Payload payload(!strcmp(scenario, "smallmap"));
   int sent_fd = -1;
-  if (wire || !strcmp(scenario, "adoptfail")) {
+  if (wire || public_loss || !strcmp(scenario, "adoptfail")) {
     const std::string path = prefix + ".descriptor";
     sent_fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
     static const char identity[] = "sg-owned-file";
@@ -287,9 +301,9 @@ inline int Client(const char* scenario, const std::string& prefix) {
   if (sent_fd >= 0) close(sent_fd);
   if (oneway) return report.Finish(); // process really exits before receiver is released
   Command response;
-  const bool rejected = wire || !strcmp(scenario, "smallmap") || !strcmp(scenario, "badread") ||
+  const bool rejected = wire || public_loss || !strcmp(scenario, "smallmap") || !strcmp(scenario, "badread") ||
       !strcmp(scenario, "prefixfault") || !strcmp(scenario, "adoptfail");
-  const uint32_t expected = (!strcmp(scenario, "wire-finishloss") || !strcmp(scenario, "wire-death-afterfinish"))
+  const uint32_t expected = (public_loss || !strcmp(scenario, "wire-finishloss") || !strcmp(scenario, "wire-death-afterfinish"))
       ? BR_DEAD_REPLY : rejected ? BR_FAILED_REPLY : BR_REPLY;
   if (!report.Check(driver.Next(&response, expected),
       rejected ? "receiver failure unblocks real synchronous sender" : "SG reply reaches independent sender")) return report.Finish();
@@ -297,6 +311,16 @@ inline int Client(const char* scenario, const std::string& prefix) {
     Verify(&driver, response.transaction, &report);
     driver.Free(response.transaction);
     report.Check(driver.Flush(), "reply allocation freed through real BC_FREE_BUFFER");
+  }
+  if (public_loss) {
+    Payload next;
+    next.Queue(&driver, BC_TRANSACTION_SG, 2);
+    if (!report.Check(driver.Flush(), "real sender queues recovery transaction after lost-finish receiver thread dies")) return report.Finish();
+    Command recovered;
+    if (!report.Check(driver.Next(&recovered, BR_REPLY), "subsequent real synchronous transaction completes after transport loss")) return report.Finish();
+    Verify(&driver, recovered.transaction, &report);
+    driver.Free(recovered.transaction);
+    report.Check(driver.Flush(), "recovery reply frees normally");
   }
   return report.Finish();
 }
@@ -312,6 +336,38 @@ inline int Server(const char* scenario, const std::string& prefix) {
   driver.Code(BC_ENTER_LOOPER);
   if (!report.Check(driver.Flush() && Mark(prefix + ".ready"), "receiver ready without consuming queued transaction")) return report.Finish();
   if (!report.Check(WaitFile(prefix + ".release"), "parent releases actual delivery")) return report.Finish();
+  if (!strcmp(scenario, "public-finishloss")) {
+    std::vector<Command> published;
+    int error = EAGAIN;
+    uint64_t consumed = 0;
+    for (unsigned i = 0; i < 1500 && (error == EAGAIN || error == 0); ++i) {
+      error = driver.Talk(&published, true, false, &consumed);
+      if (error != EBADF && error != EAGAIN && error != 0) break;
+      if (error != EBADF) usleep(20000);
+    }
+    const binder_transaction_data* transaction = nullptr;
+    for (const auto& command : published) if (command.code == BR_TRANSACTION) transaction = &command.transaction;
+    if (!report.Check(error == EBADF && transaction && consumed == 2 * sizeof(uint32_t) + sizeof(binder_transaction_data),
+        "actual public WriteRead returns EBADF with complete published transaction prefix after lost finish ACK")) return report.Finish();
+    if (!report.Check(transaction->sender_pid != getpid(), "published transaction came from distinct actual sender PID") ||
+        !Verify(&driver, *transaction, &report, true)) return report.Finish();
+    const int owned_fd = ReceivedFd(*transaction);
+    driver.Free(*transaction);
+    if (!report.Check(driver.Flush(), "caller frees its published allocation through reconnected real public driver")) return report.Finish();
+    report.Check(FileIdentity(owned_fd), "published caller-owned descriptor survives finish loss and actual buffer free");
+    report.Check(close(owned_fd) == 0, "caller explicitly closes its separately owned descriptor");
+    driver.Code(BC_ENTER_LOOPER);
+    if (!report.Check(driver.Flush(), "replacement real receiver thread re-enters looper")) return report.Finish();
+    Command next;
+    if (!report.Check(driver.Next(&next, BR_TRANSACTION) && next.transaction.code == 2,
+        "subsequent actual transaction progresses after public transport loss")) return report.Finish();
+    if (!Verify(&driver, next.transaction, &report)) return report.Finish();
+    driver.Free(next.transaction);
+    Payload reply;
+    reply.Queue(&driver, BC_REPLY_SG, 0);
+    report.Check(driver.Flush(), "recovery transaction replies through actual driver and broker");
+    return report.Finish();
+  }
   const bool adopt_failure = !strcmp(scenario, "adoptfail");
   if (small || !strcmp(scenario, "badread") || !strcmp(scenario, "prefixfault") || adopt_failure) {
     const int expected = small ? ENOMEM : adopt_failure ? EMFILE : EFAULT;

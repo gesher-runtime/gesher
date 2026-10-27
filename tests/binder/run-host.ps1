@@ -2,6 +2,7 @@ param([Parameter(Mandatory)][string]$Dir)
 $ErrorActionPreference = 'Stop'
 $actor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_actor.exe')).Path
 $wireActor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_wire_peer.exe')).Path
+$relayExe = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_finish_relay.exe')).Path
 $brokerExe = (Resolve-Path -LiteralPath (Join-Path $Dir 'binderd.exe')).Path
 $root = Join-Path ([IO.Path]::GetTempPath()) ('gesher-sg-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($root)
@@ -13,7 +14,7 @@ function Assert-Sg([bool]$Condition, [string]$Label) {
     if (-not $Condition) { $script:failed++; Write-Host "FAIL SG parent: $Label" }
     else { Write-Host "PASS SG parent: $Label" }
 }
-function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log) {
+function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log, [string]$Device = '') {
     # Fixture prefixes have no embedded quote. Use ProcessStartInfo with a
     # hidden window and real redirected streams; no shell interpretation.
     $info = [Diagnostics.ProcessStartInfo]::new()
@@ -23,6 +24,7 @@ function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log) {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
+    if ($Device) { $info.Environment['GESHER_BINDER'] = $Device }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
     try {
@@ -68,18 +70,24 @@ function Wait-SgFile([string]$Path, $Child) {
     return $false
 }
 try {
-    foreach ($case in @('normal', 'malformed', 'oneway', 'smallmap', 'badread', 'prefixfault', 'adoptfail',
+    foreach ($case in @('normal', 'malformed', 'oneway', 'smallmap', 'badread', 'prefixfault', 'adoptfail', 'public-finishloss',
         'wire-beforeclaim', 'wire-claimloss', 'wire-installabort', 'wire-finishloss', 'wire-queue',
         'wire-death-beforeclaim', 'wire-death-afterclaim', 'wire-death-afterinstall', 'wire-death-afterfinish')) {
         $env:GESHER_BINDER = 'sg88-' + [guid]::NewGuid().ToString('N')
         $prefix = Join-Path $root $case
-        $broker = $null; $server = $null; $client = $null
+        $broker = $null; $server = $null; $client = $null; $relay = $null
         try {
             $broker = Start-Sg $brokerExe @($env:GESHER_BINDER) ($prefix + '.broker.log')
+            $serverDevice = $env:GESHER_BINDER
+            if ($case -eq 'public-finishloss') {
+                $serverDevice = $env:GESHER_BINDER + '-front'
+                $relay = Start-Sg $relayExe @($serverDevice, $env:GESHER_BINDER, $prefix) ($prefix + '.relay.log')
+                if (-not (Wait-SgFile ($prefix + '.proxy-ready') $relay)) { throw 'Transparent finish relay did not become ready' }
+            }
             # Probe the real driver endpoint without opening a competing
             # context manager. Actors retry their actual open below.
             $serverExe = if ($case.StartsWith('wire-')) { $wireActor } else { $actor }
-            $server = Start-Sg $serverExe @('server', $case, $prefix) ($prefix + '.server.log')
+            $server = Start-Sg $serverExe @('server', $case, $prefix) ($prefix + '.server.log') $serverDevice
             if (-not (Wait-SgFile ($prefix + '.ready') $server)) { throw "Receiver not ready: $case" }
             $client = Start-Sg $actor @('client', $case, $prefix) ($prefix + '.client.log')
             Assert-Sg ($client.Process.Id -ne $server.Process.Id -and $server.Process.Id -ne $broker.Process.Id -and
@@ -99,9 +107,12 @@ try {
             if ($case.StartsWith('wire-death-')) {
                 Assert-Sg ([IO.File]::Exists($prefix + '.death')) "$case reached exact real process-death boundary"
             }
+            if ($case -eq 'public-finishloss') {
+                Assert-Sg ([IO.File]::Exists($prefix + '.ack-dropped')) 'public finish loss verified real broker success ACK before withholding it'
+            }
         } finally {
             $cleanupErrors = @()
-            foreach ($child in @($client, $server, $broker)) {
+            foreach ($child in @($client, $server, $relay, $broker)) {
                 if ($null -ne $child) {
                     try { [void](Stop-Sg $child 1000) }
                     catch { $cleanupErrors += $_.Exception.Message; $child.Process.Dispose() }

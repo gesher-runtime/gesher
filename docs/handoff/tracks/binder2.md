@@ -68,3 +68,14 @@ thread pipe for every read-stream failure. Common POSIX independent-process
 actors and a finite host parent are now source only. Remaining before CI:
 raw-wire lost-ACK/disconnect/death/FD-reuse and queue-progress controls,
 both ABI/ART/APK wiring, final peer/static checks. No source/runtime closure.
+
+## Interrupted public transaction-prefix test requirement
+
+The additional external transport-loss fixture and its incomplete actor/mode
+wiring are preserved as source only after an automatic content-filter
+interruption reported by the manager. This checkpoint is not compiled,
+executed, peer-qualified or accepted. Do not substitute the earlier raw
+manual-handle loss test or BR_NOOP prefix case for a complete public
+transaction-prefix proof. That exact lifetime/accounting test remains open.
+Routine ART/APK actor wiring continues separately from the known compile-only
+source7e9549d89fc871f4d88a29e62c887e36723e6be8. No process or CI is restarted.
