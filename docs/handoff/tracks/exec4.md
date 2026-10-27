@@ -37,6 +37,16 @@ Windows/package/e2e gates. Follow the common merge/report rules; root merges.
 
 ## Status and next steps
 
+Root takeover checkpoint: final combined ci40438421809/b429220 is complete
+red only on2022's two counted known badssl connection-timeout checks;2025
+whole0, test67/all exec3 checks on both and actual package/both e2e pass.
+Root read all conclusions and five actual runtime/package/e2e logs. The
+original immutable9f/76b source retains full-green40430496516 attempt2 proof.
+No acceptance of the red combination or unchanged retry is claimed. Media's
+new coherent candidate includes verified76b, current native clock/width
+integration and deterministic local TLS fixtures; its full proof is pending.
+See exec4-recovery.md. Further spawn semantics remain a separate source slice.
+
 Temporary agent-slot handoff: see the compact [recovery checkpoint](exec4-recovery.md).
 Final combined CI40438421809 is monitored by root; leave its interval120 watch
 running and keep source/frozen refs unchanged until work resumes.
