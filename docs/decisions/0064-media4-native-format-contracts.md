@@ -1,6 +1,6 @@
-# 0064: Native media format contracts over the pinned AOSP backend
+# 0064: Native media format and bounded OpenSL contracts
 
-Status: accepted (media4 format slice; full ci 40459815375)
+Status: accepted (format ci40459815375; bounded OpenSL ci40476766790)
 
 ## Context
 
@@ -81,19 +81,50 @@ This source predates the coordinator's separately verified Java exit-status
 freshness fix. Combined integration CI must verify that prerequisite with
 this slice before the coordinator accepts the integrated tree.
 
-## Proposed follow-up: OpenSL contracts
+## Accepted follow-up: OpenSL identifiers and capability contracts
 
-The active Media4 source adds canonical OpenSL UUID pointer objects from
-pinned OpenSLES_IID.cpp, copied-value lookup and typed engine queries. It
-validates required/optional interface arrays, exposes only requested or
-implicit interfaces, permits the pinned prerealize cases, and uses the
-actual 0x0B native recording-permission error. Test76 prepares real NDK JNI
-callers and manifest-allowed/denied single-ABI APKs for both ABIs/runners.
-This follow-up is not accepted by the format run above; its own full CI and
-exact semantic logs are required before inventory/roadmap acceptance.
+Reuse pinned OpenSLES_IID.cpp's53 real16-byte UUID pointer objects (correct
+the existing19 and add34 old missing symbols), including full source notice.
+Compare copied UUID values rather than pointer identity. Use the exact typed
+engine/global query signatures and supported class subsets; validate output,
+index/object/null and required/optional arrays, reset failed outputs, and
+expose only implicit/requested interfaces with pinned prerealize behavior.
+Unsupported effects/3D/device identifiers retain explicit unsupported results.
+Use actual0x0B recording denial with no object. The production manifest gate
+is unchanged; bare-core ART without a framework media identity also denies.
+Normalize the volume argument's low16 bits explicitly at the host boundary:
+the ARM guest does not promise incoming short sign extension. Actual current
+CI records raw64936→signed16 -600, with set/get/value success at -600/-32768/
+-1/0. No register contents are inferred for the previous failing source.
 
-The standalone OpenSL backend still depends on player/video/window/JNI
-factoring and remains open; no placeholder is linked into gesher-exec.
-Canonical effect/3D identifiers support exact unsupported results, not
-effects or 3D audio. Full configuration, loss-of-control, output-mix and
-device-policy behavior remain separate Media4 contracts.
+Full ci **40476766790**, attempt1 at **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**,
+contains accepted integration db84749b/freshExit30deb08c and passes22 jobs/
+six skipped. Windows122099872570/122099872556 finish0 failures, with14 test76
+PASS each: ten ABI/context combinations plus four device shutdowns. All50
+semantic rows and40 volume result rows per runner were read, including real
+manifest-allowed/denied single/device APKs and bare-core denial. Actual
+package122099872538 passes23 checks and e2e122100699777/122100699799 each
+passes ten apps/four transports/association/shortcut with0 unexpected
+failures. Exactly34 new IID inventory verification objects preserve all
+historical fields and143 prior format proofs.136 old media entries remain.
+No effect/3D method or full OpenSL engine is established by those constants.
+
+The earlier full40470959941/2b343aa7 remains RED: both runners exactly six
+test76 failures from the core fixture's incorrect grant assumption and the
+ARM signed16 boundary. Corrected source was verified above without retrying
+that unchanged candidate. The same green run also verifies the stronger
+lossless AAudio fixture: requested/effective44100-frame capacity, original
+750/1250Hz/44100-frame gate, zero lost/xruns and a controlled small-ring loss
+versus configured-ring zero-loss case. Old1153.3Hz cause remains unproved.
+
+## Proposed follow-up: standalone backend and remaining contracts
+
+Separate native source e5693412/full40477536464 factors pure audio/player/
+NDK OBJECT targets into both hosts, shares the existing guest-thread TLS
+entry guard, preserves the actual manifest provider and no-identity denial,
+and prepares real NDK ELF queue/TLS callback tests. Its runtime/full CI proof
+is pending, and it is not part of accepted source d10. No placeholder native
+backend is accepted. Native-child recording identity, configuration,
+loss-of-control callbacks, output-mix and full effects/device-policy behavior
+remain open. The installer notice proposal also needs package-CI proof
+before release; no installed-notice claim follows from source preservation.
