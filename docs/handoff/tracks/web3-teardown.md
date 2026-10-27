@@ -13,7 +13,7 @@ At17:48:48UTC the original A11y60+60s teardown deadline is recorded FAILED.
 Only afterward, bounded observers exit0 for launcher4000/server2960/app7400.
 App7400 WCT shows thread2304 waiting for6092, then SendMessage to8796.
 The main native stack has WaitForSingleObjectEx and dalvikvm offsets
-acd9bb/ac f398/ac f47d (without spaces in the raw log). Thread6092 has
+acd9bb/acf398/acf47d. Thread6092 has
 WaitOnAddress then18ba8c/198612/206c72/2048e6/ec544f/9c3f98;8796 has
 GetMessageW then4598. Roles/functions require exact original-map symbolization;
 the WCT edge alone does not prove a particular ownership correction.
