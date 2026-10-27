@@ -350,10 +350,16 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Current source includes verified exec3 integration 94ccde1, merged without
-conflicts at 131b335. The latest own full diagnostic and its open boot-profile
-gate below remain unchanged. No new Web3 run or acceptance claim follows from
-this integration update.
+Current changed-source full CI **40432795403** is running at exact
+`2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
+9dd57f5 (documentation-only after coordinator tip42cc1c0), including verified
+startup profile merge2ba9a11. The coordinator personally read profile source
+ca46e99/run40414859801 (18AOT checks per runner and original gates) and combined
+integration40416300047 before authorizing this one fresh Web3 run. This is a
+changed verified profile input, not a repeat of the old timing failure or a
+threshold waiver. Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log,
+interval120. All C/C++/Java compilation and native/JVM fixtures remain CI-only.
+No stage acceptance is claimed before every actual required result is read.
 
 Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
@@ -489,7 +495,9 @@ there will be no local native compilation or execution. Web3's latest own
 full diagnostic remains 40376044459 at 939ec313d0fe5a2d8410ee700a927fad0538269e:
 all 14 Web3 checks pass on both runners, with package and both e2e jobs green;
 Windows 2022's boot performance failure still prevents full-stage acceptance.
-No new Web3 run is dispatched while the coordinator diagnoses the startup
-profile; a later combined source must use the latest verified integration.
+The earlier hold for coordinator startup diagnosis ended only after its
+verified profile input merged; current run40432795403 above is the single
+authorized changed-source validation. A final source must include the latest
+verified integration.
 The separate Windows4/native evidence does not establish Web3 or release
 completion. No roadmap item or release gate is closed by this merge.
