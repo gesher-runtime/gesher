@@ -57,15 +57,17 @@ public final class TaskConfiguration {
                 : Configuration.ORIENTATION_PORTRAIT;
         c.screenLayout = Configuration.reduceScreenLayout(
                 Configuration.resetScreenLayout(base.screenLayout), Math.max(w, h),
-                Math.min(w, h));
+                Math.min(w, h)) & ~Configuration.SCREENLAYOUT_LAYOUTDIR_MASK;
+        // A task overrides geometry, not the package's locale. Copying the
+        // display's LTR bits here erased Hebrew/Arabic direction at launch.
         c.densityDpi = dpi;
         c.windowConfiguration.setBounds(bounds);
         c.windowConfiguration.setAppBounds(bounds);
-        if (rotation != Surface.ROTATION_0) {
-            c.windowConfiguration.setRotation(rotation);
-            c.windowConfiguration.setDisplayRotation(rotation);
-            c.windowConfiguration.setMaxBounds(display(rotation));
-        }
+        // Zero is an actual task orientation too: an unfocused portrait task must
+        // not inherit the shared Application display's landscape rotation.
+        c.windowConfiguration.setRotation(rotation);
+        c.windowConfiguration.setDisplayRotation(rotation);
+        c.windowConfiguration.setMaxBounds(display(rotation));
         return c;
     }
 

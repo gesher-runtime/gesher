@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>geo</title></head>
+<body>
+<p id="state">waiting</p>
+<script>
+// navigator.geolocation from Gesher's LocationManager (ADR 0058). The app reads
+// window.geoResult with evaluateJavascript.
+window.geoResult = {get: null, watch: [], error: null};
+function fmt(p) {
+  return p.coords.latitude.toFixed(4) + ' ' + p.coords.longitude.toFixed(4) + ' accuracy '
+      + Math.round(p.coords.accuracy) + ' altitude ' + (p.coords.altitude === null ? 'none'
+      : Math.round(p.coords.altitude));
+}
+navigator.geolocation.getCurrentPosition(function(p) {
+  geoResult.get = fmt(p);
+  var id = navigator.geolocation.watchPosition(function(q) {
+    geoResult.watch.push(fmt(q));
+    if (geoResult.watch.length >= 2) navigator.geolocation.clearWatch(id);
+  }, function(e) { geoResult.error = 'watch error ' + e.code + ' ' + e.message; },
+  {enableHighAccuracy: true});
+}, function(e) {
+  geoResult.error = 'error ' + e.code + ' ' + e.message;
+}, {enableHighAccuracy: true, timeout: 20000});
+</script>
+</body></html>
