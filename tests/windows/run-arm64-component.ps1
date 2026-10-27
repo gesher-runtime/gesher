@@ -1,5 +1,5 @@
 # Guarded component run; no broad suite/package/e2e acceptance.
-param([Parameter(Mandatory)] [string] $Dir)
+param([Parameter(Mandatory)] [string] $Dir, [switch] $ContinueAfterComponent)
 $ErrorActionPreference = 'Stop'
 $Dir = (Resolve-Path $Dir).Path
 $failed = 0
@@ -55,4 +55,4 @@ foreach ($record in $arm64FpcrEvidence) {
 if ($arm64FpcrEvidence.Count -ne 6) { throw 'Missing original two-ABI three-context Native2 evidence' }
 Write-Host "ACTUAL_ARM64_COMPONENT_SUMMARY $failed test(s) failed; current API3 runtime/DLL and guarded boot jars"
 if ($failed) { exit 1 }
-exit 0
+if (-not $ContinueAfterComponent) { exit 0 }

@@ -449,8 +449,8 @@ const uint32_t kLongjmp[] = {
 
 // --- the floating-point environment ------------------------------------------------
 // Rounding uses the actual per-thread FPCR, including direct guest MSR.
-// Sticky exception flags use the actual FPSR. Full environment save/restore
-// and the architecture-specific default environment object remain open.
+// Sticky exception flags and environment snapshots use the actual FPSR.
+// The pinned ARM LP64 environment is two 32-bit registers, unlike x86 fenv_t.
 int GESHER_SYSV FeSetround(int mode) {
   if (mode < 0 || mode > 3) return -1;
   uint32_t fpcr = GuestFpcr();
@@ -468,11 +468,30 @@ int GESHER_SYSV FeClearexcept(int excepts) {
   SetGuestFpsr(GuestFpsr() & ~(static_cast<uint32_t>(excepts) & kArmFeAll));
   return 0;
 }
-int GESHER_SYSV FeGetenv(uint32_t* env) {
-  if (env != nullptr) env[0] = env[1] = 0;  // fpcr, fpsr
+struct ArmFenv { uint32_t control; uint32_t status; };
+static_assert(sizeof(ArmFenv) == 8);
+const ArmFenv kArmDefaultEnv = {0, 0};
+int GESHER_SYSV FeGetenv(ArmFenv* env) {
+  env->control = GuestFpcr();
+  env->status = GuestFpsr();
   return 0;
 }
-int GESHER_SYSV FeSetenv(const uint32_t*) { return 0; }
+int GESHER_SYSV FeSetenv(const ArmFenv* env) {
+  if (env->control != GuestFpcr()) SetGuestFpcr(env->control);
+  SetGuestFpsr(env->status);
+  return 0;
+}
+int GESHER_SYSV FeHoldexcept(ArmFenv* env) {
+  FeGetenv(env);
+  SetGuestFpsr(GuestFpsr() & ~kArmFeAll);
+  return 0;
+}
+int GESHER_SYSV FeUpdateenv(const ArmFenv* env) {
+  uint32_t excepts = GuestFpsr() & kArmFeAll;
+  FeSetenv(env);
+  SetGuestFpsr(GuestFpsr() | excepts);
+  return 0;
+}
 int GESHER_SYSV FeGetexceptflag(uint32_t* flag, int excepts) {
   *flag = GuestFpsr() & (static_cast<uint32_t>(excepts) & kArmFeAll);
   return 0;
@@ -496,8 +515,8 @@ const Fallback kFenv[] = {
     FB("fesetround", FeSetround),   FB("fegetround", FeGetround),
     FB("fetestexcept", FeTestexcept), FB("feclearexcept", FeClearexcept),
     FB("feraiseexcept", FeRaiseexcept), FB("fegetenv", FeGetenv),
-    FB("fesetenv", FeSetenv),       FB("feholdexcept", FeGetenv),
-    FB("feupdateenv", FeSetenv),    FB("fegetexceptflag", FeGetexceptflag),
+    FB("fesetenv", FeSetenv),       FB("feholdexcept", FeHoldexcept),
+    FB("feupdateenv", FeUpdateenv), FB("fegetexceptflag", FeGetexceptflag),
     FB("fesetexceptflag", FeSetexceptflag), FB("fegetexcept", FeZero),
 };
 #undef FB
@@ -593,6 +612,9 @@ void InitGuestLibc() {
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
 
   for (const Fallback& f : kFenv) Override(f.name, f.fn);
+  // Data imports and dlsym must return the ARM object itself, never a callable
+  // trampoline or the common host shim's different x86 environment layout.
+  g_overrides["__fe_dfl_env"] = const_cast<ArmFenv*>(&kArmDefaultEnv);
 
   void* sj = EmitGuestCode(kSetjmp, sizeof(kSetjmp) / 4);
   void* lj = EmitGuestCode(kLongjmp, sizeof(kLongjmp) / 4);
