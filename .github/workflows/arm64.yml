@@ -199,6 +199,8 @@ jobs:
             -o dist-arm64/arm64-fpcr-exec tests/native/arm64_fpcr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-arm64/arm64-fpsr-exec tests/native/arm64_fpsr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
+          "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-arm64/arm64-env-exec tests/native/arm64_env_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           # Step 3/4 (guest JNI): natives found by name and registered, calling
           # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
           # thread attached to the VM.

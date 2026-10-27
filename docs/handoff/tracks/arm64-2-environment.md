@@ -1,4 +1,18 @@
-# ARM full environment/default object: source-only checkpoint
+# ARM full environment/default object: implementation awaiting CI
+
+Resume implementation: the separate environment worktree now contains real
+FPCR/FPSR get/set/hold/update and an ARM-specific eight-byte default data
+object. Shared ELF and Native2 JNI/single/device fixtures compare the
+unchanged pinned bionic body across256 control/status cases for direct and
+dynamic entries, output canaries, default-object identity/bytes, errno,
+concurrent guest threads and nested guest-host-guest callbacks. Reserved
+test85 requires actual process reports. A guarded environment component
+retains all existing coherent API3/Native2/FPCR/FPSR/varargs/JNI controls and
+the exact five-jar/image source checks. Source awaits bounded peer review
+and CI; no compiler or fixture ran locally, no acceptance/roadmap closure.
+
+The earlier audit and proposed scope below are historical context; only
+the source/CI results subsequently recorded here can establish completion.
 
 Owner requested a nearest-checkpoint stop on2026-10-27. This is a docs-only
 WIP, not an implementation or verification claim. Separate worktree
