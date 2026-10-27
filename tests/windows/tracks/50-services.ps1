@@ -6,6 +6,8 @@
 # Runs a program with a time limit (binder calls that go wrong tend to wait
 # forever), attempting process-tree termination when the time is up. Returns
 # its output; $LASTEXITCODE is its exit code (-1 on a time-out).
+. "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
+
 function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 120) {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
   foreach ($a in $Arguments) { $psi.ArgumentList.Add($a) }
@@ -13,9 +15,20 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $p = [Diagnostics.Process]::Start($psi)
+  $nativeHandle = $p.SafeHandle
+  $cancellation = [Threading.CancellationTokenSource]::new()
+  $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
+             @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+  $out = ''
+  $incomplete = $true
+  $nativeExit = $null
   try {
-    $stdout = $p.StandardOutput.ReadToEndAsync()
-    $stderr = $p.StandardError.ReadToEndAsync()
+    foreach ($pipe in $pipes) {
+      $pipe.Reader = if ($pipe.Name -eq 'stdout') { $p.StandardOutput } else { $p.StandardError }
+      $pipe.Handle = $pipe.Reader.BaseStream.SafeFileHandle
+      $pipe.Raw = $pipe.Handle.DangerousGetHandle()
+      $pipe.Task = $pipe.Reader.ReadToEndAsync($cancellation.Token)
+    }
     $incomplete = -not $p.WaitForExit($Seconds * 1000)
     $out = ''
     if ($incomplete) {
@@ -24,15 +37,36 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
       if (-not $p.WaitForExit(5000)) { $out += "`n(process still alive five seconds after kill)" }
     }
     # An exited parent can leave descendants holding redirected output open.
-    foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+    foreach ($pipe in $pipes) {
       try {
-        if ($pipe.Task.Wait(5000)) { $out += $pipe.Task.Result }
+        if ($pipe.Task.Wait(5000)) { $out += $pipe.Task.Result; $pipe.Copied = $true }
         else { $incomplete = $true; $out += "`n($($pipe.Name) did not complete within five seconds)" }
       } catch { $incomplete = $true; $out += "`n($($pipe.Name) read failed: $_)" }
     }
-    $global:LASTEXITCODE = if ($incomplete) { -1 } else { $p.ExitCode }
-    return $out
-  } finally { $p.Dispose() }
+    if ($p.HasExited) { $nativeExit = $p.ExitCode }
+  } finally {
+    $cleanup = @{ LateText = ''; TasksComplete = $false; PipesClosed = $false; Problem = 'reader cleanup did not complete' }
+    try { $cleanup = Close-ProcessReaders $cancellation $pipes }
+    catch { $incomplete = $true; $out += "`n(reader cleanup failed: $_)" }
+    $out += $cleanup.LateText
+    if (-not $cleanup.TasksComplete -or -not $cleanup.PipesClosed -or $cleanup.Problem) {
+      $incomplete = $true
+      $out += "`n(reader cleanup incomplete: $($cleanup.Problem))"
+    }
+    try {
+      if (-not $p.HasExited) {
+        $p.Kill($true)
+        if (-not $p.WaitForExit(5000)) { $incomplete = $true; $out += "`n(final owned process cleanup exceeded five seconds)" }
+      }
+    } catch { $incomplete = $true; $out += "`n(final owned process cleanup failed: $_)" }
+    try { $p.Dispose() } catch { $incomplete = $true; $out += "`n(process disposal failed: $_)" }
+    if (-not $nativeHandle.IsClosed) { $incomplete = $true; $out += "`n(native process handle did not close)" }
+    if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+      $out += "`nINFO READER_CLEANUP helper=RunTimed tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
+    }
+  }
+  $global:LASTEXITCODE = if ($incomplete) { -1 } else { $nativeExit }
+  return $out
 }
 
 function CheckTimed([string] $Name, [string] $Exe, [string[]] $Arguments, [string[]] $Expect, [int] $Seconds = 120) {

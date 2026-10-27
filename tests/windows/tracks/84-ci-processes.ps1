@@ -154,6 +154,14 @@ try {
         $timer.Stop()
         $bound = if ($case.Mode -eq 'timeout') { 145 } else { 25 }
         $correct = $code -eq $expected -and $timer.Elapsed.TotalSeconds -lt $bound
+        if ($helper -eq 'InvokeOpenSl') {
+          $pipeEvidence = [regex]::Match($text, 'INFO READER_CLEANUP helper=InvokeOpenSl tasksdone=True pipesclosed=True processclosed=True pipe-output=(\d+) pipe-error=(\d+)')
+          $invalid = $pipeEvidence.Success -and
+            [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[1].Value) -and
+            [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[2].Value)
+          $correct = $correct -and $invalid
+          Write-Host "ACTUAL_READER_PIPE_CLEANUP helper=InvokeOpenSl case=$($case.Mode) tasks-stopped=$($pipeEvidence.Success) native-pipes-invalid=$invalid"
+        }
         if ($case.Mode -in @('normal', 'nonzero')) {
           $correct = $correct -and $text.Contains("process84 stdout $($case.Mode)") -and
             $text.Contains("process84 stderr $($case.Mode)")
@@ -299,6 +307,9 @@ try {
   $dvmWindows = $process84SavedWindowVm
   $env:GESHER_CI_PROCESS_TRACE = $process84SavedTrace
 }
+$runTimed84SavedTrace = $env:GESHER_CI_PROCESS_TRACE
+try {
+$env:GESHER_CI_PROCESS_TRACE = '1'
 foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                    @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
   $pidFile = Join-Path $process84Root "$($case.Mode).pid"
@@ -309,6 +320,12 @@ foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Exp
     $code = $LASTEXITCODE
     $timer.Stop()
     $correct = $code -eq $case.Expected -and $timer.Elapsed.TotalSeconds -lt ($limit + 20)
+    $pipeEvidence = [regex]::Match($text, 'INFO READER_CLEANUP helper=RunTimed tasksdone=True pipesclosed=True processclosed=True pipe-output=(\d+) pipe-error=(\d+)')
+    $invalid = $pipeEvidence.Success -and
+      [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[1].Value) -and
+      [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[2].Value)
+    $correct = $correct -and $invalid
+    Write-Host "ACTUAL_READER_PIPE_CLEANUP helper=RunTimed case=$($case.Mode) tasks-stopped=$($pipeEvidence.Success) native-pipes-invalid=$invalid"
     if ($case.Mode -in @('normal', 'nonzero')) {
       $correct = $correct -and $text.Contains("process84 stdout $($case.Mode)") -and
         $text.Contains("process84 stderr $($case.Mode)")
@@ -316,6 +333,11 @@ foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Exp
       $correct = $correct -and $text.Contains('(timed out after 3 s)') -and (Test-Path $pidFile)
     } else {
       $correct = $correct -and $text.Contains('did not complete within five seconds') -and (Test-Path $pidFile)
+      if (Test-Path -LiteralPath $pidFile) {
+        $writer = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+        try { $correct = $correct -and $null -ne $writer -and -not $writer.HasExited }
+        finally { if ($writer) { $writer.Dispose() } }
+      }
     }
     if ($correct) {
       Write-Host "PASS  CI processes: $($case.Mode) preserves status/output and completes within explicit bounds"
@@ -340,3 +362,5 @@ foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Exp
     }
   }
 }
+
+} finally { $env:GESHER_CI_PROCESS_TRACE = $runTimed84SavedTrace }
