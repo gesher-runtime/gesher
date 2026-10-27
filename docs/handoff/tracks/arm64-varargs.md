@@ -94,3 +94,49 @@ job122277019774 and its metadata were personally read: both libraries/APKs,
 javac/d8, original third-party/symbol pipeline and artifact publication pass.
 No actual ART/APK execution or full product/Surface acceptance follows from
 this compilation-only result. Production matches scoped928a09b7 exactly.
+
+## Owner-requested checkpoint (2026-10-27)
+
+The owner requested a stop at the nearest checkpoint for a new session.
+No additional implementation or CI dispatch follows this checkpoint.
+
+Merge52be5095203d016e879c0e694e5c9d77f46ae348 imports exact immutable
+Locale2f5a02ce55f463ee4c37358f900ff703bcb1e5375, already containing the frozen
+FPSR75e7 leaf, on integration13603d54. Two conflicts were resolved additively:
+arm64.yml retains original varargs probe/consumer builds and FPCR reference/
+code generation; Native2 retains Wide/ifaddrs/FPCR/FPSR and adds varargs.
+Automatic production translator merge preserves both FPSR state/crossing
+changes and reviewed API3/demand-driven conversion. Frozen refs did not move.
+
+Coherent candidate0cfcd2e0ad594fc85936de209053dc21f3463669 is committed/pushed.
+It adds .github/workflows/arm64-varargs-component.yml and
+tests/windows/run-arm64-component.ps1. The component rebuilds current
+dalvikvm/dex2oat/exec/loader, all five boot jars/framework, NDK and translator.
+Pinned Locale scaffolding40516054280/ca4ed3cf requires exact source/attempt
+and successful build/framework/boot jobs despite the overall red Web3 result.
+Five actual SHA256 comparisons govern boot reuse; any changed current jar
+requires a current compiler/image rebuild. Original test44 both-ABI three-
+context assertions, FPCR69/FPSR75, copied JNI V and variadic consumers remain.
+Media read this exact component guard/runner and found no additional blocker
+in bounded source scope. No component runtime or product acceptance exists.
+
+The one component dispatch attempted before the stop returned HTTP404:
+arm64-varargs-component.yml is not registered on the default branch. It did
+not create a run. Next session must first register/trigger the new workflow
+(for example an additive narrowly scoped push trigger), then run/watch the
+guarded component, personally read every actual result and only then supply
+that exact prerequisite to Media's focused Surface80/86 source. Do not dispatch
+broad full until the owning Windows/Web3 correction is ready. The older
+standalone scoped workflow remains manually dispatchable; automatic push
+runs were removed while moving to the coherent component.
+
+No owned CI run remains active: diagnostic40525678026, failed correction
+40527840216, verified scoped40528739976, compile-only40529197932 and red
+Locale40516054280 are completed. Exact watch/log prefixes remain under
+C:\work\gesher-ci-review\native-arm64-varargs-<run> and
+native-locale2-40516054280; nothing was downloaded as a local artifact.
+
+Source-only test85 work now has separate C:\work\gesher-arm64-env,
+wip/arm64-env, from0cfcd2e0. Its audit/proposed full-environment/default-object
+scope is in that branch's docs/handoff/tracks/arm64-2-environment.md. No env85
+implementation, fixture build or execution occurred before the stop.
