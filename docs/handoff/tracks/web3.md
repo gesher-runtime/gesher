@@ -1,5 +1,15 @@
 # Track brief: web3
 
+## Status and next steps
+
+Accepted Windows4/Web3 full40466021634 and coherent Net440499454478 remain
+valid bounded evidence. A later device-A11y teardown recurrence in AOT
+full40512344714/96b still lacks a native stack. The next independent CI
+diagnostic uses exact accepted694 ART/Java/image artifacts and a separate
+bounded WCT/native-stack observer after the unchanged original failure.
+[Source, provenance and retained limits](web3-teardown.md). No causal fix
+or new full acceptance is claimed; compile/control/runtime proof is pending.
+
 WebView and network leftovers reported by the webview2 and net tracks. The
 original brief given to the first agent of this track (2026-10-26), kept
 verbatim. A successor reads it together with the "Status and next steps"

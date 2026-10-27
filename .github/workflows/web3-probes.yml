@@ -1,0 +1,170 @@
+name: web3-probes
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/web3']
+    paths:
+      - '.github/workflows/web3-probes.yml'
+      - 'tests/windows/web3-probe.ps1'
+      - 'tests/windows/web3/Observer.ps1'
+      - 'probes/web3/process_waits.cc'
+      - 'tools/web3/build-teardown-probe.sh'
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_RUN: '40499454478'
+  SOURCE_SHA: '694a4cd6b067f1deea87015bceb2ad2160260154'
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+concurrency:
+  group: web3-teardown-probes-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  observer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: toolchain
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch only the pinned compiler
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/toolchain
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" | tar -xJ -C ~/toolchain
+      - name: Compile the separate native observer with Werror
+        shell: bash
+        run: bash tools/web3/build-teardown-probe.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web3-teardown-observer
+          path: dist-web3-observer/
+          if-no-files-found: error
+  runtime:
+    needs: observer
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin accepted runtime bytes and diagnostic-only source changes
+        id: source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read accepted supplying run' }
+          if ($run.head_sha -cne $env:SOURCE_SHA -or $run.status -cne 'completed' -or
+              $run.conclusion -cne 'success' -or $run.run_attempt -ne 1 -or $run.name -cne 'ci' -or
+              $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY) { throw 'Wrong supplying source/attempt/repository' }
+          $paths = git diff --name-only $env:SOURCE_SHA HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compare accepted source' }
+          $allow = @('.github/workflows/web3-probes.yml','tests/windows/web3-probe.ps1',
+            'tests/windows/web3/Observer.ps1','tests/windows/tracks/54-web3.ps1',
+            'probes/web3/process_waits.cc','tools/web3/build-teardown-probe.sh',
+            'compat/input/thread_watch.h','compat/input/thread_watch.cc')
+          foreach ($path in $paths) {
+            if ($path -notlike 'docs/*' -and $path -notin $allow) { throw "Unexpected runtime/build source drift: $path" }
+          }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/attempts/1/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify supplying jobs' }
+          $suppliers = [ordered]@{ 'windows-x64'='build'; 'framework'='framework / framework';
+            'native-libs'='native-libs / native-libs'; 'graphics'='graphics / build'; 'angle'='angle / build';
+            'arm64'='arm64 / build'; 'boot-image'='boot-image / compile'; 'webview'='webview / build'; 'exec'='exec / exec' }
+          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $artifacts.total_count -gt 100) { throw 'Cannot pin supplying artifacts' }
+          foreach ($name in $suppliers.Keys) {
+            $job = @($jobs.jobs | Where-Object { $_.name -ceq $suppliers[$name] })
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].head_sha -cne $env:SOURCE_SHA -or
+                $job[0].run_id -ne [long]$env:SOURCE_RUN) { throw "Wrong supplying job $name" }
+            $artifact = @($artifacts.artifacts | Where-Object { $_.name -ceq $name })
+            if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].id -le 0 -or $artifact[0].size_in_bytes -le 0 -or
+                $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+                $artifact[0].workflow_run.head_sha -cne $env:SOURCE_SHA -or
+                $artifact[0].workflow_run.id -ne [long]$env:SOURCE_RUN -or
+                $artifact[0].workflow_run.head_repository_id -ne $run.repository.id) { throw "Wrong supplying artifact $name" }
+            "$name=$($artifact[0].id)" >> $env:GITHUB_OUTPUT
+            Write-Host "WEB3_SOURCE artifact=$name id=$($artifact[0].id) digest=$($artifact[0].digest) run=$env:SOURCE_RUN SHA=$env:SOURCE_SHA attempt=1"
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: web3-teardown-observer
+          path: observer
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.windows-x64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.framework }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.native-libs }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.graphics }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.angle }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.arm64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.boot-image }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.webview }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.exec }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Run the real Web3 cases with bounded post-failure native observation
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/windows/web3-probe.ps1 dist observer/web3_process_waits.exe

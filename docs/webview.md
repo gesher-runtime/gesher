@@ -17,6 +17,13 @@ generation/PID-aware exit implementation and actual app0/23/0 controls.
 older diagnostic status notes below. Web4/ADR0072 contracts remain open;
 this result does not establish arbitrary accessibility or screen-reader UX.
 
+A device-A11y teardown recurrence in later AOT full40512344714/96b remains
+under investigation: Activity destruction returns, then nativeWindow.close
+does not return before the unchanged deadline. The separate
+[native teardown diagnostic](handoff/tracks/web3-teardown.md) observes exact
+accepted ART/Java/image bytes and cannot turn that timeout into success.
+No cause or corrective runtime change is established yet.
+
 ## How it fits
 
 ```
