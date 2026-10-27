@@ -14,15 +14,19 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
-  $p = [Diagnostics.Process]::Start($psi)
-  $nativeHandle = $p.SafeHandle
-  $cancellation = [Threading.CancellationTokenSource]::new()
-  $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
-             @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+  $p = $null
+  $nativeHandle = $null
+  $cancellation = $null
+  $pipes = @()
   $out = ''
   $incomplete = $true
   $nativeExit = $null
   try {
+    $cancellation = [Threading.CancellationTokenSource]::new()
+    $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
+               @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+    $p = [Diagnostics.Process]::Start($psi)
+    $nativeHandle = $p.SafeHandle
     foreach ($pipe in $pipes) {
       $pipe.Reader = if ($pipe.Name -eq 'stdout') { $p.StandardOutput } else { $p.StandardError }
       $pipe.Handle = $pipe.Reader.BaseStream.SafeFileHandle
@@ -53,16 +57,18 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
       $incomplete = $true
       $out += "`n(reader cleanup incomplete: $($cleanup.Problem))"
     }
-    try {
-      if (-not $p.HasExited) {
-        $p.Kill($true)
-        if (-not $p.WaitForExit(5000)) { $incomplete = $true; $out += "`n(final owned process cleanup exceeded five seconds)" }
-      }
-    } catch { $incomplete = $true; $out += "`n(final owned process cleanup failed: $_)" }
-    try { $p.Dispose() } catch { $incomplete = $true; $out += "`n(process disposal failed: $_)" }
-    if (-not $nativeHandle.IsClosed) { $incomplete = $true; $out += "`n(native process handle did not close)" }
+    if ($null -ne $p) {
+      try {
+        if (-not $p.HasExited) {
+          $p.Kill($true)
+          if (-not $p.WaitForExit(5000)) { $incomplete = $true; $out += "`n(final owned process cleanup exceeded five seconds)" }
+        }
+      } catch { $incomplete = $true; $out += "`n(final owned process cleanup failed: $_)" }
+      try { $p.Dispose() } catch { $incomplete = $true; $out += "`n(process disposal failed: $_)" }
+      if ($null -ne $nativeHandle -and -not $nativeHandle.IsClosed) { $incomplete = $true; $out += "`n(native process handle did not close)" }
+    }
     if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
-      $out += "`nINFO READER_CLEANUP helper=RunTimed tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
+      $out += "`nINFO READER_CLEANUP helper=RunTimed tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($null -ne $nativeHandle -and $nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
     }
   }
   $global:LASTEXITCODE = if ($incomplete) { -1 } else { $nativeExit }
