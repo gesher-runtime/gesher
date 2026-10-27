@@ -12,6 +12,7 @@ target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
 
 add_executable(gesher-exec
   ${CMAKE_CURRENT_LIST_DIR}/gesher_exec.cc
+  ${CMAKE_CURRENT_LIST_DIR}/spawn_actions.cc
   ${CMAKE_CURRENT_LIST_DIR}/gesher_shell.cc)
 target_compile_options(gesher-exec PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher-exec PRIVATE gesher_exec_spawn gesher_bionic gesher_elf bcrypt shell32)

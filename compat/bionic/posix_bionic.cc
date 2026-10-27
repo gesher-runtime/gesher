@@ -358,7 +358,7 @@ int BIONIC_SYSV Futimens(int fd, const LinuxTimespec* times) {
 char* BIONIC_SYSV Getcwd(char* buf, size_t size) {
   return getcwd(buf, static_cast<int>(size > 0x7fffffff ? 0x7fffffff : size));
 }
-int BIONIC_SYSV Chdir(const char* path) { return _chdir(path) == 0 ? 0 : -1; }
+int BIONIC_SYSV Chdir(const char* path) { return chdir(path); }
 int BIONIC_SYSV Fchdir(int fd) {
   std::string p;
   if (!PathOfFd(fd, &p)) return -1;
