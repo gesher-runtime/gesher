@@ -158,3 +158,11 @@ thread's ioctl pipe is lazy. Exact trace totals plus actual intended actor opens
 bound all successful SG opens in that observed case. Failed handshakes and a
 general claim excluding arbitrary concurrent future attempts remain outside this
 bounded evidence; no such claim is required or inferred.
+
+Final bounded Native peer of correcteded741c99367d61df2bb2c07ae4d01753d9a03c06
+found no additional definite source/wiring blocker. Narrow push registered and
+started ordinary component40579429217 on that exact source, after confirming no
+live same-ref run. Required watch uses interval120 and writes the corresponding
+binder2-sg-modes-component-40579429217-watch.log in the review directory. Runtime
+is pending, with no acceptance inferred from the earlier green build-only run.
+No integration code/main/PR/tag/release operation occurred.
