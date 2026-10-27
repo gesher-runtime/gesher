@@ -2,10 +2,8 @@
 #include <cstdint>
 #include <cstddef>
 
-#include <media/NdkMediaCodec.h>
 #include <media/NdkMediaErrorPriv.h>
 #include <media/NdkMediaFormatPriv.h>
-#include <media/NdkMediaMuxer.h>
 #include <media/stagefright/foundation/AMessage.h>
 
 #include <gesher/bionic_shim.h>
@@ -25,13 +23,11 @@
 #include <vector>
 
 #include "../mux/muxer.h"
+#include "media_muxer_abi.h"
 
-static_assert(sizeof(AMediaCodecBufferInfo) == 24);
-static_assert(offsetof(AMediaCodecBufferInfo, offset) == 0);
-static_assert(offsetof(AMediaCodecBufferInfo, size) == 4);
-static_assert(offsetof(AMediaCodecBufferInfo, presentationTimeUs) == 8);
-static_assert(offsetof(AMediaCodecBufferInfo, flags) == 16);
 static_assert(sizeof(ssize_t) == 8);
+using gesher::media::muxer_abi::OutputFormat;
+using gesher::media::muxer_abi::BufferInfo;
 
 struct AMediaMuxer {
   enum class State { kInitialized, kStarted, kStopped };
@@ -49,6 +45,7 @@ struct AMediaMuxer {
 };
 
 namespace gesher::media {
+using enum muxer_abi::OutputFormat;
 namespace {
 
 // Gesher's F_GETFL currently reports O_RDWR for ordinary disk descriptors.
@@ -65,11 +62,14 @@ bool SuitableFd(int fd, bool needs_read) {
   const bool writable = handle != INVALID_HANDLE_VALUE &&
                         handle != reinterpret_cast<HANDLE>(static_cast<intptr_t>(-2)) &&
                         WriteFile(handle, &byte, 0, &written, nullptr) != 0;
+  // Pinned MediaWriter validates write access and seeks to zero before
+  // WebmWriter performs its additional read-access check. dup shares the
+  // caller's offset, including a failed write-only WebM construction.
+  const bool seekable = writable && lseek(copy, 0, SEEK_SET) == 0;
   DWORD received = 0;
-  const bool readable = !needs_read || (writable && ReadFile(handle, &byte, 0, &received, nullptr) != 0);
-  const bool seekable = writable && readable && lseek(copy, 0, SEEK_SET) == 0;
+  const bool readable = !needs_read || (seekable && ReadFile(handle, &byte, 0, &received, nullptr) != 0);
   close(copy);
-  return seekable;
+  return seekable && readable;
 }
 
 media_status_t BadValue() { return translate_error(android::BAD_VALUE); }
@@ -163,7 +163,7 @@ media_status_t Stop(AMediaMuxer* muxer) {
 }
 
 media_status_t WriteSample(AMediaMuxer* muxer, size_t track, const uint8_t* data,
-                           const AMediaCodecBufferInfo* info) {
+                           const BufferInfo* info) {
   std::lock_guard<std::mutex> lock(muxer->mutex);
   if (info == nullptr) return BadValue();
   if (muxer->format == AMEDIAMUXER_OUTPUT_FORMAT_WEBM) {

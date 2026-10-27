@@ -53,7 +53,7 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
     Write-Host $text
     $script:failed++
   }
-  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|fd trace:|empty trace:|output:|write failure:)' })) {
+  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:)' })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
   $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output)) @{} 180
