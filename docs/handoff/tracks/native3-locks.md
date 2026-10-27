@@ -33,3 +33,23 @@ unlocked-query input fields unchanged. AST parse only ran locally; no syscall
 fixture ran. Reference scope still explicitly excludes injected close-EINTR,
 simultaneous mutation contention and PID-reuse/denied-query controls. This is
 not production record-lock implementation or final acceptance.
+
+Independent actual Linux reference40555739745 at exact
+4de5b1d38c28bba95120bcc3c7e3dd83d246e81b is green. Both final metadata and
+plain runtime log are saved under `C:\work\gesher-ci-review\native3-locks-oracle-40555739745*`.
+The actual summary is `rows=114 failures=0`; evidence includes EINTR4,
+SA_RESTART successful completion after unlock, POSIX cross-file EDEADLK35,
+an OFD cycle remaining blocked until EINTR, failed-freopen ENOTDIR20 still
+releasing the old file, process crash cleanup and inherited OFD ownership.
+This establishes Linux reference semantics only.
+
+The first production interval core is now prepared in
+compat/posix/src/record_lock_ranges.h: checked signed64-bit normalization,
+process/OFD owner distinction, conflict/query, split/replace/merge and
+capacity-safe staged replacement, plus POSIX wait-graph cycle helper. It is
+not wired into runtime yet; shared coordination, liveness, signal/descriptor/
+stdio/spawn ownership remain mandatory open work. A new CI-only native
+kernel comparator prepares10000 actual OFD mutations and20000 queries over
+independent descriptions using the same core, requiring actual Linux result/
+errno/range/type/PID agreement. No compiler or fixture ran locally; bounded
+source review precedes CI wiring/dispatch of this new core.
