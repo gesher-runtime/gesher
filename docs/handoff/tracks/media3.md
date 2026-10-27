@@ -61,3 +61,21 @@ updated with every meaningful push. Before each final CI run, merge
 origin/phase4/integration into your branch. Final message = the report
 track-rules.md asks for (run ids, PASS lines, remaining gaps, edits outside
 your domain, the verified SHA).
+
+## Status and next steps
+
+The current candidate is source-only d3dd4319, incorporating verified
+integration 8922a3e and the immutable reviewed Exec4 environment prerequisite
+76b8d5c. The HTTP/SNI implementation 4032be6a completes the deterministic
+positive fixture and real missing/unknown-SNI controls; the exact NetApp
+slice d50f6e7b is also present. Root review is pending before one new full
+CI. No compiler/native/JVM/C# fixture runs locally. See docs/media.md and
+C:\work\gesher-ci-review\media3-positive-tls-reviewed.md/.json for exact
+source, patch hashes, preserved internet checks and pending verification.
+
+Source 0148698 / full ci 40438975894 remains RED: Windows-2022 has zero
+failures, Windows-2025 has exactly five external-network failures. Both
+runners pass all 37 media3 and 12 part-1 device checks, unchanged camera/
+tone/boot gates; package and both required ten-app e2e logs pass. This scoped
+evidence does not permit merge until all full-CI conclusions are green or
+intentionally skipped and both Windows summaries have zero failures.

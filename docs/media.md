@@ -220,6 +220,25 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Prepared source d3dd4319 (HTTP/SNI implementation 4032be6a) combines the
+  verified clock/width integration 8922a3e, latest integration docs 46c9cc1,
+  immutable reviewed live-environ prerequisite 76b8d5c and exact NetApp
+  local-HTTPS slice d50f6e7b. The new test-only fixture replaces the two
+  remaining unstable public HTTP200/virtual-host endpoints with a valid
+  local HTTPS body and two distinct virtual-host certificates on one
+  listener. Public DNS, Google HTTPS204 and Google TLS1.3/SNI/hostname
+  checks remain byte-identical. Missing/unknown SNI must select the default
+  certificate and fail real HTTPS endpoint identification; server names
+  and exact selected thumbprints are mandatory. Pinned Conscrypt ignores
+  an empty server-name list, so the missing-SNI client uses an unmatched
+  numeric peer identity over an already-connected loopback socket. No
+  production trust behavior, timeout or media assertion changes. Only
+  PowerShell syntax, source comparisons and isolated-index patch/hash checks
+  passed locally; no native/C#/Java compile, certificate/TLS fixture or JVM
+  ran. Root source review precedes one new full CI; this source has no
+  compilation/runtime acceptance yet. The earlier failed source below
+  remains red and is not rerun or reclassified.
+
 ### media3 (stage 3) — runtime gates pass; full CI blocked by positive internet cases, 2026-10-27
 
 - **Combined CI 40438975894 is complete RED at
