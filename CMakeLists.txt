@@ -126,6 +126,10 @@ add_executable(native3_unicode_test tests/native/native3_unicode_test.cc)
 target_compile_options(native3_unicode_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_unicode_test PRIVATE gesher_bionic gesher_elf icuuc)
 
+add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
+target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native3_cpu_clock_test PRIVATE artbase gesher_posix)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
