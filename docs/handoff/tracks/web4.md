@@ -39,13 +39,11 @@ integration before final full CI; read package cleanup and both e2e jobs.
 ## Status and next steps
 
 Reserved on 2026-10-26. No successor implementation or CI. Web3's latest
-complete diagnostic is 40376044459 at
-939ec313d0fe5a2d8410ee700a927fad0538269e: all 14 Web3 checks pass on both
-runners, package and both required e2e jobs pass, but Windows 2022's boot-profile
-performance failure keeps the full stage red. The older geocoder/log-framing
-failures are superseded, not the current blocker. Web3 preparation now
-includes verified runtime/exec3 integration 94ccde1 and has one changed-source
-follow-up: 40432795403 at 2755f21 includes the coordinator's verified startup
-profile merge 2ba9a11 and is running with unchanged thresholds. Verified Web3 must merge before
-dependent Web4 implementation in its separate worktree. No contract above is
-closed by native-only Windows4 evidence or by this handoff correction.
+complete diagnostic is 40432795403 at 2755f21, including the coordinator's
+verified startup profile merge2ba9a11. Both original boot gates now pass.
+Windows 2022 has all14Web3/zero failed tests; 2025 fails device A11y teardown
+after all UIA/app assertions complete, then two subsequent device NetActivity
+launches. Package and both required e2e jobs pass. Web3's next source adds
+teardown/tail diagnostics without changing deadlines or oracles. Verified
+Web3 must merge before dependent Web4 implementation in its separate worktree.
+No contract above is closed by scoped passing checks or this handoff correction.

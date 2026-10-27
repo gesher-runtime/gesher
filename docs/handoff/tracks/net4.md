@@ -56,14 +56,12 @@ Merge latest integration before final CI and read every claimed PASS line.
 ## Status and next steps
 
 Reserved on 2026-10-26. No successor implementation or CI yet. Web3's latest
-complete diagnostic is 40376044459 at
-939ec313d0fe5a2d8410ee700a927fad0538269e: all 14 Web3 checks pass on both
-runners, package and both required e2e jobs pass, but Windows 2022's boot-profile
-performance failure keeps the full stage red. The old 40333695614 run was
-superseded and supplies no complete runtime result. Web3 preparation includes
-verified runtime/exec3 integration 94ccde1. Current changed-source full 40432795403
-at 2755f21 adds the coordinator's verified startup profile merge 2ba9a11 and is
-running with unchanged thresholds. Verified Web3 must merge before
-dependent Net4 implementation in its own worktree. Every contract above remains
-open; the coordinator's startup diagnosis does not permit fishing for a green
-repeat or treating scoped passing checks as full-stage acceptance.
+complete diagnostic is 40432795403 at 2755f21, including verified startup
+merge2ba9a11. Both unchanged boot gates now pass. Windows 2022 has all14Web3
+and zero failed tests; 2025 fails device A11y teardown after all UIA/app
+assertions complete, followed by two device NetActivity launch timeouts.
+All four local invalid-certificate causes and cleanup pass on both; package
+and both required e2e jobs pass. Web3's next source adds teardown/tail
+diagnostics without changing deadlines or oracles. Verified Web3 must merge
+before dependent Net4 implementation in its own worktree. Every contract
+above remains open; scoped passing checks do not establish full acceptance.

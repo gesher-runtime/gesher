@@ -1047,12 +1047,21 @@ public final class WindowSession extends IWindowSession.Stub {
         layer.showPopup(false);
     }
 
+    private static void traceTeardown(AppWindow w, String phase) {
+        if (System.getenv("GESHER_WINDOW_DEBUG") != null) {
+            log("window \"" + w.title() + "\" teardown: " + phase);
+        }
+    }
+
     private void closeNativeWindow(AppWindow w) {
+        traceTeardown(w, "begin");
         WindowsInputMethod ime = WindowsInputMethod.get();
         if (ime != null) ime.removeWindow(w.client.asBinder());
         if (w.input != null) {
             // Before the window and the channel go (joins the connection's thread).
+            traceTeardown(w, "input.close enter");
             w.input.close();
+            traceTeardown(w, "input.close returned");
             w.input = null;
         }
         if (w.queue != null && w.eventFd != null) {
@@ -1068,19 +1077,27 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         if (w.nativeWindow != null) {
             // Hidden at once; the HWND goes when the last Surface over it is released too.
+            traceTeardown(w, "nativeWindow.hide enter");
             w.nativeWindow.hide();
+            traceTeardown(w, "nativeWindow.close enter");
             w.nativeWindow.close();
+            traceTeardown(w, "nativeWindow.close returned");
             w.nativeWindow = null;
         }
         if (w.surfaceControl != null) {
+            traceTeardown(w, "surfaceControl.release enter");
             w.surfaceControl.release();
+            traceTeardown(w, "surfaceControl.release returned");
             w.surfaceControl = null;
         }
         if (w.inputChannel != null) {
+            traceTeardown(w, "inputChannel.dispose enter");
             w.inputChannel.dispose();
+            traceTeardown(w, "inputChannel.dispose returned");
             w.inputChannel = null;
         }
         w.shown = false;
+        traceTeardown(w, "complete");
     }
 
     // ---- popups and tasks (ADR 0040) ----

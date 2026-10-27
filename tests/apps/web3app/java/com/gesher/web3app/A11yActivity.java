@@ -210,6 +210,26 @@ public class A11yActivity extends Activity {
                 + ", toggled " + mToggled + ", accessibility enabled "
                 + (am != null && am.isEnabled()));
         Web3.log("a11y done");
+        Web3.log("a11y finish enter");
         finish();
+        Web3.log("a11y finish returned");
+    }
+
+    @Override protected void onPause() {
+        Web3.log("a11y onPause enter");
+        super.onPause();
+        Web3.log("a11y onPause returned");
+    }
+
+    @Override protected void onStop() {
+        Web3.log("a11y onStop enter");
+        super.onStop();
+        Web3.log("a11y onStop returned");
+    }
+
+    @Override protected void onDestroy() {
+        Web3.log("a11y onDestroy enter");
+        super.onDestroy();
+        Web3.log("a11y onDestroy returned");
     }
 }

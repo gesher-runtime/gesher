@@ -34,6 +34,25 @@ Write-Host "INFO  web3: test proxy on 127.0.0.1:$web3Proxy, HTTP server on 127.0
 # Runs dalvikvm with $Arguments until $Done is in its log (or $Seconds pass), runs $During
 # with the window's HWND and the log reader once $Ready is in the log, closes what is left,
 # and checks $Expect. $During returns problems (strings).
+function Web3ProcessState([int] $LauncherId, [string] $Text) {
+  $identifiers = @($LauncherId)
+  $identifiers += @([regex]::Matches($Text, '(?:app process for [^:]+: pid |system server pid )(\d+)') |
+    ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique -Last 3)
+  foreach ($targetId in ($identifiers | Select-Object -Unique)) {
+    try {
+      $target = Get-Process -Id $targetId -ErrorAction Stop
+      Write-Host "INFO  web3 teardown process: pid $targetId $($target.ProcessName), handles $($target.HandleCount), CPU $($target.CPU)"
+      foreach ($thread in ($target.Threads | Select-Object -First 40)) {
+        try {
+          $state = $thread.ThreadState
+          $reason = if ($state -eq [Diagnostics.ThreadState]::Wait) { $thread.WaitReason } else { '-' }
+          Write-Host "INFO  web3 teardown thread: pid $targetId tid $($thread.Id), state $state, wait $reason"
+        } catch { Write-Host "INFO  web3 teardown thread: pid $targetId unavailable: $($_.Exception.Message)" }
+      }
+    } catch { Write-Host "INFO  web3 teardown process: pid $targetId unavailable: $($_.Exception.Message)" }
+  }
+}
+
 function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [string] $Done,
                  [string] $Ready = '', [scriptblock] $During = $null, [int] $Seconds = 400,
                  [string] $NativeLibrary = 'web3_network.so') {
@@ -78,7 +97,13 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     if ($hwnd -ne [IntPtr]::Zero -and [GesherWeb3Win32]::IsWindow($hwnd)) {
       [void][GesherWeb3Win32]::PostMessageW($hwnd, 0x0010 <# WM_CLOSE #>, [IntPtr]::Zero, [IntPtr]::Zero)
     }
-    if (-not $p.WaitForExit(60000)) { $p.Kill($true); $p.WaitForExit(); $problems += 'killed' }
+    if (-not $p.WaitForExit(60000)) {
+      # The existing deadline has already failed. Evidence collection cannot
+      # turn a late exit into a passing result or extend the acceptance window.
+      $problems += 'did not exit after 60+60 s and WM_CLOSE'
+      Web3ProcessState $p.Id "$(& $read)"
+      if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit(); $problems += 'killed' }
+    }
   }
   $text = & $read
   foreach ($want in $Expect) {
@@ -91,6 +116,10 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     # What the app and Gesher said (not the thread dump of a killed process).
     ($text -split "`n" | Where-Object { $_ -match '(Web3 |gesher-|Exception|Error|FATAL|Abort|chromium|^\s+at )' } |
       Select-Object -First 150) | Out-Host
+    # Provider tracing can fill the first 150 lines before finish/teardown.
+    # Keep its actual end, including any existing native thread-watch report.
+    Write-Host 'INFO  web3 failure: last 120 nonempty application-log lines follow'
+    ($text -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 120) | Out-Host
     $script:failed++
   }
   ($text -split "`n" | Select-String -Pattern '^(Web3 |gesher-a11y: |gesher-net: |gesher-webview: )' |
