@@ -37,6 +37,16 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+The Main loader correctionf4378a98 compiles in scoped framework40523146557:
+both jobs succeed; actual122255489323 has javac0/0errors, the real jar/APK
+fixtures and gesher-app.jar605087 bytes. The next diagnostic pins that
+compiler run/SHA separately from the unchanged native runtime405123/96b.
+It rejects all Java/build drift relative to the compiler source, downloads
+its exact framework artifact and builds entirely fresh primary/framework/app
+boot images on each Windows runner with the original profile/filter inputs.
+No old boot image is used with the changed Java jars. All test73 assertions
+remain unchanged; no new full or acceptance claim follows yet.
+
 Diagnostic40520811180 atd62b3645 ran the real test73 on the pinned successful
 build artifacts from405123/96b. Both actual logs show all15 graph controls,
 both initial/updated oatdump headers, hot code and app images, every device

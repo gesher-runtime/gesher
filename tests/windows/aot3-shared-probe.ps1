@@ -47,7 +47,7 @@ $aotImage = "-Ximage:$(NoDrive "$root/system/framework/boot.art")"
 $aotBcpApp = (('core-oj','core-libart','core-icu4j','framework','gesher-app') |
   ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
 $aotLauncher = @("-Xbootclasspath:$aotBcpApp",$aotImage,'-Xint','-Xusejit:false','com.gesher.app.Launcher')
-Write-Host "AOT_SHARED_DIAGNOSTIC_ONLY runtime=$env:SOURCE_RUN/$env:SOURCE_SHA harness=$env:GITHUB_SHA"
+Write-Host "AOT_SHARED_DIAGNOSTIC_ONLY runtime=$env:SOURCE_RUN/$env:SOURCE_SHA Java=$env:FRAMEWORK_RUN/$env:FRAMEWORK_SHA fresh-image=true harness=$env:GITHUB_SHA"
 . "$PSScriptRoot/tracks/73-aot3-shared-libraries.ps1"
 Write-Host "$failed test(s) failed"
 if ($failed) { exit 1 }
