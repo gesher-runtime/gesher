@@ -26,6 +26,13 @@ supplies PID102. Production gesher-app.jar compiled before that failure.
 Integration f17d03b1 (Media3/full CI40448521754 atdd06d296, documentation
 only above its matching code) is merged before the corrected CI run.
 
+Corrected scoped framework CI40454416483 at2a9c409 passed both jobs. Root
+read the actual framework log122024336684: gesher-app.jar, graphics-tests.dex
+including the corrected component fixture, and exitstatusapp.apk all built.
+This is compile/package preparation only; no runtime pass is claimed. Current
+integration808ea746 (documentation only above f17d03b1) is merged before
+dispatching the first full CI of the corrected process-lifecycle source.
+
 Prepared source only: ProcessExitStatus binds results to a globally unique
 start sequence and actual PID, clears the old result at every new start,
 and rejects late/duplicate-conflicting callbacks. Both spawned and adopted
