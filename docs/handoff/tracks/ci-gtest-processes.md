@@ -52,3 +52,11 @@ Primary implementation references: dotnet/runtime v9.0.0 Process.cs831–851
 RandomAccess.Windows.cs225–241 and Common/src/System/Threading/
 AsyncOverSyncWithIoCancellation.cs (token-driven synchronous-I/O cancellation).
 The earlier1a proof remains frozen with its explicit scope limit.
+
+Native read-only peer found no additional definite ownership/cancellation
+blocker, and requested complete output be recopied after bounded cleanup when
+a task finished normally in that interval. That recopy does not change the
+original EOF failure. A canceled ReadToEndAsync task does not expose its
+accumulated prefix; this slice does not claim preserved partial output from
+that canceled task. Ordinary killed-process EOF/finished-stream diagnostics
+remain subject to the original parser and actual controls.
