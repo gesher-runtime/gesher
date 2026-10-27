@@ -37,6 +37,28 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+The shared-library continuation is assigned to the Windows4/Web3/release/Net4
+agent in this worktree. Root's cleanfb9aefb1 merge of integration808ea746 is
+preserved. Test73 and ADR0065 remain reserved; secondary dex and APK-declared
+static/SDK libraries remain separate open contracts.
+
+Initial production source adds SharedLibraryGraph: immutable content-hashed
+Java library nodes, one dependency graph for real SharedLibraryInfo objects
+and ART PCL/DLC contexts, the same system-resource before/after partition as
+LoadedApk, content rechecks and an oat-stage identity manifest. The actual
+pinned10-argument SharedLibraryInfo constructor is used; library jars are
+never appended to the boot class path. Ordinary empty PCL graphs avoid new
+hash/provider work on the startup path.
+
+This component is not yet wired into XML registry/SDK filtering, ApkPackage,
+Installer or Dexopt. Those integrations, parsed-new-package validation before
+PM publication, unchanged-APK/library-update invalidation and real jar/app/
+oatdump test73 fixtures must follow before CI acceptance. No Java compilation
+or fixture execution occurred locally, and no AOT3 shared-library behavior is
+claimed verified by this initial source commit. Root priority remains the
+active Net4 full and fresh Windows4/Web3 combinations after exit-freshness
+acceptance; source is kept separate from those frozen candidates.
+
 Startup-profile stage fully verified: ci 40414859801 at
 ca46e9967f8994fe329f3f10c88de7141e494f76. Root read every job, all 18
 scoped PASS lines per runner, both zero-failure summaries, actual installed
