@@ -43,6 +43,21 @@ function W4Check([string] $Mode, [string] $What, $Problems) {
   }
 }
 
+function W4Foreground([string] $Mode, [IntPtr] $Window, [string] $Name,
+                      [IntPtr] $Previous = [IntPtr]::Zero) {
+  $before = [ImeInput]::GetForegroundWindow()
+  $problems = @()
+  if ($Previous -ne [IntPtr]::Zero -and $before -ne $Previous) {
+    $problems += ('Expected previous foreground HWND 0x{0:x}, got 0x{1:x}' -f $Previous.ToInt64(), $before.ToInt64())
+  }
+  $focused = [ImeInput]::Foreground($Window)
+  $after = [ImeInput]::GetForegroundWindow()
+  if (-not $focused -or $after -ne $Window) { $problems += 'The requested HWND is not actually foreground' }
+  Write-Host ('INFO  windows4 foreground: {0}, before 0x{1:x}, target 0x{2:x}, after 0x{3:x}' -f $Name, $before.ToInt64(), $Window.ToInt64(), $after.ToInt64())
+  W4Check $Mode "$Name has the actual native foreground HWND" $problems
+  if ($problems.Count) { throw 'Native foreground precondition failed' }
+}
+
 function W4Snapshot([string] $Mode, [scriptblock] $Read, [int] $Mark, [string] $Name,
                     [int] $Shared, [int] $Own, [bool] $Top, [int] $Callbacks = 0) {
   $sharedSize = if ($Shared -in 90,270) { '800x400' } else { '400x800' }
@@ -78,6 +93,7 @@ function W4Run([string] $Mode, [string[]] $Arguments, [scriptblock] $Scenario,
   $problems = @()
   try {
     if ($window -eq [IntPtr]::Zero) { throw "No first frame of $Activity" }
+    W4Foreground $Mode $window $Activity
     if ($Activity -eq 'DisplayActivity' -and -not (W3Wait $read 0 'W4 DisplayActivity buttons turn' 30).Success) { throw 'No first button layout' }
     & $Scenario $window $read
   } catch { $problems += "scenario: $_ $($_.ScriptStackTrace)" }
@@ -209,14 +225,17 @@ try {
     $land = W3Window $read $mark 'Gesher windows4 landscape' 90
     try {
       if ($land -eq [IntPtr]::Zero) { throw 'No second task window' }
+      # Showing a new HWND does not guarantee host foreground on every runner.
+      # Establish it explicitly before requiring a real landscape->portrait transition.
+      W4Foreground device $land 'the landscape task before the first shared-display snapshot'
       W4Snapshot device $read $mark DisplayLandActivity 90 90 $true
       W4Snapshot device $read $mark DisplayActivity 90 0 $false 1
       $mark = W3Mark $read
-      if (-not [ImeInput]::Foreground($window)) { throw 'Could not focus the portrait HWND' }
+      W4Foreground device $window 'the portrait task after the landscape task' $land
       W4Snapshot device $read $mark DisplayActivity 0 0 $true 2
       W4Snapshot device $read $mark DisplayLandActivity 0 90 $false 1
       $mark = W3Mark $read
-      if (-not [ImeInput]::Foreground($land)) { throw 'Could not focus the landscape HWND' }
+      W4Foreground device $land 'the landscape task after the portrait task' $window
       W4Snapshot device $read $mark DisplayLandActivity 90 90 $true 2
       W4Snapshot device $read $mark DisplayActivity 90 0 $false 3
       if (-not [GesherWin32]::IsWindowVisible($window) -or -not [GesherWin32]::IsWindowVisible($land)) {
