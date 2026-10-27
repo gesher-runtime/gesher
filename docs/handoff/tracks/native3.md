@@ -74,6 +74,14 @@ passes both width digests/33 rows and both 17-case binary128 helper logs;
 the latter does not implement the remaining binary128 libm functions.
 Monotonic elapsed/deadline clocks continue on native3-time/ADR0075.
 
+Next source-only research: probes/native3/heap-summary.c observes the actual
+CRT heap via dynamically resolved HeapSummary on both Windows CI versions,
+malloc/realloc/free deltas, independent HeapWalk totals/query time and a
+separate committed VirtualAlloc control. Production ART allocator accounting
+is unchanged; neither this probe nor process private bytes closes that gap.
+The documented API minimum and older Windows 10 support require design and
+actual CI evidence before a production change. No local native compile/run.
+
 CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
 2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
 finish within the unchanged 5s wait, then 27/28 recorded tones). Both actual

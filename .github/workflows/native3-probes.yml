@@ -80,6 +80,11 @@ jobs:
           "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang" \
             -std=c11 -O2 -Wall -Wextra -Werror -mlong-double-128 \
             probes/native3/binary128.c -o probe-out/native3-binary128.exe
+      - name: Compile the native heap accounting observation
+        run: |
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang" \
+            -std=c11 -O2 -Wall -Wextra -Werror \
+            probes/native3/heap-summary.c -o probe-out/native3-heap-summary.exe
       - uses: actions/upload-artifact@v4
         with:
           name: native3-probes
@@ -101,4 +106,9 @@ jobs:
         shell: pwsh
         run: |
           & ./probe-out/native3-binary128.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Observe real CRT heap allocations separately from virtual mappings
+        shell: pwsh
+        run: |
+          & ./probe-out/native3-heap-summary.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
