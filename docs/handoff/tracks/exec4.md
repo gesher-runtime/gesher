@@ -43,7 +43,9 @@ with EBADF before allocating/appending an action. Test74 uses real API34
 NDK callers in x86-64/arm64 ELF processes, checks15 error/errno controls
 and proves both spawn/spawnp still run real exit42 children afterward.
 Positive unopened descriptors remain accepted at registration. Latest
-integratione9859654 is merged; no scoped/full result is claimed yet.
+integratione9859654 is merged. Scoped exec CI40458517945 at3e9f2e0d builds
+both NDK programs and passes existing host-JVM checks; production/runtime
+acceptance remains pending on full CI.
 All compilers and executable fixtures run in CI. See[the source checkpoint](exec4-actions.md).
 This does not fix the separately audited child-time open/dup2/fchdir,
 attributes, full fork or executable-environment contracts below.
