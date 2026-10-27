@@ -3,7 +3,10 @@
 //
 //  - VP8 and VP9: libvpx (external/libvpx, its generic C configuration);
 //  - AV1: libdav1d (external/libdav1d, C only, 8 and 10 bits);
-//  - H.265: libhevc's decoder (external/libhevc, with its SSSE3/SSE4.2 code).
+//  - H.265: libhevc's decoder (external/libhevc, with its SSSE3/SSE4.2 code);
+//  - H.264: libavc's decoder (soft_video_avc.cc), MPEG-4 part 2 and H.263:
+//    the m4v_h263 decoder (soft_video_m4v.cc), where Media Foundation has none
+//    (media3, ADR 0059).
 //
 // Each gives its pictures as 8-bit I420 frames in presentation order; deeper
 // pictures are shifted down to 8 bits, 4:2:2 and 4:4:4 chroma subsampled.
@@ -510,7 +513,8 @@ class HevcDecoder : public VideoDecoder {
   int64_t last_out_us_ = 0;
 };
 
-const char* const kMimes[] = {"video/x-vnd.on2.vp8", "video/x-vnd.on2.vp9", "video/av01", "video/hevc"};
+const char* const kMimes[] = {"video/x-vnd.on2.vp8", "video/x-vnd.on2.vp9", "video/av01",
+                              "video/hevc", "video/avc", "video/mp4v-es", "video/3gpp"};
 
 }  // namespace
 
@@ -545,6 +549,9 @@ std::unique_ptr<VideoDecoder> CreateSoftVideoDecoder(const Format& track, std::s
     if (!d->Init(track, error)) return nullptr;
     return d;
   }
+  if (mime == "video/avc") return CreateSoftAvcDecoder(track, error);
+  if (mime == "video/mp4v-es") return CreateSoftM4vDecoder(track, true, error);
+  if (mime == "video/3gpp") return CreateSoftM4vDecoder(track, false, error);
   *error = "no software decoder for " + mime;
   return nullptr;
 }

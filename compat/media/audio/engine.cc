@@ -684,6 +684,11 @@ uint32_t Track::underrun_frames() const {
   return underrun_frames_;
 }
 
+uint32_t Track::underrun_count() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return underrun_count_;
+}
+
 uint32_t Track::LatencyMs() const {
   uint32_t out_rate = engine_->out_rate();
   uint32_t sink_ms = out_rate != 0 ? engine_->latency_frames() * 1000 / out_rate : 0;
@@ -910,6 +915,7 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
     underrun_frames_ += static_cast<uint32_t>((frames - out_done) * rate_ / out_rate);
     if (!was_underrun_) {
       was_underrun_ = true;
+      ++underrun_count_;
       if (events_.underrun) PostEvent(events_.underrun);
     }
   } else if (out_done == frames) {

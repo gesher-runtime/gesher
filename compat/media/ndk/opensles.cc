@@ -2,8 +2,8 @@
 // (docs/media.md), the part Android's implementation (frameworks/wilhelm)
 // gives apps that games and audio libraries use:
 //
-//  - the engine object and SLEngineItf (CreateOutputMix, CreateAudioPlayer;
-//    CreateAudioRecorder answers SL_RESULT_FEATURE_UNSUPPORTED until stage 3);
+//  - the engine object and SLEngineItf (CreateOutputMix, CreateAudioPlayer,
+//    CreateAudioRecorder);
 //  - the output mix object (realized; no environmental reverb);
 //  - audio players from an Android simple buffer queue or a buffer queue of
 //    PCM (SLDataFormat_PCM, SLAndroidDataFormat_PCM_EX: 8/16/24/32-bit, float),
@@ -13,7 +13,12 @@
 //    http(s)), through the player under MediaPlayer;
 //  - SLPlayItf (states, position, duration, head-at-end), SLVolumeItf (level in
 //    millibels, mute), SLSeekItf (position, loop), SLAndroidConfigurationItf
-//    (the stream type), SLPrefetchStatusItf (always filled).
+//    (the stream type), SLPrefetchStatusItf (always filled);
+//  - audio recorders (media3, ADR 0059) from the audio input device into an
+//    Android simple buffer queue of PCM: a capture stream
+//    (compat/media/audio/capture.h) fills the queued buffers, the queue's
+//    callback called as each is full; SLRecordItf (states, position). They
+//    need RECORD_AUDIO in the app's manifest (SL_RESULT_PERMISSION_DENIED).
 //
 // Every function is a System V entry the .so calls through its vtables or its
 // imports (SLAPIENTRY is empty on Android); the interface IDs are data symbols
@@ -35,8 +40,10 @@
 
 #include <gesher/bionic_shim.h>
 
+#include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/log.h"
+#include "../jni/media_jni.h"
 #include "../player/data_source.h"
 #include "../player/player.h"
 #include "jni_bridge.h"
@@ -62,10 +69,13 @@ constexpr SLresult kParameterInvalid = 2;
 constexpr SLresult kBufferInsufficient = 7;
 constexpr SLresult kContentUnsupported = 9;
 constexpr SLresult kFeatureUnsupported = 12;
+constexpr SLresult kPermissionDenied = 0x0D;  // SL_RESULT_PERMISSION_DENIED
 
 constexpr SLuint32 kObjectUnrealized = 1, kObjectRealized = 2;
 constexpr SLuint32 kPlayStopped = 1, kPlayPaused = 2, kPlayPlaying = 3;
 constexpr SLuint32 kPlayEventHeadAtEnd = 0x1;
+constexpr SLuint32 kRecordStopped = 1, kRecordPaused = 2, kRecordRecording = 3;
+constexpr SLuint32 kLocatorIoDevice = 3, kIoDeviceAudioInput = 1;
 constexpr SLuint32 kLocatorUri = 1, kLocatorOutputMix = 4, kLocatorBufferQueue = 6,
                    kLocatorAndroidFd = 0x800007BC, kLocatorAndroidSimpleBufferQueue = 0x800007BD;
 constexpr SLuint32 kFormatPcm = 2, kFormatPcmEx = 4;
@@ -133,7 +143,7 @@ Object* ObjectOf(const void* self) {
 
 // --- Objects ----------------------------------------------------------------------------
 
-enum class Kind { kEngine, kOutputMix, kPlayer };
+enum class Kind { kEngine, kOutputMix, kPlayer, kRecorder };
 
 struct Object {
   Kind kind;
@@ -145,7 +155,12 @@ struct Object {
   ItfSlot seek_itf;
   ItfSlot config_itf;
   ItfSlot prefetch_itf;
+  ItfSlot record_itf;
   SLuint32 state = kObjectUnrealized;
+
+  // Recorders.
+  std::shared_ptr<CaptureStream> capture;
+  SLuint32 record_state = kRecordStopped;
 
   // Players.
   bool queue_player = false;
@@ -214,6 +229,41 @@ void FeedLoop(Object* o) {
   }
 }
 
+// A recorder's filler: copies what was captured into the queued buffers, calls the
+// queue's callback as each is full.
+void RecordLoop(Object* o) {
+  gesher::bionic::EnterLoadedCode();
+  RaiseAudioThreadPriority(true);
+  for (;;) {
+    void(SYSV* cb)(Itf, void*) = nullptr;
+    void* ctx = nullptr;
+    bool wait = false;
+    {
+      std::unique_lock<std::mutex> lock(o->mu);
+      o->cv.wait_for(lock, std::chrono::milliseconds(20),
+                     [o] { return o->quit || (o->record_state == kRecordRecording && !o->queue.empty()); });
+      if (o->quit) return;
+      if (o->record_state != kRecordRecording || o->queue.empty()) continue;
+      Object::Buffer& b = o->queue.front();
+      ssize_t n = o->capture->Read(const_cast<uint8_t*>(b.data) + b.done, b.size - b.done, false);
+      if (n > 0) b.done += static_cast<size_t>(n);
+      if (b.done >= b.size) {
+        o->queue.pop_front();
+        o->queue_index++;
+        cb = o->queue_cb;
+        ctx = o->queue_ctx;
+      } else {
+        wait = true;
+      }
+    }
+    if (cb != nullptr) {
+      cb(reinterpret_cast<Itf>(&o->queue_itf), ctx);
+    } else if (wait) {
+      o->capture->WaitForData(256, 20);
+    }
+  }
+}
+
 // --- SLObjectItf ------------------------------------------------------------------------
 
 SLresult SYSV ObjRealize(const void* self, SLboolean) {
@@ -221,6 +271,9 @@ SLresult SYSV ObjRealize(const void* self, SLboolean) {
   o->state = kObjectRealized;
   if (o->kind == Kind::kPlayer && o->queue_player && !o->feeder.joinable()) {
     o->feeder = std::thread([o] { FeedLoop(o); });
+  }
+  if (o->kind == Kind::kRecorder && !o->feeder.joinable()) {
+    o->feeder = std::thread([o] { RecordLoop(o); });
   }
   return kSuccess;
 }
@@ -248,6 +301,11 @@ SLresult SYSV ObjGetInterface(const void* self, SLInterfaceID iid, void* out) {
     if (!o->queue_player && iid == kIidSeek) slot = &o->seek_itf;
     if (!o->queue_player && iid == kIidPrefetchStatus) slot = &o->prefetch_itf;
   }
+  if (o->kind == Kind::kRecorder) {
+    if (iid == kIidRecord) slot = &o->record_itf;
+    if (iid == kIidAndroidSimpleBufferQueue || iid == kIidBufferQueue) slot = &o->queue_itf;
+    if (iid == kIidAndroidConfiguration) slot = &o->config_itf;
+  }
   if (slot == nullptr) return kFeatureUnsupported;
   *static_cast<Itf*>(out) = reinterpret_cast<Itf>(slot);
   return kSuccess;
@@ -266,6 +324,7 @@ void SYSV ObjDestroy(const void* self) {
   if (o->feeder.joinable()) o->feeder.join();
   if (o->track != nullptr) o->track->Release();
   if (o->player != nullptr) o->player->Release();
+  if (o->capture != nullptr) o->capture->Release();
   delete o;
 }
 
@@ -385,6 +444,65 @@ const void* const kPlayVtable[] = {
     reinterpret_cast<const void*>(&PlayGetEventsMask), reinterpret_cast<const void*>(&PlayMarker),
     reinterpret_cast<const void*>(&PlayClearMarker),  reinterpret_cast<const void*>(&PlayGetMarker),
     reinterpret_cast<const void*>(&PlaySetPeriod),    reinterpret_cast<const void*>(&PlayGetPeriod),
+};
+
+// --- SLRecordItf ------------------------------------------------------------------------
+
+SLresult SYSV RecSetState(const void* self, SLuint32 state) {
+  Object* o = ObjectOf(self);
+  if (state != kRecordStopped && state != kRecordPaused && state != kRecordRecording) return kParameterInvalid;
+  std::lock_guard<std::mutex> lock(o->mu);
+  if (state == kRecordRecording) {
+    o->capture->Start();
+  } else {
+    o->capture->Stop();
+    // Stopped: the position starts over (wilhelm's AudioRecord is stopped).
+  }
+  o->record_state = state;
+  o->cv.notify_all();
+  return kSuccess;
+}
+SLresult SYSV RecGetState(const void* self, SLuint32* state) {
+  if (state == nullptr) return kParameterInvalid;
+  *state = ObjectOf(self)->record_state;
+  return kSuccess;
+}
+SLresult SYSV RecSetDurationLimit(const void*, SLmillisecond) { return kSuccess; }
+SLresult SYSV RecGetPosition(const void* self, SLmillisecond* msec) {
+  if (msec == nullptr) return kParameterInvalid;
+  Object* o = ObjectOf(self);
+  *msec = o->rate != 0 ? static_cast<SLmillisecond>(o->capture->frames_read() * 1000 / o->rate) : 0;
+  return kSuccess;
+}
+SLresult SYSV RecRegisterCallback(const void*, void*, void*) { return kSuccess; }
+SLresult SYSV RecSetMask(const void* self, SLuint32 mask) {
+  ObjectOf(self)->event_mask = mask;
+  return kSuccess;
+}
+SLresult SYSV RecGetMask(const void* self, SLuint32* mask) {
+  if (mask == nullptr) return kParameterInvalid;
+  *mask = ObjectOf(self)->event_mask;
+  return kSuccess;
+}
+SLresult SYSV RecSetMarker(const void*, SLmillisecond) { return kSuccess; }
+SLresult SYSV RecClearMarker(const void*) { return kSuccess; }
+SLresult SYSV RecGetMarker(const void*, SLmillisecond* m) {
+  if (m != nullptr) *m = 0;
+  return kPreconditionsViolated;
+}
+SLresult SYSV RecSetPeriod(const void*, SLmillisecond) { return kSuccess; }
+SLresult SYSV RecGetPeriod(const void*, SLmillisecond* m) {
+  if (m != nullptr) *m = 1000;
+  return kSuccess;
+}
+
+const void* const kRecordVtable[] = {
+    reinterpret_cast<const void*>(&RecSetState),     reinterpret_cast<const void*>(&RecGetState),
+    reinterpret_cast<const void*>(&RecSetDurationLimit), reinterpret_cast<const void*>(&RecGetPosition),
+    reinterpret_cast<const void*>(&RecRegisterCallback), reinterpret_cast<const void*>(&RecSetMask),
+    reinterpret_cast<const void*>(&RecGetMask),      reinterpret_cast<const void*>(&RecSetMarker),
+    reinterpret_cast<const void*>(&RecClearMarker),  reinterpret_cast<const void*>(&RecGetMarker),
+    reinterpret_cast<const void*>(&RecSetPeriod),    reinterpret_cast<const void*>(&RecGetPeriod),
 };
 
 // --- Buffer queues ----------------------------------------------------------------------
@@ -643,10 +761,54 @@ SLresult SYSV PlayerRealize(const void* self, SLboolean async) {
   return ObjRealize(self, async);
 }
 
-SLresult SYSV EngCreateAudioRecorder(const void*, Itf*, const SLDataSource*, const SLDataSink*, SLuint32,
-                                     const SLInterfaceID*, const SLboolean*) {
-  MEDIA_LOGW("OpenSL ES: no audio recorder yet (audio capture is stage 3)");
-  return kFeatureUnsupported;
+// The audio input device into an Android simple buffer queue of PCM.
+SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* src, const SLDataSink* sink,
+                                     SLuint32, const SLInterfaceID*, const SLboolean*) {
+  if (out == nullptr || src == nullptr || src->locator == nullptr || sink == nullptr ||
+      sink->locator == nullptr || sink->format == nullptr) {
+    return kParameterInvalid;
+  }
+  struct IoDevice { SLuint32 type, device_type, device_id; void* device; };
+  auto* io = static_cast<IoDevice*>(src->locator);
+  if (io->type != kLocatorIoDevice || io->device_type != kIoDeviceAudioInput) return kContentUnsupported;
+  SLuint32 sink_type = static_cast<DataLocatorHeader*>(sink->locator)->type;
+  if (sink_type != kLocatorAndroidSimpleBufferQueue && sink_type != kLocatorBufferQueue) {
+    return kContentUnsupported;
+  }
+  auto* pcm = static_cast<DataFormatPcm*>(sink->format);
+  if (pcm->format_type != kFormatPcm && pcm->format_type != kFormatPcmEx) return kContentUnsupported;
+  bool is_float = pcm->format_type == kFormatPcmEx &&
+                  static_cast<DataFormatPcmEx*>(sink->format)->representation == kPcmRepresentationFloat;
+  PcmFormat f;
+  switch (pcm->bits_per_sample) {
+    case 8: f = PcmFormat::kU8; break;
+    case 16: f = PcmFormat::kS16; break;
+    case 24: f = PcmFormat::kS24Packed; break;
+    case 32: f = is_float ? PcmFormat::kFloat : PcmFormat::kS32; break;
+    default: return kContentUnsupported;
+  }
+  if (!MayRecordAudio(nullptr)) {
+    MEDIA_LOGE("OpenSL ES: the app does not have android.permission.RECORD_AUDIO");
+    return kPermissionDenied;
+  }
+  std::unique_ptr<Object> o(NewObject(Kind::kRecorder));
+  o->queue_capacity = std::max<SLuint32>(static_cast<DataLocatorQueue*>(sink->locator)->num_buffers, 1);
+  o->rate = pcm->samples_per_sec / 1000;
+  CaptureParams p;
+  p.sample_rate = o->rate;
+  p.channels = std::max<SLuint32>(pcm->num_channels, 1);
+  p.format = f;
+  p.capacity_frames = std::max<size_t>(o->rate / 2, 2048);
+  p.name = "OpenSL ES recorder";
+  std::string error;
+  o->capture = OpenCapture(p, &error);
+  if (o->capture == nullptr) {
+    MEDIA_LOGE("OpenSL ES: %s", error.c_str());
+    return kContentUnsupported;
+  }
+  o->frame_size = BytesPerSample(f) * p.channels;
+  *out = reinterpret_cast<Itf>(&o.release()->object_itf);
+  return kSuccess;
 }
 
 SLresult SYSV EngQueryNum(const void*, SLuint32* n) {
@@ -699,6 +861,7 @@ Object* NewObject(Kind kind) {
   o->seek_itf = {kSeekVtable, o};
   o->config_itf = {kConfigVtable, o};
   o->prefetch_itf = {kPrefetchVtable, o};
+  o->record_itf = {kRecordVtable, o};
   return o;
 }
 

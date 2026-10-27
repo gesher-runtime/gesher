@@ -149,12 +149,29 @@ closure, CI, PR description and installer verification gates remain in force.
 The coordinator alone merges integration/main and publishes the release;
 track agents keep their existing branch-only scope.
 
-Local-load follow-up (owner chat, 2026-10-26): C/C++ fixture/compiler
-checks also move to CI. Do not start local C/C++ compilations, even for
-small Gesher-only fixtures; use source inspection/edits and lightweight
-script checks locally. The coordinator and agents checked the process list
-after the report and found no remaining compiler process. The earlier
-local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+Local-load follow-up (owner chat, 2026-10-26, reaffirmed 2026-10-27): every
+C/C++, Java and C# compilation and executable fixture runs in CI, including
+small Gesher-only probes. Local work is source inspection/edits, Git and
+lightweight script parsing. Root rechecked live compiler/build-tool processes
+on2026-10-27 and found none; agents received the same explicit instruction.
+Earlier local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+
+Current exit-freshness full CI40455262527 is pending at
+29fa0bdf665a2cc5ee707524e7edd2a670391451, including integration808ea746 and
+the verified Media3 code. Scoped framework CI40454416483 at2a9c409 builds
+the server, ART component fixture and real exit-status APK. Prior scoped
+40452236687 failed on the fixture's omitted PID argument, now corrected;
+no runtime acceptance follows from compilation. Test70 must prove actual
+normal0/abnormal23/normal0 launcher behavior before Windows4/Web3 acceptance
+([brief](tracks/exec4-exit.md)). Root independently read strict Web3 full
+40449137605/4f253878: both14 scoped passes, both whole0, package23 passes
+and both nine-app e2e0. Its child-zero values still use the older cache.
+
+Media4's first format slice is running full CI40456299720 at92e914238,
+without inventory closure. Net4's interface-address slice is under review
+and its corrected CI result is pending. Test71 belongs to Media4,72 to
+Net4 and73 to AOT3 shared-library work; next free test is74. Shared-library
+implementation remains source-design work, not a verified AOT3 stage.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
@@ -296,6 +313,25 @@ needed for this merge. See [the clock report](tracks/native3-time-verified.md)
 and [the prerequisite report](tracks/native3-width-clock.md). Other native3
 gaps remain open; future changed combinations still require rule-g CI.
 
+Media3 is merged as a1edcb0, verified at
+dd06d296e35ffd47fcecba9d0b88559360163500 in full ci 40448521754, attempt 1.
+Root personally read all 28 conclusions (22 success/six skipped), both
+zero-failure Windows summaries and all 37 scoped media PASS labels per
+runner, exact local HTTP/SNI/certificate controls, live-environ67/time68,
+installed window/input/uninstall and both ten-app e2e logs (zero unexpected,
+including Just Player, Puzzles and TIC-80). No retry. Head c54dea4d adds six
+docs files only; verified source already contains integration7694f18 and
+the merged non-doc tree exactly equals it, so no extra integration CI is
+needed. This includes the independently verified Exec4 live-environment
+prerequisite and deterministic Net4 fixtures; it is no broad Exec4/Net4 or
+hardware-media completion claim. Media4/ADR0064 retains the explicit gaps.
+
+Exit-result freshness is a new explicit exec4 slice in
+C:\work\gesher-exec4-exit, branch wip/exec4-exit, test70. Its generation/PID
+tracker, destructive-query handoff and strict unknown/timeout controls are
+source-reviewed work awaiting full runtime proof. No Web3 child0 marker is
+accepted as a freshness proof before that prerequisite is verified.
+
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | Merged as 4d14466. All 13 track PASS lines per runner, both zero-failure summaries, actual package cleanup and both required TIC-80/Puzzles e2e results read. Remaining contracts assigned to aot3/ADR 0065. | ci 40320549410 at ae75766; head 20650a3 docs only. |
@@ -303,8 +339,8 @@ gaps remain open; future changed combinations still require rule-g CI.
 | native2 | Merged as 4459570 after personally reading every job, both zero-failure summaries, 26 native2 PASS lines per runner, package cleanup and e2e. Public API coverage gaps remain with native3. | ci 40296960603 at d380a3e; head 0fc20d0 docs only. |
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
 | web3 | Full 40432795403/2755f21 passes 2022 whole suite, both original boot gates, actual package/both e2e and all local certificate cases. 2025 completes UIA actions/DOM assertions but fails process teardown, then two device continuation launches. | No full acceptance. Diagnostic 40444053066/cbf5639 adds lifecycle/window-close tails; source review withdrew the earlier synchronous-UIA-outcall hypothesis because the existing wrapper already dispatches asynchronously. Web4/ADR0072 and Net4/ADR0070 contracts stay open. |
-| media3 | Final 40438975894/0148698 passes all 37 media3, 12 part1 device, 18 aot3 and 11 exec3 checks per runner, original boot gates, actual package/both ten-app e2e and all four local certificate-negative cases. 2022 whole suite has zero failures. | 2025 has five counted external-network failures: example.com FileNotFoundException (HTTP status not observed), badssl positive TCP timeout, aggregate and two NetApp cases. It is red, not accepted or retried unchanged. New candidate includes native clock/width integration, verified live-environ prerequisite, NetApp local HTTPS and deterministic HTTP/SNI fixtures under source review. Allocator remains root scope; other media gaps remain media4/ADR0064. |
-| exec3 / exec4 | Exec3 merged94ccde1; root fully verified its40410489251 and combined40416300047. Original live-environ9f25080 also fully verified in40430496516 attempt2, both0/actual package/both e2e. | Final profile combination40438421809/b429220 is red only on2022's two known badssl TCP-timeout checks;2025 whole0 and all exec4/exec3 checks/package/both e2e pass, root personally read. Media's new combined candidate includes immutable reviewed76b plus deterministic TLS fixtures. No root-cause claim for the earlier Windows4 crash or acceptance of the red full run. |
+| media3 | Merged a1edcb0 after root full verification of 40448521754/dd06d296, attempt1: 37 media checks per runner, both whole0, exact HTTP/SNI/certificate controls, actual package23PASS/both ten-app e2e0. Head c54dea4d is docs only; merged code equals verified source. | Prior 40438975894/0148698 and both 40430522654 attempts remain red, not reclassified. Physical capture, hardware/MF proof, 313 NDK baseline gaps, session/recorder/container/DRM contracts remain media4/ADR0064. Root owns native allocator accounting. |
+| exec3 / exec4 | Exec3 merged94ccde1; live-environ9f25080 fully verified40430496516 attempt2, then merged through a1edcb0 with coherent full40448521754/dd06d296. Both actual environments/ELF/APK modes, package and e2e pass. | Red profile combination40438421809/b429220 remains red (2022 badssl timeout2); no crash-cause claim. New exec4-exit/test70 addresses stale previous-process exit0 and destructive observer handoff; source review passed after two corrections, full proof pending. Remaining shell/process/console/logger contracts stay open. |
 | native3 foundation | Merged as f677944; all four dalvikvm and four APK scoped PASS lines per runner, both zero-failure summaries, package cleanup and both required Puzzles/TIC-80 e2e logs personally read. Remaining scope continues on wip/native3. | ci 40344682373 at 1e881b5, attempt 2; frozen head 8b511a8 adds docs only. |
 | native3 continuation | Merged as 117629e after personally reading all jobs, both zero-failure summaries, full-code-point pinned Unicode parity, both ABI/APK modes, package cleanup and both required e2e logs. Remaining native3 contracts stay open. | ci 40386670586 at 6f6ac6f, attempt 1; head 9ba4bff docs only. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
 | aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |

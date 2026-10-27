@@ -20,6 +20,14 @@ extern char** environ;
 
 static int g_pass, g_fail;
 
+// Opt-in boundaries for the real APK process, without replacing any operation
+// or assertion. A fatal signal can otherwise erase which spawn/stdio step ran.
+static void phase(const char* name) {
+  if (getenv("GESHER_TRACE_EXEC_PHASES") == NULL) return;
+  fprintf(stderr, "exec4-phase: %s\n", name);
+  fflush(stderr);
+}
+
 static void ok(const char* name, int cond, const char* detail) {
   if (cond) {
     printf("exec2: PASS %s\n", name);
@@ -66,34 +74,47 @@ int main(int argc, char** argv) {
 
   // --- posix_spawn() with a file action (stdout to a pipe) -------------------
   {
+    phase("spawn actions begin");
     int p[2];
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
+    phase("spawn actions initialized");
     posix_spawn_file_actions_adddup2(&fa, 0, 0);  // exercise a no-op dup2 too
+    phase("spawn no-op dup2 recorded");
     char line[128] = {0};
     int spawned = -1, status = -1, got = 0;
     if (pipe(p) == 0) {
+      phase("spawn pipe created");
       posix_spawn_file_actions_adddup2(&fa, p[1], 1);
       posix_spawn_file_actions_addclose(&fa, p[0]);
       posix_spawn_file_actions_addclose(&fa, p[1]);
       char* a[] = {(char*)child, (char*)"echo", (char*)"spawned", NULL};
+      phase("spawn enter");
       spawned = posix_spawn(&got, child, &fa, NULL, a, environ);
+      phase("spawn returned");
       close(p[1]);
       if (spawned == 0) {
+        phase("spawn fdopen enter");
         FILE* f = fdopen(p[0], "r");
+        phase("spawn fdopen returned");
         if (f) {
+          phase("spawn fgets enter");
           if (fgets(line, sizeof(line), f)) {
             char* nl = strchr(line, '\n');
             if (nl) *nl = 0;
           }
+          phase("spawn fgets returned");
           fclose(f);
+          phase("spawn fclose returned");
         }
         waitpid(got, &status, 0);
+        phase("spawn wait returned");
       } else {
         close(p[0]);
       }
     }
     posix_spawn_file_actions_destroy(&fa);
+    phase("spawn actions destroyed");
     ok("posix_spawn with a dup2 file action, output captured",
        spawned == 0 && strcmp(line, "spawned") == 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
        line);
