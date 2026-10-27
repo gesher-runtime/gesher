@@ -71,6 +71,9 @@
 
 #include "net4_ifaddrs.h"
 #include "arm64_varargs.h"
+#include "../native/arm64_fpcr_contracts.h"
+#include "../native/arm64_fpsr_contracts.h"
+#include "native3_wide_contracts.h"
 
 namespace {
 
@@ -692,6 +695,22 @@ std::vector<std::string> Symbols(const std::string& path) {
 }
 
 #include "native3_unicode.inc"
+#include "native3_wide.inc"
+
+#if defined(__aarch64__)
+Part ArmFpcr() {
+  Part p{"fpcr"};
+  p.Check(Arm64FpcrContracts() == 0, "pinned FPCR rounding contracts");
+  p.notes.push_back("pinned FPCR modes0..3, actual arithmetic, bits, pthread inheritance/isolation and nested callbacks");
+  return p;
+}
+Part ArmFpsr() {
+  Part p{"fpsr"};
+  p.Check(Arm64FpsrContracts() == 0, "pinned sticky FPSR contracts");
+  p.notes.push_back("pinned FPSR flags0x9f, masks, real arithmetic, QC, pthread inheritance/isolation and nested callbacks");
+  return p;
+}
+#endif
 
 std::string Run(const std::string& dir, const std::string& symbols) {
   net4::Result interfaces = net4::RunIfaddrs();
@@ -702,7 +721,11 @@ std::string Run(const std::string& dir, const std::string& symbols) {
   Part varargs_part{"varargs"};
   varargs_part.failures = varargs.failures;
   varargs_part.notes.push_back(varargs.Summary());
-  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir), interface_part, varargs_part};
+  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir), interface_part, varargs_part};
+#if defined(__aarch64__)
+  parts.push_back(ArmFpcr());
+  parts.push_back(ArmFpsr());
+#endif
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {
