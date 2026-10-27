@@ -1,8 +1,42 @@
-# Gtest process cleanup: source only
+# Gtest process cleanup: bounded component proof
 
 2026-10-28, existing ADR0078/test84. Owned wip/ci-gtest-processes /
 C:/work/gesher-ci-gtest-processes starts at reviewed canonical union
 30db7709838839d28be68d8b467a57b26a3ac667. Its active full remains immutable.
+
+## 2026-10-28 verified current component
+
+Exact source df61f06118a38402670dc54594577d65b48dbe21 /run40600988297 attempt1
+is GREEN2/2. Both actual job logs122528753952 (Windows2022) and122528754343
+(Windows2025) plus metadata were read. Required watch69026 completed0. Saved
+plain logs/result/control-review.json share C:/work/gesher-ci-review/
+ci-gtest-streams-40600988297-. No CI artifact was downloaded locally.
+
+Actual helper runtimes were PowerShell7.6.8 and7.6.7 respectively, both
+.NET10.0.13. Each host passed43controls with0fail: all exact25prior40556470317
+PASSrecords plus18new actual-helper controls. Sixteen process executions per
+host each proved both read tasks completed, actual process-handle disposal,
+paired owned-reader/native-pipe closure and an independent invalid-handle
+probe for both captured pipe handles. Missing-executable cases create no
+process/reader and retain their original failure behavior.
+
+For BOTH actual gtest helpers, the retained-writer control checks the recorded
+real child is still alive AFTER helper completion. Both tasks then have
+completed and both native pipes are invalid, while ORIGINAL readers=False,
+parent exit0 and the explicit ten-second output failure remain. The helper
+returns false; cleanup is not a late success. The fixture then verifies the
+child's exact executable path and finitely terminates that owned child.
+Absolute/relative cwd+argv, exit23 despite PASS, failed/zero/missing summaries,
+actual timeout and missing-executable controls all passed. Ordinary600/900s
+calls, exclusions and parser/native-exit conditions remain unchanged.
+
+This is helper/component evidence on those actual runtimes. It does not add
+libcore/ART semantic coverage, qualify a coherent full, prove arbitrary kill
+denial/job containment or close other legacy helpers. Canceled ReadToEndAsync
+partial prefixes remain unavailable as documented below. Current canonical
+30db full contains none of this later helper code; no proof is transferred.
+
+## Source design and prior evidence
 
 Invoke-CoreLibsTest20 and Invoke-ArtGtest21 share only finite subprocess/output
 completion. All real gtest parsing, positive passed-count requirement, native
@@ -51,7 +85,8 @@ Primary implementation references: dotnet/runtime v9.0.0 Process.cs831–851
 (caller-owned readers), Process.Windows.cs584–592 (sync redirected FileStreams),
 RandomAccess.Windows.cs225–241 and Common/src/System/Threading/
 AsyncOverSyncWithIoCancellation.cs (token-driven synchronous-I/O cancellation).
-The earlier1a proof remains frozen with its explicit scope limit.
+The earlier1a proof remains frozen with its explicit scope limit. Those v9
+source references explain the design; actual execution proof above is.NET10.0.13.
 
 Native read-only peer found no additional definite ownership/cancellation
 blocker, and requested complete output be recopied after bounded cleanup when
