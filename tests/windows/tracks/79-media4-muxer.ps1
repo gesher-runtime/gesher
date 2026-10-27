@@ -7,10 +7,12 @@ $mxCore = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework
 $mxApp = @("-Xbootclasspath:$mxBcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 
 function InvokeMuxer([string] $Exe, [string[]] $Arguments, [hashtable] $Environment, [int] $Seconds = 180) {
-  $info = [Diagnostics.ProcessStartInfo]::new($Exe)
+  $info = [Diagnostics.ProcessStartInfo]::new((Resolve-Path $Exe).Path)
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
-  $info.WorkingDirectory = $Dir
+  # Arguments and the image's embedded dist/*.jar locations are relative to
+  # the caller, just as in the full suite. Changing to dist makes them dist/dist.
+  $info.WorkingDirectory = (Get-Location).ProviderPath
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
   foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
@@ -53,7 +55,7 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
     Write-Host $text
     $script:failed++
   }
-  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:)' })) {
+  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:|[^\r\n]+: ok)' })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
   $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output)) @{} 180
