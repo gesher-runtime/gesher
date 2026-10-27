@@ -70,6 +70,7 @@
 #include <vector>
 
 #include "net4_ifaddrs.h"
+#include "arm64_varargs.h"
 
 namespace {
 
@@ -697,7 +698,11 @@ std::string Run(const std::string& dir, const std::string& symbols) {
   Part interface_part{"ifaddrs"};
   interface_part.failures = interfaces.failures;
   interface_part.notes.push_back(interfaces.Summary());
-  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir), interface_part};
+  arm64_varargs::Result varargs = arm64_varargs::Run(dir);
+  Part varargs_part{"varargs"};
+  varargs_part.failures = varargs.failures;
+  varargs_part.notes.push_back(varargs.Summary());
+  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir), interface_part, varargs_part};
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {
