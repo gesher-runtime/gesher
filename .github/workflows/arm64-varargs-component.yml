@@ -1,6 +1,15 @@
 name: arm64-varargs-component
 on:
+  push:
+    branches: ['wip/arm64-varargs']
+    paths:
+      - '.github/workflows/arm64-varargs-component.yml'
+      - 'tests/windows/run-arm64-component.ps1'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
