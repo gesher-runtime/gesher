@@ -64,13 +64,20 @@ your domain, the verified SHA).
 
 ## Status and next steps
 
-Full ci 40448521754 is running at dd06d296e35ffd47fcecba9d0b88559360163500,
+Full ci 40448521754 is GREEN at dd06d296e35ffd47fcecba9d0b88559360163500,
 after merging current integration 7694f18 and Root's independent source
 review of the corrected 8364829 fixtures. This source combines all 37
 media gates, verified clock/width and live-environ prerequisites with
-deterministic HTTP/SNI/NetApp tests. No actual full-run acceptance yet;
-inspect every job, both zero summaries, selected-name/thumbprint and
-hostname-control PASS lines, package and both ten-app e2e logs first.
+deterministic HTTP/SNI/NetApp tests. All 28 job conclusions were read:
+22 success, six skipped, attempt 1 without retries. Windows jobs
+122008646975 (2022) / 122008646925 (2025) each end `0 test(s) failed`:
+37 media3, 12 part-1 device, 18 AOT3, 11 Exec3, 57 shell, live-environ67
+and clock68 checks pass. Actual selected-name/thumbprint, missing/wrong-SNI
+hostname failures, all four certificate rejections, preserved Google checks,
+NetApp modes and cleanup were read on both runners. Package 122008646942
+passes all 23 checks; e2e 122009257652 / 122009257798 each pass ten apps,
+four transport fixtures, association/shortcut launch and zero unexpected
+failures. Freeze this source; commits above it may change docs only.
 
 The current candidate dd06d296 incorporates verified
 integration 8922a3e and the immutable reviewed Exec4 environment prerequisite
@@ -79,16 +86,20 @@ complete the deterministic positive fixture and real missing/unknown-SNI
 controls without allowing earlier HTTP traffic to supply their evidence; the exact NetApp
 slice d50f6e7b is also present. Root approved the source review before the
 new full CI was dispatched. Build, framework, media, boot-image, package
-and both ten-app e2e jobs pass; their actual logs were read. The two Windows
-suites are still running, so the new C# TLS fixture, SNI/hostname controls
-and full runtime acceptance remain pending. No compiler/native/JVM/C#
-fixture runs locally. See docs/media.md and
+and both ten-app e2e jobs pass; their actual logs were read. Camera recording
+accepts/encodes/muxes 61 frames in each single process and 58/59 on the
+2022/2025 device, with zero rejects, queue drops or encoder failures. The
+original independent 30-frame/picture and terminal gates pass unchanged.
+No compiler/native/JVM/C# fixture runs locally. See docs/media.md and
 C:\work\gesher-ci-review\media3-positive-tls-reviewed.md/.json for exact
-source, patch hashes, preserved internet checks and pending verification.
+source, patch hashes and preserved internet checks. The coordinator alone
+reviews/merges this frozen branch. Media4 (ADR 0064) owns the remaining
+native exports, physical capture, session, recorder/container and hardware/
+protected-media contracts; successful Media3 checks do not close them.
 
 Source 0148698 / full ci 40438975894 remains RED: Windows-2022 has zero
 failures, Windows-2025 has exactly five external-network failures. Both
 runners pass all 37 media3 and 12 part-1 device checks, unchanged camera/
 tone/boot gates; package and both required ten-app e2e logs pass. This scoped
-evidence does not permit merge until all full-CI conclusions are green or
-intentionally skipped and both Windows summaries have zero failures.
+evidence did not permit merge. Its failed result is retained separately
+from the accepted source and full ci 40448521754 above.
