@@ -42,3 +42,16 @@ all15 fixture groups match the pinned native's ordering; no source blocker
 was found. PowerShell AST/diff checks pass only. A full CI run is next; the
 baseline already contains current verified integration3577b330. No roadmap
 box is ticked before actual compile/runtime/package/e2e verification.
+
+## Owner-requested stop checkpoint
+
+Work stopped on2026-10-27; full40522376074 remains on exact source
+2913d484b4f3adee64acd44c5dd7b7e4a042d6f7. At the last required-watch
+snapshot15:32UTC, build122252635829 succeeded37m44, both Windows tests
+122275166484/122275166538 were active, and package122275166541 plus
+e2e122276311510/122276311525 had successful conclusions. Root has not
+independently read those package/e2e actual logs; no acceptance is claimed.
+Next session must read final metadata and every actual critical log,
+especially all15 CopyFileTest groups and both zero-failure summaries.
+Watch log: C:\work\gesher-ci-review\libcore-io-full-40522376074-watch.log.
+No code change, new dispatch, merge or roadmap tick after the stop request.
