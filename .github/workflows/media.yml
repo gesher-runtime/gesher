@@ -20,6 +20,7 @@ jobs:
         with:
           sparse-checkout: |
             tests/apps
+            tests/media/ndk-format
             compat/media/sounds
 
       - uses: actions/download-artifact@v4
@@ -115,6 +116,9 @@ jobs:
             -o tests/apps/recordapp/lib/x86_64/librecord_ndk_test.so tests/apps/recordapp/jni/record_ndk_test.c \
             -laaudio -lOpenSLES -lm
 
+      - name: Build Media4 NDK format fixtures
+        run: bash tests/media/ndk-format/build.sh out android-ndk-r27c
+
       - name: Build mediaapp.apk
         run: |
           chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign
@@ -130,6 +134,9 @@ jobs:
           # media3: recording (tests/apps/recordapp).
           chmod +x tests/apps/recordapp/build.sh
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/recordapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediaformatapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           ls -la out

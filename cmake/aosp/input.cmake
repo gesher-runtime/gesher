@@ -82,10 +82,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_cin}/keychars
 # IMM32 compositions, the caret; docs/input.md "Text input", ADR 0039).
 add_library(gesher_input STATIC
   ${_cin}/translate.cc ${_cin}/connection.cc ${_cin}/win32.cc ${_cin}/keymap.cc ${_cin}/ime.cc
-  ${_cin}/touch_keyboard.cc ${_cin}/thread_watch.cc
+  ${_cin}/touch_keyboard.cc ${_cin}/thread_watch.cc ${_cin}/text_store.cc ${_cin}/text_service.cc
   "${_gen_input}/generic_kcm.cc")
 target_include_directories(gesher_input PUBLIC ${_cin}/include ${_cin})
-target_link_libraries(gesher_input PUBLIC android_input gesher_window user32 imm32)
+target_link_libraries(gesher_input PUBLIC android_input gesher_window user32 imm32 ole32 uuid)
 gesher_graphics_cxx(gesher_input)
 # -Werror for Gesher's code; what AOSP's headers trip under -Wextra is let through
 # as in framework.cmake.

@@ -132,6 +132,15 @@ public final class WebView2Host {
         if (load()) nConfigure(userDataFolder, browserArguments);
     }
 
+    /**
+     * Chromium's proxy arguments for the process's WebView2 environment (androidx.webkit's
+     * ProxyController, ADR 0058); true when they apply, false when the environment exists
+     * already (they apply to the next one) or WebView2 is unavailable.
+     */
+    public static boolean setProxyArguments(String args) {
+        return load() && nSetProxyArguments(args != null ? args : "");
+    }
+
     private final Client mClient;
     private volatile long mHandle;
 
@@ -145,6 +154,12 @@ public final class WebView2Host {
         WebView2Host host = new WebView2Host(client);
         host.mHandle = nCreate(host, 0, scale, background);
         return host.mHandle != 0 ? host : null;
+    }
+
+    /** The HWND of the window WebView2 draws into (0 until it exists): accessibility's. */
+    public long containerHwnd() {
+        long h = mHandle;
+        return h != 0 ? nContainer(h) : 0;
     }
 
     public boolean isDestroyed() {
@@ -391,9 +406,11 @@ public final class WebView2Host {
     private static native String nRuntimeVersion();
     private static native String nLoaderKind();
     private static native void nConfigure(String userData, String args);
+    private static native boolean nSetProxyArguments(String args);
     private static native long nCreate(WebView2Host peer, long parent, double scale,
             int background);
     private static native void nDestroy(long h);
+    private static native long nContainer(long h);
     private static native void nNavigate(long h, String url, String headers, String method,
             byte[] body);
     private static native void nPostWebMessage(long h, String json);

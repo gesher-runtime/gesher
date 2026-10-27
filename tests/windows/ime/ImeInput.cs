@@ -108,6 +108,16 @@ public static class ImeInput {
     return GetKeyboardLayout(GetWindowThreadProcessId(hwnd, out pid)).ToInt64();
   }
 
+  [DllImport("user32.dll", SetLastError = true)]
+  static extern IntPtr SendMessageTimeoutW(IntPtr hwnd, uint message, UIntPtr wParam,
+      IntPtr lParam, uint flags, uint timeout, out UIntPtr result);
+
+  public static bool ThreadResponsive(IntPtr hwnd) {
+    UIntPtr result;
+    return SendMessageTimeoutW(hwnd, 0 /* WM_NULL */, UIntPtr.Zero, IntPtr.Zero,
+        3 /* SMTO_BLOCK | SMTO_ABORTIFHUNG */, 1000, out result) != IntPtr.Zero;
+  }
+
   // Enables (for the user) and activates (here) Microsoft IME for Japanese, so
   // that a window switched to Japanese gets it. HRESULT.
   public static int EnableJapaneseIme() {

@@ -118,6 +118,8 @@ std::wstring Hex(HRESULT hr) {
 std::mutex g_config_mutex;
 std::wstring g_user_data;
 std::wstring g_browser_args;
+std::wstring g_proxy_args;  // SetProxyArguments
+bool g_env_started = false;  // under g_config_mutex: WithEnvironment began creating it
 bool g_configured = false;
 
 enum class EnvState { kNone, kCreating, kReady, kFailed };
@@ -217,6 +219,8 @@ void WithEnvironment(std::function<void(ICoreWebView2Environment*, HRESULT)> fn)
     std::lock_guard<std::mutex> lock(g_config_mutex);
     user_data = g_user_data;
     args = g_browser_args;
+    if (!g_proxy_args.empty()) args = args.empty() ? g_proxy_args : args + L" " + g_proxy_args;
+    g_env_started = true;
   }
   // Chromium stops drawing windows it thinks are covered or off the desktop
   // (tests show windows off it); an app's WebView draws whenever it is shown.
@@ -255,6 +259,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   Listener* listener = nullptr;
   HostOptions options;
   HWND container = nullptr;
+  std::atomic<HWND> published_container{nullptr};  // Container(), from any thread
   Com<ICoreWebView2Environment> env;
   Com<ICoreWebView2Controller> controller;
   Com<ICoreWebView2> webview;
@@ -1271,6 +1276,7 @@ void Start(const std::shared_ptr<Impl>& impl) {
     Fail(impl.get(), HRESULT_FROM_WIN32(GetLastError()), L"CreateWindowEx");
     return;
   }
+  impl->published_container.store(impl->container);
   SetWindowLongPtrW(impl->container, GWLP_USERDATA, static_cast<LONG_PTR>(impl->options.background));
   if (parent != nullptr) EnsureClipChildren(parent);
   WithEnvironment([impl](ICoreWebView2Environment* env, HRESULT hr) {
@@ -1375,6 +1381,14 @@ void Host::Configure(const std::wstring& user_data_folder, const std::wstring& b
   g_browser_args = browser_args;
 }
 
+HWND Host::Container() const { return impl_->published_container.load(); }
+
+bool Host::SetProxyArguments(const std::wstring& args) {
+  std::lock_guard<std::mutex> lock(g_config_mutex);
+  g_proxy_args = args;
+  return !g_env_started;
+}
+
 std::wstring Host::RuntimeVersion(HRESULT* hr) {
   LPWSTR version = nullptr;
   HRESULT result = AvailableBrowserVersion(&version);
@@ -1422,6 +1436,7 @@ void Host::Destroy() {
     impl->receivers.clear();
     impl->controller.Reset();
     impl->webview.Reset();
+    impl->published_container.store(nullptr);
     if (impl->container != nullptr) DestroyWindow(impl->container);
     impl->container = nullptr;
     impl->pending.clear();

@@ -32,6 +32,7 @@ import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
+import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 
 import com.android.internal.infra.AndroidFuture;
@@ -106,6 +107,9 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         int[] caret;
         boolean softInputShown;
         boolean touchKeyboardShown;
+        int documentEpoch;
+        int appliedRevision;
+        int documentRequest;
 
         Window(IBinder token) {
             this.token = token;
@@ -116,6 +120,9 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
 
         @Override
         public void updateExtractedText(int token, ExtractedText text) {
+            // Updates may be partial and arrive under IMM's lock: request a
+            // complete snapshot asynchronously instead of exposing a fragment.
+            queueDocument(this);
         }
 
         @Override
@@ -127,6 +134,7 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
                 candStart = candidatesStart;
                 if (candidatesStart >= 0) composeStart = candidatesStart;
             }
+            queueDocument(this);
         }
 
         @Override
@@ -158,8 +166,10 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
 
         @Override
         public void updateCursorAnchorInfo(CursorAnchorInfo info) {
-            Handler h = handler;
-            if (h != null && info != null) h.post(() -> applyCursorAnchorInfo(this, info));
+            Handler h;
+            int epoch;
+            synchronized (this) { h = handler; epoch = documentEpoch; }
+            if (h != null && info != null) h.post(() -> applyCursorAnchorInfo(this, info, epoch));
         }
 
         @Override
@@ -169,13 +179,17 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         @Override
         public void finishInput() {
             WindowInput in;
+            int epoch;
             synchronized (this) {
                 active = false;
                 connection = null;
                 composing = false;
+                documentEpoch++;
+                appliedRevision = 0;
                 in = input;
+                epoch = documentEpoch;
             }
-            if (in != null) in.setTextInput(false, false, 0);
+            if (in != null) in.setTextInput(false, false, 0, epoch);
         }
 
         @Override
@@ -186,6 +200,8 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
                 connection = ic;
                 sessionId = newSessionId;
                 composing = false;
+                documentEpoch++;
+                appliedRevision = 0;
             }
             applyEditor(this);
         }
@@ -257,6 +273,11 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
     private static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
+    }
+
+    /** Metadata only, enabled by the existing explicit TSF fixture environment. */
+    private static void traceDocument(String message) {
+        if (System.getenv("GESHER_TSF_TEST_SERVICE") != null) log("TSF document " + message);
     }
 
     /** {@code s} in ASCII, other characters as backslash-u escapes. */
@@ -358,6 +379,8 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
             w.editor = editorInfo;
             w.connection = inputConnection;
             w.sessionId = 0;
+            w.documentEpoch++;
+            w.appliedRevision = 0;
             w.composing = false;
             w.composeStart = -1;
             w.selStart = editorInfo != null ? editorInfo.initialSelStart : -1;
@@ -368,12 +391,23 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         if (editorInfo != null && inputConnection != null) {
             log("input started in window \"" + w.title + "\": " + describe(editorInfo)
                     + ", keyboard layout " + Long.toHexString(keyboardLayout(windowToken)));
-            // After the client has its binding (its result message is queued before this):
-            // the editor reports its cursor from now on.
-            Handler h = w.handler != null ? w.handler : new Handler(Looper.getMainLooper());
-            h.post(() -> requestCursorUpdates(w));
         }
         return new InputMethodManagerService.Session(w, mClientChannel.dup());
+    }
+
+    @Override
+    public void onInputBound(IBinder windowToken) {
+        Window w = window(windowToken, false);
+        if (w == null) return;
+        Handler h = w.handler != null ? w.handler : new Handler(Looper.getMainLooper());
+        synchronized (w) {
+            traceDocument("bound epoch " + w.documentEpoch + " input " + (w.input != null)
+                    + " connection " + (w.connection != null));
+        }
+        // startInput's earlier query may precede InputMethodManager accepting its
+        // result and return unavailable. Requery after that result is queued,
+        // including an unchanged initial selection that emits no updateSelection.
+        h.post(() -> { requestDocument(w); requestCursorUpdates(w); });
     }
 
     @Override
@@ -428,6 +462,7 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         boolean active;
         boolean ime;
         int action;
+        int epoch;
         synchronized (w) {
             in = w.input;
             active = w.connection != null && w.editor != null
@@ -435,8 +470,79 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
             ime = active && allowsCompositions(w.editor);
             action = active ? enterAction(w.editor) : 0;
             w.active = active;
+            epoch = w.documentEpoch;
         }
-        if (in != null) in.setTextInput(active, ime, action);
+        if (in != null) in.setTextInput(active, ime, action, epoch);
+        queueDocument(w);
+    }
+
+    private void queueDocument(Window w) {
+        Handler h = w.handler;
+        if (h != null) h.post(() -> requestDocument(w));
+    }
+
+    private void requestDocument(Window w) {
+        final IRemoteInputConnection ic;
+        final InputConnectionCommandHeader command;
+        final WindowInput input;
+        final int epoch, revision, serial;
+        synchronized (w) {
+            input = w.input;
+            if (input == null) {
+                traceDocument("request skipped before native input attachment, epoch " + w.documentEpoch);
+                return;
+            }
+            epoch = w.documentEpoch;
+            revision = w.appliedRevision;
+            serial = ++w.documentRequest;
+            ic = w.active && allowsCompositions(w.editor) ? w.connection : null;
+            command = header(w);
+        }
+        traceDocument("request epoch " + epoch + " revision " + revision + " serial " + serial
+                + " session " + command.mSessionId + " connection " + (ic != null));
+        if (ic == null) {
+            input.setDocument("", 0, 0, 0, epoch, revision, false);
+            return;
+        }
+        ExtractedTextRequest request = new ExtractedTextRequest();
+        request.token = epoch;
+        AndroidFuture<ExtractedText> reply = new AndroidFuture<>();
+        reply.whenComplete((value, failure) -> {
+            synchronized (w) {
+                if (w.input != input || w.connection != ic || w.documentEpoch != epoch
+                        || w.documentRequest != serial) {
+                    traceDocument("stale reply epoch " + epoch + " serial " + serial
+                            + " current epoch " + w.documentEpoch + " serial " + w.documentRequest);
+                    return;
+                }
+                // selectionStart/End are relative to startOffset, per ExtractedText.
+                boolean valid = failure == null && value != null && value.text != null
+                        && value.partialStartOffset == -1 && value.startOffset >= 0
+                        && value.selectionStart >= 0 && value.selectionEnd >= 0
+                        && value.selectionStart <= value.text.length()
+                        && value.selectionEnd <= value.text.length();
+                traceDocument("reply epoch " + epoch + " revision " + revision + " serial " + serial
+                        + " valid " + valid + " failure " + (failure != null ? failure.getClass().getName() : "none")
+                        + " length " + (value != null && value.text != null ? value.text.length() : -1)
+                        + " partial " + (value != null ? value.partialStartOffset : -2)
+                        + " offset " + (value != null ? value.startOffset : -1)
+                        + " selection " + (value != null ? value.selectionStart + "-" + value.selectionEnd : "none"));
+                input.setDocument(valid ? value.text.toString() : "",
+                        valid ? value.selectionStart : 0, valid ? value.selectionEnd : 0,
+                        valid ? value.startOffset : 0, epoch, revision, valid);
+            }
+        });
+        try {
+            ic.getExtractedText(command, request, InputConnection.GET_EXTRACTED_TEXT_MONITOR, reply);
+        } catch (RemoteException | RuntimeException e) { reply.completeExceptionally(e); }
+    }
+
+    /** Explicit fixture entry: the test service still uses the active real InputConnection. */
+    public int runTextServiceTest(IBinder token) {
+        Window w = window(token, false);
+        WindowInput input;
+        synchronized (w != null ? w : this) { input = w != null ? w.input : null; }
+        return input != null ? input.runTextServiceTest() : -1;
     }
 
     private static InputConnectionCommandHeader header(Window w) {
@@ -461,7 +567,21 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
     }
 
     /** The editor's cursor as the window's caret (on the window's thread). */
-    private void applyCursorAnchorInfo(Window w, CursorAnchorInfo info) {
+    private void applyCursorAnchorInfo(Window w, CursorAnchorInfo info, int epoch) {
+        WindowInput in;
+        synchronized (w) {
+            if (w.documentEpoch != epoch) return;
+            in = w.input;
+        }
+        if (in == null) return;
+        int[] origin = windowOrigin(w);
+        CharSequence composingText = info.getComposingText();
+        int compositionStart = info.getComposingTextStart();
+        // A newer observation with no caret or character measurements must still
+        // replace the previous range geometry. Native publication checks the epoch.
+        in.setTextGeometry(epoch, Math.max(0, compositionStart),
+                composingText != null && compositionStart >= 0 ? composingText.toString() : "",
+                CursorAnchorGeometry.characters(info, origin[0], origin[1]));
         float x = info.getInsertionMarkerHorizontal();
         float top = info.getInsertionMarkerTop();
         float bottom = info.getInsertionMarkerBottom();
@@ -479,22 +599,22 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         float[] pts = {x, top, x, bottom};
         Matrix m = info.getMatrix();
         if (m != null) m.mapPoints(pts);
+        for (float coordinate : pts) { if (!Float.isFinite(coordinate)) return; }
         // The matrix maps to the display; the Win32 window's client area is the Android
         // window's frame.
-        int[] origin = windowOrigin(w);
         int cx = Math.round(pts[0]) - origin[0];
         int cy = Math.round(pts[1]) - origin[1];
         int height = Math.max(1, Math.round(pts[3] - pts[1]));
-        WindowInput in;
         boolean changed;
         synchronized (w) {
+            if (w.documentEpoch != epoch) return;
             in = w.input;
             int[] caret = {cx, cy, 2, height};
             changed = w.caret == null || !java.util.Arrays.equals(w.caret, caret);
             w.caret = caret;
         }
         if (in == null) return;
-        in.setCaret(cx, cy, 2, height);
+        in.setCaret(cx, cy, 2, height, epoch);
         if (changed) {
             log("caret in window \"" + w.title + "\" at " + cx + "," + cy + " height " + height);
         }
@@ -612,10 +732,73 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
             }
             // Finished once the editor has applied it: a query after it answers then.
             AndroidFuture<Integer> applied = new AndroidFuture<>();
-            applied.whenComplete((r, e) -> input.finishTextEvent(seq));
+            applied.whenComplete((r, e) -> { queueDocument(w); input.finishTextEvent(seq); });
             ic.getCursorCapsMode(h, 0, applied);
         } catch (RemoteException | RuntimeException e) {
             log("text event " + kind + ": " + e);
+            input.finishTextEvent(seq);
+        }
+    }
+
+    @Override
+    public void onDocumentEdit(WindowInput input, int seq, int kind, String text,
+            int epoch, int revision, int start, int end) {
+        Window w = windowOf(input);
+        IRemoteInputConnection ic;
+        InputConnectionCommandHeader command;
+        synchronized (w != null ? w : this) {
+            if (w == null || w.documentEpoch != epoch || !w.active
+                    || !allowsCompositions(w.editor) || revision <= w.appliedRevision) {
+                input.finishTextEvent(seq);
+                return;
+            }
+            ic = w.connection;
+            command = header(w);
+        }
+        if (ic == null) { input.finishTextEvent(seq); return; }
+        try {
+            switch (kind) {
+                case WindowInput.DOCUMENT_REPLACE:
+                    ic.replaceText(command, start, end, text, 1, null); break;
+                case WindowInput.DOCUMENT_COMPOSITION_TEXT:
+                    // replaceText commits/removes composing spans. TSF text inside
+                    // its active composition must reach the real composing API.
+                    ic.setComposingRegion(command, start, end);
+                    ic.setComposingText(command, text, 1);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = true; w.composeStart = start; }
+                    }
+                    break;
+                case WindowInput.DOCUMENT_SELECT:
+                    ic.setSelection(command, start, end); break;
+                case WindowInput.DOCUMENT_COMPOSITION_RANGE:
+                    ic.setComposingRegion(command, start, end);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = end > start; w.composeStart = start; }
+                    }
+                    break;
+                case WindowInput.DOCUMENT_COMPOSITION_END:
+                    log("commit \"" + escape(text) + "\"");
+                    ic.finishComposingText(command);
+                    synchronized (w) {
+                        if (w.documentEpoch == epoch) { w.composing = false; w.composeStart = -1; }
+                    }
+                    break;
+                default: input.finishTextEvent(seq); return;
+            }
+            AndroidFuture<Integer> applied = new AndroidFuture<>();
+            applied.whenComplete((result, failure) -> {
+                synchronized (w) {
+                    if (failure == null && w.connection == ic && w.documentEpoch == epoch) {
+                        w.appliedRevision = Math.max(w.appliedRevision, revision);
+                    }
+                }
+                queueDocument(w);
+                input.finishTextEvent(seq);
+            });
+            ic.getCursorCapsMode(command, 0, applied);
+        } catch (RemoteException | RuntimeException e) {
+            log("document edit " + kind + ": " + e);
             input.finishTextEvent(seq);
         }
     }
