@@ -72,6 +72,16 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
+Current acceptance run: **full ci 40425393716 at 57782e5**, pending.
+Implementation is frozen at eb9f964 (the later commit changes docs only),
+with all 248 independent assertions and compilation verified in scoped
+40425021540. Fifteen completed build-job logs have been personally reviewed;
+the main runtime build is still running, so no Windows test/package/e2e
+acceptance result is claimed. Continue watching at interval 120, then inspect
+all remaining logs and test66's six cases per runner before updating coverage.
+Integration a06d930 is included; root's unsigned-width continuation remains
+separate and must retain both guest overrides when it is integrated.
+
 Prepared; scoped reference/compilation verified, production runtime pending.
 The effective multibyte registrations now
 consolidate in locale_bionic.cc; the unused extra_bionic conversions are
