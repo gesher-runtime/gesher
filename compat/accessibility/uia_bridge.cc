@@ -756,6 +756,7 @@ jboolean UiaBridge_nativeStart(JNIEnv*, jclass) {
 
 #if defined(GESHER_WEB3_QUERY_TESTS)
 thread_local Query* g_fixture_direct_query = nullptr;
+std::atomic<unsigned> g_fixture_shutdowns{0};
 #endif
 jint UiaBridge_nativeRemaining(JNIEnv*, jclass, jlong token) {
 #if defined(GESHER_WEB3_QUERY_TESTS)
@@ -766,6 +767,9 @@ jint UiaBridge_nativeRemaining(JNIEnv*, jclass, jlong token) {
   return g_queries->Remaining(static_cast<uint64_t>(token));
 }
 jboolean UiaBridge_nativeShutdown(JNIEnv*, jclass) {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+  g_fixture_shutdowns.fetch_add(1, std::memory_order_release);
+#endif
   return g_queries->Stop() ? JNI_TRUE : JNI_FALSE;
 }
 
