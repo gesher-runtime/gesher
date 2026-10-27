@@ -74,7 +74,9 @@ new host/shim builds successfully in job122272149040 and the strict translator
 compiles, but NDK guest compilation reports missing
 tests/native2/arm64_varargs_main.cpp because the reusable sparse checkout
 omitted tests/native2. Additive checkout correction928a09b7 is in fresh
-scoped40528739976; its actual results remain pending. No previous red
+scoped40528739976; all four actual executed logs have now been personally
+read and both Windows jobs pass every required positive/negative control.
+See [the exact scoped report](arm64-varargs-scoped.md). No previous red
 runtime result is reclassified or waived.
 
 The following source additionally includes the same contract body in Native2's
