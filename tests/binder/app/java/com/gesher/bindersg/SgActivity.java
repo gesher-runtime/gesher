@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class SgActivity extends Activity {
     private static native int run(String role, String scenario, String prefix, String endpoint);
     private static native String currentEndpoint();
+    private static native int probeEndpoint(String endpoint);
     private String verdict = "FAILED";
     private static String required(String key) {
         String value = android.system.Os.getenv(key);
@@ -59,6 +60,9 @@ public final class SgActivity extends Activity {
             observer.setDaemon(true);
             observer.start();
             if (!started.await(5, TimeUnit.SECONDS)) throw new AssertionError("framework observer did not start");
+            if (probeEndpoint(endpoint + "-unavailable") != 2 || !Objects.equals(before, currentEndpoint())) {
+                throw new AssertionError("failed actual endpoint open did not return ENOENT/restore selection");
+            }
             int status = run(role, scenario, prefix, endpoint);
             boolean restored = Objects.equals(before, currentEndpoint());
             if (status != 0 || !restored || framework != checkService.invoke(null, "package") || !framework.pingBinder()) {

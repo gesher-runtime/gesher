@@ -90,3 +90,19 @@ and current accepted Libcore integration, rebuild host/DLL/jars/images together
 and retain original FD/Bitmap/InputChannel/full/package/e2e gates. Complete
 public transaction-prefix transport-failure proof remains open on preserved
 unverified interrupted WIP; ordinary mode coverage does not substitute.
+
+Mode candidate now includes accepted645 plus exact verified Native942 and
+Envb497/frozen5587 (candidate mergecf416). This selects the coherent prerequisite
+before any ARM runtime; it is not combined runtime proof. Both real successful
+and unavailable-endpoint open paths will check exact environment restoration.
+JNI registration now fails cleanly on registration error/pending exception.
+A dedicated two-job build-only workflow compiles the selected host sources,
+actual JNI/ELF actors, Java entry and both role APKs with source/hash metadata;
+no runtime/ART/APK execution or acceptance is part of that workflow.
+
+Bounded source peer found no concrete build blocker in immediate restoration,
+JNI shape or packaged-byte checks. The fixture mutex covers fixture opens only:
+a concurrent new framework open/getenv could observe the temporary global
+selection. Existing-framework ping identity alone cannot prove general absence
+of misrouting. Runtime PID/open-count audit and concurrent-new-open requirement
+remain open; no broader session/isolation closure is claimed by build evidence.
