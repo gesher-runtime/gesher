@@ -60,6 +60,10 @@ an actual new session. A real-service ART regression covers preservation,
 new editorless windows, real restarts, real editor updates without connections,
 and headless results. The existing actual TSF/EditText/span/caret tests remain
 unchanged and still must pass. No runtime fix is claimed until that CI result.
+The live TsfActivity additionally focuses a real non-editor button, requires
+IMM not accepting text, a failed TSF edit session and unchanged editor bytes,
+then returns to EditText for the actual partial-composition/caret2 assertion.
+The unit Host is therefore not the only planned editorless-input coverage.
 
 ## Previous diagnostic and source preparation
 
