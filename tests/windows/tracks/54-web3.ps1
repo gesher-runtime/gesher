@@ -7,6 +7,8 @@
 # (tests/windows/web3/Web3Servers.ps1) are a proxy that serves hosts nothing else resolves
 # and a PAC script. Dot-sourced by run-tests.ps1: Check, NoDrive, $Dir, $root and $failed
 # are its.
+param([string] $Web3RuntimeExe = (Join-Path $Dir 'dalvikvm.exe'))
+$Web3RuntimeExe = (Resolve-Path -LiteralPath $Web3RuntimeExe -ErrorAction Stop).Path
 . "$PSScriptRoot/../webview/Runtime.ps1"
 . "$PSScriptRoot/../web3/Web3Servers.ps1"
 if (-not ('GesherWeb3Win32' -as [type])) {
@@ -63,7 +65,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
   }
   $log = Join-Path $env:RUNNER_TEMP "web3-$(Get-Random).log"
   $quoted = (@($dvmWeb3) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
-  $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
+  $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Web3RuntimeExe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
   $psi.Environment['GESHER_WEBVIEW_DEBUG'] = '1'
@@ -106,6 +108,8 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     }
   }
   $text = & $read
+  ($text -split "`n" | Where-Object { $_ -match 'ACTUAL_QUERY_FIXTURE_MODULE' } |
+    ForEach-Object { "INFO  web3 actual fixture executable: $_" }) | Out-Host
   $processExit = $p.ExitCode
   Write-Host ("INFO  web3 process result: {0}, exit 0x{1:X8}" -f $(if ($Arguments -contains 'com.gesher.app.Launcher') { 'device launcher' } else { 'single-process VM' }), $processExit)
   if ($processExit -ne 0) { $problems += ('process exit 0x{0:X8}' -f $processExit) }
@@ -384,7 +388,7 @@ try {
   }
 } finally {
   $shutdownLog = Join-Path $env:RUNNER_TEMP 'web3-device-shutdown.log'
-  $sd = Start-Process "$Dir/dalvikvm.exe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `
+  $sd = Start-Process "$Web3RuntimeExe" -ArgumentList (@($dvmWeb3) + 'com.gesher.app.Launcher', 'shutdown') `
     -NoNewWindow -PassThru -RedirectStandardOutput $shutdownLog -RedirectStandardError "$shutdownLog.err"
   if (-not $sd.WaitForExit(120000)) { $sd.Kill($true); Write-Host 'INFO  web3: the device shutdown timed out' }
   $env:ANDROID_DATA = $savedData
