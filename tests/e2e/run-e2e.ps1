@@ -326,6 +326,7 @@ foreach ($a in $manifestData.apps) {
   $known = $a.knownFailure
   $problems = @()
   $info = @()
+  $ranWindow = $false
   # --- Download and verify.
   $apk = Join-Path $apks "$($pkg)_$($a.versionCode).apk"
   $url = "$($manifestData.repo)/$($pkg)_$($a.versionCode).apk"
@@ -361,8 +362,9 @@ foreach ($a in $manifestData.apps) {
     $windowDebugBefore = $env:GESHER_WINDOW_DEBUG
     if ($ownDevice) { & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null }
     if ($a.surfaceTrace) {
-      $env:GESHER_SURFACE_TRACE_INVALIDATION = '1'
-      $env:GESHER_WINDOW_DEBUG = '1'
+      $env:GESHER_SURFACE_TRACE_INVALIDATION = $null
+      $env:GESHER_WINDOW_DEBUG = $null
+      $info += 'mandatory default scenario: surface/window diagnostic flags unset'
     }
     if ($a.display) { $env:GESHER_DISPLAY = [string]$a.display; $info += "display $($a.display)" }
     if ($a.trace) {
@@ -371,6 +373,7 @@ foreach ($a in $manifestData.apps) {
       $env:GESHER_APP_METHOD_TRACE = ($traceDir -replace '^[A-Za-z]:', '') -replace '\\', '/'
     }
     try {
+      $ranWindow = $true
       $r = RunWindow $a "`"$app\gesher-app.cmd`" `"$apk`" --hidden-window" 'launch'
     } finally {
       if ($ownDevice) {
@@ -390,11 +393,6 @@ foreach ($a in $manifestData.apps) {
   $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
   $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
-  if ($a.surfaceTrace) {
-    (((ReadText $appLog) + "`n" + $log) -split "`n") |
-      Where-Object { $_ -match 'GesherSurface invalidation|Win32Surface:|EGL child' } |
-      Select-Object -First 160 | ForEach-Object { Report "INFO  e2e: ${pkg} surface: $($_.TrimEnd())" }
-  }
   # "expectLog": lines the launch's or the app's log must contain (e.g. that its WebView
   # got a WebView2, docs/webview.md).
   foreach ($want in @($a.expectLog | Where-Object { $_ })) {
@@ -419,6 +417,39 @@ foreach ($a in $manifestData.apps) {
     if ($log.Contains('did not get ready')) {
       ((ReadText "$logs\system_server.log") -split "`n") | Select-Object -Last 60 |
         ForEach-Object { Write-Host "INFO  e2e: system server startup: $($_.TrimEnd())" }
+    }
+  }
+  # Record the original default result and preserve its logs before running
+  # instrumentation on a fresh device. Both scenarios are mandatory; a traced
+  # pass cannot remove an original failure or replace its initial capture.
+  if ($a.surfaceTrace -and $ranWindow) {
+    $surfaceTraceBefore = $env:GESHER_SURFACE_TRACE_INVALIDATION
+    $windowDebugBefore = $env:GESHER_WINDOW_DEBUG
+    $displayBefore = $env:GESHER_DISPLAY
+    & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
+    $env:GESHER_SURFACE_TRACE_INVALIDATION = '1'
+    $env:GESHER_WINDOW_DEBUG = '1'
+    $env:GESHER_DISPLAY = [string]$a.display
+    try {
+      $traced = RunWindow $a "`"$app\gesher-app.cmd`" `"$apk`" --hidden-window" 'surface-trace'
+    } finally {
+      & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
+      $env:GESHER_SURFACE_TRACE_INVALIDATION = $surfaceTraceBefore
+      $env:GESHER_WINDOW_DEBUG = $windowDebugBefore
+      $env:GESHER_DISPLAY = $displayBefore
+    }
+    $tracedLog = ReadText (Join-Path $OutDir "$pkg.surface-trace.log")
+    $tracedApp = ReadText $appLog
+    if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.surface-trace.app.log") -Force }
+    foreach ($line in $traced.Info) { Report "INFO  e2e surface trace: ${pkg}: $line" }
+    (($tracedApp + "`n" + $tracedLog) -split "`n") |
+      Where-Object { $_ -match 'GesherSurface invalidation|Win32Surface:|EGL child' } |
+      Select-Object -First 160 | ForEach-Object { Report "INFO  e2e surface trace: ${pkg}: $($_.TrimEnd())" }
+    if ($traced.Problems.Count -eq 0) {
+      Report "PASS  e2e surface trace: $pkg separately starts, draws, reacts to input and exits; original default result retained"
+    } else {
+      Report "FAIL  e2e surface trace: ${pkg}: $($traced.Problems -join '; '). First problem: $(FirstProblem ($tracedApp + "`n" + $tracedLog))"
+      $script:failed++
     }
   }
 }

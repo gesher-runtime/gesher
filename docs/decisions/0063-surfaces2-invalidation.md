@@ -34,7 +34,10 @@ old-failure/draw/new-post ordering under a barrier. Bound process, post-kill
 and pipe-drain waits and fail on unfinished pipes. Exercise real EGL producer
 color changes without input or explicit View.invalidate on both native ABIs,
 in single-process and fresh-device modes. Retain the original SurfaceGL and
-TIC-80 checks. After an original blank-frame failure, collect fifteen seconds
+TIC-80 checks. Its original mandatory scenario explicitly unsets surface and
+window trace flags. Record its result and logs before a separate mandatory
+traced scenario on a fresh device. An instrumented pass cannot replace the
+product default's result. After an original blank-frame failure, collect fifteen seconds
 of no-input timing/hash/pixel evidence before the original click, without
 changing the failure result or thresholds.
 

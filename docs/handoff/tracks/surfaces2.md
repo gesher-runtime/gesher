@@ -90,9 +90,13 @@ This source defect has not been proved to cause TIC-80's observed blank
 frame in Media4 full40487303965 attempt2. The original blank/text assertions
 and thresholds are unchanged. Only after an original blank assertion fails,
 the harness records fifteen one-second no-input captures with elapsed/UTC
-time, hash and pixel counts before its original click. Bounded surface and
-window traces are enabled for that app. A later nonblank diagnostic capture
-cannot turn the original failure into a pass. Both recorded app logs contain
+time, hash and pixel counts before its original click. The original mandatory
+TIC run explicitly unsets both surface/window trace flags. Its result and
+app/launcher logs are recorded first, then a separate mandatory fresh-device
+scenario enables bounded surface/window traces. This avoids accepting the
+product default only under instrumentation that changes startup timing.
+Neither a traced pass nor a later nonblank diagnostic capture can turn the
+original failure into a pass. Both recorded app logs contain
 fonts.xml ENOENT followed by successful installed font-map loading; neither
 the first reported exception nor the source defect is a proven cause yet.
 
