@@ -1,7 +1,8 @@
 # Libcore file-copy natives
 
-Coordinator-owned follow-up. ADR0077 and Windows test83 are reserved; no
-CI acceptance exists yet. Worktree C:\work\gesher-libcore-io is on
+Coordinator-owned follow-up. ADR0077 and Windows test83 own the bounded
+native-registration/copy slice, now verified by full40550474909; see
+[the final evidence report](libcore-io-final.md). Worktree C:\work\gesher-libcore-io is on
 wip/libcore-io from integration3577b330. All compilation and native/JVM
 execution belongs in CI.
 
