@@ -154,6 +154,13 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Corrected full ci **40459815375** is running at
+**c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
+integration 53898b51's docs. Source 73c20d70 adds the explicit cstdint
+prerequisite and the early exact-object CI compile. Source is frozen;
+docs-only commits may follow. No host compilation/link/runtime acceptance
+is claimed before the corrected run's actual logs are inspected.
+
 The first source candidate implements only the real NDK AMediaFormat
 subset described in ADR 0064: 21 System V function entries and 152 actual
 AOSP pointer data objects, in a small OBJECT target shared by dalvikvm and
