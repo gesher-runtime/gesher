@@ -106,3 +106,30 @@ a concurrent new framework open/getenv could observe the temporary global
 selection. Existing-framework ping identity alone cannot prove general absence
 of misrouting. Runtime PID/open-count audit and concurrent-new-open requirement
 remain open; no broader session/isolation closure is claimed by build evidence.
+
+## Successor continuation: ordinary mode build and pending runtime
+
+Build-only40577028890 at exactd280bce02e06dd5a2fb77e8bf09dd1387be8cf3f is
+terminal green, two successful jobs. Actual host122446098275 compiles the
+selected binder.cc object and links binderd plus both actors under Werror;
+actual modes122446097882 builds both NDK ELF/JNI ABIs, Java/dex and four
+separate-role APKs, executing the exact packaged library/dex byte comparisons.
+Metadata and both plain logs are retained as binder2-sg-modes-build-40577028890-*
+under C:/work/gesher-ci-review. This is compilation/packaging evidence only;
+none of those binaries/APKs has executed. Native's exactd280 bounded peer
+found no concrete build blocker, including JNI registration failure cleanup.
+
+New run-modes.ps1 is unexecuted source, pending peer and coherent runtime CI.
+It orchestrates ordinary host/two-ABI ELF/ART/single APK/device APK actors with
+fresh separate broker/server/client processes, finite waits/drains and genuine
+sender exit before one-way delivery. It consumes exact fixture hashes/current
+runtime source, retains full actor logs, checks actual APK identities and
+process exit, and audits actual traced SG broker opens against only those two
+actor PIDs. Exactly two successful SG opens are required for each observed run;
+unexpected opens fail. Existing framework IPC and exact endpoint restoration
+remain distinct checks. This bounded observed-run audit does not claim global
+serialization of arbitrary concurrent future framework opens, nor introduce a
+production selector. Coherent workflow/current host-DLL-jars-images provenance,
+actual runtime and original FD/Bitmap/InputChannel/full gates remain pending.
+The public transaction-prefix transport-loss proof remains explicitly open on
+preserved interruptedb52; this ordinary source does not resume or replace it.
