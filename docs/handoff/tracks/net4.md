@@ -55,6 +55,18 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+The coherent continuation now includes accepted Windows4/Web3 integration
+6297e80a3bddd1903790406bfc306cac92150153 (clean merge4e8b41a6).
+Shared networking/native2 merges preserve all seven Web3 bridges, both new
+ifaddrs bridges/module assertions and Media4's real AMediaFormat_new probe.
+The four AAudio result hashes still match exact78ee5e12. Source outside docs
+differs from6297 only by the bounded Net4 slice/diagnostic workflow and that
+already-reviewed AAudio slice; no AOT/FPSR/Surface continuation is imported.
+One new complete full run is required for this changed combination, including
+Windows4/Web3/70/71/74 plus real Net4 host-oracle9, strict AAudio controls,
+package23 and both complete ten-app e2e sets. Frozen6f073f45 remains the
+documentation-only bounded proof above source646f; do not move that ref.
+
 Bounded interface candidate full40469857757 at exact646f9fb1e6b932317c089c829b80ec9d58ee50d0
 is complete green:28jobs22success/6skip, both actual Windows suites0failed,
 package23 and both ten-app e2e sets0unexpected. Actual both ABI dalvikvm,
