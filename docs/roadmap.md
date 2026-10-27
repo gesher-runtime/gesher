@@ -154,6 +154,10 @@ Each phase ends with something demonstrable, built and tested in CI.
       40408733247 at 05ca072, both Windows runners and package/e2e.
 - [ ] Aot3: shared-library class-loader contexts, cloud profiles, secondary
       dex compilation and oatdump ([brief](handoff/tracks/aot3.md), ADR 0065).
+- [x] Gesher framework startup profile: observed methods/classes supplement
+      the pinned AOSP profiles; shipped PackageParser2/SystemFonts code is
+      independently inspected and original image-size/10%/30ms startup gates
+      pass on both runners. Full ci 40414859801 at ca46e99, package/both e2e.
 - [x] A trial installer from CI (`tools/package`, Inno Setup): per user, a
       `gesher` command for `.dex` programs, installed and tried on a clean
       runner
