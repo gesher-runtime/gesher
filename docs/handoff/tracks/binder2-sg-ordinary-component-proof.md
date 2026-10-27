@@ -19,17 +19,17 @@ zero failed, totaling1440 actual C++ actor checks. Separately the parent has
 723checks/0failed. These are repeated matrix/control observations, not1440 or
 723 new APIs/gaps. The actual actor output includes:
 
--54 nested parent-slot rebasing checks and162 copied-payload identity checks
+- 54 nested parent-slot rebasing checks and162 copied-payload identity checks
   after sender mutation/free/death across positive request/reply contexts.
--99 actual malformed failed replies: eleven pinned malformed layouts repeated
+- 99 actual malformed failed replies: eleven pinned malformed layouts repeated
   in nine contexts. FDA rejection is a negative, not FDA implementation.
--Nine actual mapped-capacity ENOMEM,18 invalid-address EFAULT and nine real
+- Nine actual mapped-capacity ENOMEM,18 invalid-address EFAULT and nine real
   descriptor-table EMFILE/adoption failures, with synchronous sender unblocking.
--Nine protected-page BR_NOOP-prefix/read_consumed controls. These are not the
+- Nine protected-page BR_NOOP-prefix/read_consumed controls. These are not the
   separately required public transaction-prefix transport-ACK-loss proof.
--Nine one-way cases validate the actual sender's normal exit0 and dead PID
+- Nine one-way cases validate the actual sender's normal exit0 and dead PID
   BEFORE the parent releases delivery. Two queued payloads progress after free.
--All28 device-app completions per host have the actual per-package normal
+- All28 device-app completions per host have the actual per-package normal
   exit-code0 marker, matching native/app PID and actual dead actor PID. The
   directly owned launcher/ART/Main/ELF processes also actually finish0.
 
@@ -57,9 +57,9 @@ successful supplier source/run/attempt identities, five current artifact IDs/
 digests, eleven fixture payload hashes, five jar hashes and all fifteen exact
 image-copy hashes. APK library/dex bytes are compared to the standalone files.
 
-Current artifacts: windows-x6412770666897, framework12770080694,
-binder2-sg-modes12768463462, arm6412768917040, boot-image12770741940;
-independent numeric reference12769106574. Numeric reference provenance is
+Current artifacts: windows-x64=12770666897, framework=12770080694,
+binder2-sg-modes=12768463462, arm64=12768917040, boot-image=12770741940;
+independent numeric reference=12769106574. Numeric reference provenance is
 retained; it is not an independent Linux Binder semantics oracle.
 
 All plain logs/metadata are retained under
