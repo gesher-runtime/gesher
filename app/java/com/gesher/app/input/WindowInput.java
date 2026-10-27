@@ -42,6 +42,8 @@ public final class WindowInput implements AutoCloseable {
   public static final int EVENT_VISIBILITY = 16;
   /** A press outside a window watching outside touches: published as ACTION_OUTSIDE. */
   public static final int EVENT_OUTSIDE = 17;
+  /** Top-level activation, which need not change the existing keyboard focus. */
+  public static final int EVENT_ACTIVATED = 18;
 
   /** gesher::WindowEvent's modifiers. */
   public static final int MODIFIER_SHIFT = 1;

@@ -33,10 +33,10 @@ foreach ($probe in @('windows4_text_store_probe', 'windows4_ime_tsf_probe', 'win
 }
 Write-Host 'INFO NEGATIVE COUNTERFACTUALS: deliberately changed source copies must fail exactly their declared regression assertions. Raw negative FAIL lines remain visible.'
 $manifest = Get-Content -Raw -LiteralPath "$Directory/counterfactuals.json" | ConvertFrom-Json
-if ($manifest.source_sha -cne $env:GITHUB_SHA -or @($manifest.variants).Count -ne 5 -or
-    @($manifest.variants.name | Sort-Object -Unique).Count -ne 5) { throw 'Unexpected counterfactual provenance' }
+if ($manifest.source_sha -cne $env:GITHUB_SHA -or @($manifest.variants).Count -ne 6 -or
+    @($manifest.variants.name | Sort-Object -Unique).Count -ne 6) { throw 'Unexpected counterfactual provenance' }
 foreach ($case in $manifest.variants) {
-  if ($case.name -notin @('lease','caret','geometry','composition','initial-size')) { throw 'Unexpected counterfactual name' }
+  if ($case.name -notin @('lease','caret','geometry','composition','initial-size','activation')) { throw 'Unexpected counterfactual name' }
   Write-Host "INFO NEGATIVE COUNTERFACTUAL $($case.name): $($case.source)"
   $result = Read-Probe "counterfactual-$($case.name)"
   $observed = @([regex]::Matches($result.Text, '(?m)^FAIL\s+windows4 [^:\r\n]+: ([^\r\n]+)') | ForEach-Object { $_.Groups[1].Value })

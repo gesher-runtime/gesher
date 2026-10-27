@@ -633,6 +633,9 @@ public final class WindowSession extends IWindowSession.Stub {
                 }
                 w.handler.post(() -> applyResize(key));
                 break;
+            case WindowInput.EVENT_ACTIVATED:
+                w.handler.post(() -> onActivated(w));
+                break;
             case WindowInput.EVENT_FOCUS:
                 w.handler.post(() -> {
                     if (w.focused != (a != 0)) {

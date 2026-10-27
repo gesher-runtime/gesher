@@ -703,6 +703,12 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return 0;
     }
+    case WM_ACTIVATE:
+      if (LOWORD(wparam) != WA_INACTIVE && HIWORD(wparam) == 0) {
+        e.type = WindowEvent::kActivated;
+        Queue(e);
+      }
+      return -1;  // DefWindowProc retains normal keyboard-focus behavior.
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
       if (msg == WM_KILLFOCUS) held_modifiers_ = 0;  // their key-up messages go elsewhere

@@ -46,7 +46,9 @@ for task_case in geometry composition; do
     probes/windows4/text_store_probe.cc "$task_negative/$task_case.cc" "$task_input/text_service.cc" \
     -o "$task_output/counterfactual-$task_case.exe" -lole32 -luuid
 done
-"$task_compiler" "${task_flags[@]}" -Iprobes/windows4/standalone -I"$task_window" \
-  probes/windows4/initial_client_size_probe.cc "$task_negative/initial-size.cc" \
-  "$task_window/gesher_popup.cc" "$task_window/input_pane.cc" \
-  -o "$task_output/counterfactual-initial-size.exe" -lole32 -luuid -lgdi32
+for task_case in initial-size activation; do
+  "$task_compiler" "${task_flags[@]}" -Iprobes/windows4/standalone -I"$task_window" \
+    probes/windows4/initial_client_size_probe.cc "$task_negative/$task_case.cc" \
+    "$task_window/gesher_popup.cc" "$task_window/input_pane.cc" \
+    -o "$task_output/counterfactual-$task_case.exe" -lole32 -luuid -lgdi32
+done

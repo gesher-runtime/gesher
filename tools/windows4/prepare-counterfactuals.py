@@ -31,6 +31,10 @@ VARIANTS = [
      "  if (hwnd != nullptr) SetClientSize(width, height);",
      "  // Counterfactual: leave CreateWindowEx's initial desktop clamp in place.",
      ["a client larger than the desktop retains its exact requested size"]),
+    ("activation", "compat/hwui/window/gesher_window.cc",
+     "    case WM_ACTIVATE:\n      if (LOWORD(wparam) != WA_INACTIVE && HIWORD(wparam) == 0) {\n        e.type = WindowEvent::kActivated;\n        Queue(e);\n      }\n      return -1;  // DefWindowProc retains normal keyboard-focus behavior.\n",
+     "    // Counterfactual: rely on keyboard-focus transitions alone.\n",
+     ["top-level activation is delivered separately from keyboard focus"]),
 ]
 
 def main():
