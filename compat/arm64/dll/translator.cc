@@ -21,6 +21,7 @@
 #include "translator.h"
 
 #include <windows.h>
+#include <xmmintrin.h>
 
 #include <array>
 #include <atomic>
@@ -78,6 +79,16 @@ class HostFenvScope {
   ~HostFenvScope() { std::fesetenv(&saved_); }
  private:
   std::fenv_t saved_;
+};
+
+// Internal callbacks can run with live guest MXCSR. Native address/cache
+// classification is not guest arithmetic (unordered_map may do FP math).
+class GuestMxcsrScope {
+ public:
+  GuestMxcsrScope() : saved_(_mm_getcsr()) { _mm_setcsr(0x1f80); }
+  ~GuestMxcsrScope() { _mm_setcsr(saved_); }
+ private:
+  unsigned saved_;
 };
 
 // --- guest code regions -------------------------------------------------------
@@ -452,6 +463,7 @@ class Env final : public A64::UserCallbacks {
     A64::Jit* jit = CurrentJit();
     switch (ex) {
       case A64::Exception::NoExecuteFault: {
+        GuestMxcsrScope callback_fenv;
         // A guest branch to an address outside every guest code region. If
         // host code is there, it is a host function the guest got as a plain
         // pointer (dlsym, eglGetProcAddress, a table): call it as System V
