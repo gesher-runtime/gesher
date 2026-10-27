@@ -156,22 +156,48 @@ lightweight script parsing. Root rechecked live compiler/build-tool processes
 on2026-10-27 and found none; agents received the same explicit instruction.
 Earlier local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
 
-Current exit-freshness full CI40455262527 is pending at
-29fa0bdf665a2cc5ee707524e7edd2a670391451, including integration808ea746 and
-the verified Media3 code. Scoped framework CI40454416483 at2a9c409 builds
-the server, ART component fixture and real exit-status APK. Prior scoped
-40452236687 failed on the fixture's omitted PID argument, now corrected;
-no runtime acceptance follows from compilation. Test70 must prove actual
-normal0/abnormal23/normal0 launcher behavior before Windows4/Web3 acceptance
+Exit freshness is merged as35fba0ab: full CI 40455262527 at
+29fa0bdf665a2cc5ee707524e7edd2a670391451 passed attempt1,22 success/6 skips.
+Root read both whole0 Windows logs, test70's actual ART generation/PID
+controls and normal0/abnormal23/normal0 app results with launcher0/1/0,
+package23 actual installed UI/input/uninstall passes and both ten-app e2e0.
+Head7d219f59 adds docs only. The only merge conflict was the copied brief;
+the accepted source/history was retained. Merged code exactly matches29fa0bdf,
+so rule-g requires no extra integration CI. Prior scoped40452236687's
+omitted fixture PID remains recorded; corrected scoped40454416483 built it.
+Windows4/Web3 now need their final full run on this merged prerequisite
 ([brief](tracks/exec4-exit.md)). Root independently read strict Web3 full
 40449137605/4f253878: both14 scoped passes, both whole0, package23 passes
 and both nine-app e2e0. Its child-zero values still use the older cache.
 
-Media4's first format slice is running full CI40456299720 at92e914238,
-without inventory closure. Net4's interface-address slice is under review
-and its corrected CI result is pending. Test71 belongs to Media4,72 to
-Net4 and73 to AOT3 shared-library work; next free test is74. Shared-library
-implementation remains source-design work, not a verified AOT3 stage.
+Media4's corrected format full CI 40459815375 atc5962291 is pending after
+actual bridge compilation/link/package passes. Earlier40456299720/92e91423
+failed on12 missing int32_t/int64_t header definitions and ran no Windows
+tests; <cstdint> and an early object compile correct that source. Net4 full
+40462148835 at719ae176 is pending with the corrected invocation/cache guard.
+Neither slice has inventory/runtime closure yet. Test71 belongs to Media4,72 to
+Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
+spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
+NDK ABI callers, but production/runtime acceptance awaits full CI
+([brief](tracks/exec4-actions.md)). Test75 is the next ARM sticky-FPSR slice;
+next free test is76. Shared-library implementation and the new slices are
+not verified AOT3/exec4/FPSR completion.
+
+ARM FPCR source49ade205 is independently full-verified in40451978087,
+attempt2:22 success/6 skips, both Windows0, five scoped FPCR passes each,
+six wide-conversion passes each, package23 passes and both nine-app e2e0.
+Only Windows2022's known untrusted-root.badssl.com TCP timeout was retried;
+actual certificate rejection then passed. Root read metadata and all five
+critical logs. Frozen wip/arm64-2-fpcr-verified=dab49ab0 is docs only above
+that source; it predates Media3 and exit-freshness, so no integration merge
+is claimed yet. Complete FPSR/env/default-object/host-CRT rounding remains open.
+
+Net4 full40456605869 was superseded after its standalone invocation omitted
+argv0; the corrected full40456946272/fa8b29e2 then failed before javac on a
+cached wificond sparse-checkout.lock. The prior cancelled framework's
+always-save captured that lock; CI cache lifecycle is being repaired before
+a new run. No timeout, skipped oracle or infrastructure failure is accepted
+as a passing Net4 runtime check.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free

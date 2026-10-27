@@ -490,9 +490,13 @@ public final class Launcher {
                 if (exit == Integer.MIN_VALUE) SystemClock.sleep(250);
             }
             tail.finish();
+            if (exit == Integer.MIN_VALUE) {
+                log("failed: no OS exit code for the package's latest process: " + pkg);
+                return 1;
+            }
             log("the process of " + pkg + " ended"
-                    + (exit != Integer.MIN_VALUE ? " (exit code " + exit + ")" : ""));
-            if (exit != 0 && exit != Integer.MIN_VALUE) {
+                    + " (exit code " + exit + ")");
+            if (exit != 0) {
                 log("failed: the app's process exited with code " + exit);
                 return 1;
             }

@@ -106,6 +106,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean ready;       // finishAttachApplication came
         boolean exiting;
         boolean spawned;     // started by this server (startProcess), not by itself
+        long startSeq;       // distinguishes a late exit from a newer process of this package
         /** The configuration it was given last (bindApplication, ConfigurationChangeItem). */
         Configuration config;
         final List<ActivityRecord> activities = new ArrayList<>();
@@ -240,8 +241,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private long mNextStartSeq = 1;
     /** How app processes are started; null: they start by themselves and attach. */
     private volatile ProcessStarter mStarter;
-    /** The exit code of each package's last process, once it is known. */
-    private final Map<String, Integer> mLastExit = new HashMap<>();
+    /** The OS exit code of the latest start, unknown until that process actually exits. */
+    private final ProcessExitStatus mExitStatus = new ProcessExitStatus();
     /** Since when (uptimeMillis) no app process runs or starts; 0 while some do. */
     private long mIdleSince = SystemClock.uptimeMillis();
 
@@ -500,7 +501,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (app == null) {
                     app = unassignedProcess(callingPid);
                     if (app != null) {
-                        app.packageName = info.packageName;
+                        assignPackage(app, info.packageName);
                         bind = app;
                     }
                 }
@@ -605,6 +606,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
+    /** Binds an attached process to a package without reusing an older start's exit. Guarded by this. */
+    private void assignPackage(ProcessRecord app, String packageName) {
+        app.packageName = packageName;
+        if (app.startSeq == 0) {
+            app.startSeq = mNextStartSeq++;
+            mExitStatus.started(packageName, app.startSeq);
+        }
+        mExitStatus.bind(packageName, app.startSeq, app.pid);
+    }
+
     /**
      * A process that attached by itself and has no package yet: the one that asked
      * ({@code preferredPid}), else, when this server cannot start processes, the first.
@@ -641,6 +652,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (processFor(packageName) != null || starting(packageName)) return;
             seq = mNextStartSeq++;
+            mExitStatus.started(packageName, seq);
             pending = new PendingProcess(packageName, reason);
             mStarting.put(seq, pending);
             updateIdle();
@@ -657,22 +669,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         synchronized (this) {
             pending.pid = pid;
+            mExitStatus.bind(packageName, seq, pid);
         }
         SystemServer.log("starting a process for " + packageName + " (" + reason + "): pid "
                 + pid + ", start seq " + seq);
         // A process that dies before it attaches fails what waited for it.
         Thread watch = new Thread(() -> {
             while (true) {
+                int code;
                 synchronized (this) {
                     if (mStarting.get(seq) != pending) return;  // attached
+                    // exitCode consumes the native handle on completion. Keep
+                    // lookup and publication atomic with attach handing it to
+                    // processDied's observer, so two readers cannot consume it.
+                    code = Zygote.exitCode(pid);
+                    if (code != Zygote.STILL_ACTIVE) {
+                        mExitStatus.exited(packageName, seq, pid, code);
+                    }
                 }
-                int code = Zygote.exitCode(pid);
                 if (code != Zygote.STILL_ACTIVE) {
                     SystemServer.log("process " + pid + " for " + packageName
                             + " exited before attaching (exit code " + code + ")");
-                    synchronized (this) {
-                        mLastExit.put(packageName, code);
-                    }
                     startFailed(seq, pending);
                     return;
                 }
@@ -716,7 +733,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** The exit code of the package's last process, or null if none ended (or unknown). */
     synchronized Integer lastExitCode(String packageName) {
-        return mLastExit.get(packageName);
+        return mExitStatus.code(packageName);
     }
 
     /** The app processes, for getRunningAppProcesses. */
@@ -836,6 +853,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             String waiting = null;
             if (started != null) {
                 app.spawned = true;
+                app.startSeq = startSeq;
                 waiting = started.packageName;
             } else {
                 // A start waiting for a process (none being started for its package): the
@@ -858,7 +876,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 }
             }
             if (waiting != null && processFor(waiting) == null) {
-                app.packageName = waiting;
+                assignPackage(app, waiting);
                 for (ActivityRecord r : mActivities) {
                     if (r.app == null && r.state == State.INITIALIZING
                             && app.packageName.equals(r.info.packageName)) {
@@ -977,10 +995,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     if (code == Zygote.STILL_ACTIVE) SystemClock.sleep(250);
                 }
                 if (code != Zygote.STILL_ACTIVE) {
+                    boolean published;
                     synchronized (this) {
-                        mLastExit.put(app.packageName, code);
+                        published = mExitStatus.exited(app.packageName, app.startSeq, app.pid, code);
                     }
-                    SystemServer.log(app + " exited with code " + code);
+                    if (published) SystemServer.log(app + " exited with code " + code);
                 }
             }, "exit-code " + app.pid);
             t.setDaemon(true);
