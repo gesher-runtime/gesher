@@ -55,6 +55,17 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Full40462148835 at719ae176 is red: both Windows test72 scripts abort
+before the standalone caller because the .NET oracle did not obtain an
+interface index. Actual dalvikvm ifaddrs checks pass for both ABIs on each
+runner; APK aggregate checks also pass, but no host-oracle claim follows.
+The2022 log separately contains a Media3 AAudio input-read assertion failure,
+which is reported to that owner and remains visible. The next narrow CI
+probe records every adapter, both protocol indexes and the exact exceptions,
+then repeats the original index selection. No index source, interface coverage
+or assertion is relaxed before the actual diagnostic output is understood.
+Historical API inventory remains unchanged and acceptance is pending.
+
 Corrected cache scope40461056132 at9bb847a8 is complete green; actual
 framework122045549772 was read. All10 lifecycle controls pass, including
 held Git with external cwd and both global path-option forms, plus successive
