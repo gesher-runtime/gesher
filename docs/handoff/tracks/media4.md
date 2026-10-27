@@ -177,22 +177,46 @@ must have minimal additive edits and be listed in the final report.
 
 The next independent native-muxer slice is source-only in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
-Test79 is reserved (next80), ADR0064 retained. First preparation moves the
+Test79 is reserved; Surface invalidation owns80, Locale2 owns81 (next82).
+ADR0064 is retained. First preparation moves the
 three codec-configuration helper bodies unchanged out of encoder.cc and
 configures the actual MP4/WebM/Ogg writers once in a shared OBJECT target
 linked into both hosts; existing JNI encoders/writers retain the same
-helpers. No compiler/link/runtime proof or NDK muxer export is claimed yet.
+helpers. A later source-only preparation adds ten typed System V entries
+over those real writers (new/delete, orientation/location, add/start/stop/
+write, track count/format). No compiler/link/runtime proof or verified NDK
+muxer export is claimed yet; the new entries and GPS backend are not ready
+for full CI until their independent two-ABI fixtures and output checks exist.
 Pinned NdkMediaMuxer/MediaMuxer/error-translation/MediaAppender sources were
 read with exact URL/hash audits in C:\work\gesher-ci-review. Important source
 contracts include LP64 BufferInfo size24/offsets0,4,8,16; BAD_VALUE maps to
 AMEDIA_ERROR_UNKNOWN through the pinned translator, not INVALID_PARAMETER;
 start/stop state transitions precede the writer result; and non-MP4 location
 returns INVALID_OPERATION despite the public-header summary. The wrapper
-will use the real writer, duplicate caller FDs, preserve typed track-format
-ownership and verify actual encoded output independently. No generic append
+uses the real writer, duplicates caller FDs and preserves typed track-format
+ownership; actual encoded output still needs independent verification. No generic append
 stub will be registered. Append modes, HEIF and any unimplemented format
-contract stay open. Separate AAudio full40487303965/afebf1ec is immutable;
-its three policy entries and installed-notice proof remain unverified.
+contract remain open. The pinned WebmWriter/OggWriter sources were also read
+with exact URL/hash audits: WebM requires read-write access, validates and
+updates per-track timestamp metadata before state/index checks; Ogg reports
+UNKNOWN for start without a source. The source checks actual duplicated
+Win32-handle zero-byte read/write rights plus seekability instead of using
+Gesher F_GETFL's current generic O_RDWR disk result. These access probes
+still require actual Windows CI controls, including read-only, write-only,
+read-write, closed/invalid and nonseekable descriptors. No shared POSIX
+F_GETFL implementation is changed.
+
+Track formats retain the actual AOSP AMessage and return independently
+owned AMediaFormat wrappers. The MP4 writer now has source for the real
+ISO-6709 udta/0xA9xyz box, replacing the inherited SetLocation no-op; its
+bytes, rotation matrix, packet timing, decoded colors/tones, caller-FD
+ownership, delete/stop cleanup and lifecycle/error order remain unverified
+until the planned fixtures run. Append, HEIF and advanced packet/metadata
+contracts remain explicit gaps; no append placeholder is registered.
+Separate AAudio full40487303965/afebf1ec is immutable; its three policy
+entries remain unaccepted because the full is red. The installed notice's
+exact hash and all23 package gates passed there, but coherent acceptance
+still requires the corrected Surface/AAudio full candidate.
 Only source reading, Git and lightweight script checks have run locally.
 
 A separate source-checked e2e log-review job reads already-recorded TIC-80

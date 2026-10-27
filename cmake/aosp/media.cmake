@@ -83,6 +83,7 @@ endforeach()
 # The actual container writers and pure packet metadata are shared by JNI
 # and native processes; neither host pulls the encoder factories through them.
 add_library(gesher_media_muxer OBJECT
+  ${_media}/ndk/media_muxer.cc
   ${_media}/encode/codec_config.cc
   ${_media}/mux/mp4_muxer.cc
   ${_media}/mux/webm_muxer.cc
