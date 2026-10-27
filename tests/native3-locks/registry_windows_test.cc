@@ -162,6 +162,21 @@ int wmain(int argc, wchar_t** argv) {
   Check(linked != INVALID_HANDLE_VALUE && FileIdentity(linked, &linked_identity) == 0 && identity == linked_identity,
         "hardlink spellings share the exact file key");
   if (linked != INVALID_HANDLE_VALUE) CloseHandle(linked);
+  HANDLE duplicate = nullptr;
+  bool same = false;
+  Check(DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) &&
+        SameDescription(file, duplicate, &same) == 0 && same,
+        "actual duplicate shares kernel description independent of handle number");
+  HANDLE separate = OpenFile(path);
+  File separate_identity{};
+  Check(separate != INVALID_HANDLE_VALUE && FileIdentity(separate, &separate_identity) == 0 && identity == separate_identity &&
+        SameDescription(file, separate, &same) == 0 && !same,
+        "separate opens share file identity but have different open descriptions");
+  if (separate != INVALID_HANDLE_VALUE) CloseHandle(separate);
+  if (duplicate) CloseHandle(duplicate);
+  Check(SameDescription(file, INVALID_HANDLE_VALUE, &same) == EBADF &&
+        SameDescription(file, file, nullptr) == EINVAL,
+        "invalid description comparison returns explicit errors without owner evidence");
   uint32_t access = 0, handles = 0;
   Check(HandleAccess(file, &access, &handles) == 0 && (access & FILE_READ_DATA) &&
         (access & FILE_WRITE_DATA) && handles > 0, "actual read/write handle granted access");

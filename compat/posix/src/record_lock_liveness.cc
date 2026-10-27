@@ -93,6 +93,24 @@ int FileIdentity(HANDLE file, File* identity) {
   return 0;
 }
 
+int SameDescription(HANDLE first, HANDLE second, bool* same) {
+  if (!same) return EINVAL;
+  if (!first || !second || first == INVALID_HANDLE_VALUE || second == INVALID_HANDLE_VALUE) return EBADF;
+  using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
+  HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  if (!kernelbase) return EOPNOTSUPP;
+  auto compare = reinterpret_cast<Compare>(reinterpret_cast<void*>(GetProcAddress(kernelbase, "CompareObjectHandles")));
+  if (!compare) return EOPNOTSUPP;
+  // The public Windows10+ API compares underlying kernel objects without
+  // requiring file read/write rights. A failure other than NOT_SAME_OBJECT
+  // is not evidence that a reused/invalid handle denotes a different owner.
+  SetLastError(ERROR_SUCCESS);
+  if (compare(first, second)) { *same = true; return 0; }
+  DWORD error = GetLastError();
+  if (error == ERROR_NOT_SAME_OBJECT) { *same = false; return 0; }
+  return error == ERROR_SUCCESS ? EIO : gesher::ErrnoFromWin32(error);
+}
+
 int HandleAccess(HANDLE handle, uint32_t* access, uint32_t* handle_count) {
   if (!access) return EINVAL;
   using Query = LONG(WINAPI*)(HANDLE, ULONG, void*, ULONG, ULONG*);

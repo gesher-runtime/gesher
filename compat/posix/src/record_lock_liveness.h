@@ -10,6 +10,10 @@ int CurrentThreadIdentity(ThreadIdentity* identity);
 Liveness ProbeProcess(const ProcessIdentity& identity);
 Liveness ProbeThread(const ThreadIdentity& identity);
 int FileIdentity(HANDLE file, File* identity);
+// Kernel FILE_OBJECT identity, not a path/file-ID/handle-number comparison.
+// Duplicate/inherited aliases compare equal; separate opens do not. This
+// primitive alone does not establish last-user-alias or transfer lifetime.
+int SameDescription(HANDLE first, HANDLE second, bool* same);
 int HandleAccess(HANDLE handle, uint32_t* access, uint32_t* handle_count = nullptr);
 
 struct Probes {
