@@ -52,8 +52,15 @@ public class VideoActivity extends Activity {
         super.onCreate(savedInstanceState);
         // The checks run off the main thread: later ones draw into this window.
         boolean surfacesOnly = getIntent().getBooleanExtra("surfacesOnly", false);
+        // The decoders alone (a run with GESHER_VIDEO_DECODERS=soft: the software ones).
+        boolean codecsOnly = getIntent().getBooleanExtra("codecsOnly", false);
         new Thread(() -> {
             try {
+                if (codecsOnly) {
+                    for (String[] clip : CLIPS) decodeSync(clip[0], clip[1]);
+                    say("done");
+                    return;
+                }
                 if (!surfacesOnly) {
                     extractor();
                     codecList();
@@ -61,12 +68,21 @@ public class VideoActivity extends Activity {
                     decodeAsync();
                     seek();
                     audioCodec();
+                    webm("vp9_opus", "video_vp9_opus.webm", 880);
+                    webm("vp8_vorbis", "video_vp8_vorbis.webm", 660);
+                    recordWithoutPermission();
                 }
                 surfaces();
                 if (!surfacesOnly) {
                     retriever();
                     player();
                     videoView();
+                    // The software decoders (and WebM's audio) through MediaPlayer and
+                    // MediaMetadataRetriever.
+                    for (String[] clip : PLAYED) {
+                        playClip(clip[0], clip[1]);
+                        retrieverClip(clip[0], clip[1]);
+                    }
                 }
                 say("done");
             } catch (Throwable t) {
@@ -79,6 +95,13 @@ public class VideoActivity extends Activity {
     static final String[][] CLIPS = {
         {"h264", "video_h264.mp4"}, {"hevc", "video_hevc.mp4"}, {"vp8", "video_vp8.webm"},
         {"vp9", "video_vp9.webm"}, {"av1", "video_av1.mp4"},
+        {"mpeg4", "video_mpeg4.mp4"}, {"h263", "video_h263.3gp"},
+    };
+
+    /** Played by MediaPlayer and read by MediaMetadataRetriever (media3). */
+    static final String[][] PLAYED = {
+        {"vp9_opus", "video_vp9_opus.webm"}, {"vp8_vorbis", "video_vp8_vorbis.webm"},
+        {"vp8", "video_vp8.webm"}, {"av1", "video_av1.mp4"}, {"hevc", "video_hevc.mp4"},
     };
 
     MediaExtractor open(String asset) throws Exception {
@@ -772,6 +795,245 @@ public class VideoActivity extends Activity {
         runOnUiThread(() -> vv[0].stopPlayback());
         say("video view: prepared " + p + ", duration " + (Math.abs(duration[0] - 2000) <= 50 ? "ok" : duration[0])
                 + ", playing " + playing[0] + ", completed " + c);
+    }
+
+    // --- media3: WebM with audio, the software decoders through MediaPlayer --------------
+
+    java.io.File fileOf(String asset) throws Exception {
+        java.io.File out = new java.io.File(getFilesDir(), asset);
+        if (!out.exists()) {
+            try (java.io.InputStream in = getAssets().open(asset);
+                 java.io.FileOutputStream os = new java.io.FileOutputStream(out)) {
+                in.transferTo(os);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * A WebM clip with an audio track (MatroskaExtractor): its tracks, its video samples,
+     * a seek to the previous sync sample, and the audio track decoded by MediaCodec.
+     */
+    void webm(String name, String asset, int hz) throws Exception {
+        MediaExtractor ex = open(asset);
+        int v = track(ex, "video/"), a = track(ex, "audio/");
+        if (v < 0 || a < 0) {
+            say("webm " + name + ": tracks video " + v + ", audio " + a + " (" + ex.getTrackCount() + ")");
+            ex.release();
+            return;
+        }
+        MediaFormat vf = ex.getTrackFormat(v), af = ex.getTrackFormat(a);
+        ex.selectTrack(v);
+        int samples = 0, sync = 0;
+        ByteBuffer buf = ByteBuffer.allocate(1 << 20);
+        while (ex.readSampleData(buf, 0) >= 0) {
+            samples++;
+            if ((ex.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0) sync++;
+            ex.advance();
+        }
+        ex.seekTo(1100000, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+        long previous = ex.getSampleTime();
+        boolean previousSync = (ex.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0;
+        ex.seekTo(1100000, MediaExtractor.SEEK_TO_NEXT_SYNC);
+        long next = ex.getSampleTime();
+        ex.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+        long start = ex.getSampleTime();
+        ex.unselectTrack(v);
+        ex.selectTrack(a);
+        ex.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+        String audio = decodeAudio(ex, af, hz);
+        ex.release();
+        long duration = vf.containsKey(MediaFormat.KEY_DURATION) ? vf.getLong(MediaFormat.KEY_DURATION) : -1;
+        say("webm " + name + ": tracks [" + vf.getString(MediaFormat.KEY_MIME) + " "
+                + vf.getInteger(MediaFormat.KEY_WIDTH) + "x" + vf.getInteger(MediaFormat.KEY_HEIGHT) + ", "
+                + af.getString(MediaFormat.KEY_MIME) + " " + af.getInteger(MediaFormat.KEY_SAMPLE_RATE) + " Hz "
+                + af.getInteger(MediaFormat.KEY_CHANNEL_COUNT) + " ch], duration "
+                + (Math.abs(duration - 2000000) <= 60000 ? "ok" : String.valueOf(duration))
+                + "; seek to 1.1 s: previous sync at " + Math.round(previous / 10000.0) * 10 + " ms (sync "
+                + previousSync + "), back to " + Math.round(start / 10000.0) * 10 + " ms; audio " + audio);
+        say("webm " + name + " (info): " + samples + " video samples, " + sync
+                + " sync, next sync after 1.1 s at " + (next / 1000) + " ms");
+    }
+
+    /** The selected audio track through MediaCodec: "R Hz C ch, 2 s, H Hz". */
+    String decodeAudio(MediaExtractor ex, MediaFormat f, int expectHz) throws Exception {
+        MediaCodec codec = MediaCodec.createDecoderByType(f.getString(MediaFormat.KEY_MIME));
+        codec.configure(f, null, null, 0);
+        codec.start();
+        MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        boolean inputDone = false;
+        long frames = 0, crossings = 0;
+        int channels = 0, rate = 0;
+        short prev = 0;
+        long deadline = System.currentTimeMillis() + 20000;
+        while (System.currentTimeMillis() < deadline) {
+            if (!inputDone) {
+                int i = codec.dequeueInputBuffer(10000);
+                if (i >= 0) {
+                    int n = ex.readSampleData(codec.getInputBuffer(i), 0);
+                    if (n < 0) {
+                        codec.queueInputBuffer(i, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        inputDone = true;
+                    } else {
+                        codec.queueInputBuffer(i, 0, n, ex.getSampleTime(), 0);
+                        ex.advance();
+                    }
+                }
+            }
+            int o = codec.dequeueOutputBuffer(info, 10000);
+            if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                MediaFormat of = codec.getOutputFormat();
+                channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+                rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+            } else if (o >= 0) {
+                ByteBuffer out = codec.getOutputBuffer(o);
+                if (out != null && channels > 0) {
+                    out.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    int n = info.size / (2 * channels);
+                    for (int k = 0; k < n; k++) {
+                        short s = out.getShort(info.offset + k * 2 * channels);
+                        if (prev < -1000 && s >= 0) crossings++;
+                        if (s < -1000 || s >= 0) prev = s;
+                    }
+                    frames += n;
+                }
+                codec.releaseOutputBuffer(o, false);
+                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break;
+            }
+        }
+        codec.stop();
+        codec.release();
+        double seconds = rate > 0 ? (double) frames / rate : 0;
+        double hz = seconds > 0 ? crossings / seconds : 0;
+        return rate + " Hz " + channels + " ch, " + (Math.abs(seconds - 2.0) <= 0.1 ? "2 s" : seconds + " s")
+                + ", " + (Math.abs(hz - expectHz) <= expectHz * 0.02 ? expectHz + " Hz" : hz + " Hz");
+    }
+
+    /** MediaPlayer plays a clip (video, and audio where it has some) into a TextureView. */
+    void playClip(String name, String asset) throws Exception {
+        // The capture analyzer identifies separate sounds by silence. Two
+        // consecutive WebM tones otherwise become one 4-second measurement.
+        Thread.sleep(300);
+        final android.graphics.SurfaceTexture[] texture = new android.graphics.SurfaceTexture[1];
+        final android.view.TextureView[] tv = new android.view.TextureView[1];
+        final java.util.concurrent.atomic.AtomicInteger updates = new java.util.concurrent.atomic.AtomicInteger();
+        CountDownLatch ready = new CountDownLatch(1);
+        runOnUiThread(() -> {
+            android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+            tv[0] = new android.view.TextureView(this);
+            tv[0].setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture s, int w, int h) {
+                    texture[0] = s;
+                    ready.countDown();
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture s, int w, int h) {}
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture s) {
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture s) {
+                    updates.incrementAndGet();
+                }
+            });
+            root.addView(tv[0], new android.widget.FrameLayout.LayoutParams(320, 240));
+            setContentView(root);
+        });
+        if (!ready.await(20, TimeUnit.SECONDS)) {
+            say("player " + name + ": no SurfaceTexture");
+            return;
+        }
+        android.media.MediaPlayer mp = new android.media.MediaPlayer();
+        CountDownLatch completed = new CountDownLatch(1);
+        mp.setOnCompletionListener(p -> completed.countDown());
+        android.view.Surface surface = new android.view.Surface(texture[0]);
+        mp.setSurface(surface);
+        String result;
+        try {
+            mp.setDataSource(fileOf(asset).getPath());
+            mp.prepare();
+            int vw = mp.getVideoWidth(), vh = mp.getVideoHeight(), duration = mp.getDuration();
+            updates.set(0);
+            mp.start();
+            Thread.sleep(1250);
+            final String[] color = new String[1];
+            CountDownLatch read = new CountDownLatch(1);
+            runOnUiThread(() -> {
+                android.graphics.Bitmap b = tv[0].getBitmap();
+                color[0] = b == null ? "null" : rgbName(b.getPixel(b.getWidth() / 2, b.getHeight() / 2));
+                read.countDown();
+            });
+            read.await(2, TimeUnit.SECONDS);
+            boolean done = completed.await(8, TimeUnit.SECONDS);
+            result = "size " + vw + "x" + vh + ", duration " + (Math.abs(duration - 2000) <= 60 ? "ok" : duration)
+                    + ", frames shown " + (updates.get() >= 30 ? "30+" : String.valueOf(updates.get()))
+                    + ", completed " + done + " (at 1.25 s: " + color[0] + ")";
+        } catch (Exception e) {
+            result = "failed: " + e;
+        }
+        mp.release();
+        surface.release();
+        say("player " + name + ": " + result);
+    }
+
+    /** MediaMetadataRetriever on a clip: its video, its audio, a frame at 1.25 s (blue). */
+    void retrieverClip(String name, String asset) {
+        String result;
+        android.media.MediaMetadataRetriever r = new android.media.MediaMetadataRetriever();
+        try {
+            r.setDataSource(fileOf(asset).getPath());
+            android.graphics.Bitmap frame = r.getFrameAtTime(1250000,
+                    android.media.MediaMetadataRetriever.OPTION_CLOSEST);
+            String w = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+            String h = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+            String audio = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
+            String mime = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
+            result = "video " + w + "x" + h + ", audio " + audio + ", at 1.25 s closest " + describe(frame)
+                    + " (mime " + mime + ")";
+        } catch (Exception e) {
+            result = "failed: " + e;
+        }
+        try {
+            r.release();
+        } catch (Exception e) {
+            // nothing
+        }
+        say("retriever " + name + ": " + result);
+    }
+
+    /**
+     * media3: this app does not ask for RECORD_AUDIO, so recording is refused, as on a phone:
+     * the AudioRecord stays uninitialized, MediaRecorder.setAudioSource throws.
+     */
+    void recordWithoutPermission() {
+        android.media.AudioRecord r = new android.media.AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC, 44100,
+                android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, 8820);
+        int state = r.getState();
+        String start;
+        try {
+            r.startRecording();
+            start = "started";
+        } catch (IllegalStateException e) {
+            start = "IllegalStateException";
+        }
+        r.release();
+        String source;
+        android.media.MediaRecorder mr = new android.media.MediaRecorder(this);
+        try {
+            mr.setAudioSource(android.media.MediaRecorder.AudioSource.MIC);
+            source = "set";
+        } catch (RuntimeException e) {
+            source = e.getClass().getSimpleName();
+        }
+        mr.release();
+        say("record without RECORD_AUDIO: AudioRecord state " + state + ", startRecording " + start
+                + ", MediaRecorder.setAudioSource " + source);
     }
 
     /** The MP4's AAC track through MediaCodec: PCM of the 1661 Hz tone. */

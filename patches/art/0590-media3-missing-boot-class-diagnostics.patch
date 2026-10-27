@@ -1,0 +1,19 @@
+diff --git a/runtime/class_linker.cc b/runtime/class_linker.cc
+--- a/runtime/class_linker.cc
++++ b/runtime/class_linker.cc
+@@ -3493,5 +3493,15 @@ ObjPtr<mirror::Class> ClassLinker::FindClass(Thread* self,
+                          *pair.second);
+     } else {
++#if defined(_WIN32) && defined(GESHER)
++      // The preallocated error has no descriptor or stack. Opt-in diagnostics
++      // keep missing framework dependencies visible without logging every
++      // normal application-class fallback through the boot loader.
++      if (getenv("GESHER_TRACE_MISSING_BOOT_CLASSES") != nullptr &&
++          (strncmp(descriptor, "Landroid/", 9) == 0 ||
++           strncmp(descriptor, "Lcom/android/", 13) == 0)) {
++        LOG(WARNING) << "gesher: boot class missing: " << descriptor;
++      }
++#endif
+       // The boot class loader is searched ahead of the application class loader, failures are
+       // expected and will be wrapped in a ClassNotFoundException. Use the pre-allocated error to
+       // trigger the chaining with a proper stack trace.

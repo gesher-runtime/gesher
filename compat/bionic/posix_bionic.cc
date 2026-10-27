@@ -680,14 +680,11 @@ char* BIONIC_SYSV Dirname(const char* path) {
   return t_path_buf;
 }
 
-// environ: the CRT's (narrow) environment as it is when the shim starts.
-char** g_environ = nullptr;
 const char* g_progname = "app_process";
 
 }  // namespace
 
 void RegisterPosix(SymbolTable& t) {
-  g_environ = _environ;
   BCryptGenRandom(nullptr, g_at_random, sizeof(g_at_random), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("opendir", Opendir);
@@ -796,7 +793,12 @@ void RegisterPosix(SymbolTable& t) {
   E("__gnu_basename", Basename);
   E("dirname", Dirname);
 #undef E
-  t["environ"] = &g_environ;
+  // Export the live data object, not a snapshot of its array. Host startup
+  // (including Java Os.setenv and the property session's _wputenv_s) can
+  // resize/free that array after ELF relocations have bound this address.
+  // The CRT keeps this slot current for both narrow and wide mutations.
+  t["environ"] = &_environ;
+  t["__environ"] = &_environ;
   t["__progname"] = &g_progname;
 }
 

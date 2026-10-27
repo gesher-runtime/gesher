@@ -147,12 +147,19 @@ public class NetActivity extends Activity {
         AtomicReference<String> cleartext = new AtomicReference<>();
         Thread io = new Thread(() -> {
             try {
-                HttpsURLConnection c = (HttpsURLConnection) new URL("https://example.com/").openConnection();
+                // $GESHER_NETAPP_HTTPS: the test's own HTTPS server (a certificate from a
+                // test root in Windows' ROOT store, 56-net.ps1), so CI does not depend on an
+                // outside site; example.com without it.
+                String local = System.getenv("GESHER_NETAPP_HTTPS");
+                String url = local != null && !local.isEmpty() ? local : "https://example.com/";
+                HttpsURLConnection c = (HttpsURLConnection) new URL(url).openConnection();
                 c.setConnectTimeout(20_000);
                 c.setReadTimeout(30_000);
                 String body = read(c);
-                https.set(c.getResponseCode() + " " + (body.contains("Example Domain") ? "Example Domain" : "?")
-                        + " " + c.getCipherSuite());
+                boolean expected = body.contains("Example Domain")
+                        || body.contains("trusted through the Windows ROOT store");
+                https.set(c.getResponseCode() + " " + (expected ? "expected page" : "?")
+                        + " from " + url + " " + c.getCipherSuite());
             } catch (Throwable t) {
                 https.set("failed: " + t);
                 t.printStackTrace(System.out);
