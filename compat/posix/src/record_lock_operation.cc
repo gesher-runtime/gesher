@@ -5,14 +5,39 @@
 namespace gesher::record_locks {
 namespace {
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
+bool UserRange(const void* address, size_t bytes, bool writing) {
+  uintptr_t cursor = reinterpret_cast<uintptr_t>(address), end;
+  if (!cursor || __builtin_add_overflow(cursor, bytes, &end)) return false;
+  while (cursor < end) {
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<const void*>(cursor), &region, sizeof(region)) != sizeof(region) ||
+        region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD)) return false;
+    const DWORD protection = region.Protect & 0xff;
+    const bool writable = protection == PAGE_READWRITE || protection == PAGE_WRITECOPY ||
+                          protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
+    const bool readable = writable || protection == PAGE_READONLY ||
+                          protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE;
+    if (writing ? !writable : !readable) return false;
+    uintptr_t next;
+    if (__builtin_add_overflow(reinterpret_cast<uintptr_t>(region.BaseAddress), region.RegionSize, &next) ||
+        next <= cursor) return false;
+    cursor = next;
+  }
+  return true;
+}
 int ReadUser(const void* source, void* destination, size_t bytes) {
   SIZE_T copied = 0;
-  return source && ReadProcessMemory(GetCurrentProcess(), source, destination, bytes, &copied) && copied == bytes
+  return UserRange(source, bytes, false) &&
+    ReadProcessMemory(GetCurrentProcess(), source, destination, bytes, &copied) && copied == bytes
     ? 0 : EFAULT;
 }
 int WriteUser(void* destination, const void* source, size_t bytes) {
   SIZE_T copied = 0;
-  return destination && WriteProcessMemory(GetCurrentProcess(), destination, source, bytes, &copied) && copied == bytes
+  // WriteProcessMemory is a debugger API and may temporarily make read-only
+  // pages writable. Reject nonwritable user pages explicitly; that courtesy
+  // must not turn Linux copy_to_user's EFAULT into a false query success.
+  return UserRange(destination, bytes, true) &&
+    WriteProcessMemory(GetCurrentProcess(), destination, source, bytes, &copied) && copied == bytes
     ? 0 : EFAULT;
 }
 }  // namespace
