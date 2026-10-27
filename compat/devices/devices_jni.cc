@@ -25,6 +25,7 @@ namespace android {
 
 int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMethod* methods,
                           int count);  // services_natives.cc
+void LogCameraDeliveryTrace();  // camera_frames.cc, opt-in recording diagnostics
 
 namespace {
 
@@ -134,21 +135,28 @@ jlong WindowsCamera_open(JNIEnv* env, jclass, jstring id, jint width, jint heigh
 // The next frame (NV12) into `frame`: 0, or the failure's HRESULT.
 jint WindowsCamera_read(JNIEnv* env, jclass, jlong handle, jbyteArray frame) {
   auto* capture = reinterpret_cast<cam::Capture*>(handle);
-  if (capture == nullptr || frame == nullptr ||
+  if (capture == nullptr) return E_INVALIDARG;
+  cam::TraceSample trace(capture->jni_read_trace);
+  if (frame == nullptr ||
       env->GetArrayLength(frame) < capture->width * capture->height * 3 / 2) {
     return E_INVALIDARG;
   }
+  trace.Step(0);
   std::vector<uint8_t> buffer(static_cast<size_t>(capture->width) * capture->height * 3 / 2);
+  trace.Step(1);
   HRESULT hr = capture->Read(buffer.data());
+  trace.Step(2);
   if (SUCCEEDED(hr)) {
     env->SetByteArrayRegion(frame, 0, static_cast<jsize>(buffer.size()),
                             reinterpret_cast<const jbyte*>(buffer.data()));
   }
+  trace.Step(3);
   return static_cast<jint>(hr);
 }
 
 void WindowsCamera_close(JNIEnv*, jclass, jlong handle) {
   delete reinterpret_cast<cam::Capture*>(handle);
+  LogCameraDeliveryTrace();
 }
 
 const JNINativeMethod gWindowsCameraMethods[] = {

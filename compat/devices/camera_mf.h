@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "camera_trace.h"
+
 namespace gesher::devices::camera {
 
 struct Device {
@@ -29,12 +31,13 @@ const std::vector<Device>& List(std::string* status);
 // An open device, producing NV12 frames of width x height.
 class Capture {
  public:
-  virtual ~Capture() = default;
+  virtual ~Capture() { jni_read_trace.Log(); }
   // The next frame into `nv12` (width * height * 3 / 2 bytes); blocks until
   // there is one. S_OK, or the failure.
   virtual HRESULT Read(uint8_t* nv12) = 0;
   int width = 0, height = 0;
   const char* via = "";  // how frames are read, for the logs
+  TraceStats jni_read_trace{"JNI read", {"validate", "allocate", "capture", "copy to Java"}};
 };
 
 // Opens `id` at the offered size nearest to width x height.

@@ -566,6 +566,7 @@ jobs:
           pwsh -NoProfile -File tests/e2e/test-apks.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
           exit $LASTEXITCODE
 
