@@ -342,6 +342,8 @@ class Env final : public A64::UserCallbacks {
       conf.processor_id = next_id_.fetch_add(1) & 63;
       conf.global_monitor = &Monitor();
       conf.enable_cycle_counting = false;
+      conf.optimizations = Dynarmic::all_safe_optimizations;
+      conf.unsafe_optimizations = false;
       conf.wall_clock_cntpct = true;
       // Fastmem: the guest shares the host address space, so a guest access
       // is generated inline as a host access at [0 + vaddr] (all 64 bits),

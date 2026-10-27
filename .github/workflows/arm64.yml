@@ -75,7 +75,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps
-          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p2
+          key: arm64-deps-${{ env.DYNARMIC_COMMIT }}-fmt${{ env.FMT_VERSION }}-boost${{ env.BOOST_VERSION }}-p3-fpsr-${{ hashFiles('compat/arm64/dll/patch-dynarmic-fpsr.py') }}
 
       - name: Fetch and patch dynarmic, fmt and Boost
         if: steps.deps.outputs.cache-hit != 'true'
@@ -116,6 +116,9 @@ jobs:
           tar -xjf boost.tar.bz2 "boost_${BOOST_VERSION//./_}/boost"
           mv "boost_${BOOST_VERSION//./_}" boost
           rm boost.tar.bz2
+
+      - name: Verify and patch the pinned compiler FPSR boundary
+        run: python3 compat/arm64/dll/patch-dynarmic-fpsr.py deps/dynarmic
 
       - name: Install Ninja
         run: sudo apt-get install -y --no-install-recommends ninja-build
