@@ -45,7 +45,7 @@ the successful read-mode popen check, before the posix_spawn file-action
 check reports. The existing log lacks RIP/caller context. All prior fully
 green exec3 evidence is retained; no camera or Windows4 causality is claimed.
 
-Diagnostic CI40428277638 runs at 610e957. Its watch is
+Diagnostic CI40428277638 finished at 610e957. Its original watch is
 C:\work\gesher-ci-review\exec4-watch-40428277638.log (120-second interval).
 It enables the existing capped pre-handler sentinel
 record only for the own exec3 APK invocations, with map symbolization and
@@ -53,6 +53,18 @@ phase markers around the actual spawn/file-action/stdio operations. Original
 assertions and native signal/exit behavior are retained. No new local C/C++
 or Java compiler/fixture runs. Broader exec4 contracts remain unimplemented;
 no roadmap box is ticked.
+
+Actual diagnostic Windows logs are now read: each runner passes all 11 exec3
+Checks/57 shell cases and both APK modes. The single-process APK completes all
+13 spawn/file-action/stdio phase markers without a sentinel record. The crash
+did not recur; no precise cause follows. Windows-2022 has 0 failed tests;
+Windows-2025 has exactly two failed net Check groups because expired.badssl.com
+did not connect within 15 seconds. Original failure output is preserved.
+Package install/oatdump/UI/input/uninstall cleanup passes. Both nine-app e2e
+jobs and four transport cases have 0 unexpected failures, including required
+TIC-80 and Puzzles generators 8036/1220 exiting 0. Actual Windows, build,
+package and e2e logs are exec4-diagnostic-*.log under ci-review. The full
+diagnostic run remains red for those network failures, not accepted as green.
 
 Prepared a separate live-environment correction after the frozen diagnostic:
 RegisterPosix exported a one-time `_environ` array snapshot, but later host
@@ -72,11 +84,11 @@ add host Java Os.setenv mutations after native loading and require the same
 real child checks. Original exec2's nine assertions remain intact.
 
 Local checks: diff whitespace, workflow YAML parse and PowerShell parse only.
-The candidate is not yet built or runtime-verified. Direct exec.yml dispatch
+The candidate is built in CI; Windows acceptance remains pending. Direct exec.yml dispatch
 returned HTTP404 (workflow absent on the default branch); no run was created.
-Diagnostic CI40428277638 is retained; the corrected full run will use an
+Diagnostic CI40428277638 is retained; the corrected full run uses an
 immutable `wip/exec4-live-environ` candidate ref, as authorized by root, to
-avoid same-ref cancellation of its still-active reusable posix workflow.
+avoid same-ref cancellation of the diagnostic's then-active reusable workflows.
 The actual checkout remains on wip/exec4. The takeover diagnostic watch uses
 C:\work\gesher-ci-review\exec4-takeover-watch-40428277638.log, session49047,
 at interval120. Test67 bounds the entire process tree and pipe completion;
@@ -90,15 +102,14 @@ the bounded-harness follow-up. Watch log:
 C:\work\gesher-ci-review\exec4-live-environ-watch-40430496516.log, interval120.
 Candidate exec/exec job121946700051 succeeded. Its actual job log confirms
 NDK -Werror compilation of the new shared fixture/JNI, Java/dex compilation
-and APK packaging. This is build evidence only; host C++/Windows execution,
-package and e2e are still pending. Log:
+and APK packaging. This is build evidence only. Log:
 C:\work\gesher-ci-review\exec4-live-environ-exec-121946700051.log.
 Candidate framework job121946748227 failed after its Java/APK compilation
 at a curl HTTP/2 INTERNAL_ERROR (exit92). Actual log:
 C:\work\gesher-ci-review\exec4-live-environ-framework-121946748227.log.
 This is a transport failure, not a compiler or runtime result. A selected-job
-rerun was rejected as `job ... cannot be rerun` while the full run remains
-active; retry failed jobs in this same immutable-source run after it finishes.
+rerun was rejected as `job ... cannot be rerun` while the full run was active;
+the later completed-run retry is recorded below.
 Do not dispatch a second candidate or infer any Windows pass from the skipped
 dependent jobs. No HTTP403/rate-limit rejection occurred.
 Attempt1 has now completed. Its actual build job121946699764 compiled and
@@ -108,8 +119,13 @@ The only failed job is the framework transport failure; Windows/package/e2e
 were skipped and provide no runtime proof. `gh run rerun ... --failed` was
 accepted after completion as attempt2 of CI40430496516, still exact 9f25080.
 Attempt2 watch is exec4-live-environ-attempt2-watch-40430496516.log,
-session42323, interval120; replacement framework job121957869699 is pending.
-Original diagnostic610 remains running independently at CI40428277638.
+session42323, interval120. Replacement framework job121957869699 passed in
+5m50s; its actual log is read. Windows-2025 job121960683003 and Windows-2022
+job121960683017 are running. Package job121960683093 passes actual installed
+oatdump/boot image, device install/dexopt/window/input, shortcuts and all cleanup;
+its actual log is exec4-live-environ-attempt2-package-121960683093.log.
+Both e2e jobs are running. No candidate Windows/runtime acceptance is claimed.
+Original diagnostic610 finished independently as recorded above.
 Root alone merges the final verified source and coordinates latest
 integration; no branch was merged here.
 
