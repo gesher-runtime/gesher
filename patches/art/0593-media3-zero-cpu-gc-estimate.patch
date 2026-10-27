@@ -1,0 +1,15 @@
+diff --git a/runtime/gc/heap.cc b/runtime/gc/heap.cc
+--- a/runtime/gc/heap.cc
++++ b/runtime/gc/heap.cc
+@@ -3951,7 +3951,10 @@
+         double next_gc_cpu_time = next_collector->GetMeanCpuTime();
+         double cur_gc_cpu_time = collector_ran->GetMeanCpuTime();
+         DCHECK(!std::isnan(cur_gc_cpu_time));
+-        if (LIKELY(!std::isnan(next_gc_cpu_time))) {
++        // Host CPU accounting can report zero for a short collection. Preserve
++        // the observed allocation estimate when a CPU-time ratio is undefined,
++        // as for an unknown next collector above; never convert 0/0 to size_t.
++        if (LIKELY(!std::isnan(next_gc_cpu_time) && cur_gc_cpu_time > 0.0)) {
+           remaining_bytes = remaining_bytes * (next_gc_cpu_time / cur_gc_cpu_time);
+         }
+       }

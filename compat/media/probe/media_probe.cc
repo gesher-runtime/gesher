@@ -12,6 +12,9 @@
 //                                  and renders 200 ms (a tone with GESHER_PROBE_AUDIBLE,
 //                                  else silence), or says why it cannot
 //   media_probe mf                 lists the Media Foundation decoders this machine has
+//   media_probe capture [out.wav]  records 2 s through the capture engine (capture.h:
+//                                  GESHER_AUDIO_SOURCE, the default capture endpoint,
+//                                  or silence) at 44100 Hz stereo, into out.wav
 //
 // The engine's own tests: what the framework adds on top (AudioTrack and the rest)
 // is tested through test apps.
@@ -19,6 +22,7 @@
 #include <windows.h>
 #include <objbase.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +32,7 @@
 #include <thread>
 #include <vector>
 
+#include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/sink.h"
 
@@ -394,7 +399,8 @@ int MediaFoundation() {
     uint32_t sub;
   } wants[] = {{"AAC", false, 0x1610}, {"MP3", false, 0x0055}, {"FLAC", false, 0xF1AC},
                {"Opus", false, 0x704F}, {"H.264", true, 0x34363248}, {"HEVC", true, 0x43564548},
-               {"VP9", true, 0x30395056}, {"AV1", true, 0x31305641}, {"MPEG-4 part 2", true, 0x5634504D}};
+               {"VP9", true, 0x30395056}, {"AV1", true, 0x31305641}, {"MPEG-4 part 2", true, 0x5634504D},
+               {"VP8", true, 0x30385056}, {"H.263", true, 0x33363248}};
   for (const Want& w : wants) {
     TypeInfo in = {w.video ? kVideo : kAudio, fourcc(w.sub)};
     IUnknown** acts = nullptr;
@@ -405,7 +411,78 @@ int MediaFoundation() {
     for (UINT32 i = 0; i < count; i++) acts[i]->Release();
     if (acts != nullptr) CoTaskMemFree(acts);
   }
+  // The encoders (media3, ADR 0059): MediaCodec's encoders use these where present.
+  const GUID kAudioEncoder = {0x91C64BD0, 0xF91E, 0x4D8C, {0x92, 0x76, 0xDB, 0x24, 0x82, 0x79, 0xD9, 0x75}};
+  const GUID kVideoEncoder = {0xF79EAC7D, 0xE545, 0x4387, {0xBD, 0xEE, 0xD6, 0x47, 0xD7, 0xBD, 0xE4, 0x2A}};
+  const Want encoders[] = {{"AAC", false, 0x1610}, {"Opus", false, 0x704F}, {"H.264", true, 0x34363248},
+                           {"HEVC", true, 0x43564548}, {"VP8", true, 0x30385056}, {"VP9", true, 0x30395056}};
+  for (const Want& w : encoders) {
+    TypeInfo out = {w.video ? kVideo : kAudio, fourcc(w.sub)};
+    IUnknown** acts = nullptr;
+    UINT32 count = 0;
+    hr = enumEx(w.video ? kVideoEncoder : kAudioEncoder, 0x1 | 0x2 | 0x4 | 0x10 | 0x40, nullptr, &out,
+                &acts, &count);
+    printf("mf: %s encoders: %u (0x%08lx)\n", w.name, count, static_cast<unsigned long>(hr));
+    for (UINT32 i = 0; i < count; i++) acts[i]->Release();
+    if (acts != nullptr) CoTaskMemFree(acts);
+  }
   return 0;
+}
+
+// The capture engine (media3, ADR 0059): what the input is, and 2 s of it.
+int Capture(const char* out_path) {
+  InputInfo info = GetInputInfo();
+  printf("capture: %s%s\n", info.description.c_str(), info.device ? "" : " (no input device)");
+  CaptureParams p;
+  p.sample_rate = 44100;
+  p.channels = 2;
+  p.format = PcmFormat::kS16;
+  p.capacity_frames = 44100;
+  p.name = "probe";
+  std::string error;
+  auto s = OpenCapture(p, &error);
+  if (s == nullptr) {
+    printf("capture: open failed: %s\n", error.c_str());
+    return 1;
+  }
+  std::vector<int16_t> pcm(static_cast<size_t>(2 * 44100) * 2);
+  auto t0 = std::chrono::steady_clock::now();
+  s->Start();
+  ssize_t n = s->Read(pcm.data(), pcm.size() * sizeof(int16_t), true);
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+  s->Stop();
+  const size_t frames = n > 0 ? static_cast<size_t>(n) / 4 : 0;
+  int64_t ts_frames = 0, ts_ns = 0;
+  const bool ts = s->Timestamp(&ts_frames, &ts_ns);
+  printf("capture: read %zu frames in %lld ms (overruns %u, timestamp %s)\n", frames,
+         static_cast<long long>(ms), s->overrun_frames(), ts ? "yes" : "no");
+  s->Release();
+  if (out_path != nullptr) {
+    FILE* f = fopen(out_path, "wb");
+    if (f == nullptr) {
+      printf("capture: cannot write %s\n", out_path);
+      return 1;
+    }
+    const uint32_t data = static_cast<uint32_t>(frames * 4);
+    auto u32 = [&](uint32_t v) { fwrite(&v, 4, 1, f); };
+    auto u16 = [&](uint16_t v) { fwrite(&v, 2, 1, f); };
+    fwrite("RIFF", 1, 4, f);
+    u32(36 + data);
+    fwrite("WAVEfmt ", 1, 8, f);
+    u32(16);
+    u16(1);
+    u16(2);
+    u32(44100);
+    u32(44100 * 4);
+    u16(4);
+    u16(16);
+    fwrite("data", 1, 4, f);
+    u32(data);
+    fwrite(pcm.data(), 1, data, f);
+    fclose(f);
+    printf("capture: wrote %s\n", out_path);
+  }
+  return frames >= 2 * 44100 * 95 / 100 ? 0 : 1;
 }
 
 }  // namespace
@@ -416,6 +493,7 @@ int main(int argc, char** argv) {
   if (argc >= 3 && strcmp(argv[1], "analyze") == 0) return Analyze(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "wasapi") == 0) return Wasapi();
   if (argc >= 2 && strcmp(argv[1], "mf") == 0) return MediaFoundation();
+  if (argc >= 2 && strcmp(argv[1], "capture") == 0) return Capture(argc >= 3 ? argv[2] : nullptr);
   fprintf(stderr, "usage: media_probe tones | analyze <wav> | wasapi\n");
   return 2;
 }

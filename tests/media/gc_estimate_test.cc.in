@@ -1,0 +1,87 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated in CI from the actual ART source; this is not a full Heap instance.
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+
+#define LIKELY(value) (value)
+#define DCHECK(value) do { if (!(value)) std::abort(); } while (false)
+
+namespace {
+struct InputCollector {
+  volatile double mean;
+  double GetMeanCpuTime() const { return mean; }
+};
+
+size_t ProductionEstimate(size_t remaining_bytes, double next, double current) {
+  const InputCollector next_input{next}, current_input{current};
+  const auto* next_collector = &next_input;
+  const auto* collector_ran = &current_input;
+@PATCHED_ESTIMATE@
+  return remaining_bytes;
+}
+
+bool PatchedWouldScale(double next, double current) {
+  const InputCollector next_input{next}, current_input{current};
+  const auto* next_collector = &next_input;
+  const auto* collector_ran = &current_input;
+@PATCHED_GUARD@
+  return false;
+}
+
+bool OriginalWouldScale(double next, double current) {
+  const InputCollector next_input{next}, current_input{current};
+  const auto* next_collector = &next_input;
+  const auto* collector_ran = &current_input;
+@ORIGINAL_GUARD@
+  return false;
+}
+}  // namespace
+
+int main() {
+  const double unknown = std::numeric_limits<double>::quiet_NaN();
+  struct Case {
+    const char* name;
+    double next, current;
+    size_t expected;
+    bool scales;
+  };
+  const Case cases[] = {
+      {"finite double", 4.0, 2.0, 8192, true},
+      {"finite half", 2.0, 4.0, 2048, true},
+      {"finite zero next", 0.0, 2.0, 0, true},
+      {"zero next/current", 0.0, 0.0, 4096, false},
+      {"positive next/zero current", 4.0, 0.0, 4096, false},
+      {"unknown next", unknown, 2.0, 4096, false},
+      {"unknown next/zero current", unknown, 0.0, 4096, false},
+  };
+  for (const Case& item : cases) {
+    // Check the actual source guard first. If it regresses, fail before
+    // invoking a production arithmetic path that would convert NaN to size_t.
+    const bool scales = PatchedWouldScale(item.next, item.current);
+    if (scales != item.scales) {
+      std::fprintf(stderr, "FAIL GC CPU estimate guard: %s, %d instead of %d\n",
+                   item.name, scales, item.scales);
+      return 1;
+    }
+    const size_t result = ProductionEstimate(4096, item.next, item.current);
+    if (result != item.expected) {
+      std::fprintf(stderr, "FAIL GC CPU estimate: %s, %zu instead of %zu\n",
+                   item.name, result, item.expected);
+      return 1;
+    }
+  }
+  if (!OriginalWouldScale(0.0, 0.0) || PatchedWouldScale(0.0, 0.0) ||
+      OriginalWouldScale(unknown, 2.0)) {
+    std::fprintf(stderr, "FAIL GC CPU estimate pristine/patched guard control\n");
+    return 1;
+  }
+  std::puts("SOURCE Heap::GrowForUtilization patched block SHA256 @PATCHED_SHA@");
+  std::puts("SOURCE Heap::GrowForUtilization pristine block SHA256 @ORIGINAL_SHA@");
+  std::puts("MediaGcEstimateTest: 7 finite/zero/unknown production estimates passed");
+  std::puts("MediaGcEstimateTest: pristine zero-CPU guard selects scaling; patched guard preserves estimate");
+  return 0;
+}
