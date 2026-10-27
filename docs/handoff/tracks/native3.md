@@ -62,6 +62,22 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
+2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
+finish within the unchanged 5s wait, then 27/28 recorded tones). Both actual
+ART CPU-clock host checks pass, as do both boot performance gates. This is
+scoped clock evidence, not full acceptance or corrected ARM-width proof.
+Media3 read the AAC case: INVALID_OPERATION follows the timeout, and the
+worker's decoder-open log arrives about 6.4s after the start. It is not
+classified as a tone-only flake.
+
+The next candidate includes the independently verified startup input from
+ca46e99/ci 40414859801 and media3's opt-in bounded prepare-phase observation.
+It changes no MediaPlayer state, HRESULT, waiting/assertion or tone criteria;
+100ms slow events are capped at 16/process and use steady_clock. Root reviewed
+the patch and applied it; its compilation and any new AAC timing evidence
+must come from the next combined full run. CPU/ARM correctness remains pending.
+
 Unsigned reference ci 40423333599 at a449d02 is green; all four jobs and
 the complete reference rows/digest were inspected. It retains the signed
 digest 566ac5b76f65a70b and produces separate unsigned 3650764a32c5bf03.
