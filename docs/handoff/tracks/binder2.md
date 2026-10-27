@@ -29,6 +29,18 @@ accepting a command without implementing its effect.
 
 ## Status and next steps
 
+Manager-assigned SG PTR leaf on2026-10-27: dedicated
+C:/work/gesher-binder2-sg, wip/binder2-sg from acceptedb323a42c; existing
+ADR0068 and test88. Native owns record-lock fd/stdio/spawn hooks and confirms
+no concurrent binder.cc/wire/broker/epoll edits. Source candidate adds guarded
+snapshot/relative owned payload/independent shape checks/receiver rebasing
+and wireversion2, requiring fresh host+broker together. No fixture, compile,
+runtime or full proof exists yet. Read ADR0068 for source identity/invariants.
+Next: bounded source peer, actual cross-process malformed/lifetime/ABI
+fixtures, CI only, then current accepted Libcore union and full gates. Existing
+FD/Bitmap/InputChannel behavior must remain; FDA/security/freeze/priority/
+readiness stay open. The older reservation below is historical.
+
 Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted. Existing
 descriptor support is verified only in its cited contexts; the remaining
 contracts above are open, pending source audit and executable evidence.
