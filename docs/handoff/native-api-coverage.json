@@ -3618,7 +3618,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40469857757,
+        "attempt": 1,
+        "sha": "646f9fb1e6b932317c089c829b80ec9d58ee50d0",
+        "status": "verified-interface-address-contexts",
+        "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
+      }
     },
     {
       "library": "libc.so",
@@ -3930,7 +3937,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40469857757,
+        "attempt": 1,
+        "sha": "646f9fb1e6b932317c089c829b80ec9d58ee50d0",
+        "status": "verified-interface-address-contexts",
+        "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
+      }
     },
     {
       "library": "libc.so",

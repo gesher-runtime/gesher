@@ -55,6 +55,22 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Bounded interface candidate full40469857757 at exact646f9fb1e6b932317c089c829b80ec9d58ee50d0
+is complete green:28jobs22success/6skip, both actual Windows suites0failed,
+package23 and both ten-app e2e sets0unexpected. Actual both ABI dalvikvm,
+four APK contexts and two standalone callers pass per runner. Each standalone
+prints entries9/host-oracle9 and matches real independent Windows records.
+The exact imported AAudio slice also passes strict750/1250Hz/44100-frame/
+capacity44100/lost0/xruns0 checks in all four app contexts, plus the small-ring
+loss/configured-ring zero-loss counterfactual. Old1153.3Hz causality remains
+unproven. [Frozen evidence](net4-ifaddrs-final.md) identifies every critical job.
+
+Only getifaddrs/freeifaddrs gain bounded per-entry metadata for that exact
+source/run. Every existing field, baseline count and unrelated entry remains
+unchanged. Coordinator acceptance/coherent integration verification follows:
+the next candidate must include newly accepted Windows4/Web3 integration6297e80a.
+Earlier diagnostic history below is retained, not current acceptance status.
+
 Corrected narrow40467169771 at55a17156 is complete green. Actual Windows
 jobs122065270702/122065270474 retain the nine old missing-index observations
 and produce nine real AF_UNSPEC records each: physical, loopback and vEthernet
