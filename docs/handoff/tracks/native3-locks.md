@@ -144,3 +144,34 @@ trigger or dispatch until the source peer is complete. Its intended scope is
 storage/identities only: partial inactive-bank-copy interruption, raw metadata
 corruption, OS-denied queries, actual PID reuse, cross-session/nonadministrator
 ACLs and every actual fcntl/descriptor/stdio/spawn/signal path remain open.
+
+Storage/identity-only qualification is now actual green on both Windows at
+exact ee71c7c5165717c1d431d802ad40967842d4127c, run40579579092 attempt1,
+success3/3. Independent Windows peer reviewed the complete source and final
+fixture child cleanup before push. Compile122455027650 built the actual
+registry/liveness/internal sources with the production POSIX header overlay
+and-Wall-Wextra-Werror; pinned archive hash and the explicit14-system-DLL
+import allowlist passed. Windows2022 job122455211147 and Windows2025
+job122455211119 each executed22 assertions with0 failures. Both verified
+artifact12768333815, ZIPsha256
+c51220c4010a1d7f36d1414c627f6f2ea2b64f2736b8360e6befae9ff0e0daaa,
+and identical executable SHA256
+50046d004168633cfa0fcac81c77585d72fb8e7d703f631d0716283a2ac574f8.
+Final metadata and all three actual plain job logs are preserved under
+`C:\work\gesher-ci-review\native3-registry-40579579092-*`; the required
+watch exited0 and is no longer live.
+
+Actual evidence includes hardlink/file identity, read-only GrantedAccess,
+exited thread, real pre/postcommit child death while holding the named mutex,
+authoritative old/new bank retention, confirmed dead-process pruning, invalid
+candidate byte preservation and explicit allocator/Unknown-probe dependencies.
+Fixture children are created suspended, assigned to a noninherited owned
+kill-on-close job, then resumed; termination outcomes and finite final waits
+are checked before handles are released. The Windows job contract is described
+in [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects)
+and [AssignProcessToJobObject](https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject).
+No real OS allocation/permission denial or actual PID reuse is implied by the
+explicit dependency controls. There is still no wired fcntl/close/dup/stdio/
+spawn/signal implementation or runtime-lock acceptance; partial initialization/
+inactive-copy corruption, contention, nonadministrator/cross-session behavior
+and nonblocking metadata-acquisition policy remain required open work.
