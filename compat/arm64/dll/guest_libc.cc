@@ -226,6 +226,7 @@ int ToGuestFlags(int f) {
 void* g_open = nullptr;
 void* g_openat = nullptr;
 void* g_fcntl = nullptr;
+void* g_spawn_addopen = nullptr;
 
 int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
   return reinterpret_cast<int(GESHER_SYSV*)(const char*, int, int)>(g_open)(path, ToHostFlags(flags), mode);
@@ -233,6 +234,10 @@ int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
 int GESHER_SYSV GuestOpenat(int dirfd, const char* path, int flags, int mode) {
   return reinterpret_cast<int(GESHER_SYSV*)(int, const char*, int, int)>(g_openat)(
       dirfd, path, ToHostFlags(flags), mode);
+}
+int GESHER_SYSV GuestSpawnAddOpen(void* actions, int fd, const char* path, int flags, uint32_t mode) {
+  return reinterpret_cast<int(GESHER_SYSV*)(void*, int, const char*, int, uint32_t)>(g_spawn_addopen)(
+      actions, fd, path, ToHostFlags(flags), mode);
 }
 int64_t GESHER_SYSV GuestFcntl(int fd, int cmd, int64_t arg) {
   constexpr int kGetfl = 3, kSetfl = 4;
@@ -503,6 +508,7 @@ void InitGuestLibc() {
   g_open = Host("open");
   g_openat = Host("openat");
   g_fcntl = Host("fcntl");
+  g_spawn_addopen = Host("posix_spawn_file_actions_addopen");
   if (g_open) {
     for (const char* n : {"open", "open64", "__open_2"}) Override(n, reinterpret_cast<void*>(&GuestOpen));
   }
@@ -510,6 +516,7 @@ void InitGuestLibc() {
     for (const char* n : {"openat", "openat64", "__openat_2"}) Override(n, reinterpret_cast<void*>(&GuestOpenat));
   }
   if (g_fcntl) Override("fcntl", reinterpret_cast<void*>(&GuestFcntl));
+  if (g_spawn_addopen) Override("posix_spawn_file_actions_addopen", reinterpret_cast<void*>(&GuestSpawnAddOpen));
 
   g_dlsym = Host("dlsym");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
