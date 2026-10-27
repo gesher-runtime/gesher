@@ -193,6 +193,16 @@ now has an explicit zero constructor, preserving C's initialization while
 leaving the original time body unchanged. No assertion was relaxed; the
 new time/error-order source is not yet runtime verified.
 
+Scoped ci 40425021540 at eb9f964 is green; all three actual logs read.
+The reference prints "PASS pinned wide: 248 conversion/state/boundary/LP64
+assertions, 0 failures", including the original wide-time wrapper's own
+buffer/error logic and UTF-8 zone conversion. Provenance verification,
+production locale/guest -Werror and both NDK compilations pass. No further
+implementation work remains from the source audit; production acceptance
+still requires the next full run. Superseded 40423326965 was cancelled while
+the main runtime was compiling and supplies no Windows runtime result.
+Current integration a06d930 was fetched/rechecked and is already included.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
