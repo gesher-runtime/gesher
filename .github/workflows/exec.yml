@@ -73,7 +73,9 @@ jobs:
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
             -o dist-exec/libexec2test.so tests/exec/exec2_test.c
           "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
-            -Wl,-soname,libexec3jni.so -o dist-exec/libexec3jni.so tests/exec/app/jni/exec3_jni.c
+            -Wl,-soname,libexec3jni.so -o dist-exec/libexec3jni.so tests/exec/app/jni/exec3_jni.c -ldl
+          "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -Wl,-soname,libexec4environment.so -o dist-exec/libexec4environment.so tests/exec/exec4_environment.c -ldl
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-exec/libexec3tls.so tests/exec/exec3_tls.c
           "$bin/llvm-readelf" -l -W dist-exec/libexec3tls.so | grep ' TLS '
