@@ -50,6 +50,15 @@ This is not full binary128 accuracy, direct-variadic or HFA acceptance.
 
 ## Source/history and pending gates
 
+Latest coherent prerequisite is now actually verified: exact942f2c16,
+component40556015168, eight executed jobs success/one smoke skip, both actual
+Windows zero summaries and six Native2 contexts/JNI copiedV/FPCR/FPSR/varargs
+read. Four jar differences cause real current-tool image rebuild on both
+hosts, with15 consumed-copy hashes matching. See the
+[exact component report](arm64-varargs-component-verified.md). This supersedes
+the active/pending component checkpoints below; full/Surface acceptance is
+still pending.
+
 Resume checkpoint: the guarded coherent component now has a narrow push
 trigger for `wip/arm64-varargs`, limited to its workflow and driver. This
 registers the workflow absent from main without dispatching an unrelated full
