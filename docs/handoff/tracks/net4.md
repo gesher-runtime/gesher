@@ -55,6 +55,19 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Corrected cache scope40461056132 at9bb847a8 is complete green; actual
+framework122045549772 was read. All10 lifecycle controls pass, including
+held Git with external cwd and both global path-option forms, plus successive
+relative -C. Actual restored4fb cache has no locks, javac exits0/0errors and
+the snapshot has no live Git/locks. Root's second bounded source review found
+no additional actionable issue. The API/runtime stage is still unverified.
+Current preparation includes latest integration53898b51 (mergecda052b0),
+which adds only coordinator handoff docs above the existing runtime base.
+The next complete full run must establish both zero-failure Windows suites,
+all new ABI/process/oracle markers, actual package cleanup and both ten-app
+e2e logs. All historical baseline counts remain unchanged until scoped
+per-entry evidence is actually accepted.
+
 This worktree is now assigned to the Windows4/Web3/release agent for the
 getifaddrs/freeifaddrs slice only. Root's clean6519f82d merge of verified
 integrationf17d03b1 is preserved; merge latest integration before CI. ADR0070
