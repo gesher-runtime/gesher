@@ -307,6 +307,7 @@ inline int Server(const char* scenario, const std::string& prefix) {
   const bool small = !strcmp(scenario, "smallmap");
   if (!report.Check(driver.Open(small ? 4096 : 1 << 20), "open independent receiver mapping")) return report.Finish();
   flat_binder_object manager{};
+  manager.flags = FLAT_BINDER_FLAG_ACCEPTS_FDS;
   if (!report.Check(ioctl(driver.fd, BINDER_SET_CONTEXT_MGR_EXT, &manager) == 0, "become actual context manager")) return report.Finish();
   driver.Code(BC_ENTER_LOOPER);
   if (!report.Check(driver.Flush() && Mark(prefix + ".ready"), "receiver ready without consuming queued transaction")) return report.Finish();

@@ -25,8 +25,20 @@ function Start-Sg([string]$Exe, [string[]]$Arguments, [string]$Log) {
     $info.RedirectStandardError = $true
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $info
-    if (-not $process.Start()) { throw "Cannot start $Exe" }
-    return [pscustomobject]@{ Process = $process; Out = $process.StandardOutput.ReadToEndAsync(); Err = $process.StandardError.ReadToEndAsync(); Log = $Log }
+    try {
+        if (-not $process.Start()) { throw "Cannot start $Exe" }
+        return [pscustomobject]@{ Process = $process; Out = $process.StandardOutput.ReadToEndAsync(); Err = $process.StandardError.ReadToEndAsync(); Log = $Log }
+    } catch {
+        $setupFailure = $_
+        # Setup can fail after Start succeeds. Reap/dispose that actual owned
+        # child even when there is no completed Child record for the caller.
+        try {
+            if (-not $process.HasExited) { $process.Kill() }
+            if (-not $process.WaitForExit(5000)) { Write-Host 'FAIL SG parent: setup-failure child did not exit after kill' }
+        } catch { Write-Host "FAIL SG parent: setup cleanup: $_" }
+        finally { $process.Dispose() }
+        throw $setupFailure
+    }
 }
 function Stop-Sg($Child, [int]$Deadline = 45000) {
     if ($null -eq $Child) { return -1 }
@@ -88,9 +100,14 @@ try {
                 Assert-Sg ([IO.File]::Exists($prefix + '.death')) "$case reached exact real process-death boundary"
             }
         } finally {
+            $cleanupErrors = @()
             foreach ($child in @($client, $server, $broker)) {
-                if ($null -ne $child) { [void](Stop-Sg $child 1000) }
+                if ($null -ne $child) {
+                    try { [void](Stop-Sg $child 1000) }
+                    catch { $cleanupErrors += $_.Exception.Message; $child.Process.Dispose() }
+                }
             }
+            if ($cleanupErrors.Count) { throw ('SG cleanup failures after attempting all owned children: ' + ($cleanupErrors -join ' | ')) }
         }
     }
 } finally {
