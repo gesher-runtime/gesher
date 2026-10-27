@@ -57,9 +57,26 @@ never runs. The next source invokes the same observer on actual focus gain
 too. It still requires focused=true, accepting=false, HRESULT8000ffff and
 unchanged editor text, followed by real editor recovery. No production code,
 assertion or deadline is weakened. This fixture correction needs new CI.
-Root owns the separately prepared deterministic positive HTTP/SNI test slice;
-no unchanged rerun or network-failure waiver is planned. Corrected targeted
-framework40446866229 at73ba54f is earlier build evidence only.
+The next source imports the coordinator-reviewed deterministic positive
+HTTP/SNI slice from Media3, source836482975254ec3fbcbbdb190398d65dc79fae11,
+and the earlier two-file NetApp slice. All five resulting network test files
+match the combined patch's authenticated source hashes exactly, including the
+already-present negative fixture. Positive patch SHA256 is
+ae93ceeed2954f7795bdc052383b8a2be9277696236ea6441904b9b016e89689;
+NetApp patch SHA256 is
+a13fcce99fbb4fec145413c0942d7dc5fc75c3e9f67b730437a46256fbbe4d9b.
+HTTP and virtual-host TLS use separate listeners; two names select distinct
+certificates on one SNI listener, with exact missing/unknown-name fallback and
+hostname rejection controls. Numeric192.0.2.1 is only the wrapped TLS peer
+identity over an already-connected loopback socket, never a network target.
+Public DNS/Google HTTPS204/TLS1.3/SNI/hostname blocks and all four negative
+certificate causes remain intact. PS syntax and exact hashes pass locally;
+no C#/Java/native compilation or fixture execution occurred. Media full
+40448521754/dd06d296 is still running, so the new SNI fixture is not yet
+runtime-accepted. No new full run is dispatched before its proof and the
+coordinator-owned process-exit freshness prerequisite. No unchanged rerun or
+network-failure waiver is planned. Corrected targeted framework40446866229
+at73ba54f is earlier build evidence only.
 
 Latest full diagnostic **40441680201** at exact
 `5b5b51d0b858c6b08602af6450eed2a49025d71f` is COMPLETE RED: 28 jobs,

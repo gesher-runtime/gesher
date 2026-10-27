@@ -49,6 +49,7 @@ import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SNIHostName;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLParameters;
@@ -435,10 +436,15 @@ public final class NetTest {
             require(a.length > 0 && b.length > 0, "no addresses");
             return "example.com " + Arrays.toString(a) + ", www.google.com " + b.length + " addresses";
         });
-        check("HTTPS: GET https://example.com/ (HttpsURLConnection, OkHttp over Conscrypt)", () -> {
-            HttpsURLConnection c = (HttpsURLConnection) new URL("https://example.com/").openConnection();
+        // CI owns the HTTP200/body oracle; Google below still exercises public
+        // trust, HTTPS and TLS1.3 over the real internet. Manual runs keep example.com.
+        String positiveOverride = System.getenv("GESHER_TLS_POSITIVE_URL");
+        String positiveUrl = positiveOverride == null ? "https://example.com/" : positiveOverride;
+        String positiveBody = positiveOverride == null ? "Example Domain" : "trusted through the Windows ROOT store";
+        check("HTTPS: GET " + positiveUrl + " (HttpsURLConnection, OkHttp over Conscrypt)", () -> {
+            HttpsURLConnection c = (HttpsURLConnection) new URL(positiveUrl).openConnection();
             String body = read(c);
-            require(c.getResponseCode() == 200 && body.contains("Example Domain"), "status " + c.getResponseCode());
+            require(c.getResponseCode() == 200 && body.contains(positiveBody), "status " + c.getResponseCode());
             return c.getCipherSuite() + ", " + body.length() + " characters";
         });
         check("HTTPS: GET https://www.google.com/generate_204", () -> {
@@ -461,12 +467,23 @@ public final class NetTest {
                         + session.getPeerPrincipal();
             }
         });
-        check("TLS: SNI picks the virtual host (https://badssl.com/ among badssl.com's hosts)", () -> {
+        String localSniPort = System.getenv("GESHER_TLS_SNI_PORT");
+        check(localSniPort == null
+                ? "TLS: SNI picks the virtual host (https://badssl.com/ among badssl.com's hosts)"
+                : "TLS: SNI picks each virtual host's certificate on one local listener", () -> {
+            if (localSniPort != null) return localVirtualHosts(Integer.parseInt(localSniPort));
             HttpsURLConnection c = (HttpsURLConnection) new URL("https://badssl.com/").openConnection();
             String body = read(c);
             require(c.getResponseCode() == 200 && body.contains("badssl"), "status " + c.getResponseCode());
             return "badssl.com served its own certificate";
         });
+        if (localSniPort != null) {
+            int port = Integer.parseInt(localSniPort);
+            check("TLS: missing SNI selects the default certificate and rejects an unmatched IP peer",
+                    () -> localVirtualHostRejection(port, null));
+            check("TLS: wrong SNI rejects the default localhost certificate for an unrecognized name",
+                    () -> localVirtualHostRejection(port, "wrong-sni.gesher.invalid"));
+        }
         String[][] bad = {
             {"https://expired.badssl.com/", "an expired certificate"},
             {"https://wrong.host.badssl.com/", "a certificate for another host"},
@@ -481,6 +498,73 @@ public final class NetTest {
         }
         for (String[] b : bad) {
             check("HTTPS: " + b[0] + " is rejected (" + b[1] + ")", () -> rejected(b[0]));
+        }
+    }
+
+    private static SSLSocketFactory freshDefaultSocketFactory() throws Exception {
+        // A new context for every probe prevents session resumption from hiding
+        // missing/wrong SNI. Null managers retain the platform's default trust.
+        SSLContext context = SSLContext.getInstance("TLS");
+        context.init(null, null, null);
+        return context.getSocketFactory();
+    }
+
+    private static String localVirtualHosts(int port) throws Exception {
+        StringBuilder peers = new StringBuilder();
+        for (String host : new String[] {"sni-one.gesher.invalid", "sni-two.gesher.invalid"}) {
+            try (Socket transport = new Socket()) {
+                // Only the transport address is loopback. The TLS peer name and
+                // SNI name are the distinct virtual host, with normal verification.
+                transport.connect(new InetSocketAddress("127.0.0.1", port), 15_000);
+                try (SSLSocket socket = (SSLSocket) freshDefaultSocketFactory().createSocket(transport, host, port, true)) {
+                    SSLParameters parameters = socket.getSSLParameters();
+                    parameters.setEndpointIdentificationAlgorithm("HTTPS");
+                    parameters.setServerNames(Arrays.asList(new SNIHostName(host)));
+                    socket.setSSLParameters(parameters);
+                    socket.setSoTimeout(15_000);
+                    socket.startHandshake();
+                    SSLSession session = socket.getSession();
+                    String peer = session.getPeerPrincipal().getName();
+                    require(peer.equals("CN=" + host), "wrong virtual-host certificate: " + peer);
+                    if (peers.length() != 0) peers.append("; ");
+                    peers.append(host).append(" -> ").append(peer).append(" ").append(session.getProtocol());
+                }
+            }
+        }
+        return peers.toString();
+    }
+
+    private static String localVirtualHostRejection(int port, String requestedName) throws Exception {
+        try (Socket transport = new Socket()) {
+            transport.connect(new InetSocketAddress("127.0.0.1", port), 15_000);
+            // Pinned Conscrypt ignores an empty server-name list. A numeric peer
+            // suppresses SNI independently, while HTTPS verification still checks
+            // that identity. TEST-NET-1 is an identity only, never a connect address.
+            String peerName = requestedName == null ? "192.0.2.1" : "sni-one.gesher.invalid";
+            try (SSLSocket socket = (SSLSocket) freshDefaultSocketFactory().createSocket(
+                    transport, peerName, port, true)) {
+                SSLParameters parameters = socket.getSSLParameters();
+                parameters.setEndpointIdentificationAlgorithm("HTTPS");
+                parameters.setServerNames(requestedName == null ? java.util.Collections.emptyList()
+                        : Arrays.asList(new SNIHostName(requestedName)));
+                socket.setSSLParameters(parameters);
+                socket.setSoTimeout(15_000);
+                try {
+                    socket.startHandshake();
+                } catch (SSLPeerUnverifiedException expected) {
+                    return expected.getClass().getSimpleName() + ": " + rootCause(expected);
+                } catch (SSLException expected) {
+                    for (Throwable cause = expected; cause != null; cause = cause.getCause()) {
+                        // Pinned TrustManagerImpl's HTTPS endpoint-identification failure.
+                        if (cause instanceof CertificateException &&
+                                "No subjectAltNames on the certificate match".equals(cause.getMessage())) {
+                            return expected.getClass().getSimpleName() + ": " + rootCause(expected);
+                        }
+                    }
+                    throw expected;
+                }
+                throw new AssertionError("accepted missing/wrong SNI: " + socket.getSession().getPeerPrincipal());
+            }
         }
     }
 
