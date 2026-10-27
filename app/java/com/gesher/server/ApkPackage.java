@@ -433,7 +433,16 @@ public final class ApkPackage {
         ai.deviceProtectedDataDir = mDataDir;
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
-        sharedLibraries.apply(ai);
+        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // Ordinary packages keep the cheap immutable empty graph path.
+        try {
+            SharedLibraryGraph graph = parsed.getUsesLibraries().isEmpty()
+                    && parsed.getUsesOptionalLibraries().isEmpty() ? sharedLibraries
+                    : SharedLibraryRegistry.resolve(parsed);
+            graph.apply(ai);
+        } catch (IOException invalidLibrary) {
+            throw new IllegalStateException("shared libraries changed for " + packageName, invalidLibrary);
+        }
     }
 
     private static void component(ComponentInfo c, ApplicationInfo ai) {
