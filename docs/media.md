@@ -220,6 +220,12 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- OpenSL full ci **40470959941** is running at
+  **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
+  db84749b/fresh exit-status30deb08c merged. The source is frozen; later
+  commits add docs only. Test76 and the AAudio correction below need actual
+  both-runner runtime/full-suite/package/e2e proof before any new acceptance.
+
 - Media4's accepted format source below is frozen on
   `wip/media4-format-verified` at docs-only ba3c1c2d. Active source78ee5e12
   separately corrects the blocking AAudio lossless fixture's missing
