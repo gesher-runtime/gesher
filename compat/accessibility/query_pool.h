@@ -49,7 +49,7 @@ struct Query {
 
 class QueryPool {
  public:
-  using Execute = void (*)(Query&);
+  using Execute = void (*)(Query&) noexcept;
   static constexpr size_t kWorkers = 4, kQueued = 32;
   explicit QueryPool(Execute execute) : execute_(execute) {}
   // This object is process-owned; it is never destroyed underneath a worker.

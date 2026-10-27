@@ -7,6 +7,7 @@ on:
       - 'compat/accessibility/query_pool.*'
       - 'compat/accessibility/uia_bridge.cc'
       - 'cmake/webview.cmake'
+      - 'compat/hwui/window/gesher_window.*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,4 +27,4 @@ jobs:
         with:
           ccache-key: runtime
       - name: Compile actual accessibility objects with their production Werror flags
-        run: ninja -C out gesher_web3
+        run: ninja -C out gesher_web3 gesher_window
