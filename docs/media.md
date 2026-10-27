@@ -221,24 +221,48 @@ the microphone (looped, from its start each time recording starts);
 ## Status and next steps
 
 ### media3 (stage 3) — camera throughput gate remains open, 2026-10-27
-- Diagnostic full CI **40416959340** is running at **fe137c8** after merging
-  verified integration 94ccde1 (AOT cloud and Exec3, including the independently
-  verified camera ownership/race correction). It adds the initial atomic
-  suspend/barrier/flip/checkpoint observations and bounded ART suspension
-  causes described below. Source patch application and PowerShell parsing
-  pass. Main **121901592754** succeeds in 3m39s: both changed ART objects
-  (jni_internal.cc and thread_list.cc) compile with -Werror and dalvikvm /
-  oatdump link. Host tools **121901593406** succeed in 20m24s, graphics in
-  16m17s and framework **121909747843** in 8m44s (javac no errors and
-  services-tests.dex generated). Media **121913106190** succeeds in 1m5s;
-  ffmpeg was already installed and all three unchanged generators/APKs run.
-  Package **121913530737** passes actual installed oatdump, image/fonts,
-  install/dexopt, shortcut/association, window/input and complete uninstall
-  cleanup. E2e **121914371093** (2022) / **121914371153** (2025) each pass
-  four transport fixtures, all ten apps including Just Player/TIC-80/Puzzles,
-  association/shortcut launch and `0 unexpected failures`. Both complete
-  Windows runtime jobs are still pending. All original 36 media3,
-  two-second/30-frame and boot-timing criteria are retained.
+- Full diagnostic CI **40416959340** at **fe137c83667bf927d3ec331dc10a30ac2b8ef866**
+  includes verified integration 94ccde1 (AOT cloud/Exec3 and the independently
+  verified camera ownership/race correction). All 28 job conclusions are
+  read: 20 success, six skipped, two Windows failures. Windows **121913530707**
+  (2022) / **121913530700** (2025) each end `1 test(s) failed`, only the
+  device camera throughput gate: **24/17 encoded and independently decoded
+  frames**, versus 61 each in single process. There are 25/18 source callbacks
+  and one terminal post-stop buffer loss per runner. Every accepted frame is
+  encoded/muxed, with no queue drops/encode failures. Each runner has 35
+  media3 PASS lines, including the actual ART 1,000-race regression and every
+  exactly-once onClosed check. Original boot criteria pass: interpreter
+  577/599 and JIT 448/443 ms (2022), interpreter 613/657 and JIT 516/476 ms
+  (2025). This source is not mergeable.
+- **New measured mechanism:** all 13/9 slow SetArrayRegion calls begin in
+  state 92 with SuspendRequest set; barrier/flip/checkpoint observations are
+  zero. SOA entry totals **1,632,879/1,552,299 us**, bodies 9..55 us, CPU zero.
+  Recorded ThreadFlip intervals overlap **1,498,407/1,389,508 us** of those
+  entries; the 64-event cap exhausts before all later collections. Real GC
+  lines show Background young/full CMC collections with roughly 100..200 ms
+  pauses even at about 2 MB live / 25 MB total. CMC's FlipCallback invokes
+  CompactionPause inside FlipThreadRoots, accounting for the active suspend
+  request. Resume tails are only tens of microseconds. This identifies GC
+  suspension, but does not yet identify KernelPreparation or another phase
+  within CompactionPause as the expensive operation.
+- Compilation/publication in 40416959340: main **121901592754** succeeds in
+  3m39s, compiling both changed ART objects with -Werror and linking dalvikvm /
+  oatdump; framework **121909747843** succeeds (javac no errors, service dex
+  generated). Media **121913106190** succeeds in 1m5s; ffmpeg already exists
+  and all three unchanged generators/APKs run. Package **121913530737**
+  passes actual installed oatdump, image/fonts, install/dexopt,
+  shortcut/association, window/input and complete uninstall cleanup. E2e
+  **121914371093** (2022) / **121914371153** (2025) each pass four transport
+  fixtures, all ten apps including Just Player/TIC-80/Puzzles,
+  association/shortcut launch and `0 unexpected failures`.
+- Prepared next: use ART's existing `-verbose:heap` only in record VMs and
+  retain complete exclusive/total collection timing groups (at most 64
+  groups / 4,096 rows per mode). The standalone race fixture keeps its
+  original VM options. This observes all phases without presuming the
+  expensive one, adds no ART patch and changes no GC/scheduler behavior or
+  acceptance criterion. Integration a06d930 (coordination docs only above
+  94ccde1) is merged. Source/PowerShell checks precede a new full CI; no
+  local compilation or fixture execution is allowed.
 - Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
