@@ -27,15 +27,19 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [st
   $info.Environment['GESHER_SHORTCUTS'] = '0'
   $info.Environment['GESHER_MEDIA_TRACE_RECORD'] = '1'
   foreach ($key in $Environment.Keys) { $info.Environment[$key] = $Environment[$key] }
-  $process = [Diagnostics.Process]::Start($info)
-  $nativeHandle = $process.SafeHandle
-  $cancellation = [Threading.CancellationTokenSource]::new()
-  $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
-             @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+  $process = $null
+  $nativeHandle = $null
+  $cancellation = $null
+  $pipes = @()
   $text = ''
   $timedOut = $true
   $nativeExit = $null
   try {
+    $cancellation = [Threading.CancellationTokenSource]::new()
+    $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
+               @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+    $process = [Diagnostics.Process]::Start($info)
+    $nativeHandle = $process.SafeHandle
   foreach ($pipe in $pipes) {
       $pipe.Reader = if ($pipe.Name -eq 'stdout') { $process.StandardOutput } else { $process.StandardError }
       $pipe.Handle = $pipe.Reader.BaseStream.SafeFileHandle
@@ -65,16 +69,18 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [st
       $timedOut = $true
       $text += "`n(reader cleanup incomplete: $($cleanup.Problem))"
     }
-    try {
-      if (-not $process.HasExited) {
-        $process.Kill($true)
-        if (-not $process.WaitForExit(5000)) { $timedOut = $true; $text += "`n(final owned process cleanup exceeded five seconds)" }
-      }
-    } catch { $timedOut = $true; $text += "`n(final owned process cleanup failed: $_)" }
-    try { $process.Dispose() } catch { $timedOut = $true; $text += "`n(process disposal failed: $_)" }
-    if (-not $nativeHandle.IsClosed) { $timedOut = $true; $text += "`n(native process handle did not close)" }
+    if ($null -ne $process) {
+      try {
+        if (-not $process.HasExited) {
+          $process.Kill($true)
+          if (-not $process.WaitForExit(5000)) { $timedOut = $true; $text += "`n(final owned process cleanup exceeded five seconds)" }
+        }
+      } catch { $timedOut = $true; $text += "`n(final owned process cleanup failed: $_)" }
+      try { $process.Dispose() } catch { $timedOut = $true; $text += "`n(process disposal failed: $_)" }
+      if ($null -ne $nativeHandle -and -not $nativeHandle.IsClosed) { $timedOut = $true; $text += "`n(native process handle did not close)" }
+    }
     if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
-      $text += "`nINFO READER_CLEANUP helper=InvokeOpenSl tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
+      $text += "`nINFO READER_CLEANUP helper=InvokeOpenSl tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($null -ne $nativeHandle -and $nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
     }
   }
   $code = if ($timedOut) { -1 } else { $nativeExit }
