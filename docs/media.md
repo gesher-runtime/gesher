@@ -245,7 +245,8 @@ the microphone (looped, from its start each time recording starts);
   whole-process totals. No mremap, collector selection or scheduling change
   is made from this observation. ART NanoTime markers and steady/QPC
   camera clocks are separate domains; overlap analysis uses ART markers only.
-- **New candidate, not yet CI-verified:** import coordinator's exact ART0572
+- **Candidate CI 40430522654 is running at e8b37b9; not yet verified:**
+  import coordinator's exact ART0572
   CPU-clock patch (SHA256 2a643cad9529c1f92673917dcf756ee18a680f981d2f9fbbde18dbd0c9493db4)
   and ART0593's single positive-current-CPU guard. 0572 compiled/linked in
   coordinator CI 40418638643 and has an actual Windows-2025 clock PASS;
