@@ -152,10 +152,17 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   $gcTimingGroups = 0
   $gcTimingRows = 0
   $gcTiming = $false
+  # Device output includes both streamed stdout and the app log. Deduplicate
+  # whole groups by the full native header (timestamp/pid/tid included), while
+  # retaining repeated phase rows within a collection.
+  $gcTimingHeaders = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   foreach ($trace in @($Out -split "`n")) {
     if ($trace -match '\[Exclusive time\] \[Total time\]') {
-      ++$gcTimingGroups
-      $gcTiming = $gcTimingGroups -le 64
+      $gcTiming = $gcTimingHeaders.Add($trace.TrimEnd())
+      if ($gcTiming) {
+        ++$gcTimingGroups
+        $gcTiming = $gcTimingGroups -le 64
+      }
     }
     if ($gcTiming -and $gcTimingRows -lt 4096) {
       Write-Host "INFO  media3 GC phase ($Mode): $($trace.TrimEnd())"
