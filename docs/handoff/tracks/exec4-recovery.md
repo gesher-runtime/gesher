@@ -13,13 +13,23 @@
   This cleanly merges integration630c20c (root-verified code42cc1c0,
   CI40432541082) and its real startup profile/checks into the verified slice.
   Native3 width/CPU and monotonic-clock candidates remain outside it.
-- Final combined full CI40438421809 is pending. Pre-checkpoint docs head is
-  `b64721a`; this checkpoint changes documentation only. Root will monitor
-  final acceptance during the temporary agent-slot handoff. Do not change
-  source, move frozen refs, dispatch another CI or merge integration/main.
+- Final combined full CI40438421809 at b429220 is complete RED: root read
+  all conclusions (21 success/six skipped/one failure), both actual Windows
+  logs, package and both required e2e logs. Windows2025 has zero failures;
+  Windows2022 has exactly two counted net failures from one known external
+  self-signed.badssl.com TCP timeout after15000ms and its aggregate. Test67
+  and all exec3 checks pass both; actual package/both e2e pass. This is not
+  full acceptance of b429220. The immutable9f/76b original full proof stays
+  valid. No unchanged-source retry was requested; Media's new combined
+  candidate imports verified76b and deterministic TLS fixtures, and must
+  prove the complete new tree. Source/frozen refs remain unchanged.
 - Leave watcher running: `gh run watch 40438421809 -R gesher-runtime/gesher
   --exit-status --interval 120`, session28115. Watch file:
   `C:\work\gesher-ci-review\exec4-final-combined-watch-40438421809.log`.
+  This watcher stopped at the previous agent handoff; root fetched the final
+  result/logs directly after discovering the stale file. The run is complete
+  and no new watcher is needed. Final logs are
+  `exec4-final-40438421809-root-{test2022,test2025,package,e2e2022,e2e2025}.log`.
 - Previous verified execution logs under `C:\work\gesher-ci-review`:
   `exec4-live-environ-attempt2-2025-121960683003.log`,
   `exec4-live-environ-attempt2-2022-121960683017.log`,
