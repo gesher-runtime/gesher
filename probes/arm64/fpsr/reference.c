@@ -137,5 +137,20 @@ __attribute__((noreturn)) void _start(void) {
       }
     }
   }
+  for (unsigned mode = 0; mode < 4; ++mode) for (unsigned dn = 0; dn < 2; ++dn) for (unsigned fz = 0; fz < 2; ++fz) {
+    uint64_t control = ((uint64_t)mode << 22) | ((uint64_t)dn << 25) | ((uint64_t)fz << 24);
+    for (unsigned width = 32; width <= 64; width += 32) for (unsigned operation = 0; operation < 4; ++operation) {
+      for (unsigned index = 0; index < ARM_FPSR_BOUNDARY_COUNT; ++index) for (unsigned initial = 0; initial < 2; ++initial) {
+        const struct ArmFpsrVector* vector = &ArmFpsrBoundaryVectors[index];
+        uint64_t left = width == 32 ? vector->left32 : vector->left64;
+        uint64_t right = width == 32 ? vector->right32 : vector->right64;
+        uint64_t seed = initial ? UINT64_C(0x08000081) : 0;
+        __asm__ volatile("msr fpcr, %0\n msr fpsr, %1" : : "r"(control), "r"(seed) : "memory");
+        uint64_t result = Arithmetic(operation, width, left, right), status;
+        __asm__ volatile("mrs %0, fpsr" : "=r"(status) : : "memory");
+        Row(operation, width, control, left, right, seed, result, status);
+      }
+    }
+  }
   Finish(0);
 }

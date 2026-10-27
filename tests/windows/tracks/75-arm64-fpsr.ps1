@@ -7,6 +7,7 @@ Check 'arm64-2 FPSR: real flags, arithmetic, nested callbacks, thread isolation 
   'PASS  arm64 FPSR: concurrent guest state is isolated and every native host fenv is restored',
   'PASS  arm64 FPSR: 8192 independent QEMU numeric/status cases, scalar32/64 add sub mul div, all modes DN/FZ and NaN/inf/subnormal rules',
   'PASS  arm64 FPSR: 144 independent QEMU cumulative cases preserve seeded and same-block IXC before and after FZ underflow',
+  'PASS  arm64 FPSR: 2048 independent QEMU normal-operand boundary cases preserve numeric bits and status near smallest normal',
   '0 test(s) failed')
 
 # Reuse complete actual process logs already captured by test44 for test69.
