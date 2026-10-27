@@ -20,8 +20,11 @@ positive-unopened control list is destroyed without execution. Test74
 requires the specific ABI, all concrete results and zero failed tests;
 argv0 and actual self-path are explicit in the launcher invocation.
 
-Only source inspection, Git and PowerShell parsing run locally. Scoped
-exec CI must first build the NDK programs and existing Java/APK fixtures.
+Only source inspection, Git and PowerShell parsing run locally. Initial
+scoped dispatch of exec.yml returned HTTP404 because main does not yet
+contain this workflow; no run started from that request. A branch/path push
+trigger bootstraps the ready scoped fixture build on wip/exec4. Scoped exec
+CI must first build the NDK programs and existing Java/APK fixtures.
 Before final full CI merge current integration, including exit-freshness
 once accepted, then read all jobs, both Windows zero summaries and actual
 test74/legacy exec PASS lines, package and both e2e logs.
