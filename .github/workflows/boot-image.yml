@@ -52,7 +52,7 @@ jobs:
         run: >-
           pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image
           -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed
-          -BootProfiles boot-image/profiles/art-boot-image-profile.txt,boot-image/profiles/framework-boot-image-profile.txt
+          -BootProfiles boot-image/profiles/art-boot-image-profile.txt,boot-image/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt
           -TimeoutMinutes 15
 
       # A first look before the test jobs: Hello runs on the image.
