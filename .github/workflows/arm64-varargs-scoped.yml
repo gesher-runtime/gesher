@@ -1,17 +1,5 @@
 name: arm64-varargs-scoped
 on:
-  push:
-    branches: [wip/arm64-varargs]
-    paths:
-      - compat/arm64/**
-      - compat/bionic/shim_internal.h
-      - compat/bionic/stdio_bionic.cc
-      - tests/native/arm64_varargs*
-      - tests/native2/arm64_varargs*
-      - tests/windows/run-arm64-varargs.ps1
-      - tests/windows/run-arm64-varargs-baseline.ps1
-      - .github/workflows/arm64.yml
-      - .github/workflows/arm64-varargs-scoped.yml
   workflow_dispatch:
 
 permissions:
