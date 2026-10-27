@@ -24,12 +24,23 @@ the existing INTERNET permission; numeric conversion and local service
 database reads remain available. Service lookup retains network byte order,
 canonical-name matching and optional protocol selection.
 
-Next: real NDK callers on both ABIs, ART and APK paths in both app modes,
-standalone callers with an independent Windows oracle, explicit negative
-controls and concurrent thread/lifetime tests. All compilation and executable
-fixtures run in CI. No API verification metadata or baseline counts change
-before actual complete CI evidence. Reentrant APIs, `gethostbyname2`, resolver
-wire/query/state functions, database enumeration and broader network contracts
+Prepared fixtures build separate NDK JNI/standalone callers for both ABIs.
+Four dedicated APKs cover each ABI with/without INTERNET in both app modes;
+Native2's existing manifest and modules are unchanged. Actual numeric/localhost/
+IPv4 and IPv6 reverse records, network-order ports including 443, aliases,
+mutable copied storage, strict numeric/family/length errors, permission denial
+and four concurrent native threads are required. Test82 runs eight caller
+contexts per ABI, plus a separate bounded WinSDK oracle process that decodes
+the Windows short fields directly and compares eight real host/service rows.
+It requires fresh device app exit zero and actual uninstall/code cleanup.
+
+The existing native2 workflow gains additive build/copy/symbol inputs only;
+all original NDK libraries and app checks remain. Source PS AST/XML and Git
+whitespace checks pass locally. NDK compilation, production llvm-mingw/Werror
+and every executable fixture remain CI-only and pending. No API verification
+metadata or baseline counts change before complete actual CI evidence.
+Reentrant APIs, `gethostbyname2`, resolver wire/query/state functions,
+per-network binding policy, database enumeration and broader network contracts
 remain open.
 
 ## Pinned sources
