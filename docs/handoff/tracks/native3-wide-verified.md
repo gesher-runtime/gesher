@@ -27,7 +27,10 @@ gain only scoped verification metadata; historical counts/owners stay intact.
 Only docs advance above this source. The frozen predecessor ref below is
 unchanged at e7c1b06. This source predates root's verified 0573/time68 merge;
 the separate ARM FPCR candidate includes current integration 8922a3e and
-these wide prerequisites in full ci 40444486511 at e0f9601, still pending.
+these wide prerequisites in corrected full ci 40451978087 at 49ade205.
+Attempt 1 passes all six test66 cases and FPCR cases on both runners,
+package/both e2e and the 2025 zero summary; only 2022's known badssl TCP
+timeout remains, with a failed-job-only attempt 2 running on unchanged source.
 Root alone handles integration/main/release. Binary128, wide stdio/scanf,
 full narrow gdtoa/tzcode and other native3/POSIX contracts remain open.
 
