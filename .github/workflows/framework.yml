@@ -415,7 +415,7 @@ jobs:
           cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
-          cp out/app/sharedlibraryapp.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
+          cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
 

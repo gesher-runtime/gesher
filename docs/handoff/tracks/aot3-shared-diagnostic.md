@@ -19,6 +19,15 @@ not establish DLC execution; changed-source component and full CI are pending.
 After-resource, static/SDK libraries, secondary dex and arbitrary factory
 loaders remain explicitly open.
 
+Initial DLC component40552437468/sourcee9b4ffe5 is red with one failure per
+host. Both actual logs122363164015/122363164095 retain all21 original PCL
+PASS plus15 graph controls and exact fresh-image execution. DLC setup fails
+because the newly built APK was omitted from framework's artifact copy list;
+no DLC runtime executed. The corrected source adds exactly that APK to the
+existing copy line and allows this exact build-input path in the pinned
+component's source guard. No runtime assertion, loader policy or deadline
+changes. Changed-source CI remains required.
+
 This is component proof, not a complete CI result or merge acceptance.
 Diagnostic **40524933356**, harness source
 `1120e8a6c9303890bc5d267286e4cc29c3d24438`, attempt 1, is green on both
