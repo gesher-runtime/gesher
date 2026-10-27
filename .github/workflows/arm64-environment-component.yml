@@ -82,7 +82,10 @@ jobs:
           foreach ($name in 'build','framework / framework','boot-image / compile','graphics / build',
                             'angle / build','media / media','webview / build','exec / exec') {
             $job = @($jobs.jobs | Where-Object name -CEQ $name)
-            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Unproved build prerequisite $name" }
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].run_id -ne $base.id -or
+                $job[0].head_sha -cne $base.head_sha -or $job[0].run_attempt -ne $base.run_attempt) {
+              throw "Unproved build prerequisite source/attempt $name"
+            }
           }
           git diff --exit-code $base.head_sha HEAD -- aosp.lock patches cmake/aosp/art.cmake compat/base
           if ($LASTEXITCODE -ne 0) { throw 'Changed ART/boot-image compatibility source needs separate review' }
@@ -147,6 +150,15 @@ jobs:
               Set-Location -LiteralPath $workspace
             }
             Copy-Item -Recurse -Force "$workspace/rebuilt-boot/framework/*" "$workspace/dist/framework/"
+            foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+              foreach ($extension in 'art','oat','vdex') {
+                $member = "$image.$extension"
+                $produced = (Get-FileHash "$workspace/rebuilt-boot/framework/x86_64/$member" -Algorithm SHA256).Hash
+                $consumed = (Get-FileHash "$workspace/dist/framework/x86_64/$member" -Algorithm SHA256).Hash
+                if ($produced -cne $consumed) { throw "Rebuilt boot image copy identity mismatch $member" }
+                Write-Host "ACTUAL_COMPONENT_IMAGE member=$member sha256=$consumed rebuilt-copy-identical=True"
+              }
+            }
             Write-Host 'ACTUAL_COMPONENT_BOOT rebuilt from current native compiler and all five current jars'
           }
       - name: Actual both-ABI Native2 ART/APK, copied JNI V, FPCR/FPSR and variadic contracts
