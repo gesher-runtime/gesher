@@ -258,3 +258,25 @@ after vacant CRT fd probes; failures retain the actual duplication error.
 The portable oracle compares those results with actual Linux and checks a
 negative minimum leaves existing POSIX locks intact. This delta is still
 uncompiled and requires the same final source peer before any CI dispatch.
+
+### Known pre-CI atomicity blocker (source68d26f1c)
+
+Do not push/dispatch the prepared command workflow yet. Direct vacant-fd
+search followed by dup2 is not atomic against publishers outside the current
+DescriptorGuard. Source audit found unguarded common ReserveFd (fd.cc), pipe2
+(unistd.cc), memfd_create (system.cc), Binder ReceiveFds, libcore/process.cc,
+bionic/process_bionic.cc, raw _wfopen in ELF tools/media/native-font/FLAC code,
+and bionic Tmpfile paths. This is a concrete destructive-replacement race,
+not an accepted limitation. The final allocation/publication design and its
+actual contention controls must resolve it before qualifying the slice.
+
+Source review is considering a shared publication boundary across controlled
+callers or linker wrapping with actual COFF reference proof. Simple function
+wrapping alone cannot be assumed to catch dllimport references: canonical
+[mingw-w64 io.h](https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/mingw-w64-headers/crt/io.h)
+marks raw fd publishers _CRTIMP, and [GNU ld wrapping](https://www.sourceware.org/binutils/docs/ld/Options.html#index-_002d_002dwrap_003dsymbol)
+only replaces undefined references to the exact symbol. The frozen compiler
+archive's actual headers/objects must decide any toolchain-specific claim.
+No cross-edits to Binder/Exec/Media were made. Coordinate Binder changes with
+/root/integration_next and preserve the selected ordered-spawn Exec leaf;
+Windows owns the bounded independent peer before any production CI.
