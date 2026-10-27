@@ -125,6 +125,20 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 
 _Updated by the exec track (branch `wip/exec`)._
 
+_Exec4 live-environment correction (wip/exec4, ADR 0074):_ full CI40430496516
+attempt2 is green at 9f250803cd184e05d024733da8296410007de76f (22 success,
+six intentional skips). Shared-library `environ`/`__environ` bind the CRT's
+live pointer slot, so host narrow/wide setters cannot leave their relocated
+ELF imports bound to an old array. Actual Windows tests verify slot identity
+without dereferencing stale memory, then enumerate the environment and spawn
+real NDK children; both existing ART APK modes also mutate the host environment
+after native loading. Both whole suites have zero failures, and package and
+both required Puzzles/TIC-80 e2e runs pass. The sole retry was a framework
+HTTP/2 download failure before runtime testing. The launcher retains its
+separate initial UTF-8 array; its mutation contract and the broader exec4
+contracts remain open. Diagnostic610 did not reproduce the old crash, so no
+precise crash cause is inferred. Root coordinates latest integration/merging.
+
 - ci `40114487210` (39227be): everything built; on both runners
   `PASS  exec: gesher-exec runs an NDK-built ELF executable as its main program`,
   `PASS  exec: gesher-exec exit statuses: exit(3) is 3, abort() is 134, a fault is 139`,

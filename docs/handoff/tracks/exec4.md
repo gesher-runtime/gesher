@@ -84,7 +84,7 @@ add host Java Os.setenv mutations after native loading and require the same
 real child checks. Original exec2's nine assertions remain intact.
 
 Local checks: diff whitespace, workflow YAML parse and PowerShell parse only.
-The candidate is built in CI; Windows acceptance remains pending. Direct exec.yml dispatch
+The live-environment candidate is now fully CI-verified as recorded below. Direct exec.yml dispatch
 returned HTTP404 (workflow absent on the default branch); no run was created.
 Diagnostic CI40428277638 is retained; the corrected full run uses an
 immutable `wip/exec4-live-environ` candidate ref, as authorized by root, to
@@ -102,7 +102,7 @@ the bounded-harness follow-up. Watch log:
 C:\work\gesher-ci-review\exec4-live-environ-watch-40430496516.log, interval120.
 Candidate exec/exec job121946700051 succeeded. Its actual job log confirms
 NDK -Werror compilation of the new shared fixture/JNI, Java/dex compilation
-and APK packaging. This is build evidence only. Log:
+and APK packaging. Its build log is:
 C:\work\gesher-ci-review\exec4-live-environ-exec-121946700051.log.
 Candidate framework job121946748227 failed after its Java/APK compilation
 at a curl HTTP/2 INTERNAL_ERROR (exit92). Actual log:
@@ -120,11 +120,21 @@ were skipped and provide no runtime proof. `gh run rerun ... --failed` was
 accepted after completion as attempt2 of CI40430496516, still exact 9f25080.
 Attempt2 watch is exec4-live-environ-attempt2-watch-40430496516.log,
 session42323, interval120. Replacement framework job121957869699 passed in
-5m50s; its actual log is read. Windows-2025 job121960683003 and Windows-2022
-job121960683017 are running. Package job121960683093 passes actual installed
+5m50s; its actual log is read. Attempt2 is fully green: all 28 jobs completed,
+22 success and six intentional skips, at the unchanged exact source 9f25080.
+Actual Windows-2025 job121960683003 and Windows-2022 job121960683017 logs end
+with 0 test(s) failed. Each passes all 11 exec3 Checks, 57 shell cases and
+test67's live-CRT-slot/real-ELF/posix_spawn regression. Both existing APK modes
+require and pass the new host-setenv/native-environ/child checks; original
+exec2's nine assertions remain intact. All 13 single-process phase markers
+complete with no sentinel record. Package job121960683093 passes actual installed
 oatdump/boot image, device install/dexopt/window/input, shortcuts and all cleanup;
 its actual log is exec4-live-environ-attempt2-package-121960683093.log.
-Both e2e jobs are running. No candidate Windows/runtime acceptance is claimed.
+Both actual e2e logs (jobs121961593664/121961593810) have all nine apps,
+required Puzzles/TIC-80, .apk/shortcut entry points and four transport cases
+passing, with 0 unexpected failures; generators2768/7476 exit0. All these
+execution logs were personally read. The live-environment slice is verified;
+the earlier crash cause and the broader exec4 contracts remain open.
 Original diagnostic610 finished independently as recorded above.
 Root alone merges the final verified source and coordinates latest
 integration; no branch was merged here.
@@ -146,3 +156,13 @@ Remaining-contract source audit while CI builds (no acceptance claims):
   real fork/static-executable limits, unimplemented TLS forms and property
   caller/notification dependencies are unchanged. These require their own
   actual runtime evidence after the immediate environment/crash regression.
+- `DoPosixSpawn` currently swallows failed open/missing dup2 sources and
+  records fchdir without executing its action. Validate and complete those
+  child-descriptor/directory failure semantics with actual native programs;
+  these are source-audit findings, not a cause assigned to the old crash.
+
+Root must coordinate latest-integration acceptance before merging this
+verified slice. The candidate includes integration94ccde1; it does not import
+the concurrent Native3 width/CPU or monotonic-clock candidates. No integration,
+main, PR or release operation was performed by this track. CMakeLists.txt adds
+only exec4_environment_test; no ci.yml or production Main.java edit was made.

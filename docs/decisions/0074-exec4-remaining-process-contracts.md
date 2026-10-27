@@ -46,3 +46,23 @@ CREATE_NO_WINDOW, and shell exec still starts/waits for a different process.
 The log store records C-string tag/text rather than arbitrary binary payloads
 and logd framing. These are concrete follow-up boundaries, not implemented or
 verified compatibility. Keep them separate from the live-environment candidate.
+
+## Verified live-environment slice
+
+Full CI40430496516 attempt2 passes at exact source
+9f250803cd184e05d024733da8296410007de76f: all 28 jobs completed, 22 success
+and six intentional skips. Actual logs were read for both zero-failure Windows
+suites, every exec3 Check/57 shell cases, the new host CRT/NDK/spawn regression,
+both host-mutated APK modes, package install/oatdump/window/input/cleanup and
+both nine-app e2e runs (0 unexpected failures, required Puzzles/TIC-80).
+Attempt1 failed only a framework curl HTTP/2 transport (exit92); failed jobs
+were retried after that run completed, on the identical source and ref.
+
+The earlier diagnostic610 also passes both APK modes and completes every
+spawn/stdio phase marker without reproducing the crash. It is red only for
+two Windows-2025 external badssl timeout Checks; Windows-2022, package and
+both e2e runs pass. That non-reproduction and the green correction do not
+establish the precise cause of the older sentinel crash. Only the live shared-
+library environment correction is verified here; the initial executable UTF-8
+array and all remaining process/console/log/TLS/fork/property contracts remain
+open. Root owns latest-integration acceptance and merging.
