@@ -29,7 +29,12 @@ verification closes 143 old entries (21 functions and 122 data objects),
 preserving every historical baseline/owner/observation. Thirty additional
 pinned data objects are verified without extending the old export list.
 Both runners/ABIs now report 133 missing libmediandk entries; 170 old media
-entries remain including the 34 OpenSL and three AAudio entries. Ordinary
+entries remained at that format slice. Full ci 40476766790 at d10bea3a
+subsequently verifies the 34 old OpenSL IID data entries, including pinned
+values, indirection, copied-ID lookup and explicit capability outcomes.
+Only their verification objects are added; all old fields and all 143
+format proofs stay unchanged. The remaining old media entries are now 136:
+133 libmediandk and three AAudio. Broader OpenSL methods remain open. Ordinary
 format-key storage does not implement the media feature named by that key.
 
 ## NDK export contracts
@@ -39,18 +44,15 @@ format-key storage does not implement the media feature named by that key.
   the devices/surfaces tracks. Java API round trips do not implement these
   ELF exports. Reuse functional backends and test NDK lifecycle, data and
   error behavior on both ABIs/runners; export resolution alone is insufficient.
-- Implement the 34 remaining OpenSL interface identifiers together with
-  their actual interface contracts or explicit documented unsupported
-  results. Do not claim effects or 3D audio by exporting constants alone.
-  Read-only comparison with pinned OpenSLES.h / OpenSLES_IID.cpp also finds
-  synthetic UUID contents in the existing 19 identifiers, pointer-identity
-  lookup, ignored required-interface arrays and an incorrectly two-argument
-  QueryNumSupportedInterfaces table entry (the API takes self/objectID/out).
-  The local permission-denied value is 0x0D (INTERNAL_ERROR), while the
-  pinned permission result is 0x0B. Correct canonical UUID values, copied-IID
-  matching, capability/required-interface negotiation, the typed query ABI
-  and NDK record-denial results need implementation and independent CI.
-  These source findings have no runtime acceptance yet.
+- Full ci 40476766790 verifies all 53 canonical OpenSL UUID pointer
+  objects (19 corrected and 34 old missing), copied-ID matching, the typed
+  query ABI, required/optional negotiation and explicit exposure in both
+  JNI/APK ABIs/runners. Bare-core/no-identity denial and real APK manifest
+  allowed/denied outcomes are independently checked with actual 0x0B
+  results. Canonical effects/3D/device IDs retain unsupported outcomes;
+  no effects engine is inferred. Standalone backend/TLS/callback proof is
+  pending in separate native source e5693412/full40477536464. Configuration,
+  output-mix, loss-of-control and full effects/device contracts remain open.
 - Implement AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
   AAudio_setMMapPolicy with correct Windows capability/policy semantics;
   verify getter/setter/result behavior rather than adding generic zeros.
@@ -111,8 +113,10 @@ legacy use; they do not implement that module.
   duration/file-size notifications, reset/reuse and stop/error handling.
   ADR 0059 describes implementations, while the current integration checks
   cover successful recordings and getMaxAmplitude only.
-- Verify RECORD_AUDIO denial for NDK AAudio/OpenSL paths independently;
-  current denial test proves the Java AudioRecord/MediaRecorder boundary.
+- OpenSL RECORD_AUDIO allowed/denied APKs and bare-core denial now pass
+  independently in full40476766790 on both ABIs/runners and single/device
+  modes. Independent AAudio denial and native-child identity propagation
+  remain open; the earlier Java boundary alone does not prove them.
 - Exercise the software H.264 encoder explicitly with GESHER_VIDEO_ENCODERS=soft
   on both runners. Ordinary stage-3 selection tries Media Foundation first;
   ci 40330465222's 2022 log records MF I420 input rejection and actual libavc
@@ -171,12 +175,54 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
-Corrected full ci **40476766790** is running at
-**d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, with integration db84749b
-already contained. This source is frozen; later commits are docs only.
-The bounded native peer review found no concrete source blocker in the
-signed16 normalization and actual-result fixtures. No local compilation or
-native/JVM/C# execution ran. Every runtime/full-suite gate remains required.
+Corrected full ci **40476766790** is complete GREEN at
+**d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt 1 without retries,
+with accepted integration db84749b/freshExit30deb08c contained. All 28 job
+conclusions were read: **22 success, six skipped**. Main122096814825 passes
+in 2m47s (actual opensles.cc compile, both host links, 203 assembly
+boundaries/zero problems); framework122096859804 passes6m13s, and
+media122099370327 passes1m10s with both Werror NDK ABI libraries and all four
+allowed/denied APK builds. Actual completed logs were read. Windows jobs
+**122099872570** (2022,29m53s) and **122099872556** (2025,30m36s) each finish
+**0 test(s) failed**. Each runner has14 test76 PASS lines: two ABIs through
+core JNI and single/device allowed/denied APKs, plus four device shutdowns.
+All50 actual semantic rows and40 set/get/value rows per runner were read:
+53 canonical UUID objects/indirection/pinned fields; typed global/engine
+queries, bounds/null/output rules and supported subsets; every ID's
+required/optional and copied-ID outcomes; real PCM queue/volume/exposure;
+actual recording permissions. Core denies with result11/objectfalse; real
+manifest-allowed APKs return0/objecttrue and denied APKs11/objectfalse.
+Each ABI reports libOpenSLES56 checked/0 missing. Only34 exact IID inventory
+verification objects are added; the old baseline and all previous fields
+stay intact. No effects, 3D, full configuration or standalone backend claim
+follows from these constants and explicit unsupported outcomes.
+
+Package **122099872538** passes all23 actual install/runtime/window/input/
+uninstall checks. E2e **122100699777 / 122100699799** each passes all ten
+required apps (Just Player0.217/Puzzles/TIC-80 included), four transport
+fixtures, association/shortcut and **0 unexpected failures**. The complete
+logs were read. Both suites preserve10 format,38 media3 (old37 plus the
+controlled-ring check),18 AOT3, env67/time68 and actual exit-freshness70
+checks; no full-suite failure is hidden. AAudio's original750/1250Hz and
+44100-frame blocking gate passes single/device with capacity44100/lost0/
+xruns0. The controlled small/configured rings show lost5613/5537 versus0,
+xruns1 versus0 and configured retained9141/9065 on2022/2025. The earlier
+1153.3Hz observation still lacks loss counters; this controlled result does
+not retrospectively establish its cause.
+
+The accepted source is frozen; later commits are docs only. Native peer's
+bounded source review found no blocker, and all compilation/execution was
+CI-only. The separate pure-backend continuation e5693412 (6be2eaec+d10)
+is frozen under full40477536464 in C:\work\gesher-media4-native; no runtime
+acceptance is claimed while it runs. It moves the exact guest-thread TLS
+entry guard into the shim, keeps the existing manifest provider/deny rule,
+and adds genuine NDK ELF queue/TLS callback checks. It is not part of the
+verified d10 source. Keep native-child recording identity, configuration,
+loss-of-control/output-mix/effects/device contracts open. The installer also
+needs the separate prepared OpenSL notice proposal applied and package-CI
+verified: C:\work\gesher-ci-review\media4-opensl-notice-proposal.patch
+(SHA256 f9c4197cf2200bc012dd2ce7e73b5a7dc70a01c59c3733f1982953dff03429d1).
+This proposal is not applied to either frozen candidate.
 
 Full ci **40470959941** is complete RED at
 **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
@@ -200,11 +246,12 @@ manifest-allowed and denied APKs, without changing production permission.
 ARM's signed16 volume boundary now receives a32-bit register value and
 explicitly normalizes its low16 bits before comparison. AAPCS64 does not
 promise the sign extension the host SysV short parameter could assume.
-The old log lacks raw register/value diagnostics, so that mechanism is not
-claimed as proven yet. The corrected fixture preserves -600 and adds valid
--32768/-1/0 round trips; raw32/signed16 and actual set/get/result/permission
-diagnostics are published. No unchanged rerun is planned. Native continuation
-6be2eaec remains separate and unverified; it must import this correction.
+The old log lacks raw register/value diagnostics. The corrected GREEN run
+now directly shows ARM -600 arriving as raw32=64936 and normalizing to
+signed16=-600, with successful actual set/get/value for -600/-32768/-1/0 in
+every context. This establishes the boundary assumption on that current
+path without inventing the older register contents. No unchanged retry was
+used. Native continuation e5693412 imports the same correction separately.
 
 The AAudio78ee5e12 correction passes its actual lossless cases in this red
 full run: both modes/runners read44100 original750/1250Hz frames with
@@ -213,41 +260,12 @@ one xrun on2022/2025 while configured rings retain9167/9100 frames with
 zero loss/xruns. The old1153.3Hz observation remains without loss counters;
 these new controlled results do not retrospectively prove its cause.
 
-Frozen **wip/media4-format-verified** points at docs-only
+Frozen **wip/media4-format-verified** still points at docs-only
 **ba3c1c2dc94e2e6e69c8e7c050df9dc3145c0317** above the accepted format
-source below. The active branch now prepares a separate AAudio fixture
-correction after Net4 full40462148835/719ae logs a Windows-2022 blocking
-tone result of 750/1153.3 Hz, rather than 750/1250, with 44100 frames/exit0.
-That old log has no blocking loss counters; overrun is a hypothesis, not
-an established cause. The lossless blocking fixture now requests a one-second
-capacity like its callback counterpart, reports effective capacity and
-frame/xrun counters, and requires the original 44100 frames and unchanged
-750/1250 frequency tolerance plus zero loss/xruns. Diagnostic-only native
-open/read/stop traces expose coherent CaptureStats, including lost frames.
-A bounded CI capture probe leaves 80ms/one-second rings unread until at
-least 200ms of actual capture, requires real small-ring loss and configured
-zero loss, and verifies the stopped rings drain their retained frames.
-Production buffering/resampling and the separate three-cycle overrun check
-are unchanged. No new compile/runtime proof yet; all execution remains CI-only.
-OpenSL canonical IDs/query/negotiation/permission work owns new test76;
-Exec4-spawn owns test77; next free test is78. It does not modify the frozen
-format source. Source implementation now supplies 53 canonical UUID pointer
-objects (19 corrected plus 34 old missing exports), value-based copied-ID
-matching, typed engine query signatures, supported-subset enumeration,
-required/optional array validation and explicit/prerealize exposure. Native
-record denial now returns the pinned 0x0B rather than INTERNAL_ERROR 0x0D.
-The new OpenSL fixture builds real NDK libraries for both ABIs and actual
-manifest-allowed/denied APKs. Test76 requires all data/query/negotiation/PCM
-queue-volume/permission parts in core JNI and single/device APK contexts,
-with ABI markers and fresh per-variant device roots. This is source only;
-no new native coverage entry or roadmap box is accepted before full CI.
-
-Standalone OpenSL in gesher-exec remains unimplemented: its current backend
-lives with JNI player/video/window dependencies. No launcher stub is added.
-Full native backend factoring remains open, as do AndroidConfiguration's
-ignored/unchecked options, loss-of-control callbacks, output-mix interfaces
-and the broader OpenSL effects/device contracts. The fixture requires
-explicit unsupported results for those identifiers; it does not claim effects.
+source below. The separate78ee5e12 lossless-capacity/diagnostic/probe slice
+is now verified with OpenSL in full40476766790 above. Production buffering,
+resampling and the separate three-cycle cumulative overrun check stay
+unchanged. Test76 belongs to OpenSL; Exec4-spawn owns77; next free test78.
 
 Corrected full ci **40459815375** is complete GREEN at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current

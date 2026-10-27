@@ -187,6 +187,25 @@ Coherent Windows4/Web3 full40466021634 at160e25e8 includes this slice, root's
 spawn registrations, the cache guard and merged exit freshness. Its Windows/
 package/e2e results are pending; no integration acceptance is claimed yet.
 
+Media4 OpenSL follow-up is full-GREEN atd10bea3a in40476766790, attempt1:
+22 success/6 skips, both whole0/14 test76 PASS each. Both ABIs/core JNI and
+real allowed/denied single/device APKs prove53 canonical UUID objects,
+typed queries/copied-ID negotiation/exposure, actual0x0B denial and signed16
+volume values;50 semantic rows/40 volume rows per runner were read. Actual
+package23 and both ten-app/four-transport e2e0 logs pass. Exactly34 additional
+IID verification objects retain all old fields and143 format proofs;136 old
+media entries remain. The AAudio78ee5e12 lossless gate passes44100frames/
+750+1250Hz/capacity44100/lost0/xruns0; controlled small rings actually lose
+frames while configured rings retain all. Old1153.3Hz cause stays unproved.
+Source contains merged freshExit30deb08c and integration db84749b, stays
+frozen with docs-only successors, and does not claim effects/3D/native
+backend completion. Standalone/TLS/callback continuation e5693412 is frozen
+in separate wip/media4-native under pending full40477536464. Full40470959941/
+2b343aa7 stays red for exactly six OpenSL failures per runner; no unchanged
+retry was used. A separate installer OpenSL notice proposal still needs
+application and package CI before release; the Media4 brief records its
+exact patch/hash. Root alone accepts integration/main/release.
+
 Net4 full40462148835/719ae176 failed both Windows tests: its oracle queried
 nine Up NDIS adapters with neither IP protocol bound; Windows2022 also
 reported1250 Hz input as1153.3 Hz without loss counters. Corrected narrow
