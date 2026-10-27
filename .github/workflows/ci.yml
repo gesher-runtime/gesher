@@ -34,7 +34,9 @@ jobs:
           # header/ABI errors without waiting for every AOSP object.
           ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
+          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
           ninja -C out native3_unicode_test
+          ninja -C out native3_cpu_clock_test
           ninja -C out
 
       - name: Check assembly boundaries use the System V ABI
@@ -564,6 +566,7 @@ jobs:
           pwsh -NoProfile -File tests/e2e/test-apks.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results
           exit $LASTEXITCODE
 

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Recording (media3, docs/media.md "Recording", ADR 0059): AudioRecord, AAudio and
+     OpenSL ES input, MediaCodec's encoders (byte buffers and an input Surface), MediaMuxer,
+     MediaRecorder (audio, a Surface, the camera through Camera2), MediaCodec into an
+     ImageReader; each checked from what the APIs report and from the files written read
+     back (tests/windows/tracks/59-media3.ps1). The microphone is GESHER_AUDIO_SOURCE's
+     file: 750 Hz and 1250 Hz tones of 0.4 s in each second. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.recordapp"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <application android:label="@string/app_name">
+        <activity
+            android:name=".RecordActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
