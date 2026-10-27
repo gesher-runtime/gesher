@@ -190,3 +190,28 @@ No new integration code merge, main/release operation, duplicate dispatch or
 CI restart occurred for this checkpoint. Hardware ten-group plan, repository
 runners0 and pending owner environment information remain unchanged. All-gap
 scope and next ADR0081/test89 are preserved.
+
+## Owner environment response and Env85 transition
+
+The owner explicitly confirms no suitable interactive hardware-equipped CI
+environment exists. Together with repository runners0, this confirms an
+external environment blocker for all ten hardware groups and final all-gap/
+release completion. Preserve every gate; software work remains active.
+
+Native has actually reviewed Env85 exactb497b8c7997c02bd862daec9c473e57e38a4f5c6,
+component40564869955 attempt1: ten jobs, nine success/one intentional skip;
+all nine executed plain logs read. Windows122414930631/122414930394 both0,
+with actual256 pinned environment rows across six contexts/default-object
+controls and retained coherent942 Native2/JNI-V/varargs/FPCR/FPSR/oracle gates.
+Exact942 prerequisite and current API3 suppliers/jars/rebuilt fifteen copied
+images were checked. Frozen documentation report is forthcoming. This is
+scoped prerequisite proof only. Assess its exact reviewed source and actual
+canonical test85 build/runtime wiring before adding it to a future qualifying
+Media union; no full/package/e2e/Surface acceptance is implied.
+
+SG source-only checkpointfed4913c adds raw processed-but-unread ACK loss,
+actual receiver exits, descriptor exhaustion, protected-page partial prefix,
+real adopted-file identity/handle reuse and one-way progress fixture source.
+Production remains peer-revieweddf80; compile/Android mode wiring and final
+fixture peer are pending. Integration code still equals accepted944; no new
+Media dispatch or code integration occurred.
