@@ -1,18 +1,19 @@
 # Net4 interface-address candidate evidence
 
-[Full40469857757](https://github.com/gesher-runtime/gesher/actions/runs/40469857757),
-attempt1, source `646f9fb1e6b932317c089c829b80ec9d58ee50d0`:
+[Full40499454478](https://github.com/gesher-runtime/gesher/actions/runs/40499454478),
+attempt1, source `694a4cd6b067f1deea87015bceb2ad2160260154`:
 28jobs22success/6skip, both actual Windows suites `0 test(s) failed`.
-This bounded source predates the accepted Windows4 combination; the next
-coherent candidate must include integration6297e80a before integration acceptance.
+This coherent source includes accepted Windows4/Web3 integration6297e80a.
+The earlier bounded40469857757/646f proof remains frozen at6f073f45 on
+wip/net4-ifaddrs-verified; that immutable reference is not moved.
 
 | Actual job | ID | Evidence |
 | --- | --- | --- |
-| Windows2022 |122076740538|2 ABI dalvikvm,4 APK contexts,2 standalone callers;0 failed |
-| Windows2025 |122076740580|Same contexts;0 failed |
-| Package |122076740561|23 installed runtime/window/input/uninstall PASS |
-| E2E2022 |122077545268|All ten apps,4 transport controls, association/shortcut,0 unexpected |
-| E2E2025 |122077545241|Same complete set;0 unexpected |
+| Windows2022 |122176176495|2 ABI dalvikvm,4 APK contexts,2 standalone callers;0 failed |
+| Windows2025 |122176175888|Same contexts;0 failed |
+| Package |122176175931|23 installed runtime/window/input/uninstall PASS |
+| E2E2022 |122177141823|All ten apps,4 transport controls, association/shortcut,0 unexpected |
+| E2E2025 |122177141801|Same complete set;0 unexpected |
 
 The two standalone callers on each runner print:
 
@@ -35,13 +36,15 @@ IP-bound records; the unchanged full host-oracle>=3 assertion receives9.
 The imported four-file AAudio fixture/diagnostic slice78ee5e12 keeps the
 750/1250Hz windows,2% tolerance and44100 required frames. Every app context
 has requested/effective capacity44100,read44100,lost0,xruns0; retained captured
-frames are44331/44687 on2022 and44333/44327 on2025. The controlled unread
+frames are44241/44269 on2022 and44361/44417 on2025. The controlled unread
 3528-frame ring reports loss/overrun, while the44100-frame ring remains
 lossless and both drain exact retained frames. This does not establish that
 the earlier1153.3Hz failure was caused by overrun; that run had no counters.
 
-Main122074087624 reports203 ABI boundaries/0problems; framework and both NDK
-callers build successfully. Package actual installed oatdump/image/dexopt,
+Each runner also retains38 top Windows4,14 Web3,4 generation-aware exit70,
+10 format71 and2 action74 PASS records; whole-suite top PASS count is712,
+with no top FAIL. Those are log records, not API inventory counts. Framework
+and both NDK callers build successfully. Package actual installed oatdump/image/dexopt,
 Win32 rendering/input/resize and process/data/association/shortcut/toast cleanup
 pass. Both e2e sets include Just Player/Puzzles/TIC80 with0 unexpected failures.
 No CI artifacts/caches or local compilation/fixtures were used locally.

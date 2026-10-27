@@ -55,6 +55,19 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Coherent full **40499454478**, exact source
+`694a4cd6b067f1deea87015bceb2ad2160260154`, attempt1, is complete green:
+28jobs22success/6skip, both actual Windows suites0failed with712 top PASS
+records and no top FAIL. Each retains38 Windows4/14 Web3/4 exit70/10 format71/
+2 action74 PASS, alongside Net4's2 ABI dalvikvm/4 APK contexts/2 standalone
+callers with entries9/host-oracle9. Strict AAudio tone/frame/capacity/zero-loss
+controls, package23 and both complete ten-app e2e sets0unexpected pass.
+The five critical actual logs were read; [frozen evidence](net4-ifaddrs-final.md)
+lists exact jobs. The two per-entry metadata objects now cite this coherent
+run/source; every unrelated entry and historical field/count remains intact.
+Coordinator independent acceptance/merge remains separate; no more runtime
+source changes or unchanged-code CI reruns follow from this result.
+
 The coherent continuation now includes accepted Windows4/Web3 integration
 6297e80a3bddd1903790406bfc306cac92150153 (clean merge4e8b41a6).
 Shared networking/native2 merges preserve all seven Web3 bridges, both new
