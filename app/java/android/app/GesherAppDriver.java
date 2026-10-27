@@ -104,6 +104,8 @@ public final class GesherAppDriver {
         } catch (Throwable t) {
             log("VMRuntime.setTargetSdkVersion: " + t);
         }
+        long[] disabledChanges = com.gesher.server.CompatChanges.disabledFor(appInfo.targetSdkVersion);
+        AppCompatCallbacks.install(disabledChanges, new long[0]);
         // The device's, with the app's own locales (LocaleManager, locale track).
         Configuration config = com.gesher.server.LocaleManagerService.configurationFor(
                 appInfo.packageName);
@@ -113,6 +115,8 @@ public final class GesherAppDriver {
         data.processName = appInfo.processName;
         data.config = config;
         data.compatInfo = compat;
+        data.disabledCompatChanges = disabledChanges;
+        data.loggableCompatChanges = new long[0];
         thread.mBoundApplication = data;
 
         configController.setConfiguration(config);
