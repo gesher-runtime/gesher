@@ -34,6 +34,35 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Accepted bounded Windows4/Web3 candidate: full **40466021634** at exact
+`160e25e8a77857cc50dd3e7c76e0616fb9fd1043`, attempt1, all28 jobs
+22success/6skip. Root independently read all metadata and five critical logs
+and accepted this source. Both actual Windows logs have zero failed tests,
+38 top Windows4 PASS lines (159 native/ART/app PASS records),14 Web3 PASS,
+five VM0/six launcher0/six fresh child0 records, four exit-status checks,
+ten format checks and two action-registration checks. The corrected
+non-editor focus observation now passes, alongside real reconversion,
+partial-composition caret2, restrictions/reconnection, legacy resize and
+shared-display task focus. Package23 and both ten-app e2e sets pass with
+zero unexpected failures. [Frozen evidence](windows4-final.md) records the
+exact jobs, scope and remaining boundaries; older notes below are history.
+
+- [x] Focused InputConnection/TSF document access and reconversion, with
+  native COM lifetime/epoch/revision/geometry controls and actual EditText
+  transactions in both modes: CI40466021634.
+- [x] IFrameworkInputPane COM source/window/rectangle/lifetime checks,
+  plus the observed Microsoft floating candidate's zero edge inset:
+  CI40466021634; hardware touch-keyboard coverage remains open.
+- [x] Target28 floating-pane/adjustResize content behavior, alongside the
+  unchanged modern inset/adjustPan checks: CI40466021634.
+- [x] Held/fresh Application Display snapshots, listener callbacks and
+  different-rotation tasks under actual native foreground HWND changes:
+  CI40466021634.
+- [ ] Physical touch keyboard and arbitrary third-party candidate-window
+  discovery/content-versus-visible inset behavior; rich TSF objects/formatting.
+
+### Earlier preparation and diagnostic history
+
 The final prepared candidate combines both owned tracks: Web3b1477eed is
 merged into Windows4, alongside verified exit-freshness integration30deb08c
 (runtime29fa0bdf/full40455262527, Root personally read all28/both0, actual

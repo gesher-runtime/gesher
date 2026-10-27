@@ -5,6 +5,18 @@ Edge WebView2 (the Chromium runtime Windows 10/11 ship), with no WebView APK.
 Work happens on branch `wip/webview`; the decision record is
 [ADR 0041](decisions/0041-webview-webview2.md).
 
+Current Web3 acceptance: full40466021634 at
+160e25e8a77857cc50dd3e7c76e0616fb9fd1043 combines the prepared Web3 code
+with Windows4 and verified process-exit freshness. Both actual Windows logs
+have14 Web3 PASS, five single-process VM0, six launcher0 and six fresh
+child0 records, and zero failed tests. All28 jobs, actual package23 and both
+ten-app e2e sets pass; Root independently accepted the bounded source.
+The formerly open backing-cache prerequisite is closed by the included
+generation/PID-aware exit implementation and actual app0/23/0 controls.
+[Frozen combined evidence](handoff/tracks/windows4-final.md) supersedes the
+older diagnostic status notes below. Web4/ADR0072 contracts remain open;
+this result does not establish arbitrary accessibility or screen-reader UX.
+
 ## How it fits
 
 ```
