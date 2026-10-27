@@ -1,0 +1,60 @@
+name: exec4-startup-probes
+on:
+  push:
+    branches: [wip/exec4-spawn]
+    paths:
+      - probes/exec4/**
+      - .github/workflows/exec4-probes.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: exec4-probes-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: toolchain
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/toolchain
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" | tar -xJ -C ~/toolchain
+      - name: Build standalone actual CRT startup probe and inspect chdir import
+        run: |
+          set -euo pipefail
+          mkdir -p probe-out
+          cc="$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++"
+          "$cc" -std=c++17 -O2 -Wall -Wextra -Werror probes/exec4/stdio-startup.cc -lshell32 -o probe-out/stdio-startup.exe
+          "$cc" -std=c++17 -O2 -Wall -Wextra -Werror -Icompat/posix/include -S probes/exec4/chdir-import.cc -o probe-out/chdir-import.s
+          cat probe-out/chdir-import.s
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec4-startup-probes
+          path: probe-out/
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec4-startup-probes
+          path: probe-out
+      - name: Record actual startup handles without manufacturing fd state
+        shell: pwsh
+        run: |
+          & ./probe-out/stdio-startup.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

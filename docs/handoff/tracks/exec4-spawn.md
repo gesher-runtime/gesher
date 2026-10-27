@@ -60,7 +60,19 @@ Corrected full40502225202 is dispatched at exact
 integration7b49a718 (docs above Windows6297/160). The second bounded peer
 review of6eeb773d found no blocker; neither review supplies runtime proof.
 Watch C:\work\gesher-ci-review\exec4-spawn-full-40502225202-watch.log,
-interval120. The candidate remains immutable while this run executes.
+interval120. Full40502225202 is red on both Windows runners: each ABI's
+ordered Unicode directory actions and inherited-directory fchdir exit127
+rather than42; the PID-file assertion consequently fails too. Both no-console
+probes observe real raw stdin handles88/104/108 rather than the expected-2.
+Each whole suite has4 top-level failures. Expected child127, first-failed
+action short circuit, close-on-exec, caller-PATH/replacement-env and closed
+parent stdin controls pass. No cause or child-action acceptance is claimed.
+
+The scoped exec4-startup-probes workflow records actual CRT/Win32 startup
+handles for NULL/INVALID stdin under CREATE_NO_WINDOW/DETACHED_PROCESS and
+the exact toolchain's chdir assembly relocation with the wrapper's header
+order. It changes no production code or test expectations. These diagnostics
+must identify an actual unbound startup state before correcting the fixture.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
