@@ -9,6 +9,7 @@ on:
       - .github/workflows/media4-muxer-build.yml
       - cmake/aosp/media.cmake
       - compat/media/ndk/media_muxer.cc
+      - compat/media/ndk/media_muxer_abi.h
       - compat/media/encode/codec_config.*
       - compat/media/mux/**
       - tests/media/ndk-muxer/*.cc

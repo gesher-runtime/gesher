@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,18 @@
 #include <vector>
 
 namespace {
+
+// Check the actual public NDK declarations on both Android caller ABIs;
+// the Windows host's private bridge declarations carry the same assertions.
+static_assert(sizeof(AMediaCodecBufferInfo) == 24);
+static_assert(offsetof(AMediaCodecBufferInfo, offset) == 0);
+static_assert(offsetof(AMediaCodecBufferInfo, size) == 4);
+static_assert(offsetof(AMediaCodecBufferInfo, presentationTimeUs) == 8);
+static_assert(offsetof(AMediaCodecBufferInfo, flags) == 16);
+static_assert(sizeof(OutputFormat) == 4);
+static_assert(AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4 == 0 && AMEDIAMUXER_OUTPUT_FORMAT_WEBM == 1 &&
+              AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP == 2 && AMEDIAMUXER_OUTPUT_FORMAT_HEIF == 3 &&
+              AMEDIAMUXER_OUTPUT_FORMAT_OGG == 4);
 
 struct Report {
   int failures = 0;
@@ -151,15 +164,27 @@ void Descriptors(const Api& api, const std::string& root, Report* report) {
   const std::string path = root + "/descriptor-control.bin";
   int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
   if (fd < 0) { report->Check(false, "descriptor-create"); return; }
+  const uint8_t seed[32] = {};
+  const bool seeded = write(fd, seed, sizeof(seed)) == static_cast<ssize_t>(sizeof(seed));
   close(fd);
+  const int anchor = open(path.c_str(), O_RDWR);
+  const bool anchor_ready = anchor >= 0 && lseek(anchor, 11, SEEK_SET) == 11;
   Muxer negative(api.create(-1, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4), MuxerDelete{&api});
   Muxer huge(api.create(INT_MAX, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4), MuxerDelete{&api});
-  bool ok = !negative && !huge;
+  const off_t anchor_after = anchor_ready ? lseek(anchor, 0, SEEK_CUR) : -1;
+  bool ok = seeded && anchor_ready && !negative && !huge && anchor_after == 11;
+  if (anchor >= 0) close(anchor);
+  report->text += "media4 muxer invalid-fd trace: unrelated caller offset before 11 after " +
+      std::to_string(anchor_after) + "\n";
   for (int invalid : {-1, 3, 99}) {
     fd = open(path.c_str(), O_RDWR);
     if (fd < 0) { ok = false; continue; }
+    const off_t before = lseek(fd, 9, SEEK_SET);
     Muxer unsupported(api.create(fd, static_cast<OutputFormat>(invalid)), MuxerDelete{&api});
-    ok = ok && !unsupported;
+    const off_t after = lseek(fd, 0, SEEK_CUR);
+    ok = ok && before == 9 && !unsupported && after == 9;
+    report->text += "media4 muxer unsupported trace: format " + std::to_string(invalid) +
+        " offset before " + std::to_string(before) + " after " + std::to_string(after) + " expected 9\n";
     close(fd);
   }
   for (OutputFormat output : {AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4, AMEDIAMUXER_OUTPUT_FORMAT_WEBM,
@@ -167,14 +192,19 @@ void Descriptors(const Api& api, const std::string& root, Report* report) {
     for (int mode : {O_RDONLY, O_WRONLY, O_RDWR}) {
       fd = open(path.c_str(), mode);
       if (fd < 0) { ok = false; continue; }
+      const off_t before = lseek(fd, 7, SEEK_SET);
       Muxer muxer(api.create(fd, output), MuxerDelete{&api});
       const bool expected = mode != O_RDONLY && (output != AMEDIAMUXER_OUTPUT_FORMAT_WEBM || mode == O_RDWR);
+      const off_t after = lseek(fd, 0, SEEK_CUR);
+      const off_t expected_offset = mode == O_RDONLY ? 7 : 0;
       struct stat status;
       const bool alive = fstat(fd, &status) == 0;
       report->text += "media4 muxer fd trace: format " + std::to_string(output) + " mode " +
           std::to_string(mode) + " expected " + std::to_string(expected) + " actual " +
-          std::to_string(muxer != nullptr) + " caller-alive " + std::to_string(alive) + "\n";
-      ok = ok && (muxer != nullptr) == expected && alive;
+          std::to_string(muxer != nullptr) + " caller-alive " + std::to_string(alive) +
+          " offset before " + std::to_string(before) + " after " + std::to_string(after) +
+          " expected-after " + std::to_string(expected_offset) + "\n";
+      ok = ok && (muxer != nullptr) == expected && alive && before == 7 && after == expected_offset;
       muxer.reset();
       close(fd);
     }

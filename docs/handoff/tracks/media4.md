@@ -184,7 +184,24 @@ execute Gesher fixtures or replace a final full Windows matrix. That full
 still requires source peer review and the latest accepted integration.
 The running Surface405078 candidate is separate and immutable.
 
-The next independent native-muxer slice is source-only in
+First compile-only ci40517106801 at0841f609853f0b996b5620a0aab82002eaa9ee44
+is complete RED: fixtures122233582626 passes in1m10s with actual encoded
+packet/typed-field hashes, sixty video packets, both NDK JNI/ELF ABIs and
+both single-ABI APKs. Host122233583005 fails in1m5s on the exact new bridge:
+NdkMediaCodec.h290 asserts sizeof(_off_t_compat)==sizeof(long),8==4 on
+Windows LLP64. Actual logs were read; no oracle link or runtime acceptance
+follows from this red scope. The correction includes only the canonical
+BufferInfo and OutputFormat value declarations used by the muxer in a
+private bridge header, with exact size/offset/value assertions on the host
+and actual public NDK callers. It does not weaken an assertion, redefine
+long, or port the unused codec offset APIs. Full NdkMediaCodec public-header
+compatibility and its offset API adaptation remain explicitly open. Pinned
+NdkMediaCodec.h SHA256 1D9F8AC727A79AF55C199054D240F26AB6CD3E31027E883D02B4C82930902681
+and NdkMediaMuxer.h SHA256 4FC08AFB8507C72C01A8C62086F8D4D85529E64A0B598B2EEEECFFC8E42E0C10
+are preserved in the source audit. All subsequent builds remain CI-only.
+
+The next independent native-muxer slice is in progress with scoped compile
+evidence in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
 Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
 libcore I/O83 and test process infrastructure84 (next85).
@@ -194,8 +211,9 @@ configures the actual MP4/WebM/Ogg writers once in a shared OBJECT target
 linked into both hosts; existing JNI encoders/writers retain the same
 helpers. A later source-only preparation adds ten typed System V entries
 over those real writers (new/delete, orientation/location, add/start/stop/
-write, track count/format). No compiler/link/runtime proof or verified NDK
-muxer export is claimed yet. The new entries, GPS backend, two-ABI callers
+write, track count/format). The first scope proves NDK caller/fixture builds,
+but no host bridge/oracle link, runtime or verified NDK muxer export is
+accepted yet. The new entries, GPS backend, two-ABI callers
 and independent reader/decoder oracle now exist as source; bounded peer
 review and compile-first CI preparation remain pending before full CI.
 Pinned NdkMediaMuxer/MediaMuxer/error-translation/MediaAppender sources were
@@ -217,6 +235,18 @@ still require actual Windows CI controls, including read-only, write-only,
 read-write, closed/invalid and nonseekable descriptors. No shared POSIX
 F_GETFL implementation is changed.
 
+Root's bounded source review prompted explicit caller-offset controls.
+Pinned MediaWriter::isFdOpenModeValid checks writable access then seeks the
+caller's shared open-file offset to zero; WebmWriter calls that base helper
+before its additional read-write check. The first source checked readable
+access too early, incorrectly preserving the offset after write-only WebM
+failure. The correction retains SEEK_SET with the exact writable/seek/read
+order. New actual controls seed a32-byte file and start all12 mode/format
+cases at offset7, requiring read-only errors to preserve7 and writable
+cases to end at0, including write-only WebM failure. Invalid/unsupported
+formats preserve9; invalid descriptors preserve an unrelated caller's11.
+These source tests and ordering correction are still unverified until CI.
+
 CI-only fixture generation source now extracts independently encoded
 H.264/AAC (baseline/no B frames), VP9/Opus, VP8/Vorbis and Opus-only packets
 with ffprobe, with portable typed field/packet binaries and exact JSON
@@ -228,8 +258,10 @@ single-ABI APKs. It
 exercises actual FD mode/ownership/seekability, state/error order, aliased
 AMessage ownership, padded-buffer offsets, interleaved/track-blocked writes
 and WebM timestamp controls. media.yml adds their generation/build sources;
-no new run has been dispatched and nothing was compiled or executed
-locally. An independent host oracle now links only readers/decoders, not
+no full has been dispatched and nothing was compiled or executed locally.
+The first compile scope's actual generated inputs and both ABI callers/APKs
+pass, with the separate host header failure recorded above. The independent
+host oracle's source links only readers/decoders, not
 the container writers. It requires exact60-frame/four-color video, real
 two-second PCM with the original1661/880/660Hz tones within2%, positive
 amplitude, codec/track metadata, the90-degree MP4 matrix and exact ISO-6709
