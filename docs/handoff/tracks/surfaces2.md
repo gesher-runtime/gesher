@@ -139,6 +139,18 @@ Surface fault at the same vprintf return seam, but this does not replace a
 corrected Surface run or prove the older TIC blank cause. Native owns the
 tagged-list correction, API-version rejection and its component/full proof.
 
+The coordinator now requires a focused coherent component before another
+broad full: import Native's exact API3/Locale2/FPSR prerequisite, build fresh
+dalvikvm/gesher-exec/DLL and use source-matched jars/images, then run the
+unchanged test80 and86 on both runners. The prepared component driver loads
+the original SurfaceRun function/type from the track52 AST and the original
+WindowChecks module, retaining every pixel/phase/ABI/teardown gate without
+copying their implementation. Runtime/boot/font setup follows the full
+harness. The workflow source guard and Native prerequisite are not ready
+yet; no component dispatch or original Surface repair is claimed. Broad
+full also waits for the separate common Web3 correction. Muxer full405277
+remains an independent frozen candidate.
+
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
 cleared pending before publishing its weak view. The correction retries
