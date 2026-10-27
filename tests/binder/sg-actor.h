@@ -96,13 +96,14 @@ struct Driver {
     Append(&outgoing, tr.data.ptr.buffer);
   }
   int Talk(std::vector<Command>* commands, bool read = true, bool invalid_read = false,
-           uint64_t* consumed = nullptr) {
+           uint64_t* consumed = nullptr, void* custom_read = nullptr) {
     uint8_t incoming[1024]{};
     binder_write_read rw{};
     rw.write_size = outgoing.size();
     rw.write_buffer = reinterpret_cast<binder_uintptr_t>(outgoing.data());
     rw.read_size = read ? sizeof(incoming) : 0;
-    rw.read_buffer = invalid_read ? 1 : reinterpret_cast<binder_uintptr_t>(incoming);
+    auto* destination = custom_read ? static_cast<uint8_t*>(custom_read) : incoming;
+    rw.read_buffer = invalid_read ? 1 : reinterpret_cast<binder_uintptr_t>(destination);
     const int status = ioctl(fd, BINDER_WRITE_READ, &rw);
     const int saved = errno;
     if (rw.write_consumed > outgoing.size() || rw.read_consumed > sizeof(incoming)) return EPROTO;
@@ -114,12 +115,12 @@ struct Driver {
       while (at < rw.read_consumed) {
         if (rw.read_consumed - at < sizeof(uint32_t)) return EPROTO;
         Command command;
-        memcpy(&command.code, incoming + at, sizeof(command.code));
+        memcpy(&command.code, destination + at, sizeof(command.code));
         const size_t size = _IOC_SIZE(command.code);
         if (size > rw.read_consumed - at - sizeof(uint32_t)) return EPROTO;
         if (command.code == BR_TRANSACTION || command.code == BR_REPLY) {
           if (size != sizeof(command.transaction)) return EPROTO;
-          memcpy(&command.transaction, incoming + at + 4, sizeof(command.transaction));
+          memcpy(&command.transaction, destination + at + 4, sizeof(command.transaction));
         }
         if (commands) commands->push_back(command);
         at += 4 + size;
@@ -196,6 +197,13 @@ struct Payload {
     // Encourage immediate allocator reuse after originals have been freed.
     root.assign(65536, 0xee);
   }
+  void AddFd(int fd) {
+    binder_fd_object object{};
+    object.hdr.type = BINDER_TYPE_FD;
+    object.fd = static_cast<uint32_t>(fd);
+    offsets.push_back(data.size());
+    Append(&data, object);
+  }
 };
 
 inline bool Verify(Driver* driver, const binder_transaction_data& tr, Report* report) {
@@ -259,17 +267,31 @@ inline int Client(const char* scenario, const std::string& prefix) {
       if (!report.Check(driver.Next(&failed, BR_FAILED_REPLY), "malformed request produces real failed reply")) return report.Finish();
     }
   }
-  const bool oneway = !strcmp(scenario, "oneway");
+  const bool wire = !strncmp(scenario, "wire-", 5);
+  const bool oneway = !strcmp(scenario, "oneway") || !strcmp(scenario, "wire-queue");
   Payload payload(!strcmp(scenario, "smallmap"));
+  int sent_fd = -1;
+  if (wire || !strcmp(scenario, "adoptfail")) {
+    const std::string path = prefix + ".descriptor";
+    sent_fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
+    static const char identity[] = "sg-owned-file";
+    if (!report.Check(sent_fd >= 0 && write(sent_fd, identity, sizeof(identity)) == static_cast<ssize_t>(sizeof(identity)) &&
+        lseek(sent_fd, 0, SEEK_SET) == 0, "prepare real descriptor transfer")) return report.Finish();
+    payload.AddFd(sent_fd);
+  }
   payload.Queue(&driver, BC_TRANSACTION_SG, 1, oneway ? TF_ONE_WAY : 0);
   if (oneway) payload.Queue(&driver, BC_TRANSACTION_SG, 2, TF_ONE_WAY);
   if (!report.Check(driver.Flush(), "SG snapshot queued before receiver reads")) return report.Finish();
   payload.DestroyOriginalBytes();
   if (!report.Check(Mark(prefix + ".queued"), "sender mutation/free completed")) return report.Finish();
+  if (sent_fd >= 0) close(sent_fd);
   if (oneway) return report.Finish(); // process really exits before receiver is released
   Command response;
-  const bool rejected = !strcmp(scenario, "smallmap") || !strcmp(scenario, "badread");
-  if (!report.Check(driver.Next(&response, rejected ? BR_FAILED_REPLY : BR_REPLY),
+  const bool rejected = wire || !strcmp(scenario, "smallmap") || !strcmp(scenario, "badread") ||
+      !strcmp(scenario, "prefixfault") || !strcmp(scenario, "adoptfail");
+  const uint32_t expected = (!strcmp(scenario, "wire-finishloss") || !strcmp(scenario, "wire-death-afterfinish"))
+      ? BR_DEAD_REPLY : rejected ? BR_FAILED_REPLY : BR_REPLY;
+  if (!report.Check(driver.Next(&response, expected),
       rejected ? "receiver failure unblocks real synchronous sender" : "SG reply reaches independent sender")) return report.Finish();
   if (!rejected) {
     Verify(&driver, response.transaction, &report);
@@ -289,17 +311,41 @@ inline int Server(const char* scenario, const std::string& prefix) {
   driver.Code(BC_ENTER_LOOPER);
   if (!report.Check(driver.Flush() && Mark(prefix + ".ready"), "receiver ready without consuming queued transaction")) return report.Finish();
   if (!report.Check(WaitFile(prefix + ".release"), "parent releases actual delivery")) return report.Finish();
-  if (small || !strcmp(scenario, "badread")) {
-    const int expected = small ? ENOMEM : EFAULT;
+  const bool adopt_failure = !strcmp(scenario, "adoptfail");
+  if (small || !strcmp(scenario, "badread") || !strcmp(scenario, "prefixfault") || adopt_failure) {
+    const int expected = small ? ENOMEM : adopt_failure ? EMFILE : EFAULT;
     int actual = EAGAIN;
     uint64_t consumed = 0;
+    const bool partial = !strcmp(scenario, "prefixfault");
+    void* guarded = MAP_FAILED;
+    void* destination = nullptr;
+    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    if (partial) {
+      guarded = mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+      if (!report.Check(guarded != MAP_FAILED && mprotect(static_cast<uint8_t*>(guarded) + page, page, PROT_NONE) == 0,
+          "real protected page follows writable BR_NOOP prefix")) return report.Finish();
+      destination = static_cast<uint8_t*>(guarded) + page - sizeof(uint32_t);
+    }
+    std::vector<int> filled;
+    if (adopt_failure) {
+      for (unsigned i = 0; i < 32768; ++i) {
+        int descriptor = open("/dev/null", O_RDONLY);
+        if (descriptor < 0) break;
+        filled.push_back(descriptor);
+      }
+      if (!report.Check(!filled.empty() && errno == EMFILE, "real receiver descriptor table reaches EMFILE")) return report.Finish();
+    }
     for (unsigned i = 0; i < 1500 && (actual == EAGAIN || actual == 0); ++i) {
-      actual = driver.Talk(nullptr, true, !small, &consumed);
+      actual = driver.Talk(nullptr, true, !small && !partial && !adopt_failure, &consumed, destination);
       if (actual != expected && actual != EAGAIN && actual != 0) break;
       if (actual != expected) usleep(20000);
     }
-    report.Check(actual == expected, small ? "real mapped capacity exhaustion returns ENOMEM" : "real invalid read address returns EFAULT");
-    report.Check(consumed <= sizeof(uint32_t), "unpublished transaction excluded from read_consumed");
+    report.Check(actual == expected, small ? "real mapped capacity exhaustion returns ENOMEM" :
+        adopt_failure ? "real FD adoption failure returns EMFILE" : "real invalid read address returns EFAULT");
+    report.Check(partial ? consumed == sizeof(uint32_t) : consumed <= sizeof(uint32_t),
+        partial ? "published BR_NOOP prefix retained after transaction user-copy failure" : "unpublished transaction excluded from read_consumed");
+    if (guarded != MAP_FAILED) munmap(guarded, 2 * page);
+    for (int descriptor : filled) close(descriptor);
     return report.Finish();
   }
   const unsigned count = !strcmp(scenario, "oneway") ? 2 : 1;
