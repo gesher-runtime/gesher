@@ -70,6 +70,8 @@ struct protoent {
 #define EAI_OVERFLOW   (-12)
 
 #define HOST_NOT_FOUND 1
+#define NETDB_INTERNAL (-1)
+#define NETDB_SUCCESS 0
 #define TRY_AGAIN      2
 #define NO_RECOVERY    3
 #define NO_DATA        4
