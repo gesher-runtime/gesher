@@ -44,6 +44,16 @@ the independent Exec4 stage remains unverified until its owner reads its CI.
 The earlier full red run below remains diagnostic evidence, not acceptance.
 All C/C++/Java compilation and native/JVM fixtures run only in CI.
 
+Current main build 121957654239 succeeds in 28m41, boot-image compile in
+30 seconds. The actual main log confirms both imported environment objects
+and JNI building, with 203 assembly boundaries/zero problems. Framework
+121958450006 and its app/graphics dex/winlegacy build log were also read.
+Package 121966922162 succeeds in 2m32; actual installed compiler/oatdump,
+boot/runtime, HWND/input/resize and uninstall cleanup PASS lines were read.
+Windows 2022 job 121966922116, Windows 2025 job 121966922207 and e2e jobs
+121967761169/121967761098 are still running. Their final actual results
+are required before any source acceptance.
+
 Full diagnostic **40417632512** at exact cde1c79 is COMPLETE RED: 28 jobs,
 20 success, six skipped, both Windows jobs failed. Both actual Windows logs
 were read: 2022 job 121919469641 has nine failures (41m20); 2025 job
