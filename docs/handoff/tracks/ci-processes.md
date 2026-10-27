@@ -21,6 +21,14 @@ so its exited-parent/retained-file case must finish without waiting for EOF;
 the two pipe helpers must fail incomplete EOF within their explicit bounds.
 All helper defaults remain unchanged. Only local PowerShell parsing and
 whitespace checks are allowed; changed-source CI and full proof are pending.
+Scoped40551845130/source1b9f683f is red on both hosts after all four actual
+SurfaceRun cases pass, including the unchanged120s timeout and SIGQUIT path.
+The fixture incorrectly supplied an Exe parameter from a later OpenSL helper;
+the authorized frozen helper instead uses slHost/dalvikvm.exe. The corrected
+fixture configures that actual path and preserves its real signature. No
+OpenSL runtime result follows from the failed harness, and no unchanged retry
+or full acceptance is claimed. Many other legacy helpers remain inventoried
+for subsequent bounded slices after this changed-source component proof.
 
 Root's source review of the Surface invalidation candidate found that legacy
 SurfaceRun/test76 process helpers can wait without a bound after attempting
