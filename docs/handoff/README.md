@@ -245,12 +245,22 @@ Shared-library implementation and the new slices are
 not verified AOT3/exec4/FPSR completion.
 
 Native FPSR coherent full40498782924/8ec4bf3c imports accepted Windows160
-and integration6297. Scoped40475532910/93f7637a passes all10384 actual
+and integration6297 and is independently root-accepted as a bounded leaf:
+29jobs23success/6skip, both Windows0 with five FPSR/five FPCR/six wide
+passes, package23 and both complete ten-app e2e0. Root also read the actual
+independent QEMU producer's10384-row proof. Frozen docs-only head75e7ef29
+predates accepted Net4; coherent Locale2 full40516054280/ca4ed3cf now combines
+both leaves, but its union is not accepted yet.
+Scoped40475532910/93f7637a passes all10384 actual
 QEMU/production comparisons on both hosts, retaining original cold/nested/
-thread and numeric/status controls; final JNI/APK/ELF/full-suite evidence
-remains pending. AOT shared-library full40503913306/c35abe7c is also pending
-on accepted Windows6297 after corrected compile-only40499783709/a79ae0f1
-and bounded source peer review. Empty default after-library resource, actual
+thread and numeric/status controls. Full environment/default object/host-libm
+and remaining ARM ISA contracts stay open.
+AOT shared-library full40503913306/c35abe7c failed both Windows runners on
+the real missing UnixCopyFile.transfer JNI entry before graph assertions;
+[libcore-io](tracks/libcore-io.md) owns that gap. Corrected fixture-only
+stream-copy source96b12ab6 is in full40512344714 after accepted Net4bc6.
+Neither the earlier corrected compile-only40499783709/a79ae0f1 nor bounded
+source peer review establishes runtime completion. Empty default after-library resource, actual
 DLC paths, secondary dex and static SDK libraries remain explicit gaps.
 
 OpenSLd10/full40476766790 and nativee569/full40477536464 are independently
@@ -265,8 +275,11 @@ TIC80 on Windows2025; both whole suites0/16 policy passes, package23/notice
 hash and Windows2022 e2e0 do not waive that failure. A separate Surface
 candidate is being prepared with strict producer-only/no-input regression;
 the invalidation-latch source defect is not yet proved to have caused TIC80.
-Locale2/ADR0066 source work starts separately, retaining all broader locale
-and Windows language/format gaps.
+Locale2/ADR0066 scoped40512781936/004fff10 passes21 actual groups on each
+Windows runner. Its coherent full40516054280/ca4ed3cf imports accepted Net4
+and the frozen FPSR leaf; package/e2e/full-suite acceptance is pending.
+Privileged/cross-package/multiuser authority and broader Windows language/
+format contracts remain open.
 
 ARM FPCR source49ade205 is independently full-verified in40451978087,
 attempt2:22 success/6 skips, both Windows0, five scoped FPCR passes each,
