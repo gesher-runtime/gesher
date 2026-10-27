@@ -47,3 +47,12 @@ device-state inheritance, spawn attributes, true fork/image replacement
 and console delivery remain explicit Exec4 work. Windows command-line
 capacity can reject oversized encoded requests with E2BIG before a child
 is created. A child setup error is never synthesized as a fake wait status.
+
+UCRT's unbound standard stream sentinel is-2, distinct from invalid fd-1;
+neither is a file handle. Snapshot/child sweep code excludes those exact
+values before Win32 handle APIs. The transport's temporary NUL standard
+handles are closed before actions if the parent slot was absent. The CI
+probe requires an actual no-console raw-2 parent and real NDK child closed0,
+rather than manufacturing a wait status.
+See [Microsoft's _get_osfhandle contract](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/get-osfhandle?view=msvc-170).
+These additional runtime controls remain pending full40502225202.
