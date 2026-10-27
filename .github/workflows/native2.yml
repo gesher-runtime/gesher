@@ -12,6 +12,13 @@ name: native2
 #     the NDK's public API import (symbols.py).
 # ci.yml calls this workflow.
 on:
+  push:
+    branches: ['wip/net4-resolver']
+    paths:
+      - '.github/workflows/native2.yml'
+      - 'tests/native2/net4_resolver*'
+      - 'tests/native2/java/gesher/Net4ResolverTest.java'
+      - 'tests/apps/net4resolverapp/**'
   workflow_dispatch:
   workflow_call:
 
