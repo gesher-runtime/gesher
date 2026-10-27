@@ -1,0 +1,47 @@
+name: arm64-varargs-scoped
+on:
+  push:
+    branches: [wip/arm64-varargs]
+    paths:
+      - compat/arm64/**
+      - tests/native/arm64_varargs*
+      - tests/windows/run-arm64-varargs-baseline.ps1
+      - .github/workflows/arm64.yml
+      - .github/workflows/arm64-varargs-scoped.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  baseline:
+    needs: translator
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable real host runtime and download inside CI only
+        shell: pwsh
+        run: |
+          $run = gh api repos/${{ github.repository }}/actions/runs/40498782924 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '8ec4bf3c30160575c8df794ad2ca1406957adc98' -or
+              $run.conclusion -cne 'success') { throw 'Unexpected runtime provenance' }
+          Write-Host "ACTUAL_VARARGS_HOST_RUNTIME run=$($run.id) source=$($run.head_sha)"
+          gh run download 40498782924 -R '${{ github.repository }}' -n windows-x64 -D dist
+          if ($LASTEXITCODE -ne 0) { throw 'Missing immutable host runtime' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - name: Observe real valid shallow and deep calls without a production correction
+        shell: pwsh
+        run: tests/windows/run-arm64-varargs-baseline.ps1 -Dir "$PWD/dist"

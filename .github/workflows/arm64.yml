@@ -154,6 +154,11 @@ jobs:
         run: |
           set -euo pipefail
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          # ADR0079: the actual original Surface printf/vprintf logger at a
+          # shallow entry and in a separate working-buffer control frame.
+          "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -Wl,-soname,libarm64_varargs_baseline.so \
+            -o dist-arm64/arm64_varargs_baseline.so tests/native/arm64_varargs_baseline.c
           # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
           "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
