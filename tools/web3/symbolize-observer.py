@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 
 SOURCE_RUN = 40512344714
@@ -79,6 +80,23 @@ def analyze():
     spec.loader.exec_module(symbols)
     base, addresses, names = symbols.load_map(linker_map)
     assert addresses, 'Original linker map has no symbols'
+    print('WEB3_ORIGINAL_MAP_CONTEXT thread=8796 rva=0x4598; raw section/object rows retained')
+    for line in linker_map.read_text(encoding='utf-8', errors='replace').splitlines():
+        match = symbols.LINE.match(line)
+        if match and base + 0x4100 <= int(match.group(1), 16) <= base + 0x4800:
+            print(line)
+    image = binary.read_bytes()
+    pe = struct.unpack_from('<I', image, 0x3c)[0]
+    assert image[:2] == b'MZ' and image[pe:pe + 4] == b'PE\0\0'
+    assert struct.unpack_from('<H', image, pe + 24)[0] == 0x20b
+    binary_base = struct.unpack_from('<Q', image, pe + 48)[0]
+    disassembler = shutil.which('llvm-objdump') or shutil.which('objdump')
+    assert disassembler, 'No original-byte disassembler available'
+    print('WEB3_ORIGINAL_CODE_CONTEXT rva=0x4500..0x4620; disassembly only, no executable run')
+    disassembly = subprocess.run([disassembler, '-d', f'--start-address={binary_base + 0x4500}',
+                                 f'--stop-address={binary_base + 0x4620}', str(binary)],
+                                text=True, capture_output=True, timeout=15, check=True)
+    print(disassembly.stdout)
     log = Path('observation.log').read_text(encoding='utf-8')
     block = log.split('WEB3_OBSERVER_BEGIN pid=7400', 1)[1].split('WEB3_OBSERVER_END pid=7400', 1)[0]
     selected = []
