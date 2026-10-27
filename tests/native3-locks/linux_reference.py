@@ -99,6 +99,7 @@ def worker(inherited):
                 code = libc.fcntl(ctypes.c_int(slots[slot]), ctypes.c_int(request.get("command", 6)),
                                   ctypes.byref(lock))
                 result.update(result=code, errno=ctypes.get_errno() if code < 0 else 0,
+                              command=request.get("command", 6),
                               type=lock.type, whence=lock.whence, start=lock.start,
                               length=lock.length, pid=lock.pid, signals=signal_count)
             elif op == "exit":
@@ -119,12 +120,17 @@ class Client:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1, pass_fds=inherited)
         self.rows = queue.Queue()
+        self.cleaned = False
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
-        ready = self.take()
-        if not ready.get("ready") or ready["flock_size"] != 32:
-            raise AssertionError(f"Unexpected Linux LP64 worker ABI: {ready}")
-        self.pid = ready["pid"]
+        try:
+            ready = self.take()
+            if not ready.get("ready") or ready["flock_size"] != 32:
+                raise AssertionError(f"Unexpected Linux LP64 worker ABI: {ready}")
+            self.pid = ready["pid"]
+        except BaseException:
+            self.cleanup()
+            raise
 
     def _read(self):
         try:
@@ -157,15 +163,26 @@ class Client:
         raise AssertionError(f"{self.label} unexpectedly completed blocking request: {row}")
 
     def cleanup(self):
+        if self.cleaned:
+            return
         if self.process.poll() is None:
-            self.process.kill()
+            try:
+                self.process.kill()
+            except ProcessLookupError:
+                pass
         try:
             self.process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             raise AssertionError(f"{self.label} could not be terminated")
+        self.reader.join(timeout=2)
+        if self.reader.is_alive():
+            # TextIO.close can itself block on the live reader's lock. Report
+            # the unfinished pipe instead of hiding it in an unbounded close.
+            raise AssertionError(f"{self.label} output pipe did not reach EOF after termination")
         self.process.stdin.close()
         self.process.stdout.close()
         self.process.stderr.close()
+        self.cleaned = True
 
 
 def reference(output):
@@ -186,13 +203,20 @@ def reference(output):
             if value.get(key) != expected:
                 raise AssertionError(f"{name}: expected {key}={expected}, actual {value}")
         value = dict(value)
-        if value.get("pid", 0) > 0:
+        if (value.get("command") in (5, 36) and value["result"] == 0 and
+                value.get("type") != 2 and value.get("pid", 0) > 0):
             value["pid"] = names.get(value["pid"], "unrecognized-live-pid")
         rows.append({"name": name, "actual": value})
         print(f"ACTUAL_LINUX_RECORD_LOCK {name} {json.dumps(value, sort_keys=True)}", flush=True)
 
     def lock(who, **options):
-        return who.call(op="lock", **options)
+        value = who.call(op="lock", **options)
+        # Linux GETLK modifies only l_type for a nonconflicting query.
+        if options.get("command", 6) in (5, 36) and value["result"] == 0 and value["type"] == 2:
+            for field in ("whence", "start", "length", "pid"):
+                if value[field] != options.get(field, 0):
+                    raise AssertionError(f"nonconflicting query changed {field}: {value}")
+        return value
 
     try:
         with tempfile.TemporaryDirectory(prefix="gesher-record-lock-oracle-") as folder:
@@ -357,8 +381,14 @@ def reference(output):
             record("inherited-OFD-close-E", e.call(op="close"))
             record("inherited-OFD-final-release", lock(b, command=5, start=800, length=1), type=2)
     finally:
+        cleanup_errors = []
         for value in clients:
-            value.cleanup()
+            try:
+                value.cleanup()
+            except Exception as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            raise ExceptionGroup("record-lock worker cleanup failures", cleanup_errors)
     manifest = {"schema": 1, "source": os.environ["GITHUB_SHA"], "producer": "actual-linux-fcntl",
                 "kernel": os.uname().release, "flock_size": ctypes.sizeof(Flock), "rows": rows,
                 "remaining_reference_scope": ["close-EINTR deterministic injection", "simultaneous mutation contention",

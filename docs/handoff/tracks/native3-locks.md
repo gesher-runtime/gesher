@@ -21,3 +21,15 @@ and has no CI dispatch until coherent runtime proof. Neither is accepted as
 a full product. No broad full is dispatched until relevant prerequisites and
 Web3 gate pass. Next lock action: peer review the actual coordination design,
 then implement and verify its bounded native/common and NDK contracts in CI.
+
+Prepared Linux reference source838e90a0 executes actual libc fcntl through
+independent CI workers, including POSIX/OFD owner distinction, ranges/errors,
+real blocking/EINTR/SA_RESTART, cross-file POSIX deadlock versus OFD waiting,
+hardlink/dup/stdio/failed-freopen lifetime, crash cleanup and exec descriptor
+transfer. Peer review found lifecycle/query-normalization issues; source now
+cleans a failed worker construction, attempts every worker cleanup with
+bounded reader EOF, preserves nonquery/error PID evidence and asserts
+unlocked-query input fields unchanged. AST parse only ran locally; no syscall
+fixture ran. Reference scope still explicitly excludes injected close-EINTR,
+simultaneous mutation contention and PID-reuse/denied-query controls. This is
+not production record-lock implementation or final acceptance.
