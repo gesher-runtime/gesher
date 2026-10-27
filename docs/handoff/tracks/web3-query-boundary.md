@@ -58,3 +58,28 @@ callbacks before VM exit; failed drain takes explicit halt(1), not unsafe VM
 teardown. This is source only: Java/C++ compile and real contention/lifecycle
 regression are still required. The early 53c object compilation40570599325
 passed; it does not compile or qualify this later source.
+
+## Real fixture source checkpoint (still runtime unverified)
+
+Test-hook build now dispatches all four existing query wrappers on a real
+fixture HWND owner STA under actual WindowManagerGlobal.mLock contention.
+The bare-window fixture requires an actual BLOCKED/viewRoots stack, the real
+window close/join before releasing that monitor, the original3s query plus
+500ms scheduling allowance (no deadline change), actual detach success and
+no late root publication, then shutdown begun with one canceled JNI worker
+still blocked. Its unwrapped real-JNI control must actually remain stuck and
+is explicitly an expected failing control, not historical-binary evidence.
+
+The mapped Dialog Activity tests two real window lifecycles per process:
+positive button action, identical action queued behind held actual UI thread,
+original-deadline unavailability, Handler removal/drained JNI, no late action
+or cache insertion, then real Dialog dismissal and stale-generation rejection.
+Both Main and device runs and every original14 Web3 case remain required.
+Finite Windows driver source exists; exact coherent component producer/source
+workflow and peer review/CI execution are still pending. No runtime acceptance.
+
+Early compiler40574506577/source61883e31 uses the existing framework compiler
+and hook-enabled native objects. Prior3350/862 startup failures were missing
+caller actions-read permission, corrected before this run; no compiler or
+fixture executed in those startup-failed runs. Any later source needs its own
+compile/runtime validation.

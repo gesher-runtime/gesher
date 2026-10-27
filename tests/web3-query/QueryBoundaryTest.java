@@ -8,13 +8,14 @@ import java.util.Map;
 
 /** CI-only real global monitor + actual owner STA + real destructor join. */
 public final class QueryBoundaryTest {
-    private static native long nativeStart(long hwnd, int kind, boolean direct);
+    private static native long nativeStart(long hwnd, int kind, long node, boolean direct);
     private static native long nativeState(long id);
     private static native long nativeGeneration(long id);
     private static native boolean nativeJoin(long id);
     private static native int nativeActive();
     private static native int nativeAttached();
     private static native int nativeShutdowns();
+    private static native boolean nativeStalePerform(long id);
     private static void require(boolean value, String name) {
         if (!value) throw new AssertionError(name);
         System.out.println("PASS query-boundary: " + name);
@@ -66,7 +67,8 @@ public final class QueryBoundaryTest {
             NativeWindow window = NativeWindow.create("QueryBoundary-" + kind, 64, 64);
             long id;
             synchronized (lock) {
-                id = nativeStart(window.getHwnd(), kind, direct);
+                long queryStarted = System.nanoTime();
+                id = nativeStart(window.getHwnd(), kind, -1, direct);
                 require(id != 0, "real fixture HWND dispatch kind=" + kind);
                 long generation = nativeGeneration(id);
                 require(generation > previousGeneration, "fresh HWND generation kind=" + kind);
@@ -78,6 +80,9 @@ public final class QueryBoundaryTest {
                 System.out.println("ACTUAL_CLOSE_UNDER_GLOBAL_LOCK kind=" + kind + " direct=" + direct);
                 System.out.flush();
                 window.close(); // REAL destructor waits for the owner; lock is STILL held.
+                long queryAndCloseMs = (System.nanoTime() - queryStarted) / 1_000_000;
+                require(queryAndCloseMs <= 3500,
+                        "real query plus owner join within original3s budget +500ms scheduling allowance: " + queryAndCloseMs);
                 require((nativeState(id) & 6) == 6,
                         "actual owner joined with unavailable result before lock release kind=" + kind);
                 require(nativeActive() == 1 && nativeAttached() == 1,

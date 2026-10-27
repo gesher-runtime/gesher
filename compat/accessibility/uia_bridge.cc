@@ -53,6 +53,7 @@ void Trace(const char* format, ...) {
 }
 
 std::atomic<unsigned> g_attached_queries{0};
+std::atomic<bool> g_detach_failed{false};
 JavaVM* g_vm = nullptr;
 jclass g_bridge = nullptr;  // com.gesher.app.accessibility.UiaBridge
 jmethodID g_node = nullptr, g_node_at = nullptr, g_focused = nullptr, g_perform = nullptr;
@@ -109,8 +110,12 @@ class ScopedEnv {
   }
   ~ScopedEnv() {
     if (attached_) {
-      g_vm->DetachCurrentThread();
-      g_attached_queries.fetch_sub(1, std::memory_order_release);
+      if (g_vm->DetachCurrentThread() == JNI_OK) {
+        g_attached_queries.fetch_sub(1, std::memory_order_release);
+      } else {
+        g_detach_failed.store(true, std::memory_order_release);
+        std::fprintf(stderr, "gesher-a11y: DetachCurrentThread FAILED\n");
+      }
     }
   }
   ScopedEnv(const ScopedEnv&) = delete;
@@ -770,7 +775,8 @@ jboolean UiaBridge_nativeShutdown(JNIEnv*, jclass) {
 #if defined(GESHER_WEB3_QUERY_TESTS)
   g_fixture_shutdowns.fetch_add(1, std::memory_order_release);
 #endif
-  return g_queries->Stop() ? JNI_TRUE : JNI_FALSE;
+  return g_queries->Stop() && !g_detach_failed.load(std::memory_order_acquire) &&
+         g_attached_queries.load(std::memory_order_acquire) == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 jboolean UiaBridge_nativeScreenReader(JNIEnv*, jclass) {

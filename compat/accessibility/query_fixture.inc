@@ -6,6 +6,7 @@ struct FixtureQuery {
   WNDPROC original = nullptr;
   Epoch epoch;
   int kind = 0;
+  int64_t node = kRoot;
   bool direct = false;
   HANDLE sender = nullptr;
   std::atomic<bool> entered{false}, done{false};
@@ -34,17 +35,17 @@ LRESULT CALLBACK FixtureProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) 
       // presented as execution of the historical binary or a qualifying fix.
       Query q;
       q.hwnd = reinterpret_cast<uintptr_t>(hwnd); q.window = state->epoch;
-      q.kind = static_cast<QueryKind>(state->kind); q.id = kRoot; q.token = UINT64_MAX;
+      q.kind = static_cast<QueryKind>(state->kind); q.id = state->node; q.token = UINT64_MAX;
       g_fixture_direct_query = &q;
       ExecuteQuery(q);
       g_fixture_direct_query = nullptr;
       unavailable = !q.okay || (q.kind != QueryKind::kNode ? q.answer == 0 : q.node.empty());
     } else {
       switch (state->kind) {
-        case 0: unavailable = !GetNode(hwnd, kRoot, state->epoch).ok; break;
+        case 0: unavailable = !GetNode(hwnd, state->node, state->epoch).ok; break;
         case 1: unavailable = NodeAt(hwnd, POINT{0, 0}, state->epoch) == 0; break;
         case 2: unavailable = Focused(hwnd, state->epoch) == 0; break;
-        case 3: unavailable = !Perform(hwnd, kRoot, kClick, nullptr, state->epoch); break;
+        case 3: unavailable = !Perform(hwnd, state->node, kClick, nullptr, state->epoch); break;
       }
     }
     state->unavailable.store(unavailable, std::memory_order_release);
@@ -65,14 +66,14 @@ DWORD WINAPI FixtureSender(void* pointer) {
   SendMessageW(state->hwnd, kFixtureMessage, 0, reinterpret_cast<LPARAM>(state.get()));
   return 0;
 }
-jlong QueryFixture_nativeStart(JNIEnv*, jclass, jlong value, jint kind, jboolean direct) {
+jlong QueryFixture_nativeStart(JNIEnv*, jclass, jlong value, jint kind, jlong node, jboolean direct) {
   HWND hwnd = reinterpret_cast<HWND>(static_cast<intptr_t>(value));
   if (!IsAppWindow(hwnd) || kind < 0 || kind > 3 || kFixtureMessage == 0) return 0;
   Subclass(hwnd);  // preserve UIA's original chain, including NCDESTROY cleanup
   Epoch epoch = EpochOf(hwnd);
   if (!epoch || !epoch->alive.load()) return 0;
   auto state = std::make_shared<FixtureQuery>();
-  state->hwnd = hwnd; state->epoch = epoch; state->kind = kind; state->direct = direct == JNI_TRUE;
+  state->hwnd = hwnd; state->epoch = epoch; state->kind = kind; state->node = node; state->direct = direct == JNI_TRUE;
   uint64_t id;
   {
     std::lock_guard<std::mutex> lock(g_fixture_mutex);
@@ -130,15 +131,26 @@ jboolean QueryFixture_nativeJoin(JNIEnv*, jclass, jlong id) {
 jint QueryFixture_nativeActive(JNIEnv*, jclass) { return static_cast<jint>(g_queries->ActiveCount()); }
 jint QueryFixture_nativeAttached(JNIEnv*, jclass) { return static_cast<jint>(g_attached_queries.load()); }
 jint QueryFixture_nativeShutdowns(JNIEnv*, jclass) { return static_cast<jint>(g_fixture_shutdowns.load()); }
+jboolean QueryFixture_nativeStalePerform(JNIEnv*, jclass, jlong id) {
+  std::shared_ptr<FixtureQuery> state;
+  {
+    std::lock_guard<std::mutex> lock(g_fixture_mutex);
+    auto found = g_fixture_queries.find(static_cast<uint64_t>(id));
+    if (found == g_fixture_queries.end()) return JNI_TRUE; // fail the rejection assertion
+    state = found->second;
+  }
+  return Perform(state->hwnd, state->node, kClick, nullptr, state->epoch) ? JNI_TRUE : JNI_FALSE;
+}
 jboolean RegisterQueryFixture(JNIEnv* env, jclass, jclass type) {
   if (!type) return JNI_FALSE;
   const JNINativeMethod methods[] = {
-    {"nativeStart", "(JIZ)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeStart)},
+    {"nativeStart", "(JIJZ)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeStart)},
     {"nativeState", "(J)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeState)},
     {"nativeGeneration", "(J)J", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeGeneration)},
     {"nativeJoin", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeJoin)},
     {"nativeActive", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeActive)},
     {"nativeAttached", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeAttached)},
+    {"nativeStalePerform", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeStalePerform)},
     {"nativeShutdowns", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeShutdowns)},
   };
   bool okay = env->RegisterNatives(type, methods, sizeof(methods) / sizeof(methods[0])) == JNI_OK;
