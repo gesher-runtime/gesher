@@ -12,6 +12,13 @@ startup collector, with zero failures; actual package and both e2e results
 pass. Shared-library contexts and secondary dex remain open. See the
 [cloud-stage report](../handoff/tracks/aot3-cloud.md).
 
+Startup-profile coverage revision: accepted in full ci 40414859801 at
+ca46e99. The observed framework/core supplement compiles selected shipped
+startup code and passes the original size/performance gates on both runners;
+actual package and both e2e results pass. See the
+[startup-stage report](../handoff/tracks/aot3-startup.md). This does not close
+shared-library contexts/secondary dex or claim timing variance is eliminated.
+
 ADR 0054's app/profile/image model is verified in ci 40320549410 at ae75766.
 Its remaining contracts belong to this track, as listed in
 [the brief](../handoff/tracks/aot3.md).
