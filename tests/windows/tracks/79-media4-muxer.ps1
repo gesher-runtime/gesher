@@ -40,7 +40,9 @@ function InvokeMuxer([string] $Exe, [string[]] $Arguments, [hashtable] $Environm
 }
 
 function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [string] $Output) {
-  $text = $Result.Text
+  # Java console and launcher forwarding can produce CRLF or CRCRLF. Keep
+  # every actual record and required count while normalizing only CR bytes.
+  $text = $Result.Text.Replace("`r", '')
   $missing = @(@("media4 muxer ABI: $Abi", "media4 muxer caller: $Caller", 'media4 muxer: all passed',
     'media4 muxer descriptor-access-ownership-seekability: ok', 'media4 muxer empty-lifecycle-and-error-order: ok') |
     Where-Object { -not $text.Contains($_) })
@@ -70,6 +72,16 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   foreach ($line in @($verification.Text -split "`r?`n" | Where-Object { $_ })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
+  $packetAudit = InvokeMuxer (Get-Command python).Source @(
+    "$PSScriptRoot/../../media/ndk-muxer/verify-ogg-packets.py",
+    '--fixture', "$mxDir/fixtures/opus.json", '--output', "$Output/opus-interleaved.ogg") @{} 30
+  Write-Host $packetAudit.Text
+  if ($packetAudit.Code -eq 0 -and $packetAudit.Text.Contains('media4 muxer Ogg packet verification: 0 failure(s)')) {
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): actual Ogg audio packets match every independent source packet with no empty EOS packet"
+  } else {
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent Ogg packet boundary/hash verification exit $($packetAudit.Code)"
+    $script:failed++
+  }
 }
 
 if (-not (Test-Path "$mxDir/mediamuxer-tests.dex") -or -not (Test-Path "$Dir/media_muxer_verify.exe")) {
@@ -87,7 +99,7 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
     $caller = 'JNI'
     if ($mode -eq 'core JNI') {
       $result = InvokeMuxer "$Dir/dalvikvm.exe" ($mxCore + @('-cp', (NoDrive "$mxDir/mediamuxer-tests.dex"),
-        'gesher.MediaMuxerTest', (NoDrive "$native/libmediamuxer_test.so"))) $environment
+        'gesher.MediaMuxerTest', (NoDrive (Resolve-Path "$native/libmediamuxer_test.so").Path))) $environment
     } elseif ($mode -eq 'standalone ELF') {
       $environment['LD_LIBRARY_PATH'] = NoDrive $native
       $caller = 'executable'

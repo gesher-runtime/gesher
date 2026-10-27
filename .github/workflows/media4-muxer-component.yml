@@ -7,6 +7,7 @@ on:
       - .github/workflows/media4-muxer-component.yml
       - tests/windows/run-media4-muxer-component.ps1
       - tests/windows/tracks/79-media4-muxer.ps1
+      - tests/media/ndk-muxer/verify-ogg-packets.py
 permissions:
   contents: read
   actions: read
@@ -36,7 +37,7 @@ jobs:
               $run.run_attempt -ne 1 -or $run.conclusion -cne 'failure') {
             throw 'Unexpected immutable muxer full run/source/attempt'
           }
-          git diff --exit-code $source HEAD -- . ':!docs/**' ':!tests/windows/tracks/79-media4-muxer.ps1' ':!tests/windows/run-media4-muxer-component.ps1' ':!.github/workflows/media4-muxer-component.yml'
+          git diff --exit-code $source HEAD -- . ':!docs/**' ':!tests/windows/tracks/79-media4-muxer.ps1' ':!tests/windows/run-media4-muxer-component.ps1' ':!tests/media/ndk-muxer/verify-ogg-packets.py' ':!.github/workflows/media4-muxer-component.yml'
           if ($LASTEXITCODE -ne 0) { throw 'Component may change only muxer harness/logging; rebuild changed runtime code' }
           $jobs = gh api repos/${{ github.repository }}/actions/runs/40527788805/jobs --paginate | ConvertFrom-Json
           foreach ($name in 'build','framework / framework','graphics / build','angle / build','arm64 / build','boot-image / compile','media / media') {
