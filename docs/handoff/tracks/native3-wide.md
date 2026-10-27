@@ -186,6 +186,13 @@ zone output and malformed zone bytes. The reference uses a host narrow C
 formatter only; narrow strftime/tm code remains unchanged. This correction
 needs scoped CI and the subsequent complete runtime acceptance run.
 
+Scoped 40424755605 at ff72ac0 stopped before reference execution because
+C permits an uninitialized static const aggregate declaration that C++
+requires to be const-default-constructible. The reference mbstate adapter
+now has an explicit zero constructor, preserving C's initialization while
+leaving the original time body unchanged. No assertion was relaxed; the
+new time/error-order source is not yet runtime verified.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.
