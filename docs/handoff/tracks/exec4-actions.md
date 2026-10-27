@@ -25,6 +25,11 @@ scoped dispatch of exec.yml returned HTTP404 because main does not yet
 contain this workflow; no run started from that request. A branch/path push
 trigger bootstraps the ready scoped fixture build on wip/exec4. Scoped exec
 CI must first build the NDK programs and existing Java/APK fixtures.
+Scoped exec CI40458517945 at3e9f2e0db86a03514c1a119998f3680647a8a7c6
+passed. Root read actual job122037370882: both API34 NDK programs compiled
+with Werror, and existing LauncherTailTest/LauncherCommandLineTest passed
+under the CI JVM. This is fixture compilation only; the production guards
+and actual ELF behavior still require full Windows CI.
 Before final full CI merge current integration, including exit-freshness
 once accepted, then read all jobs, both Windows zero summaries and actual
 test74/legacy exec PASS lines, package and both e2e logs.
