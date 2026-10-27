@@ -37,6 +37,17 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Corrected full40512344714 is running at exact96b12ab6f9b5146870c7a373e337f762010eb6f1.
+It includes accepted Net4 integrationbc6e05be through mergef67611d. The17
+non-documentation paths match the prior reviewed scope; only the fixture's
+stream-copy hash differs from revieweda79. All AOT production files are byte
+identical. Actual package122221111380 has23PASS, including installed oatdump,
+window/input and uninstall cleanup; both e2e jobs122222355191/122222355352
+have all ten apps, four transport controls, association/shortcut and zero
+unexpected failures. Both Windows/test73 results remain pending. Root owns
+the separately tracked UnixCopyFile.transfer implementation under libcore-io
+ADR0077/test83; this fixture correction does not close that native API gap.
+
 Full40503913306 at exactc35abe7c is complete red:28jobs20success/6skip/
 2failure. Both Windows jobs122199397625/122199397683 contain707 top PASS and
 only two failures from the first test73 setup call. Files.copy invokes the
