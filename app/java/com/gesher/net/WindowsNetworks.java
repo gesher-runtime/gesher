@@ -5,6 +5,10 @@
 package com.gesher.net;
 
 import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.net.SocketException;
+import java.net.IDN;
+import java.io.FileDescriptor;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -44,6 +48,61 @@ public final class WindowsNetworks {
     private static native void nativeSetInetAllowed(boolean allowed);
 
     private static native boolean nativeInetAllowed();
+
+    private static native String nativeResolve(String host, int ifIndex) throws UnknownHostException;
+    private static native int nativeBindSocket(int fd, int ifIndex);
+    private static native int nativeSocketInterface(int fd);
+    private static native boolean nativeBindProcess(int ifIndex);
+    private static native int nativeProcessInterface();
+
+    private static int interfaceIndex(int netId) {
+        if (netId <= 100) throw new IllegalArgumentException("Invalid network " + netId);
+        return netId - 100;
+    }
+
+    /** Resolve through the chosen interface's DNS servers, bypassing the global cache. */
+    public static InetAddress[] resolve(int netId, String host) throws UnknownHostException {
+        if (host == null || host.isEmpty()) return InetAddress.getAllByName(host);
+        if (host.indexOf('\0') >= 0) throw new UnknownHostException("Invalid host name");
+        load();
+        String query = host.indexOf(':') >= 0 ? host : IDN.toASCII(host);
+        String answer = nativeResolve(query, netId == 0 ? -1 : interfaceIndex(netId));
+        List<InetAddress> addresses = new ArrayList<>();
+        for (String value : answer.split("\n")) {
+            if (!value.isEmpty()) addresses.add(InetAddress.getByAddress(host,
+                    InetAddress.getByName(value).getAddress()));
+        }
+        return addresses.toArray(new InetAddress[0]);
+    }
+
+    public static void bindSocket(FileDescriptor fd, int netId) throws SocketException {
+        if (fd == null) throw new NullPointerException("fd");
+        load();
+        int error = nativeBindSocket(fd.getInt$(), netId == 0 ? 0 : interfaceIndex(netId));
+        if (error != 0) throw new SocketException("Cannot bind socket to network " + netId
+                + " (errno " + error + ")");
+    }
+
+    /** The kernel's outgoing interface for an existing socket (0 means unspecified). */
+    public static int socketInterface(FileDescriptor fd) throws SocketException {
+        load();
+        int result = nativeSocketInterface(fd.getInt$());
+        if (result < 0) throw new SocketException("Cannot read socket interface (errno " + -result + ")");
+        return result;
+    }
+
+    public static boolean bindProcess(int netId) {
+        load();
+        if (!nativeBindProcess(netId == 0 ? 0 : interfaceIndex(netId))) return false;
+        InetAddress.clearDnsCache();
+        return true;
+    }
+
+    public static int processNetwork() {
+        load();
+        int index = nativeProcessInterface();
+        return index == 0 ? 0 : index + 100;
+    }
 
     /** Windows' networks now, as text ({@link #parse} reads it). */
     public static String snapshot() {
@@ -88,6 +147,8 @@ public final class WindowsNetworks {
         public boolean congested;
         /** The Network List Manager reaches the internet through it. */
         public boolean internet;
+        /** Windows' Network List Manager detected a redirecting hotspot. */
+        public boolean captivePortal;
         /** Windows routes the internet through it. */
         public boolean isDefault;
         public String friendlyName = "";
@@ -184,6 +245,11 @@ public final class WindowsNetworks {
                     case "suffix": {
                         Net n = find(nets, f[1]);
                         if (n != null) n.dnsSuffix = f[2];
+                        break;
+                    }
+                    case "portal": {
+                        Net n = find(nets, f[1]);
+                        if (n != null) n.captivePortal = f[2].equals("1");
                         break;
                     }
                     default:

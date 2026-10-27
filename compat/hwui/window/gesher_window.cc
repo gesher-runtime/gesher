@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "gesher_window.h"
+#include "input_pane.h"
 
 namespace gesher {
 namespace {
@@ -151,106 +152,15 @@ struct StartArgs {
   int width, height;
 };
 
-// The touch keyboard's COM interfaces (shobjidl.h), spelled out under names
-// of their own: not every llvm-mingw shobjidl.h has them, nor their GUIDs.
-struct InputPaneHandlerIface : public IUnknown {
-  virtual HRESULT STDMETHODCALLTYPE Showing(RECT* screen, BOOL ensure_focused_in_view) = 0;
-  virtual HRESULT STDMETHODCALLTYPE Hiding(BOOL ensure_focused_in_view) = 0;
-};
-struct InputPaneIface : public IUnknown {
-  virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown* window, InputPaneHandlerIface* handler,
-                                           DWORD* cookie) = 0;
-  virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND hwnd, InputPaneHandlerIface* handler,
-                                                   DWORD* cookie) = 0;
-  virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
-  virtual HRESULT STDMETHODCALLTYPE Location(RECT* screen) = 0;
-};
-const CLSID kClsidFrameworkInputPane = {0xD5120AA3, 0x46BA, 0x44C5,
-                                        {0x82, 0x2D, 0xCA, 0x80, 0x92, 0xC1, 0xFC, 0x72}};
-const IID kIidFrameworkInputPane = {0x5752238B, 0x24F0, 0x495A,
-                                    {0x82, 0xF1, 0x2F, 0xD5, 0x93, 0x05, 0x67, 0x96}};
-const IID kIidFrameworkInputPaneHandler = {0x226C537B, 0x1E76, 0x4D9E,
-                                           {0xA7, 0x60, 0x33, 0xDB, 0x29, 0x92, 0x2F, 0x18}};
-
-// What the touch keyboard tells a window (on the window's thread, an STA):
-// posted to it as kMsgInputPane, the same message tests post.
-class InputPaneHandler final : public InputPaneHandlerIface {
- public:
-  explicit InputPaneHandler(HWND hwnd) : hwnd_(hwnd) {}
-  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
-    if (out == nullptr) return E_POINTER;
-    if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, kIidFrameworkInputPaneHandler)) {
-      *out = static_cast<InputPaneHandlerIface*>(this);
-      AddRef();
-      return S_OK;
-    }
-    *out = nullptr;
-    return E_NOINTERFACE;
-  }
-  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refs_); }
-  ULONG STDMETHODCALLTYPE Release() override {
-    LONG n = InterlockedDecrement(&refs_);
-    if (n == 0) delete this;
-    return static_cast<ULONG>(n);
-  }
-  HRESULT STDMETHODCALLTYPE Showing(RECT* screen, BOOL) override {
-    if (screen != nullptr) {
-      // Its rows: a docked keyboard spans the screen's width (a floating one
-      // is taken as covering those rows too).
-      PostMessageW(hwnd_, kMsgInputPane, static_cast<WPARAM>(screen->top),
-                   static_cast<LPARAM>(screen->bottom));
-    }
-    return S_OK;
-  }
-  HRESULT STDMETHODCALLTYPE Hiding(BOOL) override {
-    PostMessageW(hwnd_, kMsgInputPane, 0, 0);
-    return S_OK;
-  }
-
- private:
-  HWND hwnd_;
-  LONG refs_ = 1;
-};
-
 }  // namespace
 
 void Window::AdviseInputPane() {
   if (popup_ || hwnd_ == nullptr) return;
-  InputPaneIface* pane = nullptr;
-  if (FAILED(CoCreateInstance(kClsidFrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER,
-                              kIidFrameworkInputPane, reinterpret_cast<void**>(&pane))) ||
-      pane == nullptr) {
-    return;  // no touch keyboard on this Windows (Server Core, some SKUs)
-  }
-  auto* handler = new InputPaneHandler(static_cast<HWND>(hwnd_));
-  DWORD cookie = 0;
-  if (FAILED(pane->AdviseWithHWND(static_cast<HWND>(hwnd_), handler, &cookie))) {
-    handler->Release();
-    pane->Release();
-    return;
-  }
-  input_pane_ = pane;
-  input_pane_handler_ = handler;
-  input_pane_cookie_ = cookie;
-  // Shown already (another window had it up).
-  RECT r = {};
-  if (SUCCEEDED(pane->Location(&r)) && r.bottom > r.top && r.right > r.left) {
-    OnInputPane(r.left, r.top, r.right, r.bottom);
-  }
+  input_pane_ = InputPane::Attach(hwnd_, input_pane_factory_);
 }
 
 void Window::UnadviseInputPane() {
-  auto* pane = static_cast<InputPaneIface*>(input_pane_);
-  if (pane != nullptr) {
-    pane->Unadvise(static_cast<DWORD>(input_pane_cookie_));
-    pane->Release();
-  }
-  if (input_pane_handler_ != nullptr) {
-    static_cast<InputPaneHandler*>(input_pane_handler_)->Release();
-  }
-  input_pane_ = nullptr;
-  input_pane_handler_ = nullptr;
-  input_pane_cookie_ = 0;
+  input_pane_.reset();
 }
 
 void Window::OnInputPane(int left, int top, int right, int bottom) {
@@ -274,8 +184,14 @@ void Window::UpdateInputPane() {
     const int t = k[1] > ct ? k[1] : ct, b = k[3] < cb ? k[3] : cb;
     const int l = k[0] > cl ? k[0] : cl, r = k[2] < cr ? k[2] : cr;
     if (b > t && r > l) {
-      covered_top = t - ct;
-      covered_bottom = b - ct;
+      if (l == cl && r == cr && b == cb) {
+        covered_top = t - ct;
+        covered_bottom = b - ct;
+      } else {
+        // A floating/undocked pane is visible but creates no Android edge
+        // inset. Preserve that distinction instead of inventing bottom rows.
+        covered_top = -2;
+      }
     }
   }
   if (covered_top == input_pane_top_ && covered_bottom == input_pane_bottom_) return;
@@ -304,8 +220,11 @@ int Window::Modifiers() const {
   return m;
 }
 
-Window* Window::Create(const std::string& title_utf8, int width, int height) {
-  return Start(new Window(), title_utf8, width, height);
+Window* Window::Create(const std::string& title_utf8, int width, int height,
+                       InputPaneFactory input_pane_factory) {
+  auto* window = new Window();
+  window->input_pane_factory_ = input_pane_factory;
+  return Start(window, title_utf8, width, height);
 }
 
 Window* Window::CreatePopup(const std::string& title_utf8, int width, int height,
@@ -373,6 +292,13 @@ void Window::Run(std::wstring title, int width, int height) {
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
     hwnd_ = hwnd;
+  }
+  // CreateWindowEx with CW_USEDEFAULT can clamp an initial top-level window
+  // to the desktop work area. The Android display/requested client size must
+  // still be exact, including on the hosted runners' small desktops.
+  if (hwnd != nullptr) SetClientSize(width, height);
+  {
+    std::lock_guard<std::mutex> lock(create_mutex_);
     created_ = true;
   }
   create_cv_.notify_all();
@@ -393,6 +319,13 @@ void Window::Run(std::wstring title, int width, int height) {
           quit = true;
           break;
         }
+        // TSF must see a key before TranslateMessage queues its WM_CHAR. Only
+        // our own subclass receives the synchronous stack-local MSG pointer.
+        if (msg.hwnd == hwnd && GetPropW(hwnd, L"GesherImeWindow") != nullptr &&
+            (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP ||
+             msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP) &&
+            SendMessageW(hwnd, RegisterWindowMessageW(L"GesherImeFilterKey"), 0,
+                         reinterpret_cast<LPARAM>(&msg)) != 0) continue;
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }
@@ -670,6 +603,14 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       }
       return 0;
     }
+    case kMsgInputPaneChanged: {
+      if (input_pane_ != nullptr) {
+        int rectangle[4];
+        input_pane_->Screen(rectangle);
+        OnInputPane(rectangle[0], rectangle[1], rectangle[2], rectangle[3]);
+      }
+      return 0;
+    }
     case WM_MOVE:
       if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return -1;
@@ -753,7 +694,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
         client_width_ = w;
         client_height_ = h;
       }
-      if (changed) {
+      if (changed && created_) {
         e.type = WindowEvent::kResize;
         e.width = w;
         e.height = h;
@@ -762,6 +703,12 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return 0;
     }
+    case WM_ACTIVATE:
+      if (LOWORD(wparam) != WA_INACTIVE && HIWORD(wparam) == 0) {
+        e.type = WindowEvent::kActivated;
+        Queue(e);
+      }
+      return -1;  // DefWindowProc retains normal keyboard-focus behavior.
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
       if (msg == WM_KILLFOCUS) held_modifiers_ = 0;  // their key-up messages go elsewhere

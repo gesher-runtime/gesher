@@ -57,13 +57,13 @@ final class GesherWebMessagePort extends WebMessagePort {
     }
 
     /** The end that was sent to the page receives a message from the page. */
-    void fromPage(String data) {
+    void fromPage(WebMessage message) {
         GesherWebMessagePort peer;
         synchronized (this) {
             if (mClosed) return;
             peer = mPeer;
         }
-        if (peer != null) peer.receive(new WebMessage(data));
+        if (peer != null) peer.receive(message);
     }
 
     @Override

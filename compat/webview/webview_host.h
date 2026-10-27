@@ -127,12 +127,21 @@ class Host {
   static void Configure(const std::wstring& user_data_folder, const std::wstring& browser_args);
   // The runtime's version, or an empty string and *hr when none is installed.
   static std::wstring RuntimeVersion(HRESULT* hr);
+  // androidx.webkit's ProxyController (ADR 0058): Chromium's proxy arguments
+  // ("--proxy-server=... --proxy-bypass-list=...", empty: the system's) for
+  // the process's environment. True when they apply (the environment is not
+  // created yet); false when it exists already: they apply to the next one.
+  static bool SetProxyArguments(const std::wstring& args);
 
   // A new WebView. The listener is called on the WebView thread until
   // OnDestroyed.
   static Host* Create(Listener* listener, const HostOptions& options);
 
   void Destroy();  // the Host goes; OnDestroyed follows on the WebView thread
+
+  // The container window WebView2 draws into (null until the WebView thread
+  // made it): accessibility shows WebView2's UI Automation tree there (ADR 0058).
+  HWND Container() const;
 
   // Navigation. headers: "Name: value\r\n..." or empty. A method other than
   // GET (postUrl: POST) sends `body`.

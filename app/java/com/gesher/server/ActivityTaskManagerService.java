@@ -1065,6 +1065,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** The last sequence number given to an activity's override configuration. */
     private int mConfigSeq;
+    private long mDisplaySeq;
 
     /**
      * The override of a task {@code task} in size (null: the display's): its size
@@ -1075,8 +1076,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private synchronized Configuration taskOverride(Rect task, int rotation,
             Configuration global) {
-        Configuration override = task != null ? TaskConfiguration.override(task, rotation)
-                : new Configuration();
+        Configuration override = TaskConfiguration.override(
+                task != null ? task : TaskConfiguration.display(rotation), rotation);
         mConfigSeq = Math.max(mConfigSeq, global.seq) + 1;
         if (mConfigSeq == 0) mConfigSeq = 1;
         override.seq = mConfigSeq;
@@ -1087,7 +1088,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private static Configuration effectiveConfiguration(Configuration global, Rect task,
             int rotation) {
         Configuration c = new Configuration(global);
-        if (task != null) c.updateFrom(TaskConfiguration.override(task, rotation));
+        c.updateFrom(TaskConfiguration.override(
+                task != null ? task : TaskConfiguration.display(rotation), rotation));
         return c;
     }
 
@@ -1157,6 +1159,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         for (ActivityRecord a : reconfigure) ensureConfiguration(a);
+        updateTopResumed();
     }
 
     /** ActivityClientController.getRequestedOrientation. */
@@ -1198,8 +1201,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private void updateTopResumed() {
         ActivityRecord lose = null;
         ActivityRecord gain = null;
+        int displayRotation;
+        long displaySequence;
         synchronized (this) {
             ActivityRecord want = topResumedCandidateLocked();
+            displayRotation = want == null ? Surface.ROTATION_0
+                    : mTaskRotation.get(want.taskId, Surface.ROTATION_0);
+            displaySequence = ++mDisplaySeq;
             if (mTopResumed != null && mTopResumed != want) {
                 if (mTopResumed.topSent && mTopResumed.app != null
                         && mTopResumed.state != State.DESTROYED) {
@@ -1213,6 +1221,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 gain = want;
             }
         }
+        com.gesher.app.window.ApplicationDisplay.update(displayRotation, displaySequence);
         if (lose != null) {
             ClientTransaction t = new ClientTransaction(lose.app.thread);
             t.addTransactionItem(new TopResumedActivityChangeItem(lose.token, false));

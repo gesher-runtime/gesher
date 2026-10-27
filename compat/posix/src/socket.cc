@@ -96,6 +96,25 @@ int gesher_inet_allowed(void) {
   return allowed;
 }
 
+int gesher_bind_socket_interface(int fd, uint32_t if_index) {
+  SocketFd state;
+  if (!Lookup(fd, &state)) return errno;
+  return ws::BindInterface(state.socket, if_index) == 0 ? 0 : errno;
+}
+
+int gesher_socket_interface(int fd, uint32_t* if_index) {
+  if (if_index == nullptr) return EINVAL;
+  SocketFd state;
+  if (!Lookup(fd, &state)) return errno;
+  return ws::BoundInterface(state.socket, if_index) == 0 ? 0 : errno;
+}
+
+int gesher_set_process_interface(uint32_t if_index) {
+  return ws::SetProcessInterface(if_index) == 0 ? 0 : errno;
+}
+
+uint32_t gesher_process_interface(void) { return ws::ProcessInterface(); }
+
 int socket(int domain, int type, int protocol) {
   if (!ws::Startup()) return -1;
   ws::Family family = ToFamily(domain);
@@ -146,13 +165,13 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
   };
   ws::Address a_name, b_name;
   if (ws_type == ws::Type::kStream) {
-    listener = ws::Open(ws::Family::kInet, ws::Type::kStream, 0);
+    listener = ws::Open(ws::Family::kInet, ws::Type::kStream, 0, false);
     ws::Address listen_name;
     if (listener == ws::kInvalidSocket || ws::Bind(listener, any) < 0 ||
         ws::Listen(listener, 1) < 0 || ws::GetSockName(listener, &listen_name) < 0) {
       return fail();
     }
-    a = ws::Open(ws::Family::kInet, ws::Type::kStream, 0);
+    a = ws::Open(ws::Family::kInet, ws::Type::kStream, 0, false);
     if (a == ws::kInvalidSocket || ws::Connect(a, listen_name) < 0 ||
         ws::GetSockName(a, &a_name) < 0) {
       return fail();
@@ -167,8 +186,8 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
     ws::Close(listener);
     listener = ws::kInvalidSocket;
   } else {
-    a = ws::Open(ws::Family::kInet, ws::Type::kDgram, 0);
-    b = ws::Open(ws::Family::kInet, ws::Type::kDgram, 0);
+    a = ws::Open(ws::Family::kInet, ws::Type::kDgram, 0, false);
+    b = ws::Open(ws::Family::kInet, ws::Type::kDgram, 0, false);
     if (a == ws::kInvalidSocket || b == ws::kInvalidSocket || ws::Bind(a, any) < 0 ||
         ws::Bind(b, any) < 0 || ws::GetSockName(a, &a_name) < 0 ||
         ws::GetSockName(b, &b_name) < 0 || ws::Connect(a, b_name) < 0 ||

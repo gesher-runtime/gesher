@@ -370,6 +370,10 @@ foreach ($a in $manifestData.apps) {
       (((ReadText $appLog) + "`n" + $log) -split "`n") | Where-Object { $_ -match $a.diagnoseLog } |
         Select-Object -Last 60 | ForEach-Object { Write-Host "INFO  e2e: ${pkg} log: $($_.TrimEnd())" }
     }
+    if ($log.Contains('did not get ready')) {
+      ((ReadText "$logs\system_server.log") -split "`n") | Select-Object -Last 60 |
+        ForEach-Object { Write-Host "INFO  e2e: system server startup: $($_.TrimEnd())" }
+    }
   }
 }
 

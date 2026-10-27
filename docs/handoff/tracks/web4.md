@@ -38,7 +38,12 @@ integration before final full CI; read package cleanup and both e2e jobs.
 
 ## Status and next steps
 
-Reserved on 2026-10-26. No successor implementation or CI. web3's latest
-40353139413 passes all 14 WebView checks on both runners but the full run
-is red on the independent geocoder teardown/window-log framing issues.
-Its verified stage must merge before dependent web4 implementation.
+Reserved on 2026-10-26. No successor implementation or CI. Web3's latest
+complete diagnostic is 40432795403 at 2755f21, including the coordinator's
+verified startup profile merge2ba9a11. Both original boot gates now pass.
+Windows 2022 has all14Web3/zero failed tests; 2025 fails device A11y teardown
+after all UIA/app assertions complete, then two subsequent device NetActivity
+launches. Package and both required e2e jobs pass. Web3's next source adds
+teardown/tail diagnostics without changing deadlines or oracles. Verified
+Web3 must merge before dependent Web4 implementation in its separate worktree.
+No contract above is closed by scoped passing checks or this handoff correction.
