@@ -1,8 +1,8 @@
 # 0070. Network interface addresses and remaining resolver contracts
 
-Status: verified bounded interface-address candidate, full40469857757 at
-646f9fb1e6b932317c089c829b80ec9d58ee50d0; coordinator acceptance and a
-coherent Windows4 combination follow. Only the two scoped entries receive
+Status: verified bounded interface-address candidate, coherent full40499454478
+at694a4cd6b067f1deea87015bceb2ad2160260154, including accepted Windows4/Web3
+integration6297. Coordinator independent acceptance/merge follows. Only the two scoped entries receive
 verification metadata. Historical baseline counts and remaining Net4
 contracts are unchanged. [Frozen evidence](../handoff/tracks/net4-ifaddrs-final.md).
 
