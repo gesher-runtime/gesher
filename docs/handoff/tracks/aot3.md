@@ -42,9 +42,12 @@ both jobs succeed; actual122174345315 read javac0/0errors, graphics-tests.dex,
 sharedlibraryapp/sharedlibrarybad APKs and all three real DEX jars (549/546/687
 bytes). Native peer independently matched all11 pinned-source audit digests
 and found no blocking issue in graph/registry/SDK/Installer/Dexopt/stale-control
-source. That is bounded static review, not runtime proof. The continuation
-includes coordinator7b49 documentation only above accepted runtime6297.
-One complete full candidate now tests actual PCL/DAG loading, compiled hot
+source. That is bounded static review, not runtime proof. Full40503913306
+uses exactc35abe7c, with the same non-documentation tree as revieweda79 and
+accepted runtime6297. The optional7b49 documentation merge did not occur:
+that abbreviated object name was ambiguous; its earlier inclusion sentence
+was incorrect. No code change, cancellation or duplicate dispatch follows.
+The one complete full candidate now tests actual PCL/DAG loading, compiled hot
 methods/app images, no-reinstall stale rejection, unchanged-APK refresh and
 old-install preservation, alongside all original Windows/package/e2e gates.
 After-resource/DLC actual app+image, secondary/static/SDK and arbitrary
