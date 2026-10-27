@@ -34,6 +34,16 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Prepared source now includes coordinator integration
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (mergef92be5cf). Root personally
+verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296;
+the merged non-doc integration tree matches that source exactly. All five
+network test hashes remain unchanged, and the automatic Services merge retains
+both MediaSession registration and the Windows4 Application Display callbacks.
+Next full verification must use the updated ten-app e2e set, including Just
+Player/Puzzles/TIC80, plus the pending corrected exit-freshness prerequisite.
+No new CI run or local compilation follows from this preparation merge.
+
 Full validation **40447661700** at exact
 `8d97726de522800bccffd994d5e91ae6d5136bbf` is COMPLETE RED: 28 jobs,
 20 success, six skipped and two failed Windows jobs. Actual logs122004647145
