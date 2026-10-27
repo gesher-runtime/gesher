@@ -230,6 +230,10 @@ open; no export inventory or roadmap acceptance is added.
 The next independent native-muxer slice is in progress with scoped compile
 evidence in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
+The branch now also merges accepted integration13603d54, including the
+verified Windows/Web3 and Net4 prerequisites. Git confirms every muxer
+production, fixture, oracle and build file is unchanged from compile-green
+3208ff7d by that merge. Bounded peer review and full runtime CI remain open.
 Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
 libcore I/O83 and test process infrastructure84. Further reservations belong
 to the coordinator.
