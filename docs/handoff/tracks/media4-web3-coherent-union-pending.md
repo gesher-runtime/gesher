@@ -5,6 +5,19 @@ wip/media4-web3-union-pending, C:/work/gesher-media4-muxer. It is not pushed,
 dispatched or merged into phase4. Original f4/7beb/eaa checkpoint refs and
 remote Media d552 remain intact. All commits retain both parent histories.
 
+Superseding ready-for-CI source checkpoint:08909b8bb0b07bd85cf18460b0086eefb7be16eb
+adds exact reviewed canonical wiring58a085a2 after both Native and integrator
+bounded peers. The only CI merge conflict retains explicit productionOFF
+configuration BEFORE the original Exec early build; all current AOT/Media/
+observer additions remain. Original54 assertions/diagnostics/deadlines survive
+with the explicit runtime parameter; all other incoming role/supplier/driver/
+test-only module guards equal58a. Protected previous union production/fixtures
+and inventory remain unchanged. YAML/Python/PowerShell parse and whitespace
+checks passed without local fixture execution, full test60min and both added
+regression hosts retained. The following earlier preparation narrative is
+historical; this source is ready for one freshly frozen canonical qualification
+run, not accepted/integrated code. No CI result is inferred from static checks.
+
 Starting f4a2b372 contains accepted Libcore944 plus Native942/Envb497, Media
 muxer d552 and qualified AOT450/frozen0c1. Their exact scoped/full evidence
 and limits remain in the prior union report. This changed source must qualify
