@@ -4,6 +4,10 @@ on:
     branches: [wip/exec4-spawn]
     paths:
       - .github/workflows/exec4-child.yml
+      - compat/elf/exec/spawn_actions.*
+      - compat/elf/exec/gesher_exec.cc
+      - tests/exec/no-console-spawn.cc
+      - tests/windows/tracks/77-exec4-spawn.ps1
   workflow_dispatch:
 permissions:
   contents: read
