@@ -34,16 +34,32 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
-Current full validation **40447661700** is running at exact
-`8d97726de522800bccffd994d5e91ae6d5136bbf`. It includes the focus-only fix
-and real non-editor fixture below, verified clock/width integration8922a3e
-and the latest single-line integration handoff46c9cc1. Corrected targeted
-framework40446866229 at73ba54f succeeded; actual job122000143076 was read:
-javac zero errors, app jar, graphics dex, winapp and winlegacy built.
-All code in8d matches that targeted source. Root completed source review of
-745fd5a and the pinned branch with no P1 finding; that is not runtime proof.
-Watch: C:/work/gesher-ci-review/windows4-40447661700-watch.log, interval120.
-No full-stage acceptance or roadmap tick before the actual new results.
+Full validation **40447661700** at exact
+`8d97726de522800bccffd994d5e91ae6d5136bbf` is COMPLETE RED: 28 jobs,
+20 success, six skipped and two failed Windows jobs. Actual logs122004647145
+(2022) and122004647104 (2025) each end with four failed checks: the new
+non-editor observation in both modes, and badssl.com positive SNI TCP15s
+timeout plus its network aggregate. The original first-reconversion failure
+is fixed in actual Android: both modes/both runners read and reconvert the
+existing selection, expose live composing spans, complete the Japanese text,
+block password/number edits, reconnect and preserve aXcd/caret2 after the
+partial composition. Native probes, ART binding/configuration/geometry,
+foreground/shared Display, IME35 and target28 legacy resize pass on both.
+Actual main/framework/package and both e2e logs were read; installed runtime,
+window/input/uninstall and all nine apps including Puzzles/TIC80/four
+transport/association/shortcut/zero unexpected pass. This is no full acceptance.
+
+The remaining non-editor failure is fixture control flow: pinned AOSP16
+View.java18307-18328 deliberately takes focus on the first touch of an
+unfocused focusableInTouchMode Button and skips onClick. The logs show the
+real connection becoming null after that tap, but the onClick-only observer
+never runs. The next source invokes the same observer on actual focus gain
+too. It still requires focused=true, accepting=false, HRESULT8000ffff and
+unchanged editor text, followed by real editor recovery. No production code,
+assertion or deadline is weakened. This fixture correction needs new CI.
+Root owns the separately prepared deterministic positive HTTP/SNI test slice;
+no unchanged rerun or network-failure waiver is planned. Corrected targeted
+framework40446866229 at73ba54f is earlier build evidence only.
 
 Latest full diagnostic **40441680201** at exact
 `5b5b51d0b858c6b08602af6450eed2a49025d71f` is COMPLETE RED: 28 jobs,
