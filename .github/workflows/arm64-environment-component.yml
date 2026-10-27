@@ -39,11 +39,11 @@ jobs:
           java-version: '21'
       - name: Build current API3 runtime, launcher, compiler and boot jars
         run: |
-          ninja -C out dalvikvm dex2oat gesher-exec arm64_elf_test
+          ninja -C out dalvikvm dex2oat profman dexdump gesher-exec arm64_elf_test
           tools/build-boot-jars.sh out/boot-jars
           tests/build-test-apps.sh out/test-apps
           mkdir -p dist-component
-          cp out/dalvikvm.exe out/dex2oat.exe out/gesher-exec.exe out/arm64_elf_test.exe dist-component/
+          cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe out/arm64_elf_test.exe dist-component/
           cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
           printf '%s\n' "$GITHUB_SHA" > dist-component/arm64-component-source.txt
       - uses: actions/upload-artifact@v4
@@ -136,9 +136,17 @@ jobs:
           if ($same) {
             Write-Host 'ACTUAL_COMPONENT_BOOT reused immutable Locale image: all five current jars byte-identical'
           } else {
-            tools/boot-image/fetch-profiles.ps1 -Out rebuilt-boot/profiles
-            tools/boot-image/compile.ps1 -Dist dist -Out rebuilt-boot -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles rebuilt-boot/profiles/art-boot-image-profile.txt,rebuilt-boot/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt -TimeoutMinutes 15
-            Copy-Item -Recurse -Force rebuilt-boot/framework/* dist/framework/
+            $workspace = $PWD.Path
+            $profiles = @("$workspace/rebuilt-boot/profiles/art-boot-image-profile.txt",
+                          "$workspace/rebuilt-boot/profiles/framework-boot-image-profile.txt",
+                          "$workspace/tools/boot-image/gesher-startup-profile.txt")
+            & "$workspace/tools/boot-image/fetch-profiles.ps1" -Out "$workspace/rebuilt-boot/profiles"
+            try {
+              & "$workspace/tools/boot-image/compile.ps1" -Dist "$workspace/dist" -Out "$workspace/rebuilt-boot" -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles $profiles -TimeoutMinutes 15
+            } finally {
+              Set-Location -LiteralPath $workspace
+            }
+            Copy-Item -Recurse -Force "$workspace/rebuilt-boot/framework/*" "$workspace/dist/framework/"
             Write-Host 'ACTUAL_COMPONENT_BOOT rebuilt from current native compiler and all five current jars'
           }
       - name: Actual both-ABI Native2 ART/APK, copied JNI V, FPCR/FPSR and variadic contracts
