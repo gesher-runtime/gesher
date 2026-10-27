@@ -64,6 +64,7 @@ int main(int argc, char** argv) {
   while (std::fgets(line, sizeof(line), stdin)) {
     if (std::sscanf(line, "%31s", command) != 1) return Failure("empty command");
     if (std::strcmp(command, "exit") == 0) break;
+    if (std::strcmp(command, "crash") == 0) std::_Exit(23);  // No fd/stdio/registry cleanup.
     int slot = -1, other = -1, flags = 0;
     if (std::strcmp(command, "open") == 0 || std::strcmp(command, "stream") == 0) {
       if (std::sscanf(line, "%*s %d %d %d", &slot, &other, &flags) != 3 || !Slot(slot) || other < 0 || other > 5 || Descriptor(slot) >= 0) return Failure("open command shape");

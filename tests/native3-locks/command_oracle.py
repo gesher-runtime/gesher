@@ -18,6 +18,7 @@ class Client:
     def __init__(self, executable, paths):
         self.process = subprocess.Popen([str(executable), *paths], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.expected_exit = 0
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -73,7 +74,7 @@ class Client:
         else:
             self.process.stdout.close()
         self.process.stdin.close()
-        if self.process.returncode not in (0, None):
+        if self.process.returncode not in (self.expected_exit, None):
             failures.append('worker exit ' + str(self.process.returncode))
         if failures:
             raise AssertionError('; '.join(failures))
@@ -234,6 +235,21 @@ def run(executable):
                 lock(0)
                 command(0, 'contended_stdio 0 1')
                 query(False)
+            # A real owner process exits without any library/stdio cleanup.
+            # Distinct ranges cover process locks and private-anchor OFD locks.
+            command(0, 'open 0 0 2')
+            lock(0)
+            lock(0, cmd=37, start=100)
+            query(True)
+            assert lock(1, cmd=36, start=100)['type'] == 1
+            clients[0].process.stdin.write('crash\n')
+            clients[0].process.stdin.flush()
+            clients[0].expected_exit = 23
+            assert clients[0].process.wait(timeout=5) == 23
+            rows.append(dict(actor=0, command='crash', actual={'exit': 23}))
+            print('ACTUAL_COMMAND_ROW ' + json.dumps(rows[-1], sort_keys=True), flush=True)
+            query(False)
+            assert lock(1, cmd=36, start=100)['type'] == 2
             command(1, 'close 0')
         finally:
             failures = []
