@@ -55,13 +55,35 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
-Root now owns C:\work\gesher-net4, branch wip/net4, from verified native
-integration 8922a3e. The first shared test-fixture slice is prepared with
-Media3: four real local certificate rejections, NetApp HTTPS and deterministic
-HTTP200/two-host SNI selection with missing/unknown-name controls, retaining
-actual example/Google DNS and Google HTTPS204/TLS1.3/SNI/hostname checks.
-Source review is pending; no Net4 runtime/API closure or inventory rewrite.
-The complete Media3 candidate will provide fresh CI proof before integration.
+This worktree is now assigned to the Windows4/Web3/release agent for the
+getifaddrs/freeifaddrs slice only. Root's clean6519f82d merge of verified
+integrationf17d03b1 is preserved; merge latest integration before CI. ADR0070
+and test72 are used, while test71 belongs to Media4 and test73 to AOT3.
+
+Prepared production changes add the two real System V exports and static LP64
+structure/family guards over the existing GetAdaptersAddresses backend.
+The public-entry-at-offset-zero allocation invariant is also asserted. Pinned
+official ifaddrs.cpp matches the saved source byte-for-byte (SHA256
+6416b09b239c2e93585ec57ebfb558a5cb634ad6bd0cf3d98f8429114b4da453), and
+the public/packet headers were read directly from android-16.0.0_r4.
+
+Native2 fixtures now include real list/loopback/IPv4/IPv6/mask/broadcast/
+hardware/index/lifetime checks in both ABI dalvikvm and APK modes. A shared
+NDK implementation also builds as standalone ELF in both ABIs; test72 compares
+those results with a separate Windows .NET adapter snapshot. Media4's narrow
+native2 availability edit is coordinated and is not overwritten. No app Java
+or native2 app build script change is needed. Only PS AST, source/hash and
+diff checks have run locally. All C/C++/Java/C# compilation and every executable
+fixture are CI-only. Runtime/full CI and per-entry metadata remain pending;
+none of the84 historical entries or other contracts is marked closed.
+
+The earlier fixture-only stage is merged through verified Media3 integration
+f17d03b1: four local certificate rejections, NetApp HTTPS and deterministic
+HTTP200/two-host SNI selection with isolated missing/unknown-name controls,
+retaining real example/Google DNS and Google HTTPS204/TLS1.3/SNI/hostname.
+Root personally read full40448521754/dd06d296, all28 jobs, both zero-failure
+summaries, package and both ten-app e2e logs. This fixture verification supplies
+no Net4 runtime/API closure or inventory rewrite.
 
 Earlier Media3 full 40438975894/0148698 remains red only on 2025's five
 external-network failures, despite all media gates passing; no timeout is
