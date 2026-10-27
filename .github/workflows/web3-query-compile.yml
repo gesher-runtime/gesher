@@ -8,6 +8,10 @@ on:
       - 'compat/accessibility/uia_bridge.cc'
       - 'cmake/webview.cmake'
       - 'compat/hwui/window/gesher_window.*'
+      - 'compat/accessibility/query_fixture.inc'
+      - 'app/java/**'
+      - 'tests/web3-query/**'
+      - '.github/workflows/framework.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,6 +22,8 @@ env:
   LLVM_MINGW_TAG: '20261006'
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
   compile:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -27,4 +33,6 @@ jobs:
         with:
           ccache-key: runtime
       - name: Compile actual accessibility objects with their production Werror flags
-        run: ninja -C out gesher_web3 gesher_window
+        run: |
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+          ninja -C out gesher_web3 gesher_window

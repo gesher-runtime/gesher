@@ -52,6 +52,7 @@ void Trace(const char* format, ...) {
   std::fputc('\n', stderr);
 }
 
+std::atomic<unsigned> g_attached_queries{0};
 JavaVM* g_vm = nullptr;
 jclass g_bridge = nullptr;  // com.gesher.app.accessibility.UiaBridge
 jmethodID g_node = nullptr, g_node_at = nullptr, g_focused = nullptr, g_perform = nullptr;
@@ -101,12 +102,16 @@ class ScopedEnv {
     JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("UIA"), nullptr};
     if (g_vm->AttachCurrentThreadAsDaemon(&env_, &args) == JNI_OK) {
       attached_ = true;
+      g_attached_queries.fetch_add(1, std::memory_order_release);
     } else {
       env_ = nullptr;
     }
   }
   ~ScopedEnv() {
-    if (attached_) g_vm->DetachCurrentThread();
+    if (attached_) {
+      g_vm->DetachCurrentThread();
+      g_attached_queries.fetch_sub(1, std::memory_order_release);
+    }
   }
   ScopedEnv(const ScopedEnv&) = delete;
   ScopedEnv& operator=(const ScopedEnv&) = delete;
@@ -749,7 +754,15 @@ jboolean UiaBridge_nativeStart(JNIEnv*, jclass) {
   return JNI_TRUE;
 }
 
+#if defined(GESHER_WEB3_QUERY_TESTS)
+thread_local Query* g_fixture_direct_query = nullptr;
+#endif
 jint UiaBridge_nativeRemaining(JNIEnv*, jclass, jlong token) {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+  if (g_fixture_direct_query && g_fixture_direct_query->token == static_cast<uint64_t>(token)) {
+    return g_fixture_direct_query->RemainingMillis();
+  }
+#endif
   return g_queries->Remaining(static_cast<uint64_t>(token));
 }
 jboolean UiaBridge_nativeShutdown(JNIEnv*, jclass) {
@@ -819,7 +832,14 @@ void UiaBridge_nativeRaise(JNIEnv* env, jclass, jlong hwnd_value, jlong id, jint
   if (SUCCEEDED(com)) CoUninitialize();
 }
 
+#if defined(GESHER_WEB3_QUERY_TESTS)
+#include "query_fixture.inc"
+#endif
+
 const JNINativeMethod kMethods[] = {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+    {"nativeRegisterFixture", "(Ljava/lang/Class;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(RegisterQueryFixture)},
+#endif
     {"nativeStart", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeStart)},
     {"nativeRemaining", "(J)I", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeRemaining)},
     {"nativeShutdown", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeShutdown)},
