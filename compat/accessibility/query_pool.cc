@@ -22,7 +22,8 @@ bool QueryPool::Start() {
   if (started_) return accepting_;
   started_ = true;
   for (size_t i = 0; i < kWorkers; ++i) {
-    threads_[i] = CreateThread(nullptr, 0, ThreadEntry, this, 0, nullptr);
+    threads_[i] = spawn_ != nullptr ? spawn_(ThreadEntry, this)
+                                   : CreateThread(nullptr, 0, ThreadEntry, this, 0, nullptr);
     if (threads_[i] == nullptr) {
       stopping_ = true;
       lock.unlock();

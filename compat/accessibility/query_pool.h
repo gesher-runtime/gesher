@@ -51,7 +51,10 @@ class QueryPool {
  public:
   using Execute = void (*)(Query&) noexcept;
   static constexpr size_t kWorkers = 4, kQueued = 32;
-  explicit QueryPool(Execute execute) : execute_(execute) {}
+  // Optional allocator boundary lets the CI fixture fail the second actual
+  // thread allocation after a real first worker exists. Production uses Win32.
+  using Spawn = HANDLE (*)(LPTHREAD_START_ROUTINE, void*);
+  explicit QueryPool(Execute execute, Spawn spawn = nullptr) : execute_(execute), spawn_(spawn) {}
   // This object is process-owned; it is never destroyed underneath a worker.
   // Stop() closes worker handles only after every callback has returned and
   // detached from ART. No static destructor performs a join.
@@ -69,6 +72,7 @@ class QueryPool {
   void PruneLocked();
   bool JoinThreads(Clock::time_point deadline);
   Execute execute_;
+  Spawn spawn_;
   std::timed_mutex mutex_;
   std::timed_mutex lifecycle_;
   std::condition_variable_any changed_;
