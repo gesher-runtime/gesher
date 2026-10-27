@@ -350,6 +350,20 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+Current full diagnostic **40444053066** is running at exact
+`cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
+instrumentation below and coordinator-verified native clock/width integration
+8922a3e. Those runtime changes are not claimed as the cause of the prior
+teardown failure. Actual main121990960481 confirms patch0573, width/clock
+fixture builds and203ABI/zero problems. Framework121991012602 confirms javac
+zero errors and the new app/graphics/web3 APK. Package121993855040 confirms
+installed oatdump/runtime/window/input/uninstall cleanup. Both actual e2e
+logs121994560872/121994560985 have nine apps including Puzzles/TIC80, four
+transport cases, association/shortcut and zero unexpected failures each.
+The two Windows test jobs121996193503/121996193480 are still running;
+none of those completed checks establishes full Web3 acceptance.
+Watch: C:/work/gesher-ci-review/web3-40444053066-watch.log, interval120.
+
 Completed changed-source full CI **40432795403** uses exact
 `2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
 9dd57f5 (documentation-only after coordinator tip 42cc1c0), including verified
