@@ -350,6 +350,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+For final coherent proof, this prepared Web3 source is merged into the owned
+Windows4 candidate rather than dispatched again unchanged. That candidate
+also includes verified integration30deb08c/exit freshness, ready Exec4test74,
+verified Media4formatc5962291 and only the scoped-verified Net4 cache helper.
+One fresh full source must prove all14Web3 checks, all wrapper/child exits and
+the Windows4/other scoped tests together, plus actual package and both ten-app
+e2e suites. The earlier strict4f25387 result below remains separate evidence;
+it is not retroactively upgraded to fresh-exit or combined-source acceptance.
+
 Prepared source now includes coordinator integration
 f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge079e0d4b). Root personally
 verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296 and
