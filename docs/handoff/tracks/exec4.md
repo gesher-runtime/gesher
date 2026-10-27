@@ -45,7 +45,9 @@ the successful read-mode popen check, before the posix_spawn file-action
 check reports. The existing log lacks RIP/caller context. All prior fully
 green exec3 evidence is retained; no camera or Windows4 causality is claimed.
 
-The next diagnostic run enables the existing capped pre-handler sentinel
+Diagnostic CI40428277638 runs at 610e957. Its watch is
+C:\work\gesher-ci-review\exec4-watch-40428277638.log (120-second interval).
+It enables the existing capped pre-handler sentinel
 record only for the own exec3 APK invocations, with map symbolization and
 phase markers around the actual spawn/file-action/stdio operations. Original
 assertions and native signal/exit behavior are retained. No new local C/C++
