@@ -60,7 +60,7 @@ assertion or deadline is weakened. This fixture correction needs new CI.
 The next source imports the coordinator-reviewed deterministic positive
 HTTP/SNI slice from Media3, source836482975254ec3fbcbbdb190398d65dc79fae11,
 and the earlier two-file NetApp slice. All five resulting network test files
-match the combined patch's authenticated source hashes exactly, including the
+match the combined patch's audited source hashes exactly, including the
 already-present negative fixture. Positive patch SHA256 is
 ae93ceeed2954f7795bdc052383b8a2be9277696236ea6441904b9b016e89689;
 NetApp patch SHA256 is
@@ -72,9 +72,15 @@ identity over an already-connected loopback socket, never a network target.
 Public DNS/Google HTTPS204/TLS1.3/SNI/hostname blocks and all four negative
 certificate causes remain intact. PS syntax and exact hashes pass locally;
 no C#/Java/native compilation or fixture execution occurred. Media full
-40448521754/dd06d296 is still running, so the new SNI fixture is not yet
-runtime-accepted. No new full run is dispatched before its proof and the
-coordinator-owned process-exit freshness prerequisite. No unchanged rerun or
+40448521754 at dd06d296e35ffd47fcecba9d0b88559360163500 is now reported
+complete green (22 success/six skipped). This agent read the actual network
+slice in both logs122008646975/122008646925: HTTP200, two virtual-host names/
+distinct certificate thumbprints, missing/wrong-SNI exact hostname rejections,
+four certificate causes, public Google checks, NetApp and cleanup pass.
+That establishes the identical imported network test slice, not the changed
+Windows4 non-editor fixture or a new combined Windows4 full suite. No new full
+run is dispatched before the coordinator-owned process-exit freshness
+prerequisite. No unchanged rerun or
 network-failure waiver is planned. Corrected targeted framework40446866229
 at73ba54f is earlier build evidence only.
 
