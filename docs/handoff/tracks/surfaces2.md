@@ -60,7 +60,12 @@ Surface2 roadmap row is closed by the first bounded correction below.
 Source-only work is in C:\work\gesher-media4-invalidation on
 wip/media4-invalidation, based on the accepted Windows integration6297e80a
 and Media4's separate format/OpenSL/native/AAudio candidate. No compiler or
-native/JVM/C# fixture is run locally. Full CI is pending source review.
+native/JVM/C# fixture is run locally. Root completed bounded source review
+of exact d239a7e38658ab2853a1344ccf5f893cba28c8bf after three review fixes.
+Full ci40507882249 is running at06d30d403481d3833f0c7d5f99db456841b72062;
+the only later change above reviewed d239 is integration10309b0a's
+services3.md documentation. No runtime acceptance is claimed yet. The
+source remains frozen while the prescribed interval120 watch runs.
 
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
@@ -104,3 +109,10 @@ Java EGL14/GLES20/GLSurfaceView, SurfaceTexture external-OES consumption,
 child transactions, Activity SkiaGL readback, hardware storage/fences,
 Vulkan and every other required item above remain open. No new API coverage
 metadata or roadmap acceptance is claimed before a complete green full run.
+
+Separate test-infrastructure leftovers were reported to the coordinator:
+legacy SurfaceRun in52-surfaces.ps1 and InvokeOpenSl in76-media4-opensl.ps1
+still use an unbounded post-kill WaitForExit(). The new helper in test80
+bounds termination and both redirected pipes, but the legacy shared helpers
+need their own reviewed correction and CI evidence outside this frozen
+candidate. This source review does not mark those leftovers fixed.

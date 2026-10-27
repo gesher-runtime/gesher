@@ -175,6 +175,19 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Corrected coherent Surface/AAudio full ci40507882249 is running at
+06d30d403481d3833f0c7d5f99db456841b72062. Root reviewed exact d239a7e3,
+including generation-conditioned failed-post release, seven controlled
+gate cases, bounded new process/pipe waits, four real producer-only EGL
+contexts and original mandatory untraced TIC followed by a separate
+mandatory traced scenario. The only change above reviewed d239 is the
+latest integration10309b0a services3.md documentation. No runtime or new
+AAudio inventory acceptance is claimed before actual complete full logs.
+Source is frozen; later status commits are documentation only. Legacy
+SurfaceRun/test76 post-kill waits remain separate reported infrastructure
+leftovers. Source-only native muxer4a6b5c9b remains in its separate branch
+and is not included here.
+
 The corrected coherent candidate is prepared separately in
 C:\work\gesher-media4-invalidation / wip/media4-invalidation after merging
 accepted Windows integration6297e80a. Its bounded Surface2 invalidation
