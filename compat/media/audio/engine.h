@@ -133,6 +133,8 @@ class Track : public std::enable_shared_from_this<Track> {
   uint32_t buffer_size_frames() const;
   int SetBufferSizeFrames(uint32_t frames);
   uint32_t underrun_frames() const;
+  // Cumulative transitions into underrun, distinct from the frames missing.
+  uint32_t underrun_count() const;
   uint32_t LatencyMs() const;
 
   // Streaming: frames written and not yet played.
@@ -188,6 +190,7 @@ class Track : public std::enable_shared_from_this<Track> {
   uint32_t update_period_ = 0;
   uint64_t next_update_ = 0;
   uint32_t underrun_frames_ = 0;
+  uint32_t underrun_count_ = 0;
   bool was_underrun_ = false;
   bool end_signalled_ = false;
   int starved_ticks_ = 0;

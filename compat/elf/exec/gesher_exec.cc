@@ -255,6 +255,7 @@ DWORD WINAPI ProgramThread(void*) {
   gesher::bionic::AddBionicSymbol("_Exit", reinterpret_cast<void*>(&UnderscoreExit));
   gesher::bionic::AddBionicSymbol("getauxval", reinterpret_cast<void*>(&Getauxval));
   gesher::bionic::AddBionicSymbol("environ", &g_environ);
+  gesher::bionic::AddBionicSymbol("__environ", &g_environ);
   gesher::bionic::AddBionicSymbol("__progname", &g_progname);
 
   int argc = static_cast<int>(p.args.size());
