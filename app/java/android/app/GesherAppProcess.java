@@ -180,6 +180,9 @@ public final class GesherAppProcess {
         com.gesher.app.window.ApplicationDisplay.installClient();
         // Cameras are served in the app's own process (docs/devices.md): media.camera.
         com.gesher.server.CameraService.installInProcess();
+        // Accessibility over UI Automation and Windows' proxy (web3 track, ADR 0058).
+        com.gesher.app.accessibility.AccessibilityService.installInProcess();
+        com.gesher.net.WindowsProxy.installInProcess();
 
         withoutSystemFonts();
         // No vsync source yet (DisplayEventReceiver's natives are stand-ins that never
