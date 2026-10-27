@@ -114,11 +114,15 @@ if (Test-Path "$Dir/mediaapp.apk") {
       $c.Response.Close()
     }
   }
+  $env:GESHER_MEDIA_TRACE_PREPARE = '1'
   $env:GESHER_AUDIO_CAPTURE = $appCapture
   $mediaOut = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpMedia" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/mediaapp.apk") 2>&1 | Out-String
   $mediaExit = $LASTEXITCODE
-  Remove-Item Env:GESHER_AUDIO_CAPTURE
+  Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_PREPARE
+  foreach ($trace in @($mediaOut -split "`n" | Where-Object { $_ -match 'player prepare trace:' } | Select-Object -First 16)) {
+    Write-Host "INFO  media prepare: $($trace.Trim())"
+  }
   Stop-Job $httpServer; Remove-Job $httpServer -Force
   $appWav = Get-ChildItem $appCapture -Filter 'audio-*.wav' | Sort-Object LastWriteTime | Select-Object -Last 1
   Check 'media: AudioTrack in mediaapp.apk: streaming (short, byte, direct ByteBuffer writes) and static tracks, 8-bit/16-bit/float, mono and stereo, a marker, periodic notifications, loop points, setPlaybackRate, getTimestamp, AudioTrack.Builder''s defaults' {

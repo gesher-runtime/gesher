@@ -12,6 +12,7 @@
 #include "../video/video_decoder.h"
 #include "decoder.h"
 #include "extractor.h"
+#include "prepare_trace.h"
 
 // hostgraphics' ANativeWindow references (dalvikvm defines them).
 extern "C" {
@@ -208,8 +209,10 @@ class Playback : public std::enable_shared_from_this<Playback> {
   }
 
   bool Open() {
+    PrepareTrace prepare_trace("MediaPlayer.Open");
     std::string error;
     extractor_ = Extractor::Open(source_, &error);
+    prepare_trace.Step("extractor");
     if (extractor_ == nullptr) {
       MEDIA_LOGE("player: %s", error.c_str());
       Notify(kMediaError, kMediaErrorUnsupported, 0);
@@ -224,7 +227,9 @@ class Playback : public std::enable_shared_from_this<Playback> {
       Format f = extractor_->TrackFormat(i);
       std::string mime = f.Mime();
       if (mime.rfind("video/", 0) != 0) continue;
+      prepare_trace.Step("video metadata");
       video_decoder_ = VideoDecoder::Create(f, &error);
+      prepare_trace.Step("video decoder");
       if (video_decoder_ == nullptr) {
         MEDIA_LOGW("player: %s", error.c_str());
         continue;
@@ -248,12 +253,15 @@ class Playback : public std::enable_shared_from_this<Playback> {
       Format f = extractor_->TrackFormat(i);
       std::string mime = f.Mime();
       if (mime.rfind("audio/", 0) != 0) continue;
+      prepare_trace.Step("audio metadata");
       decoder_ = AudioDecoder::Create(f, &error);
+      prepare_trace.Step("audio decoder");
       if (decoder_ == nullptr) {
         unsupported = error;
         continue;
       }
       reader_ = extractor_->OpenTrack(i);
+      prepare_trace.Step("audio reader");
       int64_t d = -1;
       if (!f.GetInt64("durationUs", &d)) d = file_duration;
       std::lock_guard<std::mutex> lock(mu_);
@@ -270,6 +278,7 @@ class Playback : public std::enable_shared_from_this<Playback> {
       Notify(kMediaError, kMediaErrorUnsupported, 0);
       return false;
     }
+    prepare_trace.Complete();
     return true;
   }
 
