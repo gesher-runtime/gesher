@@ -142,6 +142,7 @@ public final class GesherAppProcess {
             if (am != null) {
                 am.linkToDeath(() -> {
                     System.err.println(TAG + ": the system server died; exiting");
+                    if (!com.gesher.app.accessibility.UiaBridge.shutdown()) Runtime.getRuntime().halt(1);
                     System.exit(3);
                 }, 0);
             }
@@ -164,6 +165,7 @@ public final class GesherAppProcess {
         }
         System.out.flush();
         System.err.flush();
+        if (!com.gesher.app.accessibility.UiaBridge.shutdown()) Runtime.getRuntime().halt(1);
         System.exit(code);
     }
 

@@ -35,8 +35,15 @@ target_link_libraries(dalvikvm PRIVATE ${_wv_libs})
 # AccessibilityNodeProvider) and Windows' proxy settings
 # (libgesher_proxy.so), builtin libraries of dalvikvm.
 add_library(gesher_web3 OBJECT ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_bridge.cc
+  ${CMAKE_SOURCE_DIR}/compat/accessibility/query_pool.cc
   ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_client.cc ${CMAKE_SOURCE_DIR}/compat/net/windows_proxy.cc)
 target_link_libraries(gesher_web3 PRIVATE nativehelper gesher_posix)
 target_compile_options(gesher_web3 PRIVATE -Wall -Werror -Wno-unused-parameter)
 target_sources(dalvikvm PRIVATE $<TARGET_OBJECTS:gesher_web3>)
 target_link_libraries(dalvikvm PRIVATE uiautomationcore oleaut32 ole32 winhttp user32 advapi32)
+
+# Test-only HWND dispatch hook, absent from normal runtime/package builds.
+option(GESHER_WEB3_QUERY_TESTS "Compile the real-window query contention fixture hook" OFF)
+if(GESHER_WEB3_QUERY_TESTS)
+  target_compile_definitions(gesher_web3 PRIVATE GESHER_WEB3_QUERY_TESTS=1)
+endif()

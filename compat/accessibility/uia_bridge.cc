@@ -35,6 +35,8 @@
 #include <gesher/builtin_library.h>
 #include <jni.h>
 #include <nativehelper/jni_macros.h>
+#include "query_pool.h"
+#include "../hwui/window/gesher_window.h"
 
 namespace {
 
@@ -50,9 +52,44 @@ void Trace(const char* format, ...) {
   std::fputc('\n', stderr);
 }
 
+std::atomic<unsigned> g_attached_queries{0};
+std::atomic<bool> g_detach_failed{false};
 JavaVM* g_vm = nullptr;
 jclass g_bridge = nullptr;  // com.gesher.app.accessibility.UiaBridge
 jmethodID g_node = nullptr, g_node_at = nullptr, g_focused = nullptr, g_perform = nullptr;
+
+using gesher::accessibility::Query;
+using gesher::accessibility::QueryKind;
+using gesher::accessibility::QueryPool;
+using gesher::accessibility::WindowEpoch;
+using Epoch = std::shared_ptr<WindowEpoch>;
+std::mutex g_epochs_mutex;
+std::map<HWND, Epoch> g_epochs;
+uint64_t g_next_generation = 1;
+void ExecuteQuery(Query& request) noexcept;
+// Deliberately process-owned: a failed bounded drain must never destruct a
+// pool or its handles underneath a still-attached worker.
+QueryPool* const g_queries = new QueryPool(ExecuteQuery);
+
+Epoch EpochOf(HWND hwnd) {
+  std::lock_guard<std::mutex> lock(g_epochs_mutex);
+  auto found = g_epochs.find(hwnd);
+  return found != g_epochs.end() ? found->second : nullptr;
+}
+void RetireWindow(void* value) {
+  HWND hwnd = static_cast<HWND>(value);
+  Epoch epoch;
+  {
+    std::lock_guard<std::mutex> lock(g_epochs_mutex);
+    auto found = g_epochs.find(hwnd);
+    // No provider/request exists for an unregistered HWND. Inserting a
+    // tombstone here would survive an unsubclassed NCDESTROY and poison reuse.
+    if (found == g_epochs.end()) return;
+    epoch = found->second;
+    epoch->alive.store(false, std::memory_order_release);
+  }
+  g_queries->Retire(epoch);
+}
 
 // The calling thread's JNIEnv for one call into Java. UI Automation calls the
 // providers on threads of its own, which end whenever UIA likes: a thread
@@ -66,12 +103,20 @@ class ScopedEnv {
     JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("UIA"), nullptr};
     if (g_vm->AttachCurrentThreadAsDaemon(&env_, &args) == JNI_OK) {
       attached_ = true;
+      g_attached_queries.fetch_add(1, std::memory_order_release);
     } else {
       env_ = nullptr;
     }
   }
   ~ScopedEnv() {
-    if (attached_) g_vm->DetachCurrentThread();
+    if (attached_) {
+      if (g_vm->DetachCurrentThread() == JNI_OK) {
+        g_attached_queries.fetch_sub(1, std::memory_order_release);
+      } else {
+        g_detach_failed.store(true, std::memory_order_release);
+        std::fprintf(stderr, "gesher-a11y: DetachCurrentThread FAILED\n");
+      }
+    }
   }
   ScopedEnv(const ScopedEnv&) = delete;
   ScopedEnv& operator=(const ScopedEnv&) = delete;
@@ -184,61 +229,79 @@ Node Parse(const std::wstring& s) {
 // The root's id: UiaBridge's ROOT (AccessibilityNodeInfo.ROOT_NODE_ID).
 constexpr int64_t kRoot = -1;
 
-Node GetNode(HWND hwnd, int64_t id) {
-  DWORD started = GetTickCount();
-  Trace("node %lld of %p: attach", static_cast<long long>(id), hwnd);
+// All four actual JNI calls execute only on bounded native workers. The
+// deadline exists before ScopedEnv can attach to ART or initialize a class.
+void ExecuteQuery(Query& q) noexcept {
   ScopedEnv scoped;
   JNIEnv* env = scoped.get();
-  if (env == nullptr || g_bridge == nullptr) return Node();
-  Trace("node %lld of %p: Java query", static_cast<long long>(id), hwnd);
-  auto s = static_cast<jstring>(env->CallStaticObjectMethod(
-      g_bridge, g_node, static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)), static_cast<jlong>(id)));
-  Clear(env);
-  if (s == nullptr) return Node();
-  Node n = Parse(Str(env, s));
-  Trace("node %lld: parent %lld, %zu children, hosted %p, %lu ms",
-        static_cast<long long>(id), static_cast<long long>(n.parent), n.children.size(), n.hosted,
-        GetTickCount() - started);
-  env->DeleteLocalRef(s);
-  return n;
+  if (env == nullptr || g_bridge == nullptr || !q.Active()) return;
+  const jlong hwnd = static_cast<jlong>(q.hwnd);
+  const jlong token = static_cast<jlong>(q.token);
+  const jlong generation = static_cast<jlong>(q.window->generation);
+  switch (q.kind) {
+    case QueryKind::kNode: {
+      auto value = static_cast<jstring>(env->CallStaticObjectMethod(
+          g_bridge, g_node, hwnd, static_cast<jlong>(q.id), token, generation));
+      Clear(env);
+      if (value != nullptr) {
+        if (q.Active()) q.node = Str(env, value);
+        env->DeleteLocalRef(value);
+      }
+      q.okay = q.Active() && !q.node.empty();
+      break;
+    }
+    case QueryKind::kNodeAt:
+      q.answer = env->CallStaticLongMethod(g_bridge, g_node_at, hwnd, q.x, q.y, token, generation);
+      Clear(env);
+      q.okay = q.Active();
+      break;
+    case QueryKind::kFocused:
+      q.answer = env->CallStaticLongMethod(g_bridge, g_focused, hwnd, token, generation);
+      Clear(env);
+      q.okay = q.Active();
+      break;
+    case QueryKind::kPerform: {
+      jstring text = env->NewString(reinterpret_cast<const jchar*>(q.text.data()),
+                                   static_cast<jsize>(q.text.size()));
+      if (q.Active() && !env->ExceptionCheck()) {
+        q.answer = env->CallStaticBooleanMethod(g_bridge, g_perform, hwnd,
+            static_cast<jlong>(q.id), q.action, text, token, generation) == JNI_TRUE;
+      }
+      Clear(env);
+      if (text != nullptr) env->DeleteLocalRef(text);
+      q.okay = q.Active();
+      break;
+    }
+  }
+  // ScopedEnv detaches before QueryPool publishes done or clears active_.
 }
 
-int64_t NodeAt(HWND hwnd, POINT client) {
-  ScopedEnv scoped;
-  JNIEnv* env = scoped.get();
-  if (env == nullptr) return 0;
-  jlong r = env->CallStaticLongMethod(g_bridge, g_node_at,
-                                      static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)),
-                                      static_cast<jint>(client.x), static_cast<jint>(client.y));
-  Clear(env);
-  return r;
+std::shared_ptr<Query> Request(HWND hwnd, const Epoch& epoch, QueryKind kind) {
+  auto q = std::make_shared<Query>();
+  q->hwnd = reinterpret_cast<uintptr_t>(hwnd);
+  q->window = epoch;
+  q->kind = kind;
+  return q;
 }
-
-int64_t Focused(HWND hwnd) {
-  ScopedEnv scoped;
-  JNIEnv* env = scoped.get();
-  if (env == nullptr) return 0;
-  jlong r = env->CallStaticLongMethod(g_bridge, g_focused,
-                                      static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)));
-  Clear(env);
-  return r;
+Node GetNode(HWND hwnd, int64_t id, const Epoch& epoch) {
+  auto q = Request(hwnd, epoch, QueryKind::kNode);
+  q->id = id;
+  return g_queries->Run(q) ? Parse(q->node) : Node();
 }
-
+int64_t NodeAt(HWND hwnd, POINT client, const Epoch& epoch) {
+  auto q = Request(hwnd, epoch, QueryKind::kNodeAt);
+  q->x = client.x; q->y = client.y;
+  return g_queries->Run(q) ? q->answer : 0;
+}
+int64_t Focused(HWND hwnd, const Epoch& epoch) {
+  auto q = Request(hwnd, epoch, QueryKind::kFocused);
+  return g_queries->Run(q) ? q->answer : 0;
+}
 enum Action : int32_t { kClick = 1, kFocus = 2, kSetText = 3, kShowOnScreen = 5 };
-
-bool Perform(HWND hwnd, int64_t id, int32_t action, const wchar_t* text) {
-  ScopedEnv scoped;
-  JNIEnv* env = scoped.get();
-  if (env == nullptr) return false;
-  jstring jt = text != nullptr
-      ? env->NewString(reinterpret_cast<const jchar*>(text), static_cast<jsize>(wcslen(text)))
-      : nullptr;
-  jboolean r = env->CallStaticBooleanMethod(g_bridge, g_perform,
-                                            static_cast<jlong>(reinterpret_cast<intptr_t>(hwnd)),
-                                            static_cast<jlong>(id), action, jt);
-  Clear(env);
-  if (jt != nullptr) env->DeleteLocalRef(jt);
-  return r == JNI_TRUE;
+bool Perform(HWND hwnd, int64_t id, int32_t action, const wchar_t* text, const Epoch& epoch) {
+  auto q = Request(hwnd, epoch, QueryKind::kPerform);
+  q->id = id; q->action = action; q->text = text != nullptr ? text : L"";
+  return g_queries->Run(q) && q->answer != 0;
 }
 
 BSTR Bstr(const std::wstring& s) { return SysAllocStringLen(s.data(), static_cast<UINT>(s.size())); }
@@ -253,9 +316,11 @@ class Element final : public IRawElementProviderSimple,
                       public IValueProvider,
                       public IToggleProvider {
  public:
-  Element(HWND hwnd, int64_t id) : hwnd_(hwnd), id_(id) {}
+  Element(HWND hwnd, int64_t id, Epoch epoch) : hwnd_(hwnd), id_(id), epoch_(std::move(epoch)) {}
 
-  static Element* Make(HWND hwnd, int64_t id) { return new Element(hwnd, id); }
+  static Element* Make(HWND hwnd, int64_t id, Epoch epoch = nullptr) {
+    return new Element(hwnd, id, epoch ? std::move(epoch) : EpochOf(hwnd));
+  }
 
   // IUnknown
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
@@ -404,6 +469,7 @@ class Element final : public IRawElementProviderSimple,
   HRESULT STDMETHODCALLTYPE get_HostRawElementProvider(IRawElementProviderSimple** out) override {
     if (out == nullptr) return E_POINTER;
     *out = nullptr;
+    if (!epoch_ || !epoch_->alive.load()) return UIA_E_ELEMENTNOTAVAILABLE;
     if (id_ == kRoot) return UiaHostProviderFromHwnd(hwnd_, out);
     Node n = Get();
     if (n.ok && n.hosted != nullptr && IsWindow(n.hosted)) return UiaHostProviderFromHwnd(n.hosted, out);
@@ -417,11 +483,11 @@ class Element final : public IRawElementProviderSimple,
     *out = nullptr;
     std::vector<int64_t> pending{kRoot};
     for (size_t i = 0; i < pending.size() && i < 2000; ++i) {
-      Node n = GetNode(hwnd_, pending[i]);
+      Node n = GetNode(hwnd_, pending[i], epoch_);
       if (!n.ok) continue;
       if (n.hosted == hosted) {
         Trace("override child %p: Android node %lld", hosted, static_cast<long long>(pending[i]));
-        *out = static_cast<IRawElementProviderSimple*>(Make(hwnd_, pending[i]));
+        *out = static_cast<IRawElementProviderSimple*>(Make(hwnd_, pending[i], epoch_));
         return S_OK;
       }
       if (n.hosted == nullptr) pending.insert(pending.end(), n.children.begin(), n.children.end());
@@ -454,7 +520,7 @@ class Element final : public IRawElementProviderSimple,
       case NavigateDirection_NextSibling:
       case NavigateDirection_PreviousSibling: {
         if (id_ == kRoot) return S_OK;
-        Node p = GetNode(hwnd_, n.parent == 0 || IsRootId(n.parent) ? kRoot : n.parent);
+        Node p = GetNode(hwnd_, n.parent == 0 || IsRootId(n.parent) ? kRoot : n.parent, epoch_);
         if (!p.ok) return S_OK;
         for (size_t i = 0; i < p.children.size(); i++) {
           if (p.children[i] != n.id) continue;
@@ -471,7 +537,7 @@ class Element final : public IRawElementProviderSimple,
       }
     }
     if (!found) return S_OK;
-    *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, target));
+    *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, target, epoch_));
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE GetRuntimeId(SAFEARRAY** out) override {
@@ -490,6 +556,7 @@ class Element final : public IRawElementProviderSimple,
     if (out == nullptr) return E_POINTER;
     *out = {0, 0, 0, 0};
     RECT r;
+    if (!epoch_ || !epoch_->alive.load()) return UIA_E_ELEMENTNOTAVAILABLE;
     if (id_ == kRoot) {
       GetClientRect(hwnd_, &r);
     } else {
@@ -510,12 +577,12 @@ class Element final : public IRawElementProviderSimple,
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE SetFocus() override {
-    Perform(hwnd_, id_, kFocus, nullptr);
+    Perform(hwnd_, id_, kFocus, nullptr, epoch_);
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE get_FragmentRoot(IRawElementProviderFragmentRoot** out) override {
     if (out == nullptr) return E_POINTER;
-    *out = static_cast<IRawElementProviderFragmentRoot*>(Make(hwnd_, kRoot));
+    *out = static_cast<IRawElementProviderFragmentRoot*>(Make(hwnd_, kRoot, epoch_));
     return S_OK;
   }
 
@@ -525,25 +592,25 @@ class Element final : public IRawElementProviderSimple,
     if (out == nullptr) return E_POINTER;
     POINT p = {static_cast<LONG>(x), static_cast<LONG>(y)};
     ScreenToClient(hwnd_, &p);
-    int64_t id = NodeAt(hwnd_, p);
-    *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, id != 0 ? id : kRoot));
+    int64_t id = NodeAt(hwnd_, p, epoch_);
+    *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, id != 0 ? id : kRoot, epoch_));
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE GetFocus(IRawElementProviderFragment** out) override {
     if (out == nullptr) return E_POINTER;
     *out = nullptr;
-    int64_t id = Focused(hwnd_);
-    if (id != 0) *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, id));
+    int64_t id = Focused(hwnd_, epoch_);
+    if (id != 0) *out = static_cast<IRawElementProviderFragment*>(Make(hwnd_, id, epoch_));
     return S_OK;
   }
 
   // IInvokeProvider
   HRESULT STDMETHODCALLTYPE Invoke() override {
-    return Perform(hwnd_, id_, kClick, nullptr) ? S_OK : UIA_E_ELEMENTNOTENABLED;
+    return Perform(hwnd_, id_, kClick, nullptr, epoch_) ? S_OK : UIA_E_ELEMENTNOTENABLED;
   }
   // IValueProvider
   HRESULT STDMETHODCALLTYPE SetValue(LPCWSTR value) override {
-    return Perform(hwnd_, id_, kSetText, value != nullptr ? value : L"") ? S_OK
+    return Perform(hwnd_, id_, kSetText, value != nullptr ? value : L"", epoch_) ? S_OK
                                                                         : UIA_E_ELEMENTNOTENABLED;
   }
   HRESULT STDMETHODCALLTYPE get_Value(BSTR* out) override {
@@ -560,7 +627,7 @@ class Element final : public IRawElementProviderSimple,
   }
   // IToggleProvider
   HRESULT STDMETHODCALLTYPE Toggle() override {
-    return Perform(hwnd_, id_, kClick, nullptr) ? S_OK : UIA_E_ELEMENTNOTENABLED;
+    return Perform(hwnd_, id_, kClick, nullptr, epoch_) ? S_OK : UIA_E_ELEMENTNOTENABLED;
   }
   HRESULT STDMETHODCALLTYPE get_ToggleState(ToggleState* out) override {
     if (out == nullptr) return E_POINTER;
@@ -577,6 +644,7 @@ class Element final : public IRawElementProviderSimple,
 
   // The node, read again when 200 ms old (a UIA client asks many properties in a row).
   Node Get() {
+    if (!epoch_ || !epoch_->alive.load(std::memory_order_acquire)) return Node();
     DWORD now = GetTickCount();
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -584,8 +652,9 @@ class Element final : public IRawElementProviderSimple,
     }
     // Java can raise a UIA event while answering the query. Do not hold this
     // provider's lock across that callback: UIA may query the same element again.
-    Node node = GetNode(hwnd_, id_);
+    Node node = GetNode(hwnd_, id_, epoch_);
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!epoch_->alive.load(std::memory_order_acquire)) return Node();
     node_ = std::move(node);
     cached_ = true;
     read_at_ = GetTickCount();
@@ -595,6 +664,7 @@ class Element final : public IRawElementProviderSimple,
   std::atomic<ULONG> refs_{1};
   HWND hwnd_;
   int64_t id_;
+  const Epoch epoch_;
   std::mutex mutex_;
   bool cached_ = false;
   DWORD read_at_ = 0;
@@ -623,6 +693,8 @@ LRESULT CALLBACK SubclassProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     return r;
   }
   if (msg == WM_NCDESTROY) {
+    RetireWindow(hwnd);
+    { std::lock_guard<std::mutex> lock(g_epochs_mutex); g_epochs.erase(hwnd); }
     UiaReturnRawElementProvider(hwnd, 0, 0, nullptr);
     std::lock_guard<std::mutex> lock(g_windows_mutex);
     g_original.erase(hwnd);
@@ -645,7 +717,11 @@ void Subclass(HWND hwnd) {
   if (g_original.count(hwnd)) return;
   auto previous = reinterpret_cast<WNDPROC>(
       SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&SubclassProc)));
-  if (previous != nullptr) g_original[hwnd] = previous;
+  if (previous != nullptr) {
+    g_original[hwnd] = previous;
+    std::lock_guard<std::mutex> epoch_lock(g_epochs_mutex);
+    if (!g_epochs.count(hwnd)) g_epochs[hwnd] = std::make_shared<WindowEpoch>(g_next_generation++);
+  }
 }
 
 BOOL CALLBACK EnumOne(HWND hwnd, LPARAM) {
@@ -674,11 +750,33 @@ DWORD WINAPI HelperMain(void*) {
 std::once_flag g_start_once;
 
 jboolean UiaBridge_nativeStart(JNIEnv*, jclass) {
+  if (!g_queries->Start()) return JNI_FALSE;
+  gesher::Window::SetRetireCallback(RetireWindow);
   std::call_once(g_start_once, [] {
     HANDLE t = CreateThread(nullptr, 0, HelperMain, nullptr, 0, nullptr);
     if (t != nullptr) CloseHandle(t);
   });
   return JNI_TRUE;
+}
+
+#if defined(GESHER_WEB3_QUERY_TESTS)
+thread_local Query* g_fixture_direct_query = nullptr;
+std::atomic<unsigned> g_fixture_shutdowns{0};
+#endif
+jint UiaBridge_nativeRemaining(JNIEnv*, jclass, jlong token) {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+  if (g_fixture_direct_query && g_fixture_direct_query->token == static_cast<uint64_t>(token)) {
+    return g_fixture_direct_query->RemainingMillis();
+  }
+#endif
+  return g_queries->Remaining(static_cast<uint64_t>(token));
+}
+jboolean UiaBridge_nativeShutdown(JNIEnv*, jclass) {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+  g_fixture_shutdowns.fetch_add(1, std::memory_order_release);
+#endif
+  return g_queries->Stop() && !g_detach_failed.load(std::memory_order_acquire) &&
+         g_attached_queries.load(std::memory_order_acquire) == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 jboolean UiaBridge_nativeScreenReader(JNIEnv*, jclass) {
@@ -744,8 +842,17 @@ void UiaBridge_nativeRaise(JNIEnv* env, jclass, jlong hwnd_value, jlong id, jint
   if (SUCCEEDED(com)) CoUninitialize();
 }
 
+#if defined(GESHER_WEB3_QUERY_TESTS)
+#include "query_fixture.inc"
+#endif
+
 const JNINativeMethod kMethods[] = {
+#if defined(GESHER_WEB3_QUERY_TESTS)
+    {"nativeRegisterFixture", "(Ljava/lang/Class;)Z", NATIVEHELPER_SYSV_JNI_ENTRY(RegisterQueryFixture)},
+#endif
     {"nativeStart", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeStart)},
+    {"nativeRemaining", "(J)I", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeRemaining)},
+    {"nativeShutdown", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeShutdown)},
     {"nativeScreenReader", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeScreenReader)},
     {"nativeClientsListening", "()Z", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeClientsListening)},
     {"nativeRaise", "(JJILjava/lang/String;)V", NATIVEHELPER_SYSV_JNI_ENTRY(UiaBridge_nativeRaise)},
@@ -765,10 +872,10 @@ jint OnLoad(JavaVM* vm, void*) {
   jclass c = env->FindClass("com/gesher/app/accessibility/UiaBridge");
   if (c == nullptr) return JNI_ERR;
   g_bridge = static_cast<jclass>(env->NewGlobalRef(c));
-  g_node = env->GetStaticMethodID(c, "node", "(JJ)Ljava/lang/String;");
-  g_node_at = env->GetStaticMethodID(c, "nodeAt", "(JII)J");
-  g_focused = env->GetStaticMethodID(c, "focused", "(J)J");
-  g_perform = env->GetStaticMethodID(c, "perform", "(JJILjava/lang/String;)Z");
+  g_node = env->GetStaticMethodID(c, "node", "(JJJJ)Ljava/lang/String;");
+  g_node_at = env->GetStaticMethodID(c, "nodeAt", "(JIIJJ)J");
+  g_focused = env->GetStaticMethodID(c, "focused", "(JJJ)J");
+  g_perform = env->GetStaticMethodID(c, "perform", "(JJILjava/lang/String;JJ)Z");
   if (g_node == nullptr || g_node_at == nullptr || g_focused == nullptr || g_perform == nullptr) {
     return JNI_ERR;
   }

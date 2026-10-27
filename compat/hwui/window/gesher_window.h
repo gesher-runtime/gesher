@@ -94,6 +94,9 @@ class Window {
   static Window* Create(const std::string& title_utf8, int width, int height,
                         InputPaneFactory input_pane_factory = nullptr);
 
+  using RetireCallback = void (*)(void* hwnd);
+  static void SetRetireCallback(RetireCallback callback);
+
   ~Window();  // destroys the window and joins its thread
 
   void Show();
