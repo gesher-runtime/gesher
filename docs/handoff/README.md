@@ -158,7 +158,9 @@ local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
+ADR is 0075 after reserving native3-wide/0073 for wide/multibyte ABI contracts
+([brief](tracks/native3-wide.md)) and exec4/0074 for explicit exec3 leftovers
+([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/
 certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
 notes below are historical.
 
