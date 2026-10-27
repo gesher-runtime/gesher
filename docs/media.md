@@ -220,6 +220,16 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Full ci **40448521754** is pending at
+  **dd06d296e35ffd47fcecba9d0b88559360163500** after merging current
+  integration 7694f18 (docs only above the verified clock/width code).
+  Root independently reviewed the corrected local HTTP/SNI fixtures,
+  including the isolated SNI listener and selected-certificate controls.
+  All 37 media checks, live-environ67, clock68, actual SNI/hostname controls,
+  both zero-failure Windows summaries, package and both required ten-app
+  e2e results are still required. No runtime result is claimed before the
+  new run's actual logs are inspected; previous failed sources remain red.
+
 - Prepared source 8364829 (HTTP/SNI implementation 4032be6a and reviewed
   listener isolation 8364829) combines the
   verified clock/width integration 8922a3e, latest integration docs 46c9cc1,
