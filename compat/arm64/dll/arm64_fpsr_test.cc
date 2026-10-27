@@ -9,9 +9,12 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
+#include <string>
 #include <thread>
 #include <vector>
+#include "../../../probes/arm64/fpsr/vectors.h"
 
 #define SYSV __attribute__((sysv_abi))
 namespace {
@@ -84,11 +87,76 @@ uint64_t SYSV Outer(uint64_t expected, uint64_t replacement) {
   Check(Call(4) == replacement, "inner status changes persist through guest nesting levels");
   return replacement;
 }
+
+void CompareIndependentMatrix(const char* filename) {
+  struct Restore {
+    uint64_t control = Call(0), status = Call(4);
+    std::fenv_t native;
+    Restore() { std::fegetenv(&native); }
+    ~Restore() { Call(1, control); Call(5, status); std::fesetenv(&native); }
+  } restore;
+  std::ifstream input(filename);
+  std::string header;
+  if (!std::getline(input, header) || header != "ARM64_FPSR_QEMU_V1") {
+    Check(false, "the independent QEMU matrix exists with the expected schema");
+    return;
+  }
+  size_t rows = 0, mismatches = 0;
+  const uint64_t operations64[] = {3, 13, 7, 6};
+  for (uint64_t mode = 0; mode < 4; ++mode) for (uint64_t dn = 0; dn < 2; ++dn) for (uint64_t fz = 0; fz < 2; ++fz) {
+    uint64_t control = (mode << 22) | (dn << 25) | (fz << 24);
+    for (uint64_t width : {32, 64}) for (uint64_t operation = 0; operation < 4; ++operation) {
+      for (const auto& vector : ArmFpsrVectors) for (uint64_t seed : {UINT64_C(0), UINT64_C(0x08000081)}) {
+        uint64_t left = width == 32 ? vector.left32 : vector.left64;
+        uint64_t right = width == 32 ? vector.right32 : vector.right64;
+        uint64_t fields[8];
+        for (uint64_t& field : fields) if (!(input >> std::hex >> field)) {
+          Check(false, "independent QEMU matrix is complete and every field is hexadecimal");
+          return;
+        }
+        if (fields[0] != operation || fields[1] != width || fields[2] != control ||
+            fields[3] != left || fields[4] != right || fields[5] != seed) {
+          Check(false, "every independent reference tuple matches the original source inputs");
+          return;
+        }
+        NativeState native = Native();
+        uint64_t selected = Call(1, control), initialized = Call(5, seed);
+        uint64_t actual = Call(width == 32 ? 9 + operation : operations64[operation], left, right);
+        uint64_t status = Call(4);
+        int queried = One("fetestexcept", -1);
+        uint64_t remaining_control = Call(0);
+        bool matches = selected == control && initialized == seed && actual == fields[6] && status == fields[7] &&
+                       queried == static_cast<int>(status & 0x9f) && remaining_control == control && Same(native);
+        ++rows;
+        if (!matches) {
+          if (mismatches < 24) std::printf(
+              "INFO arm64 FPSR matrix: row=%zu op=%llu width=%llu fpcr=%08llx left=%016llx right=%016llx seed=%08llx "
+              "expected_result=%016llx actual_result=%016llx expected_status=%08llx actual_status=%08llx query=%08x\n",
+              rows, static_cast<unsigned long long>(operation), static_cast<unsigned long long>(width),
+              static_cast<unsigned long long>(control), static_cast<unsigned long long>(left),
+              static_cast<unsigned long long>(right), static_cast<unsigned long long>(seed),
+              static_cast<unsigned long long>(fields[6]), static_cast<unsigned long long>(actual),
+              static_cast<unsigned long long>(fields[7]), static_cast<unsigned long long>(status), static_cast<unsigned>(queried));
+          ++mismatches;
+        }
+      }
+    }
+  }
+  std::string extra;
+  bool complete = rows == 8192 && !(input >> extra);
+  Check(complete, "all 8192 independent rows are consumed exactly once with no trailing data");
+  if (mismatches != 0) {
+    std::printf("INFO arm64 FPSR matrix: %zu mismatching numeric/status cases of %zu\n", mismatches, rows);
+    Check(false, "actual scalar instruction bits and status match independent pinned QEMU");
+  } else if (complete) {
+    std::puts("PASS  arm64 FPSR: 8192 independent QEMU numeric/status cases, scalar32/64 add sub mul div, all modes DN/FZ and NaN/inf/subnormal rules");
+  }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
-  if (argc != 2) return 2;
+  if (argc != 3) return 2;
   HMODULE dll = LoadLibraryA(GESHER_ARM64_DLL);
   if (!dll) return 2;
   auto init = reinterpret_cast<gesher_arm64_init_fn>(
@@ -170,6 +238,7 @@ int main(int argc, char** argv) {
   Trace("identical warm SQADD", kQc, warm_saturation, One("fetestexcept", -1));
   Check(warm_saturation == kQc, "identical warm SQADD sets only cumulative saturation");
   if (failures == 0) std::puts("PASS  arm64 FPSR: real FDIV FMUL FADD and saturating SIMD produce all six flags and QC");
+  CompareIndependentMatrix(argv[2]);
   uint64_t before = kQc | 0x81, replacement = 0x92;
   Call(5, before);
   Trace("before outer callback", before, Call(4));
