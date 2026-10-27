@@ -37,6 +37,15 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Fresh-image component40524933356 at exact1120e8a6 is green on both Windows:
+actual122261802698/122261801862 each contain21 scoped PASS, all15 real graph
+controls and0FAIL. Main and device now both execute real PCL/DAG libraries,
+compiled app images, same-path updates/stale rejection, unchanged-APK refresh,
+old-install preservation and cleanup. [The bounded report](aot3-shared-diagnostic.md)
+pins both source producers and fresh-image evidence. This is not full CI;
+the Web3 teardown recurrence and the explicit after/DLC/secondary/static-SDK
+continuations remain open. No full or integration acceptance is claimed.
+
 The Main loader correctionf4378a98 compiles in scoped framework40523146557:
 both jobs succeed; actual122255489323 has javac0/0errors, the real jar/APK
 fixtures and gesher-app.jar605087 bytes. The next diagnostic pins that
