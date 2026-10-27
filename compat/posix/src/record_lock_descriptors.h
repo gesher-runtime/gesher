@@ -25,6 +25,8 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock);
 // actual post-operation object even if the CRT returned an error. An internal
 // F_DUPFD staging duplicate passes release_process=false: its disposal is not
 // an application close and must not erase the process's existing POSIX locks.
+// That internal caller MUST retain another actual user alias under its guard,
+// so this cannot be an OFD last close and needs no registry transaction.
 class ClosingDescriptor {
  public:
   explicit ClosingDescriptor(int descriptor, bool release_process = true);

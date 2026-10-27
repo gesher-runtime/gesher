@@ -22,6 +22,7 @@
 #include <string>
 
 #include "internal.h"
+#include "record_lock_descriptors.h"
 
 using gesher::PathKind;
 
@@ -571,6 +572,21 @@ FILE* fopen(const char* path, const char* mode) {
 
 FILE* fopen64(const char* path, const char* mode) { return fopen(path, mode); }
 
+int fclose(FILE* stream) {
+  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  if (transaction.Error()) return errno = transaction.Error(), EOF;
+  // Use the CRT's documented unlocked entry under its stream lock, avoiding
+  // recursion through this public fclose symbol.
+  _lock_file(stream);
+  int result = _fclose_nolock(stream);
+  _unlock_file(stream);
+  int saved = result == EOF ? gesher_errno_from_crt(errno) : errno;
+  int error = transaction.Finish();
+  if (error) return errno = error, EOF;
+  errno = saved;
+  return result;
+}
+
 // The stream is reopened by the CRT on the Windows name (NUL for /dev/null),
 // keeping its FILE.
 FILE* freopen(const char* path, const char* mode, FILE* stream) {
@@ -596,8 +612,13 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
       return nullptr;
   }
   std::wstring wmode(crt_mode, crt_mode + strlen(crt_mode));
+  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  if (transaction.Error()) return errno = transaction.Error(), nullptr;
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
-  if (result == nullptr) errno = gesher_errno_from_crt(errno);
+  int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
+  int error = transaction.Finish();
+  if (error) return errno = error, nullptr;
+  errno = saved;
   return result;
 }
 

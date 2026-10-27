@@ -175,3 +175,35 @@ explicit dependency controls. There is still no wired fcntl/close/dup/stdio/
 spawn/signal implementation or runtime-lock acceptance; partial initialization/
 inactive-copy corruption, contention, nonadministrator/cross-session behavior
 and nonblocking metadata-acquisition policy remain required open work.
+
+Nonblocking runtime integration is now SOURCE WIP, not compiled or executed:
+record_lock_operation.{h,cc} snapshots the explicit32-byte LP64 flock through
+checked process-memory copies, validates ranges and actual descriptor rights
+before allocating ownership, then applies the kernel-compared interval core.
+record_lock_descriptors.{h,cc} stages protected/noninherited FILE_OBJECT
+anchors, local descriptor serialization and real post-CRT close/replacement
+checks. Zero-user accounting compares actual kernel objects, counts exact
+anchor/probe handles and rechecks EVERY anchor owner's creation/liveness after
+the HandleCount snapshot; uncertainty retains ownership. File identity alone
+never identifies an open description. Initial SameDescription controls and
+these new modules remain unverified until independent source peer and CI.
+
+Current routing WIP connects the four nonblocking commands to this engine,
+consumes pointer varargs before the unchanged integer-command path, and hooks
+close/dup/dup2, CRT descriptor publication and fclose/freopen. F_DUPFD's private
+staging-alias close is explicitly distinguished from an application close;
+another actual user alias must survive, so its cleanup cannot erase existing
+POSIX locks. Stdio uses the CRT stream lock and documented _fclose_nolock,
+then inspects whether the captured object was actually closed even on error.
+No compilation or fixture has qualified these changes yet.
+
+This WIP is incomplete: blocking bionic commands now return ENOSYS rather than
+the old fake grant, and real waiter/deadlock/targeted-handler/SA_RESTART work
+remains mandatory. Cross-process inherited-description adoption and atomic
+suspended-spawn anchor registration are not implemented; do not qualify
+inherited OFD lifetimes from the present source. Exec00c7/fec66 ordered-spawn
+semantics must be preserved after coordination on the selected union; no
+exec/spawn source was edited here. Common POSIX signal.cc limitations differ
+from the existing bionic per-thread signal machinery; the latter should be
+extended, not replaced by timeouts or a duplicate signal subsystem. Overall87
+and coherent full/package/e2e acceptance remain open.

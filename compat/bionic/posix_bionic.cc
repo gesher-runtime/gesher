@@ -508,17 +508,19 @@ struct BionicFlock {
   int64_t l_len;
   int32_t l_pid;
 };
+static_assert(sizeof(BionicFlock) == sizeof(struct flock));
+static_assert(offsetof(BionicFlock, l_start) == offsetof(struct flock, l_start) &&
+              offsetof(BionicFlock, l_pid) == offsetof(struct flock, l_pid));
 
 int BIONIC_SYSV Fcntl(int fd, int cmd, uint64_t arg) {
   switch (cmd) {
     case 5:   // F_GETLK
     case 36:  // F_OFD_GETLK
-      // Advisory record locks are not modelled: nothing else holds one.
-      reinterpret_cast<BionicFlock*>(arg)->l_type = 2;  // F_UNLCK
-      return 0;
-    case 6: case 7:     // F_SETLK, F_SETLKW
-    case 37: case 38:   // F_OFD_SETLK, F_OFD_SETLKW
-      return 0;
+    case 6:   // F_SETLK
+    case 37:  // F_OFD_SETLK
+      return fcntl(fd, cmd, reinterpret_cast<struct flock*>(static_cast<uintptr_t>(arg)));
+    case 7: case 38:  // Mandatory waiter/targeted-signal integration remains unfinished.
+      return errno = ENOSYS, -1;
     default:
       return fcntl(fd, cmd, static_cast<long>(arg));
   }

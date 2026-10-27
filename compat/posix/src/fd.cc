@@ -24,6 +24,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "record_lock_descriptors.h"
 #include "socket_internal.h"
 
 namespace gesher {
@@ -132,6 +133,37 @@ void RegisterDevice(int fd, Device device) {
 using gesher::Device;
 using gesher::SocketFd;
 
+namespace {
+int CloseDescriptor(int fd, bool application_close) {
+  gesher::record_locks::ClosingDescriptor transaction(fd, application_close);
+  if (transaction.Error()) return errno = transaction.Error(), -1;
+  gesher::ForgetEpollEntries(fd);
+  SocketFd state;
+  int result;
+  if (!gesher::Remove(fd, &state)) {
+    gesher::ForgetDevice(fd);
+    gesher::ForgetEventObject(fd);
+    gesher::ForgetBinder(fd);
+    result = gesher::CrtResult(_close(fd));
+  } else {
+    // Closing the socket first wakes threads blocked on it, as on Linux.
+    result = gesher::ws::Close(state.socket);
+    int socket_errno = errno;
+    _close(fd);
+    errno = socket_errno;
+  }
+  const int saved = errno;
+  const int error = transaction.Finish();
+  if (error) return errno = error, -1;
+  errno = saved;
+  return result;
+}
+}  // namespace
+
+namespace gesher {
+int CloseInternalDuplicate(int fd) { return CloseDescriptor(fd, false); }
+}  // namespace gesher
+
 extern "C" {
 
 int gesher_is_socket(int fd) {
@@ -139,22 +171,7 @@ int gesher_is_socket(int fd) {
   return gesher::LookupSocket(fd, &state) ? 1 : 0;
 }
 
-int close(int fd) {
-  gesher::ForgetEpollEntries(fd);
-  SocketFd state;
-  if (!gesher::Remove(fd, &state)) {
-    gesher::ForgetDevice(fd);
-    gesher::ForgetEventObject(fd);
-    gesher::ForgetBinder(fd);
-    return gesher::CrtResult(_close(fd));
-  }
-  // Closing the socket first wakes threads blocked on it, as on Linux.
-  int result = gesher::ws::Close(state.socket);
-  int saved = errno;
-  _close(fd);
-  errno = saved;
-  return result;
-}
+int close(int fd) { return CloseDescriptor(fd, true); }
 
 int read(int fd, void* buf, unsigned int count) {
   SocketFd state;
@@ -183,6 +200,7 @@ int write(int fd, const void* buf, unsigned int count) {
 }
 
 int dup(int fd) {
+  gesher::record_locks::DescriptorGuard descriptor_guard;
   SocketFd state;
   if (!gesher::LookupSocket(fd, &state)) {
     int fd2 = gesher::CrtResult(_dup(fd));
@@ -200,7 +218,11 @@ int dup(int fd) {
 }
 
 int dup2(int fd, int fd2) {
+  gesher::record_locks::DescriptorGuard descriptor_guard;
   if (fd == fd2) return _get_osfhandle(fd) != -1 ? fd : (errno = EBADF, -1);
+  if (gesher::HandleFromFd(fd) == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  gesher::record_locks::ClosingDescriptor transaction(fd2);
+  if (transaction.Error()) return errno = transaction.Error(), -1;
   SocketFd source;
   bool source_is_socket = gesher::LookupSocket(fd, &source);
   if (source_is_socket) {
@@ -213,9 +235,14 @@ int dup2(int fd, int fd2) {
   SocketFd target;
   if (gesher::Remove(fd2, &target)) gesher::ws::Close(target.socket);
   if (gesher::CrtResult(_dup2(fd, fd2)) < 0) {
+    int saved = errno;
+    int error = transaction.Finish();
     if (source_is_socket) gesher::ws::Close(source.socket);
+    errno = error ? error : saved;
     return -1;
   }
+  const int saved = errno;
+  const int metadata_error = transaction.Finish();
   // fd2's old file is closed: forget what it was.
   gesher::ForgetDevice(fd2);
   gesher::ForgetEventObject(fd2);
@@ -230,6 +257,8 @@ int dup2(int fd, int fd2) {
     gesher::DupEventObject(fd, fd2);
     gesher::DupBinder(fd, fd2);
   }
+  if (metadata_error) return errno = metadata_error, -1;
+  errno = saved;
   return fd2;
 }
 

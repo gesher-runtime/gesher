@@ -257,6 +257,7 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
 
 ClosingDescriptor::ClosingDescriptor(int descriptor, bool release_process)
     : descriptor_(descriptor), release_process_(release_process) {
+  if (!release_process_) return;  // F_DUPFD staging alias; another guarded user alias must survive.
   if (!local) return;
   error_ = CloseCommitted();
   if (error_) return;
