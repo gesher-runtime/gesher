@@ -10,15 +10,41 @@
 #include <linux/android/binder.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace binder_sg_fixture {
+
+// Fixture-only endpoint selection for JNI actors. Existing framework Binder
+// descriptors keep their captured device. Restore the public environment
+// immediately after open, before mapping, ioctl, waiting or reporting.
+inline thread_local const char* selected_device = nullptr;
+inline std::mutex endpoint_open_mutex;
+inline int OpenDriver() {
+  if (!selected_device) return open("/dev/binder", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+  std::lock_guard<std::mutex> lock(endpoint_open_mutex);
+  const char* original = getenv("GESHER_BINDER");
+  const bool present = original != nullptr;
+  const std::string saved = present ? original : "";
+  if (setenv("GESHER_BINDER", selected_device, 1) != 0) return -1;
+  int fd = open("/dev/binder", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+  const int open_error = errno;
+  if ((present ? setenv("GESHER_BINDER", saved.c_str(), 1) : unsetenv("GESHER_BINDER")) != 0) {
+    const int restore_error = errno;
+    if (fd >= 0) close(fd);
+    errno = restore_error;
+    return -1;
+  }
+  errno = open_error;
+  return fd;
+}
 
 struct Report {
   const char* role;
@@ -73,7 +99,7 @@ struct Driver {
   }
   bool Open(size_t bytes = 1 << 20) {
     for (unsigned i = 0; i < 1500; ++i) {
-      fd = open("/dev/binder", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+      fd = OpenDriver();
       if (fd >= 0 || errno != ENOENT) break;
       usleep(20000);
     }

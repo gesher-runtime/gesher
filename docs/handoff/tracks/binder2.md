@@ -68,3 +68,25 @@ thread pipe for every read-stream failure. Common POSIX independent-process
 actors and a finite host parent are now source only. Remaining before CI:
 raw-wire lost-ACK/disconnect/death/FD-reuse and queue-progress controls,
 both ABI/ART/APK wiring, final peer/static checks. No source/runtime closure.
+
+## Ordinary ART/APK mode source (separate continuation)
+
+Active mode wiring branches from compiled7e9549, independently of preserved
+interrupted WIPb52. It adds the same common POSIX actor body to both NDK ABI
+ELFs/JNI libraries, standalone ART entry and separate server/client APK IDs.
+The existing public GESHER_BINDER selection is changed only around the new
+actor descriptor's open and restored immediately before mapping/ioctl/wait.
+The test descriptor captures its own pipe; established application Binder
+objects remain separate. APK code observes the existing package Binder's
+identity/descriptor/ping concurrently and checks endpoint restoration. CI
+must also audit the SG broker's actual per-APK PID open count for unexpected
+concurrent opens; no absence of misrouting is claimed from source alone.
+The package builder checks exact APK/native library/dex byte identity.
+
+No new production switch or API is introduced. These source files have not
+compiled or executed; build/runtime orchestration and peer remain pending.
+Before ARM/ART/APK runtime, select exact verified Native942/Envb497/frozen5587
+and current accepted Libcore integration, rebuild host/DLL/jars/images together
+and retain original FD/Bitmap/InputChannel/full/package/e2e gates. Complete
+public transaction-prefix transport-failure proof remains open on preserved
+unverified interrupted WIP; ordinary mode coverage does not substitute.
