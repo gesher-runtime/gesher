@@ -222,9 +222,10 @@ the microphone (looped, from its start each time recording starts);
 
 ### media3 (stage 3) — runtime gates pass; combined full CI pending, 2026-10-27
 
-- **Next combined candidate prepared, not yet CI-verified:** verified
-  integration **630c20c243a49c469fcbe67b45e018996783e9e5** (coordinator's
-  full 40432541082 at 42cc1c0, docs-only head) is merged at 131e89d.
+- **Final combined CI 40438975894 is running at
+  0148698211cb5cf2e7d2d5813f4d04f8756f4bdb, not yet verified:** current
+  integration **2f8ed7a481e26405f02bdd334d9e05512a0c3129** (docs-only above
+  630c20c; coordinator's full 40432541082 at 42cc1c0) is merged.
   Source **06dbe8f** adds the coordinator-approved, three-file test slice
   from frozen Web3 2755f21 / original ec111f78: real local expired,
   wrong-host, self-signed and untrusted-root certificates replace only the
