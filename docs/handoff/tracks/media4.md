@@ -171,6 +171,16 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Native continuation full ci **40477536464** is running at
+**e569341230b3970cadaeb48a235a12a4645da74a**, after importing the signed16/
+core-denial correction and resolving fixture/status conflicts with both
+intents retained. Accepted integration db84749b is already contained.
+Main122099364029 and framework122099455423 are pending. Bounded peer review
+of the exact original factor and correction found no concrete source blocker;
+compile/link/callback/TLS and both-runner runtime proof remain required.
+This source is frozen. Corrected JNI/APK full40476766790 separately verifies
+d10bea3a; neither candidate is accepted early and the old full remains RED.
+
 Separate source-only continuation **wip/media4-native** lives in
 **C:\work\gesher-media4-native**, cut from docs-only4d5f3532 above the
 still-frozen OpenSL CI source2b343aa7 below. It factors pure audio, file/video
@@ -185,7 +195,7 @@ native PCM callbacks with independent initialized guest TLS on both ABIs,
 alongside all original JNI/allowed-denied APK contracts. Native processes
 without a recording identity must return 0x0B with no recorder object.
 Only source/diff and script parsing checks have run for this continuation;
-no new compiler, native fixture or acceptance exists yet. The active full
+no new compiler, native fixture or acceptance exists yet. The completed red
 40470959941 remains on its original source and is not affected by this branch.
 Native-child identity propagation, full configuration/effects/volume policy
 and the other remaining Media4 contracts remain open.
