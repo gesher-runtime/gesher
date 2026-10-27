@@ -1,7 +1,11 @@
 # 0066. Locale2: persisted supported-locale overrides and selection reconciliation
 
 Status: proposed; source and CI fixtures prepared on `wip/locale2`, based on
-accepted integration `7b49a718`. Compilation and runtime acceptance are pending.
+accepted integration `7b49a718`. Source71ee7a0c/scoped40509891830 compiles
+production and both APKs; all ten device groups pass on both runners, but nine
+single-process groups fail because the headless driver exits before the delayed
+fixture report. The next CI retains that settled report and adds a queued
+snapshot before the driver's documented EndLoop. Runtime acceptance is pending.
 Test 81 is reserved to this slice. No local compilation or ART/APK execution.
 
 ## Pinned contract
@@ -49,6 +53,9 @@ locales; no multi-file transaction or power-loss durability is claimed.
 The existing selected-locale global Properties store is retained. Concurrent
 independent single-process writers to that legacy store are not tested or
 claimed as solved by per-package override persistence.
+Concurrent independent single-process instances of the same package are also
+not coordinated by an inter-process lock in this slice. The device service
+serializes its own writes; no broader standalone concurrency claim is made.
 
 The original resource configuration is read through real framework
 `AssetManager`, `Resources` and `LocaleConfig(ApplicationInfo, Resources)`.
@@ -65,7 +72,10 @@ This does **not** implement Android's complete privileged permission model.
 Concrete Services3 prerequisites remain: `ApkPackage.installed` assigns every
 package `Process.myUid()` (current lines 415); PM `getPackagesForUid` returns
 all packages regardless of its argument (258–259); AMS `checkPermission` and
-`checkPermissionForDevice` grant every permission (368–374). Those answers
+`checkPermissionForDevice` grant every permission (368–374). The separate
+`Services.PermissionChecker.checkPermission/checkOp` also unconditionally grant
+access (339–355); PM `getNameForUid` returns the first package (252–254), and
+`getInstallerPackageName` returns null (263–264). Those answers
 cannot authorize private locale reads or cross-package writes. Privileged
 cross-package grants, installer identity and current-IME authority remain
 open. The ordinary owner/negative controls are not evidence for those grants.
@@ -83,12 +93,20 @@ and device modes on both Windows runners. Planned controls include:
 - actual staging failure and a writable staging file held without DELETE
   sharing, so the real rename source cannot be opened for replacement;
   committed bytes, memory and selected locales must remain unchanged;
+- malformed committed Properties returning null without changing its bytes,
+  including after restart, equivalent to the pinned override XML parse-error
+  result; a successful later setter can replace that state;
 - null/unknown-package/user boundaries and a distinct registered package
   reading public supported config while private reads/delegated writes/clear
   are denied. This Java API slice makes no NDK ABI claim.
 
 The fixture's `GESHER_LOCALES=en-US` is a controlled source, not evidence for
 Windows display-language changes or sign-in behavior. No PASS is claimed yet.
+Single-mode observation must include every queued callback before Main's
+documented headless EndLoop: exact per-stage count, ordered locales/greeting
+payloads and final resource/default snapshot. Device mode retains the original
+600ms settled snapshot and real finish, with intermediate configuration
+coalescing visible in the logs. Missing asynchronous delivery is not waived.
 
 ## Still open
 

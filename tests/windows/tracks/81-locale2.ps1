@@ -39,6 +39,8 @@ function Locale2State([string] $Activity, [string] $Override, [string] $Selected
   $text = Locale2Launch $Activity
   $line = @($text -split "`r?`n" | Where-Object { $_.Contains('locale2: STATE ') }) | Select-Object -Last 1
   Locale2Assert ([bool] $line) 'no actual resource/configuration report'
+  $phase = if ($locale2Mode -eq 'single') { 'queued' } else { 'settled' }
+  Locale2Assert ((LocaleField $line 'phase') -ceq $phase) "wrong observation boundary: $line"
   $effective = if ($Override -eq 'none') { '[en-US,he-IL,fr-FR]' } else { $Override }
   foreach ($entry in @(@('override', $Override), @('selected', "[$Selected]"),
       @('effective', $effective), @('original', '[en-US,he-IL,fr-FR]'),
@@ -51,6 +53,41 @@ function Locale2State([string] $Activity, [string] $Override, [string] $Selected
     Locale2Assert (($tags -split ',')[0] -ceq $first) "wrong $field first locale: $line"
   }
   if ($Callback) { Locale2Assert ($line -match 'callbacks=[1-9][0-9]*') 'no actual configuration callback' }
+  if ($locale2Mode -eq 'single') {
+    # Require ALL callbacks queued by the real setters before Main's EndLoop.
+    # Missing, duplicated, reordered or deferred delivery must still fail.
+    $events = @($text -split "`r?`n" | Where-Object { $_.Contains('locale2: CALLBACK ') })
+    $want = @(switch ($Activity) {
+      '.MainActivity$Seed' {
+        'fr-CA,zh-Hant-TW,he-IL,en-GB,zh-Hans-CN,en-US|Bonjour'
+        'fr-CA,zh-Hant-TW,en-GB,en-US|Bonjour'
+      }
+      '.MainActivity$Equal' { 'he-IL,en-US|Shalom' }
+      '.MainActivity$Replace' {
+        'he-IL,fr-CA,zh-Hant-TW,en-GB,en-US|Shalom'
+        'he-IL,fr-CA,en-US|Shalom'
+      }
+      '.MainActivity$Clear' {
+        'fr-CA,en-US|Bonjour'
+        'fr-CA,de-DE,en-US|Bonjour' # Framework resource matching selects available French.
+        'fr-CA,en-US|Bonjour'
+      }
+      '.MainActivity$Empty' { 'he-IL,en-US|Shalom'; 'en-US|Hello' }
+      '.MainActivity$NullList' { 'he-IL,en-US|Shalom'; 'en-US|Hello' }
+      '.MainActivity$FailureSeed' { 'he-IL,en-US|Shalom' }
+      '.MainActivity$Failure' { }
+      '.MainActivity$Bounds' { }
+      '.MainActivity' { }
+      default { throw "No complete single-mode callback oracle for $Activity" }
+    })
+    Locale2Assert ($events.Count -eq $want.Count -and [int](LocaleField $line 'callbacks') -eq $want.Count) "missing/extra single callbacks ($($events.Count)/$($want.Count)): $line"
+    for ($event = 0; $event -lt $want.Count; $event++) {
+      $fields = $want[$event].Split('|')
+      Locale2Assert ($events[$event].Contains("CALLBACK $($event+1) ") -and
+        (LocaleField $events[$event] 'locales') -ceq "[$($fields[0])]" -and
+        (LocaleField $events[$event] 'greeting') -ceq $fields[1]) "wrong callback order/payload: $($events[$event])"
+    }
+  }
   return $line
 }
 
@@ -102,6 +139,22 @@ try {
       }
       Locale2Group 'non-null config with null supported list persists as explicit empty, including across restart' {
         $null = Locale2State '.MainActivity$NullList' '[]' '' 'Hello'
+        $null = Locale2State '.MainActivity' '[]' '' 'Hello'
+      }
+      Locale2Group 'malformed committed override returns null without exposing a parser exception, including after restart' {
+        $target = Join-Path $locale2Data "system/locale_configs/$locale2Pkg.properties"
+        $old = [IO.File]::ReadAllBytes($target)
+        $bad = [Text.Encoding]::ASCII.GetBytes('locales=\uZZZZ')
+        try {
+          [IO.File]::WriteAllBytes($target, $bad)
+          $null = Locale2State '.MainActivity' 'none' '' 'Hello'
+          if ($locale2Mode -eq 'device') {
+            $stop = LocaleRun @('com.gesher.app.Launcher', 'shutdown') 120
+            Locale2Assert ($LASTEXITCODE -eq 0) "device shutdown failed: $stop"
+          }
+          $null = Locale2State '.MainActivity' 'none' '' 'Hello'
+          Locale2Assert ([Convert]::ToBase64String($bad) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($target))) 'GET changed the malformed committed file'
+        } finally { [IO.File]::WriteAllBytes($target, $old) }
         $null = Locale2State '.MainActivity' '[]' '' 'Hello'
       }
       Locale2Group 'real staging failure preserves old override bytes, in-memory state and selected locales after restart' {

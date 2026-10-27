@@ -69,28 +69,36 @@ public class MainActivity extends Activity {
 
     @Override public void onResume() {
         super.onResume();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            try {
-                LocaleConfig override = manager.getOverrideLocaleConfig();
-                LocaleConfig effective = new LocaleConfig(this);
-                LocaleConfig original = LocaleConfig.fromContextIgnoringOverride(this);
-                line("STATE override=" + (override == null ? "none" : "["
-                        + override.getSupportedLocales().toLanguageTags() + "]")
-                        + " selected=[" + manager.getApplicationLocales().toLanguageTags() + "]"
-                        + " effective=[" + effective.getSupportedLocales().toLanguageTags() + "]"
-                        + " original=[" + original.getSupportedLocales().toLanguageTags() + "]"
-                        + " system=[" + manager.getSystemLocales().toLanguageTags() + "]"
-                        + " config=[" + getResources().getConfiguration().getLocales().toLanguageTags() + "]"
-                        + " default=[" + LocaleList.getDefault().toLanguageTags() + "]"
-                        + " greeting=" + getString(R.string.greeting)
-                        + " callbacks=" + callbacks + " pid=" + Process.myPid());
-            } catch (Throwable error) {
-                line("FAIL report " + error);
-            } finally {
-                line("DONE " + getClass().getSimpleName());
-                finish();
-            }
-        }, 600);
+        Handler handler = new Handler(Looper.getMainLooper());
+        // Main's headless single-process driver posts EndLoop after launch/onResume.
+        // Observe after the queued configuration work, before that documented boundary.
+        handler.post(() -> reportState("queued", false));
+        // The device owns the activity lifecycle and stays alive until finish. Retain
+        // the original settled observation; the host checks the last process snapshot.
+        handler.postDelayed(() -> reportState("settled", true), 600);
+    }
+
+    private void reportState(String phase, boolean finishAfter) {
+        try {
+            LocaleConfig override = manager.getOverrideLocaleConfig();
+            LocaleConfig effective = new LocaleConfig(this);
+            LocaleConfig original = LocaleConfig.fromContextIgnoringOverride(this);
+            line("STATE phase=" + phase + " override=" + (override == null ? "none" : "["
+                    + override.getSupportedLocales().toLanguageTags() + "]")
+                    + " selected=[" + manager.getApplicationLocales().toLanguageTags() + "]"
+                    + " effective=[" + effective.getSupportedLocales().toLanguageTags() + "]"
+                    + " original=[" + original.getSupportedLocales().toLanguageTags() + "]"
+                    + " system=[" + manager.getSystemLocales().toLanguageTags() + "]"
+                    + " config=[" + getResources().getConfiguration().getLocales().toLanguageTags() + "]"
+                    + " default=[" + LocaleList.getDefault().toLanguageTags() + "]"
+                    + " greeting=" + getString(R.string.greeting)
+                    + " callbacks=" + callbacks + " pid=" + Process.myPid());
+        } catch (Throwable error) {
+            line("FAIL report " + error);
+        } finally {
+            line("DONE " + getClass().getSimpleName());
+            if (finishAfter) finish();
+        }
     }
 
     @Override public void onConfigurationChanged(Configuration config) {

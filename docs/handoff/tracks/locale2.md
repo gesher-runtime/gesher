@@ -47,7 +47,17 @@ build plus exact immutable full-green native runtime40498782924/8ec4bf3c,
 with actual test81 on both Windows hosts. This is imageless scoped API evidence,
 not native rebuild, boot-image, package or e2e acceptance. Per-package override
 files avoid cached global map replacement between independent single-process
-apps. No old compile result is reused as proof for changed source. See
+apps. Source71ee7a0c/scoped40509891830 builds both APKs successfully and has
+all ten actual device groups PASS on both runners, but nine single-mode groups
+FAIL: Main's documented headless EndLoop runs before the fixture's delayed
+STATE/DONE. The next fixture retains its settled observation and adds a queue
+snapshot before EndLoop, without removing any expected value/callback control.
+It requires exact single-mode callback counts, every ordered locales/greeting
+payload and the final resource/default snapshot; device must still reach its
+settled snapshot. Missing asynchronous delivery remains a failure.
+A narrow malformed-Properties read error is also covered: no override is returned,
+as with the pinned XML parse error. All acceptance remains pending the next CI.
+No old compile result is reused as proof for changed source. See
 [ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
 [pinned-source audit](locale2-source-audit.json).
 
