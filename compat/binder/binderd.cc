@@ -24,8 +24,7 @@
 // /dev/binder puts the fd's handle in the object, binderd duplicates it into
 // the receiving process and the receiver's /dev/binder wraps it in a new fd.
 //
-// Not done: fd arrays (BINDER_TYPE_FDA), scatter-
-// gather buffers (BINDER_TYPE_PTR, used by HIDL), security contexts
+// Not done: fd arrays (BINDER_TYPE_FDA), security contexts
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
 // transactions fail with BR_FAILED_REPLY.
 #include <windows.h>
@@ -49,6 +48,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../posix/src/binder_sg.h"
 
 namespace {
 
@@ -155,6 +155,7 @@ struct Buffer {
   bool allow_user_free = false;  // delivered to the receiver
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
+  std::vector<uint8_t> extra;
 };
 
 struct Transaction : Work {
@@ -631,6 +632,8 @@ struct TransactionData {
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
   uint64_t buffers_size = 0;
+  int32_t copy_error = 0;
+  std::vector<uint8_t> extra;
 };
 
 // Translates the objects of a buffer from the sender's terms (proc) to the
@@ -656,6 +659,10 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
     }
     uint32_t type;
     memcpy(&type, buffer->data.data() + off, sizeof(type));
+    if (type == BINDER_TYPE_PTR) {
+      ++*translated;  // Owned extra storage is released with the same Buffer.
+      continue;
+    }
     if (type != BINDER_TYPE_BINDER && type != BINDER_TYPE_WEAK_BINDER &&
         type != BINDER_TYPE_HANDLE && type != BINDER_TYPE_WEAK_HANDLE &&
         type != BINDER_TYPE_FD) {
@@ -804,8 +811,10 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       }
     }
   }
-  if (td.buffers_size != 0) {
-    Log("proc %u: scatter-gather buffers are not supported", proc->id);
+  gesher::binder_sg::Layout sg_layout;
+  if (td.copy_error != 0 ||
+      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
+    Log("proc %u: invalid transaction user copy or scatter-gather layout", proc->id);
     return fail(BR_FAILED_REPLY);
   }
 
@@ -828,6 +837,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   buffer->async_transaction = (tr.flags & TF_ONE_WAY) != 0;
   buffer->data = std::move(td.data);
   buffer->offsets = std::move(td.offsets);
+  buffer->extra = std::move(td.extra);
   target_proc->buffers[buffer->id] = buffer;
   t->buffer = buffer;
 
@@ -1095,12 +1105,15 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         } else if (!in.Get(&td.tr)) {
           return -EFAULT;
         }
-        if (td.tr.offsets_size % sizeof(binder_size_t) != 0) return -EINVAL;
-        td.data.resize(td.tr.data_size);
-        td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
-        if (!in.Read(td.data.data(), td.data.size()) ||
-            !in.Read(td.offsets.data(), td.tr.offsets_size)) {
-          return -EFAULT;
+        if (!in.Get(&td.copy_error)) return -EFAULT;
+        if (td.copy_error == 0) {
+          if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
+          td.data.resize(td.tr.data_size);
+          td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
+          td.extra.resize(td.buffers_size);
+          if (!in.Read(td.data.data(), td.data.size()) ||
+              !in.Read(td.offsets.data(), td.tr.offsets_size) ||
+              !in.Read(td.extra.data(), td.extra.size())) return -EFAULT;
         }
         DoTransaction(proc, thread, td, cmd == BC_REPLY || cmd == BC_REPLY_SG);
         break;
@@ -1376,8 +1389,10 @@ retry:
     rs->out.Put(tr);
     rs->size += sizeof(tr);
     rs->out.Put(buffer->id);
+    rs->out.Put<uint64_t>(buffer->extra.size());
     rs->out.Write(buffer->data.data(), buffer->data.size());
     rs->out.Write(buffer->offsets.data(), tr.offsets_size);
+    rs->out.Write(buffer->extra.data(), buffer->extra.size());
     TRACE("proc %u thread %d: %s %d delivered", proc->id, thread->tid,
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {

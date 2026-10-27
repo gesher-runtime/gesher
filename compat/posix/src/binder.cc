@@ -29,6 +29,7 @@
 #include <linux/android/binder.h>
 
 #include "binder_internal.h"
+#include "binder_sg.h"
 #include "binder_wire.h"
 #include "internal.h"
 
@@ -356,6 +357,14 @@ bool IsTransactionCommand(uint32_t cmd) {
          cmd == BC_REPLY_SG;
 }
 
+// Equivalent to a guarded user copy: bad/unmapped/changing caller pointers
+// become transaction failures instead of faults in the shim or broker.
+bool CopyUser(void* destination, const void* source, size_t size) {
+  if (size == 0) return true;
+  SIZE_T copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), source, destination, size, &copied) && copied == size;
+}
+
 int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
   HANDLE pipe = ThreadPipe(file);
   if (pipe == INVALID_HANDLE_VALUE) return -1;
@@ -369,7 +378,14 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
 
   // The command stream, with the data each transaction points to.
   std::vector<size_t> starts;  // each command's offset in the write buffer
-  const uint8_t* wbase = reinterpret_cast<const uint8_t*>(bwr->write_buffer);
+  if (bwr->write_consumed > bwr->write_size || bwr->write_size > binder_sg::kMaxBytes) {
+    return errno = EINVAL, -1;
+  }
+  std::vector<uint8_t> command_bytes(static_cast<size_t>(bwr->write_size));
+  if (!CopyUser(command_bytes.data(), reinterpret_cast<const void*>(bwr->write_buffer), command_bytes.size())) {
+    return errno = EFAULT, -1;
+  }
+  const uint8_t* wbase = command_bytes.data();
   size_t wpos = bwr->write_consumed;
   while (wpos < bwr->write_size) {
     if (bwr->write_size - wpos < 4) return errno = EINVAL, -1;
@@ -385,16 +401,43 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       memcpy(&tr, arg, sizeof(tr));
       const void* data = reinterpret_cast<const void*>(tr.data.ptr.buffer);
       const void* offsets = reinterpret_cast<const void*>(tr.data.ptr.offsets);
+      uint64_t extra_size = 0;
+      if (cmd == BC_TRANSACTION_SG || cmd == BC_REPLY_SG) {
+        memcpy(&extra_size, arg + sizeof(tr), sizeof(extra_size));
+      }
+      std::vector<uint8_t> snapshot;
+      std::vector<uint64_t> snapshot_offsets;
+      std::vector<uint8_t> extra;
+      int32_t copy_error = 0;
+      if (!binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
+        copy_error = EINVAL;
+      } else {
+        snapshot.resize(static_cast<size_t>(tr.data_size));
+        snapshot_offsets.resize(static_cast<size_t>(tr.offsets_size / sizeof(uint64_t)));
+        if (!CopyUser(snapshot.data(), data, snapshot.size()) ||
+            !CopyUser(snapshot_offsets.data(), offsets, static_cast<size_t>(tr.offsets_size))) {
+          copy_error = EFAULT;
+        } else {
+          bool user_fault = false;
+          if (!binder_sg::Capture(&snapshot, snapshot_offsets, static_cast<size_t>(extra_size), &extra,
+              [&](void* to, const void* from, size_t bytes) {
+                if (CopyUser(to, from, bytes)) return true;
+                user_fault = true;
+                return false;
+              })) copy_error = user_fault ? EFAULT : EINVAL;
+        }
+      }
       tr.data.ptr.buffer = 0;
       tr.data.ptr.offsets = 0;
       m.Put(tr);
       if (size > sizeof(tr)) m.Write(arg + sizeof(tr), size - sizeof(tr));  // buffers_size
-      if (tr.data_size > 0) {
-        size_t at = m.bytes.size();
-        m.Write(data, tr.data_size);
-        SendFds(m.bytes.data() + at, tr.data_size, offsets, tr.offsets_size);
+      m.Put(copy_error);
+      if (copy_error == 0) {
+        SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        m.Write(snapshot.data(), snapshot.size());
+        m.Write(snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        m.Write(extra.data(), extra.size());
       }
-      if (tr.offsets_size > 0) m.Write(offsets, tr.offsets_size);
     } else if (cmd == BC_FREE_BUFFER) {
       binder_uintptr_t ptr;
       memcpy(&ptr, arg, sizeof(ptr));
@@ -404,6 +447,8 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
     }
     wpos += 4 + size;
   }
+
+  if (m.bytes.size() - 4 > binder_sg::kMaxBytes) return errno = EINVAL, -1;
 
   std::vector<uint8_t> reply;
   if (!Send(pipe, m) || !Receive(pipe, &reply)) return errno = EBADF, -1;
@@ -430,13 +475,29 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       binder_transaction_data tr;
       uint64_t id;
       if (!r.Get(&tr) || !r.Get(&id)) return errno = EBADF, -1;
-      size_t data_size = static_cast<size_t>(tr.data_size);
-      size_t aligned = (data_size + 7) & ~size_t{7};
-      uint8_t* block = file->Allocate(aligned + tr.offsets_size, id);
-      if (block == nullptr) return errno = ENOMEM, -1;
-      if (!r.Read(block, data_size) || !r.Read(block + aligned, tr.offsets_size)) {
+      uint64_t extra_size;
+      if (!r.Get(&extra_size) || !binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
         return errno = EBADF, -1;
       }
+      size_t data_size = static_cast<size_t>(tr.data_size);
+      size_t aligned = (data_size + 7) & ~size_t{7};
+      const size_t offsets_size = static_cast<size_t>(tr.offsets_size);
+      const size_t extra_offset = aligned + offsets_size;
+      std::vector<uint8_t> snapshot(data_size);
+      std::vector<uint64_t> snapshot_offsets(offsets_size / sizeof(uint64_t));
+      std::vector<uint8_t> extra(static_cast<size_t>(extra_size));
+      if (!r.Read(snapshot.data(), snapshot.size()) ||
+          !r.Read(snapshot_offsets.data(), offsets_size) || !r.Read(extra.data(), extra.size())) {
+        return errno = EBADF, -1;
+      }
+      binder_sg::Layout layout;
+      if (!binder_sg::WireLayout(snapshot, snapshot_offsets, extra.size(), &layout)) return errno = EBADF, -1;
+      uint8_t* block = file->Allocate(extra_offset + extra.size(), id);
+      if (block == nullptr) return errno = ENOMEM, -1;
+      if (data_size != 0) memcpy(block, snapshot.data(), data_size);
+      if (offsets_size != 0) memcpy(block + aligned, snapshot_offsets.data(), offsets_size);
+      if (!extra.empty()) memcpy(block + extra_offset, extra.data(), extra.size());
+      binder_sg::Rebase(block, block + extra_offset, layout);
       ReceiveFds(block, data_size, block + aligned, tr.offsets_size);
       tr.data.ptr.buffer = reinterpret_cast<binder_uintptr_t>(block);
       tr.data.ptr.offsets = reinterpret_cast<binder_uintptr_t>(block + aligned);
