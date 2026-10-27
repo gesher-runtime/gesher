@@ -3,7 +3,7 @@
 This is a source inventory of the current media track, not a claim that the
 whole Android media API works. Verified behavior and exact CI runs are in
 [media.md](media.md#status-and-next-steps); the open acceptance contracts are
-in [media4](handoff/tracks/media4.md) (ADR 0064 reserved).
+in [media4](handoff/tracks/media4.md) (format slice accepted in ADR 0064).
 
 ## Native registration rule
 
@@ -24,7 +24,8 @@ implemented native-signature inventory for the pinned framework version.
 | AudioSystem / AudioManager policy | [audio_system_jni.cc](../compat/media/jni/audio_system_jni.cc), [AudioService.java](../app/java/com/gesher/server/AudioService.java) | Stream indexes/mutes, output/input ports, focus stack, ringer/mode, activity and player/session ids. AudioProductStrategy implements the two legacy-attribute mapping natives; remaining policy natives use stand-ins. This is not Android's full audio policy service. |
 | AudioRecord | [audio_record_jni.cc](../compat/media/jni/audio_record_jni.cc), [capture.h](../compat/media/audio/capture.h) | PCM reads, lifecycle, marker/period/timestamp and routed-input reporting; manifest permission gate. `native_setInputDevice` currently always succeeds without changing the capture route. Requested audio-source/input-effect policy and physical routing remain incomplete. |
 | AAudio | [aaudio.cc](../compat/media/ndk/aaudio.cc) export table | Input/output PCM, callback and blocking I/O, stream state and positions. Several builder policy/spatialization setters are ignored, input pause/flush return unimplemented; error callbacks are stored but never delivered, so disconnection/error notification is not implemented. API exports are not a complete Android performance/sharing/routing implementation. |
-| OpenSL ES | [opensles.cc](../compat/media/ndk/opensles.cc) interfaces/export table | Engine/mix, PCM buffer-queue output, file player and Android simple-buffer-queue recording. The implemented interface tables define the subset; unsupported interfaces/formats must remain explicit. No full OpenSL effects/device-policy engine. |
+| OpenSL ES | [opensles.cc](../compat/media/ndk/opensles.cc) interfaces/export table | Engine/mix, PCM buffer-queue output, file player and Android simple-buffer-queue recording. Canonical IID contents/value lookup, required-interface negotiation, the QueryNumSupportedInterfaces ABI and NDK permission error results need correction and CI; unsupported interfaces/formats must remain explicit. No full OpenSL effects/device-policy engine. |
+| Native AMediaFormat | [media_format.cc](../compat/media/ndk/media_format.cc), [format ADR](decisions/0064-media4-native-format-contracts.md) | Actual pinned AOSP storage through 21 System V functions and 152 real pointer data objects; typed values, ownership, error and lifecycle contracts pass in test71 on both ABIs/runners and all four process contexts (ci 40459815375). A metadata key does not implement or advertise the codec/DRM feature it names; other NDK media families remain open. |
 | MediaPlayer / VideoView | [media_player_jni.cc](../compat/media/jni/media_player_jni.cc), [player.h](../compat/media/player/player.h) | Extract/decode/play, supported data sources, asynchronous prepare, seek/pause/loop/completion and timed video surfaces. Codec availability is machine-dependent; no protected/offloaded/tunneled playback, full playback-rate time stretching or complete native parameter set. |
 | SoundPool / Ringtone | [soundpool_jni.cc](../compat/media/jni/soundpool_jni.cc), [media.md](media.md#how-a-file-plays) | Decode whole sounds and mix tracks; synthesized default sound files. Remaining reflected natives do not add effects or a media provider. |
 | MediaExtractor | [media_extractor_jni.cc](../compat/media/jni/media_extractor_jni.cc), [extractor.h](../compat/media/player/extractor.h) | AOSP container sniffers/readers, track formats/samples/seeking for supported containers; this does not provide encrypted-sample/DRM processing. |
@@ -78,11 +79,25 @@ both runners and ABIs. All 37 media3 and 12 part-1 device checks pass with
 both whole Windows suites, package and required e2e green; none of those
 checks implements the 313 unresolved exports inherited by media4.
 
+Full GREEN ci **40459815375** at **c5962291855b13ebd0d21fcf72981db973ad9e72**
+then verifies the actual format subset in both ABIs/runners, through core
+ART JNI, standalone ELF and single/device APKs. The historical list and
+every baseline/owner/observation remain intact; exact per-entry subsequent
+verification covers **143** old entries (21 AMediaFormat functions and 122
+format data objects). Another **30** pinned data objects pass the same
+semantic tests without being added to that historical baseline. Each ABI's
+native2 log reports **276 checked, 133 missing** for libmediandk. The old
+media baseline therefore has **170 remaining** entries: 133 libmediandk,
+34 OpenSL and three AAudio. Data verification proves pointer-object
+indirection, pinned string values and ordinary typed-key storage; it does
+not close the codec, hardware or protected-media contract named by a key.
+
 The AAudio entries are AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
 AAudio_setMMapPolicy. OpenSL's entries include unimplemented 3D/effect/device
-interface identifiers. libmediandk spans native codec/format/extractor/muxer,
-image/reader and protected-media APIs; Java MediaCodec/ImageReader tests do
-not establish those NDK exports. media4 inherits this unresolved export
+interface identifiers. Remaining libmediandk entries span native codec,
+extractor/muxer, image/reader and protected-media APIs; Java
+MediaCodec/ImageReader tests do not establish those NDK exports.
+media4 inherits this unresolved export
 scope and coordinates image/reader implementation with the devices/surfaces
 owners. Preserve each baseline observation and add a new run, ABI and
 semantic case before claiming an entry implemented. Publishing a zero
@@ -90,8 +105,9 @@ function or an interface-id constant alone does not complete its API.
 
 ## Evidence and ownership
 
-[38-media.ps1](../tests/windows/tracks/38-media.ps1) and
-[59-media3.ps1](../tests/windows/tracks/59-media3.ps1) are the test inventory;
+[38-media.ps1](../tests/windows/tracks/38-media.ps1),
+[59-media3.ps1](../tests/windows/tracks/59-media3.ps1) and
+[71-media4-format.ps1](../tests/windows/tracks/71-media4-format.ps1) are the test inventory;
 only their actual PASS checks are verified. The runners' file microphone
 and test camera do not establish real WASAPI hardware/route/device-removal
 behavior. General API coverage requires independent success, error,

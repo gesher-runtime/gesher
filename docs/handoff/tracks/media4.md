@@ -18,16 +18,19 @@ and reflection stand-ins are described in
 coverage does not prove the remainder of those native/API contracts.
 
 The machine-readable [native export baseline](../native-api-coverage.json)
-also assigns 313 unresolved media symbols to media3: 276 libmediandk.so,
+records 313 originally unresolved media symbols assigned to media3: 276 libmediandk.so,
 34 libOpenSLES.so and 3 libaaudio.so (ci 40296960603; both runners/ABIs).
 media4 inherits these open exports; coordinate central per-entry ownership
 updates with the coordinator, retain the recorded baseline, and add exact
 subsequent verification rather than overwriting missing with a broad claim.
-Read-only planning identifies 21 AMediaFormat functions and 122 format data
-symbols in that baseline; the pinned AOSP implementation contains 152 data
-definitions. A future bridge must verify all pinned entries and preserve
-the distinction between a constant's value and the media contract it names.
-None of these entries is implemented by the Media3 Java/recording proof.
+Full ci 40459815375 at c5962291 verifies the first slice: 21 AMediaFormat
+functions and all 152 pinned data definitions. Per-entry subsequent
+verification closes 143 old entries (21 functions and 122 data objects),
+preserving every historical baseline/owner/observation. Thirty additional
+pinned data objects are verified without extending the old export list.
+Both runners/ABIs now report 133 missing libmediandk entries; 170 old media
+entries remain including the 34 OpenSL and three AAudio entries. Ordinary
+format-key storage does not implement the media feature named by that key.
 
 ## NDK export contracts
 
@@ -39,9 +42,23 @@ None of these entries is implemented by the Media3 Java/recording proof.
 - Implement the 34 remaining OpenSL interface identifiers together with
   their actual interface contracts or explicit documented unsupported
   results. Do not claim effects or 3D audio by exporting constants alone.
+  Read-only comparison with pinned OpenSLES.h / OpenSLES_IID.cpp also finds
+  synthetic UUID contents in the existing 19 identifiers, pointer-identity
+  lookup, ignored required-interface arrays and an incorrectly two-argument
+  QueryNumSupportedInterfaces table entry (the API takes self/objectID/out).
+  The local permission-denied value is 0x0D (INTERNAL_ERROR), while the
+  pinned permission result is 0x0B. Correct canonical UUID values, copied-IID
+  matching, capability/required-interface negotiation, the typed query ABI
+  and NDK record-denial results need implementation and independent CI.
+  These source findings have no runtime acceptance yet.
 - Implement AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
   AAudio_setMMapPolicy with correct Windows capability/policy semantics;
   verify getter/setter/result behavior rather than adding generic zeros.
+  The pinned API starts policy at UNSPECIFIED (0), separately from a Windows
+  effective no-MMAP capability; its setter accepts 0/1/2/3 and preserves the
+  old value on invalid -898. ALWAYS with no system MMAP service fails stream
+  open with NO_SERVICE (-881). No-MMAP stream identity, policy changes and
+  callback lifetime must be verified; these are source-only planning facts.
 - Implement AAudio error/disconnection callback delivery (currently stored
   but never invoked), device/route selection and the ignored policy setters;
   verify removal, stop/close cancellation and callback lifecycle separately
@@ -154,19 +171,45 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
-Corrected full ci **40459815375** is running at
+Corrected full ci **40459815375** is complete GREEN at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
 integration 53898b51's docs. Source 73c20d70 adds the explicit cstdint
 prerequisite and the early exact-object CI compile. Source is frozen;
-docs-only commits may follow. Main build 122041490613 passes in 20m37s:
+later branch commits change docs only. All 28 conclusions were read:
+**22 success, six skipped**, attempt 1 without retries. Main build
+122041490613 passes in 20m37s:
 the actual log shows the early bridge object compiled, both gesher-exec and
 dalvikvm linked, and 203 assembly boundaries/zero problems. Media build
 122043516317 passes in 1m3s with both NDK ABI/ELF and APK builds; framework
 122041532403 passes in 6m11s. Actual logs were read. Package 122048294220
 passes all 23 installed-runtime/window/input/uninstall checks; boot-image
-122048132669 passes in 28s. Windows jobs 122048294283 (2022) /
-122048294275 (2025) and e2e 122048949119 / 122048949121 are running.
-No test71/runtime or full-green acceptance yet.
+122048132669 passes in 28s. Windows jobs **122048294283** (2022, 28m24s) /
+**122048294275** (2025, 26m22s) each finish **0 test(s) failed**. All ten
+test71 PASS lines per runner were read: two ABIs, core ART JNI, standalone
+ELF, single-process APK and fresh-device APK, plus both device shutdowns.
+Every context prints all eight actual semantic parts, ABI and caller markers:
+21 real functions, 152 real data objects/values, typed/FPU/LP64 calls,
+ownership, errors, clear, debug-string lifetime and 128 allocation cycles.
+The native2 availability check passes; each ABI reports libmediandk
+276 checked / 133 missing. ADR 0064 is accepted for this format slice only.
+
+Both complete suites also pass all 37 media3, 12 part-1 device, 18 AOT3,
+11 Exec3, live-environ67 and monotonic/deadline-clock68 checks. Original
+Camera2 throughput/picture/terminal/permission/race gates remain unchanged:
+61/61 single-process frames and 58/59 device frames on 2022/2025, with zero
+queue drops, rejects or encoder failures. Original startup gates pass:
+interpreter 472/504 ms and JIT 347/386 on 2022; interpreter 387/421 and
+JIT 302/339 on 2025. Actual deterministic HTTP/SNI certificate/hostname
+controls and preserved Google Internet checks pass on both runners.
+E2e **122048949119 / 122048949121** each passes all ten required apps
+(including Just Player 0.217, Puzzles and TIC-80), four transport fixtures,
+association/shortcut launches and **0 unexpected failures**. Actual package
+and both e2e logs were read, not inferred from their conclusions.
+
+The accepted source predates the coordinator's separately verified Java
+exit-status freshness prerequisite (integration 30deb08c). The coordinator
+will verify the coherent combined tree before integration acceptance;
+this branch stays c596 plus documentation only until that handoff.
 
 The first source candidate implements only the real NDK AMediaFormat
 subset described in ADR 0064: 21 System V function entries and 152 actual
@@ -202,8 +245,8 @@ Framework 122030408664 passes in 10m39s; actual NetApp/services dex logs were
 read. Root independently reviewed the source/ABI/data/wiring and found no
 actionable issue within that bounded review; actual CI exposed the header
 dependency above. No Windows matrix, package or e2e job ran at that source;
-the corrected candidate is tracked above. Read every job, both
-complete zero-failure Windows summaries, all test71 parts, package and
-required e2e before acceptance. The native API baseline metadata and roadmap
-are unchanged. All remaining contracts listed above stay open; later work
-must build on a CI-accepted slice.
+the corrected candidate is accepted above. The native API baseline retains
+its original fields and adds exact c596/40459815375 verification to only the
+143 format entries. A scoped roadmap box records the real format slice;
+the broad media box remains open. All remaining contracts listed above stay
+open. No later Media4 implementation is included in this frozen source.

@@ -1,6 +1,6 @@
 # 0064: Native media format contracts over the pinned AOSP backend
 
-Status: proposed (media4; first source candidate, CI pending)
+Status: accepted (media4 format slice; full ci 40459815375)
 
 ## Context
 
@@ -49,14 +49,34 @@ address of that object, not the first byte of its string literal.
 
 ## Consequences
 
-Compilation and every native/JVM fixture run happen only in CI. The first
-source candidate has only source/hash, PowerShell/XML/YAML parser and shell
-syntax checks locally; no runtime acceptance or new roadmap tick follows.
-All test71 gates, existing native2 availability checks, both complete
-Windows suites, package and required e2e must pass before acceptance.
+Compilation and every native/JVM fixture run happen only in CI. Full ci
+**40459815375**, attempt 1 at **c5962291855b13ebd0d21fcf72981db973ad9e72**,
+passes all 28 jobs (22 success, six skipped). Windows jobs 122048294283
+(2022) and 122048294275 (2025) each finish with `0 test(s) failed`. Each
+runner proves both ABIs in all four contexts, all eight semantic parts per
+context and both device shutdowns: ten test71 PASS lines. Package
+122048294220 passes all 23 checks; e2e 122048949119 / 122048949121 each pass
+all ten apps and report `0 unexpected failures`. Actual job logs were read.
 
-The 313-symbol historical baseline is retained. Subsequent exact run/ABI/
-semantic observations will describe the implemented format subset; the
+The original full ci 40456299720 at 92e914238 remains RED: main build
+122030308024 reports 12 unknown int32_t/int64_t type errors in the AOSP
+header, before Windows/package/e2e run. The accepted source explicitly
+includes cstdint before that header and compiles the exact bridge object
+early in CI. Build 122041490613 proves that compile, both host links and
+203 assembly boundaries/zero problems. Only source/hash and lightweight
+script/parser checks run locally.
+
+The 313-symbol historical baseline is retained. Exact per-entry subsequent
+verification covers 143 old entries: 21 functions and 122 data objects.
+Another 30 pinned data objects are tested without adding them to that
+historical list. Both native2 ABI logs now report 133 missing libmediandk
+entries of 276 checked; 170 old media entries remain (133 libmediandk,
+34 OpenSL and three AAudio). This verification covers ordinary metadata,
+not the codec/DRM feature named by any key. The
 remaining NDK codec/extractor/muxer/image/DRM APIs, OpenSL/AAudio contracts,
 physical capture/routes, recorder/session/container validation and hardware/
 protected-media work remain explicitly open in the Media4 brief.
+
+This source predates the coordinator's separately verified Java exit-status
+freshness fix. Combined integration CI must verify that prerequisite with
+this slice before the coordinator accepts the integrated tree.
