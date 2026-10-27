@@ -48,10 +48,19 @@ compilation and native/JVM fixtures run only in CI, including tiny probes.
 The README reflects this. No local compiler or runtime fixture is required for
 the held release preparation.
 
-Current source also includes verified exec3 integration 94ccde1, merged without
-conflicts at f47a22f. The release-version branch CI remains held for verified
-Web3 and the coordinator's combined source; this merge supplies no new release
-verification and does not authorize this agent to publish.
+Current preparation includes coordinator integration
+8922a3e2c56bc54cb4bfff95adcbc4259f846968, with verified startup profile,
+native monotonic/CPU clocks and signed/unsigned width work. The coordinator
+personally accepted full40434741055/source
+bdfb230fa3d70797caece6568b6ac529e854b4ee; this agent does not claim to have
+independently read that whole run. The additive CI merge retains explicit
+release_version, early installer upload and post-smoke receipt/promotion guards.
+It introduces no change to release promotion code. Release-version branch CI
+remains held for verified Web3 and the coordinator's final combined source.
+Web3 full40432795403 currently fails device accessibility teardown on 2025;
+Windows4 also retains initial-TSF/2025 foreground diagnostic gaps. Their new
+diagnostic runs do not establish acceptance. No preparation merge supplies
+release verification or authorizes this agent to publish.
 
 Explicit release documentation gap: the repository README still described phase
 1 with no Java or APK execution. The coordinator authorized this agent on
