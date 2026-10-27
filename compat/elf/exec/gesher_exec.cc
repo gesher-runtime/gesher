@@ -394,8 +394,10 @@ int RunArguments(const std::vector<std::string>& args) {
     // PE/batch programs keep the existing wait-and-propagate convention.
     std::vector<ex::ChildFd> fds;
     for (int fd = 0; fd < 2048; ++fd) {
-      HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-      if (h != INVALID_HANDLE_VALUE && h != nullptr) fds.push_back({fd, h});
+      intptr_t value = _get_osfhandle(fd);
+      if (value != -1 && value != -2 && value != 0) {
+        fds.push_back({fd, reinterpret_cast<HANDLE>(value)});
+      }
     }
     PROCESS_INFORMATION process{};
     if (ex::SpawnWithFds(launch, nullptr, L"", fds, &process) != 0) return 127;

@@ -45,6 +45,17 @@ C:\work\gesher-ci-review\exec4-spawn-full-40498406783-watch.log, interval120.
 Host bridge compilation and actual Windows runtime remain pending; nothing
 was compiled/executed locally. No roadmap/runtime claim is closed.
 
+Further source review found UCRT's documented unbound-stdio sentinel is-2,
+which the old inherited-fd scan treated as a real HANDLE. The corrected
+snapshot and child sweeps exclude exactly NULL/-1/-2. An actual Windows
+no-console probe starts with STARTF_USESTDHANDLES/null stdin and no CRT
+inherited-fd block, requires raw _get_osfhandle(0)==-2, calls the real shim
+spawn/wait entries, and requires a real NDK child to see closed0 and exit42
+while the parent's raw sentinel remains unchanged. Both ABI callers are
+mandatory in test77; main CI builds this host target and launcher early.
+This is a source finding, not an error observed in the earlier run.
+Full40498406783 is superseded by the corrected source before acceptance.
+
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
 explicitly open in the aggregate Exec4 brief/ADR0074.
