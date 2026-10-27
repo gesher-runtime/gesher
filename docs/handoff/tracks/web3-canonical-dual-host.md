@@ -2,7 +2,8 @@
 
 Owner branch wip/web3-full-bound / C:/work/gesher-web3-full-bound starts at
 frozen component proofd192cab9 (non-doc identical to verifiedfc176703).
-No canonical full has executed this later wiring; no integration/main change.
+The first canonical full failed at the role guard as recorded below; no runtime
+or package acceptance follows from that attempt. No integration/main change.
 
 ci explicitly configures OFF before normal build. Production exe/map and a
 role/source/compiler manifest are sealed and uploaded as windows-x64 BEFORE
@@ -31,8 +32,8 @@ selected executable. All original monitor/owner-join/JNI_OKdetach/cache/action/
 generation/VM/freshprocess/deadline gates remain unchanged. A PR's compiled
 merge SHA and API event-head metadata are pinned separately and explicitly.
 
-Pending: bounded peer of source/role producer-package-consumer boundaries,
-actual CI compilation/current-role checks and fresh changed-union full with
+Bounded Native and integration source peers found no further role-boundary
+blocker. Pending: actual CI compilation/current-role checks and fresh changed-union full with
 actual whole suites, both regression jobs, package and both e2e. Successor
 integrator owns union construction/dispatch; this owner supplies source only.
 No local C/C++/Java/C# compilation or executable fixture was run.
@@ -56,4 +57,33 @@ export despite configured ccache. The guard now accepts exactly two explicit
 forms: metadata's absolute compiler first, or that exact compiler preceded by
 the exact configured/resolved launcher. Any arbitrary prefix/driver fails;
 all4 query commands must use one consistent recorded form. No executable is
-guessed from argv. Focused OFF/ON CI must establish actual form/hash stability.
+guessed from argv.
+
+## 2026-10-28: actual compiler configuration preflight verified
+
+Primary correction source is12db63e5304ac3ede0538a3e882196550f9fb5b0,
+above80e6c35d. Only tools/web3/host_roles.py and this report differ from58a085a2;
+the separate preflight workflow must not be imported into the primary union.
+The helper at9bda3f924a717f8cc03f746d68d0c8b9a28ae697 uses byte-identical
+host_roles.py. Actual run40595401850 attempt1/job122509916936 is GREEN.
+Complete metadata and plain job log are preserved in C:/work/gesher-ci-review/
+web3-compiler-preflight-40595401850-result.json and the matching-preflight.log.
+
+Actual setup-build plus CMake3.31.6 OFF and ON configured the same absolute
+LLVM20261006 driver and /usr/bin/ccache. Both generated records and full
+compiler dictionaries matched, including metadata SHA256
+69c314739c85ba1c243254dcdcce034d7714664917cf1fa48bd32824e56c454c.
+Both actual compile databases used compiler-first form, so no configured
+launcher was assumed present in argv. The exact four query CXX objects changed
+by only the test definition. Missing generated record, ambiguous records,
+contradictory cached compiler and wrong actual driver were each rejected;
+the real-CMake negative summary is4controls/0failures.
+
+Earlier helper run40594880613/ebeceb87 extracted both actual configurations
+but failed the comparison harness because Actions' temporary Python script
+did not include the repository on sys.path. That original red is preserved;
+9bda3f92 fixes only the helper workflow import path, with no helper-code delta.
+This proof is configuration/guard evidence, not native compilation or runtime
+qualification. The next canonical union must contain only the narrow primary
+correction above failed4a47 code, then execute production OFF whole suites,
+both isolated hook regressions, package and both e2e jobs before acceptance.
