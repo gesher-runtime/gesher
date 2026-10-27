@@ -36,8 +36,14 @@ actions before failed exec, caller PATH versus replacement envp and parent
 directory/flag preservation. Test77 uses the unchanged120-second process-tree
 bound. exec.yml adds both ABI builds and a narrow branch/path push trigger;
 the workflow is absent from main, so direct dispatch cannot bootstrap it.
-CI compilation/runtime results remain pending; nothing was compiled or
-executed locally. No roadmap/runtime claim is closed.
+Scoped40472829064 at5f2653c6 built both NDK callers. Corrected scoped
+40497922800 at47733cd3 also succeeds; actual job122167992203 is awaiting
+root log review. Full40498406783 runs at exact
+e8e827e599077f994be650d1e7b7e40cc78b193c after importing accepted
+Windows160e25e8 and integrationdb847. Watch log is
+C:\work\gesher-ci-review\exec4-spawn-full-40498406783-watch.log, interval120.
+Host bridge compilation and actual Windows runtime remain pending; nothing
+was compiled/executed locally. No roadmap/runtime claim is closed.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
