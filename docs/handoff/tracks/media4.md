@@ -175,6 +175,26 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+The next independent native-muxer slice is source-only in
+C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
+Test79 is reserved (next80), ADR0064 retained. First preparation moves the
+three codec-configuration helper bodies unchanged out of encoder.cc and
+configures the actual MP4/WebM/Ogg writers once in a shared OBJECT target
+linked into both hosts; existing JNI encoders/writers retain the same
+helpers. No compiler/link/runtime proof or NDK muxer export is claimed yet.
+Pinned NdkMediaMuxer/MediaMuxer/error-translation/MediaAppender sources were
+read with exact URL/hash audits in C:\work\gesher-ci-review. Important source
+contracts include LP64 BufferInfo size24/offsets0,4,8,16; BAD_VALUE maps to
+AMEDIA_ERROR_UNKNOWN through the pinned translator, not INVALID_PARAMETER;
+start/stop state transitions precede the writer result; and non-MP4 location
+returns INVALID_OPERATION despite the public-header summary. The wrapper
+will use the real writer, duplicate caller FDs, preserve typed track-format
+ownership and verify actual encoded output independently. No generic append
+stub will be registered. Append modes, HEIF and any unimplemented format
+contract stay open. Separate AAudio full40487303965/afebf1ec is immutable;
+its three policy entries and installed-notice proof remain unverified.
+Only source reading, Git and lightweight script checks have run locally.
+
 Native OpenSL full ci **40477536464** is complete GREEN at
 **e569341230b3970cadaeb48a235a12a4645da74a**, attempt 1 without retries.
 All 28 conclusions were read:22 success/six skipped. Main122099364029

@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "codec_config.h"
+
 #include "../video/video_decoder.h"
 
 namespace gesher::media {
@@ -89,12 +91,5 @@ std::unique_ptr<AudioEncoder> CreateMfAacEncoder(const AudioEncoderParams& p, st
 // libavc (soft_avc_encoder.cc), libopus (opus_encoder.cc).
 std::unique_ptr<VideoEncoder> CreateSoftAvcEncoder(const VideoEncoderParams& p, std::string* error);
 std::unique_ptr<AudioEncoder> CreateOpusEncoder(const AudioEncoderParams& p, std::string* error);
-
-// H.264 Annex B: splits a stream into its NAL units (start codes removed).
-std::vector<std::pair<const uint8_t*, size_t>> SplitAnnexB(const uint8_t* p, size_t n);
-// An AAC AudioSpecificConfig (2 bytes) for an object type, a rate and channels.
-std::vector<uint8_t> AacAudioSpecificConfig(int object_type, uint32_t rate, uint32_t channels);
-// An OpusHead (RFC 7845) for channels, a pre-skip and the input rate.
-std::vector<uint8_t> OpusHead(uint32_t channels, uint32_t pre_skip, uint32_t rate);
 
 }  // namespace gesher::media

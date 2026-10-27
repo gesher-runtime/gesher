@@ -80,6 +80,23 @@ foreach(_host dalvikvm gesher-exec)
   target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk)
 endforeach()
 
+# The actual container writers and pure packet metadata are shared by JNI
+# and native processes; neither host pulls the encoder factories through them.
+add_library(gesher_media_muxer OBJECT
+  ${_media}/encode/codec_config.cc
+  ${_media}/mux/mp4_muxer.cc
+  ${_media}/mux/webm_muxer.cc
+  ${_media}/mux/ogg_muxer.cc
+)
+target_link_libraries(gesher_media_muxer PUBLIC gesher_media_player_core
+  stagefright_foundation gesher_media_codecs gesher_bionic)
+target_include_directories(gesher_media_muxer PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
+target_compile_options(gesher_media_muxer PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
+  -Wno-deprecated-copy)
+set_target_properties(gesher_media_muxer PROPERTIES CXX_STANDARD 23)
+target_link_libraries(dalvikvm PRIVATE gesher_media_muxer)
+target_link_libraries(gesher-exec PRIVATE gesher_media_muxer)
+
 add_library(gesher_media_player OBJECT
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
@@ -92,14 +109,11 @@ add_library(gesher_media_player OBJECT
   ${_media}/encode/mf_encoder.cc
   ${_media}/encode/opus_encoder.cc
   ${_media}/encode/soft_avc_encoder.cc
-  ${_media}/mux/mp4_muxer.cc
-  ${_media}/mux/webm_muxer.cc
-  ${_media}/mux/ogg_muxer.cc
   ${_media}/record/recorder.cc
   ${_media}/jni/media_muxer_jni.cc
   ${_media}/jni/media_recorder_jni.cc)
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
-target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_codecs gesher_bionic
+target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
   winhttp ole32)
 target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
