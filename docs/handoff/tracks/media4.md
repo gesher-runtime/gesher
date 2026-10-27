@@ -175,6 +175,15 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Full ci **40487303965** is running at frozen source
+**afebf1ec28308673bb9b0a7745547753c6123da8**, with latest accepted integration
+db84749b and verified native backend35cf9aa1/e5693412 imported. It verifies
+test78's actual both-ABI core/ELF/allowed-denied APK contracts alongside all
+original OpenSL/format/media gates, plus the exact installed OpenSL notice.
+Later commits are docs only; all three AAudio inventory entries remain
+unverified until every job/both Windows whole0/package/both e2e gate passes.
+Watch uses interval120. All compilation and fixture execution remain CI-only.
+
 Separate AAudio policy source is prepared on wip/media4-aaudio in
 C:\work\gesher-media4-aaudio, from accepted OpenSL/docs58a24583. Test78 is
 reserved (next79), ADR0064 retained. It supplies the three old missing
