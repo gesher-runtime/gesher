@@ -1,6 +1,11 @@
 name: net4-probes
 
 on:
+  push:
+    branches: [wip/net4]
+    paths:
+      - .github/workflows/net4-probes.yml
+      - tests/windows/net/InspectIfaddrsOracle.ps1
   workflow_dispatch:
 
 permissions:
