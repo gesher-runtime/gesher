@@ -249,7 +249,14 @@ the microphone (looped, from its start each time recording starts);
   candidate. Framework **121974486318** passes in 6m16s with services-tests.dex.
   Boot image **121976602153** passes in 31s; media **121976602155** passes
   in 1m28s, including all unchanged media generators, both NDK test libraries
-  and all three APKs. Windows, package and e2e execution remains pending.
+  and all three APKs. Package **121979755592** passes actual installed
+  oatdump, image/fonts, install/dexopt, shortcuts/association, Win32 window
+  and click/key/WM_CHAR/wheel/resize input, and full uninstall cleanup.
+  E2e **121980276382** (2022) / **121980276374** (2025) each pass four
+  transport fixtures, all ten apps including Just Player/TIC-80/Puzzles,
+  association and shortcut launch, and `0 unexpected failures`. Full
+  Windows **121979755616** (2022) / **121979755620** (2025) still run;
+  their actual media, certificate and boot checks remain pending.
 - Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
   **40430522654**, has actual **37 media3 PASS on both Windows runners**.
   Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
