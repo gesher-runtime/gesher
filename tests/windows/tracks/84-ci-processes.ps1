@@ -17,6 +17,8 @@ if ($LASTEXITCODE -ne 0) {
 # cleanup without fabricating HWNDs, pixels or app phase markers.
 $process84SavedDir = $Dir
 $process84SavedSlHost = $slHost
+$process84SavedSurfaceVm = $dvmSurfaces
+$process84SavedWindowVm = $dvmWindows
 $process84SurfaceDir = Join-Path $process84Root 'surface-helper'
 New-Item -ItemType Directory $process84SurfaceDir | Out-Null
 $process84SurfaceExe = Join-Path $process84SurfaceDir 'dalvikvm.exe'
@@ -25,6 +27,7 @@ try {
   $Dir = $process84SurfaceDir
   $slHost = $process84SurfaceDir
   $dvmSurfaces = @()
+  $dvmWindows = @()
   foreach ($helper in 'SurfaceRun', 'InvokeOpenSl') {
     foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                        @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
@@ -84,7 +87,61 @@ try {
       }
     }
   }
-} finally { $Dir = $process84SavedDir; $slHost = $process84SavedSlHost }
+  foreach ($helper in 'WaitTimed', 'LocaleWait') {
+    foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
+                       @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
+      $pidFile = Join-Path $process84Root "$helper-$($case.Mode).pid"
+      $limit = if ($case.Mode -eq 'timeout') { 3 } else { 15 }
+      $timer = [Diagnostics.Stopwatch]::StartNew()
+      try {
+        $session = if ($helper -eq 'WaitTimed') {
+          StartTimed $process84SurfaceExe @($case.Mode, $pidFile)
+        } else { LocaleStart @($case.Mode, $pidFile) }
+        $actualHandle = $session.Process.SafeHandle
+        if ($case.Mode -eq 'retained' -and -not $session.Process.WaitForExit(5000)) {
+          throw 'The actual retained-pipe parent did not exit before the split wait'
+        }
+        $text = & $helper $session $limit
+        $code = $LASTEXITCODE
+        $timer.Stop()
+        $correct = $code -eq $case.Expected -and $timer.Elapsed.TotalSeconds -lt ($limit + 25) -and $actualHandle.IsClosed
+        if ($case.Mode -in @('normal', 'nonzero')) {
+          $correct = $correct -and $text.Contains("process84 stdout $($case.Mode)") -and
+            $text.Contains("process84 stderr $($case.Mode)")
+        } elseif ($case.Mode -eq 'timeout') {
+          $correct = $correct -and $text.Contains('(timed out after 3 s)') -and (Test-Path -LiteralPath $pidFile)
+        } else {
+          $correct = $correct -and $text.Contains('did not complete within ten seconds') -and (Test-Path -LiteralPath $pidFile)
+        }
+        if ($correct) {
+          Write-Host "PASS  CI processes: actual split $helper $($case.Mode) status$code bounded output and disposed native handle"
+        } else {
+          Write-Host "FAIL  CI processes: actual split $helper $($case.Mode) status$code expected$($case.Expected) disposed$($actualHandle.IsClosed) after$($timer.Elapsed.TotalSeconds): $text"
+          $script:failed++
+        }
+      } finally {
+        if (Test-Path -LiteralPath $pidFile) {
+          $ownedProcess = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+          if ($ownedProcess) {
+            try {
+              if ($ownedProcess.Path -ne $process84SurfaceExe) { throw 'split helper PID is not the owned fixture' }
+              $ownedProcess.Kill($true)
+              if (-not $ownedProcess.WaitForExit(5000)) { throw 'split helper fixture survived bounded cleanup' }
+            } catch {
+              Write-Host "FAIL  CI processes: actual split $helper $($case.Mode) cleanup: $_"
+              $script:failed++
+            } finally { $ownedProcess.Dispose() }
+          }
+        }
+      }
+    }
+  }
+} finally {
+  $Dir = $process84SavedDir
+  $slHost = $process84SavedSlHost
+  $dvmSurfaces = $process84SavedSurfaceVm
+  $dvmWindows = $process84SavedWindowVm
+}
 foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                    @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
   $pidFile = Join-Path $process84Root "$($case.Mode).pid"
