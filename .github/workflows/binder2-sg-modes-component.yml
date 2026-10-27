@@ -117,6 +117,17 @@ jobs:
               $run.run_attempt -ne ${{ github.run_attempt }} -or $run.repository.full_name -cne '${{ github.repository }}') {
             throw 'SG component current run/source identity mismatch'
           }
+          $jobs = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs --paginate | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual SG supplier job attempts' }
+          foreach ($name in 'prerequisite','host','framework / host-tools','framework / framework',
+              'translator / fpsr-reference / reference','translator / build','fixtures / host-compile','fixtures / modes-build','boot-image / compile') {
+            $job = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].head_sha -cne $run.head_sha -or
+                $job[0].run_id -ne $run.id -or $job[0].run_attempt -ne $run.run_attempt) {
+              throw "Unproved SG supplier job/source/run/attempt $name"
+            }
+            Write-Host "ACTUAL_SG_SUPPLIER job=$name id=$($job[0].id) source=$($job[0].head_sha) run=$($job[0].run_id) attempt=$($job[0].run_attempt) conclusion=$($job[0].conclusion)"
+          }
           $inventory = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect SG current artifact inventory' }
           foreach ($name in 'windows-x64','framework','arm64','boot-image','binder2-sg-modes') {

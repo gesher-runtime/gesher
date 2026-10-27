@@ -63,7 +63,7 @@ function Start-Mode([string]$Exe, [string[]]$Arguments, [hashtable]$Environment,
     foreach ($key in $Environment.Keys) { $info.Environment[$key] = $Environment[$key] }
     $child = [pscustomobject]@{
         Process = [Diagnostics.Process]::new(); Out = $null; Err = $null
-        Log = $Log; Pid = 0; Text = ''; Exit = -1; Stopped = $false
+        Log = $Log; Pid = 0; Text = ''; Exit = -1; Stopped = $false; Validated = $false
     }
     $child.Process.StartInfo = $info
     try {
@@ -145,6 +145,43 @@ function Start-Actor([string]$Mode, [string]$Abi, [string]$Role, [string]$Scenar
     }
     Start-Mode $exe $arguments $Environment "$Prefix.$Role.log"
 }
+function Assert-ActorCompletion($Child, [string]$Mode, [string]$Abi, [string]$Scenario, [string]$Role) {
+    if ($Child.Validated) { return }
+    Assert-Mode ($Child.Stopped -and $Child.Exit -eq 0 -and
+        $Child.Text -match "SG ${Role}: [1-9][0-9]* checks, 0 failed" -and $Child.Text -notmatch '(?m)^FAIL ') `
+        "$Mode/$Abi/$Scenario $Role actual assertions and fresh process exit0"
+    if ($Mode -eq 'art') {
+        Assert-Mode ($Child.Text.Contains("SG ART result: role=$Role; scenario=$Scenario; status=0; endpoint restored=true")) `
+            "$Mode/$Abi/$Scenario $Role public endpoint restored"
+    }
+    if ($Mode -in 'single','device') {
+        Assert-Mode ($Child.Text.Contains("BinderSgActivity onResume: all passed; role=$Role; scenario=$Scenario; mode=$Mode; endpoint restored=true; existing framework pings=")) `
+            "$Mode/$Abi/$Scenario $Role existing framework identity/pings and endpoint restoration"
+        $ids = [regex]::Matches($Child.Text, "SG APK identity: pid=([0-9]+); role=$Role; mode=$Mode;")
+        Assert-Mode ($ids.Count -eq 1) "$Mode/$Abi/$Scenario $Role one actual APK identity"
+        $actorId = [int]$ids[0].Groups[1].Value
+    } else { $actorId = $Child.Pid }
+    if ($Mode -eq 'device') {
+        # This marker is published from the accepted generation/PID-bound
+        # native process result, after real app death. Launcher0 alone fails.
+        $package = [regex]::Escape("com.gesher.bindersg.$Role")
+        $ended = [regex]::Matches($Child.Text, "(?m)^gesher-app: the process of $package ended \(exit code (-?[0-9]+)\)\r?$")
+        Assert-Mode ($ended.Count -eq 1 -and $ended[0].Groups[1].Value -ceq '0') `
+            "$Mode/$Abi/$Scenario $Role actual app normal exit-code-zero result"
+        $started = [regex]::Matches($Child.Text, "app process for ${package}: pid ([0-9]+)")
+        Assert-Mode ($started.Count -eq 1 -and [int]$started[0].Groups[1].Value -eq $actorId) `
+            "$Mode/$Abi/$Scenario $Role app-process identity matches native actor PID"
+    }
+    $Child | Add-Member -NotePropertyName ActorPid -NotePropertyValue $actorId
+    $stillRunning = $false
+    try {
+        $observed = [Diagnostics.Process]::GetProcessById($actorId)
+        try { $stillRunning = -not $observed.HasExited }
+        finally { $observed.Dispose() }
+    } catch [ArgumentException] { }
+    Assert-Mode (-not $stillRunning) "$Mode/$Abi/$Scenario $Role actual actor PID exited"
+    $Child.Validated = $true
+}
 try {
     foreach ($mode in $Modes) {
         $abis = if ($mode -eq 'host') { @('host') } else { @('x86_64','arm64-v8a') }
@@ -176,35 +213,14 @@ try {
                     Wait-ModeFile "$prefix.queued" $client
                     if ($scenario -eq 'oneway') {
                         Stop-Mode $client
-                        Assert-Mode ($client.Exit -eq 0) "$mode/$abi/$scenario real sender exits before receiver delivery"
+                        Assert-ActorCompletion $client $mode $abi $scenario 'client'
+                        Assert-Mode $client.Validated "$mode/$abi/$scenario actual sender normal exit0 verified before receiver delivery"
                     }
                     [IO.File]::WriteAllText("$prefix.release", 'deliver')
                     Stop-Mode $client
                     Stop-Mode $server
-                    foreach ($actor in @(@{ Child=$server; Role='server' }, @{ Child=$client; Role='client' })) {
-                        $child = $actor.Child; $role = $actor.Role
-                        Assert-Mode ($child.Exit -eq 0 -and $child.Text -match "SG ${role}: [1-9][0-9]* checks, 0 failed" -and
-                            $child.Text -notmatch '(?m)^FAIL ') "$mode/$abi/$scenario $role actual assertions and fresh process exit0"
-                        if ($mode -eq 'art') {
-                            Assert-Mode ($child.Text.Contains("SG ART result: role=$role; scenario=$scenario; status=0; endpoint restored=true")) `
-                                "$mode/$abi/$scenario $role public endpoint restored"
-                        }
-                        if ($mode -in 'single','device') {
-                            Assert-Mode ($child.Text.Contains("BinderSgActivity onResume: all passed; role=$role; scenario=$scenario; mode=$mode; endpoint restored=true; existing framework pings=")) `
-                                "$mode/$abi/$scenario $role existing framework identity/pings and endpoint restoration"
-                            $ids = [regex]::Matches($child.Text, "SG APK identity: pid=([0-9]+); role=$role; mode=$mode;")
-                            Assert-Mode ($ids.Count -eq 1) "$mode/$abi/$scenario $role one actual APK identity"
-                            $actorId = [int]$ids[0].Groups[1].Value
-                        } else { $actorId = $child.Pid }
-                        $child | Add-Member -NotePropertyName ActorPid -NotePropertyValue $actorId
-                        $stillRunning = $false
-                        try {
-                            $observed = [Diagnostics.Process]::GetProcessById($actorId)
-                            try { $stillRunning = -not $observed.HasExited }
-                            finally { $observed.Dispose() }
-                        } catch [ArgumentException] { }
-                        Assert-Mode (-not $stillRunning) "$mode/$abi/$scenario $role actual actor PID exited"
-                    }
+                    Assert-ActorCompletion $server $mode $abi $scenario 'server'
+                    Assert-ActorCompletion $client $mode $abi $scenario 'client'
                     Assert-Mode ($server.ActorPid -gt 0 -and $client.ActorPid -gt 0 -and
                         $server.ActorPid -ne $client.ActorPid -and $server.ActorPid -ne $broker.Pid -and $client.ActorPid -ne $broker.Pid) `
                         "$mode/$abi/$scenario actual broker/server/client distinct PIDs"
@@ -228,6 +244,10 @@ try {
                     }
                     if ($null -ne $broker -and $broker.Text) {
                         try {
+                            # OpenBinder eagerly completes HelloProc before
+                            # reserving/publishing the FD. ServeProc traces
+                            # before replying; even unused successful SG FDs
+                            # are counted here. Only thread ioctl pipes are lazy.
                             $opens = [regex]::Matches($broker.Text, 'proc ([0-9]+): pid ([0-9]+) opened the device')
                             Assert-Mode ($opens.Count -eq 2) "$mode/$abi/$scenario actual SG broker exactly two successful opens"
                             foreach ($actor in @($server,$client)) {
