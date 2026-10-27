@@ -101,6 +101,14 @@ rerun was rejected as `job ... cannot be rerun` while the full run remains
 active; retry failed jobs in this same immutable-source run after it finishes.
 Do not dispatch a second candidate or infer any Windows pass from the skipped
 dependent jobs. No HTTP403/rate-limit rejection occurred.
+Attempt1 has now completed. Its actual build job121946699764 compiled and
+linked exec4_environment_test.exe and reports 203 assembly boundaries checked,
+0 problems; log exec4-live-environ-build-121946699764.log under ci-review.
+The only failed job is the framework transport failure; Windows/package/e2e
+were skipped and provide no runtime proof. `gh run rerun ... --failed` was
+accepted after completion as attempt2 of CI40430496516, still exact 9f25080.
+Attempt2 watch is exec4-live-environ-attempt2-watch-40430496516.log,
+session42323, interval120; replacement framework job121957869699 is pending.
 Original diagnostic610 remains running independently at CI40428277638.
 Root alone merges the final verified source and coordinates latest
 integration; no branch was merged here.
