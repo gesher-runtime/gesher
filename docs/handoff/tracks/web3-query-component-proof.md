@@ -14,7 +14,7 @@ them. This is component acceptance, not canonical full/default-OFF/package/e2e.
 - Corrected existing four wrappers each reach actual BLOCKED/viewRoots under
   that monitor, return unavailable and finish the REAL native window close
   and owner join BEFORE the main thread releases the monitor. Measured total
-  query+join3010-3038ms(2022),3010-3021ms(2025), original native3s budget plus
+  query+join3010-3038ms(2022),3007-3021ms(2025), original native3s budget plus
   at most500ms scheduling observation allowance; no production deadline moved.
 - After release, actual JNI_OK detachment/active0/cache0, sender exit0 and
   repeated HWND generations pass. Shutdown starts with one canceled worker
