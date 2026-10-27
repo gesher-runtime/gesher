@@ -87,6 +87,27 @@ changes. The replaced run supplies no host-oracle/runtime acceptance. A new
 complete corrected full run is required; do not reinterpret it as a retry of
 unchanged code or relax the existing assertion.
 
+Corrected full40456946272/fa8b29e2 builds both NDK ABIs, ELF binaries and
+APKs successfully (actual122032381864 read), but framework122032814915
+fails before javac on wificond/.git/info/sparse-checkout.lock. The exact cache
+producer is the cancelled prior framework122031504583: cancellation05:44:43Z
+was followed by always-save05:44:51Z under key suffixe831265ca95d55bb,
+cacheID9564745920. The corrected run restored that exact key and later saved
+the failed tree again asccc8acf1d1e8d4de/cacheID9564776068. Logs/cache API
+metadata establish this chain; no local cache/artifact bytes were downloaded.
+No runtime proof follows from the compiler-only NDK job.
+
+Root assigned the infrastructure correction before another run. Framework
+source snapshots now exclude cancelled jobs and reject live Git/remaining
+locks. A Linux GitHub-Actions-only guard immediately after restore records
+incoming lock paths/hashes and removes only recognized stale Git locks under
+the exact AOSP workspace, before any source Git child. It refuses local or
+external paths, symlinks, unknown locks and active Git; snapshot never deletes.
+Seven fixtures (including a real held Git process) run in CI before restore.
+Only Python AST/diff inspection has run locally; the fixtures and corrected
+full run still need CI. No unchanged retry or cache-key eviction hides the
+incoming-lock evidence. Net4 runtime source and historical inventory stay fixed.
+
 The earlier fixture-only stage is merged through verified Media3 integration
 f17d03b1: four local certificate rejections, NetApp HTTPS and deterministic
 HTTP200/two-host SNI selection with isolated missing/unknown-name controls,
