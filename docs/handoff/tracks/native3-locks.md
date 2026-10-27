@@ -248,3 +248,13 @@ work. The active integration full4a47 was untouched; its provenance-capture
 failure is separate from this source branch. Integration/release ownership is
 now /root/integration_next; prior integration agents are retired. Existing
 2026-10-27 proof snapshots retain their historical date and identities.
+
+Source self-review after this checkpoint removed the F_DUPFD staging alias
+entirely: under DescriptorGuard it finds the lowest vacant descriptor at or
+above the requested minimum, then uses the actual dup2 path directly. There
+is no hidden temporary alias whose failed close can leak an OFD pin, and the
+unused application-close bypass was removed. Success restores entry errno
+after vacant CRT fd probes; failures retain the actual duplication error.
+The portable oracle compares those results with actual Linux and checks a
+negative minimum leaves existing POSIX locks intact. This delta is still
+uncompiled and requires the same final source peer before any CI dispatch.

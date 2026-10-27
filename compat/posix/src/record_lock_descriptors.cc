@@ -255,9 +255,7 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
   return 0;
 }
 
-ClosingDescriptor::ClosingDescriptor(int descriptor, bool release_process)
-    : descriptor_(descriptor), release_process_(release_process) {
-  if (!release_process_) return;  // F_DUPFD staging alias; another guarded user alias must survive.
+ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
   if (!local) return;
   error_ = CloseCommitted();
   if (error_) return;
@@ -291,10 +289,8 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
   if (error || (same && !closed_or_replaced)) return error;
   Pruned pruned{};
   PruneDeadOwners(staged_, &pruned);
-  if (release_process_) {
-    Owner process{Ownership::kProcess, local->process.pid, local->process.created};
-    RemoveOwner(&staged_->locks, process, &file_);
-  }
+  Owner process{Ownership::kProcess, local->process.pid, local->process.created};
+  RemoveOwner(&staged_->locks, process, &file_);
   Collect(staged_, file_);
   error = local->registry.Commit();
   if (error) CancelPending();

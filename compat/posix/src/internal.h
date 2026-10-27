@@ -32,12 +32,6 @@ inline int CrtResult(int result) {
 // The Win32 handle behind a CRT file descriptor, or INVALID_HANDLE_VALUE.
 HANDLE HandleFromFd(int fd);
 
-// Dispose an internal F_DUPFD staging alias without making it an application
-// close that would erase the process's POSIX record locks. Virtual descriptor
-// tables still receive the real close. Caller holds its descriptor guard and
-// another actual user alias, so this cannot be an OFD last close.
-int CloseInternalDuplicate(int fd);
-
 // After a successful write to `fd` (fd.cc's write, pwrite): IN_MODIFY for the
 // inotify watches on the file or its directory in this process at once, as
 // Linux reports each write; NTFS tells ReadDirectoryChangesW only when it

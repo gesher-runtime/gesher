@@ -134,8 +134,8 @@ using gesher::Device;
 using gesher::SocketFd;
 
 namespace {
-int CloseDescriptor(int fd, bool application_close) {
-  gesher::record_locks::ClosingDescriptor transaction(fd, application_close);
+int CloseDescriptor(int fd) {
+  gesher::record_locks::ClosingDescriptor transaction(fd);
   if (transaction.Error()) return errno = transaction.Error(), -1;
   gesher::ForgetEpollEntries(fd);
   SocketFd state;
@@ -160,10 +160,6 @@ int CloseDescriptor(int fd, bool application_close) {
 }
 }  // namespace
 
-namespace gesher {
-int CloseInternalDuplicate(int fd) { return CloseDescriptor(fd, false); }
-}  // namespace gesher
-
 extern "C" {
 
 int gesher_is_socket(int fd) {
@@ -171,7 +167,7 @@ int gesher_is_socket(int fd) {
   return gesher::LookupSocket(fd, &state) ? 1 : 0;
 }
 
-int close(int fd) { return CloseDescriptor(fd, true); }
+int close(int fd) { return CloseDescriptor(fd); }
 
 int read(int fd, void* buf, unsigned int count) {
   SocketFd state;

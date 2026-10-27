@@ -22,14 +22,10 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock);
 
 // Hold across the ACTUAL CRT close/reopen/dup2 replacement, not merely an
 // attempted close. Finish inspects the captured FILE_OBJECT versus the fd's
-// actual post-operation object even if the CRT returned an error. An internal
-// F_DUPFD staging duplicate passes release_process=false: its disposal is not
-// an application close and must not erase the process's existing POSIX locks.
-// That internal caller MUST retain another actual user alias under its guard,
-// so this cannot be an OFD last close and needs no registry transaction.
+// actual post-operation object even if the CRT returned an error.
 class ClosingDescriptor {
  public:
-  explicit ClosingDescriptor(int descriptor, bool release_process = true);
+  explicit ClosingDescriptor(int descriptor);
   ~ClosingDescriptor();
   ClosingDescriptor(const ClosingDescriptor&) = delete;
   ClosingDescriptor& operator=(const ClosingDescriptor&) = delete;
@@ -42,7 +38,7 @@ class ClosingDescriptor {
  private:
   DescriptorGuard guard_;
   int descriptor_, error_ = 0;
-  bool release_process_, begun_ = false, completed_ = false;
+  bool begun_ = false, completed_ = false;
   HANDLE probe_ = nullptr;
   File file_{};
   RegistryState* staged_ = nullptr;

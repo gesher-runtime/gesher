@@ -149,8 +149,11 @@ def run(executable):
             query(False)
             command(0, 'open 0 0 2')
 
-            # Internal F_DUPFD temporary disposal must not erase POSIX locks.
+            # F_DUPFD housekeeping must not erase POSIX locks. The Windows
+            # implementation avoids a temporary alias/close altogether.
             lock(0)
+            command(0, 'dupfd 0 1 -1', -1, 22)
+            query(True)
             command(0, 'dupfd 0 1 40')
             query(True)
             command(0, 'dup2 31 1', -1, 9)
