@@ -53,3 +53,27 @@ phase markers around the actual spawn/file-action/stdio operations. Original
 assertions and native signal/exit behavior are retained. No new local C/C++
 or Java compiler/fixture runs. Broader exec4 contracts remain unimplemented;
 no roadmap box is ticked.
+
+Prepared a separate live-environment correction after the frozen diagnostic:
+RegisterPosix exported a one-time `_environ` array snapshot, but later host
+`_putenv_s`/`_wputenv_s` calls can relocate that array. The export now names the
+CRT's live pointer slot, with `environ`/`__environ` sharing that data address.
+The launcher keeps its separate initial UTF-8 array and now gives both names
+the same address; updates to that initial executable array remain a separate
+open contract. No conversion or Unicode semantics were changed.
+
+Test 67 adds a Windows host fixture plus an actual NDK shared library. It
+loads the library before narrow/wide host mutations, compares slot identities
+before any guest traversal, and uses only the integer address of an old array
+as a safe stale-snapshot control. Real ELF calls enumerate the array, query
+getenv and pass it to posix_spawn with dup2/close actions; guest setenv,
+overwrite=false, putenv and unsetenv are included. Both existing ART APK modes
+add host Java Os.setenv mutations after native loading and require the same
+real child checks. Original exec2's nine assertions remain intact.
+
+Local checks: diff whitespace, workflow YAML parse and PowerShell parse only.
+The candidate is not yet built or runtime-verified. Diagnostic CI40428277638
+is retained; do not launch a new full run while its reusable posix workflow
+is still active, because that workflow's same-ref concurrency would cancel it.
+An independent exec.yml dispatch can build the NDK/Java artifacts meanwhile.
+No precise crash cause is claimed from the source defect alone.

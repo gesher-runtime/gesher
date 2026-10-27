@@ -9,6 +9,7 @@ import java.io.File;
 
 public final class ExecActivity extends Activity {
     private static native int nativeProcesses(String child);
+    private static native int nativeEnvironment(String child);
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -19,6 +20,10 @@ public final class ExecActivity extends Activity {
             String directory = getApplicationInfo().nativeLibraryDir;
             String child = new File(directory, "libexec2child.so").getPath();
             System.loadLibrary("exec3jni");
+            for (int i = 0; i < 16; i++) android.system.Os.setenv("GESHER_EXEC4_JAVA_GROW_" + i, "host", true);
+            android.system.Os.setenv("GESHER_EXEC4_ENV", "java-host-setenv", true);
+            if (nativeEnvironment(child) != 0) throw new AssertionError("live native environment suite failed");
+            System.out.println("Exec4DeviceTest PASS host environment changes reach native environ and spawned children");
             if (nativeProcesses(child) != 0) throw new AssertionError("in-process native suite failed");
             System.out.println("Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app");
             Exec3Test.main(new String[0]);
