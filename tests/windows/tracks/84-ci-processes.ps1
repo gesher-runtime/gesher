@@ -12,6 +12,82 @@ if ($LASTEXITCODE -ne 0) {
   return
 }
 
+# Compile the gtest parser/retained-pipe fixture only on CI. RetainOutput is the
+# same real Win32 handle-transfer routine exercised by the existing controls.
+$gtest84Exe = Join-Path $process84Root 'gtest84.exe'
+$gtest84Source = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../fixtures/Gtest84.cs')).Path
+& $process84Compiler /nologo /warnaserror+ /platform:x64 /target:exe /main:Gtest84 "/out:$gtest84Exe" $gtest84Source $process84Source
+if ($LASTEXITCODE -ne 0) {
+  Write-Host 'FAIL  CI processes: actual gtest fixture compilation failed'
+  $script:failed++
+  return
+}
+$gtest84Saved = @{}
+foreach ($name in 'GESHER_GTEST84_MODE','GESHER_GTEST84_PID','GESHER_GTEST84_CWD','GESHER_CI_PROCESS_TRACE') {
+  $gtest84Saved[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+$gtest84SavedLibs = $libsTests
+$gtest84SavedArt = $artBin
+try {
+  $env:GESHER_CI_PROCESS_TRACE = '1'
+  foreach ($helper in 'Invoke-CoreLibsTest','Invoke-ArtGtest') {
+    $directory = Join-Path $process84Root $helper
+    New-Item -ItemType Directory $directory | Out-Null
+    Copy-Item -LiteralPath $gtest84Exe -Destination (Join-Path $directory 'gtest84.exe')
+    $libsTests = $directory
+    $artBin = $directory
+    $env:GESHER_GTEST84_CWD = $directory
+    foreach ($mode in 'normal','nonzero','failed','zero-count','missing-summary','timeout','retained','missing-exe') {
+      $env:GESHER_GTEST84_MODE = $mode
+      $pidFile = Join-Path $process84Root "$helper-$mode.pid"
+      $env:GESHER_GTEST84_PID = $pidFile
+      $name = if ($mode -eq 'missing-exe') { 'absent84' } else { 'gtest84' }
+      $timer = [Diagnostics.Stopwatch]::StartNew()
+      try {
+        $records = @(& $helper -Name $name -Exclude @('Fixture.Excluded') -TimeoutSec 1 6>&1)
+        $timer.Stop()
+        $verdicts = @($records | Where-Object { $_ -is [bool] })
+        $text = ($records | Where-Object { $_ -isnot [bool] } | ForEach-Object { "$_" }) -join "`n"
+        $expected = $mode -eq 'normal'
+        $correct = $verdicts.Count -eq 1 -and $verdicts[0] -eq $expected -and $timer.Elapsed.TotalSeconds -lt 20
+        if ($mode -ne 'missing-exe') { $correct = $correct -and $text.Contains('disposed=True') }
+        if ($mode -eq 'normal') { $correct = $correct -and $text.Contains('1 tests passed') -and $text.Contains('readers=True') }
+        if ($mode -eq 'nonzero') { $correct = $correct -and $text.Contains('exit 0x00000017') }
+        if ($mode -eq 'failed') { $correct = $correct -and $text.Contains('Fixture.RealProcess') -and $text.Contains('1 failed') }
+        if ($mode -eq 'timeout') { $correct = $correct -and $text.Contains('timed out after 1 s') }
+        if ($mode -eq 'retained') {
+          $correct = $correct -and $text.Contains('complete=True readers=False') -and
+            $text.Contains('output did not complete within ten seconds') -and (Test-Path -LiteralPath $pidFile)
+          if (Test-Path -LiteralPath $pidFile) {
+            $retained = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+            try { $correct = $correct -and $null -ne $retained -and -not $retained.HasExited }
+            finally { if ($retained) { $retained.Dispose() } }
+          }
+        }
+        $text | Out-Host
+        if ($correct) { Write-Host "PASS  CI processes: actual $helper $mode parser/status/output/disposal within original bounds" }
+        else { Write-Host "FAIL  CI processes: actual $helper $mode verdict=$($verdicts -join ',') expected=$expected after$($timer.Elapsed.TotalSeconds)"; $script:failed++ }
+      } finally {
+        if (Test-Path -LiteralPath $pidFile) {
+          $owned = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+          if ($owned) {
+            try {
+              if ($owned.Path -ne (Join-Path $directory 'gtest84.exe')) { throw 'gtest fixture child PID is not the owned executable' }
+              $owned.Kill($true)
+              if (-not $owned.WaitForExit(5000)) { throw 'gtest fixture child survived finite cleanup' }
+            } catch { Write-Host "FAIL  CI processes: gtest fixture cleanup $_"; $script:failed++ }
+            finally { $owned.Dispose() }
+          }
+        }
+      }
+    }
+  }
+} finally {
+  $libsTests = $gtest84SavedLibs
+  $artBin = $gtest84SavedArt
+  foreach ($name in $gtest84Saved.Keys) { [Environment]::SetEnvironmentVariable($name, $gtest84Saved[$name]) }
+}
+
 # Exercise the actual legacy helpers, preserving their original 120 s exit
 # and SurfaceRun's 8 s diagnostic/500 s phase bounds. Phases=0 isolates exit
 # cleanup without fabricating HWNDs, pixels or app phase markers.
