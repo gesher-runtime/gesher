@@ -135,9 +135,7 @@ using gesher::Device;
 using gesher::SocketFd;
 
 namespace {
-int CloseDescriptor(int fd) {
-  gesher::record_locks::ClosingDescriptor transaction(fd);
-  if (transaction.Error()) return errno = transaction.Error(), -1;
+int CloseFdBody(int fd, bool unpublished) {
   gesher::ForgetEpollEntries(fd);
   SocketFd state;
   int result;
@@ -150,9 +148,23 @@ int CloseDescriptor(int fd) {
     // Closing the socket first wakes threads blocked on it, as on Linux.
     result = gesher::ws::Close(state.socket);
     int socket_errno = errno;
+    if (result < 0 && unpublished) {
+      // A failed virtual-resource close does not make the private CRT slot
+      // available for reuse. Keep both owners recorded for the caller's
+      // explicit quarantine; do not discard the actual SOCKET handle.
+      gesher::Insert(fd, state);
+      return errno = socket_errno, -1;
+    }
     _close(fd);
     errno = socket_errno;
   }
+  return result;
+}
+
+int CloseDescriptor(int fd) {
+  gesher::record_locks::ClosingDescriptor transaction(fd);
+  if (transaction.Error()) return errno = transaction.Error(), -1;
+  int result = CloseFdBody(fd, false);
   const int saved = errno;
   const int error = transaction.Finish(result == 0);
   if (error) return errno = error, -1;
@@ -160,6 +172,13 @@ int CloseDescriptor(int fd) {
   return result;
 }
 }  // namespace
+
+namespace gesher {
+int CloseUnpublishedDuplicate(int fd) {
+  record_locks::DescriptorGuard descriptor_guard;
+  return CloseFdBody(fd, true);
+}
+}  // namespace gesher
 
 extern "C" {
 

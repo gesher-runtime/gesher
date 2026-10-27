@@ -1,6 +1,7 @@
 #include "record_lock_duplicate.h"
 #include "record_lock_descriptors.h"
 #include "internal.h"
+#include "socket_internal.h"
 #include <array>
 #include <cstdio>
 #include <fcntl.h>
@@ -152,16 +153,22 @@ int DuplicateAtLeast(int descriptor, int minimum, bool close_on_exec) {
     return errno = error, -1;
   }
   HANDLE published = gesher::HandleFromFd(fd);
+  gesher::SocketFd socket{};
+  const bool source_is_socket = gesher::LookupSocket(descriptor, &socket);
   // This is final-state flag handling, NOT atomic F_DUPFD_CLOEXEC versus an
   // overlapping uncoordinated CreateProcess. The actual CRT dup2 may create
   // an inheritable source alias before this flag change. Atomic spawn/handle
   // publication remains a mandatory separate acceptance gate.
-  if (!SetHandleInformation(published, HANDLE_FLAG_INHERIT, close_on_exec ? 0 : HANDLE_FLAG_INHERIT)) {
+  // Existing socket policy is stricter: F_GETFD reports CLOEXEC and actual
+  // SOCKET transport is never inherited. Do not export only its meaningless
+  // CRT NUL placeholder when plain F_DUPFD is requested.
+  const bool inherit = !close_on_exec && !source_is_socket;
+  if (!SetHandleInformation(published, HANDLE_FLAG_INHERIT, inherit ? HANDLE_FLAG_INHERIT : 0)) {
     error = WinError();
     // This is still our just-created, unpublished alias. Close it ONCE with
-    // raw CRT semantics, preserving user POSIX locks. Any error is ambiguous;
+    // complete virtual-resource cleanup, preserving user POSIX locks. Any error is ambiguous;
     // retain/account it and refuse later ownership-changing operations.
-    if (_close(fd) < 0) RetainUnknownSource(target, gesher_errno_from_crt(errno));
+    if (gesher::CloseUnpublishedDuplicate(fd) < 0) RetainUnknownSource(target, errno);
     else *target = {};
     return errno = error, -1;
   }
