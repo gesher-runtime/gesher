@@ -58,6 +58,14 @@ mandatory before accepting the source.
 
 ## Remaining scope
 
+The next legacy host/service component is prepared separately in
+`wip/net4-resolver` from acceptedbc6e05be. It replaces raw Windows result
+pointers with deeply owned neutral copies and Linux-layout thread-local
+publication, with explicit resolver error conversion. Test82 will supply
+real ABI/oracle/concurrency evidence; [the component brief](../handoff/tracks/net4-resolver.md)
+records pinned source semantics. This continuation is unverified and changes
+no accepted interface proof or baseline metadata.
+
 The 84-entry historical Net4 export baseline remains unchanged. These two
 entries may gain scoped verification metadata only after actual CI evidence;
 the aggregate historical counts must not be rewritten. Hostent translation,
