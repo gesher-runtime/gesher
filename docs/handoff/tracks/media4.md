@@ -188,7 +188,24 @@ zero loss, and verifies the stopped rings drain their retained frames.
 Production buffering/resampling and the separate three-cycle overrun check
 are unchanged. No new compile/runtime proof yet; all execution remains CI-only.
 OpenSL canonical IDs/query/negotiation/permission work owns new test76;
-next free test is77. It does not modify the frozen format source.
+Exec4-spawn owns test77; next free test is78. It does not modify the frozen
+format source. Source implementation now supplies 53 canonical UUID pointer
+objects (19 corrected plus 34 old missing exports), value-based copied-ID
+matching, typed engine query signatures, supported-subset enumeration,
+required/optional array validation and explicit/prerealize exposure. Native
+record denial now returns the pinned 0x0B rather than INTERNAL_ERROR 0x0D.
+The new OpenSL fixture builds real NDK libraries for both ABIs and actual
+manifest-allowed/denied APKs. Test76 requires all data/query/negotiation/PCM
+queue-volume/permission parts in core JNI and single/device APK contexts,
+with ABI markers and fresh per-variant device roots. This is source only;
+no new native coverage entry or roadmap box is accepted before full CI.
+
+Standalone OpenSL in gesher-exec remains unimplemented: its current backend
+lives with JNI player/video/window dependencies. No launcher stub is added.
+Full native backend factoring remains open, as do AndroidConfiguration's
+ignored/unchecked options, loss-of-control callbacks, output-mix interfaces
+and the broader OpenSL effects/device contracts. The fixture requires
+explicit unsupported results for those identifiers; it does not claim effects.
 
 Corrected full ci **40459815375** is complete GREEN at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current

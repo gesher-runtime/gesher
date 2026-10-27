@@ -80,3 +80,20 @@ protected-media work remain explicitly open in the Media4 brief.
 This source predates the coordinator's separately verified Java exit-status
 freshness fix. Combined integration CI must verify that prerequisite with
 this slice before the coordinator accepts the integrated tree.
+
+## Proposed follow-up: OpenSL contracts
+
+The active Media4 source adds canonical OpenSL UUID pointer objects from
+pinned OpenSLES_IID.cpp, copied-value lookup and typed engine queries. It
+validates required/optional interface arrays, exposes only requested or
+implicit interfaces, permits the pinned prerealize cases, and uses the
+actual 0x0B native recording-permission error. Test76 prepares real NDK JNI
+callers and manifest-allowed/denied single-ABI APKs for both ABIs/runners.
+This follow-up is not accepted by the format run above; its own full CI and
+exact semantic logs are required before inventory/roadmap acceptance.
+
+The standalone OpenSL backend still depends on player/video/window/JNI
+factoring and remains open; no placeholder is linked into gesher-exec.
+Canonical effect/3D identifiers support exact unsupported results, not
+effects or 3D audio. Full configuration, loss-of-control, output-mix and
+device-policy behavior remain separate Media4 contracts.
