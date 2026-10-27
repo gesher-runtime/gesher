@@ -97,6 +97,7 @@ public final class Main {
         System.err.flush();
         // Framework code may have started threads (HandlerThreads, the finalizer watchdog);
         // the process ends here regardless.
+        if (!com.gesher.app.accessibility.UiaBridge.shutdown()) Runtime.getRuntime().halt(1);
         System.exit(code);
     }
 

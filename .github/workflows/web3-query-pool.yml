@@ -1,0 +1,174 @@
+name: web3-query-pool
+on:
+  push:
+    branches: ['wip/web3-pool-controls']
+    paths:
+      - '.github/workflows/web3-query-pool.yml'
+      - 'tests/windows/web3/query_pool_test.cc'
+      - 'compat/accessibility/query_pool.h'
+      - 'compat/accessibility/query_pool.cc'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: web3-query-pool-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows
+            compat/accessibility
+            tests/windows/web3
+      - name: Fetch exact independently identified toolchain archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o toolchain.tar.xz
+          printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain fixture
+          tar -xJf toolchain.tar.xz -C toolchain
+      - name: Compile actual production pool and native fixture with warnings as errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++ --version
+          toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++ \
+            -std=c++17 -Wall -Wextra -Werror -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 \
+            -municode -static compat/accessibility/query_pool.cc tests/windows/web3/query_pool_test.cc \
+            -o fixture/query_pool_test.exe
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/query_pool_test.exe > fixture/imports.txt
+      - name: Require a nonempty explicit system-DLL import allowlist
+        shell: python
+        run: |
+          import re
+          from pathlib import Path
+          imports = Path('fixture/imports.txt').read_text()
+          names = re.findall(r'^\s*Name:\s*(\S+)', imports, flags=re.MULTILINE)
+          if not names:
+              raise SystemExit('Missing actual PE import names')
+          # Actual imports from the pinned static toolchain; no wildcard DLLs,
+          # external C++/pthread runtime or ambient runner PATH dependency.
+          allowed = {'kernel32.dll', 'api-ms-win-crt-stdio-l1-1-0.dll',
+                     'api-ms-win-crt-runtime-l1-1-0.dll', 'api-ms-win-crt-locale-l1-1-0.dll',
+                     'api-ms-win-crt-heap-l1-1-0.dll', 'api-ms-win-crt-private-l1-1-0.dll',
+                     'api-ms-win-crt-string-l1-1-0.dll', 'api-ms-win-crt-convert-l1-1-0.dll',
+                     'api-ms-win-crt-math-l1-1-0.dll', 'api-ms-win-crt-environment-l1-1-0.dll',
+                     'api-ms-win-crt-filesystem-l1-1-0.dll'}
+          unexpected = sorted(set(name.casefold() for name in names) - allowed)
+          if unexpected:
+              raise SystemExit('Unexpected runtime DLL dependency: ' + ', '.join(unexpected))
+          print('VERIFIED_STATIC_POOL_IMPORTS ' + ', '.join(names))
+      - name: Record exact source and executable provenance
+        shell: python
+        run: |
+          import hashlib, json, os
+          from pathlib import Path
+          paths = ['compat/accessibility/query_pool.h', 'compat/accessibility/query_pool.cc',
+                   'tests/windows/web3/query_pool_test.cc', '.github/workflows/web3-query-pool.yml']
+          metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
+                          run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                          source=os.environ['GITHUB_SHA'], toolchain_sha256=os.environ['LLVM_MINGW_SHA256'],
+                          files={path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in paths},
+                          executable_sha256=hashlib.sha256(Path('fixture/query_pool_test.exe').read_bytes()).hexdigest())
+          Path('fixture/provenance.json').write_text(json.dumps(metadata, indent=2) + '\n')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web3-query-pool-${{ github.sha }}-a${{ github.run_attempt }}
+          path: fixture
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows
+            compat/accessibility
+            tests/windows/web3
+      - uses: actions/download-artifact@v4
+        with:
+          name: web3-query-pool-${{ github.sha }}-a${{ github.run_attempt }}
+          path: pool-fixture
+      - name: Check supplying run artifact and source identities before execution
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = "web3-query-pool-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+          $response = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify fixture artifact supplier' }
+          $rows = @((($response | ConvertFrom-Json).artifacts) | Where-Object name -eq $expected)
+          if ($rows.Count -ne 1) { throw 'Fixture artifact is not unique' }
+          $artifact = $rows[0]
+          if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+              "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
+              "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              "$($artifact.workflow_run.head_repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              $artifact.workflow_run.head_sha -ne $env:GITHUB_SHA) { throw 'Fixture artifact identity mismatch' }
+          $manifest = Get-Content -LiteralPath pool-fixture/provenance.json -Raw | ConvertFrom-Json
+          if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or $manifest.repository_id -ne $env:GITHUB_REPOSITORY_ID -or
+              $manifest.run -ne $env:GITHUB_RUN_ID -or $manifest.attempt -ne $env:GITHUB_RUN_ATTEMPT -or
+              $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) {
+            throw 'Fixture producer manifest mismatch'
+          }
+          foreach ($file in $manifest.files.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) {
+              throw "Fixture source bytes differ: $($file.Name)"
+            }
+          }
+          $actual = (Get-FileHash -LiteralPath pool-fixture/query_pool_test.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $manifest.executable_sha256) { throw 'Fixture executable differs from producer' }
+          Write-Host "VERIFIED_NATIVE_POOL source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$actual"
+      - name: Execute actual bounded Windows lifecycle and saturation controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $executable = (Resolve-Path -LiteralPath pool-fixture/query_pool_test.exe).Path
+          $stdout = Join-Path $env:RUNNER_TEMP pool-controls.stdout.txt
+          $stderr = Join-Path $env:RUNNER_TEMP pool-controls.stderr.txt
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(90000)) { throw 'Native pool fixture exceeded external90s bound' }
+            $process.Refresh()
+            if ($process.ExitCode -ne 0) { throw "Native pool fixture exit=$($process.ExitCode)" }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_QUERY_POOL_SUMMARY failures=0; workers=4 queue=32 budget_ms=3000; scope=native-core-only$' -Quiet)) {
+              throw 'Native pool fixture summary missing'
+            }
+          } finally {
+            if ($null -ne $process) {
+              if (-not $process.HasExited) {
+                $process.Kill()
+                if (-not $process.WaitForExit(5000)) { Write-Error 'Owned fixture process failed to terminate' }
+              }
+              $process.Dispose()
+            }
+            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
+            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web3-query-pool-logs-${{ matrix.os }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pool-controls.stdout.txt
+            ${{ runner.temp }}/pool-controls.stderr.txt
+          if-no-files-found: warn
+          retention-days: 14
