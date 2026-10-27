@@ -334,6 +334,7 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
 
 void OggBoundaries(const Api& api, const Dataset& data, const std::string& root, Report* report) {
   std::array<bool, 3> results{};
+  std::array<bool, 3> payload_eos{};
   std::array<std::thread, 3> workers;
   std::atomic<unsigned> ready{0};
   std::atomic<bool> go{false};
@@ -350,7 +351,9 @@ void OggBoundaries(const Api& api, const Dataset& data, const std::string& root,
       for (size_t index = 0; ok && index < count; ++index) {
         const Packet& packet = data.packets[index];
         AMediaCodecBufferInfo info = {0, static_cast<int32_t>(packet.data.size()), packet.time, packet.flags};
+        if (count == 2 && index + 1 == count) info.flags |= 4;
         ok = api.write(muxer.get(), 0, packet.data.data(), &info) == AMEDIA_OK;
+        if (info.flags & 4) payload_eos[count] = ok;
       }
       // The explicit zero-byte EOS buffer must not become an encoded packet.
       uint8_t dummy = 0;
@@ -365,7 +368,8 @@ void OggBoundaries(const Api& api, const Dataset& data, const std::string& root,
   for (auto& worker : workers) worker.join();
   for (size_t count : {0u, 1u, 2u}) {
     report->text += "media4 muxer Ogg boundary: packets " + std::to_string(count) +
-        " result=" + (results[count] ? "ok\n" : "FAILED\n");
+        " result=" + (results[count] ? "ok" : "FAILED") +
+        " payload-eos=" + (payload_eos[count] ? "1\n" : "0\n");
     if (!results[count]) ++report->failures;
   }
 }

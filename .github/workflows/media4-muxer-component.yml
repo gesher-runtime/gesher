@@ -43,8 +43,15 @@ jobs:
               $run.run_attempt -ne 1 -or $run.conclusion -cne 'failure') {
             throw 'Unexpected immutable muxer full run/source/attempt'
           }
-          git diff --exit-code $source HEAD -- . ':!docs/**' ':!tests/windows/tracks/79-media4-muxer.ps1' ':!tests/windows/run-media4-muxer-component.ps1' ':!tests/media/ndk-muxer/verify-ogg-packets.py' ':!tests/media/ndk-muxer/muxer_test.cc' ':!compat/media/mux/ogg_muxer.cc' ':!.github/workflows/media4-muxer-component.yml' ':!.github/workflows/media4-muxer-build.yml'
+          $resolverSource = '3fb8255d7dd4b9bb26c1d92dfdcf01f7475a3729'
+          $resolverPaths = @(git diff --name-only bc6e05bea341d1dc79920deaf3f069ad690fedc4 $resolverSource -- . ':!docs/**')
+          if ($LASTEXITCODE -ne 0 -or $resolverPaths.Count -eq 0) { throw 'Missing immutable accepted resolver source paths' }
+          git diff --exit-code $resolverSource HEAD -- @resolverPaths
+          if ($LASTEXITCODE -ne 0) { throw 'Merged resolver paths differ from independently accepted full40519019567 source' }
+          $resolverExclusions = @($resolverPaths | ForEach-Object { ':!' + $_ })
+          git diff --exit-code $source HEAD -- . ':!docs/**' ':!tests/windows/tracks/79-media4-muxer.ps1' ':!tests/windows/run-media4-muxer-component.ps1' ':!tests/media/ndk-muxer/verify-ogg-packets.py' ':!tests/media/ndk-muxer/muxer_test.cc' ':!compat/media/mux/ogg_muxer.cc' ':!.github/workflows/media4-muxer-component.yml' ':!.github/workflows/media4-muxer-build.yml' @resolverExclusions
           if ($LASTEXITCODE -ne 0) { throw 'Only reviewed Ogg writer, real caller and harness may differ; ART/ABI/jars/DLL remain pinned' }
+          Write-Host "ACTUAL_MUXER_ACCEPTED_PREREQUISITE resolver=$resolverSource code-paths=$($resolverPaths.Count) full=40519019567"
           $jobs = gh api repos/${{ github.repository }}/actions/runs/40527788805/jobs --paginate | ConvertFrom-Json
           foreach ($name in 'build','framework / framework','graphics / build','angle / build','arm64 / build','boot-image / compile','media / media') {
             $job = @($jobs.jobs | Where-Object name -CEQ $name)
