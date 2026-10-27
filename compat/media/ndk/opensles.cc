@@ -31,6 +31,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -590,7 +591,14 @@ const void* const kQueueVtable[] = {
 
 // --- SLVolumeItf ------------------------------------------------------------------------
 
-SLresult SYSV VolSetLevel(const void* self, SLmillibel level) {
+SLresult SYSV VolSetLevel(const void* self, SLint32 raw_level) {
+  // AAPCS64 leaves the high bits of a narrow argument unspecified. Normalize
+  // the actual 16-bit value before the host System V signed comparison.
+  const SLmillibel level = static_cast<SLmillibel>(raw_level);
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (trace != nullptr && trace[0] == '1') {
+    MEDIA_LOGI("OpenSL volume boundary trace: raw32 %d, signed16 %d", raw_level, static_cast<int>(level));
+  }
   Object* o = ObjectOf(self);
   o->level = std::min<SLmillibel>(level, 0);
   ApplyVolume(o);

@@ -171,13 +171,40 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
-Full ci **40470959941** is running at
+Full ci **40470959941** is complete RED at
 **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
-integration db84749b (docs above fresh-exit30deb08c). Main build
-122077706841 is pending. Source is frozen; following commits are docs only.
-This is the first OpenSL/test76 runtime candidate and includes the separately
-reviewed AAudio78ee5e12 fixture correction. No new compile/runtime acceptance
-or OpenSL inventory closure is claimed until all actual full-run gates pass.
+integration db84749b (docs above fresh-exit30deb08c). All28 conclusions were
+read:20 success/six skipped/two failed. Main122077706841 passes3m28s,
+framework122077748379 passes6m11s, and media122079941894 passes1m31s with
+both actual NDK ABI builds and all four allowed/denied APKs. Package
+122080555528 passes23 actual installer gates; e2e122081340170/136 each pass
+all ten apps, four transport controls, association/shortcut and0 unexpected
+failures. Actual completed logs were read. Windows122080555604/602 each
+finish exactly6 test(s) failed, all in test76: both core-JNI permission
+expectations and all five ARM volume round trips. Data/query/negotiation
+parts pass in every context; actual APK allowed/denied permissions pass on
+both ABIs, but no OpenSL inventory/roadmap acceptance follows from a red run.
+
+Corrected source keeps the real core denial: jni_util's media VM cache is
+unset without framework native registration, so AttachedEnv returns null
+and MayRecordAudio denies. The previous fixture incorrectly expected a
+grant. It now requires the actual0x0B/no-object denial independently of
+manifest-allowed and denied APKs, without changing production permission.
+ARM's signed16 volume boundary now receives a32-bit register value and
+explicitly normalizes its low16 bits before comparison. AAPCS64 does not
+promise the sign extension the host SysV short parameter could assume.
+The old log lacks raw register/value diagnostics, so that mechanism is not
+claimed as proven yet. The corrected fixture preserves -600 and adds valid
+-32768/-1/0 round trips; raw32/signed16 and actual set/get/result/permission
+diagnostics are published. No unchanged rerun is planned. Native continuation
+6be2eaec remains separate and unverified; it must import this correction.
+
+The AAudio78ee5e12 correction passes its actual lossless cases in this red
+full run: both modes/runners read44100 original750/1250Hz frames with
+capacity44100/lost0/xruns0. Controlled small rings lose5639/5572 frames with
+one xrun on2022/2025 while configured rings retain9167/9100 frames with
+zero loss/xruns. The old1153.3Hz observation remains without loss counters;
+these new controlled results do not retrospectively prove its cause.
 
 Frozen **wip/media4-format-verified** points at docs-only
 **ba3c1c2dc94e2e6e69c8e7c050df9dc3145c0317** above the accepted format
