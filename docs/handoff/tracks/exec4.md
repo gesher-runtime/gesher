@@ -37,5 +37,17 @@ Windows/package/e2e gates. Follow the common merge/report rules; root merges.
 
 ## Status and next steps
 
-Reserved, unstarted. Exec3's accepted scope remains verified; all contracts
-above are explicit leftovers. No new roadmap box is ticked for this brief.
+Active own-runtime crash triage on wip/exec4, based on a06d930 (verified
+integration 94ccde1 code plus documentation). Frozen wip/exec3 is unchanged.
+Windows4 diagnostic CI40417632512 at cde1c79: Windows-2022 passes exec3;
+Windows-2025's single-process exec3 APK dies with SIGSEGV address -1 after
+the successful read-mode popen check, before the posix_spawn file-action
+check reports. The existing log lacks RIP/caller context. All prior fully
+green exec3 evidence is retained; no camera or Windows4 causality is claimed.
+
+The next diagnostic run enables the existing capped pre-handler sentinel
+record only for the own exec3 APK invocations, with map symbolization and
+phase markers around the actual spawn/file-action/stdio operations. Original
+assertions and native signal/exit behavior are retained. No new local C/C++
+or Java compiler/fixture runs. Broader exec4 contracts remain unimplemented;
+no roadmap box is ticked.
