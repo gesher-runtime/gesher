@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -124,6 +125,18 @@ int64_t Now() {
   timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+}
+
+void TraceInput(AAudioStream* s, const char* operation, int32_t requested, int32_t returned) {
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (s->capture == nullptr || trace == nullptr || trace[0] != '1') return;
+  const CaptureStats stats = s->capture->stats();
+  MEDIA_LOGI("AAudio input %s trace: %d Hz, capacity %zu, requested %d frames, returned %d frames, "
+             "captured %llu, read %llu, lost %u, xruns %u, timestamp %lld ns",
+             operation, s->b.sample_rate, s->capture->capacity_frames(), requested, returned,
+             static_cast<unsigned long long>(stats.captured_frames),
+             static_cast<unsigned long long>(stats.read_frames), stats.lost_frames, stats.overruns,
+             static_cast<long long>(stats.timestamp_ns));
 }
 
 // An input stream's callback thread: each burst captured goes to the data callback.
@@ -257,6 +270,11 @@ aaudio_result_t OpenInputStream(Builder* b, AAudioStream** out) {
     return kErrorInternal;
   }
   s->b.capacity = capacity;
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (trace != nullptr && trace[0] == '1') {
+    MEDIA_LOGI("AAudio input open trace: %d Hz, requested capacity %d, effective capacity %d",
+               rate, b->capacity, capacity);
+  }
   AAudioStream* raw = s.release();
   if (raw->b.data_cb != nullptr) raw->callback_thread = std::thread([raw] { CallbackLoop(raw); });
   *out = raw;
@@ -368,6 +386,7 @@ aaudio_result_t SYSV RequestStop(AAudioStream* s) {
   std::lock_guard<std::mutex> lock(s->mu);
   if (s->track != nullptr) s->track->Stop();
   if (s->capture != nullptr) s->capture->Stop();
+  TraceInput(s, "stop", 0, 0);
   s->state = kStateStopped;
   return kOk;
 }
@@ -419,6 +438,7 @@ int32_t SYSV Read(AAudioStream* s, void* data, int32_t frames, int64_t timeout_n
     s->capture->WaitForData(static_cast<size_t>(std::min(frames - done, s->burst)),
                             static_cast<int>(std::min<int64_t>(left / 1000000 + 1, 100)));
   }
+  TraceInput(s, "read", frames, done);
   return done;
 }
 
