@@ -21,6 +21,7 @@ jobs:
           sparse-checkout: |
             tests/apps
             tests/media/ndk-format
+            tests/media/opensl-contracts
             compat/media/sounds
 
       - uses: actions/download-artifact@v4
@@ -119,6 +120,9 @@ jobs:
       - name: Build Media4 NDK format fixtures
         run: bash tests/media/ndk-format/build.sh out android-ndk-r27c
 
+      - name: Build Media4 OpenSL contract fixtures
+        run: bash tests/media/opensl-contracts/build.sh out android-ndk-r27c
+
       - name: Build mediaapp.apk
         run: |
           chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign
@@ -137,6 +141,9 @@ jobs:
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediaformatapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/openslapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           ls -la out

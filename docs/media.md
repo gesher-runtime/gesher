@@ -220,6 +220,19 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Media4's accepted format source below is frozen on
+  `wip/media4-format-verified` at docs-only ba3c1c2d. Active source78ee5e12
+  separately corrects the blocking AAudio lossless fixture's missing
+  one-second capacity and adds actual capacity/frame/loss/xrun diagnostics
+  plus a controlled small/configured ring probe. The unchanged 750/1250 Hz
+  and 44100-frame gate is stronger with mandatory zero loss/xruns; the
+  old1153.3 Hz failure lacks counters and is not a proven overrun. Root
+  approved the exact four-file slice for Net4's next candidate; runtime
+  acceptance is pending. Prepared OpenSL source/test76 adds canonical UUID
+  data, typed query/negotiation/exposure and native permission contracts
+  on both JNI/APK ABIs. No new OpenSL CI acceptance or independent launcher
+  backend is claimed; follow [media4](handoff/tracks/media4.md).
+
 - Corrected Media4 full ci **40459815375** is GREEN at
   **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
   integration 53898b51's docs and source correction 73c20d70 below. Main
