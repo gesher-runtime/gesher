@@ -71,6 +71,14 @@ FPCR/FPSR including10384 oracle rows and original variadic controls. On
 success send Media the exact coherent prerequisite; on failure preserve all
 assertions and repair the observed source/cause before rerunning.
 
+Run40549806536 finished red before Windows runtime. Host122350163280
+successfully compiled/linked all3834 native targets, including current API3
+dalvikvm/dex2oat/launcher/loader, then javac rejected source21 because this
+new workflow omitted explicit JDK21 setup. NDK/framework/translator/oracle
+builds succeed; both Windows jobs skip. This is compilation evidence only.
+The corrected workflow explicitly installs Temurin21 before boot jars and
+test apps; a new source/run is required. The original failed log is preserved.
+
 Baseline3b607e75/diagnostic40525678026 establishes the prior actual valid-call
 eager-copy defect on both hosts: shallow139, eager_end=top+0xa0 versus a
 separate deep0 control. This does not independently establish all original
