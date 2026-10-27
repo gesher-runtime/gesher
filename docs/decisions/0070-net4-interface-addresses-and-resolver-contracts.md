@@ -1,7 +1,10 @@
 # 0070. Network interface addresses and remaining resolver contracts
 
-Status: proposed (net4). The interface-address slice is prepared for CI;
-no per-entry API closure, baseline count change or full Net4 acceptance.
+Status: verified bounded interface-address candidate, full40469857757 at
+646f9fb1e6b932317c089c829b80ec9d58ee50d0; coordinator acceptance and a
+coherent Windows4 combination follow. Only the two scoped entries receive
+verification metadata. Historical baseline counts and remaining Net4
+contracts are unchanged. [Frozen evidence](../handoff/tracks/net4-ifaddrs-final.md).
 
 ## Contract and implementation
 
