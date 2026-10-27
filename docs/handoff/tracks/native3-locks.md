@@ -67,3 +67,25 @@ cycles are separately observed by real Linux worker requests before any wait
 graph implementation can be qualified. Shared registry, unknown-owner/PID
 reuse, close/stdio/spawn lifetimes, signal integration and full runtime gates
 remain mandatory open scope.
+
+Actual pure-core qualification40559255447/a70682a3 is green: both jobs and
+actual logs were read. Capacity seven outcomes/byte preservation all1,
+17 signed/EOF boundaries agree,10000 kernel mutations and20000 queries
+have0 failures. Actual process reference now has126 rows/0 failures. Mixed
+same-file discovery: an OFD requester remains blocked until EINTR; the
+reverse POSIX requester gets EDEADLK35 while traversing an OFD waiter edge.
+Do not drop all OFD graph edges. This is still Linux/pure-core evidence.
+
+Shared Windows registry source foundation is now prepared, not compiled or
+wired: record_lock_registry.{h,cc} uses the same canonical ProgramData path
+in standalone/installed/all sessions, an explicitly secured Global mutex and
+unnamed file-backed mapping (no Global section privilege or per-session
+fallback). Persistent metadata uses version/size checks, two banks with
+generation+CRC64, complete inactive publication followed by one interlocked
+active index; invalid active state never falls back to an older bank. Checked
+Windows heap allocation stages fixed-capacity state; failed candidates cannot
+mutate the active snapshot. Process/thread birth, descriptor reference and
+wait-request fields are storage only until actual liveness/lifetime code is
+implemented. ACL/nonadministrator/cross-session behavior, abandonment/crash/
+corruption/heap-failure tests and bounded source peer review precede its
+Windows CI qualification. No production fcntl/close hook is installed yet.
