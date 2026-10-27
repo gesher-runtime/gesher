@@ -430,6 +430,12 @@ int PrepareLaunchProgram(const std::string& program, const std::vector<std::stri
   return PrepareProgram(program, argv, dir, 0, search_path, launch, ProcessPath());
 }
 
+int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std::string>& argv,
+                               const std::string& dir, bool search_path, const std::string& path,
+                               Launch* launch) {
+  return PrepareProgram(program, argv, dir, 0, search_path, launch, Widen(path));
+}
+
 bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,

@@ -25,6 +25,7 @@
 #include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <malloc.h>
@@ -45,6 +46,7 @@
 
 #include "exec_spawn.h"
 #include "gesher_shell.h"
+#include "spawn_actions.h"
 
 #define SYSV __attribute__((sysv_abi))
 
@@ -71,6 +73,7 @@ constexpr int kSigill = 4, kSigtrap = 5, kSigabrt = 6, kSigbus = 7, kSigfpe = 8,
 constexpr int kCrtSigabrt = 22;
 
 const char* g_name = "gesher-exec";  // for messages: the program's argv[0]
+int g_link_failure_status = 1;
 
 [[noreturn]] void Die(int status, const char* fmt, const char* a = "", const char* b = "") {
   fprintf(stderr, fmt, a, b);
@@ -273,10 +276,10 @@ DWORD WINAPI ProgramThread(void*) {
 
   std::string error;
   elf::Library* lib = elf::Load(program.c_str(), &error, options);
-  if (lib == nullptr) Die(1, "CANNOT LINK EXECUTABLE \"%s\": %s\n", g_name, error.c_str());
+  if (lib == nullptr) Die(g_link_failure_status, "CANNOT LINK EXECUTABLE \"%s\": %s\n", g_name, error.c_str());
   elf::ExecutableInfo info;
   if (!elf::GetExecutableInfo(lib, &info) || info.entry == nullptr) {
-    Die(1, "CANNOT LINK EXECUTABLE \"%s\": %s has no entry point\n", g_name, program.c_str());
+    Die(g_link_failure_status, "CANNOT LINK EXECUTABLE \"%s\": %s has no entry point\n", g_name, program.c_str());
   }
   if (!info.has_interp) {
     fprintf(stderr, "%s: warning: %s has no PT_INTERP (a shared library?); entering it anyway\n", g_name,
@@ -358,6 +361,66 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
   return 1;
 }
 
+int RunArguments(const std::vector<std::string>& args) {
+  if (args.size() >= 3 && args[0] == "--elf") {
+    return RunElf(ex::Widen(args[1]), std::vector<std::string>(args.begin() + 2, args.end()));
+  }
+  if (!args.empty() && args[0] == "--sh") {
+    return ex::RunShell(std::vector<std::string>(args.begin() + 1, args.end()));
+  }
+  if (args.size() >= 2 && args[0] == "--tool") {
+    return ex::RunTool(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+  }
+  if (!args.empty() && args[0] == "--spawn") {
+    ex::SpawnRequest request;
+    if (!ex::DecodeSpawn(std::vector<std::string>(args.begin() + 1, args.end()), &request)) {
+      fprintf(stderr, "gesher-exec: invalid spawn setup\n");
+      return 127;
+    }
+    if (ex::ApplySpawnActions(request) != 0) return 127;
+    ex::Launch launch;
+    int prepared_error = ex::PrepareLaunchProgramInPath(request.program, request.argv, "", request.search,
+                                                       request.search_path, &launch);
+    if (prepared_error != 0) {
+      errno = prepared_error;
+      return ex::SpawnFailure("program lookup", request.program.c_str());
+    }
+    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
+        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
+      int count = 0;
+      wchar_t** prepared = CommandLineToArgvW(launch.command_line.c_str(), &count);
+      if (prepared == nullptr) return ex::SpawnFailure("prepared arguments", request.program.c_str());
+      std::vector<std::string> next;
+      for (int i = 1; i < count; ++i) next.push_back(ex::Narrow(prepared[i]));
+      LocalFree(prepared);
+      g_link_failure_status = 127;
+      return RunArguments(next);
+    }
+    // PE/batch programs keep the existing wait-and-propagate convention.
+    std::vector<ex::ChildFd> fds;
+    for (int fd = 0; fd < 2048; ++fd) {
+      intptr_t value = _get_osfhandle(fd);
+      if (value != -1 && value != -2 && value != 0) {
+        fds.push_back({fd, reinterpret_cast<HANDLE>(value)});
+      }
+    }
+    PROCESS_INFORMATION process{};
+    if (ex::SpawnWithFds(launch, nullptr, L"", fds, &process) != 0) return 127;
+    CloseHandle(process.hThread);
+    DWORD status = 127;
+    if (WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0) {
+      GetExitCodeProcess(process.hProcess, &status);
+    }
+    CloseHandle(process.hProcess);
+    return ex::ExitStatus(status);
+  }
+  fprintf(stderr,
+          "usage: gesher-exec --elf <program> <argv0> [args...]\n"
+          "       gesher-exec --sh [-c <command> | <script> [args...]]\n"
+          "       gesher-exec --tool <name> [args...]\n");
+  return 2;
+}
+
 }  // namespace
 
 int main() {
@@ -377,21 +440,6 @@ int main() {
   wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
   std::vector<std::string> args;
   for (int i = 1; i < argc; ++i) args.push_back(ex::Narrow(wargv[i]));
-  std::wstring elf_path = argc >= 3 ? wargv[2] : L"";
   LocalFree(wargv);
-
-  if (args.size() >= 3 && args[0] == "--elf") {
-    return RunElf(elf_path, std::vector<std::string>(args.begin() + 2, args.end()));
-  }
-  if (!args.empty() && args[0] == "--sh") {
-    return ex::RunShell(std::vector<std::string>(args.begin() + 1, args.end()));
-  }
-  if (args.size() >= 2 && args[0] == "--tool") {
-    return ex::RunTool(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
-  }
-  fprintf(stderr,
-          "usage: gesher-exec --elf <program> <argv0> [args...]\n"
-          "       gesher-exec --sh [-c <command> | <script> [args...]]\n"
-          "       gesher-exec --tool <name> [args...]\n");
-  return 2;
+  return RunArguments(args);
 }
