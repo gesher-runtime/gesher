@@ -55,8 +55,8 @@ processes. A Windows PC may have a microphone or not; CI runners have none
   the capture thread owns/closes the native capture handle; disconnect never
   joins the callback executor. Clients keep their callback executor alive
   until onClosed, then shut it down. Terminal ordering is separate from
-  active throughput; both original runtime gates pass in 40438975894,
-  whose remaining full-suite net failures are recorded in docs/media.md.
+  active throughput; both original runtime gates pass in full GREEN
+  40448521754, with exact source and proof in docs/media.md.
 - **Container writers** of Gesher's own (compat/media/mux): MPEG-4/3GPP (the
   samples in one mdat as they come, the moov at the end: avcC, esds, dOps,
   stts/stss/stsz/co64, an edit list where a track starts late), WebM through
@@ -72,13 +72,14 @@ processes. A Windows PC may have a microphone or not; CI runners have none
   YUV_420_888 Images.
 
 ## Consequences
-CI 40438975894 at 0148698 supplies 37 actual media3 and 12 part-1 device
-PASS checks per runner, including the original two-second/30-frame camera
+Full GREEN CI 40448521754 at dd06d296 supplies 37 actual media3 and 12
+part-1 device PASS checks per runner, including the original two-second/30-frame camera
 gate, terminal callback ordering and a production-block regression for zero
-CPU-duration GC estimates. Package and both ten-app e2e jobs pass, including
-Just Player. The source is still RED for five Windows-2025 net checks and is
-not full acceptance. This verifies the recorded subsets, not the remaining
-313 NDK exports, physical endpoints, broader session APIs or encoder paths
+CPU-duration GC estimates. All 28 job conclusions are success (22) or
+skipped (six), with zero failures in both whole Windows suites, package and
+both ten-app e2e jobs passing, including Just Player. This verifies the
+recorded subsets, not the remaining 313 NDK exports, physical endpoints,
+broader session APIs or encoder paths
 listed in the Media4 brief. Latest status and exact proof remain in media.md.
 
 The Just Player e2e run (ci 40292991000) also exposed missing session-service

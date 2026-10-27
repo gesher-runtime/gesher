@@ -73,6 +73,10 @@ both runners and both ABIs; terminal Camera2 callback checks close none of them.
 CI 40438975894 at 0148698 again records 34/3/276 on both runners and ABIs.
 Its 37 media3 and 12 part-1 device PASS checks per runner close none of these
 313 exports; its full suite remains RED for Windows-2025 net checks.
+Full GREEN ci 40448521754 at dd06d296 again records 34/3/276 missing on
+both runners and ABIs. All 37 media3 and 12 part-1 device checks pass with
+both whole Windows suites, package and required e2e green; none of those
+checks implements the 313 unresolved exports inherited by media4.
 
 The AAudio entries are AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
 AAudio_setMMapPolicy. OpenSL's entries include unimplemented 3D/effect/device

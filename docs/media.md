@@ -220,7 +220,7 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-- Full ci **40448521754** is pending at
+- Full ci **40448521754** is GREEN at
   **dd06d296e35ffd47fcecba9d0b88559360163500** after merging current
   integration 7694f18 (docs only above the verified clock/width code).
   Root independently reviewed the corrected local HTTP/SNI fixtures,
@@ -230,11 +230,24 @@ the microphone (looped, from its start each time recording starts);
   122008646942 passes all 23 installed-runtime/window/input/uninstall
   checks. E2e 122009257652 (2022) / 122009257798 (2025) each pass four
   transport fixtures, all ten apps, association/shortcut launch and
-  `0 unexpected failures`. Both Windows suites are still running. All 37
-  media checks, live-environ67, clock68, actual SNI/hostname controls and
-  both zero-failure summaries still require their actual logs. In particular
-  Java compilation is not runtime proof of the C# TLS fixture. Previous
-  failed sources remain red.
+  `0 unexpected failures`. All 28 conclusions were read: **22 success,
+  six skipped**, attempt 1 without retries. Windows **122008646975** (2022,
+  27m39s) / **122008646925** (2025, 29m23s) each end `0 test(s) failed`,
+  with **37 media3, 12 part-1 device, 18 AOT3, 11 Exec3, 57 shell**,
+  live-environ67 and monotonic/deadline-clock68 checks passing. Both actual
+  logs prove distinct named SNI certificates, missing/wrong-SNI hostname
+  rejection, four certificate negatives, HTTP200, NetApp single/device,
+  preserved public Google HTTPS204/TLS1.3 and bounded cleanup. Camera
+  recording accepts/encodes/muxes **61/61** frames in the single processes,
+  **58/59** on the 2022/2025 devices, with zero rejects, queue drops or
+  encoder failures; original independent 30-frame/picture, onClosed,
+  permissions and 1,000 cancel/flush-race gates pass. Original startup gates
+  pass unchanged: interpreter **482/508 ms**, JIT **352/374** (2022);
+  interpreter **617/655**, JIT **474/503** (2025). Freeze dd06d296; later
+  branch commits change docs only. The coordinator alone merges it.
+  Previous failed sources remain red; physical capture, remaining NDK
+  exports, broader sessions/recorders/containers, MF-positive/hardware and
+  protected-media contracts remain in [media4](handoff/tracks/media4.md).
 
 - Prepared source 8364829 (HTTP/SNI implementation 4032be6a and reviewed
   listener isolation 8364829) combines the
@@ -255,10 +268,12 @@ the microphone (looped, from its start each time recording starts);
   PowerShell syntax, source comparisons and isolated-index patch/hash checks
   passed locally; no native/C#/Java compile, certificate/TLS fixture or JVM
   ran. Root source review passed before the full run was dispatched; this
-  source has no full runtime acceptance yet. The earlier failed source below
+  source now has the exact combined full-run proof above. This is combined
+  clock/GC-guard and media evidence, not individual patch FPS attribution
+  or an optimization of KernelPreparation. The earlier failed source below
   remains red and is not rerun or reclassified.
 
-### media3 (stage 3) — runtime gates pass; full CI blocked by positive internet cases, 2026-10-27
+### media3 (stage 3) — earlier failed-source evidence, 2026-10-27
 
 - **Combined CI 40438975894 is complete RED at
   0148698211cb5cf2e7d2d5813f4d04f8756f4bdb:** all 28 job conclusions are
