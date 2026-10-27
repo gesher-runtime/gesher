@@ -44,6 +44,10 @@ public final class TsfActivity extends Reporting {
         partial = button(root, "Partial composition edit", this::partial);
         noneditor = button(root, "Focus without an editor", this::nonEditor);
         noneditor.setFocusableInTouchMode(true);
+        // View's first touch takes focus instead of calling onClick in touch mode.
+        noneditor.setOnFocusChangeListener((view, focused) -> {
+            if (focused) nonEditor();
+        });
         setContentView(root);
         root.post(() -> {
             say("W4 TSF buttons reconvert " + center(reconvert) + " password " + center(password)
