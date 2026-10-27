@@ -75,6 +75,13 @@ fail exactly the named assertion. Fast CI now declares six negative source
 copies, preserving all prior exact counts. This native change is not yet
 verified and does not establish the additional 2025 foreground case as fixed.
 
+Targeted framework 40428458347 at d98d5a1 passed pinned javac but caught an
+authoring error in the scaled driver: AppBindData has no loggableCompatChanges
+field at this pinned version. The direct AppCompatCallbacks.install call takes
+both arrays as expected; only the nonexistent redundant field assignment is
+removed. This build failure supplies no Android runtime result. Native fast
+40429258614 at 4a7ca61 separately checks the activation source/fixture.
+
 Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
 and exec3), merged at 9d1445c. The media conflict preserves the integration's
 canonical HTTPS mirrors and 240-second install bound alongside command tracing.
