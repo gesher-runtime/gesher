@@ -14,6 +14,8 @@ $slExpected = @(
   'media4 opensl volume trace: requested 0, set 0, get 0, value 0',
   'media4 opensl: all passed')
 
+. "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
+
 function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [string] $Exe = "$slHost/dalvikvm.exe") {
   $info = [Diagnostics.ProcessStartInfo]::new($Exe)
   $info.UseShellExecute = $false
@@ -26,9 +28,20 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [st
   $info.Environment['GESHER_MEDIA_TRACE_RECORD'] = '1'
   foreach ($key in $Environment.Keys) { $info.Environment[$key] = $Environment[$key] }
   $process = [Diagnostics.Process]::Start($info)
+  $nativeHandle = $process.SafeHandle
+  $cancellation = [Threading.CancellationTokenSource]::new()
+  $pipes = @(@{ Name = 'stdout'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false },
+             @{ Name = 'stderr'; Reader = $null; Handle = $null; Raw = [IntPtr]::Zero; Task = $null; Copied = $false })
+  $text = ''
+  $timedOut = $true
+  $nativeExit = $null
   try {
-  $stdout = $process.StandardOutput.ReadToEndAsync()
-  $stderr = $process.StandardError.ReadToEndAsync()
+  foreach ($pipe in $pipes) {
+      $pipe.Reader = if ($pipe.Name -eq 'stdout') { $process.StandardOutput } else { $process.StandardError }
+      $pipe.Handle = $pipe.Reader.BaseStream.SafeFileHandle
+      $pipe.Raw = $pipe.Handle.DangerousGetHandle()
+      $pipe.Task = $pipe.Reader.ReadToEndAsync($cancellation.Token)
+    }
   $timedOut = -not $process.WaitForExit(120000)
   $text = ''
   if ($timedOut) {
@@ -36,15 +49,36 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [st
     try { $process.Kill($true) } catch { $text += "`n(process kill failed: $_)" }
     if (-not $process.WaitForExit(5000)) { $text += "`n(process still alive five seconds after kill)" }
   }
-  foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+  foreach ($pipe in $pipes) {
     try {
-      if ($pipe.Task.Wait(5000)) { $text += $pipe.Task.Result }
+      if ($pipe.Task.Wait(5000)) { $text += $pipe.Task.Result; $pipe.Copied = $true }
       else { $timedOut = $true; $text += "`n($($pipe.Name) did not complete within five seconds)" }
     } catch { $timedOut = $true; $text += "`n($($pipe.Name) read failed: $_)" }
   }
-  $code = if ($timedOut) { -1 } else { $process.ExitCode }
+  if ($process.HasExited) { $nativeExit = $process.ExitCode }
+  } finally {
+    $cleanup = @{ LateText = ''; TasksComplete = $false; PipesClosed = $false; Problem = 'reader cleanup did not complete' }
+    try { $cleanup = Close-ProcessReaders $cancellation $pipes }
+    catch { $timedOut = $true; $text += "`n(reader cleanup failed: $_)" }
+    $text += $cleanup.LateText
+    if (-not $cleanup.TasksComplete -or -not $cleanup.PipesClosed -or $cleanup.Problem) {
+      $timedOut = $true
+      $text += "`n(reader cleanup incomplete: $($cleanup.Problem))"
+    }
+    try {
+      if (-not $process.HasExited) {
+        $process.Kill($true)
+        if (-not $process.WaitForExit(5000)) { $timedOut = $true; $text += "`n(final owned process cleanup exceeded five seconds)" }
+      }
+    } catch { $timedOut = $true; $text += "`n(final owned process cleanup failed: $_)" }
+    try { $process.Dispose() } catch { $timedOut = $true; $text += "`n(process disposal failed: $_)" }
+    if (-not $nativeHandle.IsClosed) { $timedOut = $true; $text += "`n(native process handle did not close)" }
+    if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+      $text += "`nINFO READER_CLEANUP helper=InvokeOpenSl tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
+    }
+  }
+  $code = if ($timedOut) { -1 } else { $nativeExit }
   return @{ Text = $text; Code = $code }
-  } finally { $process.Dispose() }
 }
 
 function CheckOpenSl([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra, [string] $Caller = 'JNI') {
