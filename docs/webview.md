@@ -350,7 +350,7 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Current changed-source full CI **40432795403** is running at exact
+Completed changed-source full CI **40432795403** uses exact
 `2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
 9dd57f5 (documentation-only after coordinator tip 42cc1c0), including verified
 startup profile merge 2ba9a11. The coordinator personally read profile source
@@ -359,18 +359,36 @@ integration run 40416300047 before authorizing this one fresh Web3 run with
 the changed verified profile input. The original thresholds remain unchanged.
 Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log, interval 120.
 All C/C++/Java compilation and native/JVM fixtures remain CI-only.
-No stage acceptance is claimed before every actual required result is read.
+It is COMPLETE RED: 28 jobs, 21 success, six skipped and one failed Windows
+job. Both actual Windows logs have been read; no full-stage acceptance follows.
 
 The current main build succeeds in 40m21 and its actual ABI check reports
 203 boundaries/zero problems. Framework job 121955313869 was read: javac
 zero errors and actual AndroidX WebKit 1.18.0 web3app build. Package job
 121967311150 succeeds in 2m1; the actual log confirms installed oatdump/boot/
 runtime, app HWND/input/resize and full uninstall cleanup. Windows jobs
-121967311074/121967311081 remain running. Both actual e2e logs are now read:
+121967311074 (2022) ends with zero failed tests/all 14 Web3 checks. Windows
+2025 job 121967311081 has three failures: device A11yActivity completes every
+UIA/app assertion, including Chromium's button/DOM pressed2 and app done, but
+the process fails to exit after 60+60 seconds and WM_CLOSE and is killed.
+The two following NetActivity device launches then time out with no app
+markers. This is a real teardown/device-continuation failure. Both original
+boot gates now pass (JIT medians 414/439 ms on 2022 and 473/508 on 2025).
+All four local certificate rejection causes, real positive internet checks
+and complete TLS cleanup pass on both. Both actual e2e logs are read:
 121967975250 (2022) and 121967975130 (2025) pass all nine apps including
 Puzzles/TIC-80, four pinned-byte transport fixtures, APK association and Start
 menu shortcut, with zero unexpected failures each. Complete actual Windows
-results remain required for acceptance.
+results from a corrected full source remain required for acceptance.
+
+The next diagnostic source preserves every existing assertion and deadline.
+It prints the actual failure-log tail and bounded process/thread states after
+the existing exit deadline has already failed. Fixture lifecycle and window
+teardown phase markers identify the last completed operation. A late exit
+cannot turn that failure into PASS. No teardown fix is claimed from this
+instrumentation. Java UiaBridge.raise already queues through sEvents before
+native UIA calls; an initial hypothesis of an immediate COM outcall under
+the original caller's framework lock was rejected before any code change.
 
 Completed full ci **40376044459** at
 `939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
