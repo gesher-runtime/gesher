@@ -220,6 +220,11 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Corrected OpenSL full ci **40476766790** is running at
+  **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, with current integration
+  db84749b contained. Source is frozen and the bounded peer source review
+  found no blocker; actual runtime/full CI acceptance remains pending.
+
 - OpenSL full ci **40470959941** is RED at
   **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
   db84749b/fresh exit-status30deb08c merged:20 success/six skipped/two failed.
