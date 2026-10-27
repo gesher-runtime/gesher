@@ -17,16 +17,11 @@ int WriteUser(void* destination, const void* source, size_t bytes) {
 }
 }  // namespace
 
-int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner,
-                         int command, void* user_flock, bool* mutated) {
-  if (!state || !mutated || state->locks.count > kRecordCapacity) return EINVAL;
-  *mutated = false;
+int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOperation* prepared) {
+  if (!prepared) return EINVAL;
   const bool query = command == 5 || command == 36;  // F_GETLK/F_OFD_GETLK
   const bool ofd = command == 36 || command == 37;
   if (!query && command != 6 && command != 37) return EINVAL;  // F_SETLK/F_OFD_SETLK
-  if (static_cast<unsigned>(owner.kind) > 1 || (owner.low == 0 && owner.high == 0) ||
-      ofd != (owner.kind == Ownership::kDescription) ||
-      (!ofd && (owner.low == 0 || owner.low > INT32_MAX || owner.high == 0))) return EINVAL;
   if (!anchor || anchor == INVALID_HANDLE_VALUE) return EBADF;
   SetLastError(ERROR_SUCCESS);
   DWORD file_type = GetFileType(anchor);
@@ -43,18 +38,41 @@ int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner
   LARGE_INTEGER zero{}, current{}, size{};
   if (input.whence == 1 && !SetFilePointerEx(anchor, zero, &current, FILE_CURRENT)) return WinError();
   if (input.whence == 2 && !GetFileSizeEx(anchor, &size)) return WinError();
-  Record requested{};
-  error = FileIdentity(anchor, &requested.file);
+  File file{};
+  Range range{};
+  error = FileIdentity(anchor, &file);
   if (error) return error;
-  error = Normalize(input.whence, input.start, input.length, current.QuadPart, size.QuadPart, &requested.range);
+  error = Normalize(input.whence, input.start, input.length, current.QuadPart, size.QuadPart, &range);
   if (error) return error;
-  requested.owner = owner;
-  requested.kind = static_cast<Kind>(input.type);
-  requested.pid = ofd ? -1 : static_cast<int32_t>(owner.low);
+  if (!query && input.type != 2) {
+    uint32_t access = 0;
+    error = HandleAccess(anchor, &access);
+    if (error) return error;
+    if (input.type == 0 && !(access & FILE_READ_DATA)) return EBADF;
+    if (input.type == 1 && !(access & (FILE_WRITE_DATA | FILE_APPEND_DATA))) return EBADF;
+  }
+  std::memcpy(&prepared->input, &input, sizeof(input));
+  prepared->file = file;
+  prepared->range = range;
+  prepared->user_flock = user_flock;
+  prepared->query = query;
+  prepared->ofd = ofd;
+  return 0;
+}
 
-  if (query) {
+int ApplyOperation(RegistryState* state, const Owner& owner,
+                    const PreparedOperation& prepared, bool* mutated) {
+  if (!state || !mutated || state->locks.count > kRecordCapacity) return EINVAL;
+  *mutated = false;
+  if (static_cast<unsigned>(owner.kind) > 1 || (owner.low == 0 && owner.high == 0) ||
+      prepared.ofd != (owner.kind == Ownership::kDescription) ||
+      (!prepared.ofd && (owner.low == 0 || owner.low > INT32_MAX || owner.high == 0))) return EINVAL;
+  Record requested{prepared.file, owner, prepared.range, static_cast<Kind>(prepared.input.type),
+                   prepared.ofd ? -1 : static_cast<int32_t>(owner.low)};
+
+  if (prepared.query) {
     LinuxFlock output;
-    std::memcpy(&output, &input, sizeof(output));  // Preserve padding and all nonconflicting input fields.
+    std::memcpy(&output, &prepared.input, sizeof(output));  // Preserve all nonconflicting input fields/padding.
     const Record* conflict = FindConflict(state->locks, requested);
     if (!conflict) output.type = 2;
     else {
@@ -65,21 +83,22 @@ int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner
                       static_cast<int64_t>(conflict->range.end - conflict->range.start);
       output.pid = conflict->pid;
     }
-    return WriteUser(user_flock, &output, sizeof(output));
+    return WriteUser(prepared.user_flock, &output, sizeof(output));
   }
 
-  if (requested.kind != Kind::kUnlock) {
-    uint32_t access = 0;
-    error = HandleAccess(anchor, &access);
-    if (error) return error;
-    if (requested.kind == Kind::kRead && !(access & FILE_READ_DATA)) return EBADF;
-    if (requested.kind == Kind::kWrite && !(access & (FILE_WRITE_DATA | FILE_APPEND_DATA))) return EBADF;
-    if (FindConflict(state->locks, requested)) return EAGAIN;
-  }
-  error = Replace(&state->locks, requested, kRecordCapacity);
+  int error = Replace(&state->locks, requested, kRecordCapacity);
   if (error) return error;
   *mutated = true;
   return 0;
+}
+
+int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner,
+                         int command, void* user_flock, bool* mutated) {
+  if (!mutated) return EINVAL;
+  *mutated = false;
+  PreparedOperation prepared{};
+  int error = PrepareOperation(anchor, command, user_flock, &prepared);
+  return error ? error : ApplyOperation(state, owner, prepared, mutated);
 }
 
 }  // namespace gesher::record_locks
