@@ -38,11 +38,16 @@ First bounded slice started on 2026-10-27 in `C:\work\gesher-locale2`,
 `wip/locale2`, from accepted integration `7b49a718`. ADR0066 and test81 cover
 persisted override/replacement/clear, selected-locale reconciliation and ordinary
 caller/package/user boundaries. Source and actual APK fixtures are prepared;
-compilation/runtime/full acceptance are pending. Initial source `713b3ba6`
-has framework-only compile run `40507901609` active; the following source
-refinement uses one committed override file per package to avoid cached global
-map replacement between independent single-process apps. No old compile result
-will be reused as proof for changed source. See
+runtime/full acceptance are pending. Initial compile `40507901609` was canceled
+as superseded (not failed/retried). Source `f9f3f629`/compile `40508467291` passes
+framework javac0 and the production service/app build, then fails before APK
+compilation because the two new shell wrappers had Git mode100644. The next
+source corrects executable modes and adds branch-scoped CI: current-run Java/APK
+build plus exact immutable full-green native runtime40498782924/8ec4bf3c,
+with actual test81 on both Windows hosts. This is imageless scoped API evidence,
+not native rebuild, boot-image, package or e2e acceptance. Per-package override
+files avoid cached global map replacement between independent single-process
+apps. No old compile result is reused as proof for changed source. See
 [ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
 [pinned-source audit](locale2-source-audit.json).
 
