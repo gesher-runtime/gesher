@@ -58,7 +58,9 @@ release_version, early installer upload and post-smoke receipt/promotion guards.
 It introduces no change to release promotion code. Release-version branch CI
 remains held for verified Web3/Windows4 and the coordinator's final combined
 source. Web3 full40444053066 is green before its exit-oracle hardening;
-strict full40449137605 is running, with actual package and both e2e logs read.
+strict full40449137605 is complete green (22 success/six skipped), with both
+actual Windows0failed/14Web3PASS/VM0/Launcher0/child0/lifecycle, package and
+both e2e logs read. The child-zero freshness property remains unverified.
 A coordinator-owned exec4-exit prerequisite must also make cached child exit
 results process-generation-aware before a fresh child-zero claim is accepted.
 Windows4 full40447661700 proves actual first TSF reconversion, partial caret,
