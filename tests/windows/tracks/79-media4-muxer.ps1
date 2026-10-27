@@ -46,7 +46,7 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   $missing = @(@("media4 muxer ABI: $Abi", "media4 muxer caller: $Caller", 'media4 muxer: all passed',
     'media4 muxer descriptor-access-ownership-seekability: ok', 'media4 muxer empty-lifecycle-and-error-order: ok',
     'media4 muxer Ogg boundary: packets 0 result=ok', 'media4 muxer Ogg boundary: packets 1 result=ok',
-    'media4 muxer Ogg boundary: packets 2 result=ok') |
+    'media4 muxer Ogg boundary: packets 2 result=ok payload-eos=1') |
     Where-Object { -not $text.Contains($_) })
   $parts = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer [^\r\n]+: ok\r?$'))
   $fds = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer fd trace: [^\r\n]+$'))
