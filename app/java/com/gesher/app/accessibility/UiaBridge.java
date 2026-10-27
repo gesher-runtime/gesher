@@ -113,6 +113,7 @@ public final class UiaBridge {
         boolean active() { return remaining() > 0; }
     }
     private static final ThreadLocal<Request> sRequest = new ThreadLocal<>();
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingUi = new java.util.concurrent.atomic.AtomicInteger();
     private static boolean active() {
         Request q = sRequest.get();
         return q != null && q.active();
@@ -204,6 +205,7 @@ public final class UiaBridge {
         }
         FutureTask<T> f = new FutureTask<>(guarded);
         if (!q.active() || !h.post(f)) return null;
+        sPendingUi.incrementAndGet();
         try {
             int left = q.remaining();
             if (left <= 0) return null;
@@ -216,6 +218,7 @@ public final class UiaBridge {
             // revalidates after that acquisition and before any UI/action work.
             f.cancel(false);
             h.removeCallbacks(f);
+            sPendingUi.decrementAndGet();
         }
     }
 
