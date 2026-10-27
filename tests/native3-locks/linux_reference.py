@@ -340,6 +340,31 @@ def reference(output):
             record("OFD-cycle-clear-A-first", lock(a, command=37, type=2))
             record("OFD-cycle-clear-A-second", lock(a, slot=1, command=37, type=2))
 
+            # Observe mixed same-file owner cycles rather than assuming the
+            # POSIX graph may traverse OFD wait edges. Only actual EDEADLK or
+            # proven blocking followed by explicit EINTR is an admissible row.
+            for a_ofd in (False, True):
+                label = "mixed-A-OFD-B-POSIX" if a_ofd else "mixed-A-POSIX-B-OFD"
+                a_set, a_wait = (37, 38) if a_ofd else (6, 7)
+                b_set, b_wait = (6, 7) if a_ofd else (37, 38)
+                record(label + "-A-holds", lock(a, command=a_set, start=1000, length=1))
+                record(label + "-B-holds", lock(b, command=b_set, start=1002, length=1))
+                a.send(op="lock", command=a_wait, start=1002, length=1)
+                a.blocked()
+                b.send(op="lock", command=b_wait, start=1000, length=1)
+                try:
+                    mixed = b.take(seconds=0.25)
+                except queue.Empty:
+                    if b.process.poll() is not None:
+                        raise AssertionError("mixed-cycle requester died instead of blocking")
+                    os.kill(b.pid, signal.SIGUSR1)
+                    record(label + "-actual-blocking-EINTR", b.take(), -1, errno.EINTR)
+                else:
+                    record(label + "-actual-EDEADLK", mixed, -1, errno.EDEADLK)
+                record(label + "-B-releases", lock(b, command=b_set, type=2))
+                record(label + "-A-completes", a.take())
+                record(label + "-A-clears", lock(a, command=a_set, type=2))
+
             record("dup2-target-posix-lock", lock(a, start=900, length=5))
             record("dup2-replaces-target", a.call(op="dup2", slot=1, target=0))
             record("dup2-target-close-releases", lock(b, command=5, start=900, length=1), type=2)
