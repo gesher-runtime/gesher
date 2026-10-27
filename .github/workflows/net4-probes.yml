@@ -1,0 +1,25 @@
+name: net4-probes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: net4-probes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  oracle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect actual Windows interface index selection
+        shell: pwsh
+        run: ./tests/windows/net/InspectIfaddrsOracle.ps1
