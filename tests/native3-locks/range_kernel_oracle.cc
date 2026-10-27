@@ -19,6 +19,51 @@ int main() {
   std::mt19937 random(0x47657368);
   unsigned failures = 0;
   unsigned operations = 0, queries = 0;
+  struct Boundary { int whence; int64_t start, length, current; };
+  constexpr int64_t maximum = INT64_MAX;
+  const Boundary boundaries[] = {
+    {0, 0, 0, 0}, {0, maximum, 0, 0}, {0, maximum, 1, 0}, {0, maximum, 2, 0},
+    {0, maximum - 1, 2, 0}, {0, maximum - 1, 3, 0}, {0, -1, 1, 0},
+    {0, 0, -1, 0}, {0, maximum, INT64_MIN, 0}, {0, 0, INT64_MIN, 0},
+    {1, maximum, 1, 1}, {2, maximum, 0, 0}, {3, 0, 1, 0},
+    {1, -64, 32, 64}, {2, -16, 8, 0}, {0, 50, -5, 0}, {0, 50, 5, 0},
+  };
+  unsigned boundary_count = 0;
+  for (const Boundary& boundary : boundaries) {
+    if (lseek(fd[0], boundary.current, SEEK_SET) != boundary.current) return 2;
+    Range expected_range{};
+    int expected = Normalize(boundary.whence, boundary.start, boundary.length,
+                             boundary.current, 4096, &expected_range);
+    struct flock actual{};
+    actual.l_type = F_WRLCK;
+    actual.l_whence = static_cast<short>(boundary.whence);
+    actual.l_start = boundary.start;
+    actual.l_len = boundary.length;
+    errno = 0;
+    int code = fcntl(fd[0], F_OFD_SETLK, &actual);
+    int error = code < 0 ? errno : 0;
+    bool matched = error == expected;
+    if (code == 0) {
+      struct flock query{};
+      query.l_type = F_WRLCK;
+      query.l_start = static_cast<int64_t>(expected_range.start);
+      query.l_len = 1;
+      if (fcntl(fd[1], F_OFD_GETLK, &query) != 0) return 2;
+      int64_t expected_length = expected_range.end == kThroughEof ? 0 :
+        static_cast<int64_t>(expected_range.end - expected_range.start);
+      matched = matched && query.l_type == F_WRLCK && query.l_whence == 0 && query.l_pid == -1 &&
+        query.l_start == static_cast<int64_t>(expected_range.start) && query.l_len == expected_length;
+      struct flock clear{};
+      clear.l_type = F_UNLCK;
+      if (fcntl(fd[0], F_OFD_SETLK, &clear) != 0) return 2;
+    }
+    std::printf("ACTUAL_RECORD_LOCK_KERNEL_BOUNDARY row=%u whence=%d start=%lld len=%lld current=%lld expected_errno=%d actual_errno=%d matched=%d\n",
+      boundary_count, boundary.whence, static_cast<long long>(boundary.start),
+      static_cast<long long>(boundary.length), static_cast<long long>(boundary.current), expected, error, matched);
+    ++boundary_count;
+    if (!matched) ++failures;
+  }
+  if (failures) return 1;
   for (unsigned index = 0; index < 10000; ++index) {
     unsigned who = random() & 1;
     int whence = random() % 3;
@@ -80,6 +125,7 @@ int main() {
   }
   close(fd[0]);
   close(fd[1]);
-  std::printf("ACTUAL_RECORD_LOCK_KERNEL_RANGE_SUMMARY operations=%u queries=%u failures=%u\n", operations, queries, failures);
+  std::printf("ACTUAL_RECORD_LOCK_KERNEL_RANGE_SUMMARY boundaries=%u seed=0x47657368 operations=%u queries=%u failures=%u\n",
+              boundary_count, operations, queries, failures);
   return failures == 0 ? 0 : 1;
 }
