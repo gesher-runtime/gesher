@@ -8,9 +8,10 @@ name: exec
 # ProcessBuilder in dalvikvm. ci.yml calls this workflow.
 on:
   push:
-    branches: ['wip/exec4']
+    branches: ['wip/exec4', 'wip/exec4-spawn']
     paths:
       - 'tests/exec/exec4_actions.c'
+      - 'tests/exec/exec4_spawn.c'
       - '.github/workflows/exec.yml'
   workflow_dispatch:
   workflow_call:
@@ -87,6 +88,10 @@ jobs:
             -o dist-exec/exec4-actions-x86_64 tests/exec/exec4_actions.c
           "$bin/aarch64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-exec/exec4-actions-arm64-v8a tests/exec/exec4_actions.c
+          "$bin/x86_64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/exec4-spawn-x86_64 tests/exec/exec4_spawn.c
+          "$bin/aarch64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/exec4-spawn-arm64-v8a tests/exec/exec4_spawn.c
           "$bin/llvm-readelf" -l -W dist-exec/libexec3tls.so | grep ' TLS '
           echo "--- libexec2test.so UND imports ---"
           "$bin/llvm-readelf" --dyn-syms -W dist-exec/libexec2test.so | awk '$7 == "UND" && $8 != "" {print $8}' | sort -u
