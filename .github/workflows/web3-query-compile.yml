@@ -1,25 +1,117 @@
-name: web3-query-compile
+name: web3-compiler-preflight
 on:
+  push:
+    branches: ['wip/web3-compiler-preflight']
+    paths: ['.github/workflows/web3-query-compile.yml']
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
 concurrency:
-  group: web3-query-compile-${{ github.ref }}
-  cancel-in-progress: true
+  group: web3-compiler-preflight-${{ github.ref }}
+  cancel-in-progress: false
 env:
   LLVM_MINGW_TAG: '20261006'
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
-  compile:
+  preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: runtime
-      - name: Compile actual accessibility objects with their production Werror flags
+      - name: Actual CMake OFF and ON compiler records and exported commands
         run: |
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          python3 tools/web3/host_roles.py compiler-preflight --build out > compiler-off.json
+          cp out/compile_commands.json compile-off.json
           cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
-          ninja -C out gesher_web3 gesher_window
+          python3 tools/web3/host_roles.py compiler-preflight --build out > compiler-on.json
+          cp out/compile_commands.json compile-on.json
+          cat compiler-off.json compiler-on.json
+      - name: Corroborate same actual compiler and exact one-definition boundary
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          import shlex
+          from tools.web3 import host_roles as roles
+          off = json.loads(Path('compiler-off.json').read_text())
+          on = json.loads(Path('compiler-on.json').read_text())
+          assert off == on, 'Actual compiler/launcher/generated metadata changed between OFF and ON'
+          def commands(path):
+              result = {}
+              for row in json.loads(Path(path).read_text()):
+                  args = row.get('arguments') or shlex.split(row['command'])
+                  key = (row['directory'], row['file'], args[args.index('-o')+1])
+                  assert key not in result
+                  result[key] = args
+              return result
+          before, after = commands('compile-off.json'), commands('compile-on.json')
+          assert before.keys() == after.keys()
+          changed = set()
+          for key, args in before.items():
+              actual = after[key]
+              assert args == [part for part in actual if part != '-DGESHER_WEB3_QUERY_TESTS=1'], key
+              if args != actual:
+                  changed.add(Path(key[1]).resolve().relative_to(roles.ROOT).as_posix())
+          assert changed == roles.CHANGED, changed
+          print('ACTUAL_CMAKE_COMPILER_PREFLIGHT source='+off['source']+' compiler='+off['compiler']['sha256']+
+                ' form='+off['compiler']['compile_database_form']+' OFF_ON_identical=True changed_objects='+str(len(changed)))
+      - name: Fail closed on mutated real generated metadata and driver evidence
+        shell: python
+        run: |
+          import json, shutil, tempfile
+          from pathlib import Path
+          from tools.web3 import host_roles as roles
+          original = Path('out')
+          record = list((original/'CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
+          assert len(record) == 1
+          configured = roles.compiler(original)['configured_driver']
+          def rejected(label, mutate):
+              with tempfile.TemporaryDirectory(prefix='compiler-negative-') as name:
+                  root = Path(name)
+                  target = root/'CMakeFiles'/record[0].parent.name/'CMakeCXXCompiler.cmake'
+                  target.parent.mkdir(parents=True)
+                  shutil.copyfile(record[0], target)
+                  shutil.copyfile(original/'CMakeCache.txt', root/'CMakeCache.txt')
+                  shutil.copyfile(original/'compile_commands.json', root/'compile_commands.json')
+                  mutate(root, target)
+                  try:
+                      roles.compiler(root)
+                  except (SystemExit, OSError) as error:
+                      print('PASS actual CMake negative: '+label+' rejected='+str(error))
+                  else:
+                      raise AssertionError('Missing fail-closed guard: '+label)
+          rejected('missing generated record', lambda root,target: target.unlink())
+          def ambiguous(root,target):
+              extra=root/'CMakeFiles'/'unexpected-version'/'CMakeCXXCompiler.cmake'
+              extra.parent.mkdir(); shutil.copyfile(target,extra)
+          rejected('ambiguous generated records', ambiguous)
+          def contradictory(root,target):
+              with (root/'CMakeCache.txt').open('a') as out:
+                  out.write('\nCMAKE_CXX_COMPILER:FILEPATH='+str(target.parent)+'\n')
+          rejected('contradictory cached compiler', contradictory)
+          def wrong_driver(root,target):
+              path=root/'compile_commands.json'
+              rows=json.loads(path.read_text())
+              for row in rows:
+                  if Path(row['file']).resolve()==(roles.ROOT/'compat/accessibility/uia_bridge.cc').resolve():
+                      if 'arguments' in row:
+                          row['arguments']=[str(target.parent) if value==configured else value for value in row['arguments']]
+                      else:
+                          row['command']=row['command'].replace(configured,str(target.parent))
+                      break
+              else: raise AssertionError('Missing real query CXX command')
+              path.write_text(json.dumps(rows))
+          rejected('wrong actual driver', wrong_driver)
+          print('ACTUAL_CMAKE_NEGATIVE_SUMMARY controls=4 failures=0; configuration-only no-runtime-proof')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web3-compiler-preflight-evidence
+          path: |
+            compiler-off.json
+            compiler-on.json
+          if-no-files-found: warn
