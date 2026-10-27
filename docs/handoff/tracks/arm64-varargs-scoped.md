@@ -50,6 +50,13 @@ This is not full binary128 accuracy, direct-variadic or HFA acceptance.
 
 ## Source/history and pending gates
 
+Resume checkpoint: the guarded coherent component now has a narrow push
+trigger for `wip/arm64-varargs`, limited to its workflow and driver. This
+registers the workflow absent from main without dispatching an unrelated full
+run. Its exact CI-built API3 host/DLL, current Native2 and five-jar/image
+guards remain unchanged. Runtime evidence is pending; no acceptance or
+roadmap closure follows from registering the workflow.
+
 Baseline3b607e75/diagnostic40525678026 establishes the prior actual valid-call
 eager-copy defect on both hosts: shallow139, eager_end=top+0xa0 versus a
 separate deep0 control. This does not independently establish all original
