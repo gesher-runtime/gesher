@@ -33,6 +33,14 @@ Activity contexts remain the way to query a particular task. Single-process
 orientation changes update the same service in the app process; device mode
 updates it in the system server with the top-resumed task.
 
+Top-level task activation is distinct from keyboard focus. The next source
+delivers WM_ACTIVATE as a separate native activation event and retains default
+Win32 focus handling; it does not synthesize a keyboard-focus transition.
+The native fixture checks activation while the real HWND already has keyboard
+focus, with a counterfactual copy that omits only this event. CI and the actual
+two-task Android foreground test must verify this correction before acceptance.
+See the [WM_ACTIVATE contract](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-activate).
+
 ## Open verification
 
 54-windows4.ps1 has executable cases for existing Display objects and registered

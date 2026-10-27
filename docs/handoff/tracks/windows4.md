@@ -66,6 +66,15 @@ changes, so it can observe finishComposingText without weakening the exact
 native-commit/no-composition assertion. These source corrections await CI;
 no local native build or new full run has been performed.
 
+The next native source also gives top-level WM_ACTIVATE its own event, separate
+from keyboard-focus changes; WindowSession uses it for task activation while
+retaining normal DefWindowProc behavior. A real HWND fixture first obtains
+actual keyboard focus, then requires a separate activation event without a
+focus transition. Its added counterfactual removes only that event and must
+fail exactly the named assertion. Fast CI now declares six negative source
+copies, preserving all prior exact counts. This native change is not yet
+verified and does not establish the additional 2025 foreground case as fixed.
+
 Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
 and exec3), merged at 9d1445c. The media conflict preserves the integration's
 canonical HTTPS mirrors and 240-second install bound alongside command tracing.
