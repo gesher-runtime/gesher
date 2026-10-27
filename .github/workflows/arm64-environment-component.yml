@@ -33,6 +33,10 @@ jobs:
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: runtime
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - name: Build current API3 runtime, launcher, compiler and boot jars
         run: |
           ninja -C out dalvikvm dex2oat gesher-exec arm64_elf_test
