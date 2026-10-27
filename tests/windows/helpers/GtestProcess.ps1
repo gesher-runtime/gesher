@@ -10,6 +10,11 @@ using Microsoft.Win32.SafeHandles;
 public static class GtestProcessNativeHandles {
   [DllImport("kernel32.dll", SetLastError = true)]
   static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+  static GtestProcessNativeHandles() {
+    // Resolve/JIT the P/Invoke before the first close/probe interval.
+    uint flags;
+    GetHandleInformation(IntPtr.Zero, out flags);
+  }
   public static bool CloseOwnedReader(StreamReader reader, SafeFileHandle owned) {
     var file = reader.BaseStream as FileStream;
     bool same = file != null && Object.ReferenceEquals(file.SafeFileHandle, owned);
