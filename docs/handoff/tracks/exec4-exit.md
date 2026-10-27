@@ -1,7 +1,8 @@
 # Exec4: fresh process exit results
 
 Root owns wip/exec4-exit in C:\work\gesher-exec4-exit under ADR0074.
-Test70 is reserved. No integration/main/release acceptance is claimed.
+Test70 is reserved. Full CI is verified below; integration merge is pending.
+Other exec4 contracts and the final main/release gates remain open.
 
 ## Context
 
@@ -12,6 +13,33 @@ The newly hardened Web3 marker alone could not establish result freshness.
 This source interleaving does not prove the cause of an earlier UIA stall.
 
 ## Status and next steps
+
+Full CI40455262527 at29fa0bdf665a2cc5ee707524e7edd2a670391451 passed
+attempt1:28 jobs,22 success/6 intentional skips. Root read all job metadata
+and actual test2022/122039787831, test2025/122039787913,
+package122039787753 and e2e122040311361/122040311469 logs.
+Both Windows summaries are0 test(s) failed, with these actual results:
+
+- PASS exec4 exit: only the latest bound PID/start can publish launcher success.
+- PASS NormalActivity: fresh app0 and launcher0.
+- PASS AbnormalActivity: fresh app23 and launcher1.
+- PASS NormalActivity again: fresh app0 and launcher0.
+
+The actual component runs under ART, including old/unbound/mismatched PID,
+PID reuse, conflicting callback and concurrent stale/cross-package controls.
+Package has23 installed oatdump/image/fonts/window/input/uninstall passes;
+both e2e run all ten apps, four transport controls and association/shortcut
+launches with0 unexpected failures. Existing live-environment/time/media,
+shell/process, original boot-profile size/startup and app-image gates remain
+enabled and passed. No retry or deadline/assertion relaxation.
+
+Freeze the verified source with documentation only, merge it into current
+integration and confirm the merged non-documentation tree matches29fa0bdf.
+Windows4/Web3 must then run on this prerequisite. This fixes exit-result
+freshness, not the cause of an earlier UIA stall; untracked adopted OS exits
+remain explicitly unknown/failure. Child action/fork/exec4 gaps remain open.
+
+### Source and scoped-build history
 
 Source review found two additional issues before acceptance: the native
 exit query consumes its handle, so pending-process ownership, query and
