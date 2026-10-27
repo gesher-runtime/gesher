@@ -4,7 +4,7 @@
 # use.
 
 # Runs a program with a time limit (binder calls that go wrong tend to wait
-# forever), killing it and whatever it started when the time is up. Returns
+# forever), attempting process-tree termination when the time is up. Returns
 # its output; $LASTEXITCODE is its exit code (-1 on a time-out).
 function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 120) {
   $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
@@ -13,18 +13,26 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $p = [Diagnostics.Process]::Start($psi)
-  $stdout = $p.StandardOutput.ReadToEndAsync()
-  $stderr = $p.StandardError.ReadToEndAsync()
-  $timedOut = -not $p.WaitForExit($Seconds * 1000)
-  if ($timedOut) {
-    $p.Kill($true)
-    $p.WaitForExit()
-  }
-  $null = $stdout.Wait(10000), $stderr.Wait(10000)
-  $global:LASTEXITCODE = if ($timedOut) { -1 } else { $p.ExitCode }
-  $out = $stdout.Result + $stderr.Result
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
-  return $out
+  try {
+    $stdout = $p.StandardOutput.ReadToEndAsync()
+    $stderr = $p.StandardError.ReadToEndAsync()
+    $incomplete = -not $p.WaitForExit($Seconds * 1000)
+    $out = ''
+    if ($incomplete) {
+      $out += "`n(timed out after $Seconds s)"
+      try { $p.Kill($true) } catch { $out += "`n(process kill failed: $_)" }
+      if (-not $p.WaitForExit(5000)) { $out += "`n(process still alive five seconds after kill)" }
+    }
+    # An exited parent can leave descendants holding redirected output open.
+    foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+      try {
+        if ($pipe.Task.Wait(5000)) { $out += $pipe.Task.Result }
+        else { $incomplete = $true; $out += "`n($($pipe.Name) did not complete within five seconds)" }
+      } catch { $incomplete = $true; $out += "`n($($pipe.Name) read failed: $_)" }
+    }
+    $global:LASTEXITCODE = if ($incomplete) { -1 } else { $p.ExitCode }
+    return $out
+  } finally { $p.Dispose() }
 }
 
 function CheckTimed([string] $Name, [string] $Exe, [string[]] $Arguments, [string[]] $Expect, [int] $Seconds = 120) {
@@ -371,13 +379,23 @@ function StartTimed([string] $Exe, [string[]] $Arguments) {
 }
 
 function WaitTimed($t, [int] $Seconds) {
+  try {
   $timedOut = -not $t.Process.WaitForExit($Seconds * 1000)
-  if ($timedOut) { $t.Process.Kill($true); $t.Process.WaitForExit() }
-  $null = $t.Out.Wait(10000), $t.Err.Wait(10000)
+  $out = ''
+  if ($timedOut) {
+    $out += "`n(timed out after $Seconds s)"
+    try { $t.Process.Kill($true) } catch { $out += "`n(process kill failed: $_)" }
+    if (-not $t.Process.WaitForExit(5000)) { $out += "`n(process still alive five seconds after kill)" }
+  }
+  foreach ($pipe in @(@{ Task = $t.Out; Name = 'stdout' }, @{ Task = $t.Err; Name = 'stderr' })) {
+    try {
+      if ($pipe.Task.Wait(10000)) { $out += $pipe.Task.Result }
+      else { $timedOut = $true; $out += "`n($($pipe.Name) did not complete within ten seconds)" }
+    } catch { $timedOut = $true; $out += "`n($($pipe.Name) read failed: $_)" }
+  }
   $global:LASTEXITCODE = if ($timedOut) { -1 } else { $t.Process.ExitCode }
-  $out = $t.Out.Result + $t.Err.Result
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
   return $out
+  } finally { $t.Process.Dispose() }
 }
 
 function ServerPid([string] $out) {

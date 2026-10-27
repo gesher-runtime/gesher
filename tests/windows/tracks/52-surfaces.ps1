@@ -77,6 +77,7 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   $psi.Environment['GESHER_CAMERA_TEST'] = '1'
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
+  try {
   $read = {
     $t = Get-Content -Raw $log -ErrorAction SilentlyContinue
     foreach ($f in $AppLogs) { $t += "`n" + (Get-Content -Raw $f -ErrorAction SilentlyContinue) }
@@ -119,19 +120,31 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
       if ($c.Name -eq 'dalvikvm.exe') { Write-Host "INFO  SIGQUIT to $($c.ProcessId): $([GesherSurfWin32]::SigQuit([int]$c.ProcessId))" }
     }
     Start-Sleep -Seconds 8
-    $p.Kill($true); $p.WaitForExit()
+    try { $p.Kill($true) } catch { Write-Host "INFO  surfaces: process kill failed: $_" }
+    if (-not $p.WaitForExit(5000)) { Write-Host 'INFO  surfaces: process still alive five seconds after kill' }
   }
   # Its dalvikvm may outlive cmd.exe for a moment (files it maps stay in use).
   Start-Sleep -Seconds 2
   $text = & $read
   if ($timedOut) { $text += "
 (killed: still running 120 s after its last phase)" }
-  return @{ Text = $text; Shots = $shots; Hwnd = $hwnd; Exit = $p.ExitCode }
+  $exitCode = if ($timedOut) { -1 } else { $p.ExitCode }
+  return @{ Text = $text; Shots = $shots; Hwnd = $hwnd; Exit = $exitCode }
+  } finally {
+    try {
+      if (-not $p.HasExited) {
+        try { $p.Kill($true) } catch { Write-Host "INFO  surfaces: final process kill failed: $_" }
+        if (-not $p.WaitForExit(5000)) { Write-Host 'INFO  surfaces: final process cleanup exceeded five seconds' }
+      }
+    } finally { $p.Dispose() }
+  }
 }
 
 function SurfaceChecks([string] $Mode, $r) {
   $t = $r.Text
   $s = $r.Shots
+  SurfaceCheck "process completion ($Mode): the actual process exits successfully" @(
+    if ($r.Exit -ne 0) { "actual process exit $($r.Exit): $t" })
   $none = { param($n) if ($null -eq $s[$n]) { "no read-back at phase $n" } }
   # Window-free checks.
   SurfaceCheck "Bitmap parcels ($Mode): a small Bitmap in place, a large one through shared memory (a memfd's descriptor), read back pixel for pixel" @(
@@ -211,6 +224,8 @@ function SurfaceChecks([string] $Mode, $r) {
 function SurfaceGlChecks([string] $Mode, $r) {
   $t = $r.Text
   $s = $r.Shots
+  SurfaceCheck "GL process completion ($Mode): the actual process exits successfully" @(
+    if ($r.Exit -ne 0) { "actual process exit $($r.Exit): $t" })
   SurfaceCheck "SurfaceView ($Mode): EGL/GLES 2 from native code into its surface (ANativeWindow_fromSurface, eglCreateWindowSurface, eglSwapBuffers): the frames shown where the view is" @(
     if ($null -eq $s[1]) { 'no read-back at phase 1' }
     InOrder $t @('surfacegl: surfaceCreated', 'surfacegl: surfaceChanged 400x400', 'surfacegl: window 400x400',
