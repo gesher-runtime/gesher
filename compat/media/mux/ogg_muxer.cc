@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#include "../encode/encoder.h"
+#include "../encode/codec_config.h"
 #include "muxer.h"
 
 namespace gesher::media {
