@@ -80,8 +80,9 @@ ARM CHAR_MAX adapter and the corrected unsigned wchar width adapters,
 including both registrations. extra_bionic's exact comparison results and
 test44's six-case wide evidence capture remain intact alongside the width
 checks. Roadmap conflict resolution retains both scoped acceptance records.
-Local checks are source/digest/parser checks only. One final combined full
-CI is next; no combined runtime result is claimed yet. The separate pending
+Local checks are source/digest/parser checks only. Final combined full ci
+40439802052 at 7302b20432e9b31e30897ced7b372f0e835c4603 is running,
+watched with interval 120; no combined runtime result is claimed yet. The separate pending
 native3-time/0573 source is not imported. Frozen native3-wide-verified is
 unchanged at e7c1b06.
 
