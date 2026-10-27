@@ -104,6 +104,52 @@ void CompareIndependentMatrix(const char* filename) {
   size_t rows = 0, mismatches = 0;
   size_t numeric_mismatches = 0, status_mismatches = 0, setup_mismatches = 0;
   size_t query_mismatches = 0, native_mismatches = 0, missing_idc = 0, extra_inexact = 0, other_status = 0;
+  auto compare = [&](uint64_t operation, uint64_t width, uint64_t control, uint64_t left,
+                     uint64_t right, uint64_t seed, uint64_t selected_operation) {
+    uint64_t fields[8];
+    for (uint64_t& field : fields) if (!(input >> std::hex >> field)) {
+      Check(false, "independent QEMU matrix is complete and every field is hexadecimal");
+      return false;
+    }
+    if (fields[0] != operation || fields[1] != width || fields[2] != control ||
+        fields[3] != left || fields[4] != right || fields[5] != seed) {
+      Check(false, "every independent reference tuple matches the original source inputs");
+      return false;
+    }
+    NativeState native = Native();
+    uint64_t selected = Call(1, control), initialized = Call(5, seed);
+    uint64_t actual = Call(selected_operation, left, right);
+    uint64_t status = Call(4);
+    int queried = One("fetestexcept", -1);
+    uint64_t remaining_control = Call(0);
+    bool setup_matches = selected == control && initialized == seed && remaining_control == control;
+    bool query_matches = queried == static_cast<int>(status & 0x9f);
+    bool native_matches = Same(native);
+    numeric_mismatches += actual != fields[6];
+    setup_mismatches += !setup_matches;
+    query_mismatches += !query_matches;
+    native_mismatches += !native_matches;
+    if (status != fields[7]) {
+      ++status_mismatches;
+      if ((fields[7] ^ status) == 0x80 && !(status & 0x80)) ++missing_idc;
+      else if ((fields[7] ^ status) == 0x10 && (status & 0x10)) ++extra_inexact;
+      else ++other_status;
+    }
+    bool matches = setup_matches && actual == fields[6] && status == fields[7] && query_matches && native_matches;
+    ++rows;
+    if (!matches) {
+      if (mismatches < 24) std::printf(
+          "INFO arm64 FPSR matrix: row=%zu op=%llu width=%llu fpcr=%08llx left=%016llx right=%016llx seed=%08llx "
+          "expected_result=%016llx actual_result=%016llx expected_status=%08llx actual_status=%08llx query=%08x\n",
+          rows, static_cast<unsigned long long>(operation), static_cast<unsigned long long>(width),
+          static_cast<unsigned long long>(control), static_cast<unsigned long long>(left),
+          static_cast<unsigned long long>(right), static_cast<unsigned long long>(seed),
+          static_cast<unsigned long long>(fields[6]), static_cast<unsigned long long>(actual),
+          static_cast<unsigned long long>(fields[7]), static_cast<unsigned long long>(status), static_cast<unsigned>(queried));
+      ++mismatches;
+    }
+    return true;
+  };
   const uint64_t operations64[] = {3, 13, 7, 6};
   for (uint64_t mode = 0; mode < 4; ++mode) for (uint64_t dn = 0; dn < 2; ++dn) for (uint64_t fz = 0; fz < 2; ++fz) {
     uint64_t control = (mode << 22) | (dn << 25) | (fz << 24);
@@ -111,54 +157,28 @@ void CompareIndependentMatrix(const char* filename) {
       for (const auto& vector : ArmFpsrVectors) for (uint64_t seed : {UINT64_C(0), UINT64_C(0x08000081)}) {
         uint64_t left = width == 32 ? vector.left32 : vector.left64;
         uint64_t right = width == 32 ? vector.right32 : vector.right64;
-        uint64_t fields[8];
-        for (uint64_t& field : fields) if (!(input >> std::hex >> field)) {
-          Check(false, "independent QEMU matrix is complete and every field is hexadecimal");
-          return;
-        }
-        if (fields[0] != operation || fields[1] != width || fields[2] != control ||
-            fields[3] != left || fields[4] != right || fields[5] != seed) {
-          Check(false, "every independent reference tuple matches the original source inputs");
-          return;
-        }
-        NativeState native = Native();
-        uint64_t selected = Call(1, control), initialized = Call(5, seed);
-        uint64_t actual = Call(width == 32 ? 9 + operation : operations64[operation], left, right);
-        uint64_t status = Call(4);
-        int queried = One("fetestexcept", -1);
-        uint64_t remaining_control = Call(0);
-        bool setup_matches = selected == control && initialized == seed && remaining_control == control;
-        bool query_matches = queried == static_cast<int>(status & 0x9f);
-        bool native_matches = Same(native);
-        numeric_mismatches += actual != fields[6];
-        setup_mismatches += !setup_matches;
-        query_mismatches += !query_matches;
-        native_mismatches += !native_matches;
-        if (status != fields[7]) {
-          ++status_mismatches;
-          if ((fields[7] ^ status) == 0x80 && !(status & 0x80)) ++missing_idc;
-          else if ((fields[7] ^ status) == 0x10 && (status & 0x10)) ++extra_inexact;
-          else ++other_status;
-        }
-        bool matches = setup_matches && actual == fields[6] && status == fields[7] && query_matches && native_matches;
-        ++rows;
-        if (!matches) {
-          if (mismatches < 24) std::printf(
-              "INFO arm64 FPSR matrix: row=%zu op=%llu width=%llu fpcr=%08llx left=%016llx right=%016llx seed=%08llx "
-              "expected_result=%016llx actual_result=%016llx expected_status=%08llx actual_status=%08llx query=%08x\n",
-              rows, static_cast<unsigned long long>(operation), static_cast<unsigned long long>(width),
-              static_cast<unsigned long long>(control), static_cast<unsigned long long>(left),
-              static_cast<unsigned long long>(right), static_cast<unsigned long long>(seed),
-              static_cast<unsigned long long>(fields[6]), static_cast<unsigned long long>(actual),
-              static_cast<unsigned long long>(fields[7]), static_cast<unsigned long long>(status), static_cast<unsigned>(queried));
-          ++mismatches;
+        if (!compare(operation, width, control, left, right, seed,
+                     width == 32 ? 9 + operation : operations64[operation])) return;
+      }
+    }
+  }
+  size_t baseline_mismatches = mismatches;
+  for (uint64_t mode = 0; mode < 4; ++mode) for (uint64_t dn = 0; dn < 2; ++dn) {
+    uint64_t control = (mode << 22) | (dn << 25) | (UINT64_C(1) << 24);
+    for (uint64_t width : {32, 64}) {
+      uint64_t minimum = width == 32 ? UINT64_C(0x00800000) : UINT64_C(0x0010000000000000);
+      for (uint64_t operation = ARM_FPSR_SEEDED_MUL; operation <= ARM_FPSR_MUL_THEN_ADD; ++operation) {
+        uint64_t selected = operation == ARM_FPSR_SEEDED_MUL ? (width == 32 ? 11 : 7) :
+                            (operation == ARM_FPSR_ADD_THEN_MUL ? 14 : 16) + (width == 32 ? 1 : 0);
+        for (uint64_t seed : {UINT64_C(0), UINT64_C(0x08000081), UINT64_C(0x08000091)}) {
+          if (!compare(operation, width, control, minimum, minimum, seed, selected)) return;
         }
       }
     }
   }
   std::string extra;
-  bool complete = rows == 8192 && !(input >> extra);
-  Check(complete, "all 8192 independent rows are consumed exactly once with no trailing data");
+  bool complete = rows == 8336 && !(input >> extra);
+  Check(complete, "all original 8192 and supplemental 144 independent rows are consumed once with no trailing data");
   std::printf("INFO arm64 FPSR matrix classification: numeric=%zu status=%zu setup=%zu query=%zu native=%zu "
               "missing_IDC=%zu extra_IXC=%zu other_status=%zu\n",
               numeric_mismatches, status_mismatches, setup_mismatches, query_mismatches,
@@ -166,8 +186,12 @@ void CompareIndependentMatrix(const char* filename) {
   if (mismatches != 0) {
     std::printf("INFO arm64 FPSR matrix: %zu mismatching numeric/status cases of %zu\n", mismatches, rows);
     Check(false, "actual scalar instruction bits and status match independent pinned QEMU");
-  } else if (complete) {
+  }
+  if (complete && baseline_mismatches == 0) {
     std::puts("PASS  arm64 FPSR: 8192 independent QEMU numeric/status cases, scalar32/64 add sub mul div, all modes DN/FZ and NaN/inf/subnormal rules");
+  }
+  if (complete && mismatches == baseline_mismatches) {
+    std::puts("PASS  arm64 FPSR: 144 independent QEMU cumulative cases preserve seeded and same-block IXC before and after FZ underflow");
   }
 }
 }  // namespace

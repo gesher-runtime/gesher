@@ -34,6 +34,12 @@ def inputs():
                 left, right = (left32, right32) if width == 32 else (left64, right64)
                 for seed in (0, 0x08000081):
                     yield operation, width, control, left, right, seed
+    for mode, dn in itertools.product(range(4), range(2)):
+        control = (mode << 22) | (dn << 25) | (1 << 24)
+        for width in (32, 64):
+            minimum = 0x00800000 if width == 32 else 0x0010000000000000
+            for operation, seed in itertools.product(range(4, 7), (0, 0x08000081, 0x08000091)):
+                yield operation, width, control, minimum, minimum, seed
 
 
 def digest(path):
@@ -66,11 +72,19 @@ def main():
     lines = Path(args.matrix).read_text().splitlines()
     assert lines[0] == "ARM64_FPSR_QEMU_V1"
     assert len(lines) == len(expected) + 1
+    baseline = "\n".join(lines[:lock["baseline_cases"] + 1]) + "\n"
+    assert hashlib.sha256(baseline.encode()).hexdigest() == lock["baseline_matrix_sha256"], "the original 8192 reference rows changed"
     for number, (line, source) in enumerate(zip(lines[1:], expected), 1):
         fields = tuple(int(item, 16) for item in line.split())
         assert len(fields) == 8 and fields[:6] == source, (number, "input/schema mismatch")
         operation, width, control, left, right, seed, result, status = fields
         assert 0 <= result < (1 << width) and status & ~0x0800009f == 0
+        if operation >= 4:
+            assert status == (seed | (0x8 if operation == 4 else 0x18)), (number, "cumulative UF/IX status sanity")
+            if operation in (4, 5):
+                assert result == 0, (number, "FZ cumulative result sanity")
+            if control == 0x01000000:
+                print(f"QEMU_CUMULATIVE op={operation} width={width} fpcr={control:08x} seed={seed:08x} result={result:016x} status={status:08x}")
         if ((control >> 22) & 3) == 0 and control & (1 << 24) and seed == 0 and nan_denormal_pair(width, left, right):
             print(f"QEMU_NAN_DENORMAL op={operation} width={width} fpcr={control:08x} left={left:016x} right={right:016x} result={result:016x} status={status:08x}")
         one = 0x3f800000 if width == 32 else 0x3ff0000000000000
@@ -98,6 +112,7 @@ def main():
         print("PINNED_AARCH64_REFERENCE", manifest["reference_source_sha256"], manifest["vectors_sha256"], manifest["elf_sha256"])
         print("ACTUAL_FPSR_MATRIX", manifest["matrix_sha256"])
     print("PASS independent QEMU AArch64 oracle:", len(expected), "numeric/status cases; all modes DN/FZ, both widths, NaN/inf/subnormal pairs")
+    print("PASS independent QEMU cumulative controls: original 8192 rows unchanged; 144 seeded and same-block UF/IX sequences")
 
 
 if __name__ == "__main__":
