@@ -54,6 +54,13 @@ This source predates the concurrent exec3 integration. Merging it with that
 newer code requires combined integration CI under rule g before another
 track merge. Only documentation may be added to this frozen source.
 
+That combination now passes full integration ci 40432541082 at 42cc1c0.
+Root read all 28 conclusions, every 18 aot3/11 exec3 scoped PASS line per
+runner, both zero-failure summaries, actual package and both required e2e
+logs (zero unexpected), without a retry. Original startup medians are
+interpreter 364/386 and JIT 301/326 ms on 2022; interpreter 610/634 and JIT
+447/476 ms on 2025. Original size/performance assertions remain unchanged.
+
 Shared-library loader contexts and secondary dex/profile/invalidation are
 still open on aot3/ADR0065. ARM width/CPU clocks, media, Windows input and
 the remaining tracks are independent contracts. No final main merge or
