@@ -48,7 +48,7 @@ jobs:
           $paths = git diff --name-only $env:SOURCE_SHA HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect runtime-source equality' }
           $harness = @('.github/workflows/aot3-shared-probes.yml','tests/windows/aot3-shared-probe.ps1','tests/windows/tracks/73-aot3-shared-libraries.ps1')
-          $allow = $harness + @('app/java/android/app/GesherAppDriver.java',
+          $allow = $harness + @('app/java/android/app/GesherAppDriver.java', '.github/workflows/framework.yml',
             'tests/apps/sharedlibraryapp/build.sh',
             'tests/apps/sharedlibraryapp/java/com/gesher/sharedapp/SharedActivity.java')
           foreach ($path in $paths) {
