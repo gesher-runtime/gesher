@@ -30,6 +30,11 @@ int main(int argc, char** argv) {
   auto run = reinterpret_cast<Run>(elf::Lookup(library, "Exec4Environment"));
   auto mutate = reinterpret_cast<Run>(elf::Lookup(library, "Exec4EnvironmentMutations"));
   if (run == nullptr || mutate == nullptr) return 1;
+  auto check_guest = [&](Run test, const char* expected, const char* stage) {
+    int result = test(argv[2], expected);
+    if (result != 0) std::fprintf(stderr, "exec4: FAIL %s guest result %d\n", stage, result);
+    return result == 0;
+  };
   bool relocated = false;
   for (int i = 0; i < 64; ++i) {
     const std::string name = "GESHER_EXEC4_GROW_" + std::to_string(i);
@@ -47,15 +52,18 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::puts("exec4: PASS stale CRT snapshot detected without dereferencing it");
-  if (_putenv_s("GESHER_EXEC4_ENV", "host-narrow") != 0 || run(argv[2], "host-narrow") != 0)
+  if (_putenv_s("GESHER_EXEC4_ENV", "host-narrow") != 0 ||
+      !check_guest(run, "host-narrow", "host-narrow"))
     return 1;
   if (_wputenv_s(L"GESHER_EXEC4_ENV", L"host-wide") != 0 ||
       _wputenv_s(L"GESHER_EXEC4_WIDE_ADDED", L"wide-added") != 0)
     return 1;
-  if (slot != &_environ || *slot != _environ || run(argv[2], "host-wide") != 0) return 1;
-  if (_wputenv_s(L"GESHER_EXEC4_ENV", L"") != 0 || *slot != _environ || run(argv[2], nullptr) != 0)
+  if (slot != &_environ || *slot != _environ || !check_guest(run, "host-wide", "host-wide"))
     return 1;
-  if (mutate(argv[2], nullptr) != 0) return 1;
+  if (_wputenv_s(L"GESHER_EXEC4_ENV", L"") != 0 || *slot != _environ ||
+      !check_guest(run, nullptr, "host-wide removal"))
+    return 1;
+  if (!check_guest(mutate, nullptr, "guest mutations")) return 1;
   std::puts(
       "exec4: PASS host narrow/wide changes reach relocated ELF imports "
       "and spawned children");

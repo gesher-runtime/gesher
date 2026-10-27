@@ -22,7 +22,8 @@ public final class ExecActivity extends Activity {
             System.loadLibrary("exec3jni");
             for (int i = 0; i < 16; i++) android.system.Os.setenv("GESHER_EXEC4_JAVA_GROW_" + i, "host", true);
             android.system.Os.setenv("GESHER_EXEC4_ENV", "java-host-setenv", true);
-            if (nativeEnvironment(child) != 0) throw new AssertionError("live native environment suite failed");
+            int environmentResult = nativeEnvironment(child);
+            if (environmentResult != 0) throw new AssertionError("live native environment suite failed: " + environmentResult);
             System.out.println("Exec4DeviceTest PASS host environment changes reach native environ and spawned children");
             if (nativeProcesses(child) != 0) throw new AssertionError("in-process native suite failed");
             System.out.println("Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app");

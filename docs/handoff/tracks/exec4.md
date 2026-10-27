@@ -72,8 +72,13 @@ add host Java Os.setenv mutations after native loading and require the same
 real child checks. Original exec2's nine assertions remain intact.
 
 Local checks: diff whitespace, workflow YAML parse and PowerShell parse only.
-The candidate is not yet built or runtime-verified. Diagnostic CI40428277638
-is retained; do not launch a new full run while its reusable posix workflow
-is still active, because that workflow's same-ref concurrency would cancel it.
-An independent exec.yml dispatch can build the NDK/Java artifacts meanwhile.
-No precise crash cause is claimed from the source defect alone.
+The candidate is not yet built or runtime-verified. Direct exec.yml dispatch
+returned HTTP404 (workflow absent on the default branch); no run was created.
+Diagnostic CI40428277638 is retained; the corrected full run will use an
+immutable `wip/exec4-live-environ` candidate ref, as authorized by root, to
+avoid same-ref cancellation of its still-active reusable posix workflow.
+The actual checkout remains on wip/exec4. The takeover diagnostic watch uses
+C:\work\gesher-ci-review\exec4-takeover-watch-40428277638.log, session49047,
+at interval120. Test67 bounds the entire process tree and pipe completion;
+failure codes are retained in Java/native output. No precise crash cause is
+claimed from the source defect alone.

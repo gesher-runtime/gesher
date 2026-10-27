@@ -54,7 +54,11 @@ int Exec4Environment(const char* child, const char* expected) {
   if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 6;
   if (count == 0 || output[count - 1] != '\n') return 7;
   output[--count] = 0;
-  if (strcmp(output, expected ? expected : "(null)") != 0) return 8;
+  if (strcmp(output, expected ? expected : "(null)") != 0) {
+    fprintf(stderr, "exec4: FAIL spawned environment <%s>, expected <%s>\n", output,
+            expected ? expected : "(null)");
+    return 8;
+  }
   return 0;
 }
 
