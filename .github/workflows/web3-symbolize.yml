@@ -1,0 +1,47 @@
+name: web3-symbolize
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/web3']
+    paths:
+      - '.github/workflows/web3-symbolize.yml'
+      - 'tools/web3/symbolize-observer.py'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: web3-symbolize-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  symbols:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read exact completed producers and original failed observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/gesher-runtime/gesher/actions/runs/40512344714 > producer.json
+          gh api 'repos/gesher-runtime/gesher/actions/runs/40512344714/attempts/1/jobs?per_page=100' > producer-jobs.json
+          gh api 'repos/gesher-runtime/gesher/actions/runs/40512344714/artifacts?per_page=100' > producer-artifacts.json
+          gh api repos/gesher-runtime/gesher/actions/runs/40550620230 > observation.json
+          gh api repos/gesher-runtime/gesher/actions/jobs/122353154161 > observation-job.json
+          gh api repos/gesher-runtime/gesher/actions/jobs/122353154161/logs > observation.log
+          git diff --exit-code 96b12ab6f9b5146870c7a373e337f762010eb6f1 HEAD -- tools/symbolize.py
+      - name: Pin original binary/map artifact and failed job identity
+        id: source
+        run: python3 tools/web3/symbolize-observer.py --pin
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.runtime }}
+          run-id: 40512344714
+          github-token: ${{ github.token }}
+          path: original-runtime
+          merge-multiple: true
+      - name: Symbolize original PCs using only their original binary and linker map
+        run: python3 tools/web3/symbolize-observer.py --analyze

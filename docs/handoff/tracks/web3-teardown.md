@@ -1,5 +1,30 @@
 # Web3 native-window teardown diagnostic
 
+## Original full-order failure captured
+
+Run40550620230/sourcef4b5bdf54a655c0bc6675d6916e64f2b54115ff2 is complete
+RED. Windows2022/job122353154179 has14 Web3 PASS and no teardown recurrence;
+its sole whole failure is original test73 log sharing. Windows2025/job
+122353154161 finishes50m15 with the genuine three Web3 failures plus that
+original test73 failure. Actual plain logs are saved under
+C:/work/gesher-ci-review/web3-full-order-40550620230-test2022.log and test2025.log.
+
+At17:48:48UTC the original A11y60+60s teardown deadline is recorded FAILED.
+Only afterward, bounded observers exit0 for launcher4000/server2960/app7400.
+App7400 WCT shows thread2304 waiting for6092, then SendMessage to8796.
+The main native stack has WaitForSingleObjectEx and dalvikvm offsets
+acd9bb/ac f398/ac f47d (without spaces in the raw log). Thread6092 has
+WaitOnAddress then18ba8c/198612/206c72/2048e6/ec544f/9c3f98;8796 has
+GetMessageW then4598. Roles/functions require exact original-map symbolization;
+the WCT edge alone does not prove a particular ownership correction.
+nativeWindow.close enter remains unmatched and actual fresh app0 is absent.
+Both subsequent NetActivity cases retain original400s+60+60 failures.
+
+The new analysis-only web3-symbolize workflow pins original96b binary/map
+artifact identity and this exact f4b failed job, prints member SHA256 and
+maps only original module-relative PCs. It never rebuilds or reruns the app.
+No production correction or full acceptance is claimed from observation.
+
 ## Resumed full-order diagnostic
 
 The resumed harness merges exact original failing source96b12ab6 and pins
