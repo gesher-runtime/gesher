@@ -475,3 +475,35 @@ accepted944a0eef; candidatecd82c49a was clean with entire non-doc tree
 identical to failed full4a47. No code/main/PR/tag/release operation occurred.
 SG, after-resource, Native87 and Surface remain excluded; every hardware
 and all-gap completion gate remains open as previously recorded.
+
+## Corrected compiler provenance and fresh canonical full (2026-10-28)
+
+Windows frozen primary34ba544b1ef55c36522d0df01a552af38b595fb3 changes docs
+only above12db63e5304ac3ede0538a3e882196550f9fb5b0; the only non-doc change
+from original58a wiring is tools/web3/host_roles.py. Source peer/AST comparison
+preserve every existing role/source/flag/exe/map/installer guard outside the
+compiler extraction and added preflight entry. It uses unique absolute
+generated CMake compiler metadata, corroborates optional cache and four actual
+commands, hashes configured driver/launcher/metadata and rejects ambiguity.
+Actual CMake may export compiler-first even with configured ccache; both exact
+allowed forms are checked consistently without guessing a compiler from argv.
+
+Independent actual configuration-only preflight40595401850 at
+9bda3f924a717f8cc03f746d68d0c8b9a28ae697/job122509916936 is green. Actual
+OFF/ON dictionaries are identical, compiler-first/configuredccache is observed,
+exactly four query CXX objects differ by the single private flag, and missing/
+ambiguous generated record, contradictory cache and wrong driver negatives
+all reject. Its helper blob7889dd3e07abec6d057190858acc36ca59fb1bc4 equals
+primary12db/frozen34ba. The separate helper workflow is excluded from the
+union. This preflight proves configuration/identity parsing only, not runtime.
+
+Candidate --no-ff merge30db7709838839d28be68d8b467a57b26a3ac667 imports that
+reviewed correction. Entire other non-doc tree exactly equals failed4a47,
+and all1157 inventory rows/fields/history remain exact55e03c68. No live
+same-ref full existed before push/dispatch. Canonical ci.yml was dispatched
+once: new full40596167427 on exact30db, ACTIVE with required watch97520 at
+120s. New dispatch metadata/watch log use coherent-web3-union-full-40596167427
+under C:/work/gesher-ci-review. Every old/new current-source actual gate is
+still required; old full40588525037 remains failed and unaccepted. No phase4
+code merge/main/PR/tag/release occurred. Integration remains code-identical
+to accepted944. Hardware/all-gap gates and separate excluded tracks remain.

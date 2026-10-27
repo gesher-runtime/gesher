@@ -109,6 +109,7 @@ rescanning/counting it:
 
 - C:/work/gesher-ci-review/semantic-gap-checkpoint-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-exec-continuation-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-services-frontier-2026-10-28.json
 
 These cover selected AOT3 and Exec4 contracts only, with stable semantic IDs,
 source/section/audit-row references, owner, state, dependency, exact scoped
