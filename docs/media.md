@@ -255,14 +255,15 @@ the microphone (looped, from its start each time recording starts);
   **121914371093** (2022) / **121914371153** (2025) each pass four transport
   fixtures, all ten apps including Just Player/TIC-80/Puzzles,
   association/shortcut launch and `0 unexpected failures`.
-- Prepared next: use ART's existing `-verbose:heap` only in record VMs and
+- Diagnostic full CI **40425000165** is running at **487c5e5**, using ART's
+  existing `-verbose:heap` only in record VMs; it will
   retain complete exclusive/total collection timing groups (at most 64
   groups / 4,096 rows per mode). The standalone race fixture keeps its
   original VM options. This observes all phases without presuming the
   expensive one, adds no ART patch and changes no GC/scheduler behavior or
   acceptance criterion. Integration a06d930 (coordination docs only above
-  94ccde1) is merged. Source/PowerShell checks precede a new full CI; no
-  local compilation or fixture execution is allowed.
+  94ccde1) is merged. Source/PowerShell checks pass; new runtime phase
+  evidence is pending. No local compilation or fixture execution is allowed.
 - Latest full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
