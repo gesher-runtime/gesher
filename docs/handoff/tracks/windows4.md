@@ -51,8 +51,8 @@ exec4 peer own its investigation. Device exec3 and all 2022 exec3 checks pass.
 Actual new Java evidence: CursorAnchorGeometry passes under ART on both;
 later TSF reconversion and actual partial composition/caret2/live spans pass;
 device target28 content correctly shrinks/restores 500/800 with IME insets300.
-Single-process legacy trace instead has fitTypes/fitSides zero, unlike normal
-app binding. The scaled single driver lacks AppCompatCallbacks' disabled-change
+Single-process legacy trace instead has fitTypes/fitSides zero and full frames.
+The scaled single driver lacks AppCompatCallbacks' disabled-change
 setup; the next source installs the same target-SDK table used in normal bind.
 WindowSession's natural-rotation/empty-bounds path also omitted full appBounds
 override, leaking the shared landscape size into the unfocused portrait task;
@@ -98,6 +98,23 @@ unresponsive broker through the existing cleanup. A new assertion requires
 actual US layout and a responsive window before the unchanged password-input
 check. This recovery behavior remains unverified until full CI. Standalone CI
 also compiles the updated C# helper, without claiming that as recovery proof.
+
+Fast 40430647514 at exact 2c6b668 is complete green and both Windows logs were
+read: the new C# helper compiles, four canonical native aggregates/raw FAIL
+remain zero, and the six negative copies fail exactly 1/1/4/4/1/1 checks.
+Corrected framework 40429365809 at 5110c9b has also been read: javac zero errors,
+gesher-app/graphics dex/winapp/winlegacy builds succeed. This still leaves the
+new Android binding/legacy/foreground and broker-recovery behavior unverified.
+
+The exec4 owner supplied a source-only live-environ patch from 9f25080, SHA-256
+7f20069c6d8c120bb27a948c4a82990c90436eeefeb5160ce598bfddd368ebe8. Its hash and
+git apply check match; it is imported into this diagnostic branch only, in
+posix_bionic.cc and gesher_exec.cc. The APK export uses the live CRT environment
+slot and both modes expose __environ; the executable's UTF-8 snapshot remains
+unchanged. Exec4 full 40430496516 is still pending, and its additional tests
+are not imported. This is coordinated source preparation for the known
+2025 crash, not an Exec4 acceptance claim or an integration/main merge.
+All C/C++/Java compilation and native/JVM fixture execution remain CI-only.
 
 Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
 and exec3), merged at 9d1445c. The media conflict preserves the integration's
