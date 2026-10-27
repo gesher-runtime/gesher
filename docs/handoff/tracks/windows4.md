@@ -34,14 +34,16 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
-Current active full diagnostic **40433828877** uses exact source
+Completed full diagnostic **40433828877** uses exact source
 `0344cee6c70ecb8603bd7f19bdfd35a3b79fe20b`. It includes the focused Java,
 activation and fixture corrections below, coordinator profile integration
 9dd57f5 (verified startup merge2ba9a11) and the source-only Exec4 environment
 patch. Watch: C:/work/gesher-ci-review/windows4-40433828877-watch.log,
-interval120. No actual runtime result exists yet for these corrections, and
-the independent Exec4 stage remains unverified until its owner reads its CI.
-The earlier full red run below remains diagnostic evidence, not acceptance.
+interval120. It is COMPLETE RED: 28 jobs, 20 success, six skipped, both
+Windows jobs failed. The independent Exec4 stage remains unverified until
+its owner reads its CI; this combined source has all 11 exec3 PASS lines per
+runner, including the formerly crashing single-process APK. No full-stage
+acceptance follows from these scoped successes.
 All C/C++/Java compilation and native/JVM fixtures run only in CI.
 
 Current main build 121957654239 succeeds in 28m41, boot-image compile in
@@ -53,8 +55,30 @@ boot/runtime, HWND/input/resize and uninstall cleanup PASS lines were read.
 Both actual e2e logs are now read: 121967761169 (2022) and 121967761098
 (2025) pass all nine apps including Puzzles/TIC-80, four pinned-byte transport
 fixtures, APK association and Start menu shortcut, with zero unexpected
-failures each. Windows jobs 121966922116/121966922207 are still running;
-their final actual results are required before any source acceptance.
+failures each. Both actual Windows logs are now read: 121966922116 (2022)
+has four failed tests and 121966922207 (2025) has six. Both initially fail TSF
+reconversion; later reconnection/reconversion and partial composition with
+caret2 pass. 2022 additionally has an expired.badssl TCP timeout plus its net
+aggregate; 2025 additionally has four foreground/shared-Display snapshots.
+All IME35 exact Windows-result/no-composing, real floating candidates,
+responsive US layout and password checks pass in both process modes on both
+runners. Target28 legacy 500/800 resize/restoration and actual Configuration/
+CursorAnchorInfo/native COM/TSF probes pass on both. All Display snapshots
+pass on 2022; 2025's four failures remain real failures.
+
+Next source adds metadata-only request/reply/native-unavailable diagnostics
+under the existing explicit TSF fixture environment. It does not assume the
+remaining first-editor failure is binding order. Pinned AOSP16's remote
+getExtractedText checks session/connection, not the client's binding-active
+state; no session-mismatch/inactive warning appears in the captured logs.
+The fixture also requires actual native foreground before each scenario,
+explicitly establishes the new landscape HWND as foreground, and checks both
+real landscape->portrait->landscape transitions. ShowWindowAsync alone does
+not establish that initial host precondition. Existing text/span/geometry
+snapshots, deadlines and failure oracles remain unchanged. This source still
+requires CI; it does not claim the TSF or 2025 foreground defects are fixed.
+
+## Earlier diagnostics and source corrections
 
 Full diagnostic **40417632512** at exact cde1c79 is COMPLETE RED: 28 jobs,
 20 success, six skipped, both Windows jobs failed. Both actual Windows logs

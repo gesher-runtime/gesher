@@ -275,6 +275,11 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         System.out.flush();
     }
 
+    /** Metadata only, enabled by the existing explicit TSF fixture environment. */
+    private static void traceDocument(String message) {
+        if (System.getenv("GESHER_TSF_TEST_SERVICE") != null) log("TSF document " + message);
+    }
+
     /** {@code s} in ASCII, other characters as backslash-u escapes. */
     static String escape(CharSequence s) {
         if (s == null) return "null";
@@ -395,6 +400,10 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         Window w = window(windowToken, false);
         if (w == null) return;
         Handler h = w.handler != null ? w.handler : new Handler(Looper.getMainLooper());
+        synchronized (w) {
+            traceDocument("bound epoch " + w.documentEpoch + " input " + (w.input != null)
+                    + " connection " + (w.connection != null));
+        }
         // startInput's earlier query may precede InputMethodManager accepting its
         // result and return unavailable. Requery after that result is queued,
         // including an unchanged initial selection that emits no updateSelection.
@@ -479,13 +488,18 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         final int epoch, revision, serial;
         synchronized (w) {
             input = w.input;
-            if (input == null) return;
+            if (input == null) {
+                traceDocument("request skipped before native input attachment, epoch " + w.documentEpoch);
+                return;
+            }
             epoch = w.documentEpoch;
             revision = w.appliedRevision;
             serial = ++w.documentRequest;
             ic = w.active && allowsCompositions(w.editor) ? w.connection : null;
             command = header(w);
         }
+        traceDocument("request epoch " + epoch + " revision " + revision + " serial " + serial
+                + " session " + command.mSessionId + " connection " + (ic != null));
         if (ic == null) {
             input.setDocument("", 0, 0, 0, epoch, revision, false);
             return;
@@ -496,13 +510,23 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         reply.whenComplete((value, failure) -> {
             synchronized (w) {
                 if (w.input != input || w.connection != ic || w.documentEpoch != epoch
-                        || w.documentRequest != serial) return;
+                        || w.documentRequest != serial) {
+                    traceDocument("stale reply epoch " + epoch + " serial " + serial
+                            + " current epoch " + w.documentEpoch + " serial " + w.documentRequest);
+                    return;
+                }
                 // selectionStart/End are relative to startOffset, per ExtractedText.
                 boolean valid = failure == null && value != null && value.text != null
                         && value.partialStartOffset == -1 && value.startOffset >= 0
                         && value.selectionStart >= 0 && value.selectionEnd >= 0
                         && value.selectionStart <= value.text.length()
                         && value.selectionEnd <= value.text.length();
+                traceDocument("reply epoch " + epoch + " revision " + revision + " serial " + serial
+                        + " valid " + valid + " failure " + (failure != null ? failure.getClass().getName() : "none")
+                        + " length " + (value != null && value.text != null ? value.text.length() : -1)
+                        + " partial " + (value != null ? value.partialStartOffset : -2)
+                        + " offset " + (value != null ? value.startOffset : -1)
+                        + " selection " + (value != null ? value.selectionStart + "-" + value.selectionEnd : "none"));
                 input.setDocument(valid ? value.text.toString() : "",
                         valid ? value.selectionStart : 0, valid ? value.selectionEnd : 0,
                         valid ? value.startOffset : 0, epoch, revision, valid);

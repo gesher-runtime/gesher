@@ -583,8 +583,14 @@ struct ImeWindow::Impl {
           if (wparam == kOpTestService) {
             auto service = tsf;
             const TextInputState current = State();
-            if (!service || !current.active || !current.ime || tsf_epoch != current.editor_epoch)
+            if (!service || !current.active || !current.ime || tsf_epoch != current.editor_epoch) {
+              std::lock_guard<std::mutex> lock(mutex);
+              fprintf(stderr, "gesher-ime: TSF test unavailable: service %d active %d ime %d state epoch %d service epoch %d document epoch %d available %d length %zu%s",
+                  service != nullptr, current.active, current.ime, current.editor_epoch,
+                  tsf_epoch, document.epoch, document.available, document.text.size(), kNewline);
+              fflush(stderr);
               return static_cast<LRESULT>(E_UNEXPECTED);
+            }
             wchar_t path[32768];
             const DWORD length = GetEnvironmentVariableW(L"GESHER_TSF_TEST_SERVICE", path, 32768);
             if (length == 0 || length >= 32768) return static_cast<LRESULT>(E_INVALIDARG);
