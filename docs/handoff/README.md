@@ -1,5 +1,16 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Libcore bounded acceptance,2026-10-27:** full40550474909, source
+`944a0eeffe5157d662f0278e992c421eebc86255`, is independently accepted:
+28jobs22success/6skip, both actual15 child copy/native groups plus final
+verdict and whole0, package23 real installed UI/input/uninstall and both
+ten-app/4transport/association/shortcut e2e0. Frozen
+`ba967deac84ec79da6d4156e10f32a8ee4b3ac12` adds three docs only. The
+integration merge's entire non-doc tree equals944; no extra rule-g full is
+needed. [Exact report](tracks/libcore-io-final.md) retains uninduced IO and
+other native gaps. This supersedes the resumed log-visibility pending state
+below; no main/tag/release completion is claimed.
+
 **Resumed integration acceptance,2026-10-27:** Net4 legacy resolver frozen
 `50017009bc4d94b5dc0c57103686fd0761de7bf8` is accepted from full40519019567,
 exact source `f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a`. The integration
