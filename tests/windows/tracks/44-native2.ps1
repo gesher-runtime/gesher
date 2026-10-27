@@ -14,6 +14,8 @@ if (-not (Test-Path "$n2/native2-test.dex")) {
 $n2 = (Resolve-Path $n2).Path
 $n2Dir = (Resolve-Path $Dir).Path
 $arm64FpcrEvidence = [Collections.Generic.List[object]]::new()
+# test66 reuses these actual process logs for its six ABI/mode assertions.
+$n2WideEvidence = [Collections.Generic.List[object]]::new()
 
 # Runs a program with a time limit (a translated or broken run must never
 # hang the job), in $WorkDir (by default the current directory: $bcp's paths
@@ -65,6 +67,7 @@ foreach ($a in $abis) {
     (NoDrive "$n2/$($a.Abi)/libnative2.so"), (NoDrive $work), (NoDrive "$n2/symbols-$($a.Abi).txt")) | Out-String
   $code = $LASTEXITCODE
   $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
+  $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
   $lines = $out -split "`r?`n"
   foreach ($part in 'extras', 'unicode', 'dlopen', 'files') {
     $line = $lines | Where-Object { $_ -like "native2 $part*" } | Select-Object -First 1
@@ -194,6 +197,7 @@ foreach ($a in $apks) {
   Check "native2 ($($a.Tag)): gesher-app runs $($a.Apk) (single process): System.loadLibrary from the APK, the library's checks pass" {
     $fpcrOut = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Main', (NoDrive "$n2/$($a.Apk)"))) (Get-Location).Path @{} 900 | Out-String
     $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'single'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+    $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'single'; Exit = $LASTEXITCODE; Report = $fpcrOut })
     $fpcrOut
   } $n2Lines
 }
@@ -210,6 +214,7 @@ try {
       $fpcrOut = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'launch', (NoDrive "$n2/$($a.Apk)"), '--headless')) `
         (Get-Location).Path @{} 900 | Out-String
       $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'device'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+      $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'device'; Exit = $LASTEXITCODE; Report = $fpcrOut })
       $fpcrOut
     } ($n2Lines + @('gesher-app: app process for com.gesher.native2'))
   }

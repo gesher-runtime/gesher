@@ -72,8 +72,159 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
-Reserved, not started. Root has separately verified Unicode width in full
-ci 40404678100 at 581e88f; that source is not yet integrated with the new
-cloud/exec baseline. This subtrack starts from integration 94ccde1 and must
-not reimplement the already verified width/classification work. The global
-CPU-clock follow-up is owned by root and still needs combined CI.
+Root acceptance checkpoint while the scoped agent is interrupted: full ci
+40425393716 at 57782e5, attempt 2, is fully green. Root read all 28
+conclusions (22 success/six skipped), both zero-failure summaries, all six
+test66 ABI/mode PASS lines per runner, actual package window/input/uninstall
+and both required nine-app e2e/transport/association/shortcut logs (zero
+unexpected). Attempt 1 failed only the known external badssl connection
+timeout on both runners; the permitted failed-jobs retry passed unchanged.
+Root also read the independent 248-case reference and both production/NDK
+compilation logs in scoped ci 40425021540 at eb9f964.
+
+See native3-wide-verified.md for exact jobs. The implementation is frozen
+at eb9f964; verified full source 57782e5 and later heads add docs only.
+The duplicate ADR0073 filename is consolidated into the reserved
+0073-native3-wide-character-abi.md, retaining the detailed implementation
+and original scope/limits. This is documentation only.
+
+Final combination is still required: merge the current integration after
+root's pending rule-g gate, preserving both localeconv and corrected width
+guest overrides. Integration has advanced to 29b7b18; corrected width/CPU
+is separately verified in 40430425743/b3ecc85 and monotonic clocks are
+pending in native3-time. Coordinate with root before the final combined run.
+
+Scoped reference, compilation and production runtime are verified.
+The effective multibyte registrations now
+consolidate in locale_bionic.cc; the unused extra_bionic conversions are
+removed. State uses the actual four sequence bytes and preserves LP64's
+four reserved bytes. C11 conversions preserve the pinned encoder/decoder
+asymmetry and C16/NUL quirks, rather than imposing extra Unicode restrictions.
+Integer parsing removes the 255-character limit and handles LP64 bounds,
+binary prefixes and end pointers directly. Added locale aliases, bounded
+C collation/transform and UTF-32 wcsftime over the existing narrow formatter.
+No narrow time or tm-layout implementation was changed.
+
+Independent CI reference sources are saved verbatim, with licenses and
+SHA-256 manifest, under probes/native3/wide/upstream. Include-only adapters
+compile the pinned conversion/legacy/integer bodies on Linux and run shared
+contract assertions. native3-wide.yml also compiles the production locale
+object with pinned llvm-mingw/-Werror and both NDK library ABIs. Compilation
+and fixture execution are CI-only. test66 asserts each actual ABI/mode log;
+production runtime and full CI remain pending.
+
+Scoped run 40419128672 at 9bff75d failed before runtime: the production
+object needed the C++ cstdlib header for std::malloc/free, and GCC rejects
+bionic's Clang-oriented always_inline declaration under -Werror. Both are
+corrected (the reference uses Clang, as bionic does). The NDK compile job
+succeeded; no runtime or full-green verification is claimed.
+
+Scoped 40419236055 at f280450 compiled production and both NDK ABIs, but
+the reference compilation found Clang's suspicious-literal-concatenation
+warning in a malformed-input fixture. The byte string is now explicit;
+no assertion or production behavior was relaxed. test66 now checks the
+actual test44 process logs for all six ABI/mode cases, avoiding duplicate
+Activity runs. No runtime proof is claimed until the next scoped/full run.
+
+Scoped 40419402781 at 908125d is green; all three actual job logs were read.
+The pinned reference prints "PASS pinned wide: 186 conversion/state/boundary/
+LP64 assertions, 0 failures". Production locale compiles with pinned
+llvm-mingw/-Werror, and both NDK library ABIs compile. This is independent
+expected-behavior/compile evidence, not production runtime proof. The next
+scoped run adds the actual pinned wcstod/parsefloat grammar reference with
+an explicitly limited host rounding/finite-stream adapter and locale-alias
+calls. ADR 0073 records the registration audit, quirks and open boundaries.
+
+Expanded scoped ci 40420020504 at 9ea7ef5 is green; all three job logs read.
+The reference now prints "PASS pinned wide: 202 conversion/state/boundary/
+LP64 assertions, 0 failures", including the original wide floating grammar.
+Production locale and both NDK ABI builds also pass. Current integration
+a06d930 is merged as 6bec63d before the first full runtime CI dispatch.
+No production runtime, package or e2e claim is made yet.
+
+First full ci 40420123819 at 6e91b8d is pending. A final float audit adds
+a decimal just above a binary32 halfway boundary (detects double rounding)
+and explicitly selects the CRT's C numeric locale for wcstod/wcstof, matching
+both supported bionic locales independently of host language changes. This
+follow-up needs scoped compilation/reference and a subsequent full run;
+the first full run remains useful production diagnostics for the prior SHA.
+
+Scoped ci 40421142590 at a898a11 is green, all three job logs read:
+"PASS pinned wide: 203 conversion/state/boundary/LP64 assertions, 0 failures".
+Both NDK ABIs and the production locale object compile with the new parser
+calls. Superseded full 40420123819 was cancelled during compilation, before
+Windows runtime results; no failure or runtime proof is inferred from it.
+origin/phase4/integration remains a06d930 and is included. The next full run
+uses this verified follow-up and is the required production acceptance run.
+
+Full ci 40421328934 at 27f9391 is pending. A separate source audit is
+checking the NDK's char signedness because pinned localeconv stores
+CHAR_MAX sentinel bytes; the shared Windows layout currently uses 127.
+The scoped workflow now prints both target macro sets before its ordinary
+fixture builds. Root was notified before any architecture-specific edit.
+
+Scoped ci 40421702672 at 611f520 confirms the ABI difference: arm64 defines
+__CHAR_UNSIGNED__/__WCHAR_UNSIGNED__, while x86-64 does not; long is 64 bits
+for both. Prepared a localeconv-only guest_libc override (the sole cross-domain
+production edit) returning 255 sentinel bytes while sharing all real pointer
+fields. NDK tests now check all fourteen fields, exact lconv layout and
+import/dlsym identity in both ABIs. Scoped compilation now includes this
+guest object with -Werror; it and the subsequent full runtime run are pending.
+
+Scoped 40421984640 at e0077b3 passed the locale and guest objects with
+-Werror, both NDK fixtures and the 203-case reference; actual logs read.
+Root accepted the localeconv-only cross-domain override. A further signedness
+audit found that pinned LLVM-libc comparisons return raw 32-bit subtraction;
+the common wcscmp/wcsncmp/wmemcmp and collation now preserve that magnitude
+and high-bit result. Exact signed/unsigned LLVM comparison bodies and the
+unsigned bionic numeric-template instantiation extend the independent CI
+reference. Production numeric tests cover high-bit source/end behavior.
+No width/property/case code or fixture was edited; root owns its unsigned
+width-reference correction. This follow-up still needs scoped/full CI.
+
+Reference provenance checking now compares every saved source with the
+actual pinned upstream bytes in CI, in addition to the checked-in digest.
+This also prevents a failed source fetch from leaving a misleading file:
+an erroneous LLVM LICENSE.TXT path (upstream uses LICENSE) was removed;
+its copied content was never compiled. The genuine LLVM LICENSE is retained.
+
+Scoped ci 40423004909 at 569b497 is green; all three actual job logs read.
+Every saved source/license matches its pinned upstream bytes. The reference
+prints "PASS pinned wide: 237 conversion/state/boundary/LP64 assertions,
+0 failures", including signed/unsigned LLVM comparisons, high-bit numeric
+input, hard float rounding and the earlier state/bounds contracts. Production
+locale and the localeconv guest adapter pass -Werror; both NDK ABIs compile.
+Superseded full 40421328934 (pre-lconv/comparison source) was cancelled in
+compilation; it supplies no runtime acceptance claim. Current integration
+remains a06d930 and is included before the next complete acceptance run.
+Root's unsigned width follow-up is separate and has not been modified here.
+
+Full ci 40423326965 at 76cf72e is pending. A final source comparison found
+one wrapper error-order mismatch: invalid wcsftime format must report EILSEQ
+before a SIZE_MAX destination reports EINVAL. The wrapper now follows the
+pinned allocation/conversion order. Shared tests and the original FreeBSD
+wrapper reference cover invalid/empty formats, zero/overflow bounds, Unicode
+zone output and malformed zone bytes. The reference uses a host narrow C
+formatter only; narrow strftime/tm code remains unchanged. This correction
+needs scoped CI and the subsequent complete runtime acceptance run.
+
+Scoped 40424755605 at ff72ac0 stopped before reference execution because
+C permits an uninitialized static const aggregate declaration that C++
+requires to be const-default-constructible. The reference mbstate adapter
+now has an explicit zero constructor, preserving C's initialization while
+leaving the original time body unchanged. No assertion was relaxed; the
+new time/error-order source is not yet runtime verified.
+
+Scoped ci 40425021540 at eb9f964 is green; all three actual logs read.
+The reference prints "PASS pinned wide: 248 conversion/state/boundary/LP64
+assertions, 0 failures", including the original wide-time wrapper's own
+buffer/error logic and UTF-8 zone conversion. Provenance verification,
+production locale/guest -Werror and both NDK compilations pass. No further
+implementation work remains from the source audit; production acceptance
+still requires the next full run. Superseded 40423326965 was cancelled while
+the main runtime was compiling and supplies no Windows runtime result.
+Current integration a06d930 was fetched/rechecked and is already included.
+
+Root separately verified Unicode width in ci 40404678100 at 581e88f; this
+track does not modify its classification/case/width implementations or
+ART patch 0572. Final verification must first include current integration.

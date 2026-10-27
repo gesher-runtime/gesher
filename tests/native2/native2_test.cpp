@@ -69,6 +69,7 @@
 #include <vector>
 
 #include "../native/arm64_fpcr_contracts.h"
+#include "native3_wide_contracts.h"
 
 namespace {
 
@@ -690,6 +691,7 @@ std::vector<std::string> Symbols(const std::string& path) {
 }
 
 #include "native3_unicode.inc"
+#include "native3_wide.inc"
 
 #if defined(__aarch64__)
 Part ArmFpcr() {
@@ -701,7 +703,7 @@ Part ArmFpcr() {
 #endif
 
 std::string Run(const std::string& dir, const std::string& symbols) {
-  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir)};
+  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir)};
 #if defined(__aarch64__)
   parts.push_back(ArmFpcr());
 #endif
