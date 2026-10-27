@@ -1,5 +1,8 @@
 name: web3-query-component
 on:
+  push:
+    branches: ['wip/web3-query-bound']
+    paths: ['.github/workflows/web3-query-component.yml']
   workflow_dispatch:
 
 concurrency:
