@@ -38,7 +38,11 @@ First bounded slice started on 2026-10-27 in `C:\work\gesher-locale2`,
 `wip/locale2`, from accepted integration `7b49a718`. ADR0066 and test81 cover
 persisted override/replacement/clear, selected-locale reconciliation and ordinary
 caller/package/user boundaries. Source and actual APK fixtures are prepared;
-compilation/runtime/full acceptance are pending. See
+compilation/runtime/full acceptance are pending. Initial source `713b3ba6`
+has framework-only compile run `40507901609` active; the following source
+refinement uses one committed override file per package to avoid cached global
+map replacement between independent single-process apps. No old compile result
+will be reused as proof for changed source. See
 [ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
 [pinned-source audit](locale2-source-audit.json).
 

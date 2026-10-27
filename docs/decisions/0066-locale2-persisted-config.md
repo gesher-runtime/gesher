@@ -33,16 +33,22 @@ The companion source hashes are recorded in the
 ## Implementation boundary
 
 The locale service keeps existing selected-locale Properties in
-`system/app_locales` and adds supported overrides in
-`system/app_locale_configs`. Absence of a package key means no override;
-an empty value means a successful, empty override. Format choice is internal.
+`system/app_locales` and adds one supported-override Properties file per
+package in `system/locale_configs/`. Reads consult the committed file, so
+independent single-process apps do not overwrite other packages through a
+cached global map. Package names are URI-encoded before forming file names.
+Absence of a `locales` key means no override; an empty value means a successful,
+empty override. A clear commits a file without that key. Format choice is internal.
 Writes use a locale-owned `.new` file, sync/close and existing `Os.rename`
 replacement; a failure never deletes the last committed target. Memory is
-updated only after successful replacement. This does not modify the broader
+updated only after successful replacement; overrides are read from disk. This does not modify the broader
 `Device.write` helper, whose delete-on-failed-rename fallback remains outside
 this slice. Override and selected-locale files are separate commits, as the
 pinned service commits supported configuration before updating selected
 locales; no multi-file transaction or power-loss durability is claimed.
+The existing selected-locale global Properties store is retained. Concurrent
+independent single-process writers to that legacy store are not tested or
+claimed as solved by per-package override persistence.
 
 The original resource configuration is read through real framework
 `AssetManager`, `Resources` and `LocaleConfig(ApplicationInfo, Resources)`.

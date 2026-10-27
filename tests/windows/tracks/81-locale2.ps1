@@ -106,7 +106,7 @@ try {
       }
       Locale2Group 'real staging failure preserves old override bytes, in-memory state and selected locales after restart' {
         $null = Locale2State '.MainActivity$FailureSeed' '[he-IL,fr-FR]' 'he-IL' 'Shalom'
-        $target = Join-Path $locale2Data 'system/app_locale_configs'
+        $target = Join-Path $locale2Data "system/locale_configs/$locale2Pkg.properties"
         $old = [IO.File]::ReadAllBytes($target)
         $pending = "$target.new"
         New-Item -ItemType Directory -Path $pending | Out-Null
@@ -121,7 +121,7 @@ try {
         $null = Locale2State '.MainActivity' '[he-IL,fr-FR]' 'he-IL' 'Shalom'
       }
       Locale2Group 'real locked-source rename failure preserves old override bytes and skips selected-locale reconciliation' {
-        $target = Join-Path $locale2Data 'system/app_locale_configs'
+        $target = Join-Path $locale2Data "system/locale_configs/$locale2Pkg.properties"
         $old = [IO.File]::ReadAllBytes($target)
         $pending = "$target.new"
         $held = [IO.FileStream]::new($pending, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite,
