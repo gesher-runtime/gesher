@@ -36,6 +36,8 @@ jobs:
           import json
           from pathlib import Path
           import shlex
+          import sys
+          sys.path.insert(0, str(Path.cwd()))
           from tools.web3 import host_roles as roles
           off = json.loads(Path('compiler-off.json').read_text())
           on = json.loads(Path('compiler-on.json').read_text())
@@ -64,6 +66,8 @@ jobs:
         run: |
           import json, shutil, tempfile
           from pathlib import Path
+          import sys
+          sys.path.insert(0, str(Path.cwd()))
           from tools.web3 import host_roles as roles
           original = Path('out')
           record = list((original/'CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
