@@ -83,6 +83,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.hardware.display.IDisplayManager android.os.IUserManager   com.android.internal.view.IInputMethodManager \
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
   android.media.IAudioService android.content.IContentService android.os.storage.IStorageManager \
+  android.media.session.ISessionManager android.media.session.ISession android.media.session.ISessionController \
   android.os.IPowerManager android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
   android.app.ISearchManager android.app.ILocaleManager android.app.job.IJobScheduler android.os.IBatteryPropertiesRegistrar com.android.internal.app.IBatteryStats android.location.ILocationManager android.os.IVibratorManagerService
