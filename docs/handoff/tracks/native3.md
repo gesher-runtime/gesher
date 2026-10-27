@@ -62,13 +62,17 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
-Full candidate ci 40430425743 at b3ecc85 is running. It combines the
-independently verified startup input, corrected unsigned ARM width oracle
-and actual per-ABI complete digest checks, CPU patch 0572 and bounded AAC
-prepare observation. Locked reference/Windows-helper ci 40426388584 at
-5229764 is fully green and root inspected both reference digests/33 rows
-and both 17-case binary128 helper logs. This does not replace full runtime
-acceptance or implement the remaining binary128 libm functions.
+Full ci 40430425743 at b3ecc85 is verified, attempt 1: root read all 28
+jobs (22 success/six skipped), both zero-failure Windows summaries, actual
+per-ABI whole-range width checks, four APK modes, production ART CPU-clock
+check, package input/uninstall and both required e2e logs (zero unexpected).
+See native3-width-clock.md. Frozen wip/native3-width-clock adds docs only;
+integration rule g still gates the merge. The corrected signed/unsigned
+width and current-thread/process CPU contracts are scoped closures.
+Locked reference/Windows-helper ci 40426388584 at 5229764 independently
+passes both width digests/33 rows and both 17-case binary128 helper logs;
+the latter does not implement the remaining binary128 libm functions.
+Monotonic elapsed/deadline clocks continue on native3-time/ADR0075.
 
 CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
 2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
