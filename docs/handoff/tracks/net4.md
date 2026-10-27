@@ -62,6 +62,9 @@ runners, package and both required e2e jobs pass, but Windows 2022's boot-profil
 performance failure keeps the full stage red. The old 40333695614 run was
 superseded and supplies no complete runtime result. Web3 preparation includes
 verified runtime/exec3 integration 94ccde1. Verified Web3 must merge before
+dependent implementation. Current changed-source full40432795403 at2755f21 adds
+the coordinator's verified startup profile merge2ba9a11 and is running without
+a threshold waiver. Verified Web3 must still merge before
 dependent Net4 implementation in its own worktree. Every contract above remains
 open; the coordinator's startup diagnosis does not permit fishing for a green
 repeat or treating scoped passing checks as full-stage acceptance.
