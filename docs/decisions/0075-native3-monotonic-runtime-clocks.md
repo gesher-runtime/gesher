@@ -1,6 +1,9 @@
 # 0075. Use monotonic time for ART elapsed clocks on Windows
 
-Status: proposed; compilation and runtime acceptance pending CI.
+Status: accepted in full ci 40434741055 at
+bdfb230fa3d70797caece6568b6ac529e854b4ee, attempt 1. Root read all 28 jobs,
+both zero-failure Windows summaries, actual clock/ABI PASS lines, package
+window/input/uninstall and both required e2e logs (zero unexpected).
 
 ## Context
 
@@ -26,6 +29,10 @@ deadline brackets with offsets and relative duration. A wall-clock
 counterexample confirms the bracket rejects the former epoch domain;
 the test never changes the machine clock. Both Windows runners must also
 pass the complete original suite, package and e2e gates before acceptance.
+
+All those gates pass in the accepted full run. The earlier c168b23 candidate
+was cancelled after source review found InitTimeSpec still called the removed
+wall helper; no compiler/runtime result from that superseded source is accepted.
 
 ## Limits
 

@@ -486,8 +486,12 @@ needs: [framework-build.md](framework-build.md).
 - [x] ART current-thread/process CPU clocks match independent Win32 native
       brackets, including caller/worker identity and process CPU accumulation.
       Full ci 40430425743 at b3ecc85, both Windows suites/package/e2e.
-      Non-current pthread clocks, monotonic elapsed clocks and native
-      allocator accounting remain separate open contracts.
+      Non-current pthread clocks and native allocator accounting remain open.
+- [x] ART monotonic NanoTime/MicroTime/MilliTime and clock-selecting absolute
+      deadlines: actual artbase matches independent QPC/UTC brackets, units,
+      concurrent ordering, elapsed sleep and relative rollover. Full ci
+      40434741055 at bdfb230, both Windows suites/package/required e2e;
+      original image-size/startup gates pass without changes or retries.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
