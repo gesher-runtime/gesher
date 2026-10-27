@@ -35,7 +35,11 @@ struct RegistryState {
 // retains metadata when this instance closes its mapping/handles.
 class Registry {
  public:
+  using Allocate = void* (*)(size_t);
+  using Release = void (*)(void*);
   Registry() = default;
+  // Explicit internal test dependency; production uses checked Windows heap.
+  Registry(Allocate allocate, Release release) : allocate_(allocate), release_(release) {}
   ~Registry();
   Registry(const Registry&) = delete;
   Registry& operator=(const Registry&) = delete;
@@ -56,6 +60,8 @@ class Registry {
   bool held_ = false;
   LONG active_ = -1;
   uint64_t generation_ = 0;
+  Allocate allocate_ = nullptr;
+  Release release_ = nullptr;
 };
 
 }  // namespace gesher::record_locks

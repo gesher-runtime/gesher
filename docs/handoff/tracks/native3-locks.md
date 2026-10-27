@@ -104,3 +104,18 @@ without assuming F_GETFL's old O_RDWR fallback. See Microsoft's
 and [file identity notes](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information).
 Deterministic injected query denial/PID reuse and actual cross-process death/
 thread cancellation tests remain required. No native code ran locally.
+
+Prepared actual Windows storage/identity fixture registry_windows_test.cc
+uses real hardlinks/128-bit IDs, read-only/read-write handle rights, current
+PID with mismatched birth and an actual exited thread. Real owned children
+exit23 while holding the named mutex before/after publication; the parent
+requires exact old bytes/generation or the complete new bank, then actual
+dead-owner pruning. Explicit paired allocator dependency returns null to
+check staging ENOMEM without mutating an existing active bank. Invalid
+candidate count is rejected with unchanged bytes; injected Unknown probes
+retain both process/OFD metadata. These are storage/dependency checks, not
+actual fcntl/FD ENOMEM or OS-denied-query acceptance. Child wait/termination
+is bounded and failure stops before another mutex wait. Source is pending
+peer review/CI; no local compiler or fixture ran. Actual denied owner query,
+cross-session/nonadministrator ACLs, corruption/concurrent publication and
+all runtime fcntl/lifetime/signal integration remain open.

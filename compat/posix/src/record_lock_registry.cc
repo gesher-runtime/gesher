@@ -131,7 +131,10 @@ void Registry::Reset() {
   if (mapping_) CloseHandle(mapping_);
   if (file_ != INVALID_HANDLE_VALUE) CloseHandle(file_);
   if (mutex_) CloseHandle(mutex_);
-  if (staged_) HeapFree(GetProcessHeap(), 0, staged_);
+  if (staged_) {
+    if (release_) release_(staged_);
+    else HeapFree(GetProcessHeap(), 0, staged_);
+  }
   disk_ = nullptr;
   mapping_ = mutex_ = nullptr;
   file_ = INVALID_HANDLE_VALUE;
@@ -140,6 +143,7 @@ void Registry::Reset() {
 
 int Registry::Open() {
   if (disk_) return 0;
+  if ((allocate_ == nullptr) != (release_ == nullptr)) return EINVAL;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
       L"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)", SDDL_REVISION_1, &descriptor, nullptr)) return WinError();
@@ -197,7 +201,8 @@ int Registry::Open() {
     error = Validate();
   }
   if (!error) {
-    void* storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(RegistryState));
+    void* storage = allocate_ ? allocate_(sizeof(RegistryState)) :
+      HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(RegistryState));
     if (!storage) error = ENOMEM;
     else staged_ = new (storage) RegistryState{};
   }
