@@ -15,7 +15,8 @@ if ((Get-Content "$Dir/binder-sg-runtime-source.txt" -Raw).Trim() -cne $Source) 
     throw 'SG current host/broker runtime source identity mismatch'
 }
 $manifest = Get-Content "$Fixtures/source.json" -Raw | ConvertFrom-Json
-if ($manifest.source -cne $Source -or -not $manifest.run -or -not $manifest.attempt) {
+if ($manifest.source -cne $Source -or $manifest.run -cne $env:GITHUB_RUN_ID -or
+    $manifest.attempt -cne $env:GITHUB_RUN_ATTEMPT -or @($manifest.files.PSObject.Properties).Count -ne 11) {
     throw 'SG actual JNI/ELF/dex/APK producer identity mismatch'
 }
 foreach ($entry in $manifest.files.PSObject.Properties) {
@@ -85,10 +86,14 @@ function Start-Mode([string]$Exe, [string[]]$Arguments, [hashtable]$Environment,
 function Stop-Mode($Child, [int]$Milliseconds = 45000, [switch]$Terminate) {
     if ($Child.Stopped) { return }
     try {
-        if ($Terminate -and -not $Child.Process.HasExited) { $Child.Process.Kill($true) }
+        if ($Terminate -and -not $Child.Process.HasExited) {
+            try { $Child.Process.Kill($true) }
+            catch { if (-not $Child.Process.HasExited) { throw } }
+        }
         $timedOut = -not $Child.Process.WaitForExit($Milliseconds)
         if ($timedOut) {
-            $Child.Process.Kill($true)
+            try { $Child.Process.Kill($true) }
+            catch { if (-not $Child.Process.HasExited) { throw } }
             if (-not $Child.Process.WaitForExit(5000)) { throw 'SG child did not terminate after finite kill deadline' }
         }
         if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($Child.Out, $Child.Err), 5000)) {

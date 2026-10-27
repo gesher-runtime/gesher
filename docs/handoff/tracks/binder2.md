@@ -133,3 +133,11 @@ production selector. Coherent workflow/current host-DLL-jars-images provenance,
 actual runtime and original FD/Bitmap/InputChannel/full gates remain pending.
 The public transaction-prefix transport-loss proof remains explicitly open on
 preserved interruptedb52; this ordinary source does not resume or replace it.
+
+The pending binder2-sg-modes-component workflow builds fresh current host and
+broker, current framework/core jars, current API3 translator and fixtures, and
+rebuilds the boot image from those exact producers. Both Windows consumers
+check all five current-run artifact identities/digests, fixture source/run/
+attempt and eleven payload hashes, all five jar hashes and fifteen exact
+image-copy hashes. It calls the ordinary runner only. This is unexecuted
+workflow source pending the same bounded peer; no component has been dispatched.
