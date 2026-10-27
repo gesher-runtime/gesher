@@ -1,5 +1,11 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Latest resumed continuation,2026-10-27:** read
+[the resumed progress checkpoint](session-2026-10-27-resumed-progress.md)
+for accepted Libcore/resolver, active exact sources/runs, newly captured
+Web3 failing native stacks, worker ownership and the remaining gap plan.
+The original session-stop checkpoint is retained as history.
+
 **Libcore bounded acceptance,2026-10-27:** full40550474909, source
 `944a0eeffe5157d662f0278e992c421eebc86255`, is independently accepted:
 28jobs22success/6skip, both actual15 child copy/native groups plus final
