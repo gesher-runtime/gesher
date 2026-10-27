@@ -93,6 +93,14 @@ NDK -Werror compilation of the new shared fixture/JNI, Java/dex compilation
 and APK packaging. This is build evidence only; host C++/Windows execution,
 package and e2e are still pending. Log:
 C:\work\gesher-ci-review\exec4-live-environ-exec-121946700051.log.
+Candidate framework job121946748227 failed after its Java/APK compilation
+at a curl HTTP/2 INTERNAL_ERROR (exit92). Actual log:
+C:\work\gesher-ci-review\exec4-live-environ-framework-121946748227.log.
+This is a transport failure, not a compiler or runtime result. A selected-job
+rerun was rejected as `job ... cannot be rerun` while the full run remains
+active; retry failed jobs in this same immutable-source run after it finishes.
+Do not dispatch a second candidate or infer any Windows pass from the skipped
+dependent jobs. No HTTP403/rate-limit rejection occurred.
 Original diagnostic610 remains running independently at CI40428277638.
 Root alone merges the final verified source and coordinates latest
 integration; no branch was merged here.
