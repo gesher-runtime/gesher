@@ -220,11 +220,20 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-- OpenSL full ci **40470959941** is running at
+- OpenSL full ci **40470959941** is RED at
   **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
-  db84749b/fresh exit-status30deb08c merged. The source is frozen; later
-  commits add docs only. Test76 and the AAudio correction below need actual
-  both-runner runtime/full-suite/package/e2e proof before any new acceptance.
+  db84749b/fresh exit-status30deb08c merged:20 success/six skipped/two failed.
+  Both Windows jobs fail exactly6 test76 cases: core recording-grant
+  expectations (actual bare-core denial) and all five ARM signed16 volume
+  cases. Actual data/query/negotiation and both APK permission variants pass;
+  package23 and both ten-app/four-transport e2e0 pass. No OpenSL acceptance
+  follows. Corrected source requires the existing0x0B/no-identity denial
+  and normalizes the volume boundary explicitly, with actual raw/value/
+  permission diagnostics and valid signed16 edges. Its new CI remains pending.
+  AAudio's original750/1250Hz,44100-frame lossless gate passes in both modes
+  and runners with actual lost0/xruns0; the controlled small rings lose
+  frames while configured rings retain all. The old1153.3Hz cause remains
+  unproved. Details and exact job ids are in the Media4 brief.
 
 - Media4's accepted format source below is frozen on
   `wip/media4-format-verified` at docs-only ba3c1c2d. Active source78ee5e12

@@ -43,7 +43,7 @@ const Id kIds[] = {
 static_assert(sizeof(SLInterfaceID_) == 16 && alignof(SLInterfaceID_) == 4);
 static_assert(sizeof(kIds) / sizeof(kIds[0]) == 53);
 
-std::string Run(bool allowed) {
+std::string Run(bool allowed, bool has_manifest) {
   Report r;
 #if defined(__aarch64__)
   r.text = "media4 opensl ABI: arm64-v8a\n";
@@ -194,9 +194,22 @@ std::string Run(bool allowed) {
                 volume != nullptr && buffers != nullptr && play != nullptr, "actual requested and implicit interfaces");
     if (volume != nullptr && buffers != nullptr && play != nullptr) {
       SLmillibel level = 0;
-      r.Check((*volume)->SetVolumeLevel(volume, -600) == SL_RESULT_SUCCESS &&
-                  (*volume)->GetVolumeLevel(volume, &level) == SL_RESULT_SUCCESS && level == -600,
+      SLresult set = (*volume)->SetVolumeLevel(volume, -600);
+      SLresult get = (*volume)->GetVolumeLevel(volume, &level);
+      r.text += "media4 opensl volume trace: requested -600, set " + std::to_string(set) +
+          ", get " + std::to_string(get) + ", value " + std::to_string(level) + "\n";
+      r.Check(set == SL_RESULT_SUCCESS && get == SL_RESULT_SUCCESS && level == -600,
               "actual PCM volume round trip");
+      const SLmillibel edges[] = {SL_MILLIBEL_MIN, -1, 0};
+      for (SLmillibel edge : edges) {
+        set = (*volume)->SetVolumeLevel(volume, edge);
+        get = (*volume)->GetVolumeLevel(volume, &level);
+        r.text += "media4 opensl volume trace: requested " + std::to_string(edge) +
+            ", set " + std::to_string(set) + ", get " + std::to_string(get) +
+            ", value " + std::to_string(level) + "\n";
+        r.Check(set == SL_RESULT_SUCCESS && get == SL_RESULT_SUCCESS && level == edge,
+                "signed16 volume boundary " + std::to_string(edge));
+      }
       int16_t silence[882] = {};
       SLAndroidSimpleBufferQueueState state{};
       r.Check((*buffers)->Enqueue(buffers, silence, sizeof(silence)) == SL_RESULT_SUCCESS &&
@@ -226,6 +239,8 @@ std::string Run(bool allowed) {
               SL_RESULT_FEATURE_UNSUPPORTED && bad == nullptr, "unsupported required recorder effect rejected");
   Object recorder;
   SLresult result = (*api)->CreateAudioRecorder(api, &recorder.value, &capture, &recorded, 2, record_ids, flags);
+  r.text += "media4 opensl permission trace: expected " + std::string(allowed ? "allowed" : "denied") +
+      ", result " + std::to_string(result) + ", object " + (recorder.value != nullptr ? "true\n" : "false\n");
   r.Check(result == (allowed ? SL_RESULT_SUCCESS : SL_RESULT_PERMISSION_DENIED) &&
               (allowed ? recorder.value != nullptr : recorder.value == nullptr),
           "actual native RECORD_AUDIO allow/deny result (permission constant 0x0B)");
@@ -243,7 +258,8 @@ std::string Run(bool allowed) {
               "actual initial native recorder state");
     }
   }
-  r.Part("permission", before, allowed ? "manifest allowed native recorder lifecycle" : "manifest denied native recorder returns 0x0B without object");
+  r.Part("permission", before, !has_manifest ? "bare core without recording identity returns 0x0B without object" :
+      allowed ? "manifest allowed native recorder lifecycle" : "manifest denied native recorder returns 0x0B without object");
   if (library != nullptr) dlclose(library);
   if (system != nullptr) dlclose(system);
   r.text += r.failed == 0 ? "media4 opensl: all passed\n" : "media4 opensl: FAILED\n";
@@ -252,9 +268,9 @@ std::string Run(bool allowed) {
 
 }  // namespace
 
-extern "C" JNIEXPORT jstring JNICALL Java_gesher_OpenSlTest_run(JNIEnv* env, jclass, jboolean allowed) {
-  return env->NewStringUTF(Run(allowed == JNI_TRUE).c_str());
+extern "C" JNIEXPORT jstring JNICALL Java_gesher_OpenSlTest_run(JNIEnv* env, jclass, jboolean) {
+  return env->NewStringUTF(Run(false, false).c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL Java_com_gesher_opensl_OpenSlActivity_run(JNIEnv* env, jclass, jboolean allowed) {
-  return env->NewStringUTF(Run(allowed == JNI_TRUE).c_str());
+  return env->NewStringUTF(Run(allowed == JNI_TRUE, true).c_str());
 }
