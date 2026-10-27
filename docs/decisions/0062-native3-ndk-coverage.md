@@ -11,8 +11,9 @@ Corrected signed/unsigned character widths and ART current-thread/process
 CPU clocks are accepted in full ci 40430425743 at b3ecc85, attempt 1;
 root inspected both Windows suites, package and both required e2e logs.
 See handoff/tracks/native3-width-clock.md. This supersedes the earlier
-shared-signed width expectations for unsigned ARM64. Other native3 gaps,
-including monotonic elapsed/deadline clocks on ADR0075, remain open.
+shared-signed width expectations for unsigned ARM64. Monotonic elapsed and
+clock-selecting deadline behavior is separately accepted on ADR0075 in
+full ci 40434741055 at bdfb230; other native3 contracts remain open.
 
 ## Context
 
