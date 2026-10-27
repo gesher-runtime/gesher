@@ -237,7 +237,11 @@ production, fixture, oracle and build file is unchanged from compile-green
 actual caller, generator, test79 and independent reader/decoder without an
 additional blocker. The reviewed FD order, host/NDK ABI guards and strict
 18 semantic/12 descriptor/10 decoded-container oracles remain unchanged.
-One coherent full run is ready; its actual runtime evidence remains open.
+Coherent full ci40527788805 is running at
+5d9e24d3df1e9caa77c21dbae360a1f32988b943. That source is frozen while its
+actual runtime evidence remains open; subsequent branch changes may only
+record documentation. Both Windows suites must finish zero failures, all
+jobs success/skipped, package and both complete required e2e runs green.
 Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
 libcore I/O83 and test process infrastructure84. Further reservations belong
 to the coordinator.
