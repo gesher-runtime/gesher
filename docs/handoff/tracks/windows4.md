@@ -34,6 +34,17 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Current full validation **40447661700** is running at exact
+`8d97726de522800bccffd994d5e91ae6d5136bbf`. It includes the focus-only fix
+and real non-editor fixture below, verified clock/width integration8922a3e
+and the latest single-line integration handoff46c9cc1. Corrected targeted
+framework40446866229 at73ba54f succeeded; actual job122000143076 was read:
+javac zero errors, app jar, graphics dex, winapp and winlegacy built.
+All code in8d matches that targeted source. Root completed source review of
+745fd5a and the pinned branch with no P1 finding; that is not runtime proof.
+Watch: C:/work/gesher-ci-review/windows4-40447661700-watch.log, interval120.
+No full-stage acceptance or roadmap tick before the actual new results.
+
 Latest full diagnostic **40441680201** at exact
 `5b5b51d0b858c6b08602af6450eed2a49025d71f` is COMPLETE RED: 28 jobs,
 20 success, six skipped, two failed Windows jobs. Actual logs 121985265563
