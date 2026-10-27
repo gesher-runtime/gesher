@@ -1,6 +1,8 @@
 # Web3 native query boundary source checkpoint
 
-Status: incomplete source, not a correction/runtime acceptance claim.
+Status: sourcefc176703 verified in component40577659058 on both Windows hosts.
+See web3-query-component-proof.md for actual logs and precise limits.
+Earlier WIP sections below are historical; canonical default-OFF/full/package/e2e remain open.
 Dedicated wip/web3-query-bound/C:/work/gesher-web3-query-bound starts with
 accepteda7889e76 plus exact component-proven Native frozen db9fa9ad.
 It does not import the unrelated AOT96b diagnostic ancestry.
