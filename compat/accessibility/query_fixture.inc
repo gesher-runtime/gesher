@@ -125,6 +125,18 @@ jboolean QueryFixture_nativeJoin(JNIEnv*, jclass, jlong id) {
   bool okay = GetExitCodeThread(state->sender, &code) && code == 0;
   CloseHandle(state->sender);
   std::lock_guard<std::mutex> lock(g_fixture_mutex);
+  // A completed request on a LIVE mapped window must release only its own
+  // hook, so the next real query can install a fresh payload on that HWND.
+  // NCDESTROY may already have erased it; never touch a reused HWND's hook.
+  auto hook = g_fixture_hooks.find(state->hwnd);
+  if (hook != g_fixture_hooks.end() && hook->second == state) {
+    if (IsWindow(state->hwnd)) {
+      if (reinterpret_cast<WNDPROC>(GetWindowLongPtrW(state->hwnd, GWLP_WNDPROC)) != FixtureProc ||
+          SetWindowLongPtrW(state->hwnd, GWLP_WNDPROC,
+                           reinterpret_cast<LONG_PTR>(state->original)) == 0) okay = false;
+    }
+    g_fixture_hooks.erase(hook);
+  }
   g_fixture_queries.erase(static_cast<uint64_t>(id));
   return okay ? JNI_TRUE : JNI_FALSE;
 }

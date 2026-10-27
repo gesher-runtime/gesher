@@ -77,6 +77,13 @@ InvokeBoundaryFixture $false
 # Execute the original14 real Web3 cases, with their original400/60+60s,
 # expected output and actual fresh app-process exit-zero checks unchanged.
 . "$PSScriptRoot/tracks/54-web3.ps1"
+if ($null -eq $sd) { throw 'Original Web3 device shutdown process was not recorded' }
+$sd.Refresh()
+if (-not $sd.HasExited -or $sd.ExitCode -ne 0) {
+  Write-Host 'FAIL web3 query: original device shutdown did not actually finish0'
+  $failed++
+} else { Write-Host 'PASS web3 query: original device shutdown actually exits0' }
+if ($sd.HasExited) { $sd.Dispose() }
 $originalFailed = $failed
 # Reuse the real harness/strict child exit checks for two mapped Dialog cycles
 # through Main and through a real device app process; retain all originals.

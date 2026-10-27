@@ -54,11 +54,10 @@ mkdir -p "$work/classes" "$work/dex"
 find "$here" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
-  -cp "$(native "$framework")" -sourcepath "$(native "$here/../../app/java")" \
+  -cp "$(native "$framework")" \
   -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
-# gesher-app's classes (com.gesher.app.window.NativeWindow) are compiled from
-# app/java for javac (-sourcepath) but not dexed: gesher-app.jar is on the boot
-# class path at run time.
+# App boot helpers are called reflectively from the real newly built jar;
+# never recursively recompile their generated-stub dependency graph here.
 ( cd "$work" && find classes/com/gesher/app/accessibility -name 'QueryBoundaryTest*.class' ) > "$work/dex.txt"
 (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
   --output "$(native "$work/dex")" @dex.txt)
