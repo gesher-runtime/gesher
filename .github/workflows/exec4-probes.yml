@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: exec4-probes-${{ github.ref }}
   cancel-in-progress: true
@@ -33,9 +34,31 @@ jobs:
           set -euo pipefail
           mkdir -p probe-out
           cc="$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++"
-          "$cc" -std=c++17 -O2 -Wall -Wextra -Werror probes/exec4/stdio-startup.cc -lshell32 -o probe-out/stdio-startup.exe
+          "$cc" -std=c++17 -O2 -Wall -Wextra -Werror -static probes/exec4/stdio-startup.cc -lshell32 -o probe-out/stdio-startup.exe
+          "$cc" -std=c++17 -O2 -Wall -Wextra -Werror -static -mwindows -DEXEC4_GUI probes/exec4/stdio-startup.cc -lshell32 -o probe-out/stdio-startup-gui.exe
           "$cc" -std=c++17 -O2 -Wall -Wextra -Werror -Icompat/posix/include -S probes/exec4/chdir-import.cc -o probe-out/chdir-import.s
           cat probe-out/chdir-import.s
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: failed-runtime
+      - name: Inspect the actual failed launcher's chdir binding
+        run: |
+          set -euo pipefail
+          bin="$HOME/toolchain/$LLVM_MINGW_NAME/bin"
+          "$bin/llvm-nm" --demangle --defined-only failed-runtime/gesher-exec.exe | grep -E 'Chdir|Fchdir| chdir$| fchdir$|SetCurrent'
+          "$bin/llvm-objdump" --disassemble --demangle failed-runtime/gesher-exec.exe > launcher.s
+          python3 - <<'PY'
+          from pathlib import Path
+          printing = False
+          for line in Path('launcher.s').read_text().splitlines():
+              if line and not line[0].isspace() and line.endswith('>:'):
+                  printing = ('chdir' in line.lower() or 'SetCurrent(' in line)
+              if printing:
+                  print(line)
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: exec4-startup-probes
@@ -57,4 +80,10 @@ jobs:
         shell: pwsh
         run: |
           & ./probe-out/stdio-startup.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $consoleCode = $LASTEXITCODE
+          Write-Host "INFO stdio console probe exit $consoleCode"
+          if ($consoleCode -ne 0) { exit $consoleCode }
+          & ./probe-out/stdio-startup-gui.exe
+          $guiCode = $LASTEXITCODE
+          Write-Host "INFO stdio GUI probe exit $guiCode"
+          if ($guiCode -ne 0) { exit $guiCode }

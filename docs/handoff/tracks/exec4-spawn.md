@@ -73,6 +73,12 @@ handles for NULL/INVALID stdin under CREATE_NO_WINDOW/DETACHED_PROCESS and
 the exact toolchain's chdir assembly relocation with the wrapper's header
 order. It changes no production code or test expectations. These diagnostics
 must identify an actual unbound startup state before correcting the fixture.
+Scoped40516917875/b2cb26cd compiles and its exact assembly jumps to chdir,
+not an imported __imp_chdir; the ANSI-import hypothesis is unsupported.
+The first standalone Windows2025 step exits1 without output and is not
+startup evidence. Corrected probe packaging links libc++ statically, records
+exit codes, compares console/GUI subsystem startup and disassembles the
+actual failed CI launcher inside CI. No production fix is inferred yet.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
