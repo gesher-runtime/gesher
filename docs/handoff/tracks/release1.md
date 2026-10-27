@@ -43,6 +43,16 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
+Owner-requested checkpoint: release source0e4304a25251fbfeb4499886e9e955abaa34f2f1
+is saved; this checkpoint changes documentation only. No release-version
+full, promotion workflow, tag, PR, main merge or release has been run here.
+There is no active own release CI/watch log. The exact notice/version/receipt/
+promotion code is unchanged. Next session must first import Root's final
+accepted coherent runtime and reconcile the English README with that evidence,
+then verify full CI with release_version0.1.0 and actual installed notice.
+Root alone owns integration/main and publication. Version0.1.0 remains
+unpublished and not release-verified. Stop all new work after this checkpoint.
+
 Release preparation now includes accepted Windows4/Web3 integration6297e80a
 (mergebf4cf7fe), retaining explicit release_version, early installer upload,
 post-smoke receipt and promotion/source/attempt/digest guards. Root accepted
