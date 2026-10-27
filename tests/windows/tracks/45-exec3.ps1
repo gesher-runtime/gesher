@@ -70,13 +70,19 @@ try {
 # Run those same native and Java operations from an installed APK attached to
 # the real system server. This does not substitute a host-only dalvikvm for an
 # app process: the APK's Activity launches binaries extracted in nativeLibraryDir.
-function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240) {
+function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240, [switch] $Trace) {
   $info = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
   foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
+  if ($Trace) {
+    # Only this own test process and its children get the bounded pre-handler
+    # sentinel record. Signal disposition, process exit and assertions are kept.
+    $info.Environment['GESHER_TRACE_INVALID_SENTINEL'] = '1'
+    $info.Environment['GESHER_TRACE_EXEC_PHASES'] = '1'
+  }
   $process = [Diagnostics.Process]::Start($info)
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
@@ -86,6 +92,17 @@ function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240) {
   if ($stdout.Wait(10000)) { $text += $stdout.Result } else { $timedOut = $true; $text += '(stdout did not close)' }
   if ($stderr.Wait(10000)) { $text += $stderr.Result } else { $timedOut = $true; $text += '(stderr did not close)' }
   if ($timedOut) { $text += "`n(exec3 app timed out after $Seconds seconds)" }
+  if ($Trace) {
+    if ($text.Contains('invalid sentinel before signal handler')) {
+      $symbolizer = Join-Path $PSScriptRoot '../../../tools/symbolize.py'
+      if ((Test-Path "$Dir/dalvikvm.map") -and (Test-Path -LiteralPath $symbolizer)) {
+        $resolved = @($text | python $symbolizer "$Dir/dalvikvm.map")
+        if ($LASTEXITCODE -eq 0) { $text = $resolved -join "`n" }
+      }
+    }
+    ($text -split "`n" | Where-Object { $_ -match '^gesher-signal:|^exec4-phase:' } |
+      Select-Object -First 112) | ForEach-Object { Write-Host $_ }
+  }
   return @{ Code = $(if ($timedOut) { -1 } else { $process.ExitCode }); Text = $text }
 }
 
@@ -95,8 +112,11 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
 } else {
   Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force
   Check 'exec3: native processes and Java suites from a single-process APK' {
-    & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-      -Xint '-Xusejit:false' com.gesher.app.Main (NoDrive "$Dir/exec3.apk")
+    $result = InvokeExec3Timed -Arguments @("-Xbootclasspath:$bcpApp",
+      "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+      'com.gesher.app.Main', (NoDrive "$Dir/exec3.apk")) -Trace
+    $global:LASTEXITCODE = $result.Code
+    $result.Text
   } @('exec2: SUMMARY pass=9 fail=0',
       'Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device',
@@ -118,7 +138,7 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     # Launcher installs and extracts the APK before starting its real app process.
     $exec3Target = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'install', (NoDrive "$Dir/exec3target.apk"))
     if ($exec3Target.Code -ne 0) { throw "exec3 target install failed: $($exec3Target.Text)" }
-    $exec3App = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true')
+    $exec3App = InvokeExec3Timed -Arguments ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true') -Trace
     $exec3Wanted = @(
       'exec2: SUMMARY pass=9 fail=0',
       'gesher-app: app process for com.gesher.exec3',
