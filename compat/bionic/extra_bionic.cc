@@ -798,11 +798,11 @@ size_t Wlen(const wchar32* s) {
 }
 int BIONIC_SYSV Wcscmp(const wchar32* a, const wchar32* b) {
   while (*a && *a == *b) ++a, ++b;
-  return *a < *b ? -1 : *a > *b ? 1 : 0;
+  return static_cast<int32_t>(*a - *b);
 }
 int BIONIC_SYSV Wcsncmp(const wchar32* a, const wchar32* b, size_t n) {
   for (; n > 0; --n, ++a, ++b) {
-    if (*a != *b) return *a < *b ? -1 : 1;
+    if (*a != *b) return static_cast<int32_t>(*a - *b);
     if (*a == 0) break;
   }
   return 0;
@@ -955,13 +955,6 @@ wchar32* BIONIC_SYSV Wmemset(wchar32* d, wchar32 c, size_t n) {
   for (size_t i = 0; i < n; ++i) d[i] = c;
   return d;
 }
-size_t BIONIC_SYSV Wcsxfrm(wchar32* d, const wchar32* s, size_t n) {
-  size_t len = Wlen(s);
-  if (n > len) std::memcpy(d, s, (len + 1) * 4);
-  return len;
-}
-int BIONIC_SYSV Wcscoll(const wchar32* a, const wchar32* b) { return Wcscmp(a, b); }
-
 // UTF-8 <-> UTF-32 for the multibyte conversions below.
 std::string Utf8(const wchar32* s, size_t n = SIZE_MAX) {
   std::string out;
@@ -985,85 +978,6 @@ std::string Utf8(const wchar32* s, size_t n = SIZE_MAX) {
   }
   return out;
 }
-// One UTF-8 sequence at s (at most n bytes): its length, 0 for NUL, -1 if invalid.
-int DecodeUtf8(const char* s, size_t n, uint32_t* out) {
-  if (n == 0) return -2;
-  auto u = reinterpret_cast<const uint8_t*>(s);
-  if (u[0] == 0) {
-    *out = 0;
-    return 0;
-  }
-  if (u[0] < 0x80) {
-    *out = u[0];
-    return 1;
-  }
-  int len = u[0] >= 0xf0 ? 4 : u[0] >= 0xe0 ? 3 : u[0] >= 0xc0 ? 2 : 0;
-  if (len == 0 || u[0] >= 0xf8) return -1;
-  if (n < static_cast<size_t>(len)) return -2;
-  uint32_t c = u[0] & (0x7f >> len);
-  for (int i = 1; i < len; ++i) {
-    if ((u[i] & 0xc0) != 0x80) return -1;
-    c = (c << 6) | (u[i] & 0x3f);
-  }
-  *out = c;
-  return len;
-}
-size_t BIONIC_SYSV Mbstowcs(wchar32* d, const char* s, size_t n) {
-  size_t count = 0;
-  for (;;) {
-    uint32_t c;
-    int len = DecodeUtf8(s, 4, &c);
-    if (len < 0) return errno = 84, static_cast<size_t>(-1);  // EILSEQ
-    if (len == 0) {
-      if (d != nullptr && count < n) d[count] = 0;
-      return count;
-    }
-    if (d != nullptr) {
-      if (count >= n) return count;
-      d[count] = c;
-    }
-    ++count;
-    s += len;
-  }
-}
-size_t BIONIC_SYSV Wcstombs(char* d, const wchar32* s, size_t n) {
-  std::string u = Utf8(s);
-  if (d == nullptr) return u.size();
-  size_t c = u.size() < n ? u.size() : n;
-  // Never split a sequence.
-  while (c > 0 && c < u.size() && (static_cast<uint8_t>(u[c]) & 0xc0) == 0x80) --c;
-  std::memcpy(d, u.data(), c);
-  if (c < n) d[c] = 0;
-  return c;
-}
-size_t BIONIC_SYSV Wcsrtombs(char* d, const wchar32** src, size_t n, void*) {
-  size_t r = Wcstombs(d, *src, n);
-  if (d != nullptr && r != static_cast<size_t>(-1)) {
-    std::string u = Utf8(*src);
-    if (r >= u.size()) *src = nullptr;
-  }
-  return r;
-}
-int BIONIC_SYSV Wctomb(char* d, wchar32 c) {
-  if (d == nullptr) return 0;
-  wchar32 w[2] = {c, 0};
-  std::string u = c == 0 ? std::string(1, '\0') : Utf8(w);
-  std::memcpy(d, u.data(), u.size());
-  return static_cast<int>(u.size());
-}
-int BIONIC_SYSV Mblen(const char* s, size_t n) {
-  if (s == nullptr) return 0;
-  uint32_t c;
-  int len = DecodeUtf8(s, n, &c);
-  return len < 0 ? -1 : len;
-}
-int BIONIC_SYSV Mbsinit(const void* st) {
-  if (st == nullptr) return 1;
-  uint64_t v;
-  std::memcpy(&v, st, 8);
-  return v == 0;
-}
-
 }  // namespace
 
 // Wide formatted output: the narrow formatter (stdio_bionic.cc) on the
@@ -1884,8 +1798,6 @@ void RegisterExtra(SymbolTable& t) {
   E("wcsncasecmp", Wcsncasecmp);
   E("wcscasecmp_l", WcscasecmpL);
   E("wcsncasecmp_l", WcsncasecmpL);
-  E("wcscoll", Wcscoll);
-  E("wcsxfrm", Wcsxfrm);
   E("wcschr", Wcschr);
   E("wcsrchr", Wcsrchr);
   E("wcsstr", Wcsstr);
@@ -1907,12 +1819,6 @@ void RegisterExtra(SymbolTable& t) {
   E("wmempcpy", Wmempcpy);
   E("wmemmove", Wmemmove);
   E("wmemset", Wmemset);
-  E("mbstowcs", Mbstowcs);
-  E("wcstombs", Wcstombs);
-  E("wcsrtombs", Wcsrtombs);
-  E("wctomb", Wctomb);
-  E("mblen", Mblen);
-  E("mbsinit", Mbsinit);
   t["wprintf"] = reinterpret_cast<void*>(&gesher_extra_wprintf);
   t["fwprintf"] = reinterpret_cast<void*>(&gesher_extra_fwprintf);
   t["vwprintf"] = reinterpret_cast<void*>(&gesher_extra_vwprintf);

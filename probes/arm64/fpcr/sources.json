@@ -1,0 +1,17 @@
+{
+  "tag": "android-16.0.0_r4",
+  "sources": [
+    {
+      "path": "upstream/fenv-arm64.c",
+      "source": "libm/fenv-arm64.c",
+      "url": "https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libm/fenv-arm64.c?format=TEXT",
+      "sha256": "09612eff991d928627b7a543488d64edd557fedbc8a21d947e1261bcaf4ce67d"
+    },
+    {
+      "path": "upstream/fenv_arm.h",
+      "source": "libc/include/bits/fenv_arm.h",
+      "url": "https://android.googlesource.com/platform/bionic/+/refs/tags/android-16.0.0_r4/libc/include/bits/fenv_arm.h?format=TEXT",
+      "sha256": "0e2bddb41d64a1b8e1155c0702bf48c193845a079d5e57a62f03f1f80137591b"
+    }
+  ]
+}
