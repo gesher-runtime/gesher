@@ -120,6 +120,17 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     # Keep its actual end, including any existing native thread-watch report.
     Write-Host 'INFO  web3 failure: last 120 nonempty application-log lines follow'
     ($text -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 120) | Out-Host
+    if ($Arguments -contains 'com.gesher.app.Launcher') {
+      # The launcher forwards app output, not the server's lifecycle decisions.
+      # Read both original files on this runner; no local artifact download.
+      foreach ($name in @('system_server.log', 'com.gesher.web3app.log')) {
+        $deviceLog = Join-Path "$root/logs-web3" $name
+        if (Test-Path -LiteralPath $deviceLog) {
+          Write-Host "INFO  web3 failure: last 120 lines of device $name follow"
+          Get-Content -LiteralPath $deviceLog -Tail 120 | Out-Host
+        }
+      }
+    }
     $script:failed++
   }
   ($text -split "`n" | Select-String -Pattern '^(Web3 |gesher-a11y: |gesher-net: |gesher-webview: )' |
