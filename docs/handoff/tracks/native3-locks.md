@@ -207,3 +207,44 @@ exec/spawn source was edited here. Common POSIX signal.cc limitations differ
 from the existing bionic per-thread signal machinery; the latter should be
 extended, not replaced by timeouts or a duplicate signal subsystem. Overall87
 and coherent full/package/e2e acceptance remain open.
+
+## 2026-10-28 source continuation (not runtime proof)
+
+Local 21af6b3bb7ae8c871aae2ee6aa3fd2cb9081159b addresses three concrete
+independent source-review findings: successful dup2 replacement between two
+different descriptor numbers releases POSIX any-close locks even when both
+handles name the same FILE_OBJECT; fclose/freopen acquire the real stream lock
+before the descriptor/registry transaction; early failed freopen destination
+or mode conversion closes the original stream through that single transaction.
+Null-path freopen mode changes remain an explicitly unqualified existing case.
+Final independent recheck and actual CI are pending.
+
+Local 4fa2a6a63f4c4049ed278ac19b42a08a275276d3 includes the portable
+command_worker.cc and command_oracle.py plus native3-locks-commands.yml.
+The identical worker source calls actual Linux fcntl in the producer and the
+actual common POSIX library in both Windows consumers. Two real independent
+processes exercise same-description dup2, OFD alias retention, F_DUPFD temporary
+cleanup, hardlink identity, advisory I/O, access/range errors, three failed
+reopen destinations and four actual contended stream-close cycles. Actual
+high-address mappings and READONLY/cross-page/no-access pointers check errno,
+canaries and post-fault lock retention. Linux's unspecified partially copied
+EFAULT structure fields are not treated as output values; valid/no-conflict
+fields and real conflict owners are compared. Stable page checks before
+WriteProcessMemory do not qualify concurrent protection-change races.
+
+The proposed narrow workflow verifies the fresh toolchain archive hash, builds
+the actual common library with warnings as errors, requires a nonempty explicit
+system import set, and pins the Linux result/executable/source bytes to the
+same successful repository/run/attempt artifact. Both Windows suites have an
+external120s owned-process-tree bound, per-command10s controller bounds and
+cleanup for every registered worker. All source-only Python/YAML/PowerShell AST
+checks passed. Nothing in this continuation has been pushed, compiled or run;
+there is no new run/watch. Windows owns the required final bounded source peer.
+Do not use these planned controls as proof before actual logs exist.
+
+Inherited OFD/atomic ordered-spawn integration, blocking waits, deadlock graphs,
+targeted signals and handler restart semantics remain mandatory subsequent
+work. The active integration full4a47 was untouched; its provenance-capture
+failure is separate from this source branch. Integration/release ownership is
+now /root/integration_next; prior integration agents are retired. Existing
+2026-10-27 proof snapshots retain their historical date and identities.
