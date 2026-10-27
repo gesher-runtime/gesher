@@ -40,3 +40,10 @@ producer/package/consumer inventory, source peer/audit, actual scoped runtime
 and then changed-union full/package/e2e qualification. Current Web3fc component
 runs separately and remains the primary shared gate; this source is not merged
 or dispatched. StaticSDK/secondary dex/factory remain explicitly open.
+
+Read-only peer of4511 found two shutdown cleanup exception paths: a process
+whose Handle/StartTime threw before transfer could leak its wrapper, and one
+cleanup/Dispose exception could skip later retained owners. Source now uses
+per-untransferred-object finally plus independent cleanup/Dispose attempts
+for every retained owner, aggregates errors afterward, and records the
+original failed shutdown before cleanup. Actual CI remains entirely pending.

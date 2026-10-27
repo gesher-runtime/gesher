@@ -27,11 +27,16 @@ function Aot3SharedStopDevice {
         $devicePid = [int]$idMatch.Groups[1].Value
         $process = Get-Process -Id $devicePid -ErrorAction SilentlyContinue
         if ($null -eq $process) { continue }
-        $null = $process.Handle
-        if ($process.StartTime.ToUniversalTime().ToFileTimeUtc() -ne [long]$birthMatch.Groups[1].Value) {
-          $process.Dispose(); continue
+        $transferred = $false
+        try {
+          $null = $process.Handle
+          if ($process.StartTime.ToUniversalTime().ToFileTimeUtc() -ne [long]$birthMatch.Groups[1].Value) { continue }
+          $owned += [pscustomobject]@{ Name=$name; Process=$process }
+          $transferred = $true
+        } finally {
+          # Handle/StartTime can throw before ownership is transferred.
+          if (-not $transferred) { $process.Dispose() }
         }
-        $owned += [pscustomobject]@{ Name=$name; Process=$process }
       }
     }
     $stopped = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
@@ -44,7 +49,12 @@ function Aot3SharedStopDevice {
       Write-Host "INFO aot3 resource shutdown: $($entry.Name) pid=$($entry.Process.Id) actual-exit=$($entry.Process.ExitCode)"
     }
     return $stopped
+  } catch {
+    # Preserve the failed original shutdown BEFORE independent cleanup work.
+    Write-Host "INFO aot3 resource shutdown original failure: $($_.Exception.Message)"
+    throw
   } finally {
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
     foreach ($entry in $owned) {
       try {
         if (-not $entry.Process.HasExited) {
@@ -53,8 +63,14 @@ function Aot3SharedStopDevice {
           $entry.Process.Kill($true)
           if (-not $entry.Process.WaitForExit(5000)) { throw 'Owned AOT device cleanup incomplete' }
         }
-      } finally { $entry.Process.Dispose() }
+      } catch {
+        $cleanupErrors.Add("$($entry.Name) cleanup: $($_.Exception.Message)")
+      } finally {
+        try { $entry.Process.Dispose() }
+        catch { $cleanupErrors.Add("$($entry.Name) dispose: $($_.Exception.Message)") }
+      }
     }
+    if ($cleanupErrors.Count) { throw ("Owned AOT cleanup failures after all handles attempted: " + ($cleanupErrors -join '; ')) }
   }
 }
 
