@@ -18,6 +18,8 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
   $nativeHandle = $null
   $cancellation = $null
   $pipes = @()
+  $stdoutRaw = [IntPtr]::Zero
+  $stderrRaw = [IntPtr]::Zero
   $out = ''
   $incomplete = $true
   $nativeExit = $null
@@ -31,6 +33,7 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
       $pipe.Reader = if ($pipe.Name -eq 'stdout') { $p.StandardOutput } else { $p.StandardError }
       $pipe.Handle = $pipe.Reader.BaseStream.SafeFileHandle
       $pipe.Raw = $pipe.Handle.DangerousGetHandle()
+      if ($pipe.Name -eq 'stdout') { $stdoutRaw = $pipe.Raw } else { $stderrRaw = $pipe.Raw }
       $pipe.Task = $pipe.Reader.ReadToEndAsync($cancellation.Token)
     }
     $incomplete = -not $p.WaitForExit($Seconds * 1000)
@@ -68,7 +71,7 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
       if ($null -ne $nativeHandle -and -not $nativeHandle.IsClosed) { $incomplete = $true; $out += "`n(native process handle did not close)" }
     }
     if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
-      $out += "`nINFO READER_CLEANUP helper=RunTimed tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($null -ne $nativeHandle -and $nativeHandle.IsClosed) pipe-output=$($pipes[0].Raw) pipe-error=$($pipes[1].Raw)"
+      $out += "`nINFO READER_CLEANUP helper=RunTimed tasksdone=$($cleanup.TasksComplete) pipesclosed=$($cleanup.PipesClosed) processclosed=$($null -ne $nativeHandle -and $nativeHandle.IsClosed) pipe-output=$stdoutRaw pipe-error=$stderrRaw"
     }
   }
   $global:LASTEXITCODE = if ($incomplete) { -1 } else { $nativeExit }
