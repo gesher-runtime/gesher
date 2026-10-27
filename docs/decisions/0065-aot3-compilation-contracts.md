@@ -73,6 +73,7 @@ fallback/cleanup scenarios above.
 
 Shared-library loader contexts and secondary dex compilation/invalidation
 remain open. The scoped oatdump and cloud rows are closed with their
-verifying runs; the aggregate remains open. The later boot-startup profile
-supplement still requires full CI and the original performance criteria.
+verifying runs; the aggregate remains open. The boot-startup profile
+supplement passes full ci 40414859801 with the original performance criteria;
+combined integration ci 40432541082 remains pending.
 No local AOSP build was run.
