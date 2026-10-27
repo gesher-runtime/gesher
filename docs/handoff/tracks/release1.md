@@ -56,11 +56,17 @@ bdfb230fa3d70797caece6568b6ac529e854b4ee; this agent does not claim to have
 independently read that whole run. The additive CI merge retains explicit
 release_version, early installer upload and post-smoke receipt/promotion guards.
 It introduces no change to release promotion code. Release-version branch CI
-remains held for verified Web3 and the coordinator's final combined source.
-Web3 full40432795403 currently fails device accessibility teardown on 2025;
-Windows4 also retains initial-TSF/2025 foreground diagnostic gaps. Their new
-diagnostic runs do not establish acceptance. No preparation merge supplies
-release verification or authorizes this agent to publish.
+remains held for verified Web3/Windows4 and the coordinator's final combined
+source. Web3 full40444053066 is green before its exit-oracle hardening;
+strict full40449137605 is running, with actual package and both e2e logs read.
+A coordinator-owned exec4-exit prerequisite must also make cached child exit
+results process-generation-aware before a fresh child-zero claim is accepted.
+Windows4 full40447661700 proves actual first TSF reconversion, partial caret,
+foreground/shared Display and legacy resize on both runners but is red on the
+new non-editor fixture observation and external positive SNI. Its focus-gain
+fixture correction is prepared; the coordinated HTTP/SNI test slice and a new
+complete full run remain required. No preparation merge supplies release
+verification or authorizes this agent to publish.
 
 Explicit release documentation gap: the repository README still described phase
 1 with no Java or APK execution. The coordinator authorized this agent on
