@@ -92,6 +92,16 @@ started: Windows 2022 job 121919469641, Windows 2025 job 121919469507 and packag
 121919469612. Those jobs have no final result yet; build success does not close
 the Android, package or e2e gates.
 
+Package 121919469612 now succeeds in 2m6; its actual log confirms installed
+compiler/oatdump/framework and runtime smoke, real app HWND/click/keys/wheel/
+resize, and uninstall device/data/association/AppIDs/shortcuts cleanup with the
+unrelated Start menu sentinel preserved. Both e2e jobs also succeed and their
+actual logs were read: 2022 job 121920263609 (8m46), 2025 job 121920263622
+(10m33), all nine apps including Signal Generator/Puzzles/TIC-80, all four
+transport cases, association/shortcut and zero unexpected failures on each.
+Both full Windows suites are still running; Android/IME/legacy evidence and
+overall acceptance remain pending, without a roadmap tick.
+
 Shared edits to review at final handoff (relative to integration 94ccde1):
 - framework.yml adds the winlegacy build/copy lines; graphics.yml builds and
   collects the three full-native probes and test-service DLL. The separate
