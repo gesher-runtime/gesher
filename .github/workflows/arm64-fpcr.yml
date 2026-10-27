@@ -5,10 +5,21 @@ on:
     paths:
       - compat/arm64/**
       - tests/native/arm64_fpcr*
+      - tests/native/arm64_abi_test.c
+      - tests/native2/**
+      - probes/arm64/fpcr/**
+      - .github/workflows/native2.yml
       - .github/workflows/arm64.yml
       - .github/workflows/arm64-fpcr.yml
   workflow_dispatch:
 jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 probes/arm64/fpcr/verify-pinned.py --verify-upstream
+  ndk:
+    uses: ./.github/workflows/native2.yml
   translator:
     uses: ./.github/workflows/arm64.yml
   rounding:
@@ -18,6 +29,7 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
     steps:
       - uses: actions/download-artifact@v4
         with:

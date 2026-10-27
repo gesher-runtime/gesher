@@ -54,6 +54,7 @@ jobs:
             tests/native
             tests/apps/nativeactivity
             tests/exec
+            probes/arm64/fpcr
 
       - name: Cache toolchain
         id: toolchain
@@ -154,6 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          bash probes/arm64/fpcr/build-reference.sh "$cc" /tmp/arm64-fpcr-reference.o
           "$cc" -c tests/native/arm64_fpcr_code.S -o /tmp/arm64-fpcr-code.o
           "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy" \
             -O binary --only-section=.text /tmp/arm64-fpcr-code.o dist-arm64/arm64-fpcr-code.bin
@@ -172,7 +174,9 @@ jobs:
           # and the perf kernel (docs/arm64.md).
           "$cc" -shared -fPIC -O2 -fstack-protector-all \
             -Wl,-soname,libarm64_abi_test.so \
-            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c -ldl
+            -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c /tmp/arm64-fpcr-reference.o -ldl -lm
+          "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-arm64/arm64-fpcr-exec tests/native/arm64_fpcr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           # Step 3/4 (guest JNI): natives found by name and registered, calling
           # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
           # thread attached to the VM.

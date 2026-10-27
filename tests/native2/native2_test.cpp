@@ -68,6 +68,8 @@
 #include <thread>
 #include <vector>
 
+#include "../native/arm64_fpcr_contracts.h"
+
 namespace {
 
 struct Part {
@@ -689,8 +691,20 @@ std::vector<std::string> Symbols(const std::string& path) {
 
 #include "native3_unicode.inc"
 
+#if defined(__aarch64__)
+Part ArmFpcr() {
+  Part p{"fpcr"};
+  p.Check(Arm64FpcrContracts() == 0, "pinned FPCR rounding contracts");
+  p.notes.push_back("pinned FPCR modes0..3, actual arithmetic, bits, pthread inheritance/isolation and nested callbacks");
+  return p;
+}
+#endif
+
 std::string Run(const std::string& dir, const std::string& symbols) {
   std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir)};
+#if defined(__aarch64__)
+  parts.push_back(ArmFpcr());
+#endif
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {
