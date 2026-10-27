@@ -23,4 +23,5 @@ enum class UnicodeProperty {
 };
 
 uint32_t UnicodeValue(uint32_t codepoint, UnicodeProperty property);
+int UnicodeWidth(uint32_t codepoint);
 }  // namespace gesher::bionic

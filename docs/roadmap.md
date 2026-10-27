@@ -476,7 +476,22 @@ needs: [framework-build.md](framework-build.md).
       match pinned bionic ICU4X over every code point and invalid sentinels;
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
-      Widths, collation and remaining NDK/POSIX scope stay open.
+      Collation and remaining NDK/POSIX scope stay open.
+- [x] Pinned bionic wcwidth/wcswidth: separate signed x86_64 and unsigned
+      ARM64 locked ICU4X digests cover all code points/four invalid sentinels;
+      actual whole-range NDK calls, 33 boundaries and bounded UTF-32 strings
+      pass both ABIs and APK modes. Full ci 40430425743 at b3ecc85, both
+      Windows suites, package and required e2e; supersedes the earlier
+      incomplete shared-signed ARM expectations in ci 40404678100.
+- [x] ART current-thread/process CPU clocks match independent Win32 native
+      brackets, including caller/worker identity and process CPU accumulation.
+      Full ci 40430425743 at b3ecc85, both Windows suites/package/e2e.
+      Non-current pthread clocks and native allocator accounting remain open.
+- [x] ART monotonic NanoTime/MicroTime/MilliTime and clock-selecting absolute
+      deadlines: actual artbase matches independent QPC/UTC brackets, units,
+      concurrent ordering, elapsed sleep and relative rollover. Full ci
+      40434741055 at bdfb230, both Windows suites/package/required e2e;
+      original image-size/startup gates pass without changes or retries.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)
@@ -570,7 +585,19 @@ Media ([media.md](media.md), ADR 0042):
   - [x] MediaPlayer and VideoView with video (A/V sync to the audio clock),
         MediaMetadataRetriever.getFrameAtTime (ci run 40258833980)
   - [x] Software decoders for what Media Foundation lacks (VP8, VP9, AV1,
-        H.265) and a WebM extractor (ci run 40258938663;
-        [media-soft-video.md](media-soft-video.md))
-  - [ ] Hardware decoding (DXVA), MediaMuxer and encoders
-- [ ] Audio input: AudioRecord, MediaRecorder (stage 3)
+        H.265) and a WebM extractor (ci run 40258938663; media.md "Software
+        video decoders")
+  - [ ] Hardware decoding (DXVA)
+  - [x] MediaCodec AAC, Opus and H.264 encoders; MediaMuxer H.264/AAC MP4
+        and Opus-only WebM round trips (ci 40448521754, both runners and
+        APK modes). Hardware/MF-positive encoding, further formats and
+        WebM video/audio interleaving remain in media4.
+  - [x] MediaCodec decoder output into ImageReader YUV_420_888 Images
+        (ci 40448521754, both runners and APK modes).
+- [x] AudioRecord, AAudio/OpenSL input and MediaRecorder with a known WAV
+      input; Surface/Camera2 H.264/AAC recording, independent decoded tones/
+      frames, permission denial and terminal callbacks (stage 3,
+      ci 40448521754, both runners and APK modes).
+- [ ] Physical microphone/loopback, device removal/routes, remaining NDK
+      exports, session/recorder/container contracts and protected media
+      ([media4](handoff/tracks/media4.md), ADR 0064 reserved).

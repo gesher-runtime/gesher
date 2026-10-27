@@ -344,7 +344,7 @@ jint JNICALL AudioTrack_getLatency(JNIEnv* env, jobject thiz) {
 }
 jint JNICALL AudioTrack_getUnderrunCount(JNIEnv* env, jobject thiz) {
   auto t = GetTrack(env, thiz);
-  return t != nullptr ? static_cast<jint>(t->underrun_frames()) : kInvalidOperation;
+  return t != nullptr ? static_cast<jint>(t->underrun_count()) : kInvalidOperation;
 }
 jint JNICALL AudioTrack_getFlags(JNIEnv*, jobject) { return 0; }
 
