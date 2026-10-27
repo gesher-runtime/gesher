@@ -87,3 +87,17 @@ plain-transaction heap fallback, FDA/security/freeze/priority/readiness and
 other explicit Binder2 contracts remain open. Selected future source must pass
 both canonical Windows suites0, actual scope controls, installed package and
 both complete e2e sets0. All hardware/all-gap/release gates also remain.
+
+Separate source-review finding after this proof: CopyToUser in
+compat/posix/src/binder.cc uses WriteProcessMemory for command publication,
+without an explicit writable-page check. Microsoft's
+[API explanation](https://devblogs.microsoft.com/oldnewthing/20181206-00/?p=100415/)
+describes temporarily writing read-only pages and restoring their protection.
+This identifies a contract risk, not a newly observed Gesher runtime failure.
+The actual prefixfault fixture uses PROT_NONE after a writable BR_NOOP prefix;
+badread uses an invalid address. Neither proves rejection of stable PROT_READ
+output. A separate real read-only-output EFAULT/unchanged-bytes-and-protection/
+sender-and-FD-cleanup control remains required, with writable controls and both
+ABI/mode paths. Concurrent protection changes remain a distinct open contract;
+a preliminary page query alone does not prove race-safe copying. No source
+change, fixture run or broader EFAULT claim accompanies this documentation.
