@@ -32,6 +32,12 @@ trigger), watch with interval120, then read both actual256-row ELF/JNI/
 single/device results and every preserved FPCR/FPSR/JNI/variadic control.
 All aggregate/installer/e2e acceptance remains pending.
 
+Coherent prerequisite40549806536 is red before runtime: native builds pass,
+but its host jar step lacked JDK21 and javac rejected source21. The pending
+environment workflow now includes the same explicit Temurin21 correction.
+Environment dispatch still waits for corrected coherent runtime proof; the
+red prerequisite is not retried unchanged or relabeled verified.
+
 The earlier audit and proposed scope below are historical context; only
 the source/CI results subsequently recorded here can establish completion.
 
