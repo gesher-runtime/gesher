@@ -49,8 +49,11 @@ The README reflects this. No local compiler or runtime fixture is required for
 the held release preparation.
 
 Current preparation includes coordinator integration
-8922a3e2c56bc54cb4bfff95adcbc4259f846968, with verified startup profile,
-native monotonic/CPU clocks and signed/unsigned width work. The coordinator
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge2e347eb9), including the
+verified Media3/live-environ/deterministic-TLS combination and ten-app e2e
+set. Root personally read full40448521754/dd06d296, and its merged non-doc
+integration tree matches the verified source. Earlier integration also has
+the verified startup profile, native clocks and signed/unsigned width work. The coordinator
 personally accepted full40434741055/source
 bdfb230fa3d70797caece6568b6ac529e854b4ee; this agent does not claim to have
 independently read that whole run. The additive CI merge retains explicit
@@ -66,8 +69,9 @@ results process-generation-aware before a fresh child-zero claim is accepted.
 Windows4 full40447661700 proves actual first TSF reconversion, partial caret,
 foreground/shared Display and legacy resize on both runners but is red on the
 new non-editor fixture observation and external positive SNI. Its focus-gain
-fixture correction is prepared; the coordinated HTTP/SNI test slice and a new
-complete full run remain required. No preparation merge supplies release
+fixture correction is prepared; the coordinated HTTP/SNI slice now has actual
+both-runner component evidence, but a new combined full run remains required.
+No preparation merge supplies release
 verification or authorizes this agent to publish.
 
 Explicit release documentation gap: the repository README still described phase

@@ -20,7 +20,8 @@ asset. Local artifact downloads are not part of this procedure.
 
    Read every job, both zero-failure Windows summaries, the required track
    PASS lines, actual package install/run/input/uninstall cleanup and both e2e
-   zero-unexpected-failure summaries, including required TIC-80 and Puzzles.
+   zero-unexpected-failure summaries for the complete pinned app set, including
+   required Just Player, TIC-80 and Puzzles.
    Do not promote a partial rerun: all required jobs must belong to the same
    complete attempt. The post-smoke package receipt must exist.
 3. Review `docs/releases/0.1.0.md` against the final commit. Its source SHA and

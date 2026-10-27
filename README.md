@@ -71,16 +71,19 @@ cleanup](docs/installer.md) and [launcher options](app/README.md).
 - Supported networking/TLS paths use Windows networking and trust integration;
   WebViews use WebView2. Exact proxy, API and accessibility boundaries are in
   [networking](docs/network.md) and [WebView](docs/webview.md).
+- Selected audio capture, recording, video encoding and MediaSession paths
+  have scoped CI coverage; physical devices and hardware codecs require
+  separate verification. See [media support and limits](docs/media.md).
 - CI exercises installation, actual app windows and input, app shortcuts and
   file associations, and uninstall cleanup. The pinned real-app suite includes
-  text/widget apps, Simon Tatham's Puzzles and TIC-80; see the [e2e scope and
+  text/widget apps, Just Player, Simon Tatham's Puzzles and TIC-80; see the [e2e scope and
   evidence](docs/e2e.md).
 
 These are scoped implementation and test results, not a claim that the pending
 0.1.0 candidate has passed its final release gates. The [roadmap](docs/roadmap.md)
 and track handoffs distinguish verified work from remaining work. In particular,
-current Windows4 Android IME/composition, shared display and legacy resize
-corrections still need their full-suite result. Physical touch keyboard,
+the combined Windows4 and process-lifecycle changes still need final full
+validation. Physical touch keyboard,
 Wi-Fi/VPN/camera/sensor hardware and actual screen-reader speech are not
 established by hosted CI. API and hardware limitations remain documented at
 the corresponding subsystem links.
