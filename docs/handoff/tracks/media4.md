@@ -182,7 +182,8 @@ only framework artifacts of40507882249, with an explicit source assertion
 for06d30d403481d3833f0c7d5f99db456841b72062, entirely inside CI. It does not
 execute Gesher fixtures or replace a final full Windows matrix. That full
 still requires source peer review and the latest accepted integration.
-The running Surface405078 candidate is separate and immutable.
+The separate Surface405078 source remains immutable after its two Windows
+suites failed only the new test80; its correction is tracked in surfaces2.md.
 
 First compile-only ci40517106801 at0841f609853f0b996b5620a0aab82002eaa9ee44
 is complete RED: fixtures122233582626 passes in1m10s with actual encoded
@@ -212,24 +213,37 @@ or writer dependency is added to the independent reader. Fixtures pass
 in1m19s with the actual public NDK size/offset/value assertions on both
 ABIs, JNI/ELF and both APKs, with pinned framework source06 and all four
 independently encoded packet datasets. Actual logs/metadata were read and
-saved. No host executable link or Windows runtime acceptance follows yet.
+saved. No host executable link or Windows runtime acceptance follows from
+that failed source.
+
+Compile-only ci40523933946 is GREEN at
+3208ff7deefe7b10be1d12fbbd49953739e6531c. Both completed job logs and metadata
+were read: host122258201851 passes in4m54s, compiling the exact bridge and
+linking media_muxer_verify.exe with the direct audio OBJECT dependency.
+Fixtures122258202167 passes in59s, generating all four real packet datasets
+and compiling both NDK JNI/ELF ABIs, public-header static guards and both
+single-ABI APKs. The pinned framework source is still06. These jobs do not
+execute the reader, muxer or Gesher fixtures. The full Windows runtime,
+FD-offset traces, decoded-container oracles and final coherent CI remain
+open; no export inventory or roadmap acceptance is added.
 
 The next independent native-muxer slice is in progress with scoped compile
 evidence in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
 Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
-libcore I/O83 and test process infrastructure84 (next85).
+libcore I/O83 and test process infrastructure84. Further reservations belong
+to the coordinator.
 ADR0064 is retained. First preparation moves the
 three codec-configuration helper bodies unchanged out of encoder.cc and
 configures the actual MP4/WebM/Ogg writers once in a shared OBJECT target
 linked into both hosts; existing JNI encoders/writers retain the same
 helpers. A later source-only preparation adds ten typed System V entries
 over those real writers (new/delete, orientation/location, add/start/stop/
-write, track count/format). The first scope proves NDK caller/fixture builds,
-but no host bridge/oracle link, runtime or verified NDK muxer export is
-accepted yet. The new entries, GPS backend, two-ABI callers
+write, track count/format). The corrected compile scope now proves the host
+bridge/oracle link and NDK caller/fixture builds; no runtime or verified NDK
+muxer export is accepted yet. The new entries, GPS backend, two-ABI callers
 and independent reader/decoder oracle now exist as source; bounded peer
-review and compile-first CI preparation remain pending before full CI.
+review and the latest accepted integration remain prerequisites to full CI.
 Pinned NdkMediaMuxer/MediaMuxer/error-translation/MediaAppender sources were
 read with exact URL/hash audits in C:\work\gesher-ci-review. Important source
 contracts include LP64 BufferInfo size24/offsets0,4,8,16; BAD_VALUE maps to
@@ -273,8 +287,8 @@ exercises actual FD mode/ownership/seekability, state/error order, aliased
 AMessage ownership, padded-buffer offsets, interleaved/track-blocked writes
 and WebM timestamp controls. media.yml adds their generation/build sources;
 no full has been dispatched and nothing was compiled or executed locally.
-The first compile scope's actual generated inputs and both ABI callers/APKs
-pass, with the separate host header failure recorded above. The independent
+The corrected compile scope's actual generated inputs, both ABI callers/APKs
+and host link pass, following the two source failures recorded above. The independent
 host oracle's source links only readers/decoders, not
 the container writers. It requires exact60-frame/four-color video, real
 two-second PCM with the original1661/880/660Hz tones within2%, positive
