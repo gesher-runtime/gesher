@@ -52,7 +52,8 @@ void Trace(const char* phase, uint64_t expected, uint64_t observed, int queried 
   std::printf("INFO arm64 FPSR: %s expected=0x%08llx observed=0x%08llx query=0x%08x "
               "fpcr=0x%08llx host_mode=0x%x host_flags=0x%x host_mxcsr=0x%08x\n",
               phase, static_cast<unsigned long long>(expected), static_cast<unsigned long long>(observed),
-              queried, static_cast<unsigned long long>(control), host.mode, host.flags, host.mxcsr);
+              static_cast<unsigned>(queried), static_cast<unsigned long long>(control),
+              static_cast<unsigned>(host.mode), static_cast<unsigned>(host.flags), host.mxcsr);
 }
 NativeState original_native, outer_native;
 uint64_t SYSV Inner(uint64_t expected, uint64_t replacement) {
@@ -60,6 +61,8 @@ uint64_t SYSV Inner(uint64_t expected, uint64_t replacement) {
   uint64_t observed = Call(4);
   Trace("third guest level", expected, observed);
   Check(observed == expected, "third guest level inherits actual FPSR");
+  Call(5, expected);
+  Trace("identical warm third-level MRS", expected, Call(4));
   Check(Call(5, replacement) == replacement, "third guest directly changes FPSR");
   std::fesetround(FE_TOWARDZERO);
   std::feraiseexcept(FE_INVALID);
@@ -73,6 +76,8 @@ uint64_t SYSV Outer(uint64_t expected, uint64_t replacement) {
   uint64_t observed = Call(4);
   Trace("second guest level", expected, observed);
   Check(observed == expected, "nested guest inherits parent FPSR independently of host flags");
+  Call(5, expected);
+  Trace("identical warm second-level MRS", expected, Call(4));
   Check(Call(2, reinterpret_cast<uint64_t>(&Inner), expected, replacement) == replacement,
         "nested status callback completes");
   Check(Same(outer_native), "inner callback restores outer host flags and rounding");
@@ -107,6 +112,10 @@ int main(int argc, char** argv) {
   std::feraiseexcept(FE_DIVBYZERO);
   original_native = Native();
   Trace("initial guest/native state", 0, Call(4));
+  Call(5, 0);
+  uint64_t warm_initial = Call(4);
+  Trace("identical warm initial MRS", 0, warm_initial);
+  Check(warm_initial == 0, "warm initial MRS leaves the explicitly cleared status unchanged");
   Check(Call(1, 0) == 0 && Call(5, kQc | 0x9f) == (kQc | 0x9f), "direct register writes reach real backend");
   Check(One("fetestexcept", -1) == 0x9f && One("fetestexcept", 0x48000080) == 0x80,
         "test masks include denormal and exclude QC/unknown bits");
@@ -139,6 +148,13 @@ int main(int argc, char** argv) {
     Trace(op.operation == 6 ? "FDIV" : op.operation == 7 ? "FMUL" : "FADD", op.flags, observed, queried);
     Check(observed == op.flags && queried == static_cast<int>(op.flags),
           "actual FDIV/FMUL/FADD produces exception status, including IDC");
+    if (op.operation == 6 && op.left != 0) {
+      Call(5, 0);
+      (void)Call(op.operation, op.left, op.right);
+      uint64_t warmed = Call(4);
+      Trace("identical warm FDIV", op.flags, warmed, One("fetestexcept", -1));
+      Check(warmed == op.flags, "identical warm FDIV has only its actual exception flag");
+    }
     Check(Same(original_native), "real guest exception arithmetic preserves native fenv");
   }
   Call(1, 0);
@@ -149,6 +165,10 @@ int main(int argc, char** argv) {
   Trace("SQADD returned status", kQc, saturated, saturation_query);
   Trace("SQADD persisted status", kQc, saturation_status, saturation_query);
   Check(saturated == kQc && saturation_query == 0, "actual SQADD sets QC outside the C exception mask");
+  Call(5, 0);
+  uint64_t warm_saturation = Call(8);
+  Trace("identical warm SQADD", kQc, warm_saturation, One("fetestexcept", -1));
+  Check(warm_saturation == kQc, "identical warm SQADD sets only cumulative saturation");
   if (failures == 0) std::puts("PASS  arm64 FPSR: real FDIV FMUL FADD and saturating SIMD produce all six flags and QC");
   uint64_t before = kQc | 0x81, replacement = 0x92;
   Call(5, before);
@@ -166,6 +186,8 @@ int main(int argc, char** argv) {
     uint64_t initial = Call(4);
     Trace("new foreign thread", 0, initial);
     Check(initial == 0, "new foreign host thread has independent default guest FPSR");
+    Call(5, 0);
+    Trace("identical warm foreign-thread MRS", 0, Call(4));
     for (unsigned iteration = 0; iteration < 32; ++iteration) {
       uint64_t own = kQc | (UINT64_C(1) << i);
       Check(Call(5, own) == own && One("fetestexcept", -1) == static_cast<int>(own & 0x9f),
