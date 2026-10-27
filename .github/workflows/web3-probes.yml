@@ -13,8 +13,8 @@ permissions:
   contents: read
   actions: read
 env:
-  SOURCE_RUN: '40499454478'
-  SOURCE_SHA: '694a4cd6b067f1deea87015bceb2ad2160260154'
+  SOURCE_RUN: '40512344714'
+  SOURCE_SHA: '96b12ab6f9b5146870c7a373e337f762010eb6f1'
   LLVM_MINGW_TAG: '20261006'
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 concurrency:
@@ -52,12 +52,12 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Pin accepted runtime bytes and diagnostic-only source changes
+      - name: Pin original failing runtime bytes and diagnostic-only source changes
         id: source
         shell: pwsh
         env:
@@ -65,12 +65,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot read accepted supplying run' }
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read original supplying run' }
           if ($run.head_sha -cne $env:SOURCE_SHA -or $run.status -cne 'completed' -or
-              $run.conclusion -cne 'success' -or $run.run_attempt -ne 1 -or $run.name -cne 'ci' -or
+              $run.conclusion -cne 'failure' -or $run.run_attempt -ne 1 -or $run.name -cne 'ci' -or
               $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY) { throw 'Wrong supplying source/attempt/repository' }
           $paths = git diff --name-only $env:SOURCE_SHA HEAD
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot compare accepted source' }
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compare original source' }
           $allow = @('.github/workflows/web3-probes.yml','tests/windows/web3-probe.ps1',
             'tests/windows/web3/Observer.ps1','tests/windows/tracks/54-web3.ps1',
             'probes/web3/process_waits.cc','tools/web3/build-teardown-probe.sh',
@@ -82,7 +82,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify supplying jobs' }
           $suppliers = [ordered]@{ 'windows-x64'='build'; 'framework'='framework / framework';
             'native-libs'='native-libs / native-libs'; 'graphics'='graphics / build'; 'angle'='angle / build';
-            'arm64'='arm64 / build'; 'boot-image'='boot-image / compile'; 'webview'='webview / build'; 'exec'='exec / exec' }
+            'arm64'='arm64 / build'; 'boot-image'='boot-image / compile'; 'webview'='webview / build'; 'exec'='exec / exec';
+            'libs-tests'='libs / build'; 'art-gtests'='posix / build'; 'media'='media / media';
+            'surfaces'='surfaces / apps'; 'native2'='native2 / native2' }
           $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $artifacts.total_count -gt 100) { throw 'Cannot pin supplying artifacts' }
           foreach ($name in $suppliers.Keys) {
@@ -165,6 +167,41 @@ jobs:
           merge-multiple: true
           github-token: ${{ github.token }}
           run-id: ${{ env.SOURCE_RUN }}
-      - name: Run the real Web3 cases with bounded post-failure native observation
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.libs-tests }}
+          path: dist/libs-tests
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.art-gtests }}
+          path: dist/art-gtests
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.media }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.surfaces }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.native2 }}
+          path: dist/native2
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Replay original full suite with bounded post-failure native observation
         shell: pwsh
         run: pwsh -NoProfile -File tests/windows/web3-probe.ps1 dist observer/web3_process_waits.exe

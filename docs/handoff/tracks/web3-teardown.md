@@ -1,5 +1,18 @@
 # Web3 native-window teardown diagnostic
 
+## Resumed full-order diagnostic
+
+The resumed harness merges exact original failing source96b12ab6 and pins
+all14 supplying artifacts from full40512344714, attempt1. Every producer
+job, artifact ID/digest and source/repository identity is checked before
+download inside CI. No production runtime, Java jar or image is rebuilt.
+The original complete run-tests.ps1 now runs in its original order and with
+relative Dir=dist, retaining the known original AOT log-sharing failure.
+The observer runs only after test54 has recorded its unchanged deadline
+failure. The previous scoped694 green is retained as a no-recurrence control.
+This is diagnostic evidence collection, not an unchanged retry for acceptance
+or a claim of a teardown correction. Actual CI proof remains pending.
+
 ## Owner checkpoint
 
 Work is stopped at the owner's explicit request; no further implementation,
