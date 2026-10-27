@@ -42,7 +42,7 @@ int EnsureNulIdentity() {
   return 0;
 }
 
-int DisposeNul(PrivateDescriptor* owned) {
+int DisposeNul(PrivateDescriptor* owned, const DuplicateOperations* operations = nullptr) {
   const bool native = owned->kind == PrivateKind::kNativeNul;
   HANDLE current = native ? owned->native_handle : gesher::HandleFromFd(owned->descriptor);
   if (current == INVALID_HANDLE_VALUE) { *owned = {}; return 0; }
@@ -62,16 +62,21 @@ int DisposeNul(PrivateDescriptor* owned) {
   // bookkeeping. A failure is retained for identity checking on the next call.
   if (native) {
     if (!CloseHandle(current)) return WinError();
-  } else if (_close(owned->descriptor) < 0) return gesher_errno_from_crt(errno);
+  } else {
+    int error = 0;
+    if (operations && operations->close_nul) error = operations->close_nul(owned->descriptor);
+    else if (_close(owned->descriptor) < 0) error = gesher_errno_from_crt(errno);
+    if (error) return error;
+  }
   *owned = {};
   return 0;
 }
 
-int DisposeAllNuls(int except = -1) {
+int DisposeAllNuls(int except = -1, const DuplicateOperations* operations = nullptr) {
   int first_error = 0;
   for (auto& owned : private_descriptors) if (owned.kind == PrivateKind::kNativeNul ||
       (owned.kind == PrivateKind::kNul && owned.descriptor != except)) {
-    int error = DisposeNul(&owned);
+    int error = DisposeNul(&owned, operations);
     if (error && !first_error) first_error = error;
   }
   return first_error;
@@ -86,7 +91,7 @@ void RetainUnknownSource(PrivateDescriptor* owned, int error) {
                owned->descriptor, error);
 }
 
-int Reserve(int minimum, PrivateDescriptor** target) {
+int Reserve(int minimum, PrivateDescriptor** target, const DuplicateOperations* operations) {
   *target = nullptr;
   int error = DrainPrivateReservations();
   if (error) return error;
@@ -106,13 +111,13 @@ int Reserve(int minimum, PrivateDescriptor** target) {
     }
     owned = {PrivateKind::kNul, fd, nullptr};
     if (fd >= minimum) {
-      error = DisposeAllNuls(fd);
+      error = DisposeAllNuls(fd, operations);
       if (!error) { *target = &owned; return 0; }
       break;
     }
   }
   if (!error) error = EMFILE;
-  int cleanup = DisposeAllNuls();
+  int cleanup = DisposeAllNuls(-1, operations);
   return cleanup ? cleanup : error;
 }
 }  // namespace
@@ -124,14 +129,25 @@ int DrainPrivateReservations() {
   return DisposeAllNuls(publishing_target);
 }
 
-int DuplicateAtLeast(int descriptor, int minimum, bool close_on_exec) {
+PrivateReservationStatus InspectPrivateReservations() {
+  DescriptorGuard guard;
+  PrivateReservationStatus status{};
+  for (const auto& owned : private_descriptors) {
+    status.nul += owned.kind == PrivateKind::kNul;
+    status.native_nul += owned.kind == PrivateKind::kNativeNul;
+    status.uncertain += owned.kind == PrivateKind::kUnknownSource;
+  }
+  return status;
+}
+
+int DuplicateAtLeast(int descriptor, int minimum, bool close_on_exec, const DuplicateOperations* operations) {
   const int saved_errno = errno;
   DescriptorGuard guard;
   HANDLE source = gesher::HandleFromFd(descriptor);
   if (source == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   if (minimum < 0 || minimum >= static_cast<int>(kDescriptorCapacity)) return errno = EINVAL, -1;
   PrivateDescriptor* target = nullptr;
-  int error = Reserve(minimum, &target);
+  int error = Reserve(minimum, &target, operations);
   if (error) return errno = error, -1;
   const int fd = target->descriptor;
   // The target is an actual occupied, noninherited NUL reservation. Every
@@ -163,12 +179,18 @@ int DuplicateAtLeast(int descriptor, int minimum, bool close_on_exec) {
   // SOCKET transport is never inherited. Do not export only its meaningless
   // CRT NUL placeholder when plain F_DUPFD is requested.
   const bool inherit = !close_on_exec && !source_is_socket;
-  if (!SetHandleInformation(published, HANDLE_FLAG_INHERIT, inherit ? HANDLE_FLAG_INHERIT : 0)) {
-    error = WinError();
+  int flag_error = 0;
+  if (operations && operations->set_inherit) flag_error = operations->set_inherit(fd, published, inherit);
+  else if (!SetHandleInformation(published, HANDLE_FLAG_INHERIT, inherit ? HANDLE_FLAG_INHERIT : 0)) flag_error = WinError();
+  if (flag_error) {
+    error = flag_error;
     // This is still our just-created, unpublished alias. Close it ONCE with
     // complete virtual-resource cleanup, preserving user POSIX locks. Any error is ambiguous;
     // retain/account it and refuse later ownership-changing operations.
-    if (gesher::CloseUnpublishedDuplicate(fd) < 0) RetainUnknownSource(target, errno);
+    int cleanup = 0;
+    if (operations && operations->close_unpublished) cleanup = operations->close_unpublished(fd);
+    else if (gesher::CloseUnpublishedDuplicate(fd) < 0) cleanup = errno;
+    if (cleanup) RetainUnknownSource(target, cleanup);
     else *target = {};
     return errno = error, -1;
   }
