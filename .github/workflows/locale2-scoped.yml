@@ -1,0 +1,71 @@
+name: locale2-scoped
+
+on:
+  push:
+    branches: ['wip/locale2']
+    paths:
+      - '.github/workflows/locale2-scoped.yml'
+      - '.github/workflows/framework.yml'
+      - 'app/java/com/gesher/server/LocaleManagerService.java'
+      - 'tests/apps/locale2app/**'
+      - 'tests/apps/locale2other/**'
+      - 'tests/windows/run-locale2-scoped.ps1'
+      - 'tests/windows/tracks/81-locale2.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: locale2-scoped-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
+  test:
+    needs: framework
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Immutable, personally verified full runtime. This scoped run compiles the
+      # current Java/APKs; it is not a native rebuild or product/package acceptance.
+      LOCALE2_RUNTIME_RUN: '40498782924'
+      LOCALE2_RUNTIME_SHA: '8ec4bf3c30160575c8df794ad2ca1406957adc98'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact accepted runtime source and download inside CI only
+        shell: pwsh
+        run: |
+          $run = gh api "repos/${{ github.repository }}/actions/runs/$env:LOCALE2_RUNTIME_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $env:LOCALE2_RUNTIME_SHA -or
+              $run.conclusion -cne 'success' -or $run.name -cne 'ci') {
+            throw 'The immutable native runtime run/source is not the required successful full CI'
+          }
+          Write-Host "ACTUAL_LOCALE2_NATIVE_RUNTIME run=$($run.id) source=$($run.head_sha) conclusion=$($run.conclusion)"
+          foreach ($artifact in 'windows-x64', 'graphics', 'angle', 'media', 'webview', 'exec', 'arm64') {
+            gh run download $env:LOCALE2_RUNTIME_RUN -R '${{ github.repository }}' -n $artifact -D dist
+            if ($LASTEXITCODE -ne 0) { throw "Missing immutable runtime artifact $artifact" }
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+      - name: Actual public locale APIs and resources, single/device modes
+        shell: pwsh
+        run: |
+          Write-Host 'ACTUAL_LOCALE2_JAVA_SOURCE ${{ github.sha }} (current-run compiled framework and APKs)'
+          tests/windows/run-locale2-scoped.ps1 -Dir "$PWD/dist"
+      - name: CI diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locale2-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/gesher-locale2-scoped/logs-*/**
+          if-no-files-found: ignore

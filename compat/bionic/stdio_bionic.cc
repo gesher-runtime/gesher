@@ -50,17 +50,9 @@ namespace {
 // 16 bytes. Narrowed to double for the CRT (which has no binary128).
 double NextFp128(SysvVaList* ap) {
   uint64_t lo, hi;
-  if (ap->fp_offset < 176) {
-    std::memcpy(&lo, ap->reg_save_area + ap->fp_offset, 8);
-    std::memcpy(&hi, ap->reg_save_area + ap->fp_offset + 8, 8);
-    ap->fp_offset += 16;
-  } else {
-    auto a = reinterpret_cast<uintptr_t>(ap->overflow_arg_area);
-    a = (a + 15) & ~uintptr_t{15};
-    std::memcpy(&lo, reinterpret_cast<void*>(a), 8);
-    std::memcpy(&hi, reinterpret_cast<void*>(a + 8), 8);
-    ap->overflow_arg_area = reinterpret_cast<uint8_t*>(a + 16);
-  }
+  const uint8_t* source = NextFpArea(ap, 16);
+  std::memcpy(&lo, source, 8);
+  std::memcpy(&hi, source + 8, 8);
   uint64_t sign = hi >> 63;
   int64_t exp = static_cast<int64_t>((hi >> 48) & 0x7fff);
   uint64_t mant = ((hi & 0xffffffffffffULL) << 4) | (lo >> 60);

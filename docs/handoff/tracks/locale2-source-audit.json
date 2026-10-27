@@ -1,0 +1,25 @@
+{
+  "baseline": "android-16.0.0_r4",
+  "integration": "7b49a7181fabeba0afd7e230d7b466ba656a679c",
+  "verification": "scoped CI40512781936/source004fff10: four actual job logs read, both21PASS/zero; full coherent product verification pending",
+  "coherent_integration": "bc6e05bea341d1dc79920deaf3f069ad690fedc4",
+  "coherent_fpsr_stage": "75e7ef29645302a860e702207b43131f9f28b1d3",
+  "source_root": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/",
+  "sha256": {
+    "services/core/java/com/android/server/locales/LocaleManagerService.java": "2aa666ec5d650fef42258fac347cdf46cd69b2920c0836790d59deefd57342b6",
+    "core/java/android/app/LocaleConfig.java": "c30d1619b5ec94b1ccc2695bfc61a2f45272aea1570c6858f9d98ad3f479f9dd",
+    "core/java/android/app/LocaleManager.java": "7c9102d4ee31f8db9b9e04cd8d4036efe805a2350158b6d38424a0cdb42f6870",
+    "core/java/android/util/AtomicFile.java": "90e1cc85e92e53e6c257e49156677de354a79d2b6caf65d826cb77d0cffab70e",
+    "services/core/java/com/android/server/am/UserController.java": "1d8bbd6eacbb818642dc8db8184d1e7fd83d94c6287d577a560aeac57b457637"
+  },
+  "anchors": {
+    "selected_set_authority": "LocaleManagerService.java:231-265",
+    "selected_get_authority": "LocaleManagerService.java:405-438",
+    "override_set_authority": "LocaleManagerService.java:569-599",
+    "override_null_empty_same_write": "LocaleManagerService.java:614-678",
+    "reconcile_contains_locale": "LocaleManagerService.java:699-730",
+    "public_override_get": "LocaleManagerService.java:751-788",
+    "locale_config_equality_and_contains": "LocaleConfig.java:338-384",
+    "incoming_user_current_or_self": "UserController.java:3371-3465"
+  }
+}

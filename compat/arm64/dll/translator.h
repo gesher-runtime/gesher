@@ -38,6 +38,13 @@ void* GuestSymbol(const char* name);
 // wraps and registers the shim's va_list functions.
 void InitGuestLibc();
 
+// The calling guest thread's actual FPCR, including changes made by MSR.
+// Host callbacks run outside Jit::Run; setters take effect before resuming.
+uint32_t GuestFpcr();
+void SetGuestFpcr(uint32_t value);
+uint32_t GuestFpsr();
+void SetGuestFpsr(uint32_t value);
+
 // A raw `SVC #0` in guest code: Linux arm64 syscall `nr` with x0..x5. Returns
 // the raw kernel result (-errno on failure).
 int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]);
