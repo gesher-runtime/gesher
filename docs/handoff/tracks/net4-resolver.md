@@ -7,6 +7,20 @@ and its immutable `wip/net4-coherent-verified` ref remain unchanged.
 
 ## Status and next steps
 
+Full **40519019567**, exact source
+`f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a`, attempt1, is complete green:
+28jobs22success/6skip; both actual Windows logs730 top PASS/0 FAIL and zero
+failed tests. Each runner has all16 NDK caller contexts, eight real WinSDK
+comparisons per allowed standalone ABI, four-thread TLS/ownership/error
+controls, permission variants and app/device cleanup. Actual package23 and
+both complete ten-app e2e sets0unexpected also pass. All22 successful logs
+and every job's metadata were read. [Exact bounded evidence](net4-resolver-final.md).
+The four exports already existed, so no missing-entry count or inventory
+proof is rewritten; all145 existing proof objects and remaining82 entries
+stay unchanged. Root independent acceptance/merge remains separate.
+
+### Earlier source and preflight notes
+
 Production/oracle preflight40517730958 at exactb5504170 is complete green:
 actual compile122235599671 contains all three llvm-mingw/Werror/exception-free
 translation-unit markers; actual oracle122235685875/122235685683 logs contain
