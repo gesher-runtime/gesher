@@ -43,6 +43,27 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
+Release preparation now includes accepted Windows4/Web3 integration6297e80a
+(mergebf4cf7fe), retaining explicit release_version, early installer upload,
+post-smoke receipt and promotion/source/attempt/digest guards. Root accepted
+full40466021634/source160 after independently reading every outcome and the
+five actual critical logs: both Windows0failed, package23 and both ten-app
+e2e sets0unexpected. The earlier exit-freshness prerequisite is included and
+verified. The README now reflects that bounded evidence while keeping0.1.0
+unpublished and not release-verified.
+
+The reviewed Media OpenSL notice proposal is imported only in this release
+worktree (patch SHA256f9c4197cf2200bc012dd2ce7e73b5a7dc70a01c59c3733f1982953dff03429d1).
+It ships the pinned canonical interface-table notice under licenses and checks
+the actual installed file's exact source SHA256 in package CI, without changing
+the23 PASS count or release/version guards. This packaging change still needs
+actual package/release-version CI; it is not an artifact/publication claim.
+Final source must include the coordinator's accepted coherent remaining tracks
+before the release-version full and main promotion. No source from running
+Net4/AOT/Surface candidates is imported here; Root alone publishes/releases.
+
+### Earlier preparation and diagnostic history
+
 The owner's latest local-load instruction covers Java as well: all C/C++/Java
 compilation and native/JVM fixtures run only in CI, including tiny probes.
 The README reflects this. No local compiler or runtime fixture is required for

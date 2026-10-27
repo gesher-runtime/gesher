@@ -71,6 +71,10 @@ cleanup](docs/installer.md) and [launcher options](app/README.md).
 - Supported networking/TLS paths use Windows networking and trust integration;
   WebViews use WebView2. Exact proxy, API and accessibility boundaries are in
   [networking](docs/network.md) and [WebView](docs/webview.md).
+- Windows text input includes verified existing-text TSF reconversion,
+  restricted-editor handling and legacy resize behavior. Application display
+  snapshots follow the focused task; each Activity retains its own rotation.
+  See the [Windows4 scope and limits](docs/handoff/tracks/windows4-final.md).
 - Selected audio capture, recording, video encoding and MediaSession paths
   have scoped CI coverage; physical devices and hardware codecs require
   separate verification. See [media support and limits](docs/media.md).
@@ -81,9 +85,11 @@ cleanup](docs/installer.md) and [launcher options](app/README.md).
 
 These are scoped implementation and test results, not a claim that the pending
 0.1.0 candidate has passed its final release gates. The [roadmap](docs/roadmap.md)
-and track handoffs distinguish verified work from remaining work. In particular,
-the combined Windows4 and process-lifecycle changes still need final full
-validation. Physical touch keyboard,
+and track handoffs distinguish verified work from remaining work. The bounded
+Windows4/Web3/process-lifecycle combination passed full CI40466021634 on
+Windows2022 and2025, including installer cleanup and both ten-app suites;
+the final release source and published bytes still require their own gates.
+Physical touch keyboard,
 Wi-Fi/VPN/camera/sensor hardware and actual screen-reader speech are not
 established by hosted CI. API and hardware limitations remain documented at
 the corresponding subsystem links.
@@ -107,8 +113,8 @@ The source is pinned to `android-16.0.0_r4`. See the
 GitHub Actions builds the pinned AOSP sources and Gesher with llvm-mingw and
 `-Werror`, then runs the Windows suites, installer smoke and real-app e2e.
 Use the repository's [CI workflow](.github/workflows/ci.yml) for complete
-validation. C/C++/Java compilation and native/JVM fixtures on the project workstation
-run only in CI; source edits and lightweight script checks do not require a
+validation. All C/C++/Java/C# compilation and executable fixtures on the project
+workstation run only in CI; source edits and lightweight script checks do not require a
 local AOSP build or WSL. Track contributors follow the
 [handoff rules](docs/handoff/track-rules.md).
 

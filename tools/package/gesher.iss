@@ -76,6 +76,8 @@ Source: "{#BuildDir}\framework\x86_64\*"; DestDir: "{app}\framework\x86_64"; Fla
 Source: "{#BuildDir}\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\ANGLE-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+; The canonical OpenSL interface identifiers retain their source notice.
+Source: "OPENSL-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 ; The arm64 translator (docs/arm64.md, ADR 0047): dalvikvm LoadLibrary()s it to
 ; run arm64-v8a apps' native code. dynarmic is 0BSD (DYNARMIC-NOTICES.txt).
 Source: "{#BuildDir}\gesher_arm64.dll"; DestDir: "{app}"; Flags: ignoreversion
