@@ -97,6 +97,43 @@ void ConcurrentProducers() {
   Check(posts.load() == 2, "concurrent-producers-coalesce");
 }
 
+void OldFailureKeepsNewPost() {
+  FrameInvalidation gate;
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool entered = false, release = false;
+  Result old_result = Result::kPosted;
+  std::thread old_post([&] {
+    old_result = gate.Request([&] {
+      std::unique_lock<std::mutex> lock(mutex);
+      entered = true;
+      changed.notify_one();
+      changed.wait_for(lock, std::chrono::seconds(10), [&] { return release; });
+      return Result::kNoView;
+    });
+  });
+  bool waiting;
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    waiting = changed.wait_for(lock, std::chrono::seconds(5), [&] { return entered; });
+  }
+  gate.Acknowledge([] {});
+  int posts = 0;
+  const Result newer = gate.Request([&] { ++posts; return Result::kPosted; });
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    release = true;
+  }
+  changed.notify_one();
+  old_post.join();
+  const Result pending = gate.Request([&] { ++posts; return Result::kPosted; });
+  gate.Acknowledge([] {});
+  const Result after = gate.Request([&] { ++posts; return Result::kPosted; });
+  Check(waiting && old_result == Result::kNoView && newer == Result::kPosted &&
+        pending == Result::kCoalesced && after == Result::kPosted && posts == 2,
+        "old-failure-keeps-new-post");
+}
+
 }  // namespace
 
 int main() {
@@ -106,6 +143,7 @@ int main() {
   CoalesceUntilDraw();
   BindBeforeAcknowledge();
   ConcurrentProducers();
+  OldFailureKeepsNewPost();
   std::printf("surface invalidation: %d failure(s)\n", failed);
   return failed == 0 ? 0 : 1;
 }

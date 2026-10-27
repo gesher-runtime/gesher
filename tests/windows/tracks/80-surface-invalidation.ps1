@@ -5,26 +5,39 @@ function InvalidationBounded([string] $Exe, [string[]] $Arguments, [int] $Second
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
   foreach ($argument in $Arguments) { $psi.ArgumentList.Add($argument) }
   $process = [Diagnostics.Process]::Start($psi)
-  $stdout = $process.StandardOutput.ReadToEndAsync()
-  $stderr = $process.StandardError.ReadToEndAsync()
-  $completed = $process.WaitForExit($Seconds * 1000)
-  if (-not $completed) { $process.Kill($true) }
-  $process.WaitForExit()
-  return @{ Text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult();
-    Exit = $(if ($completed) { $process.ExitCode } else { 124 }) }
+  $text = ''
+  $timedOut = $false
+  try {
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($Seconds * 1000)) {
+      $timedOut = $true
+      $text += "process exceeded $Seconds seconds`n"
+      try { $process.Kill($true) } catch { $text += "process kill failed: $_`n" }
+      if (-not $process.WaitForExit(5000)) { $text += "process still alive five seconds after kill`n" }
+    }
+    foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+      try {
+        if ($pipe.Task.Wait(5000)) { $text += $pipe.Task.Result }
+        else { $timedOut = $true; $text += "$($pipe.Name) did not finish within five seconds`n" }
+      } catch { $timedOut = $true; $text += "$($pipe.Name) read failed: $_`n" }
+    }
+    return @{ Text = $text; Exit = $(if ($timedOut) { 124 } else { $process.ExitCode }) }
+  } finally { $process.Dispose() }
 }
 
 $ivControls = @('no-env-then-recovery', 'no-view-then-recovery',
   'java-post-failure-then-recovery', 'coalesce-until-draw',
-  'bind-before-acknowledge', 'concurrent-producers-coalesce')
+  'bind-before-acknowledge', 'concurrent-producers-coalesce', 'old-failure-keeps-new-post')
 $ivRun = InvalidationBounded "$Dir/surface_invalidation_test.exe" @() 30
 $ivText = $ivRun.Text
 $ivExit = $ivRun.Exit
 $ivMissing = @($ivControls | Where-Object { -not $ivText.Contains("surface invalidation ${_}: ok") })
 if ($ivExit -eq 0 -and $ivMissing.Count -eq 0 -and $ivText.Contains('surface invalidation: 0 failure(s)')) {
-  Write-Host 'PASS  surface invalidation: failed posts recover, successful posts coalesce, binding precedes acknowledgement under a controlled barrier'
+  Write-Host 'PASS  surface invalidation: failed posts recover, newer posts survive old failures, successful posts coalesce, binding precedes acknowledgement under controlled barriers'
 } else {
   Write-Host "FAIL  surface invalidation: production scheduling controls (exit $ivExit; missing $($ivMissing -join ', '))"
   Write-Host $ivText

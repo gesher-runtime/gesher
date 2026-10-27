@@ -21,13 +21,17 @@ which condition caused that original blank frame.
 ## Decision
 
 Use a small FrameInvalidation gate in the production listener. A failed
-post clears pending, so the next producer frame can retry. A successful post
+post releases its own generation's pending state, so the next producer frame
+can retry. A delayed failure cannot clear a newer successful request after
+an intervening draw. A successful post
 coalesces later requests until drawing publishes the weak view and then
 acknowledges the invalidation. Preserve the actual JNI post, exception and
 reference handling. Bounded opt-in traces expose request outcome, latest
 frame, draw and consumed frame; unsampled pixel data is labelled explicitly.
 
-Compile and run controlled gate tests only in CI. Exercise real EGL producer
+Compile and run seven controlled gate tests only in CI, including the
+old-failure/draw/new-post ordering under a barrier. Bound process, post-kill
+and pipe-drain waits and fail on unfinished pipes. Exercise real EGL producer
 color changes without input or explicit View.invalidate on both native ABIs,
 in single-process and fresh-device modes. Retain the original SurfaceGL and
 TIC-80 checks. After an original blank-frame failure, collect fifteen seconds

@@ -66,10 +66,15 @@ ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
 cleared pending before publishing its weak view. The correction retries
 after failed posts and binds the weak view before acknowledging the draw.
-A small production gate is shared with six CI-only controlled tests:
+A small production gate is shared with seven CI-only controlled tests:
 no-env/no-view/Java-post failure followed by recovery, pending coalescing,
-a barrier that holds binding before acknowledgement, and concurrent
-producers. Opt-in bounded traces record actual latest-frame/request outcome,
+a barrier that holds binding before acknowledgement, concurrent producers,
+and a delayed old failure after a newer successful post. Generation-tagged
+pending requests prevent that old failure from clearing the newer request.
+Root identified the missing generation guard during source review; no
+runtime acceptance follows from that review. All new process, post-kill
+and redirected-pipe waits are bounded, with unfinished pipes a failure.
+Opt-in bounded traces record actual latest-frame/request outcome,
 draw and consumed-frame numbers; a bounded pixel sample distinguishes black
 producer frames without making an unsampled value a pixel-count claim.
 
