@@ -89,3 +89,18 @@ wait-request fields are storage only until actual liveness/lifetime code is
 implemented. ACL/nonadministrator/cross-session behavior, abandonment/crash/
 corruption/heap-failure tests and bounded source peer review precede its
 Windows CI qualification. No production fcntl/close hook is installed yet.
+
+Liveness/identity source foundation is additionally prepared in
+record_lock_liveness.{h,cc}, still uncompiled/unwired. Real probes compare
+PID/TID plus creation FILETIME and signaled process/thread handles; access/
+query failures are Unknown and never treated as dead. Staged pruning retains
+all unknown references/owners/waits and only removes confirmed dead owners;
+OFD locks require surviving description references. Registry validation now
+rejects inconsistent POSIX PID/creation identity and orphan OFD records before
+pruning. File keys use authoritative64-bit volume+128-bit FileIdInfo, and
+documented NtQueryObject basic GrantedAccess supplies actual handle rights
+without assuming F_GETFL's old O_RDWR fallback. See Microsoft's
+[NtQueryObject contract](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryobject)
+and [file identity notes](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information).
+Deterministic injected query denial/PID reuse and actual cross-process death/
+thread cancellation tests remain required. No native code ran locally.

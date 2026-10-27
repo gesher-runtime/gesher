@@ -56,17 +56,31 @@ bool ValidOwner(const Owner& owner) {
 bool ValidRecord(const Record& record) {
   return ValidOwner(record.owner) && static_cast<unsigned>(record.kind) < 2 &&
     record.range.start < record.range.end && record.range.end <= kThroughEof &&
-    (record.owner.kind == Ownership::kDescription ? record.pid == -1 : record.pid > 0);
+    (record.owner.kind == Ownership::kDescription ? record.pid == -1 :
+      record.pid > 0 && record.owner.low == static_cast<uint32_t>(record.pid) && record.owner.high != 0);
 }
 
 bool ValidState(const RegistryState& state) {
   if (state.locks.count > kRecordCapacity || state.reference_count > kReferenceCapacity ||
       state.wait_count > kWaitCapacity) return false;
-  for (const Record& record : state.locks) if (!ValidRecord(record)) return false;
   for (size_t index = 0; index < state.reference_count; ++index) {
     const Reference& reference = state.references[index];
     if (!ValidOwner(reference.description) || reference.description.kind != Ownership::kDescription ||
-        reference.process.pid == 0 || reference.process.created == 0 || reference.native_handle == 0) return false;
+        reference.process.pid == 0 || reference.process.created == 0 || reference.native_handle == 0 ||
+        reference.native_handle == UINT64_MAX) return false;
+  }
+  for (const Record& record : state.locks) {
+    if (!ValidRecord(record)) return false;
+    if (record.owner.kind == Ownership::kDescription) {
+      bool referenced = false;
+      for (size_t index = 0; index < state.reference_count; ++index) {
+        if (state.references[index].description == record.owner && state.references[index].file == record.file) {
+          referenced = true;
+          break;
+        }
+      }
+      if (!referenced) return false;
+    }
   }
   for (size_t index = 0; index < state.wait_count; ++index) {
     const WaitingRequest& request = state.waits[index];
