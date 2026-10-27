@@ -1,0 +1,64 @@
+name: media4-muxer-component
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/media4-muxer]
+    paths:
+      - .github/workflows/media4-muxer-component.yml
+      - tests/windows/run-media4-muxer-component.ps1
+      - tests/windows/tracks/79-media4-muxer.ps1
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: media4-muxer-component-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  actual:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact unchanged production and successful matching artifact producers
+        shell: pwsh
+        run: |
+          $source = '5d9e24d3df1e9caa77c21dbae360a1f32988b943'
+          $run = gh api repos/${{ github.repository }}/actions/runs/40527788805 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $source -or $run.name -cne 'ci' -or
+              $run.run_attempt -ne 1 -or $run.conclusion -cne 'failure') {
+            throw 'Unexpected immutable muxer full run/source/attempt'
+          }
+          git diff --exit-code $source HEAD -- . ':!docs/**' ':!tests/windows/tracks/79-media4-muxer.ps1' ':!tests/windows/run-media4-muxer-component.ps1' ':!.github/workflows/media4-muxer-component.yml'
+          if ($LASTEXITCODE -ne 0) { throw 'Component may change only muxer harness/logging; rebuild changed runtime code' }
+          $jobs = gh api repos/${{ github.repository }}/actions/runs/40527788805/jobs --paginate | ConvertFrom-Json
+          foreach ($name in 'build','framework / framework','graphics / build','angle / build','arm64 / build','boot-image / compile','media / media') {
+            $job = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Unproved producer $name" }
+            Write-Host "ACTUAL_MUXER_PRODUCER name=$name job=$($job[0].id) source=$source result=success"
+          }
+          foreach ($artifact in 'windows-x64','framework','graphics','angle','arm64','boot-image','media') {
+            gh run download 40527788805 -R '${{ github.repository }}' -n $artifact -D dist
+            if ($LASTEXITCODE -ne 0) { throw "Missing immutable runtime artifact $artifact" }
+          }
+          foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            Write-Host "ACTUAL_MUXER_JAR name=$name sha256=$((Get-FileHash "dist/$name.jar" -Algorithm SHA256).Hash) source=$source"
+          }
+          foreach ($path in 'dalvikvm.exe','gesher-exec.exe','gesher_arm64.dll','media_muxer_verify.exe','framework/x86_64/boot.art','media/ndk-muxer/fixtures/h264-aac.json') {
+            if (-not (Test-Path "dist/$path")) { throw "Missing matching artifact member $path" }
+            Write-Host "ACTUAL_MUXER_MEMBER name=$path sha256=$((Get-FileHash "dist/$path" -Algorithm SHA256).Hash) source=$source"
+          }
+      - name: Actual eight contexts with the full suite relative Dir
+        shell: pwsh
+        run: tests/windows/run-media4-muxer-component.ps1 -Dir dist -PathMode relative
+      - name: Actual eight contexts with absolute Dir
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/run-media4-muxer-component.ps1 -Dir "$PWD/dist" -PathMode absolute

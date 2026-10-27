@@ -568,3 +568,28 @@ its original fields and adds exact c596/40459815375 verification to only the
 143 format entries. A scoped roadmap box records the real format slice;
 the broad media box remains open. All remaining contracts listed above stay
 open. No later Media4 implementation is included in this frozen source.
+
+## Resumed muxer startup diagnosis (2026-10-27)
+
+Full40527788805/source5d9e24d3df1e9caa77c21dbae360a1f32988b943 is red:
+both Windows18 failed. All eight contexts failed before their ABI/caller and
+semantic markers, so no18-part/12FD/10-output or independent decode proof
+exists. Package and e2e conclusions are green; no installed-new-notice claim.
+
+Actual plain logs prove a harness working-directory defect. InvokeMuxer sets
+WorkingDirectory=Dir=dist while arguments and the boot image retain paths
+relative to the repository caller. ART reports Unable to open dist/core-oj.jar
+then GESHER_REQUIRE_BOOT_IMAGE aborts with0xC0000409. Standalone reports
+CANNOT LINK EXECUTABLE: cannot open dist/media/ndk-muxer/x86_64/ndk-muxer-test.
+This explains common startup failure independently of ARM varargs; it proves
+no muxer semantic behavior. Exact full logs are saved under
+C:/work/gesher-ci-review/muxer-40527788805-resume-test2022.log and test2025.log.
+
+The harness now resolves the host executable and preserves caller cwd, with
+all original18-part/12FD/10-output/independent decode gates unchanged. It
+prints actual semantic rows as well as FD/output records. A narrow component
+uses unchanged production and matching immutable artifacts from the failed
+full's successful build producers; source/attempt/jobs and five jars/images
+are guarded. Both relative Dir=dist and absolute Dir exercise the full eight
+contexts on each Windows version. Component acceptance remains pending and
+does not replace a coherent full or the Surface/AAudio/notice prerequisite.
