@@ -200,6 +200,20 @@ NdkMediaCodec.h SHA256 1D9F8AC727A79AF55C199054D240F26AB6CD3E31027E883D02B4C8293
 and NdkMediaMuxer.h SHA256 4FC08AFB8507C72C01A8C62086F8D4D85529E64A0B598B2EEEECFFC8E42E0C10
 are preserved in the source audit. All subsequent builds remain CI-only.
 
+Corrected compile-only ci40519714094 at
+ca2dc5a5ecfbc0c53a629483a2e7a368e789db98 is complete RED. Its actual host
+log shows the bridge object and independent verify_output.cc compile with
+the explicit ABI declarations, then the oracle link fails on14 unresolved
+real audio-backend entries, including BytesPerSample and Track methods.
+The link line emits player_core OBJECT files but not its transitive audio
+OBJECT dependency. The correction explicitly links gesher_media_audio,
+matching the accepted dalvikvm/gesher-exec direct OBJECT pattern; no stub
+or writer dependency is added to the independent reader. Fixtures pass
+in1m19s with the actual public NDK size/offset/value assertions on both
+ABIs, JNI/ELF and both APKs, with pinned framework source06 and all four
+independently encoded packet datasets. Actual logs/metadata were read and
+saved. No host executable link or Windows runtime acceptance follows yet.
+
 The next independent native-muxer slice is in progress with scoped compile
 evidence in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.

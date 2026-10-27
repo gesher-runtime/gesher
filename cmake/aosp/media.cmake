@@ -101,7 +101,7 @@ target_link_libraries(gesher-exec PRIVATE gesher_media_muxer)
 # This reader/decoder oracle deliberately does not link the muxer writers.
 add_executable(media_muxer_verify "${CMAKE_SOURCE_DIR}/tests/media/ndk-muxer/verify_output.cc")
 target_include_directories(media_muxer_verify PRIVATE "${CMAKE_SOURCE_DIR}")
-target_link_libraries(media_muxer_verify PRIVATE gesher_media_player_core gesher_elf)
+target_link_libraries(media_muxer_verify PRIVATE gesher_media_audio gesher_media_player_core gesher_elf)
 target_compile_options(media_muxer_verify PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   -Wno-deprecated-copy)
 set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
