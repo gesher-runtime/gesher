@@ -1,0 +1,61 @@
+name: windows4-probes
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/windows4']
+    paths: ['.github/workflows/windows4-probes.yml']
+permissions:
+  contents: read
+concurrency:
+  group: windows4-standalone-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: toolchain
+        with:
+          path: ~/toolchain
+          key: ${{ env.LLVM_MINGW_NAME }}
+      - name: Fetch the pinned compiler only
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ~/toolchain
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" | tar -xJ -C ~/toolchain
+      - name: Compile Gesher native fixtures with llvm-mingw and Werror
+        shell: bash
+        run: bash tools/windows4/build-probes.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows4-standalone-native
+          path: dist-windows4/
+          if-no-files-found: error
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows4-standalone-native
+          path: dist-windows4/
+      - name: Exercise real COM and TSF fixtures
+        shell: pwsh
+        run: probes/windows4/run-standalone.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows4-standalone-logs-${{ matrix.os }}
+          path: windows4-probe-logs/

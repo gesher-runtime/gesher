@@ -1,9 +1,8 @@
 # Track brief: media4 — remaining media contracts
 
-Status: open follow-up to media3, 2026-10-26. ADR **0064** is reserved for
-media4 by the coordinator; the implementing owner writes it when making
-the next design decision. The coordinator assigns an
-owner/worktree before implementation. Read docs/handoff/track-rules.md,
+Status: active follow-up to media3, 2026-10-27. ADR **0064** belongs to
+media4. The coordinator assigned C:\work\gesher-media4, branch wip/media4,
+cut from integration f17d03b1 after Media3's verified merge. Read docs/handoff/track-rules.md,
 docs/media.md and ADRs 0042, 0052 and 0059 first. CI only for AOSP builds;
 no local AOSP builds, WSL or artifact downloads. This brief records gaps,
 not completed features or authorization to use another track's worktree.
@@ -57,8 +56,8 @@ Verified mux round trips cover H.264/AAC MP4 and Opus-only WebM, not WebM
 video/audio interleaving. Media3's original camera throughput and terminal
 gates pass on both runners in full GREEN 40448521754 at dd06d296 (37 media3
 and 12 part-1 device checks per runner; both whole suites zero failures,
-package and both required ten-app e2e green). The coordinator still performs
-its review/integration merge; this evidence closes none of Media4's API gaps.
+package and both required ten-app e2e green). The coordinator merged Media3
+as a1edcb02; this evidence closes none of Media4's API gaps.
 The older 40438975894 source remains RED for five Windows-2025 net checks.
 The exact verified runs and remaining failed checks are in docs/media.md. CI uses
 a known WAV microphone source and GESHER_CAMERA_TEST; it does not establish
@@ -152,3 +151,46 @@ new third-party apps. Merge current integration before final CI. Report the
 exact SHA, job ids, PASS lines and unsupported contracts; do not tick broad
 roadmap boxes based on one app launch or successful packaging. Shared files
 must have minimal additive edits and be listed in the final report.
+
+## Status and next steps
+
+The first source candidate implements only the real NDK AMediaFormat
+subset described in ADR 0064: 21 System V function entries and 152 actual
+AOSP pointer data objects, in a small OBJECT target shared by dalvikvm and
+gesher-exec. No dummy codec or format storage implementation is added.
+The platform-library probe and native2 availability expectation now use
+AMediaFormat_new, while test71 requires the unimplemented decoder to stay
+absent. These two shared bionic/native2 edits are approved by the coordinator;
+Net4's owner is coordinating its separate native2 changes and test72.
+
+New mediaformatapp single-ABI APKs, core dex and independent ELF executables
+share the same typed/data/ownership/error/lifecycle source for x86_64 and
+arm64-v8a. Their build/publication is additive in media.yml; no new workflow
+job or artifact download is needed. tests/windows/tracks/71-media4-format.ps1
+owns the new checks, with bounded processes, fresh device roots and native
+ABI/caller markers. All compilation and fixture execution are CI-only.
+
+Full ci **40456299720** is complete RED at
+**92e914238cc8655aef472887ad9f494eec5c8a97** (source 9f4dee5 after merging
+integration 808ea746's docs): 15 successful, ten skipped and one failed job.
+Main build 122030308024 fails on the new bridge at object 3093/3187:
+NdkMediaFormat.h has 12 `unknown type name 'int32_t'/'int64_t'` errors with
+mingw because it relies on bionic's transitive fixed-width definitions.
+The correction includes cstdint before that header and adds an early CI
+compile of the exact bridge object before the full AOSP graph. This is a
+new-source correction, not an unchanged rerun; no native build runs locally.
+PowerShell AST, XML/YAML, embedded-Python and Bash syntax/source checks pass;
+the 21 registrations and 152 names/values match the pinned source exactly.
+No compiler/native/JVM/C# fixture was run locally. Media job 122033620469
+passes in 1m32s: its actual log shows Werror NDK builds of both ABI libraries
+and independent ELF executables, and both single-ABI APKs/dex published.
+Framework 122030408664 passes in 10m39s; actual NetApp/services dex logs were
+read. Root independently reviewed the source/ABI/data/wiring and found no
+actionable issue within that bounded review; actual CI exposed the header
+dependency above. No Windows matrix, package or e2e job ran. Host linkage and
+all runtime behavior remain unverified. Merge current integration before a
+new full candidate and read every job, both
+complete zero-failure Windows summaries, all test71 parts, package and
+required e2e before acceptance. The native API baseline metadata and roadmap
+are unchanged. All remaining contracts listed above stay open; later work
+must build on a CI-accepted slice.
