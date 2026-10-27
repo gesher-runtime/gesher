@@ -171,6 +171,25 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Frozen **wip/media4-format-verified** points at docs-only
+**ba3c1c2dc94e2e6e69c8e7c050df9dc3145c0317** above the accepted format
+source below. The active branch now prepares a separate AAudio fixture
+correction after Net4 full40462148835/719ae logs a Windows-2022 blocking
+tone result of 750/1153.3 Hz, rather than 750/1250, with 44100 frames/exit0.
+That old log has no blocking loss counters; overrun is a hypothesis, not
+an established cause. The lossless blocking fixture now requests a one-second
+capacity like its callback counterpart, reports effective capacity and
+frame/xrun counters, and requires the original 44100 frames and unchanged
+750/1250 frequency tolerance plus zero loss/xruns. Diagnostic-only native
+open/read/stop traces expose coherent CaptureStats, including lost frames.
+A bounded CI capture probe leaves 80ms/one-second rings unread until at
+least 200ms of actual capture, requires real small-ring loss and configured
+zero loss, and verifies the stopped rings drain their retained frames.
+Production buffering/resampling and the separate three-cycle overrun check
+are unchanged. No new compile/runtime proof yet; all execution remains CI-only.
+OpenSL canonical IDs/query/negotiation/permission work owns new test76;
+next free test is77. It does not modify the frozen format source.
+
 Corrected full ci **40459815375** is complete GREEN at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
 integration 53898b51's docs. Source 73c20d70 adds the explicit cstdint

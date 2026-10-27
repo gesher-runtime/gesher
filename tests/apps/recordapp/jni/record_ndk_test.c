@@ -111,12 +111,16 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputCa
 JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRead(JNIEnv* env, jclass cls) {
   AAudioStreamBuilder* b;
   AAudioStream* s;
-  char msg[256], tones[96];
+  char msg[512], tones[96];
   if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) return (*env)->NewStringUTF(env, "no builder");
   AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_INPUT);
   AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
   AAudioStreamBuilder_setSampleRate(b, 44100);
   AAudioStreamBuilder_setChannelCount(b, 2);
+  // Match the callback's lossless tone check: scheduling stalls must not
+  // overflow a small default ring and splice the measured tone windows.
+  const int requested_capacity = 44100;
+  AAudioStreamBuilder_setBufferCapacityInFrames(b, requested_capacity);
   aaudio_result_t r = AAudioStreamBuilder_openStream(b, &s);
   AAudioStreamBuilder_delete(b);
   if (r != AAUDIO_OK) {
@@ -134,10 +138,18 @@ JNIEXPORT jstring JNICALL Java_com_gesher_recordapp_RecordActivity_aaudioInputRe
     got += n;
   }
   AAudioStream_requestStop(s);
+  int capacity = AAudioStream_getBufferCapacityInFrames(s);
+  int xruns = AAudioStream_getXRunCount(s);
+  int64_t captured = AAudioStream_getFramesWritten(s);
+  int64_t read = AAudioStream_getFramesRead(s);
   AAudioStream_close(s);
   for (int i = 0; i < got; i++) mono[i] = pcm[i * 2] / 32768.0f;
   describe(mono, got, 44100, tones, sizeof tones);
-  snprintf(msg, sizeof msg, "stereo 16-bit 44100, read %d frames, %s", got, tones);
+  snprintf(msg, sizeof msg, "stereo 16-bit 44100, read %d frames, %s; requested capacity %d, "
+           "effective capacity %d, captured %lld, frames read %lld, xruns %d, lossless %s",
+           got, tones, requested_capacity, capacity, (long long)captured, (long long)read, xruns,
+           capacity >= requested_capacity && got == want && read == want && captured >= read &&
+               xruns == 0 ? "true" : "false");
   free(pcm);
   free(mono);
   return (*env)->NewStringUTF(env, msg);
