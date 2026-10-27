@@ -30,5 +30,12 @@ retained frozen-helper fixture failure in40551845130.
 Each next slice must preserve original primary deadlines and failure meaning,
 cover genuine distinct subprocess behaviors in CI, and retain raw failures.
 Do not blanket-replace the helpers or infer that a textual pattern alone
-proves an observed hang. This table does not exhaust blocking pipe reads,+task waits or helpers outside the tracks directory; those remain in scope.
+proves an observed hang. This table does not exhaust blocking pipe reads,
+task waits or helpers outside the tracks directory; those remain in scope.
 Job-object containment and actual injected kill denial remain unproved.
+
+The subsequent source corrects LocaleWait and WaitTimed with their original
+split start/wait protocol and10s output bounds; real split-process controls
+are added to84. Those two source sites are no longer unbounded, but their
+changed-source CI and all later full gates remain pending. The table above
+retains the pinned6dd5 inventory rather than silently deleting its history.

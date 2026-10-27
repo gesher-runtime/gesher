@@ -6,6 +6,23 @@ Build and execute process fixtures only in CI.
 
 ## Status and next steps
 
+Corrected40552781028/source6dd5cc88 is GREEN both Windows hosts. Actual
+logs122360699800/122360700049 were read:12 controls each, all real
+RunTimed/SurfaceRun/InvokeOpenSl normal23/timeout/retained-output cases,
+then0failed. Surface's real120s+8s path and OpenSL's real120s path pass.
+This is component proof only; no full/runtime/package/e2e acceptance.
+
+The next source corrects split LocaleWait/test49 and WaitTimed/test50,
+retaining their original process deadline and10s per-pipe bounds. Incomplete
+readers are failures, unfinished Result is never read, post-kill is bounded
+and the process handle is disposed in finally. Test84 invokes actual
+LocaleStart/LocaleWait and StartTimed/WaitTimed, including an already-exited
+real parent with a live pipe-holding descendant, checks actual native-handle
+disposal and bounds cleanup by owned PID/image. Previous12 controls remain.
+Changed-source CI and coherent full remain pending.
+
+### Earlier resumed source and fixture history
+
 Resumed source extends the same ADR0078/test84 scope to actual SurfaceRun
 and InvokeOpenSl. SurfaceRun retains500s phase,120s exit and8s SIGQUIT
 diagnostic bounds, adds finite post-kill/final cleanup and finally disposal,

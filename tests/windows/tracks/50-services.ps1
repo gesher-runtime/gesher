@@ -379,13 +379,23 @@ function StartTimed([string] $Exe, [string[]] $Arguments) {
 }
 
 function WaitTimed($t, [int] $Seconds) {
+  try {
   $timedOut = -not $t.Process.WaitForExit($Seconds * 1000)
-  if ($timedOut) { $t.Process.Kill($true); $t.Process.WaitForExit() }
-  $null = $t.Out.Wait(10000), $t.Err.Wait(10000)
+  $out = ''
+  if ($timedOut) {
+    $out += "`n(timed out after $Seconds s)"
+    try { $t.Process.Kill($true) } catch { $out += "`n(process kill failed: $_)" }
+    if (-not $t.Process.WaitForExit(5000)) { $out += "`n(process still alive five seconds after kill)" }
+  }
+  foreach ($pipe in @(@{ Task = $t.Out; Name = 'stdout' }, @{ Task = $t.Err; Name = 'stderr' })) {
+    try {
+      if ($pipe.Task.Wait(10000)) { $out += $pipe.Task.Result }
+      else { $timedOut = $true; $out += "`n($($pipe.Name) did not complete within ten seconds)" }
+    } catch { $timedOut = $true; $out += "`n($($pipe.Name) read failed: $_)" }
+  }
   $global:LASTEXITCODE = if ($timedOut) { -1 } else { $t.Process.ExitCode }
-  $out = $t.Out.Result + $t.Err.Result
-  if ($timedOut) { $out += "`n(timed out after $Seconds s)" }
   return $out
+  } finally { $t.Process.Dispose() }
 }
 
 function ServerPid([string] $out) {
