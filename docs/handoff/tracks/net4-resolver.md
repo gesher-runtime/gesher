@@ -7,6 +7,20 @@ and its immutable `wip/net4-coherent-verified` ref remain unchanged.
 
 ## Status and next steps
 
+Production/oracle preflight40517730958 at exactb5504170 is complete green:
+actual compile122235599671 contains all three llvm-mingw/Werror/exception-free
+translation-unit markers; actual oracle122235685875/122235685683 logs contain
+all eight real WinSDK rows on Windows2022/2025. Both have real IPv6 loopback
+family10/length16, HTTP aliases and HTTPS network-order port47873 without
+signed extension. These jobs execute no Gesher runtime and prove no NDK calls.
+The runtime candidate includes current integration3577b330 (docs only above
+acceptedbc6) and retains exact preflight production/fixture source. One full
+CI must now prove all sixteen NDK caller contexts, independent host/service
+comparisons, negatives, mutation/thread lifetimes, both complete Windows
+suites, actual package cleanup and both ten-app e2e sets. Provider-specific
+TRY_AGAIN/NO_RECOVERY routes, heap exhaustion and broader resolver/network
+semantics are not claimed by the deterministic front-end negative controls.
+
 Scoped NDK40516203951 at exactaaef8b0e is complete green; actual job
 122230657268 was read. Both standalone/JNI ABI callers compile with Werror,
 the Java caller dex builds, and all four permission/ABI APKs are packaged
