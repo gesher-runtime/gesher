@@ -1,0 +1,45 @@
+name: ci-process-cleanup
+on:
+  push:
+    branches: [wip/ci-processes]
+    paths:
+      - .github/workflows/ci-processes.yml
+      - tests/windows/tracks/50-services.ps1
+      - tests/windows/tracks/84-ci-processes.ps1
+      - tests/windows/fixtures/Process84.cs
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-processes-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify actual shared helper against real process and retained pipe cases
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('ci-processes-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory $root | Out-Null
+          $failed = 0
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          $definition = $ast.FindAll({ param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+          }, $false) | Where-Object Name -eq RunTimed
+          if (@($definition).Count -ne 1) { throw 'Expected exactly one actual RunTimed helper' }
+          . ([scriptblock]::Create($definition.Extent.Text))
+          . "$pwd/tests/windows/tracks/84-ci-processes.ps1"
+          Write-Host "$failed test(s) failed"
+          if ($failed) { exit 1 }
