@@ -57,6 +57,20 @@ run. Its exact CI-built API3 host/DLL, current Native2 and five-jar/image
 guards remain unchanged. Runtime evidence is pending; no acceptance or
 roadmap closure follows from registering the workflow.
 
+Actual resumed component40549806536 uses exact
+c7a4365393efb869b572b16fd6aff50f7d09f0a4, triggered by that narrow push.
+The API3 production/Native2 source is unchanged from0cfcd2e0. At the current
+checkpoint Native2, independent QEMU oracle and translator builds succeeded;
+host/framework and subsequent Windows runtime are still pending. Read the
+actual final runtime logs before claiming any prerequisite. Required watch
+output is saved in `C:\work\gesher-ci-review\native-arm64-component-40549806536.watch.log`;
+completed translator/NDK plain logs share that prefix. No broad full was
+dispatched. Next action: finish this watch, verify exact source/jobs and both
+real zero summaries with six Native2 ABI/context reports, copied JNI V,
+FPCR/FPSR including10384 oracle rows and original variadic controls. On
+success send Media the exact coherent prerequisite; on failure preserve all
+assertions and repair the observed source/cause before rerunning.
+
 Baseline3b607e75/diagnostic40525678026 establishes the prior actual valid-call
 eager-copy defect on both hosts: shallow139, eager_end=top+0xa0 versus a
 separate deep0 control. This does not independently establish all original
