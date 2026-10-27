@@ -1,7 +1,7 @@
 # Exec4: spawn action registration
 
 Root owns wip/exec4 in C:\work\gesher-exec4, ADR0074. Test74 is reserved.
-No roadmap box or integration/runtime acceptance is claimed.
+The bounded registration slice is merged/accepted; broader Exec4 stays open.
 
 ## Status and next steps
 
@@ -33,6 +33,15 @@ and actual ELF behavior still require full Windows CI.
 Before final full CI merge current integration, including exit-freshness
 once accepted, then read all jobs, both Windows zero summaries and actual
 test74/legacy exec PASS lines, package and both e2e logs.
+
+Final coherent full40466021634 at160e25e8 now verifies the actual production
+guards and both ABI ELF callers: test74 passes on Windows2022 and2025, both
+whole suites end0, package23 and both ten-app e2e0. Root independently read
+all28 job conclusions and five critical logs. Merged as6297e80a; its code
+exactly matches the verified source, with later documentation only.
+The source-only/scoped records above remain the chronology, not separate
+runtime proof. Child-side ordered actions are the new exec4-spawn/test77
+candidate, full40498406783 pending, not part of this registration acceptance.
 
 Remaining: actual child-side ordered open/dup/close/chdir/fchdir failures
 with pinned Android child127 semantics, relative-path behavior, attributes,

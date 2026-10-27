@@ -83,3 +83,14 @@ establish the precise cause of the older sentinel crash. Only the live shared-
 library environment correction is verified here; the initial executable UTF-8
 array and all remaining process/console/log/TLS/fork/property contracts remain
 open. Root owns latest-integration acceptance and merging.
+
+## Verified action-registration slice
+
+Full40466021634 at160e25e8 verifies test74's actual x86-64/arm64 NDK callers
+on both Windows runners:15 negative descriptor registrations return EBADF
+without changing errno or corrupting the action list, positive unopened
+descriptors register, and real spawn/spawnp children wait with exit42.
+Both full suites0, package23 and both ten-app e2e0 were independently read
+by root; merged6297e80a matches the verified non-doc tree. This accepts only
+registration boundaries. Ordered child-side action execution/failure127 is
+the separate proposed ADR0076, while the aggregate ADR0074 remains open.
