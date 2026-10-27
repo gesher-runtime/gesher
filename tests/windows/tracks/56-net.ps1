@@ -172,10 +172,49 @@ try {
   Write-Host 'INFO  net TLS cleanup: root-test complete'
 }
 
-# On the internet (the runners have it): DNS, HTTPS GETs with TLS 1.3 and SNI, and
-# certificates that must be rejected (expired, another host's, self-signed, an
-# untrusted root).
-$null = NetDex 'DNS and HTTPS on the internet, bad certificates rejected' @('internet') 300
+# Keep real internet DNS/HTTPS/TLS 1.3/SNI checks, but serve all four negative
+# certificate cases locally. An unreachable badssl endpoint is not a TLS test.
+. "$PSScriptRoot/../net/NegativeCertificates.ps1"
+$unknownKey = [Security.Cryptography.RSA]::Create(2048)
+$unknownRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+  'CN=Gesher Untrusted Test Root', $unknownKey, [Security.Cryptography.HashAlgorithmName]::SHA256,
+  [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$unknownRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+$unknownRoot = $unknownRequest.CreateSelfSigned($now.AddDays(-1), $now.AddDays(30))
+$negativeCertificates = @()
+$negativeServers = @()
+try {
+  $negativeCertificates = @(
+    (New-NetTestCertificate 'localhost' $rootCert $now.AddHours(-2) $now.AddHours(-1)),
+    (New-NetTestCertificate 'another.gesher.invalid' $rootCert $now.AddHours(-1) $now.AddDays(1)),
+    (New-NetTestCertificate 'localhost' $null $now.AddHours(-1) $now.AddDays(1) $true),
+    (New-NetTestCertificate 'localhost' $unknownRoot $now.AddHours(-1) $now.AddDays(1)))
+  $negativeUrls = @()
+  foreach ($certificate in $negativeCertificates) {
+    $server = [GesherNetTlsServer]::new($certificate)
+    $negativeServers += $server
+    $negativeUrls += "https://localhost:$($server.Port)/"
+  }
+  $machineRoot.Open('ReadWrite'); $machineRoot.Add($rootPublic); $machineRoot.Close()
+  $null = NetDex 'DNS and HTTPS on the internet, local expired/wrong-host/self-signed/untrusted certificates rejected' @('internet') 300 @{
+    GESHER_TLS_REJECTION_URLS = $negativeUrls -join ','
+  }
+} finally {
+  try {
+    foreach ($server in $negativeServers) {
+      Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stop (active clients $($server.ActiveClients))"
+      $server.Dispose()
+      Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stopped"
+    }
+  } finally {
+    Write-Host 'INFO  net TLS cleanup: negative certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+    Write-Host 'INFO  net TLS cleanup: negative certificates dispose'
+    foreach ($certificate in $negativeCertificates) { $certificate.Dispose() }
+    $unknownRoot.Dispose(); $unknownKey.Dispose()
+  }
+  Write-Host 'INFO  net TLS cleanup: negative complete'
+}
 
 # Apps (tests/apps/netapp, nonetapp) through gesher-app: ConnectivityManager over the
 # connectivity service (com.gesher.server.ConnectivityService), its callbacks, HTTPS with
