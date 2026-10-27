@@ -1,5 +1,14 @@
 # ARM full environment/default object: implementation awaiting CI
 
+Latest status: the scoped environment component is now verified at exact
+b497b8c7/component40564869955, attempt1, nine executed success/one smoke skip.
+Both actual Windows summaries are zero, all four ARM JNI/APK/ELF contexts
+verify256 pinned cases/default-object identity, and every original coherent
+control remains. All nine actual logs were read. See the
+[exact scoped report](arm64-2-environment-verified.md). This supersedes the
+pending/no-dispatch checkpoints below; full/Surface/package/e2e acceptance is
+still required and no aggregate scope is closed.
+
 Resume implementation: the separate environment worktree now contains real
 FPCR/FPSR get/set/hold/update and an ARM-specific eight-byte default data
 object. Shared ELF and Native2 JNI/single/device fixtures compare the
