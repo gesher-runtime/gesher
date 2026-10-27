@@ -3,7 +3,8 @@ $execSpawnOldTrace = $env:GESHER_SPAWN_TRACE
 try {
 $env:GESHER_SPAWN_TRACE = '1'
 foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
-  $execSpawnProgram = NoDrive "$Dir/exec4-spawn-$execSpawnAbi"
+  # Child actions intentionally change cwd before POSIX program lookup.
+  $execSpawnProgram = NoDrive (Resolve-Path -LiteralPath "$Dir/exec4-spawn-$execSpawnAbi" -ErrorAction Stop).Path
   $execSpawnWork = Join-Path $root ("exec4-spawn-$execSpawnAbi-" + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $execSpawnWork -ErrorAction Stop | Out-Null
   CheckTimed "exec4 spawn ($execSpawnAbi): actual ordered actions, child127 and parent isolation" "$Dir/gesher-exec.exe" @(

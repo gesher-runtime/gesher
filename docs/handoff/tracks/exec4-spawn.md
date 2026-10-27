@@ -121,7 +121,17 @@ cause for the old full127. Current integration3577b330 (docs above accepted
 Net4bc6) is merged before the next full run. No runtime/roadmap acceptance
 is claimed until both full suites, package and both e2e jobs pass.
 
-## Owner-requested stop checkpoint
+## Resumed relative-directory fixture correction
+
+The resumed source resolves the actual self-program with Resolve-Path before
+NoDrive. This preserves POSIX lookup after child directory actions while
+removing the full driver's accidental relative executable path. Every
+original action, PID, isolation, failure and no-console assertion is retained.
+The scoped driver now runs the entire unchanged assertion body with both an
+absolute Dir and relative Dir=dist on each Windows host. Only PowerShell
+parsing and whitespace checks run locally; CI runtime proof is pending.
+
+## Historical owner-requested stop checkpoint
 
 Work stopped on2026-10-27 for a new coordinating session. Full40521839555
 at b4c350b80b5b74ea87b2fe4933b185137b39449a is RED: Windows2022 has2 top
