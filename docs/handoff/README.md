@@ -199,8 +199,16 @@ media entries remain. The AAudio78ee5e12 lossless gate passes44100frames/
 frames while configured rings retain all. Old1153.3Hz cause stays unproved.
 Source contains merged freshExit30deb08c and integration db84749b, stays
 frozen with docs-only successors, and does not claim effects/3D/native
-backend completion. Standalone/TLS/callback continuation e5693412 is frozen
-in separate wip/media4-native under pending full40477536464. Full40470959941/
+backend completion from that d10 run. Standalone/TLS/callback continuation
+e5693412 is now full-verified in40477536464, attempt1:22 success/six skipped,
+both whole0/16 test76 PASS, all60 semantic/48 volume/12 callback rows per
+runner, actual package23 and both ten-app/four-transport e2e0. Both ABI
+genuine ELF callbacks have independent valid guest TLS and unchanged caller
+TLS. Native without identity denies11/no object; real APK grants/denials
+stay independent. Only docs change above e569; its34 IID proof objects
+remain the exact d10 evidence. Native-child identity and broad OpenSL/media
+contracts remain open. Source-only AAudio test78 (next79) and installer
+notice are prepared separately, unverified and excluded from this run. Full40470959941/
 2b343aa7 stays red for exactly six OpenSL failures per runner; no unchanged
 retry was used. A separate installer OpenSL notice proposal still needs
 application and package CI before release; the Media4 brief records its

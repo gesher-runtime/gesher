@@ -1,5 +1,5 @@
 # Real OpenSL identifiers/query/negotiation/permission contracts (media4, ADR0064).
-# No independent native-launcher backend is claimed by these JNI/APK checks.
+# Includes the independent native launcher over the same functional backend.
 $slHost = (Resolve-Path $Dir).Path
 $slDir = Join-Path $slHost 'media/opensl-contracts'
 $slExpected = @(
@@ -7,14 +7,15 @@ $slExpected = @(
   'media4 opensl query: ok; typed global and engine queries, supported subsets, null/index/object controls',
   'media4 opensl negotiation: ok; copied UUIDs, all 53 required/optional engine outcomes, duplicate and invalid arrays',
   'media4 opensl player: ok; real PCM queue and volume, explicit exposure and unsupported effect rejection',
+  'media4 opensl callback trace: calls 1, TLS valid true, caller TLS unchanged true',
   'media4 opensl volume trace: requested -600, set 0, get 0, value -600',
   'media4 opensl volume trace: requested -32768, set 0, get 0, value -32768',
   'media4 opensl volume trace: requested -1, set 0, get 0, value -1',
   'media4 opensl volume trace: requested 0, set 0, get 0, value 0',
   'media4 opensl: all passed')
 
-function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}) {
-  $info = [Diagnostics.ProcessStartInfo]::new("$slHost/dalvikvm.exe")
+function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [string] $Exe = "$slHost/dalvikvm.exe") {
+  $info = [Diagnostics.ProcessStartInfo]::new($Exe)
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
@@ -37,15 +38,17 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}) {
   return @{ Text = $text; Code = $code }
 }
 
-function CheckOpenSl([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra) {
+function CheckOpenSl([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra, [string] $Caller = 'JNI') {
   $permission = if ($Mode -eq 'core JNI') { 'bare core without recording identity returns 0x0B without object' }
-  elseif ($Allowed) { 'manifest allowed native recorder lifecycle' } else {
+  elseif ($Allowed) { 'manifest allowed native recorder lifecycle' } elseif ($Caller -eq 'executable') {
+    'native process without recording identity returns 0x0B without object'
+  } else {
     'manifest denied native recorder returns 0x0B without object'
   }
   $permissionTrace = if ($Allowed) { 'expected allowed, result 0, object true' } else {
     'expected denied, result 11, object false'
   }
-  $missing = @(($slExpected + "media4 opensl ABI: $Abi" + 'media4 opensl caller: JNI' +
+  $missing = @(($slExpected + "media4 opensl ABI: $Abi" + "media4 opensl caller: $Caller" +
     "media4 opensl permission: ok; $permission" + "media4 opensl permission trace: $permissionTrace" + $Extra) |
     Where-Object { -not $Result.Text.Contains($_) })
   if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and
@@ -57,7 +60,7 @@ function CheckOpenSl([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable]
     $script:failed++
   }
   foreach ($line in @($Result.Text -split "`r?`n" | Where-Object {
-      $_ -match '^(OpenSlActivity: )?media4 opensl (ABI:|caller:|data:|query:|negotiation:|player:|volume trace:|permission:|permission trace:)|OpenSL volume boundary trace:'
+      $_ -match '^(OpenSlActivity: )?media4 opensl (ABI:|caller:|data:|query:|negotiation:|player:|callback trace:|volume trace:|permission:|permission trace:)|OpenSL volume boundary trace:'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media4 opensl ($Abi; $Mode): $line"
   }
@@ -77,6 +80,9 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
   $core = InvokeOpenSl ($slCoreVm + @('-cp', (NoDrive "$slDir/opensl-tests.dex"),
     'gesher.OpenSlTest', (NoDrive "$native/libopensl_contracts.so")))
   CheckOpenSl $abi.Name 'core JNI' $false $core @()
+  $elf = InvokeOpenSl @('--elf', "$native/opensl-test", 'opensl-test') `
+    @{ LD_LIBRARY_PATH = (NoDrive $native) } -Exe "$slHost/gesher-exec.exe"
+  CheckOpenSl $abi.Name 'standalone ELF' $false $elf @() -Caller 'executable'
   foreach ($permission in @(@{ Suffix = ''; Allowed = $true; Name = 'allowed' },
                             @{ Suffix = '-denied'; Allowed = $false; Name = 'denied' })) {
     $apk = "$slHost/openslapp$($permission.Suffix)-$($abi.Label).apk"

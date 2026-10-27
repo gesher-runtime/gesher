@@ -19,6 +19,7 @@
 
 #include "../audio/capture.h"
 #include "../audio/engine.h"
+#include "../audio/record_permission.h"
 #include "../audio/log.h"
 #include "../audio/shared_state.h"
 #include "jni_util.h"
@@ -360,6 +361,13 @@ bool MayRecordAudio(JNIEnv* env) {
   if (CheckException(env, "AudioService.recordAudioAllowed")) ok = JNI_FALSE;
   env->DeleteLocalRef(cls);
   return ok == JNI_TRUE;
+}
+
+namespace {
+// The standalone native launcher has no Java provider. In ART retain the
+// existing manifest decision, including the bare-core boot path's policy.
+[[maybe_unused]] const bool g_record_permission_registered =
+    (SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); }), true);
 }
 
 int RegisterAudioRecord(JNIEnv* env) {

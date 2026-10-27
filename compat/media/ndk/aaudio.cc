@@ -31,9 +31,8 @@
 #include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/log.h"
+#include "../audio/record_permission.h"
 #include "../audio/shared_state.h"
-#include "../jni/media_jni.h"
-#include "jni_bridge.h"
 
 #define SYSV __attribute__((sysv_abi))
 
@@ -248,7 +247,7 @@ aaudio_result_t SYSV BuilderDelete(Builder* b) {
 }
 
 aaudio_result_t OpenInputStream(Builder* b, AAudioStream** out) {
-  if (!MayRecordAudio(nullptr)) {
+  if (!RecordingAllowed()) {
     MEDIA_LOGE("AAudio: the app does not have android.permission.RECORD_AUDIO");
     return kErrorUnavailable;
   }

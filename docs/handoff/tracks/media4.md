@@ -50,8 +50,8 @@ format-key storage does not implement the media feature named by that key.
   JNI/APK ABIs/runners. Bare-core/no-identity denial and real APK manifest
   allowed/denied outcomes are independently checked with actual 0x0B
   results. Canonical effects/3D/device IDs retain unsupported outcomes;
-  no effects engine is inferred. Standalone backend/TLS/callback proof is
-  pending in separate native source e5693412/full40477536464. Configuration,
+  no effects engine is inferred. Standalone backend/TLS/callback proof now
+  passes in separate native source e5693412/full40477536464. Configuration,
   output-mix, loss-of-control and full effects/device contracts remain open.
 - Implement AAudioStream_isMMapUsed, AAudio_getMMapPolicy and
   AAudio_setMMapPolicy with correct Windows capability/policy semantics;
@@ -188,7 +188,7 @@ real legacy PCM output and manifest-aware capture/read/stop/close cases.
 Both-ABI libraries, four allowed/denied APKs, core DEX and strict test78
 markers are prepared. No compilation/runtime proof or inventory change is
 claimed. Standalone coverage must use the separately verified real backend,
-not a policy-only library; native full40477536464 is still pending. Full
+not a policy-only library; real native full40477536464 is now green and imported. Full
 builder validation, platform-policy getters, routing and error callbacks
 remain open. Only PS AST/Bash/XML/YAML/source checks ran locally.
 
@@ -198,6 +198,45 @@ installed under licenses and package CI compares its SHA256 to the source.
 Neither frozen d10/e569 candidate changes. Installed-byte proof is pending
 the new candidate's package job; this is no general license-completeness
 claim and preserves all23 existing installer PASS gates.
+
+Native OpenSL full ci **40477536464** is complete GREEN at
+**e569341230b3970cadaeb48a235a12a4645da74a**, attempt 1 without retries.
+All 28 conclusions were read:22 success/six skipped. Main122099364029
+passes36m30s (actual record_permission.cc compile, both executable links,
+203 assembly boundaries/zero problems); framework122099455423 passes8m18s,
+media122102886520 passes1m22s with both real NDK ELF/library builds and all
+four APKs. Windows **122115058999** (2022,28m54s) and **122115058759**
+(2025,28m12s) each finish **0 test(s) failed** with16 actual test76 PASS.
+Both ABIs now run core JNI, real standalone ELF and all four allowed/denied
+single/device APK contexts, plus four device shutdowns per runner. All60
+semantic rows,48 volume rows and12 actual callback traces per runner were
+read: calls1/TLS valid true/caller TLS unchanged true, alongside all53
+canonical UUID/data/query/negotiation contracts. Bare core and standalone
+native processes correctly deny recording11/no object; actual APK manifest
+grants/denials remain0/object and11/no object independently.
+
+Package **122115058982** passes all23 actual installer gates. Both e2e
+**122116078991 / 122116079057** pass all ten apps, four transports,
+association/shortcut and **0 unexpected failures**; complete logs were read.
+All10 format/38 media3/18 AOT3 and existing env/time/fresh-exit gates pass.
+Original AAudio44100 frames/750+1250Hz/lost0/xruns0 remains strict. Controlled
+small rings lose6311/6333 frames with xruns1, versus configured9839/9861
+retained and lost0/xruns0 on2022/2025. The old1153.3Hz cause is not inferred.
+The strict full-log verifier passes. No local native/JVM/C# compilation or
+fixture execution ran.
+
+The verified factor directly links pure audio/player-core/NDK OBJECT files
+into both hosts with actual window/graphics dependencies. It shares the
+exact old EnterLoadedCode/SetupThreadTls guard in the shim; JNI delegates.
+The native recording provider defaults to deny; ART installs the unchanged
+MayRecordAudio decision. No stub backend or permission bypass is added.
+Native-child recording identity propagation and full configuration,
+loss-of-control/output-mix/effects/device contracts remain open. Existing
+34 IID verification objects stay pinned to their independently verified
+d10 run; no historical field or143 format proof changes. Original accepted
+integration db84749b is contained, and later commits change docs only.
+Separate test78 AAudio MMAP source94e4a0e7/noticecf9240cc remains unverified
+in wip/media4-aaudio (next test79); it is not in this frozen native source.
 
 Corrected full ci **40476766790** is complete GREEN at
 **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt 1 without retries,
@@ -237,8 +276,8 @@ not retrospectively establish its cause.
 The accepted source is frozen; later commits are docs only. Native peer's
 bounded source review found no blocker, and all compilation/execution was
 CI-only. The separate pure-backend continuation e5693412 (6be2eaec+d10)
-is frozen under full40477536464 in C:\work\gesher-media4-native; no runtime
-acceptance is claimed while it runs. It moves the exact guest-thread TLS
+is frozen under GREEN full40477536464 in C:\work\gesher-media4-native;
+its independent full/runtime acceptance is recorded above. It moves the exact guest-thread TLS
 entry guard into the shim, keeps the existing manifest provider/deny rule,
 and adds genuine NDK ELF queue/TLS callback checks. It is not part of the
 verified d10 source. Keep native-child recording identity, configuration,
@@ -289,7 +328,7 @@ Frozen **wip/media4-format-verified** still points at docs-only
 source below. The separate78ee5e12 lossless-capacity/diagnostic/probe slice
 is now verified with OpenSL in full40476766790 above. Production buffering,
 resampling and the separate three-cycle cumulative overrun check stay
-unchanged. Test76 belongs to OpenSL; Exec4-spawn owns77; next free test78.
+unchanged. Test76 belongs to OpenSL; Exec4-spawn owns77; AAudio owns78; next free79.
 
 Corrected full ci **40459815375** is complete GREEN at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current

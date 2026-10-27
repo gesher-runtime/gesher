@@ -32,20 +32,25 @@ set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/capture.cc
   ${_media}/audio/capture_wasapi.cc)
 
+# Pure audio and its recording gate have no Java VM dependency.
+add_library(gesher_media_audio OBJECT ${GESHER_MEDIA_AUDIO_SOURCES}
+  ${_media}/audio/record_permission.cc)
+target_link_libraries(gesher_media_audio PUBLIC log ole32 uuid)
+target_compile_options(gesher_media_audio PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+
 add_library(gesher_media OBJECT
-  ${GESHER_MEDIA_AUDIO_SOURCES}
   ${_media}/jni/jni_util.cc
   ${_media}/jni/audio_system_jni.cc
   ${_media}/jni/audio_track_jni.cc
   ${_media}/jni/audio_record_jni.cc)
-target_link_libraries(gesher_media PUBLIC nativehelper log ole32 uuid)
+target_link_libraries(gesher_media PUBLIC gesher_media_audio nativehelper log ole32 uuid)
 target_compile_options(gesher_media PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 
 target_link_libraries(dalvikvm PRIVATE gesher_media)
 
 # The player under MediaPlayer, SoundPool and MediaMetadataRetriever
 # (compat/media/player) and their natives.
-add_library(gesher_media_player OBJECT
+add_library(gesher_media_player_core OBJECT
   ${_media}/player/data_source.cc
   ${_media}/player/http_source.cc
   ${_media}/player/extractor.cc
@@ -59,7 +64,23 @@ add_library(gesher_media_player OBJECT
   ${_media}/video/soft_video.cc
   ${_media}/video/soft_video_avc.cc
   ${_media}/video/soft_video_m4v.cc
-  ${_media}/video/render.cc
+  ${_media}/video/render.cc)
+target_link_libraries(gesher_media_player_core PUBLIC gesher_media_audio gesher_media_codecs
+  gesher_bionic gesher_window_surface winhttp ole32)
+target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
+  -Wno-unused-parameter -Wno-deprecated-copy)
+set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
+
+# The native APIs share the actual audio/file-player backend in both hosts.
+add_library(gesher_media_ndk OBJECT ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc)
+target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core gesher_bionic)
+target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)
+foreach(_host dalvikvm gesher-exec)
+  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk)
+endforeach()
+
+add_library(gesher_media_player OBJECT
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/media_jni.cc
   ${_media}/jni/media_player_jni.cc
@@ -76,12 +97,9 @@ add_library(gesher_media_player OBJECT
   ${_media}/mux/ogg_muxer.cc
   ${_media}/record/recorder.cc
   ${_media}/jni/media_muxer_jni.cc
-  ${_media}/jni/media_recorder_jni.cc
-  # The NDK's AAudio and OpenSL ES for apps' ELF libraries (bionic shim symbols).
-  ${_media}/ndk/aaudio.cc
-  ${_media}/ndk/opensles.cc)
+  ${_media}/jni/media_recorder_jni.cc)
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
-target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_codecs gesher_bionic
+target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_codecs gesher_bionic
   winhttp ole32)
 target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.

@@ -5,8 +5,12 @@
 #include <jni.h>
 
 #include <cstdint>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -43,14 +47,28 @@ const Id kIds[] = {
 static_assert(sizeof(SLInterfaceID_) == 16 && alignof(SLInterfaceID_) == 4);
 static_assert(sizeof(kIds) / sizeof(kIds[0]) == 53);
 
-std::string Run(bool allowed, bool has_manifest) {
+struct CallbackState {
+  std::atomic<int> calls{0};
+  std::atomic<bool> valid{true};
+};
+constexpr uint64_t kCookie = UINT64_C(0x1122334455667788);
+thread_local uint64_t g_callback_cookie = kCookie;
+
+void BufferDone(SLAndroidSimpleBufferQueueItf, void* user) {
+  auto* state = static_cast<CallbackState*>(user);
+  if (g_callback_cookie != kCookie) state->valid = false;
+  ++g_callback_cookie;
+  state->calls.fetch_add(1, std::memory_order_release);
+}
+
+std::string Run(bool allowed, const char* caller, bool has_manifest) {
   Report r;
 #if defined(__aarch64__)
   r.text = "media4 opensl ABI: arm64-v8a\n";
 #else
   r.text = "media4 opensl ABI: x86_64\n";
 #endif
-  r.text += "media4 opensl caller: JNI\n";
+  r.text += "media4 opensl caller: " + std::string(caller) + "\n";
   int before = r.failed;
   void* library = dlopen("libOpenSLES.so", RTLD_NOW);
   void* system = dlopen("/system/lib64/libOpenSLES.so", RTLD_NOW);
@@ -217,6 +235,22 @@ std::string Run(bool allowed, bool has_manifest) {
                   (*buffers)->Clear(buffers) == SL_RESULT_SUCCESS &&
                   (*buffers)->GetState(buffers, &state) == SL_RESULT_SUCCESS && state.count == 0,
               "real PCM queue accepts and clears caller buffer");
+      CallbackState callback;
+      r.Check((*buffers)->RegisterCallback(buffers, BufferDone, &callback) == SL_RESULT_SUCCESS &&
+                  (*buffers)->Enqueue(buffers, silence, sizeof(silence)) == SL_RESULT_SUCCESS &&
+                  (*play)->SetPlayState(play, SL_PLAYSTATE_PLAYING) == SL_RESULT_SUCCESS,
+              "start real native PCM callback");
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (callback.calls.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      r.Check((*play)->SetPlayState(play, SL_PLAYSTATE_STOPPED) == SL_RESULT_SUCCESS &&
+                  callback.calls.load(std::memory_order_acquire) == 1 && callback.valid &&
+                  g_callback_cookie == kCookie,
+              "actual callback thread has independent initialized ELF TLS");
+      r.text += "media4 opensl callback trace: calls " + std::to_string(callback.calls.load()) +
+          ", TLS valid " + (callback.valid ? "true" : "false") + ", caller TLS unchanged " +
+          (g_callback_cookie == kCookie ? "true\n" : "false\n");
     }
     output = reinterpret_cast<void*>(uintptr_t{0x1234});
     r.Check((*player.value)->GetInterface(player.value, SL_IID_ANDROIDCONFIGURATION, &output) ==
@@ -258,8 +292,10 @@ std::string Run(bool allowed, bool has_manifest) {
               "actual initial native recorder state");
     }
   }
-  r.Part("permission", before, !has_manifest ? "bare core without recording identity returns 0x0B without object" :
-      allowed ? "manifest allowed native recorder lifecycle" : "manifest denied native recorder returns 0x0B without object");
+  r.Part("permission", before, has_manifest ?
+      (allowed ? "manifest allowed native recorder lifecycle" : "manifest denied native recorder returns 0x0B without object") :
+      std::strcmp(caller, "executable") == 0 ? "native process without recording identity returns 0x0B without object" :
+      "bare core without recording identity returns 0x0B without object");
   if (library != nullptr) dlclose(library);
   if (system != nullptr) dlclose(system);
   r.text += r.failed == 0 ? "media4 opensl: all passed\n" : "media4 opensl: FAILED\n";
@@ -269,8 +305,17 @@ std::string Run(bool allowed, bool has_manifest) {
 }  // namespace
 
 extern "C" JNIEXPORT jstring JNICALL Java_gesher_OpenSlTest_run(JNIEnv* env, jclass, jboolean) {
-  return env->NewStringUTF(Run(false, false).c_str());
+  return env->NewStringUTF(Run(false, "JNI", false).c_str());
 }
 extern "C" JNIEXPORT jstring JNICALL Java_com_gesher_opensl_OpenSlActivity_run(JNIEnv* env, jclass, jboolean allowed) {
-  return env->NewStringUTF(Run(allowed == JNI_TRUE, true).c_str());
+  return env->NewStringUTF(Run(allowed == JNI_TRUE, "JNI", true).c_str());
 }
+
+#ifdef MEDIA_OPENSL_EXECUTABLE
+int main() {
+  // No Java/manifest permission provider is installed in a native process.
+  const std::string report = Run(false, "executable", false);
+  std::fputs(report.c_str(), stdout);
+  return report.find("media4 opensl: all passed\n") == std::string::npos ? 1 : 0;
+}
+#endif

@@ -1,6 +1,6 @@
 # 0064: Native media format and bounded OpenSL contracts
 
-Status: accepted (format ci40459815375; bounded OpenSL ci40476766790)
+Status: accepted (format ci40459815375; bounded OpenSL ci40476766790/40477536464)
 
 ## Context
 
@@ -117,17 +117,33 @@ lossless AAudio fixture: requested/effective44100-frame capacity, original
 750/1250Hz/44100-frame gate, zero lost/xruns and a controlled small-ring loss
 versus configured-ring zero-loss case. Old1153.3Hz cause remains unproved.
 
-## Proposed follow-up: standalone backend and remaining contracts
+## Accepted follow-up: standalone functional backend and guest-thread entry
 
-Separate native source e5693412/full40477536464 factors pure audio/player/
-NDK OBJECT targets into both hosts, shares the existing guest-thread TLS
-entry guard, preserves the actual manifest provider and no-identity denial,
-and prepares real NDK ELF queue/TLS callback tests. Its runtime/full CI proof
-is pending, and it is not part of accepted source d10. No placeholder native
-backend is accepted. Native-child recording identity, configuration,
-loss-of-control callbacks, output-mix and full effects/device-policy behavior
-remain open. The installer notice proposal also needs package-CI proof
-before release; no installed-notice claim follows from source preservation.
+Source e5693412 factors pure audio/player-core/NDK OBJECT files into both
+dalvikvm and gesher-exec with the actual window/graphics dependencies,
+keeping Java/JNI layers on ART. Move the exact old once-per-thread guest
+entry guard and SetupThreadTls call into the bionic shim; JNI delegates to
+that same implementation. A pure permission provider defaults to deny when
+no recording identity is installed, while ART registers the unchanged
+MayRecordAudio manifest/bare-core decision. No recording grant is invented.
+
+Full **40477536464**, attempt1 at
+**e569341230b3970cadaeb48a235a12a4645da74a**, passes22 jobs/six skipped,
+both whole0, actual package23 and both ten-app/four-transport e2e0. Actual
+logs and all60 semantic rows/48 volume rows/12 callback traces per runner
+were read. The same NDK fixture runs through core JNI, genuine standalone
+ELF and allowed/denied single/device APKs on both ABIs;16 PASS include four
+device shutdowns. Every context requires one real PCM callback with valid
+independent guest TLS and unchanged caller TLS. Native processes without
+identity correctly deny11/no object, while real APK grants/denials remain
+independent. Actual both-host links and203 assembly boundaries/zero
+problems pass. Only documentation changes follow the verified source.
+
+Native-child recording identity, full configuration, loss-of-control,
+output-mix/effects/device contracts remain open. Separate AAudio API36 MMAP
+source/test78 and installed-notice verification are prepared on another
+branch and are not accepted by this run. Full builder validation,
+platform-policy getters, routing and error callbacks remain open as well.
 
 ## Proposed follow-up: AAudio MMAP capability and policy
 
@@ -145,6 +161,6 @@ Separate source wip/media4-aaudio prepares typed dynamic API36 calls (the
 CI r27 NDK predates these declarations), real output/read/close and independent
 manifest grant/denial through both ABIs/core/single/device APKs in test78.
 All three historical coverage entries remain unverified. Standalone ELF
-must use the genuine backend continuation only after its full CI passes;
+uses the genuine backend now verified by full40477536464;
 no library is advertised by policy-only exports. New platform-policy getters,
 full builder validation, error callbacks and routing remain open.

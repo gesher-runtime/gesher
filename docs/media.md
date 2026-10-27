@@ -227,6 +227,20 @@ the microphone (looped, from its start each time recording starts);
   source only; no inventory/roadmap acceptance or native backend claim.
   Existing OpenSL/format candidates stay frozen. Follow the Media4 brief.
 
+- Native OpenSL full ci **40477536464** is GREEN at **e5693412**, attempt1:
+  all28 jobs=22 success/six skipped, both Windows whole0 and16 test76 PASS
+  each. Both ABI standalone ELF callers now pass the same actual UUID/
+  typed-query/negotiation/PCM/permission contracts as JNI/APKs; all12
+  contexts per runner require actual callback calls1/TLS valid/caller TLS
+  unchanged,60 semantic rows and48 volume results. Pure functional backend
+  OBJECT targets link into both hosts; JNI retains the real manifest gate
+  and native without identity denies11/no object. Actual package23 and
+  both ten-app/four-transport/association/shortcut e2e0 logs were read.
+  The original lossless AAudio/format/env/time/fresh-exit gates also pass.
+  Source is frozen with docs-only successors. Configuration/effects/device
+  policy and native-child recording identity remain open; separate AAudio
+  MMAP/notice source in test78 is unverified and excluded from this run.
+
 - Corrected OpenSL full ci **40476766790** is GREEN at
   **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt1:22 success/six
   skipped, both Windows whole0 and14 test76 PASS each. Both ABIs pass core
@@ -244,7 +258,7 @@ the microphone (looped, from its start each time recording starts);
   The old1153.3Hz cause remains unproved. This source is frozen with
   docs-only successors and contains integration db84749b/freshExit30deb.
   Separate native-backend/TLS/callback source e5693412/full40477536464 is
-  not accepted yet; no effects/3D or full OpenSL contract is inferred.
+  independently accepted above; no effects/3D or full OpenSL contract follows.
 
 - OpenSL full ci **40470959941** is RED at
   **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration

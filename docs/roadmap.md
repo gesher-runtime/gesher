@@ -607,7 +607,12 @@ Media ([media.md](media.md), ADR 0042):
       query/capability/required-interface contracts, signed16 volume and
       independent core/APK recording grants/denials on both ABIs/runners
       (ci 40476766790, test76; ADR 0064). Effects/3D implementations and
-      standalone native backend remain open.
+      broader configuration/device contracts remain open.
+- [x] Functional OpenSL backend in standalone ELF on both ABIs/runners;
+      real PCM callbacks with independent guest TLS, preserved caller TLS
+      and correct no-identity denial, alongside real allowed/denied APKs
+      (ci 40477536464, test76; ADR 0064). Native-child recording identity
+      propagation remains open.
 - [ ] Physical microphone/loopback, device removal/routes, remaining NDK
       exports, session/recorder/container contracts and protected media
       ([media4](handoff/tracks/media4.md), ADR 0064 reserved).
