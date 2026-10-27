@@ -220,8 +220,79 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — camera throughput gate remains open, 2026-10-27
-- Latest full diagnostic **40425000165**, source
+### media3 (stage 3) — runtime gates pass; full CI blocked by external TCP timeouts, 2026-10-27
+
+- Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
+  **40430522654**, has actual **37 media3 PASS on both Windows runners**.
+  Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
+  Windows **121949711710** (2022) ends `0 test(s) failed`. Windows
+  **121949711715** (2025) ends `2 test(s) failed`, only a 15-second TCP
+  connect timeout to self-signed.badssl.com and its aggregate net check.
+  A connection timeout does not establish certificate rejection.
+- The owner explicitly permitted one failed-jobs retry for that external
+  transport failure, preserving the same run and source. **Attempt 2**
+  reruns only Windows 2025 (**121960874112**); the successful jobs are
+  retained. Its 28 conclusions remain **21 success, six skipped, one failed**,
+  with `2 test(s) failed`: a 15-second TCP connect timeout to
+  wrong.host.badssl.com and its aggregate net check. This time self-signed
+  was actually rejected with CertPathValidatorException. The echoed child
+  `FAIL HTTPS` line is not an additional counted failure. Both attempts and
+  their logs are preserved. There is no third retry or full-green claim.
+  The source is evidence for the scoped runtime correction, not yet a
+  mergeable full-suite candidate; latest verified integration must still
+  be merged and the combined source must pass a new full CI.
+- Both original camera gates pass in attempt 1, and again on the rerun's
+  Windows 2025: single process has **61 accepted/encoded/muxed frames**;
+  the Gesher device has **57**, with zero queue drops, rejected frames or
+  encode failures. The independent decoded **30+ frames, ordered picture**
+  check passes in every mode. Original two-second capture, picture, tone,
+  duration and permission assertions are unchanged. The actual ART
+  1,000-round cancel/flush regression, exactly-once onClosed before callback
+  thread shutdown, and absence of uncaught app/daemon exceptions all pass.
+  Original boot criteria pass: attempt 1 interpreter 480/511 ms and JIT
+  352/383 (2022), interpreter 523/548 and JIT 388/402 (2025); attempt 2
+  interpreter 534/559 and JIT 389/416 (2025).
+- The candidate imports the coordinator's exact ART0572 CPU-clock patch
+  (SHA256 2a643cad9529c1f92673917dcf756ee18a680f981d2f9fbbde18dbd0c9493db4)
+  and ART0593's single positive-current-CPU guard. The guard preserves the
+  observed allocation estimate when current mean CPU duration is zero,
+  avoiding 0/0-to-size_t; finite scaling and unknown-next behavior retain
+  their existing policy. A CI-only executable generated from the actual
+  patched Heap::GrowForUtilization arithmetic block passes seven finite,
+  zero and unknown cases on both runners and again in attempt 2. Pristine
+  and patched guard probes provide a negative control without executing
+  undefined NaN conversion. This tests the production block, not a full
+  Heap object. It adds one check: **37 expected, all original 36 retained**.
+  Only source application/generation and parsers run locally.
+- Corrected timing analysis deduplicates the device's streamed stdout and
+  app-log copies. Attempt 1 has **two unique logged app GC collections per
+  runner**, not four; these are logged events, not a total GC counter.
+  KernelPreparation totals 203,718 us / CompactionPause 207,260 us (2022),
+  and 190,849 / 194,356 us (2025), about 0.1 s per collection. One slow
+  camera SetArrayRegion entry of 139,457 us is logged on 2022; none on 2025.
+  No global ThreadCpuNanoTime unimplemented warning remains. This supports
+  the combined clock/guard correction; it does not isolate either patch's
+  FPS effect. KernelPreparation itself is not optimized: no mremap,
+  collector selection, scheduling or threshold-policy change is included.
+  ART and steady/QPC camera clock domains remain separate. Native3 owns
+  NanoTime monotonicity and malloc-pressure accounting as separate gaps.
+- Build **121946800449** compiles time_utils.cc, heap.cc and the generated
+  regression with -Werror and links fixture/dalvikvm/oatdump. Generated
+  block hashes are ce306488dc797f2750a92924cc4baa6e8b8dc9760304cbc1dd348fa55fd4c4d3
+  (patched) and 02b4ad9fa75e8a2394928564bbfa1a7aaf36c034f6c48efd859e6c5ce2a34511
+  (pristine). Framework **121946958910** passes javac/services dex; media
+  **121949272899** installs ffmpeg through the bounded canonical route and
+  builds all three APKs. Package **121949711691** passes actual installed
+  oatdump, image/fonts, window/input, install/dexopt, association/shortcuts
+  and full uninstall cleanup. E2e **121950424518** (2022) / **121950424399**
+  (2025) each pass four transport fixtures, all ten apps (Just Player,
+  TIC-80 and Puzzles required), association/shortcut and
+  `0 unexpected failures`. These successful jobs were retained by attempt 2.
+
+#### Earlier runs and repairs
+
+Local fixture results in this history predate the owner's CI-only rule.
+- Full diagnostic **40425000165**, source
   **487c5e54917a4b4747d1852312fe7d7c5e862cb5**, is complete. All 28 job
   conclusions are read: **21 success, six skipped, one failed**. Windows
   **121931002560** (2025) has `0 test(s) failed` and all 36 media3 PASS,
@@ -245,40 +316,6 @@ the microphone (looped, from its start each time recording starts);
   whole-process totals. No mremap, collector selection or scheduling change
   is made from this observation. ART NanoTime markers and steady/QPC
   camera clocks are separate domains; overlap analysis uses ART markers only.
-- **Candidate CI 40430522654 is running at e8b37b9; not yet verified:**
-  import coordinator's exact ART0572
-  CPU-clock patch (SHA256 2a643cad9529c1f92673917dcf756ee18a680f981d2f9fbbde18dbd0c9493db4)
-  and ART0593's single positive-current-CPU guard. 0572 compiled/linked in
-  coordinator CI 40418638643 and has an actual Windows-2025 clock PASS;
-  this is not a fully green source or a camera-performance proof. The guard
-  preserves the observed allocation estimate when current mean CPU duration
-  is zero, avoiding 0/0-to-size_t; finite scaling and unknown-next behavior
-  retain their existing policy. The new CI-only executable is generated
-  from the actual patched Heap::GrowForUtilization arithmetic block; seven
-  finite/zero/unknown cases execute it. Pristine/patched guard probes provide
-  a negative control without executing undefined NaN conversion. It tests
-  that production block, not a full Heap object. This adds one independent
-  check: **37 expected, all original 36 retained**. Two-second/30-frame,
-  picture/tone/permission/terminal and boot criteria are unchanged. Only
-  source application/generation and parsers run locally. In 40430522654,
-  main **121946800449** passes in 2m57s: time_utils.cc, heap.cc and the
-  generated regression compile with -Werror, and fixture/dalvikvm/oatdump
-  link. The generated block hashes are ce306488dc797f2750a92924cc4baa6e8b8dc9760304cbc1dd348fa55fd4c4d3
-  (patched) and 02b4ad9fa75e8a2394928564bbfa1a7aaf36c034f6c48efd859e6c5ce2a34511
-  (pristine). Framework **121946958910** passes javac/services dex; media
-  **121949272899** actually installs ffmpeg through the bounded canonical
-  route and builds all three APKs. Package **121949711691** passes actual
-  installed oatdump, image/fonts, window/input, install/dexopt,
-  association/shortcuts and full uninstall cleanup. E2e **121950424518**
-  (2022) / **121950424399** (2025) each pass four transport fixtures, all
-  ten apps (Just Player/TIC-80/Puzzles required), association/shortcut and
-  `0 unexpected failures`. Full Windows/regression execution remains
-  pending. Native3 owns the separate
-  NanoTime monotonic and malloc-pressure accounting gaps.
-
-#### Earlier runs and repairs
-
-Local fixture results in this history predate the owner's CI-only rule.
 - Full diagnostic CI **40416959340** at **fe137c83667bf927d3ec331dc10a30ac2b8ef866**
   includes verified integration 94ccde1 (AOT cloud/Exec3 and the independently
   verified camera ownership/race correction). All 28 job conclusions are
@@ -311,8 +348,9 @@ Local fixture results in this history predate the owner's CI-only rule.
   NaN to size_t when estimating the next concurrent-GC threshold. The
   coordinator owns the clock correction; a source-only guard proposal
   retains the observed allocation estimate when the current mean is zero.
-  The guard and clock correction are now in the unverified candidate above;
-  no functional mremap change is included. Their FPS effect still needs CI.
+  The guard and clock correction are now in the candidate above with actual
+  production-block and camera PASS evidence. Full-suite verification is
+  still blocked by the external TCP timeouts; no mremap change is included.
 - Compilation/publication in 40416959340: main **121901592754** succeeds in
   3m39s, compiling both changed ART objects with -Werror and linking dalvikvm /
   oatdump; framework **121909747843** succeeds (javac no errors, service dex
