@@ -303,3 +303,43 @@ original14 positive UIA/fresh-exit proof before any union import. Native helper
 core-only proof (both hosts128 checks, explicit11 system DLL allowlist and
 handle parity); it does not establish JNI/window/VM/full closure. No old watch
 has been restarted or duplicate same-ref full dispatched during recovery.
+
+## Ordinary SG runtime dispatch and next-union feasibility
+
+Binder's final Native peer found and corrected two actual acceptance gaps:
+actual per-package normal exit0 and matching app/native PID must be validated
+before one-way release, and all actual artifact supplier jobs must have the
+exact successful current source/run/attempt. Corrected source is
+ed741c99367d61df2bb2c07ae4d01753d9a03c06. Final focused peer found no further
+definite source/wiring blocker; narrow push started40579429217. Required
+watch18559 writes binder2-sg-modes-component-40579429217-watch.log; runtime is
+pending. Clean pushed d001411cea2333d8b4b695aa02ba1f6ca4aa5ff8 adds docs only.
+No full/leaf/public-prefix acceptance follows. Successful OpenBinder eagerly
+completes the traced HelloProc before ReserveFd; only thread ioctl pipes are
+lazy. Exact observed broker totals therefore include even unused successful
+SG FDs. Failed handshakes/arbitrary concurrent attempts remain outside that
+bounded occurrence audit, and no production selector is introduced.
+
+Read-only next-union feasibility is saved in
+C:/work/gesher-ci-review/process-exec-qualifying-union-feasibility.md. Process
+ebae3e0b/40556470317 has25 actual controls per host0 and canonical auto-discovery
+can compile/execute84. Port helper deltas only: preserve current44 Native2/
+varargs/evidence and current76 callback/TLS/standalone-ELF/Exe intent. Whole old
+file replacement would lose them. Exec frozenfec66a76 is docs-only above
+00c7af77/40549932840, but f4 lacks its underlying bounded ordered-spawn/action/
+ARM-flag implementation; inclusion is that complete leaf, not just3 PS lines.
+Canonical actors/probe/artifact wiring exists in the leaf; current full77 runs
+only relative Dir=dist. Windows owns preparation of a dual abs/relative full
+entry preserving the unchanged assertion body before optional inclusion.
+Do not delay Web3 for unready extra wiring, raise the original60-minute full
+budget or substitute component proof for any actual canonical execution.
+The incoming Web3 source/merge audit is saved separately in
+web3-query-fc176703-integration-source-review.md; both db9 and a788 merge bases
+and AOT/DLC plus new query-dex framework build/copy intent must survive.
+
+Integration was again cleanbfbc4d3a with code exactly944, and local candidate
+was cleanf4a2 with inventory55e03c68. No integration code/main/PR/tag/release
+operation occurred. The hardware plan now explicitly records the owner's
+confirmed unavailable environment and repository runners0; every ten-group
+gate remains. Correct next allocation is ADR0081/test89 (existing0068/test88
+belongs SG); no new allocation is made by this update.

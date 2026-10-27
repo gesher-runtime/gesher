@@ -79,8 +79,9 @@ ADRs they cite. A row summarizes scheduling, not the source's entire scope.
 Concrete unmet hardware/session inputs, owners, existing proof and observable
 acceptance are retained in the [hardware evidence plan](hardware-evidence-plan-2026-10-27.md).
 ADR0080/test87 is reserved to the Native POSIX/OFD record-lock slice by the
-manager; no other worker may allocate it. Next candidate is ADR0081/test88,
-subject to checking absence in current refs/files before reservation.
+manager; no other worker may allocate it. Binder2 uses its existingADR0068
+and reservedtest88. The next new allocation is ADR0081/test89, subject to
+checking absence in current refs/files before reservation.
 
 The prose contract list is not yet atomized/deduplicated. Before final
 completion, reconcile every remaining/leftover/not-done/status statement in

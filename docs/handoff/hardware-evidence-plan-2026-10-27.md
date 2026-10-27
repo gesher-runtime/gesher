@@ -1,5 +1,11 @@
 # Unmet hardware and interactive evidence (2026-10-27)
 
+Current owner response: no suitable interactive hardware-equipped CI
+environment is available. The repository runner inventory also returned0.
+All ten groups below therefore remain required, externally blocked evidence
+gates. No synthetic/provider substitute or release readiness follows from
+hosted CI. Software implementation and CI work continue independently.
+
 These are concrete required environments from existing source contracts,
 not new approval gates. None is waived because the hosted runners lack it.
 Software implementation and deterministic CI work can continue independently.
