@@ -9,6 +9,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <thread>
+#include <time.h>
 
 namespace {
 int failures = 0;
@@ -86,6 +87,31 @@ bool RejectsWallClock() {
   uint64_t after = NativeMonotonic(UINT64_C(1000000));
   return before != UINT64_MAX && after != UINT64_MAX && (wall < before || wall > after);
 }
+
+uint64_t NativeClockNs(int clock) {
+  if (clock == CLOCK_MONOTONIC) return NativeMonotonic(UINT64_C(1000000000));
+  FILETIME time;
+  GetSystemTimePreciseAsFileTime(&time);
+  return (FileTimeValue(time) - UINT64_C(116444736000000000)) * 100;
+}
+
+bool MatchesDeadline(int clock) {
+  constexpr uint64_t delay = UINT64_C(1234567890);
+  uint64_t before = NativeClockNs(clock);
+  timespec deadline;
+  art::InitTimeSpec(true, clock, 1234, 567890, &deadline);
+  uint64_t after = NativeClockNs(clock);
+  if (before == UINT64_MAX || after == UINT64_MAX || deadline.tv_sec < 0 ||
+      deadline.tv_nsec < 0 || deadline.tv_nsec >= 1000000000L) return false;
+  uint64_t actual = static_cast<uint64_t>(deadline.tv_sec) * UINT64_C(1000000000) + deadline.tv_nsec;
+  if (actual < before + delay || actual > after + delay) {
+    std::printf("INFO  native3 clocks: deadline clock %d bracket %" PRIu64
+                " <= ART %" PRIu64 " <= %" PRIu64 " ns\n", clock, before + delay,
+                actual, after + delay);
+    return false;
+  }
+  return true;
+}
 }  // namespace
 
 int main() {
@@ -108,6 +134,16 @@ int main() {
   bool caller_monotonic = MonotonicSequence();
   other.join();
   Check(caller_monotonic && other_monotonic, "concurrent callers share the QPC clock domain");
+  Check(MatchesDeadline(CLOCK_MONOTONIC),
+        "absolute monotonic deadlines use QPC and normalize their offset");
+  Check(MatchesDeadline(CLOCK_REALTIME),
+        "absolute realtime deadlines use UTC and normalize their offset");
+  timespec relative;
+  art::InitTimeSpec(false, CLOCK_MONOTONIC, 1234, 567890, &relative);
+  bool relative_ok = relative.tv_sec == 1 && relative.tv_nsec == 234567890;
+  art::InitTimeSpec(false, CLOCK_REALTIME, 999, 1000000, &relative);
+  Check(relative_ok && relative.tv_sec == 1 && relative.tv_nsec == 0,
+        "relative deadlines retain their duration without an epoch");
   Check(MatchesNativeCpu(false), "ART current-thread CPU time matches GetThreadTimes");
   Check(MatchesNativeCpu(true), "ART process CPU time matches GetProcessTimes");
   uint64_t process_before = art::ProcessCpuNanoTime();
