@@ -243,6 +243,13 @@ the microphone (looped, from its start each time recording starts);
   publication check run locally. Full combined CI is required for all
   37 media3 checks, all four actual certificate rejections, both complete
   Windows summaries, package and both e2e jobs before this is mergeable.
+  Main **121974443338** succeeds in 3m53s, compiling time_utils.cc, heap.cc
+  and the generated production-block regression and linking its executable,
+  dalvikvm and oatdump; both generated block hashes match the earlier
+  candidate. Framework **121974486318** passes in 6m16s with services-tests.dex.
+  Boot image **121976602153** passes in 31s; media **121976602155** passes
+  in 1m28s, including all unchanged media generators, both NDK test libraries
+  and all three APKs. Windows, package and e2e execution remains pending.
 - Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
   **40430522654**, has actual **37 media3 PASS on both Windows runners**.
   Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
