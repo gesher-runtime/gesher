@@ -184,6 +184,20 @@ Later commits are docs only; all three AAudio inventory entries remain
 unverified until every job/both Windows whole0/package/both e2e gate passes.
 Watch uses interval120. All compilation and fixture execution remain CI-only.
 
+Attempt1 ended RED:26 job conclusions=16 success/nine skipped/one failure.
+Graphics122132200985 fails before compilation while fetching AOSP, with
+two actual `RPC failed; HTTP 429` messages followed by `fatal: expected
+flush after ref listing` / `expected 'packfile'`; fetch xargs exits123.
+Windows/package/e2e are skipped and prove nothing. Main122132200568 passes
+22m47s: actual early AAudio object compile, both host links and203 assembly
+boundaries/zero problems. Media122136369135 passes1m34s with both actual
+ABI DSO/ELF builds and four real manifest APKs; framework122132283933
+passes9m18s. Actual main/media/failing-fetch logs were read. After more
+than20 minutes from the upstream429, one bounded `--failed` rerun was
+requested on the same immutable source. No source change or API acceptance
+follows; a repeated fetch failure will be investigated rather than retried
+indefinitely. New watch session86977 uses the required interval120.
+
 Separate AAudio policy source is prepared on wip/media4-aaudio in
 C:\work\gesher-media4-aaudio, from accepted OpenSL/docs58a24583. Test78 is
 reserved (next79), ADR0064 retained. It supplies the three old missing
