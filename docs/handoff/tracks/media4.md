@@ -632,3 +632,24 @@ All validation is pending for this production correction. Malformed TOC/code3,
 large multipage packets/lacing, exact end trimming, append/HEIF/B-frameDTS/CTS,
 advanced metadata and the broader container/recorder contracts remain open.
 The source and existing red proofs are retained, not reclassified.
+
+## Corrected component proof and coherent full candidate
+
+Component40555035592 at56899f17648f0f7cca86c7c279fbec73389834aa is green:
+fresh host/fixtures and both Windows jobs allsuccess. Each host runs eight
+actual contexts with relative Dir plus eight with absolute Dir; all original
+18 semantic parts/12 FD rows/10 outputs and10 independent decodes pass.
+There are48 additional zero/one/two-packet audits per host. Actual Ogg records
+103pages/101audio/empty0/hash-order101of101, allCRC/granules valid;
+96960encoded minus312pre-skip equals96648decoded frames, exactly matching
+the independent source/WebM baseline. Original2s/tone/amplitude gates remain.
+This is scoped proof only, no full/package/e2e/integration acceptance.
+
+The next source34a7ddb8 adds a distinct actual nonzero final payload with
+EOS flag4 in the two-packet case, requiring its genuine payload-eos=1 record
+in addition to the separate zero-byte EOS invocation. Accepted integration
+b323a42c is merged for qualifying full verification. Component guards require
+all imported resolver paths byte-identical to accepted3fb8255d/full40519019567,
+while unchanged ART/ABI/fivejars/boot/DLL keep their pinned source identity.
+Every prior red run and wider container/hardware gap remains explicit.
+A fresh full and updated component are next; no main/tag/release action.
