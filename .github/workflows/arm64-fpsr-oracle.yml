@@ -1,0 +1,71 @@
+name: arm64-fpsr-oracle
+on:
+  push:
+    branches: [wip/arm64-2]
+    paths:
+      - probes/arm64/fpsr/**
+      - .github/workflows/arm64-fpsr-oracle.yml
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NDK_DIR: android-ndk-r27c
+      NDK_VERSION: "27.2.12479018"
+      QEMU_COMMIT: b2995afed254e4804611df52210067a4d5dbdf0b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            probes/arm64/fpsr
+      - name: Validate the pinned input definitions
+        run: |
+          python3 probes/arm64/fpsr/verify-output.py
+          python3 -c 'import json,os; assert json.load(open("probes/arm64/fpsr/qemu.lock.json"))["commit"] == os.environ["QEMU_COMMIT"]'
+      - uses: actions/cache@v4
+        id: qemu
+        with:
+          path: oracle-qemu
+          key: arm64-fpsr-qemu-${{ env.QEMU_COMMIT }}-ubuntu24-${{ hashFiles('probes/arm64/fpsr/build-qemu.sh') }}
+      - name: Build the unmodified pinned independent QEMU oracle
+        if: steps.qemu.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config libglib2.0-dev python3-venv
+          bash probes/arm64/fpsr/build-qemu.sh oracle-qemu
+      - uses: actions/cache@v4
+        id: ndk
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+      - name: Fetch the pinned Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+      - name: Execute actual freestanding AArch64 instructions in independent QEMU
+        run: |
+          set -euo pipefail
+          mkdir -p oracle-output
+          (cd oracle-qemu && sha256sum -c binary.sha256)
+          cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          "$cc" --version | head -1
+          "$cc" -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector \
+            -fno-pic -fno-pie -nostdlib -static -Wl,-no-pie -Wl,-e,_start \
+            -Wl,--build-id=none -Wl,--no-dynamic-linker \
+            probes/arm64/fpsr/reference.c -o oracle-output/reference-aarch64
+          oracle-qemu/qemu-aarch64 -cpu cortex-a53 oracle-output/reference-aarch64 > oracle-output/arm64-fpsr-reference.txt
+          python3 probes/arm64/fpsr/verify-output.py oracle-output/arm64-fpsr-reference.txt \
+            --qemu "$PWD/oracle-qemu/qemu-aarch64" --elf oracle-output/reference-aarch64 \
+            --manifest oracle-output/arm64-fpsr-reference.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-fpsr-reference
+          path: |
+            oracle-output/arm64-fpsr-reference.txt
+            oracle-output/arm64-fpsr-reference.json

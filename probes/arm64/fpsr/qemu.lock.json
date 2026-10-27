@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/qemu/qemu.git",
+  "tag": "v9.2.4",
+  "commit": "b2995afed254e4804611df52210067a4d5dbdf0b",
+  "version": "9.2.4",
+  "target": "aarch64-linux-user",
+  "cpu": "cortex-a53",
+  "cases": 8192
+}
