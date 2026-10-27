@@ -173,6 +173,9 @@ public final class Services {
         ServiceManager.initServiceCache(new TreeMap<>(all));
         // Devices (docs/devices.md): media.camera, in the app's process in every mode.
         CameraService.installInProcess();
+        // Accessibility over UI Automation and Windows' proxy (web3 track, ADR 0058).
+        com.gesher.app.accessibility.AccessibilityService.installInProcess();
+        com.gesher.net.WindowsProxy.installInProcess();
     }
 
     /** servicemanager in a single process: the services above, and nothing else. */
@@ -226,7 +229,8 @@ public final class Services {
     public static final class DisplayManager extends IDisplayManager.Default {
         @Override
         public DisplayInfo getDisplayInfo(int displayId) {
-            return displayId == Display.DEFAULT_DISPLAY ? DeviceProfile.displayInfo() : null;
+            return displayId == Display.DEFAULT_DISPLAY
+                    ? com.gesher.app.window.ApplicationDisplay.info() : null;
         }
 
         @Override
@@ -236,12 +240,13 @@ public final class Services {
 
         @Override
         public void registerCallback(IDisplayManagerCallback callback) {
-            // The display never changes.
+            com.gesher.app.window.ApplicationDisplay.register(callback, -1L);
         }
 
         @Override
         public void registerCallbackWithEventMask(IDisplayManagerCallback callback,
                 long eventsMask) {
+            com.gesher.app.window.ApplicationDisplay.register(callback, eventsMask);
         }
 
         @Override

@@ -12,6 +12,23 @@ semantics with services3/binder2. Preserve the tested shared property model.
 Acceptance requires actual semantic tests and full Windows/package/e2e CI,
 not an export inventory or a shell-only representation of missing behavior.
 
+## Verified process-exit results
+
+The package's cached exit result is bound to a unique start sequence and
+actual PID. A new start clears the old result; late/conflicting callbacks
+cannot publish an older success. The pending/death observer handoff keeps
+the destructive native exit query under its ownership lock. Launcher fails
+when the latest result remains unknown instead of manufacturing success.
+
+Accepted as a bounded slice in full CI 40455262527 at
+29fa0bdf665a2cc5ee707524e7edd2a670391451, merged35fba0ab. Both Windows
+suites have0 failed tests, actual ART generation/PID controls and the real
+same-package app0/23/0 versus launcher0/1/0 sequence. Installed package and
+both ten-app e2e pass. The merged code equals the verified source.
+This is not a cause attribution for the older UIA/native-crash reports.
+Untracked adopted exits remain unknown; the remaining exec4 contracts and
+this aggregate ADR's proposed status stay open.
+
 The first priority is a sporadic own-process native crash observed in
 Windows4 diagnostic CI40417632512 (single-process exec3 APK on Windows-2025).
 It follows the read-mode popen assertion and precedes posix_spawn's next

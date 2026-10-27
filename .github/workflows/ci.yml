@@ -35,6 +35,8 @@ jobs:
 
       - name: Build
         run: |
+          # Check the new native format ABI bridge before the full AOSP graph.
+          ninja -C out CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj
           ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
           # Compile the new bridge before the full runtime to expose its
           # header/ABI errors without waiting for every AOSP object.

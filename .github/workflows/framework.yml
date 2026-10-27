@@ -196,6 +196,9 @@ jobs:
       # build.py --checkout widens the sparse sets to the files the plan
       # needs (blobless clones fetch them then). The tree is saved again,
       # under a key naming its sparse sets, only when that widened it.
+      - name: Verify isolated AOSP cache lifecycle fixtures
+        run: python3 -m unittest discover -s tools/tests -p test_aosp_cache.py -v
+
       - name: Restore AOSP sources
         id: aosp
         uses: actions/cache/restore@v4
@@ -206,6 +209,9 @@ jobs:
             ${{ env.AOSP_KEY }}-
             aosp-framework-
             aosp-
+
+      - name: Prepare restored AOSP sources before Git acquisition
+        run: python3 tools/aosp_cache.py prepare "$PWD/third_party/aosp"
 
       - name: Fetch AOSP sources
         run: |
@@ -337,6 +343,7 @@ jobs:
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -379,12 +386,14 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/localeapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/surfaceapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winlegacy/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           # Networking (docs/network.md): an app with INTERNET and ACCESS_NETWORK_STATE, one without.
           for a in netapp nonetapp; do
             BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/$a/build.sh out/app \
               --framework-res out/framework-res/framework-res.apk \
               --framework-classes out/framework/classes --core-classes out/coremod
           done
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
 
       - name: Collect framework artifacts
         run: |
@@ -400,8 +409,11 @@ jobs:
           cp out/app/localeapp.apk dist-framework/
           cp out/app/surfaceapp.apk dist-framework/
           cp out/app/winapp.apk dist-framework/
+          cp out/app/winlegacy.apk dist-framework/
           cp out/app/netapp.apk out/app/nonetapp.apk dist-framework/
+          cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
+          cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
 
@@ -434,12 +446,14 @@ jobs:
           key: ${{ steps.jvm.outputs.cache-primary-key }}
 
       - name: Sparse sets after the build
-        if: always()
+        if: always() && !cancelled()
         id: after
-        run: echo "sparse=$(tools/sparse-bp.sh --hash)" >> "$GITHUB_OUTPUT"
+        run: |
+          python3 tools/aosp_cache.py snapshot "$PWD/third_party/aosp"
+          echo "sparse=$(tools/sparse-bp.sh --hash)" >> "$GITHUB_OUTPUT"
 
       - name: Save AOSP sources
-        if: always() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
+        if: always() && !cancelled() && steps.after.outputs.sparse != '' && (steps.aosp.outputs.cache-matched-key != format('{0}-{1}', env.AOSP_KEY, steps.after.outputs.sparse))
         uses: actions/cache/save@v4
         with:
           path: third_party/aosp
