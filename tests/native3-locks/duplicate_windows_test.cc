@@ -55,9 +55,9 @@ bool HandleParity(DWORD expected) {
   } while (std::chrono::steady_clock::now() < end);
   return false;
 }
-bool Inherited(int fd) {
+bool InheritFlagIs(int fd, bool expected) {
   DWORD flags = 0;
-  return GetHandleInformation(gesher::HandleFromFd(fd), &flags) && (flags & HANDLE_FLAG_INHERIT);
+  return GetHandleInformation(gesher::HandleFromFd(fd), &flags) && ((flags & HANDLE_FLAG_INHERIT) != 0) == expected;
 }
 int RawSentinel(const char* path) {
   HANDLE file = CreateFileW(gesher::Widen(path).c_str(), GENERIC_READ,
@@ -84,7 +84,7 @@ short Query(int fd, int command, off_t start) {
 }
 int Warm(int source) {
   int copy = fcntl(source, F_DUPFD_CLOEXEC, 32);
-  Check(copy >= 32 && !Inherited(copy), "real warm duplicate is noninherited");
+  Check(copy >= 32 && InheritFlagIs(copy, false), "real warm duplicate is noninherited");
   if (copy >= 0) Check(close(copy) == 0, "real warm duplicate closes");
   return copy;
 }
@@ -107,7 +107,13 @@ void FlagRollback(const char* kind, const char* file, const char* sentinel) {
   auto resource = OpenResource(kind, file, true);
   int source = resource.source, peer = resource.peer, query = resource.query;
   Check(source >= 0, "actual source resource opened");
-  if (source < 0) return;
+  if (!std::strcmp(kind, "regular")) Check(query >= 0, "actual independent regular query source opened");
+  if (source < 0 || (!std::strcmp(kind, "regular") && query < 0)) {
+    if (source >= 0) Check(close(source) == 0, "partial source setup closes");
+    if (query >= 0) Check(close(query) == 0, "partial query setup closes");
+    if (peer >= 0) Check(close(peer) == 0, "partial socket peer setup closes");
+    return;
+  }
   Warm(source);
   if (query >= 0) {
     Check(Lock(source, F_SETLK, F_WRLCK, 0), "real POSIX lock before private rollback");
@@ -161,7 +167,7 @@ void FlagRollback(const char* kind, const char* file, const char* sentinel) {
     }
     Check(received && observed == value, "original actual SOCKET peer receives after rollback");
     int plain = fcntl(source, F_DUPFD, 32);
-    Check(plain >= 32 && fcntl(plain, F_GETFD, 0) == FD_CLOEXEC && !Inherited(plain), "socket plain duplicate preserves existing never-inherit policy");
+    Check(plain >= 32 && fcntl(plain, F_GETFD, 0) == FD_CLOEXEC && InheritFlagIs(plain, false), "socket plain duplicate preserves existing never-inherit policy");
     if (plain >= 0) Check(close(plain) == 0, "socket plain duplicate resource closes");
   } else if (!std::strcmp(kind, "binder")) {
     uint32_t maximum = 1;
@@ -194,7 +200,7 @@ void RetainedNul(const char* file, const char* sentinel) {
   auto retained = locks::InspectPrivateReservations();
   Check(retained.nul > 0 && !retained.native_nul && !retained.uncertain && observed_nul >= 0,
         "every failed-close private NUL remains owned and counted");
-  Check(!Inherited(observed_nul), "actual retained private NUL handle is noninherited");
+  Check(InheritFlagIs(observed_nul, false), "actual retained private NUL handle is noninherited");
   Check(_close(observed_nul) == 0, "fixture deliberately closes identified retained private descriptor");
   int raw = RawSentinel(sentinel);
   Check(raw == observed_nul, "actual CRT publisher reuses retained fd number");
@@ -220,11 +226,25 @@ void Quarantine(const char* kind, const char* file, const char* sentinel) {
   auto retained = locks::InspectPrivateReservations();
   Check(retained.uncertain == 1 && !retained.nul && !retained.native_nul, "uncertain source alias is explicitly retained and counted");
   Check(locks::DrainPrivateReservations() == EIO, "uncertain alias is never retried by reused fd number");
+  bool same = false;
+  Check(locks::SameDescription(gesher::HandleFromFd(source), gesher::HandleFromFd(observed_target), &same) == 0 && same,
+        "actual uncertain target is a source FILE_OBJECT alias");
   gesher::SocketFd socket{};
-  if (!std::strcmp(kind, "socket")) Check(gesher::LookupSocket(observed_target, &socket) &&
-      socket.socket != gesher::ws::kInvalidSocket, "actual retained duplicate SOCKET remains explicitly table-owned");
-  if (!std::strcmp(kind, "event")) Check(static_cast<bool>(gesher::LookupEventFd(observed_target)), "actual retained event reference remains explicitly table-owned");
-  if (!std::strcmp(kind, "binder")) Check(gesher::IsBinderFd(observed_target), "actual retained Binder reference remains explicitly table-owned");
+  if (!std::strcmp(kind, "socket")) {
+    gesher::ws::Address address{};
+    Check(gesher::LookupSocket(observed_target, &socket) && gesher::ws::GetSockName(socket.socket, &address) == 0,
+          "actual retained duplicate SOCKET remains live and explicitly table-owned");
+  }
+  if (!std::strcmp(kind, "event")) {
+    uint64_t value = 0;
+    Check(gesher::LookupEventFd(observed_target) && read(observed_target, &value, sizeof(value)) == static_cast<ssize_t>(sizeof(value)) && value == 7,
+          "actual retained event reference remains live and explicitly table-owned");
+  }
+  if (!std::strcmp(kind, "binder")) {
+    uint32_t maximum = 1;
+    Check(gesher::IsBinderFd(observed_target) && ioctl(observed_target, BINDER_SET_MAX_THREADS, &maximum) == 0,
+          "actual retained Binder reference completes real broker roundtrip");
+  }
   Check(close(source) == -1 && errno == EIO && _get_osfhandle(source) != -1,
         "public close fails closed before changing original ownership");
   // This fresh fixture process owns this precise unpublished fd and performs
