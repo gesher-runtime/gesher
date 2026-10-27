@@ -1,0 +1,26 @@
+# Track brief: native3-time
+
+Close the native3 elapsed-clock gap using ART's existing monotonic branches.
+ADR 0075, ART patch 0573 and test68 are reserved. Worktree
+C:\work\gesher-native3-time, branch wip/native3-time. Root owns this track.
+
+Base includes native3 candidate b3ecc85 and integration 9dd57f5; corrected
+unsigned ARM width, CPU patch 0572 and the bounded AAC prepare observation
+remain separate prerequisite evidence. No local C/C++/Java compilation or
+native/JVM execution is allowed; use CI for every build/runtime check.
+
+## Status and next steps
+
+Prepared source only. The patch selects CLOCK_MONOTONIC for NanoTime,
+MicroTime and MilliTime and excludes their unused wall-clock helper. The
+actual linked artbase fixture adds seven independent Win32 QPC/ordering/
+elapsed/concurrent checks, including a wall-clock-domain counterexample.
+The original CPU clock checks and all full-suite timing gates are retained.
+Patch 0573 applies after exact 0572 in a source-only apply check. Compilation,
+runtime tests, package and both e2e results remain unverified until full CI.
+
+Before acceptance merge current integration and read every job, both zero
+test summaries, all scoped PASS lines, actual package and both required
+e2e logs. Tick only this scoped monotonic contract with its verified run.
+Non-current pthread clock identity/lifetime, native malloc accounting,
+file-backed mremap and the other native3 contracts remain open.
