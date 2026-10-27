@@ -100,7 +100,7 @@ jobs:
           $rows = @((($response | ConvertFrom-Json).artifacts) | Where-Object name -eq $expected)
           if ($rows.Count -ne 1) { throw 'Fixture artifact is not unique' }
           $artifact = $rows[0]
-          if ($artifact.id -le 0 -or $artifact.expired -or $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+          if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or
               "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
               "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
               "$($artifact.workflow_run.head_repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
