@@ -568,6 +568,14 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       Windows runners; knownFailure removed (ci 40307919084 attempt 2)
 - [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
       compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
+- [x] Arm64-2 FPCR rounding slice: real modes 0..3, preserved bits, direct
+      MSR, pthread inheritance/isolation, nested guest/native callbacks and
+      restored host fenv. Full ci 40451978087 attempt 2 at 49ade205, actual
+      JNI/single/device/native-process cases, both zero suites/package/e2e
+      ([0067](decisions/0067-arm64-2-fpcr-rounding.md)).
+- [ ] Remaining arm64-2 contracts: FPSR/environment, guest JIT pages,
+      signals/ucontext, LSE, HFA/variadic binary128 and cache/stack bounds
+      ([brief](handoff/tracks/arm64-2.md)); host CRT/libm rounding stays open.
 
 ## Phase 8 checklist
 

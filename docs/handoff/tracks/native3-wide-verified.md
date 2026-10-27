@@ -28,9 +28,13 @@ Only docs advance above this source. The frozen predecessor ref below is
 unchanged at e7c1b06. This source predates root's verified 0573/time68 merge;
 the separate ARM FPCR candidate includes current integration 8922a3e and
 these wide prerequisites in corrected full ci 40451978087 at 49ade205.
-Attempt 1 passes all six test66 cases and FPCR cases on both runners,
-package/both e2e and the 2025 zero summary; only 2022's known badssl TCP
-timeout remains, with a failed-job-only attempt 2 running on unchanged source.
+Attempt 2 is fully green: all 28 conclusions (22 success/six skipped),
+both actual zero summaries, all six test66 and five FPCR cases per runner,
+package/both e2e were personally read. Attempt 1's only failure was 2022's
+known badssl TCP timeout; the single failed job passed on unchanged source.
+Exact jobs and remaining ARM/host-CRT limits are in
+[the FPCR report](arm64-2-fpcr-verified.md). Newer Media3/exit changes still
+need coherent combined CI; this source predates them.
 Root alone handles integration/main/release. Binary128, wide stdio/scanf,
 full narrow gdtoa/tzcode and other native3/POSIX contracts remain open.
 
