@@ -58,7 +58,7 @@ constexpr int kENOSYS = 38;
 constexpr int kEFAULT = 14;
 
 // pthread_create inherits its caller's floating-point environment. Capture
-// guest FPCR rather than the host's restored x86 environment at this boundary.
+// guest FPCR/FPSR rather than the host's restored x86 environment here.
 using ThreadStart = void*(GESHER_SYSV*)(void*);
 using ThreadCreate = int(GESHER_SYSV*)(void*, const void*, ThreadStart, void*);
 ThreadCreate g_pthread_create = nullptr;
@@ -66,16 +66,18 @@ struct GuestThreadStart {
   ThreadStart function;
   void* argument;
   uint32_t fpcr;
+  uint32_t fpsr;
 };
 void* GESHER_SYSV StartGuestThread(void* opaque) {
   std::unique_ptr<GuestThreadStart> start(static_cast<GuestThreadStart*>(opaque));
   GuestThreadStart captured = *start;
   start.reset();  // A guest may terminate with pthread_exit rather than return.
   SetGuestFpcr(captured.fpcr);
+  SetGuestFpsr(captured.fpsr);
   return captured.function(captured.argument);
 }
 int GESHER_SYSV GuestPthreadCreate(void* thread, const void* attributes, ThreadStart function, void* argument) {
-  auto* start = new (std::nothrow) GuestThreadStart{function, argument, GuestFpcr()};
+  auto* start = new (std::nothrow) GuestThreadStart{function, argument, GuestFpcr(), GuestFpsr()};
   if (start == nullptr) return 12;  // Android ENOMEM.
   int result = g_pthread_create(thread, attributes, StartGuestThread, start);
   if (result != 0) delete start;
@@ -447,7 +449,8 @@ const uint32_t kLongjmp[] = {
 
 // --- the floating-point environment ------------------------------------------------
 // Rounding uses the actual per-thread FPCR, including direct guest MSR.
-// Other environment/exception functions below remain outside this slice.
+// Sticky exception flags use the actual FPSR. Full environment save/restore
+// and the architecture-specific default environment object remain open.
 int GESHER_SYSV FeSetround(int mode) {
   if (mode < 0 || mode > 3) return -1;
   uint32_t fpcr = GuestFpcr();
@@ -457,17 +460,32 @@ int GESHER_SYSV FeSetround(int mode) {
 }
 int GESHER_SYSV FeGetround() { return (GuestFpcr() >> 22) & 3; }
 int GESHER_SYSV FeZero() { return 0; }
-int GESHER_SYSV FeZero1(int) { return 0; }
+constexpr uint32_t kArmFeAll = 0x9f;  // Includes Android ARM FE_DENORMAL (0x80).
+int GESHER_SYSV FeTestexcept(int excepts) {
+  return GuestFpsr() & (static_cast<uint32_t>(excepts) & kArmFeAll);
+}
+int GESHER_SYSV FeClearexcept(int excepts) {
+  SetGuestFpsr(GuestFpsr() & ~(static_cast<uint32_t>(excepts) & kArmFeAll));
+  return 0;
+}
 int GESHER_SYSV FeGetenv(uint32_t* env) {
   if (env != nullptr) env[0] = env[1] = 0;  // fpcr, fpsr
   return 0;
 }
 int GESHER_SYSV FeSetenv(const uint32_t*) { return 0; }
-int GESHER_SYSV FeGetexceptflag(uint32_t* flag, int) {
-  if (flag != nullptr) *flag = 0;
+int GESHER_SYSV FeGetexceptflag(uint32_t* flag, int excepts) {
+  *flag = GuestFpsr() & (static_cast<uint32_t>(excepts) & kArmFeAll);
   return 0;
 }
-int GESHER_SYSV FeSetexceptflag(const uint32_t*, int) { return 0; }
+int GESHER_SYSV FeSetexceptflag(const uint32_t* flag, int excepts) {
+  uint32_t mask = static_cast<uint32_t>(excepts) & kArmFeAll;
+  SetGuestFpsr((GuestFpsr() & ~mask) | (*flag & mask));
+  return 0;
+}
+int GESHER_SYSV FeRaiseexcept(int excepts) {
+  uint32_t flag = static_cast<uint32_t>(excepts);
+  return FeSetexceptflag(&flag, excepts);
+}
 
 struct Fallback {
   const char* name;
@@ -476,8 +494,8 @@ struct Fallback {
 #define FB(n, f) {n, reinterpret_cast<void*>(&f)}
 const Fallback kFenv[] = {
     FB("fesetround", FeSetround),   FB("fegetround", FeGetround),
-    FB("fetestexcept", FeZero1),    FB("feclearexcept", FeZero1),
-    FB("feraiseexcept", FeZero1),   FB("fegetenv", FeGetenv),
+    FB("fetestexcept", FeTestexcept), FB("feclearexcept", FeClearexcept),
+    FB("feraiseexcept", FeRaiseexcept), FB("fegetenv", FeGetenv),
     FB("fesetenv", FeSetenv),       FB("feholdexcept", FeGetenv),
     FB("feupdateenv", FeSetenv),    FB("fegetexceptflag", FeGetexceptflag),
     FB("fesetexceptflag", FeSetexceptflag), FB("fegetexcept", FeZero),

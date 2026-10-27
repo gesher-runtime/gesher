@@ -68,3 +68,8 @@ add_executable(arm64_fpcr_test ${CMAKE_CURRENT_LIST_DIR}/arm64_fpcr_test.cc)
 target_include_directories(arm64_fpcr_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../include)
 target_compile_options(arm64_fpcr_test PRIVATE -Wall -Wextra -Werror)
 target_link_options(arm64_fpcr_test PRIVATE -static)
+
+add_executable(arm64_fpsr_test ${CMAKE_CURRENT_LIST_DIR}/arm64_fpsr_test.cc)
+target_include_directories(arm64_fpsr_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../include)
+target_compile_options(arm64_fpsr_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(arm64_fpsr_test PRIVATE -static)

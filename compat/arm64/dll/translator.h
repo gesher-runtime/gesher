@@ -42,6 +42,8 @@ void InitGuestLibc();
 // Host callbacks run outside Jit::Run; setters take effect before resuming.
 uint32_t GuestFpcr();
 void SetGuestFpcr(uint32_t value);
+uint32_t GuestFpsr();
+void SetGuestFpsr(uint32_t value);
 
 // A raw `SVC #0` in guest code: Linux arm64 syscall `nr` with x0..x5. Returns
 // the raw kernel result (-errno on failure).

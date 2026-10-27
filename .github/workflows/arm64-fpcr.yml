@@ -1,10 +1,11 @@
-name: arm64-fpcr
+name: arm64-fpcr-fpsr
 on:
   push:
     branches: [wip/arm64-2]
     paths:
       - compat/arm64/**
       - tests/native/arm64_fpcr*
+      - tests/native/arm64_fpsr*
       - tests/native/arm64_abi_test.c
       - tests/native2/**
       - tests/apps/native2app/**
@@ -36,10 +37,12 @@ jobs:
         with:
           name: arm64
           path: dist
-      - name: Run real translated FPCR and existing translator contracts
+      - name: Run real translated FPCR FPSR and existing translator contracts
         shell: pwsh
         run: |
           & dist/arm64_smoke_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & dist/arm64_fpcr_test.exe dist/arm64-fpcr-code.bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/arm64_fpsr_test.exe dist/arm64-fpcr-code.bin
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

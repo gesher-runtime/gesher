@@ -37,6 +37,15 @@ restore the host environment after guest entries and native callbacks.
 
 ## Verification and limits
 
+The next sticky-FPSR slice is prepared on current integration e9859654/
+Media3 in the working branch, with reserved test75. It is not verified yet.
+It uses real dynarmic status state, pinned mask 0x9f including denormal,
+preserves QC, and propagates status through threads/nested entries. Tests
+compare the original pinned bodies and actual MSR/MRS/arithmetic/SQADD,
+with four-byte flag buffers and native host status restoration. Full
+environment/default-object and host CRT/libm contracts remain outside it.
+Only the FPCR source/report above is accepted until its own CI completes.
+
 The CI-built NDK assembly test performs actual MSR/MRS and positive/negative
 FADD instructions. Its native Windows caller checks all four modes,
 non-rounding bits, invalid-mode errors, concurrent isolation and a three

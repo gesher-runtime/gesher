@@ -130,9 +130,9 @@ jobs:
             -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
             -DBoost_INCLUDE_DIR="$PWD/deps/boost"
-          ninja -C out-arm64 gesher_arm64 arm64_smoke_test arm64_fpcr_test
+          ninja -C out-arm64 gesher_arm64 arm64_smoke_test arm64_fpcr_test arm64_fpsr_test
           mkdir -p dist-arm64
-          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe out-arm64/arm64_fpcr_test.exe dist-arm64/
+          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe out-arm64/arm64_fpcr_test.exe out-arm64/arm64_fpsr_test.exe dist-arm64/
           cp deps/dynarmic/LICENSE.txt dist-arm64/DYNARMIC-NOTICES.txt
           "$llvm/bin/llvm-objdump" -p dist-arm64/gesher_arm64.dll | grep -iE 'Export|gesher_arm64' | head
           ls -la dist-arm64
@@ -177,6 +177,8 @@ jobs:
             -o dist-arm64/arm64_abi_test.so tests/native/arm64_abi_test.c /tmp/arm64-fpcr-reference.o -ldl -lm
           "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-arm64/arm64-fpcr-exec tests/native/arm64_fpcr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
+          "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-arm64/arm64-fpsr-exec tests/native/arm64_fpsr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           # Step 3/4 (guest JNI): natives found by name and registered, calling
           # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
           # thread attached to the VM.

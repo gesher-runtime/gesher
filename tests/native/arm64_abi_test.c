@@ -22,6 +22,7 @@
 #include <stdarg.h>
 #include <stdatomic.h>
 #include "arm64_fpcr_contracts.h"
+#include "arm64_fpsr_contracts.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -250,6 +251,7 @@ int gesher_selftest(const char* dir) {
   test_va_list();
   test_host_pointer();
   failures += Arm64FpcrContracts();
+  failures += Arm64FpsrContracts();
   printf(failures == 0 ? "arm64_abi_test: all passed\n" : "arm64_abi_test: %d failed\n", failures);
   fflush(stdout);
   return failures;
