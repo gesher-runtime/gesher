@@ -113,6 +113,8 @@ def encode(name, source, out, audio_only=False):
     result = bytearray(b'GSMUX001' + struct.pack('<I', len(streams)))
     track_audit = []
     for stream in streams:
+        if stream['codec_name'] == 'h264' and stream.get('has_b_frames') != 0:
+            raise ValueError('The first muxer slice must not silently include H.264 B frames')
         attributes = fields(stream)
         result.extend(struct.pack('<I', len(attributes)))
         for key, kind, value in attributes:
@@ -137,6 +139,10 @@ def encode(name, source, out, audio_only=False):
         result.extend(struct.pack('<IqII', track, time, flags, len(data)) + data)
         packet_audit.append({'track': track, 'time_us': time, 'flags': flags, 'size': len(data),
                              'sha256': hashlib.sha256(data).hexdigest()})
+    for index, stream in enumerate(streams):
+        selected = [packet for packet in packet_audit if packet['track'] == index]
+        if not selected or (stream['codec_type'] == 'video' and len(selected) != 60):
+            raise ValueError('Expected nonempty tracks and exactly sixty independently encoded video packets')
     target = out / f'{name}.bin'
     target.write_bytes(result)
     audit = {'source': str(source), 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
@@ -145,6 +151,14 @@ def encode(name, source, out, audio_only=False):
     (out / f'{name}.json').write_text(json.dumps(audit, indent=2) + '\n', encoding='utf-8')
     print(f'muxer fixture {name}: {len(streams)} tracks, {len(packets)} packets, '
           f'{len(result)} bytes, shift {shift} us, sha256 {audit["fixture_sha256"]}')
+    print(f'muxer fixture source {name}: {source.name} sha256 {audit["source_sha256"]}')
+    for index, (stream, description) in enumerate(zip(streams, track_audit)):
+        selected = [packet for packet in packet_audit if packet['track'] == index]
+        print(f'muxer fixture track {name}/{index}: codec {description["codec"]}, '
+              f'packets {len(selected)}, first {selected[0]["time_us"]}, last {selected[-1]["time_us"]} us')
+        for field in description['fields']:
+            print(f'muxer fixture field {name}/{index}: {field["key"]} kind {field["kind"]} '
+                  f'size {field["size"]} sha256 {field["sha256"]}')
 
 
 def main():
