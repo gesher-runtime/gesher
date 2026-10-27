@@ -352,13 +352,13 @@ drawing in a window that is covered or off the desktop;
 
 Current changed-source full CI **40432795403** is running at exact
 `2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
-9dd57f5 (documentation-only after coordinator tip42cc1c0), including verified
-startup profile merge2ba9a11. The coordinator personally read profile source
-ca46e99/run40414859801 (18AOT checks per runner and original gates) and combined
-integration40416300047 before authorizing this one fresh Web3 run. This is a
-changed verified profile input, not a repeat of the old timing failure or a
-threshold waiver. Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log,
-interval120. All C/C++/Java compilation and native/JVM fixtures remain CI-only.
+9dd57f5 (documentation-only after coordinator tip 42cc1c0), including verified
+startup profile merge 2ba9a11. The coordinator personally read profile source
+ca46e99/run 40414859801 (18 AOT checks per runner and original gates) and combined
+integration run 40416300047 before authorizing this one fresh Web3 run with
+the changed verified profile input. The original thresholds remain unchanged.
+Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log, interval 120.
+All C/C++/Java compilation and native/JVM fixtures remain CI-only.
 No stage acceptance is claimed before every actual required result is read.
 
 Completed full ci **40376044459** at
