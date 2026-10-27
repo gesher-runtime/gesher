@@ -95,7 +95,7 @@ bool EnableOwnWaitChainProbe() {
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &token)) return false;
   TOKEN_PRIVILEGES privileges{};
   privileges.PrivilegeCount = 1;
-  bool result = LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME, &privileges.Privileges[0].Luid);
+  bool result = LookupPrivilegeValueW(nullptr, L"SeDebugPrivilege", &privileges.Privileges[0].Luid);
   privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
   SetLastError(ERROR_SUCCESS);
   if (result) result = AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr) && GetLastError() == ERROR_SUCCESS;
