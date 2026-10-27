@@ -141,3 +141,20 @@ check all five current-run artifact identities/digests, fixture source/run/
 attempt and eleven payload hashes, all five jar hashes and fifteen exact
 image-copy hashes. It calls the ordinary runner only. This is unexecuted
 workflow source pending the same bounded peer; no component has been dispatched.
+
+Runtime peer found two concrete acceptance gaps, now corrected in source:
+device completion additionally requires the actual package's normal exit-code0
+marker and its app-process PID matching the native actor PID; one-way delivery
+is released only after that actual sender completion is validated. The consumer
+also checks every actual supplier job's successful source/run/attempt, including
+the translator reference and both framework/fixture suppliers, before consuming
+current-run artifacts. These corrections have not executed and require final peer.
+
+The successful-open audit is supported by the current production source:
+OpenBinder eagerly connects and completes HelloProc before ReserveFd/publication;
+ServeProc's trace precedes its hello reply. Therefore even an unused successful
+FD captured for the SG endpoint has a counted process-open trace. Only each
+thread's ioctl pipe is lazy. Exact trace totals plus actual intended actor opens
+bound all successful SG opens in that observed case. Failed handshakes and a
+general claim excluding arbitrary concurrent future attempts remain outside this
+bounded evidence; no such claim is required or inferred.
