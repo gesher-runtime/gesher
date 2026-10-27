@@ -3,6 +3,11 @@
 Status: proposed. Combined scoped ci 40443927632 at 053bbc0 passes exact
 source provenance, NDK builds and both Windows host/translator tests.
 Full JNI/APK/native-process and product acceptance remain pending.
+Initial full ci 40444486511 passes actual host/dalvikvm/native-process FPCR,
+package and both e2e jobs, but both APK modes abort on missing reference
+symbols: their builder omitted the original-body object when recompiling
+the fixture. That packaging path now links and audits the actual APK's
+library; production code is unchanged and the correction awaits CI.
 This is the first rounding slice of arm64-2, not completion of that track.
 
 ## Context

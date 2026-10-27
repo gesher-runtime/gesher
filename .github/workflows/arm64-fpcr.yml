@@ -7,6 +7,7 @@ on:
       - tests/native/arm64_fpcr*
       - tests/native/arm64_abi_test.c
       - tests/native2/**
+      - tests/apps/native2app/**
       - probes/arm64/fpcr/**
       - .github/workflows/native2.yml
       - .github/workflows/arm64.yml
