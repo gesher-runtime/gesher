@@ -2,7 +2,10 @@
 #pragma once
 #include <stdint.h>
 
-enum ArmFpsrOperation { ARM_FPSR_ADD, ARM_FPSR_SUB, ARM_FPSR_MUL, ARM_FPSR_DIV };
+enum ArmFpsrOperation {
+  ARM_FPSR_ADD, ARM_FPSR_SUB, ARM_FPSR_MUL, ARM_FPSR_DIV,
+  ARM_FPSR_SEEDED_MUL, ARM_FPSR_ADD_THEN_MUL, ARM_FPSR_MUL_THEN_ADD
+};
 struct ArmFpsrVector { uint64_t left64, right64; uint32_t left32, right32; };
 static const struct ArmFpsrVector ArmFpsrVectors[] = {
     {0, 0, 0, 0},

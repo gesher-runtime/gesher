@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hash-check pinned x64 compiler and scalar ARM FZ input-status corrections.
+"""Hash-check pinned x64 compiler and scalar ARM FZ status corrections.
 
 Only source rewriting/hashing runs locally. Compilation and all native
 execution belong to CI. Preserve the original dynarmic 0BSD source/license.
@@ -63,15 +63,42 @@ void RecordInputDenormal(BlockOfCode& code, const Xbyak::Reg64& scratch,
     }
 }
 
+// ARM FZ output flushing raises UFC without IXC. Isolate this instruction's
+// hardware underflow/inexact flags, then merge the complete prior status.
+// This also preserves IXC from an earlier instruction in the same block.
+void BeginFzStatus(BlockOfCode& code, EmitContext& ctx, const Xbyak::Reg64& scratch) {
+    ctx.reg_alloc.AllocStackSpace(16);
+    code.stmxcsr(code.dword[code.rsp]);
+    code.mov(scratch.cvt32(), code.dword[code.rsp]);
+    code.and_(scratch.cvt32(), ~0x30u);
+    code.mov(code.dword[code.rsp + 4], scratch.cvt32());
+    code.ldmxcsr(code.dword[code.rsp + 4]);
+}
+
+void EndFzStatus(BlockOfCode& code, EmitContext& ctx, const Xbyak::Reg64& scratch) {
+    Xbyak::Label not_underflow;
+    code.stmxcsr(code.dword[code.rsp + 4]);
+    code.mov(scratch.cvt32(), code.dword[code.rsp + 4]);
+    code.test(scratch.cvt32(), 0x10);  // x86 underflow from this operation.
+    code.jz(not_underflow, code.T_NEAR);
+    code.and_(scratch.cvt32(), ~0x20u);  // Its FTZ inexact is not ARM IXC.
+    code.L(not_underflow);
+    code.or_(scratch.cvt32(), code.dword[code.rsp]);
+    code.mov(code.dword[code.rsp + 4], scratch.cvt32());
+    code.ldmxcsr(code.dword[code.rsp + 4]);
+    ctx.reg_alloc.ReleaseStackSpace(16);
+}
+
 """
 DN_INPUTS = """    if (ctx.FPCR().DN() || ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN)) {
         const Xbyak::Xmm result = ctx.reg_alloc.UseScratchXmm(args[0]);
         const Xbyak::Xmm operand = ctx.reg_alloc.UseScratchXmm(args[1]);
 """
 DN_RECORDED = DN_INPUTS + """
+        const Xbyak::Reg64 status_scratch = ctx.FPCR().FZ() ? ctx.reg_alloc.ScratchGpr() : code.rax;
         if (ctx.FPCR().FZ()) {
-            const Xbyak::Reg64 input_scratch = ctx.reg_alloc.ScratchGpr();
-            RecordInputDenormal<fsize>(code, input_scratch, {result, operand});
+            RecordInputDenormal<fsize>(code, status_scratch, {result, operand});
+            BeginFzStatus(code, ctx, status_scratch);
         }
 """
 NORMAL_INPUTS = """    const Xbyak::Xmm op1 = ctx.reg_alloc.UseXmm(args[0]);
@@ -83,11 +110,33 @@ NORMAL_INPUTS = """    const Xbyak::Xmm op1 = ctx.reg_alloc.UseXmm(args[0]);
 NORMAL_RECORDED = NORMAL_INPUTS.replace(
     "    SharedLabel end", """    if (ctx.FPCR().FZ()) {
         RecordInputDenormal<fsize>(code, tmp, {op1, op2});
+        BeginFzStatus(code, ctx, tmp);
     }
 
     SharedLabel end""")
+DN_ARITHMETIC_END = """            fn(result, operand);
+        }
+
+        if (!ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN)) {
+            ForceToDefaultNaN<fsize>(code, result);"""
+DN_STATUS_END = DN_ARITHMETIC_END.replace(
+    "        if (!ctx.HasOptimization", """        if (ctx.FPCR().FZ()) {
+            EndFzStatus(code, ctx, status_scratch);
+        }
+
+        if (!ctx.HasOptimization""")
+NORMAL_ARITHMETIC_END = """        fn(result, op2);
+    }
+    FCODE(ucomis)(result, result);"""
+NORMAL_STATUS_END = NORMAL_ARITHMETIC_END.replace(
+    "    FCODE(ucomis)", """    if (ctx.FPCR().FZ()) {
+        EndFzStatus(code, ctx, tmp);
+    }
+    FCODE(ucomis)""")
 EMITTER_REPLACEMENTS = [(THREE_OP, INPUT_HELPER + THREE_OP),
-                        (DN_INPUTS, DN_RECORDED), (NORMAL_INPUTS, NORMAL_RECORDED)]
+                        (DN_INPUTS, DN_RECORDED), (NORMAL_INPUTS, NORMAL_RECORDED),
+                        (DN_ARITHMETIC_END, DN_STATUS_END),
+                        (NORMAL_ARITHMETIC_END, NORMAL_STATUS_END)]
 
 
 def digest(data):

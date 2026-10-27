@@ -61,6 +61,48 @@ static uint64_t Arithmetic(unsigned operation, unsigned width, uint64_t left, ui
   return result;
 }
 
+// Numeric dependencies keep every arithmetic instruction live in the
+// translated consumer too; no intervening MRS/MSR materializes the flags.
+static uint64_t Cumulative(unsigned operation, unsigned width, uint64_t left, uint64_t right) {
+  if (operation == ARM_FPSR_SEEDED_MUL) return Arithmetic(ARM_FPSR_MUL, width, left, right);
+  uint64_t result;
+  if (width == 32) {
+    uint32_t output, a = (uint32_t)left, b = (uint32_t)right;
+    uint32_t one = UINT32_C(0x3f800000), half = UINT32_C(0x33800000);
+    if (operation == ARM_FPSR_ADD_THEN_MUL) {
+      __asm__ volatile("fmov s2, %w1\n fmov s3, %w2\n fmov s0, %w3\n fmov s1, %w4\n"
+                       "fadd s0, s0, s1\n fmul s2, s2, s0\n fmul s0, s2, s3\n fmov %w0, s0"
+                       : "=r"(output) : "r"(a), "r"(b), "r"(one), "r"(half) : "v0", "v1", "v2", "v3");
+    } else {
+      __asm__ volatile("fmov s0, %w1\n fmov s1, %w2\n fmul s0, s0, s1\n fmov s2, %w4\n"
+                       "fadd s1, s2, s0\n fmov s0, %w3\n fadd s0, s0, s1\n fmov %w0, s0"
+                       : "=r"(output) : "r"(a), "r"(b), "r"(one), "r"(half) : "v0", "v1", "v2");
+    }
+    return output;
+  }
+  uint64_t one = UINT64_C(0x3ff0000000000000), half = UINT64_C(0x3ca0000000000000);
+  if (operation == ARM_FPSR_ADD_THEN_MUL) {
+    __asm__ volatile("fmov d2, %1\n fmov d3, %2\n fmov d0, %3\n fmov d1, %4\n"
+                     "fadd d0, d0, d1\n fmul d2, d2, d0\n fmul d0, d2, d3\n fmov %0, d0"
+                     : "=r"(result) : "r"(left), "r"(right), "r"(one), "r"(half) : "v0", "v1", "v2", "v3");
+  } else {
+    __asm__ volatile("fmov d0, %1\n fmov d1, %2\n fmul d0, d0, d1\n fmov d2, %4\n"
+                     "fadd d1, d2, d0\n fmov d0, %3\n fadd d0, d0, d1\n fmov %0, d0"
+                     : "=r"(result) : "r"(left), "r"(right), "r"(one), "r"(half) : "v0", "v1", "v2");
+  }
+  return result;
+}
+
+static void Row(unsigned operation, unsigned width, uint64_t control, uint64_t left,
+                uint64_t right, uint64_t seed, uint64_t result, uint64_t status) {
+  char line[160];
+  char* out = Hex(line, operation);
+  out = Hex(out, width); out = Hex(out, control); out = Hex(out, left); out = Hex(out, right);
+  out = Hex(out, seed); out = Hex(out, result); out = Hex(out, status);
+  out[-1] = '\n';
+  Write(line, (size_t)(out - line));
+}
+
 __attribute__((noreturn)) void _start(void) {
   static const char header[] = "ARM64_FPSR_QEMU_V1\n";
   Write(header, sizeof(header) - 1);
@@ -76,12 +118,22 @@ __attribute__((noreturn)) void _start(void) {
         uint64_t result = Arithmetic(operation, width, left, right);
         uint64_t status;
         __asm__ volatile("mrs %0, fpsr" : "=r"(status) : : "memory");
-        char line[160];
-        char* out = Hex(line, operation);
-        out = Hex(out, width); out = Hex(out, control); out = Hex(out, left); out = Hex(out, right);
-        out = Hex(out, seed); out = Hex(out, result); out = Hex(out, status);
-        out[-1] = '\n';
-        Write(line, (size_t)(out - line));
+        Row(operation, width, control, left, right, seed, result, status);
+      }
+    }
+  }
+  for (unsigned mode = 0; mode < 4; ++mode) for (unsigned dn = 0; dn < 2; ++dn) {
+    uint64_t control = ((uint64_t)mode << 22) | ((uint64_t)dn << 25) | (UINT64_C(1) << 24);
+    for (unsigned width = 32; width <= 64; width += 32) {
+      uint64_t minimum = width == 32 ? UINT64_C(0x00800000) : UINT64_C(0x0010000000000000);
+      for (unsigned operation = ARM_FPSR_SEEDED_MUL; operation <= ARM_FPSR_MUL_THEN_ADD; ++operation) {
+        for (unsigned initial = 0; initial < 3; ++initial) {
+          uint64_t seed = initial == 0 ? 0 : initial == 1 ? UINT64_C(0x08000081) : UINT64_C(0x08000091);
+          __asm__ volatile("msr fpcr, %0\n msr fpsr, %1" : : "r"(control), "r"(seed) : "memory");
+          uint64_t result = Cumulative(operation, width, minimum, minimum), status;
+          __asm__ volatile("mrs %0, fpsr" : "=r"(status) : : "memory");
+          Row(operation, width, control, minimum, minimum, seed, result, status);
+        }
       }
     }
   }

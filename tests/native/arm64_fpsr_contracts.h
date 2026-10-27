@@ -54,6 +54,12 @@ static uint64_t ArmFpsrArithmetic(int operation, uint64_t left, uint64_t right) 
   }
   return result;
 }
+static uint32_t ArmFpsrMultiply32(uint32_t left, uint32_t right) {
+  uint32_t result;
+  __asm__ volatile("fmov s0, %w1\n fmov s1, %w2\n fmul s0, s0, s1\n fmov %w0, s0"
+                   : "=r"(result) : "r"(left), "r"(right) : "v0", "v1");
+  return result;
+}
 static void ArmFpsrSaturate(void) {
   __asm__ volatile("movi v0.16b, #127\n movi v1.16b, #1\n sqadd v0.16b, v0.16b, v1.16b"
                    : : : "v0", "v1");
@@ -205,6 +211,22 @@ static int Arm64FpsrContracts(void) {
     failures += ArmFpsrCheck(ArmFpsrRead() == op.flags && test(FE_ALL_EXCEPT) == (int)op.flags &&
                              arm64_reference_fetestexcept(FE_ALL_EXCEPT) == (int)op.flags,
                              "real FDIV/FMUL/FADD produces each pinned exception flag");
+  }
+  const uint32_t seeds[] = {0, ARM_FPSR_QC | FE_INVALID | FE_DENORMAL,
+                            ARM_FPSR_QC | FE_INVALID | FE_DENORMAL | FE_INEXACT};
+  for (unsigned mode = 0; mode < 4; ++mode) for (unsigned dn = 0; dn < 2; ++dn) {
+    uint32_t control = (mode << 22) | (dn << 25) | (UINT32_C(1) << 24);
+    for (unsigned width = 32; width <= 64; width += 32) for (unsigned initial = 0; initial < 3; ++initial) {
+      ArmFpsrSetControl(control);
+      ArmFpsrWrite(seeds[initial]);
+      uint64_t result = width == 32 ? ArmFpsrMultiply32(UINT32_C(0x00800000), UINT32_C(0x00800000)) :
+          ArmFpsrArithmetic(1, UINT64_C(0x0010000000000000), UINT64_C(0x0010000000000000));
+      uint32_t expected = seeds[initial] | FE_UNDERFLOW;
+      failures += ArmFpsrCheck(result == 0 && ArmFpsrRead() == expected &&
+                               test(FE_ALL_EXCEPT) == (int)(expected & FE_ALL_EXCEPT) &&
+                               ArmFpsrControl() == control,
+                               "FZ32/64 output underflow preserves prior IXC without adding IXC");
+    }
   }
   ArmFpsrSetControl(0);
   ArmFpsrWrite(0);
