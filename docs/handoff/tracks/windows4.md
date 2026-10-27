@@ -34,6 +34,25 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+The final prepared candidate combines both owned tracks: Web3b1477eed is
+merged into Windows4, alongside verified exit-freshness integration30deb08c
+(runtime29fa0bdf/full40455262527, Root personally read all28/both0, actual
+ART/app0-23-0 and launcher0-1-0, package23/both ten-app e2e0). It also includes
+the ready Exec4 registration slicea8028409, whose four pinned EBADF guards and
+actual NDK child-wait fixture were source-reviewed here, and exact verified
+Media4 format sourcec5962291/full40459815375. Media4's native2 availability
+probe is preserved as AMediaFormat_new,true; codec absence is not hidden.
+
+The cache-only three-file slice from9bb847a8 is imported with byte-identical
+guard/tests, verified in scoped40461056132 (ten controls, actual javac0).
+No unverified Net4 interface APIs/fixtures, FPSR or AOT graph implementation
+is imported. Latest integration30deb08c remains an ancestor after every merge.
+Code merge tipb00f5a8b is ready for one coherent full run proving Windows4,
+all14 Web3 assertions with fresh child exits, tests70/71/74, actual installed
+window/input/uninstall and both complete ten-app suites. Earlier component
+proof does not accept this changed combination. The exact dispatched source
+and full results will be recorded separately; no roadmap tick yet.
+
 Prepared source now includes coordinator integration
 f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (mergef92be5cf). Root personally
 verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296;
