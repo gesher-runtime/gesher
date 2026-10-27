@@ -42,4 +42,4 @@ jobs:
           . ([scriptblock]::Create($definition.Extent.Text))
           . "$pwd/tests/windows/tracks/84-ci-processes.ps1"
           Write-Host "$failed test(s) failed"
-          if ($failed) { exit 1 }
+          exit $failed

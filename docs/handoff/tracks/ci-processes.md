@@ -40,3 +40,10 @@ tests/windows/Process84.cs. The corrected invocation resolves and logs the
 actual absolute fixture/compiler/output paths before calling csc, avoiding
 relative-segment interpretation. The helper's actual process behavior is
 still unverified; the old failure is retained and not retried unchanged.
+Changed-source40525679532/598cf01c compiles the actual fixture on both hosts
+and prints all four normal/23/timeout/retained-pipe PASS records followed by0
+test(s) failed. Its jobs remain red: the Actions PowerShell wrapper inherits
+the intentional final negative helper result through LASTEXITCODE. The
+scoped driver now explicitly exits its asserted failure count, exactly as
+the full run-tests.ps1 driver already does. All case expectations and helper
+status behavior remain unchanged. No full/product acceptance yet.
