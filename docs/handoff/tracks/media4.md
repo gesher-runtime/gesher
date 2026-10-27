@@ -1,9 +1,8 @@
 # Track brief: media4 — remaining media contracts
 
-Status: open follow-up to media3, 2026-10-26. ADR **0064** is reserved for
-media4 by the coordinator; the implementing owner writes it when making
-the next design decision. The coordinator assigns an
-owner/worktree before implementation. Read docs/handoff/track-rules.md,
+Status: active follow-up to media3, 2026-10-27. ADR **0064** belongs to
+media4. The coordinator assigned C:\work\gesher-media4, branch wip/media4,
+cut from integration f17d03b1 after Media3's verified merge. Read docs/handoff/track-rules.md,
 docs/media.md and ADRs 0042, 0052 and 0059 first. CI only for AOSP builds;
 no local AOSP builds, WSL or artifact downloads. This brief records gaps,
 not completed features or authorization to use another track's worktree.
@@ -57,8 +56,8 @@ Verified mux round trips cover H.264/AAC MP4 and Opus-only WebM, not WebM
 video/audio interleaving. Media3's original camera throughput and terminal
 gates pass on both runners in full GREEN 40448521754 at dd06d296 (37 media3
 and 12 part-1 device checks per runner; both whole suites zero failures,
-package and both required ten-app e2e green). The coordinator still performs
-its review/integration merge; this evidence closes none of Media4's API gaps.
+package and both required ten-app e2e green). The coordinator merged Media3
+as a1edcb02; this evidence closes none of Media4's API gaps.
 The older 40438975894 source remains RED for five Windows-2025 net checks.
 The exact verified runs and remaining failed checks are in docs/media.md. CI uses
 a known WAV microphone source and GESHER_CAMERA_TEST; it does not establish
@@ -152,3 +151,28 @@ new third-party apps. Merge current integration before final CI. Report the
 exact SHA, job ids, PASS lines and unsupported contracts; do not tick broad
 roadmap boxes based on one app launch or successful packaging. Shared files
 must have minimal additive edits and be listed in the final report.
+
+## Status and next steps
+
+The first source candidate implements only the real NDK AMediaFormat
+subset described in ADR 0064: 21 System V function entries and 152 actual
+AOSP pointer data objects, in a small OBJECT target shared by dalvikvm and
+gesher-exec. No dummy codec or format storage implementation is added.
+The platform-library probe and native2 availability expectation now use
+AMediaFormat_new, while test71 requires the unimplemented decoder to stay
+absent. These two shared bionic/native2 edits are approved by the coordinator;
+Net4's owner is coordinating its separate native2 changes and test72.
+
+New mediaformatapp single-ABI APKs, core dex and independent ELF executables
+share the same typed/data/ownership/error/lifecycle source for x86_64 and
+arm64-v8a. Their build/publication is additive in media.yml; no new workflow
+job or artifact download is needed. tests/windows/tracks/71-media4-format.ps1
+owns the new checks, with bounded processes, fresh device roots and native
+ABI/caller markers. All compilation and fixture execution are CI-only.
+
+CI is not dispatched yet. Finish static source/manifest/script review,
+merge current integration before the final candidate, then run full ci.yml
+and read every job, both complete zero-failure Windows summaries, all test71
+parts, package and required e2e before marking anything verified. The native
+API baseline metadata and roadmap are unchanged. All remaining contracts
+listed above stay open; later work must build on a CI-accepted slice.
