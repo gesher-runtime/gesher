@@ -106,6 +106,20 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
     }
   }
   $text = & $read
+  $processExit = $p.ExitCode
+  Write-Host ("INFO  web3 process result: {0}, exit 0x{1:X8}" -f $(if ($Arguments -contains 'com.gesher.app.Launcher') { 'device launcher' } else { 'single-process VM' }), $processExit)
+  if ($processExit -ne 0) { $problems += ('process exit 0x{0:X8}' -f $processExit) }
+  if ($Arguments -contains 'com.gesher.app.Launcher') {
+    $ended = [regex]::Match($text, '(?m)^gesher-app: the process of com\.gesher\.web3app ended \(exit code (-?\d+)\)\r?$')
+    if (-not $ended.Success -or $ended.Groups[1].Value -ne '0') {
+      $problems += 'missing a normal exit-code-zero completion from the actual app process'
+    }
+    Write-Host ("INFO  web3 device completion: " + $(if ($ended.Success) { $ended.Value.Trim() } else { '(no child exit-code marker)' }))
+  }
+  # Preserve the actual successful teardown evidence too, rather than only
+  # checking that its marker existed beyond the normal first-80-line summary.
+  ($text -split "`n" | Where-Object { $_ -match '^(Web3 a11y (finish|onPause|onStop|onDestroy|done)|gesher-app: window "Web3 test" teardown:)' } |
+    Select-Object -Last 40 | ForEach-Object { "INFO  web3 lifecycle: $_".TrimEnd() }) | Out-Host
   foreach ($want in $Expect) {
     if (-not $text.Contains($want)) { $problems += "missing '$want'" }
   }
