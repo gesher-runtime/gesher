@@ -82,3 +82,12 @@ C:\work\gesher-ci-review\exec4-takeover-watch-40428277638.log, session49047,
 at interval120. Test67 bounds the entire process tree and pipe completion;
 failure codes are retained in Java/native output. No precise crash cause is
 claimed from the source defect alone.
+
+Corrected full CI40430496516 is dispatched at exact source
+9f250803cd184e05d024733da8296410007de76f on the immutable candidate ref
+wip/exec4-live-environ. It includes 1cc12d7's live-export correction and
+the bounded-harness follow-up. Watch log:
+C:\work\gesher-ci-review\exec4-live-environ-watch-40430496516.log, interval120.
+No candidate job result is claimed yet. Original diagnostic610 remains
+running independently at CI40428277638. Root alone merges the final verified
+source and coordinates latest integration; no branch was merged here.
