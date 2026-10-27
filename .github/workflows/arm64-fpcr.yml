@@ -1,0 +1,32 @@
+name: arm64-fpcr
+on:
+  push:
+    branches: [wip/arm64-2]
+    paths:
+      - compat/arm64/**
+      - tests/native/arm64_fpcr*
+      - .github/workflows/arm64.yml
+      - .github/workflows/arm64-fpcr.yml
+  workflow_dispatch:
+jobs:
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  rounding:
+    needs: translator
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - name: Run real translated FPCR and existing translator contracts
+        shell: pwsh
+        run: |
+          & dist/arm64_smoke_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/arm64_fpcr_test.exe dist/arm64-fpcr-code.bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

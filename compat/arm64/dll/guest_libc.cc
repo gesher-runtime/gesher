@@ -25,6 +25,8 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <memory>
+#include <new>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -53,6 +55,31 @@ void SetErrno(int e) {
 
 constexpr int kENOSYS = 38;
 constexpr int kEFAULT = 14;
+
+// pthread_create inherits its caller's floating-point environment. Capture
+// guest FPCR rather than the host's restored x86 environment at this boundary.
+using ThreadStart = void*(GESHER_SYSV*)(void*);
+using ThreadCreate = int(GESHER_SYSV*)(void*, const void*, ThreadStart, void*);
+ThreadCreate g_pthread_create = nullptr;
+struct GuestThreadStart {
+  ThreadStart function;
+  void* argument;
+  uint32_t fpcr;
+};
+void* GESHER_SYSV StartGuestThread(void* opaque) {
+  std::unique_ptr<GuestThreadStart> start(static_cast<GuestThreadStart*>(opaque));
+  GuestThreadStart captured = *start;
+  start.reset();  // A guest may terminate with pthread_exit rather than return.
+  SetGuestFpcr(captured.fpcr);
+  return captured.function(captured.argument);
+}
+int GESHER_SYSV GuestPthreadCreate(void* thread, const void* attributes, ThreadStart function, void* argument) {
+  auto* start = new (std::nothrow) GuestThreadStart{function, argument, GuestFpcr()};
+  if (start == nullptr) return 12;  // Android ENOMEM.
+  int result = g_pthread_create(thread, attributes, StartGuestThread, start);
+  if (result != 0) delete start;
+  return result;
+}
 
 // --- struct stat ---------------------------------------------------------------
 struct X64Stat {  // bionic x86-64 struct stat
@@ -377,11 +404,16 @@ const uint32_t kLongjmp[] = {
 };
 
 // --- the floating-point environment ------------------------------------------------
-// The guest's is its FPCR/FPSR, which the translator does not expose, and
-// bionic's arm64 fenv_t (8 bytes) and FE_* values are not x86-64's (the
-// shim's): only the default rounding mode (FE_TONEAREST = 0) is accepted, and
-// no exception flags are reported.
-int GESHER_SYSV FeSetround(int mode) { return mode == 0 ? 0 : -1; }
+// Rounding uses the actual per-thread FPCR, including direct guest MSR.
+// Other environment/exception functions below remain outside this slice.
+int GESHER_SYSV FeSetround(int mode) {
+  if (mode < 0 || mode > 3) return -1;
+  uint32_t fpcr = GuestFpcr();
+  uint32_t next = (fpcr & ~(UINT32_C(3) << 22)) | (static_cast<uint32_t>(mode) << 22);
+  if (next != fpcr) SetGuestFpcr(next);
+  return 0;
+}
+int GESHER_SYSV FeGetround() { return (GuestFpcr() >> 22) & 3; }
 int GESHER_SYSV FeZero() { return 0; }
 int GESHER_SYSV FeZero1(int) { return 0; }
 int GESHER_SYSV FeGetenv(uint32_t* env) {
@@ -401,7 +433,7 @@ struct Fallback {
 };
 #define FB(n, f) {n, reinterpret_cast<void*>(&f)}
 const Fallback kFenv[] = {
-    FB("fesetround", FeSetround),   FB("fegetround", FeZero),
+    FB("fesetround", FeSetround),   FB("fegetround", FeGetround),
     FB("fetestexcept", FeZero1),    FB("feclearexcept", FeZero1),
     FB("feraiseexcept", FeZero1),   FB("fegetenv", FeGetenv),
     FB("fesetenv", FeSetenv),       FB("feholdexcept", FeGetenv),
@@ -448,6 +480,9 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
+
+  g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
+  if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));
 
   g_stat = Host("stat");
   g_lstat = Host("lstat");
