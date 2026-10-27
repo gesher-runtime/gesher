@@ -14,3 +14,16 @@ its own CI plus the future changed-union qualifying full. The owning branch
 also contains unmerged ordered-spawn/action/ARM-flag production scope; do not
 mistake the whole branch for only a path or test-loop correction. Future
 Native record-lock spawn wiring must coordinate that exact interface first.
+
+## Exact later component proof
+
+Source82d41d2117ea587876e3cc1a153dc6486c8b4d6a/run40582080725 attempt1:
+4jobs green, actual build122463847311 andNDK122463847713 logs read;
+actual Windows2022 job122465732152 and2025 job122465732026 each show
+absolute rooted=True and relative Dir=dist rooted=False, all8 original
+ordered-action/child127/parent-isolation/no-console passes and0failures.
+Fresh launcher/no-console artifact12769373520 andNDKexec12769409392.
+Plain logs retained prefix C:/work/gesher-ci-review/exec4-full-entry-40582080725-
+with build.log,ndk.log,test2022.log,test2025.log,result.json,watch.log.
+This validates the canonical shared entry at component scope only. Future
+merged full must actually show8passes/host; no postmerge/full equality claim.
