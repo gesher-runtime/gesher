@@ -1,7 +1,7 @@
 # Exec4: fresh process exit results
 
 Root owns wip/exec4-exit in C:\work\gesher-exec4-exit under ADR0074.
-Test70 is reserved. Full CI is verified below; integration merge is pending.
+Test70 is reserved. Merged as35fba0ab after the full CI verification below.
 Other exec4 contracts and the final main/release gates remain open.
 
 ## Context
@@ -33,8 +33,10 @@ launches with0 unexpected failures. Existing live-environment/time/media,
 shell/process, original boot-profile size/startup and app-image gates remain
 enabled and passed. No retry or deadline/assertion relaxation.
 
-Freeze the verified source with documentation only, merge it into current
-integration and confirm the merged non-documentation tree matches29fa0bdf.
+Frozen head7d219f59 adds documentation only. Root merged it into integration
+as35fba0ab and confirmed the non-documentation tree exactly matches29fa0bdf;
+no additional integration CI is needed under rule-g. The copied-brief
+add/add conflict retained this accepted result and all source history.
 Windows4/Web3 must then run on this prerequisite. This fixes exit-result
 freshness, not the cause of an earlier UIA stall; untracked adopted OS exits
 remain explicitly unknown/failure. Child action/fork/exec4 gaps remain open.
