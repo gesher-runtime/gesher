@@ -88,6 +88,29 @@ Corrected full CI40430496516 is dispatched at exact source
 wip/exec4-live-environ. It includes 1cc12d7's live-export correction and
 the bounded-harness follow-up. Watch log:
 C:\work\gesher-ci-review\exec4-live-environ-watch-40430496516.log, interval120.
-No candidate job result is claimed yet. Original diagnostic610 remains
-running independently at CI40428277638. Root alone merges the final verified
-source and coordinates latest integration; no branch was merged here.
+Candidate exec/exec job121946700051 succeeded. Its actual job log confirms
+NDK -Werror compilation of the new shared fixture/JNI, Java/dex compilation
+and APK packaging. This is build evidence only; host C++/Windows execution,
+package and e2e are still pending. Log:
+C:\work\gesher-ci-review\exec4-live-environ-exec-121946700051.log.
+Original diagnostic610 remains running independently at CI40428277638.
+Root alone merges the final verified source and coordinates latest
+integration; no branch was merged here.
+
+Remaining-contract source audit while CI builds (no acceptance claims):
+- `shell_execute.inc::ReadByte` polls named pipes but calls synchronous
+  ReadFile for console input. The shell/exec spawn code has no console-control
+  bridge; both spawn entry points unconditionally use CREATE_NO_WINDOW.
+  Native console interruption therefore needs an owned-console fixture,
+  blocked-read wakeup and foreground-child/group delivery, preserving the
+  existing pipe/mailbox trap tests.
+- `logging.cc::Record` stores bounded C-string tag/text in a private header;
+  Logcat supports text formats and tag/priority filters. That storage/API
+  cannot represent an arbitrary binary event payload or logd reader framing.
+  Keep EventLog, binary buffers, reader ownership/failure and remaining
+  filter/options tests open; a text logger callback is not their completion.
+- Shell `exec` still calls External and waits; native exec outside fork waits
+  and exits the old process. The previously documented changed-PID contract,
+  real fork/static-executable limits, unimplemented TLS forms and property
+  caller/notification dependencies are unchanged. These require their own
+  actual runtime evidence after the immediate environment/crash regression.

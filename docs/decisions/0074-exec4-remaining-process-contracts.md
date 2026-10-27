@@ -39,3 +39,10 @@ existing ART APK modes after Java host mutations. Compilation and execution
 remain CI-only; source inspection has not established that this defect caused
 the earlier sentinel crash. The frozen diagnostic remains active for that
 separate causal evidence.
+
+The remaining source audit confirms that console input still reaches a
+synchronous ReadFile (only pipes are polled), both process-spawn helpers force
+CREATE_NO_WINDOW, and shell exec still starts/waits for a different process.
+The log store records C-string tag/text rather than arbitrary binary payloads
+and logd framing. These are concrete follow-up boundaries, not implemented or
+verified compatibility. Keep them separate from the live-environment candidate.
