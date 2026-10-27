@@ -264,3 +264,42 @@ and bounded VM/event drain; runtime remains unverified, real lock/join fixture
 in progress. Native helper9dc is source-only pending peer/CI. No fix imported
 into the local candidate. Owner confirms all ten hardware gate environments
 are unavailable; they remain required blockers for final all-gap/release.
+
+## Successor integration recovery and ordinary Binder mode build
+
+The sole successor integrator revalidated clean6457470e and its entire empty
+non-doc diff from accepted944a. Local Media/AOT/Native/Env/Libcore candidate
+f4a2b372 remains clean, unpushed and undispatched; its inventory blob is still
+55e03c68ed061ecbfa718cfa02ca64516b9d9233. No integration code, main, PR, tag
+or release operation occurred. All final all-gap and ten hardware gates remain.
+
+Binder ordinary mode source selected exact accepted645 and frozen5587 atcf416.
+Final Native peer ofd280bce02e06dd5a2fb77e8bf09dd1387be8cf3f covered clean JNI
+registration failure, failed-open endpoint restoration and exact packaged
+bytes. Build-only40577028890 on that exact source is now green two jobs;
+actual host122446098275 compiles binder.cc and links broker/host actors under
+Werror. Actual modes122446097882 compiles both NDK ELF/JNI ABIs, ART Java/dex
+and four separate-role APKs with exact library/dex packaging comparisons.
+Metadata and both plain logs are saved as binder2-sg-modes-build-40577028890-*
+in C:/work/gesher-ci-review. The required watcher ended0 and was not restarted.
+This is build evidence only; no ordinary SG runtime has executed.
+
+Clean local ordinary source8c8b714f in gesher-binder2-sg/wip/binder2-sg-mode-wiring
+adds finite actual-process orchestration and a fresh coherent runtime component
+workflow, pending Native peer before push/dispatch. Actual SG broker trace must
+show exactly two opens belonging to the independently identified actor PIDs
+for each observed case, alongside real fresh process exit, established framework
+IPC and exact environment restoration. This does not assert serialization of
+arbitrary concurrent future framework opens. No production selector is added.
+The public transaction-prefix transport-loss test remains open on preserved
+unverifiedb52d0bda after the reported content-filter interruptions; it has not
+been resumed or replaced by ordinary/raw-handle/BR_NOOP-prefix coverage.
+
+Windows reports actual Web3 correction component40577659058 on exact
+fc17670355e8a694ecc83b632eb5e2610a968796, own required watch active. Await actual
+held-WMG-lock/four-wrapper/real-owner-join, cancellation/generation/drain and
+original14 positive UIA/fresh-exit proof before any union import. Native helper
+25e708d21fc532fa1f518aed242ec8eddeeb0285/component40575187153 remains bounded
+core-only proof (both hosts128 checks, explicit11 system DLL allowlist and
+handle parity); it does not establish JNI/window/VM/full closure. No old watch
+has been restarted or duplicate same-ref full dispatched during recovery.
