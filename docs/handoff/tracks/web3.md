@@ -2,6 +2,13 @@
 
 ## Status and next steps
 
+Owner-requested checkpoint: source5bd1732e observer diagnostic40531106587
+is complete green, all3actual logs read. Both Windows show the real held
+native-stack/WCT control plus14Web3/5VM0/6launcher0/6freshchild0/0failed.
+The old hang did not recur, so its cause/fix remains open. No active own CI;
+watch log and next action are in [the checkpoint](web3-teardown.md).
+All implementation, new dispatches and integration actions now stop.
+
 Accepted Windows4/Web3 full40466021634 and coherent Net440499454478 remain
 valid bounded evidence. A later device-A11y teardown recurrence in AOT
 full40512344714/96b still lacks a native stack. The next independent CI

@@ -1,5 +1,27 @@
 # Web3 native-window teardown diagnostic
 
+## Owner checkpoint
+
+Work is stopped at the owner's explicit request; no further implementation,
+dispatch or integration action follows this checkpoint. Diagnostic
+40531106587, exact source5bd1732e0fa8de8012a560b142908834d108d47d, attempt1,
+is complete green with three jobs. Actual observer-build122283828833 and
+Windows2022/2025 logs122283985963/122283985915 were read. The real held-process
+control yields exact PID/TID WCT records and ntdll/WaitForSingleObject native
+frames on both hosts. All nine supplying artifacts are pinned. Each host has
+14 Web3 PASS, five VM0, six launcher0, six fresh child0 and0failed.
+There are ZERO original teardown deadline failures: the hang did not recur,
+so no failing app stack, cause, fix or new full acceptance is established.
+Do not rerun unchanged to hunt for a green result.
+
+Completed watcher: interval120, local log
+`C:/work/gesher-ci-review/web3-native-diagnostic-40531106587-watch.log`.
+Metadata and three actual plain logs use that same local prefix. The exact
+producer is accepted full40499454478/source694a4cd6b067f1deea87015bceb2ad2160260154.
+The next session should retain old405123/96b raw failures, preserve this
+observer for the next meaningful failing source, and investigate actual
+native ownership/lifetime before claiming resolution. No own CI is active.
+
 The accepted source remains full40466021634/160, followed by coherent
 Net4 full40499454478/694. The later AOT full40512344714/96b is red on2025:
 device A11y completes its actual UIA/DOM assertions and Activity destruction,
