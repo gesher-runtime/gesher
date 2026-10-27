@@ -155,6 +155,13 @@ void Descriptors(const Api& api, const std::string& root, Report* report) {
   Muxer negative(api.create(-1, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4), MuxerDelete{&api});
   Muxer huge(api.create(INT_MAX, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4), MuxerDelete{&api});
   bool ok = !negative && !huge;
+  for (int invalid : {-1, 3, 99}) {
+    fd = open(path.c_str(), O_RDWR);
+    if (fd < 0) { ok = false; continue; }
+    Muxer unsupported(api.create(fd, static_cast<OutputFormat>(invalid)), MuxerDelete{&api});
+    ok = ok && !unsupported;
+    close(fd);
+  }
   for (OutputFormat output : {AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4, AMEDIAMUXER_OUTPUT_FORMAT_WEBM,
                              AMEDIAMUXER_OUTPUT_FORMAT_THREE_GPP, AMEDIAMUXER_OUTPUT_FORMAT_OGG}) {
     for (int mode : {O_RDONLY, O_WRONLY, O_RDWR}) {
@@ -212,7 +219,7 @@ void EmptyLifecycle(const Api& api, const std::string& root, Report* report) {
 }
 
 void Write(const Api& api, const Dataset& data, const std::string& path, OutputFormat output,
-           bool blocked, Report* report) {
+           bool blocked, bool delete_active, Report* report) {
   const int fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
   if (fd < 0) { report->Check(false, "create-output " + path); return; }
   Muxer muxer(api.create(fd, output), MuxerDelete{&api});
@@ -247,6 +254,9 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
   ok = ok && api.add(muxer.get(), data.tracks[0].get()) == AMEDIA_ERROR_INVALID_OPERATION &&
       api.orientation(muxer.get(), 37) == AMEDIA_ERROR_INVALID_OPERATION &&
       api.location(muxer.get(), 91, 0) == AMEDIA_ERROR_INVALID_OPERATION;
+  const auto& first = data.packets[0];
+  AMediaCodecBufferInfo invalid_track = {0, static_cast<int32_t>(first.data.size()), first.time, first.flags};
+  ok = ok && api.write(muxer.get(), SIZE_MAX, first.data.data(), &invalid_track) == AMEDIA_ERROR_UNKNOWN;
   std::vector<size_t> order(data.packets.size());
   std::iota(order.begin(), order.end(), 0);
   std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -275,13 +285,16 @@ void Write(const Api& api, const Dataset& data, const std::string& path, OutputF
       ok = ok && api.write(muxer.get(), packet.track, padded.data(), &invalid) == AMEDIA_ERROR_UNKNOWN;
     }
   }
-  ok = ok && api.stop(muxer.get()) == AMEDIA_OK && api.count(muxer.get()) == -1 &&
-      api.format(muxer.get(), 0) == nullptr && api.start(muxer.get()) == AMEDIA_ERROR_INVALID_OPERATION &&
-      api.stop(muxer.get()) == AMEDIA_ERROR_INVALID_OPERATION;
+  if (!delete_active) {
+    ok = ok && api.stop(muxer.get()) == AMEDIA_OK && api.count(muxer.get()) == -1 &&
+        api.format(muxer.get(), 0) == nullptr && api.start(muxer.get()) == AMEDIA_ERROR_INVALID_OPERATION &&
+        api.stop(muxer.get()) == AMEDIA_ERROR_INVALID_OPERATION;
+  }
   muxer.reset();
   const char* mime = nullptr;
   ok = ok && retained && AMediaFormat_getString(retained.get(), "mime", &mime) && mime != nullptr;
-  report->Check(ok, std::string("typed-track-owner-offset-write-stop ") + (blocked ? "blocked " : "interleaved ") + path);
+  report->Check(ok, std::string("typed-track-owner-offset-write-stop ") +
+      (delete_active ? "delete-active " : (blocked ? "blocked " : "interleaved ")) + path);
   report->text += "media4 muxer output: " + path + "; format " + std::to_string(output) +
       "; tracks " + std::to_string(data.tracks.size()) + "; samples " + std::to_string(data.packets.size()) + "\n";
 }
@@ -301,7 +314,7 @@ std::string Run() {
   const char* fixtures = std::getenv("GESHER_MUXER_FIXTURES");
   const char* output = std::getenv("GESHER_MUXER_OUT");
   Api api;
-  report.Check(api.valid(), "ten-typed-dynamic-symbols");
+  report.Check(api.valid() && api.destroy(nullptr) == AMEDIA_OK, "ten-typed-dynamic-symbols-and-null-delete");
   if (api.valid() && fixtures != nullptr && output != nullptr) {
     Descriptors(api, output, &report);
     EmptyLifecycle(api, output, &report);
@@ -320,7 +333,10 @@ std::string Run() {
         if (blocked && test.format == AMEDIAMUXER_OUTPUT_FORMAT_OGG) continue;
         const std::string path = std::string(output) + "/" + test.input +
             (blocked ? "-blocked." : "-interleaved.") + test.suffix;
-        Write(api, data, path, test.format, blocked, &report);
+        Write(api, data, path, test.format, blocked, false, &report);
+      }
+      if (test.format == AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4) {
+        Write(api, data, std::string(output) + "/h264-aac-delete-active.mp4", test.format, false, true, &report);
       }
     }
   } else { report.Check(false, "fixture-and-output-environment"); }

@@ -185,8 +185,9 @@ linked into both hosts; existing JNI encoders/writers retain the same
 helpers. A later source-only preparation adds ten typed System V entries
 over those real writers (new/delete, orientation/location, add/start/stop/
 write, track count/format). No compiler/link/runtime proof or verified NDK
-muxer export is claimed yet; the new entries and GPS backend are not ready
-for full CI until their independent two-ABI fixtures and output checks exist.
+muxer export is claimed yet. The new entries, GPS backend, two-ABI callers
+and independent reader/decoder oracle now exist as source; bounded peer
+review and compile-first CI preparation remain pending before full CI.
 Pinned NdkMediaMuxer/MediaMuxer/error-translation/MediaAppender sources were
 read with exact URL/hash audits in C:\work\gesher-ci-review. Important source
 contracts include LP64 BufferInfo size24/offsets0,4,8,16; BAD_VALUE maps to
@@ -215,9 +216,25 @@ exercises actual FD mode/ownership/seekability, state/error order, aliased
 AMessage ownership, padded-buffer offsets, interleaved/track-blocked writes
 and WebM timestamp controls. media.yml adds their generation/build sources;
 no new run has been dispatched and nothing was compiled or executed
-locally. The independent output verifier and test79 runner are still
-required before component CI. No encoded fixture or
+locally. An independent host oracle now links only readers/decoders, not
+the container writers. It requires exact60-frame/four-color video, real
+two-second PCM with the original1661/880/660Hz tones within2%, positive
+amplitude, codec/track metadata, the90-degree MP4 matrix and exact ISO-6709
+bytes. Test79 requires both ABI core/JNI, ELF and single/device APK callers,
+18 actual semantic parts,12 actual FD-mode rows and ten containers per
+context, including active-delete finalization. Every container is then
+independently decoded; all new process/kill/pipe waits are bounded. Its
+source wiring is ready for review, with18 scoped PASS lines expected per
+runner and no acceptance before full CI. No encoded fixture or
 sample result is invented by this source preparation.
+
+The first muxer contract is ordinary seekable disk files and the listed
+codec/container combinations, with presentation-ordered keyframe flags.
+HEIF/append, B-frame DTS/CTS, muxer-data/EOS/config sample variants and
+advanced metadata remain open rather than being inferred from method
+presence. Audio duration is checked within5% and frequency within2%; video
+requires exactly60 decoded frames and15 correctly colored frames per phase.
+No hardware decode claim follows from the explicit software video oracle.
 
 Track formats retain the actual AOSP AMessage and return independently
 owned AMediaFormat wrappers. The MP4 writer now has source for the real
