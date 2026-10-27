@@ -7,6 +7,12 @@ and its immutable `wip/net4-coherent-verified` ref remain unchanged.
 
 ## Status and next steps
 
+The initial native2 workflow dispatch returned404 because that workflow is
+not present on the default branch; it created no run. A narrowly scoped push
+trigger for this branch and these fixture/build files starts NDK compilation
+without changing main. Production llvm-mingw and actual Windows execution
+still require their own successful CI evidence.
+
 Production source is prepared, without compilation or executable evidence.
 Four existing legacy bridges now reach actual Winsock lookups through a
 neutral boundary that copies every name, alias and address into owned bytes.
