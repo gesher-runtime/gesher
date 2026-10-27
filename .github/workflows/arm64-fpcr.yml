@@ -1,0 +1,50 @@
+name: arm64-fpcr-fpsr
+on:
+  push:
+    branches: [wip/arm64-2]
+    paths:
+      - compat/arm64/**
+      - tests/native/arm64_fpcr*
+      - tests/native/arm64_fpsr*
+      - tests/native/arm64_abi_test.c
+      - tests/native2/**
+      - tests/apps/native2app/**
+      - probes/arm64/fpcr/**
+      - probes/arm64/fpsr/**
+      - .github/workflows/native2.yml
+      - .github/workflows/arm64.yml
+      - .github/workflows/arm64-fpcr.yml
+      - .github/workflows/arm64-fpsr-oracle.yml
+  workflow_dispatch:
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 probes/arm64/fpcr/verify-pinned.py --verify-upstream
+  ndk:
+    uses: ./.github/workflows/native2.yml
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  rounding:
+    needs: translator
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - name: Run real translated FPCR FPSR and existing translator contracts
+        shell: pwsh
+        run: |
+          & dist/arm64_smoke_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/arm64_fpcr_test.exe dist/arm64-fpcr-code.bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & dist/arm64_fpsr_test.exe dist/arm64-fpcr-code.bin dist/arm64-fpsr-reference.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
