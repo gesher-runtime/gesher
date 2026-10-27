@@ -50,3 +50,10 @@ is no guessed compiler fallback. Same-source/flags/exe/installer guards stay.
 A CI-only compiler-preflight mode exposes this exact extraction for focused
 real CMake OFF/ON verification. Source parsing only locally; changed-source
 preflight/full and all actual runtime/package/e2e gates remain pending.
+
+Source peer additionally identified CMake's possible compiler-only compile DB
+export despite configured ccache. The guard now accepts exactly two explicit
+forms: metadata's absolute compiler first, or that exact compiler preceded by
+the exact configured/resolved launcher. Any arbitrary prefix/driver fails;
+all4 query commands must use one consistent recorded form. No executable is
+guessed from argv. Focused OFF/ON CI must establish actual form/hash stability.
