@@ -3,6 +3,7 @@
 #pragma once
 #include <errno.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <tuple>
@@ -29,6 +30,13 @@ struct Owner {
 };
 struct Range { uint64_t start, end; };  // Half-open; kThroughEof includes future EOF.
 struct Record { File file; Owner owner; Range range; Kind kind; int32_t pid; };
+constexpr size_t kRecordCapacity = 512;
+struct Snapshot {
+  std::array<Record, kRecordCapacity> records{};
+  size_t count = 0;
+  auto begin() const { return records.begin(); }
+  auto end() const { return records.begin() + count; }
+};
 
 inline bool Overlap(const Range& left, const Range& right) {
   return left.start < right.end && right.start < left.end;
@@ -67,7 +75,10 @@ inline bool Conflicts(const Record& held, const Record& requested) {
          (held.kind == Kind::kWrite || requested.kind == Kind::kWrite);
 }
 
-inline const Record* FindConflict(const std::vector<Record>& records, const Record& requested) {
+// Callers validate normalized nonempty ranges/kinds before constructing a
+// snapshot. Held records never contain kUnlock. This layer allocates no
+// interval storage, so capacity failure is explicit even without exceptions.
+inline const Record* FindConflict(const Snapshot& records, const Record& requested) {
   for (const Record& held : records) if (Conflicts(held, requested)) return &held;
   return nullptr;
 }
@@ -75,54 +86,73 @@ inline const Record* FindConflict(const std::vector<Record>& records, const Reco
 // Make a complete candidate off shared state. Neither conflict nor capacity
 // failure changes *records. The platform layer must likewise publish its
 // serialized snapshot only after the entire candidate is checked/copied.
-inline int Replace(std::vector<Record>* records, const Record& requested, size_t capacity) {
+inline int Replace(Snapshot* records, const Record& requested, size_t capacity) {
+  if (records->count > kRecordCapacity || requested.range.start >= requested.range.end ||
+      requested.range.end > kThroughEof || static_cast<unsigned>(requested.kind) > 2) return EINVAL;
+  for (const Record& held : *records) {
+    if (held.range.start >= held.range.end || held.range.end > kThroughEof || held.kind == Kind::kUnlock ||
+        static_cast<unsigned>(held.kind) > 2) return EINVAL;
+  }
   if (requested.kind != Kind::kUnlock && FindConflict(*records, requested)) return EAGAIN;
-  std::vector<Record> candidate;
-  candidate.reserve(records->size() + 2);
+  // Replacing one interval can add at most two edge fragments plus the new
+  // interval; the overlapped old interval already occupied one slot.
+  std::array<Record, kRecordCapacity + 2> candidate{};
+  size_t count = 0;
+  auto append = [&](const Record& record) {
+    if (count == candidate.size()) return false;
+    candidate[count++] = record;
+    return true;
+  };
   for (const Record& held : *records) {
     if (!(held.file == requested.file) || !(held.owner == requested.owner) ||
         !Overlap(held.range, requested.range)) {
-      candidate.push_back(held);
+      if (!append(held)) return ENOLCK;
       continue;
     }
     if (held.range.start < requested.range.start) {
       Record left = held;
       left.range.end = requested.range.start;
-      candidate.push_back(left);
+      if (!append(left)) return ENOLCK;
     }
     if (held.range.end > requested.range.end) {
       Record right = held;
       right.range.start = requested.range.end;
-      candidate.push_back(right);
+      if (!append(right)) return ENOLCK;
     }
   }
-  if (requested.kind != Kind::kUnlock) candidate.push_back(requested);
-  std::sort(candidate.begin(), candidate.end(), [](const Record& left, const Record& right) {
+  if (requested.kind != Kind::kUnlock && !append(requested)) return ENOLCK;
+  std::sort(candidate.begin(), candidate.begin() + count, [](const Record& left, const Record& right) {
     return std::make_tuple(left.file.Tuple(), left.owner.Tuple(), left.kind, left.range.start) <
            std::make_tuple(right.file.Tuple(), right.owner.Tuple(), right.kind, right.range.start);
   });
-  std::vector<Record> merged;
-  merged.reserve(candidate.size());
-  for (const Record& record : candidate) {
-    if (!merged.empty()) {
-      Record& previous = merged.back();
+  size_t merged = 0;
+  for (size_t index = 0; index < count; ++index) {
+    Record record = candidate[index];
+    if (merged != 0) {
+      Record& previous = candidate[merged - 1];
       if (previous.file == record.file && previous.owner == record.owner && previous.kind == record.kind &&
           previous.range.end >= record.range.start) {
         previous.range.end = std::max(previous.range.end, record.range.end);
         continue;
       }
     }
-    merged.push_back(record);
+    candidate[merged++] = record;
   }
-  if (merged.size() > capacity) return ENOLCK;
-  records->swap(merged);
+  if (merged > capacity || merged > kRecordCapacity) return ENOLCK;
+  std::copy_n(candidate.begin(), merged, records->records.begin());
+  records->count = merged;
   return 0;
 }
 
-inline void RemoveOwner(std::vector<Record>* records, const Owner& owner, const File* file = nullptr) {
-  records->erase(std::remove_if(records->begin(), records->end(), [&](const Record& record) {
-    return record.owner == owner && (file == nullptr || record.file == *file);
-  }), records->end());
+inline void RemoveOwner(Snapshot* records, const Owner& owner, const File* file = nullptr) {
+  size_t retained = 0;
+  for (size_t index = 0; index < records->count; ++index) {
+    const Record& record = records->records[index];
+    if (!(record.owner == owner && (file == nullptr || record.file == *file))) {
+      records->records[retained++] = record;
+    }
+  }
+  records->count = retained;
 }
 
 struct Wait {
@@ -143,8 +173,9 @@ inline bool Reaches(const std::vector<Wait>& waits, const Owner& from, const Own
   return false;
 }
 
-// Linux OFD waits do not receive POSIX deadlock detection. Platform snapshot
-// construction must retain only actual live waiting requests/owners.
+// Unwired design helper only: mixed POSIX/OFD cycle behavior and allocation-
+// free live-request graph storage still require their own actual oracle and
+// implementation. Pure interval CI must not qualify this wait graph.
 inline bool PosixDeadlock(const std::vector<Wait>& waits, const Owner& requester,
                           const std::vector<Owner>& blockers) {
   if (requester.kind != Ownership::kProcess) return false;

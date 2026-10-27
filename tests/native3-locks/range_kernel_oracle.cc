@@ -5,17 +5,63 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 
 using namespace gesher::record_locks;
 
+static bool CapacityFailurePreserves(Snapshot* snapshot, const Record& request, size_t capacity) {
+  std::array<unsigned char, sizeof(Snapshot)> before{};
+  std::memcpy(before.data(), snapshot, sizeof(Snapshot));
+  return Replace(snapshot, request, capacity) == ENOLCK &&
+    std::memcmp(before.data(), snapshot, sizeof(Snapshot)) == 0;
+}
+
+static bool CapacityContracts() {
+  const Record whole{{1, 2, 3}, {Ownership::kDescription, 1, 2}, {0, 100}, Kind::kRead, -1};
+  Snapshot empty;
+  bool zero = CapacityFailurePreserves(&empty, whole, 0);
+  Snapshot split;
+  split.records[split.count++] = whole;
+  Record middle = whole;
+  middle.range = {40, 60};
+  middle.kind = Kind::kUnlock;
+  bool split_failure = CapacityFailurePreserves(&split, middle, 1);
+  bool split_success = Replace(&split, middle, 2) == 0 && split.count == 2 &&
+    split.records[0].range.start == 0 && split.records[0].range.end == 40 &&
+    split.records[1].range.start == 60 && split.records[1].range.end == 100;
+  Snapshot conversion;
+  conversion.records[conversion.count++] = whole;
+  middle.range = {20, 80};
+  middle.kind = Kind::kWrite;
+  bool conversion_failure = CapacityFailurePreserves(&conversion, middle, 2);
+  bool conversion_success = Replace(&conversion, middle, 3) == 0 && conversion.count == 3;
+  middle.kind = Kind::kRead;
+  bool merged = Replace(&conversion, middle, 1) == 0 && conversion.count == 1 &&
+    conversion.records[0].range.start == 0 && conversion.records[0].range.end == 100;
+  Snapshot full;
+  for (size_t index = 0; index < kRecordCapacity; ++index) {
+    Record record = whole;
+    record.range = {index * 4, index * 4 + 1};
+    full.records[full.count++] = record;
+  }
+  Record separate = whole;
+  separate.file.id_high = 999;
+  bool full_failure = CapacityFailurePreserves(&full, separate, kRecordCapacity);
+  std::printf("ACTUAL_RECORD_LOCK_CAPACITY zero=%d split_failure=%d split_success=%d conversion_failure=%d conversion_success=%d merge=%d full_failure=%d byte_unchanged_on_failure=%d\n",
+    zero, split_failure, split_success, conversion_failure, conversion_success, merged, full_failure,
+    zero && split_failure && conversion_failure && full_failure);
+  return zero && split_failure && split_success && conversion_failure && conversion_success && merged && full_failure;
+}
+
 int main() {
+  if (!CapacityContracts()) return 1;
   char path[] = "/tmp/gesher-lock-range-XXXXXX";
   int fd[2] = {mkstemp(path), -1};
   if (fd[0] < 0 || (fd[1] = open(path, O_RDWR)) < 0) return 2;
   unlink(path);
   if (ftruncate(fd[0], 4096) != 0) return 2;
-  std::vector<Record> records;
+  Snapshot records;
   std::mt19937 random(0x47657368);
   unsigned failures = 0;
   unsigned operations = 0, queries = 0;
@@ -75,7 +121,7 @@ int main() {
     Range normalized{};
     int expected = Normalize(whence, start, length, current, 4096, &normalized);
     Record request{{1, 2, 3}, {Ownership::kDescription, who, 0}, normalized, kind, -1};
-    std::vector<Record> candidate = records;
+    Snapshot candidate = records;
     if (expected == 0) expected = Replace(&candidate, request, 512);
     struct flock lock{};
     lock.l_type = kind == Kind::kRead ? F_RDLCK : kind == Kind::kWrite ? F_WRLCK : F_UNLCK;
@@ -93,7 +139,7 @@ int main() {
       ++failures;
       break;
     }
-    if (actual == 0) records.swap(candidate);
+    if (actual == 0) records = candidate;
     for (unsigned query_owner = 0; query_owner < 2; ++query_owner) {
       Range query_range{static_cast<uint64_t>(random() % 5000), 0};
       query_range.end = query_range.start + 1;
