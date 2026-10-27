@@ -44,7 +44,7 @@ public final class Exec4ExitStatusTest {
         old.start();
         status.started("com.gesher.other", 4);
         status.bind("com.gesher.other", 4, 102);
-        status.exited("com.gesher.other", 4, 17);
+        status.exited("com.gesher.other", 4, 102, 17);
         old.join();
         check(status.code(pkg) == 0 && status.code("com.gesher.other") == 17,
                 "concurrent stale callbacks and other packages remain isolated");

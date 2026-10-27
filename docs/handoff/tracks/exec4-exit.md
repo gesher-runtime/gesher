@@ -18,7 +18,13 @@ exit query consumes its handle, so pending-process ownership, query and
 publication now stay under one short server lock before attach can hand
 off to the death observer. The abnormal runtime assertion also requires
 the launcher's exact exit1, rejecting the timeout sentinel. No result
-from the first scoped framework build implies runtime acceptance.
+from the first scoped framework build implies runtime acceptance. Scoped
+framework CI40452236687 at49e20a1 failed in the new component fixture:
+`exited("com.gesher.other", 4, 17)` omitted its bound PID102; javac reported
+required String,long,int,int but found String,int,int. The fixture now
+supplies PID102. Production gesher-app.jar compiled before that failure.
+Integration f17d03b1 (Media3/full CI40448521754 atdd06d296, documentation
+only above its matching code) is merged before the corrected CI run.
 
 Prepared source only: ProcessExitStatus binds results to a globally unique
 start sequence and actual PID, clears the old result at every new start,
