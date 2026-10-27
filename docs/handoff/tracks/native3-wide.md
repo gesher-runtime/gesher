@@ -99,7 +99,10 @@ Only documentation may advance above verified source 7302b20. The original
 frozen native3-wide-verified ref is unchanged at e7c1b06. Root has since
 verified and integrated 0573/time68 as 8922a3e; this run predates it. The
 separate ARM FPCR candidate includes that newer integration and the frozen
-wide prerequisite, with coherent full ci 40444486511 at e0f9601 pending.
+wide prerequisite, with corrected full ci 40451978087 at 49ade205. Attempt
+1 passes all actual wide/FPCR cases on both runners, package/both e2e and
+the 2025 zero summary. Only 2022's known badssl TCP timeout remains;
+attempt 2 retries that failed job alone on unchanged source.
 Root alone merges integration/main and decides that combined acceptance.
 Binary128/libm, wide scanf/stdio, independent narrow gdtoa/tzcode and the
 remaining native3/POSIX contracts remain explicitly open. All compilation

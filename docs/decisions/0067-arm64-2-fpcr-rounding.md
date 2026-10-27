@@ -1,13 +1,16 @@
 # 0067. arm64-2: guest FPCR rounding across native boundaries
 
-Status: proposed. Combined scoped ci 40443927632 at 053bbc0 passes exact
-source provenance, NDK builds and both Windows host/translator tests.
-Full JNI/APK/native-process and product acceptance remain pending.
-Initial full ci 40444486511 passes actual host/dalvikvm/native-process FPCR,
-package and both e2e jobs, but both APK modes abort on missing reference
-symbols: their builder omitted the original-body object when recompiling
-the fixture. That packaging path now links and audits the actual APK's
-library; production code is unchanged and the correction awaits CI.
+Status: proposed; full acceptance awaits the failed-job retry below.
+Corrected full ci 40451978087 at 49ade205, attempt 1, passes actual FPCR
+host/dalvikvm/single/device/native-process cases on both runners. All 22
+executed job logs were read: 21 success, one failure and six skipped jobs.
+2025 ends with zero failures; only the known badssl TCP-connect timeout
+causes two counted failures on 2022. Attempt 2 retries only that failed
+job on unchanged source. Both actual package/e2e checks already pass.
+Initial full 40444486511 failed because the APK builder omitted the
+original-body reference object; the corrected builder links it and audits
+the actual extracted library's bytes and defined/undefined symbols.
+Scoped correction ci 40451472255 verifies that audit and both host fixtures.
 This is the first rounding slice of arm64-2, not completion of that track.
 
 ## Context
