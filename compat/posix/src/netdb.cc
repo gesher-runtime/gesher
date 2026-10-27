@@ -323,6 +323,7 @@ struct IfAddrsBlock {
   sockaddr_storage broadcast;
   char name[IFNAMSIZ];
 };
+static_assert(offsetof(IfAddrsBlock, ifa) == 0, "freeifaddrs owns the complete entry allocation");
 
 IfAddrsBlock* NewEntry(const ws::Interface& iface) {
   auto* block = static_cast<IfAddrsBlock*>(calloc(1, sizeof(IfAddrsBlock)));
