@@ -242,6 +242,19 @@ Coherent full ci40527788805 is running at
 actual runtime evidence remains open; subsequent branch changes may only
 record documentation. Both Windows suites must finish zero failures, all
 jobs success/skipped, package and both complete required e2e runs green.
+
+Owner-requested nearest-checkpoint stop: preserve full40527788805 running
+on exact5d9e24d3; no new implementation/import/dispatch. The prescribed
+watch120 session58347 most recently showed both Windows suites and both
+e2e jobs executing, with main/native/media/framework build stages completed.
+Only completed media/surfaces logs were read so far in that full; all final
+metadata and actual Windows/package/e2e logs still require review. There is
+no full-green claim and no new observed muxer runtime failure yet. This
+component does not include the separate Surface/AAudio/installed-OpenSL-notice
+candidate; a package pass here cannot prove the notice installation/hash.
+Its eight old baseline muxer entries and two additional API31 functions
+remain unaccepted until real full proof. Follow the saved next extractor
+source plan only after resuming; no extractor code or test was started.
 Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
 libcore I/O83 and test process infrastructure84. Further reservations belong
 to the coordinator.
