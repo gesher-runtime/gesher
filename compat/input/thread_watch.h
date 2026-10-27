@@ -20,6 +20,9 @@ class ThreadWatch;
 ThreadWatch* StartThreadWatch(void* hwnd, const char* name);
 // Stops the watch (any thread but the window's is fine; waits for it).
 void StopThreadWatch(ThreadWatch* watch);
+// Stops the worker without freeing the state: a reentrant window callback may
+// still hold it until its procedure returns. StopThreadWatch releases it later.
+void RetireThreadWatch(ThreadWatch* watch);
 // The window's procedure saw the watch's message (on the window's thread):
 // true when `msg` was it.
 bool ThreadWatchMessage(ThreadWatch* watch, uint32_t msg);

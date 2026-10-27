@@ -17,10 +17,14 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace gesher {
+
+class InputPane;
+using InputPaneFactory = void* (*)();
 
 struct WindowEvent {
   enum Type : int32_t {
@@ -48,10 +52,12 @@ struct WindowEvent {
     // mouse, else the touch's.
     kVisibility = 16,
     kOutside = 17,
+    kActivated = 18,  // top-level activation, independent of keyboard-focus transitions
     // windows3 track (docs/windows3.md): the part of the client area the
     // Windows touch keyboard (IFrameworkInputPane) covers: rows button (top)
     // to modifiers (bottom) of the client area; button -1 when it covers
-    // nothing (hidden, or beside the window). Android's IME insets.
+    // nothing (hidden, or beside the window); -2 means a visible floating
+    // pane with no Android edge inset.
     kInputPane = 30,
   };
   int32_t type = 0;
@@ -78,12 +84,15 @@ constexpr unsigned kMsgApplyStyle = 0x8000 + 0x42;      // set the popup's exten
 // IFrameworkInputPane reports it: what the window's input pane handler posts,
 // and what tests post to stand for a keyboard (windows3 track).
 constexpr unsigned kMsgInputPane = 0x8000 + 0x43;
+// The COM callback changed its complete screen rectangle, held by InputPane.
+constexpr unsigned kMsgInputPaneChanged = 0x8000 + 0x44;
 
 class Window {
  public:
   // Creates the window (hidden) with a client area of width x height pixels.
   // Returns null if Windows refuses.
-  static Window* Create(const std::string& title_utf8, int width, int height);
+  static Window* Create(const std::string& title_utf8, int width, int height,
+                        InputPaneFactory input_pane_factory = nullptr);
 
   ~Window();  // destroys the window and joins its thread
 
@@ -267,9 +276,8 @@ class Window {
   // IFrameworkInputPane, its handler and cookie; where the keyboard is on the
   // screen (left, top, right, bottom; empty: hidden) and the rows of the
   // client area it covered when that was last reported.
-  void* input_pane_ = nullptr;
-  void* input_pane_handler_ = nullptr;
-  unsigned long input_pane_cookie_ = 0;
+  std::unique_ptr<InputPane> input_pane_;
+  InputPaneFactory input_pane_factory_ = nullptr;  // native COM test source only
   int input_pane_screen_[4] = {0, 0, 0, 0};
   int input_pane_top_ = -2, input_pane_bottom_ = -2;
 

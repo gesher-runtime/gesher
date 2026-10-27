@@ -1485,7 +1485,7 @@ const PlatformLib kPlatformLibs[] = {
     {"libjnigraphics.so", "AndroidBitmap_getInfo"},
     {"libOpenSLES.so", "slCreateEngine"},
     {"libaaudio.so", "AAudio_createStreamBuilder"},
-    {"libmediandk.so", "AMediaCodec_createDecoderByType"},
+    {"libmediandk.so", "AMediaFormat_new"},
     {"libcamera2ndk.so", "ACameraManager_create"},
     {"libvulkan.so", "vkCreateInstance"},
     {"libsync.so", "sync_wait"},
