@@ -129,9 +129,9 @@ jobs:
             -DLLVM_MINGW="$llvm" -DCMAKE_BUILD_TYPE=Release \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
             -DBoost_INCLUDE_DIR="$PWD/deps/boost"
-          ninja -C out-arm64 gesher_arm64 arm64_smoke_test
+          ninja -C out-arm64 gesher_arm64 arm64_smoke_test arm64_fpcr_test
           mkdir -p dist-arm64
-          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe dist-arm64/
+          cp out-arm64/gesher_arm64.dll out-arm64/arm64_smoke_test.exe out-arm64/arm64_fpcr_test.exe dist-arm64/
           cp deps/dynarmic/LICENSE.txt dist-arm64/DYNARMIC-NOTICES.txt
           "$llvm/bin/llvm-objdump" -p dist-arm64/gesher_arm64.dll | grep -iE 'Export|gesher_arm64' | head
           ls -la dist-arm64
@@ -154,6 +154,9 @@ jobs:
         run: |
           set -euo pipefail
           cc="$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          "$cc" -c tests/native/arm64_fpcr_code.S -o /tmp/arm64-fpcr-code.o
+          "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy" \
+            -O binary --only-section=.text /tmp/arm64-fpcr-code.o dist-arm64/arm64-fpcr-code.bin
           # Step 1 (guest): a self-contained .so, no libc/TLS/stack guard.
           "$cc" -shared -fPIC -O2 -fno-stack-protector -nostdlib \
             -Wl,-soname,libtrivial.so -Wl,--hash-style=both \
