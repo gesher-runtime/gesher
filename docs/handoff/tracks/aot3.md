@@ -37,6 +37,19 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Corrected fixture scope40499783709 at immutablea79ae0f1 is complete green:
+both jobs succeed; actual122174345315 read javac0/0errors, graphics-tests.dex,
+sharedlibraryapp/sharedlibrarybad APKs and all three real DEX jars (549/546/687
+bytes). Native peer independently matched all11 pinned-source audit digests
+and found no blocking issue in graph/registry/SDK/Installer/Dexopt/stale-control
+source. That is bounded static review, not runtime proof. The continuation
+includes coordinator7b49 documentation only above accepted runtime6297.
+One complete full candidate now tests actual PCL/DAG loading, compiled hot
+methods/app images, no-reinstall stale rejection, unchanged-APK refresh and
+old-install preservation, alongside all original Windows/package/e2e gates.
+After-resource/DLC actual app+image, secondary/static/SDK and arbitrary
+factory-loader contracts remain explicit open scope.
+
 Runtime graph/dexopt sourcee2e36137 compiles in scoped40470396915: both jobs
 green; actual122075942761 has javac0/0errors, graphics dex and appjar570004.
 Fixture compile40472620654 at7fe21800 is red in graphics-tests javac, after
