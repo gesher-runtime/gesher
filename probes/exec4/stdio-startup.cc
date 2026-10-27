@@ -5,7 +5,7 @@
 #include <cstdio>
 #include <string>
 
-int main() {
+int ProbeMain() {
   intptr_t first = _get_osfhandle(0);
   HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
   int argc = 0;
@@ -19,9 +19,9 @@ int main() {
     GetStartupInfoW(&startup);
     DWORD mode = 0;
     BOOL console = GetConsoleMode(input, &mode);
-    printf("INFO stdio startup: raw%lld win%p type%lu console%d flags%lu reserved%u startup%p\n",
+    printf("INFO stdio startup: raw%lld win%p type%lu console%d flags%lu reserved%u startup%p fileno%d\n",
            static_cast<long long>(first), input, GetFileType(input), static_cast<int>(console),
-           startup.dwFlags, static_cast<unsigned>(startup.cbReserved2), startup.hStdInput);
+           startup.dwFlags, static_cast<unsigned>(startup.cbReserved2), startup.hStdInput, _fileno(stdin));
     return 0;
   }
   wchar_t self[32768];
@@ -62,3 +62,9 @@ int main() {
   }
   return 0;
 }
+
+#ifdef EXEC4_GUI
+int WINAPI WinMain(HINSTANCE, HINSTANCE, char*, int) { return ProbeMain(); }
+#else
+int main() { return ProbeMain(); }
+#endif
