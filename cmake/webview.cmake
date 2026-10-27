@@ -35,6 +35,7 @@ target_link_libraries(dalvikvm PRIVATE ${_wv_libs})
 # AccessibilityNodeProvider) and Windows' proxy settings
 # (libgesher_proxy.so), builtin libraries of dalvikvm.
 add_library(gesher_web3 OBJECT ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_bridge.cc
+  ${CMAKE_SOURCE_DIR}/compat/accessibility/query_pool.cc
   ${CMAKE_SOURCE_DIR}/compat/accessibility/uia_client.cc ${CMAKE_SOURCE_DIR}/compat/net/windows_proxy.cc)
 target_link_libraries(gesher_web3 PRIVATE nativehelper gesher_posix)
 target_compile_options(gesher_web3 PRIVATE -Wall -Werror -Wno-unused-parameter)
