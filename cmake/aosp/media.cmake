@@ -155,6 +155,11 @@ add_custom_command(OUTPUT "${_media_gc_estimate_cpp}"
 add_executable(media_gc_estimate_test "${_media_gc_estimate_cpp}")
 target_compile_options(media_gc_estimate_test PRIVATE -Wall -Wextra -Werror)
 
+add_executable(surface_invalidation_test "${CMAKE_SOURCE_DIR}/tests/surfaces/invalidation_test.cc")
+target_include_directories(surface_invalidation_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(surface_invalidation_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(surface_invalidation_test PRIVATE pthread)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE

@@ -26,6 +26,8 @@ import android.widget.FrameLayout;
 public class GlActivity extends Activity {
     static native void start(Surface surface);
 
+    static native void startPhases(Surface surface);
+
     static native void stop();
 
     static void say(String s) {

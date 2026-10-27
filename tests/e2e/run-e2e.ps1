@@ -171,6 +171,36 @@ function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15) {
   return $last
 }
 
+# Diagnose an already failed blank-frame assertion without changing its result or
+# sending input. Each sample records the actual capture, timing and pixel hash.
+function BlankFrameDiagnostics([IntPtr] $hwnd, $initial, [string] $pkg, [string] $tag) {
+  $info = @()
+  $previous = $initial
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    for ($i = 1; $i -le 15; $i++) {
+      $remaining = 1000 * $i - $clock.ElapsedMilliseconds
+      if ($remaining -gt 0) { Start-Sleep -Milliseconds ([int]$remaining) }
+      $px = [GesherWin32]::Capture($hwnd)
+      if ($null -eq $px) {
+        $info += "no-input blank diagnostic $i at $($clock.ElapsedMilliseconds) ms: PrintWindow failed"
+        continue
+      }
+      $an = Analyze $px
+      $bytes = [byte[]]::new($px.Length * 4)
+      [Buffer]::BlockCopy([int[]]$px, 0, $bytes, 0, $bytes.Length)
+      $hash = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+      SavePng $px (Join-Path $OutDir "$pkg.$tag.no-input-$i.png")
+      $info += "no-input blank diagnostic $i at $($clock.ElapsedMilliseconds) ms UTC $([DateTime]::UtcNow.ToString('o')): " +
+        "$($an.Width)x$($an.Height), background #$($an.Background), $($an.Other) non-background, " +
+        "$($an.Text) text, initial diff $(PixelDiff $initial $px), previous diff $(PixelDiff $previous $px), sha256 $hash"
+      $previous = $px
+    }
+  } finally { $sha.Dispose() }
+  return $info
+}
+
 function AppPid([string] $text, [string] $pkg) {
   $m = [regex]::Match($text, "app process for $([regex]::Escape($pkg)): pid (\d+)")
   if ($m.Success) { return [int]$m.Groups[1].Value }
@@ -235,6 +265,9 @@ function RunWindow($a, [string] $commandLine, [string] $tag, [switch] $NoInput) 
   $area = $an.Width * $an.Height
   if ($an.Other -lt $area * 0.005) { $res.Problems += "the window is blank: $($an.Other) non-background pixels of $area" }
   if ($an.Text -lt 150) { $res.Problems += "no text: $($an.Text) text pixels" }
+  if ($a.surfaceTrace -and $an.Other -lt $area * 0.005) {
+    $res.Info += @(BlankFrameDiagnostics $hwnd $px $pkg $tag)
+  }
   if (-not $NoInput -and $a.actions) {
     $before = $px
     $i = 0
@@ -323,8 +356,14 @@ foreach ($a in $manifestData.apps) {
     # landscape one for an app whose activity asks for landscape (Gesher does not rotate
     # windows for screenOrientation yet), on a device started for it alone.
     $traceDir = $null
-    $ownDevice = $a.trace -or $a.display
+    $ownDevice = $a.trace -or $a.display -or $a.surfaceTrace
+    $surfaceTraceBefore = $env:GESHER_SURFACE_TRACE_INVALIDATION
+    $windowDebugBefore = $env:GESHER_WINDOW_DEBUG
     if ($ownDevice) { & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null }
+    if ($a.surfaceTrace) {
+      $env:GESHER_SURFACE_TRACE_INVALIDATION = '1'
+      $env:GESHER_WINDOW_DEBUG = '1'
+    }
     if ($a.display) { $env:GESHER_DISPLAY = [string]$a.display; $info += "display $($a.display)" }
     if ($a.trace) {
       $traceDir = Join-Path $env:TEMP "gesher-e2e-trace-$pkg"
@@ -338,6 +377,8 @@ foreach ($a in $manifestData.apps) {
         & "$app\gesher-app.cmd" shutdown 2>&1 | Out-Null
         Remove-Item Env:GESHER_APP_METHOD_TRACE, Env:GESHER_DISPLAY -ErrorAction SilentlyContinue
       }
+      $env:GESHER_SURFACE_TRACE_INVALIDATION = $surfaceTraceBefore
+      $env:GESHER_WINDOW_DEBUG = $windowDebugBefore
       if ($traceDir) {
         Get-ChildItem $traceDir -Filter *.trace -ErrorAction SilentlyContinue | Copy-Item -Destination $OutDir
       }
@@ -349,6 +390,11 @@ foreach ($a in $manifestData.apps) {
   $log = ReadText (Join-Path $OutDir "$pkg.launch.log")
   $appLog = "$env:LOCALAPPDATA\Gesher\logs\$pkg.log"
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $OutDir "$pkg.app.log") -Force }
+  if ($a.surfaceTrace) {
+    (((ReadText $appLog) + "`n" + $log) -split "`n") |
+      Where-Object { $_ -match 'GesherSurface invalidation|Win32Surface:|EGL child' } |
+      Select-Object -First 160 | ForEach-Object { Report "INFO  e2e: ${pkg} surface: $($_.TrimEnd())" }
+  }
   # "expectLog": lines the launch's or the app's log must contain (e.g. that its WebView
   # got a WebView2, docs/webview.md).
   foreach ($want in @($a.expectLog | Where-Object { $_ })) {
