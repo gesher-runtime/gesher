@@ -25,6 +25,7 @@ import com.android.internal.pm.pkg.component.ParsedComponent;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -54,6 +55,7 @@ public final class ApkPackage {
     public final String apkPath;
     public final ParsedPackage parsed;
     public final String packageName;
+    public final SharedLibraryGraph sharedLibraries;
     private final List<String> mLauncherActivities = new ArrayList<>();
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
@@ -62,10 +64,12 @@ public final class ApkPackage {
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
 
-    private ApkPackage(String apkPath, ParsedPackage parsed) {
+    private ApkPackage(String apkPath, ParsedPackage parsed) throws IOException {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
+        // Resolve the newly parsed APK, including before an install replaces the old one.
+        sharedLibraries = SharedLibraryRegistry.resolve(parsed);
         mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
         for (ParsedActivity a : parsed.getActivities()) {
             for (ParsedIntentInfo info : a.getIntents()) {
@@ -429,6 +433,7 @@ public final class ApkPackage {
         ai.deviceProtectedDataDir = mDataDir;
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
+        sharedLibraries.apply(ai);
     }
 
     private static void component(ComponentInfo c, ApplicationInfo ai) {

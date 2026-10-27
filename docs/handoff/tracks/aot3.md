@@ -50,10 +50,17 @@ pinned10-argument SharedLibraryInfo constructor is used; library jars are
 never appended to the boot class path. Ordinary empty PCL graphs avoid new
 hash/provider work on the startup path.
 
-This component is not yet wired into XML registry/SDK filtering, ApkPackage,
-Installer or Dexopt. Those integrations, parsed-new-package validation before
-PM publication, unchanged-APK/library-update invalidation and real jar/app/
-oatdump test73 fixtures must follow before CI acceptance. No Java compilation
+The next source adds a permissions/sysconfig XML registry and wires graph
+resolution into the newly parsed ApkPackage, so both single-process and
+device ApplicationInfo receive the same actual SharedLibraryInfo graph.
+Required/optional names, missing dependencies and cycles are handled before
+an installer can replace its old APK. SDK gates use the real pinned
+UnboundedSdkLevel, already bundled by framework-minus-apex under its actual
+jarjar name android.internal.modules.utils.build; no SDK helper is copied.
+Bootclasspath declarations must match a real current bootclasspath file.
+Installer/Dexopt matching-context compilation, unchanged-APK/library-update
+invalidation and real jar/app/oatdump test73 fixtures must follow before CI
+acceptance. No Java compilation
 or fixture execution occurred locally, and no AOT3 shared-library behavior is
 claimed verified by this initial source commit. Root priority remains the
 active Net4 full and fresh Windows4/Web3 combinations after exit-freshness
