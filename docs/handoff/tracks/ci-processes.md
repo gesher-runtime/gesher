@@ -34,3 +34,9 @@ cleanup. The narrow ci-processes workflow invokes that actual helper without
 running the rest of test50. No local compiler/native fixture was executed.
 Scoped compilation/runtime, full CI and remaining Surface/test76 helpers
 are pending. ADR0078 records the exact limited scope and remaining cases.
+Scoped40524879609/c9a87f66 failed both hosts before compiling or executing
+the fixture: csc CS1504 reports a missing source path ending in
+tests/windows/Process84.cs. The corrected invocation resolves and logs the
+actual absolute fixture/compiler/output paths before calling csc, avoiding
+relative-segment interpretation. The helper's actual process behavior is
+still unverified; the old failure is retained and not retried unchanged.

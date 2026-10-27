@@ -3,7 +3,9 @@ $process84Root = Join-Path $root ('process84-' + [guid]::NewGuid().ToString('N')
 New-Item -ItemType Directory $process84Root | Out-Null
 $process84Exe = Join-Path $process84Root 'process84.exe'
 $process84Compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-& $process84Compiler /nologo /warnaserror+ /platform:x64 /target:exe "/out:$process84Exe" "$PSScriptRoot/../fixtures/Process84.cs"
+$process84Source = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../fixtures/Process84.cs')).Path
+Write-Host "INFO  CI processes: compiler $process84Compiler source $process84Source output $process84Exe"
+& $process84Compiler /nologo /warnaserror+ /platform:x64 /target:exe "/out:$process84Exe" $process84Source
 if ($LASTEXITCODE -ne 0) {
   Write-Host 'FAIL  CI processes: actual process fixture compilation failed'
   $script:failed++
