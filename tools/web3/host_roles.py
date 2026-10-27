@@ -100,22 +100,30 @@ def compiler(build):
         resolved = shutil.which(launcher)
         require(resolved is not None, "Configured compiler launcher cannot be resolved")
         launcher_path = Path(resolved).resolve(strict=True)
-    seen = set()
+    expected = {(ROOT / name).resolve(): name for name in CHANGED}
+    seen, forms = set(), set()
     for key, args in commands(build).items():
-        source = Path(key[1]).resolve().relative_to(ROOT).as_posix()
-        if source not in CHANGED:
+        source = expected.get(Path(key[1]).resolve())
+        if source is None:
             continue
-        index = 1 if launcher_path is not None else 0
-        require(len(args) > index and args[index] == str(configured),
-                "Actual CXX command does not invoke the generated configured driver: " + source)
-        if launcher_path is not None:
+        if args[0] == str(configured):
+            # Some CMake versions deliberately export compiler-only commands
+            # even when a launcher is configured. The exact absolute compiler
+            # still comes from authoritative metadata, never arbitrary argv.
+            forms.add("compiler-first")
+        else:
+            require(launcher_path is not None and len(args) > 1 and args[1] == str(configured),
+                    "Actual CXX command does not invoke the generated configured driver: " + source)
             actual_launcher = shutil.which(args[0])
             require(actual_launcher is not None and Path(actual_launcher).resolve(strict=True) == launcher_path,
                     "Actual CXX launcher differs from configured launcher")
+            forms.add("configured-launcher-prefix")
         seen.add(source)
     require(seen == CHANGED, "Missing actual query CXX commands for configured compiler proof")
+    require(len(forms) == 1, "Inconsistent CMake command export form across query objects")
     return {"path": str(path), "configured_driver": str(configured), "sha256": sha(path),
             "metadata_file": str(metadata), "metadata_sha256": sha(metadata),
+            "compile_database_form": forms.pop(),
             "launcher": str(launcher_path) if launcher_path is not None else None,
             "launcher_sha256": sha(launcher_path) if launcher_path is not None else None}
 
