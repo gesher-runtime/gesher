@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>a11y</title></head>
+<body style="background: #ffffff">
+<h1>Web content</h1>
+<button id="press" onclick="document.title = 'pressed ' + (++window.presses)">Press me</button>
+<p><input id="field" aria-label="Web field" value=""></p>
+<script>window.presses = 0;</script>
+</body></html>

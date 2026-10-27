@@ -170,17 +170,38 @@ Windows4/Web3 now need their final full run on this merged prerequisite
 40449137605/4f253878: both14 scoped passes, both whole0, package23 passes
 and both nine-app e2e0. Its child-zero values still use the older cache.
 
-Media4's corrected format full CI 40459815375 atc5962291 is pending after
-actual bridge compilation/link/package passes. Earlier40456299720/92e91423
-failed on12 missing int32_t/int64_t header definitions and ran no Windows
-tests; <cstdint> and an early object compile correct that source. Net4 full
-40462148835 at719ae176 is pending with the corrected invocation/cache guard.
-Neither slice has inventory/runtime closure yet. Test71 belongs to Media4,72 to
+Media4's format slice is full-verified atc5962291 in40459815375, attempt1:
+22 success/6 skips, both Windows0 and ten format PASS lines each, package23
+actual passes and both ten-app e2e0. Root read all five critical logs and
+64 semantic detail rows per runner across both ABIs and four execution paths.
+Immutable wip/media4-format-verified=ba3c1c2d adds docs only, including exact
+verification objects for143 old inventory entries (21 functions/122 data).
+Root independently checked that every existing field/row remains unchanged;
+30 further key objects are separate. No codec/DRM/hardware functionality is
+inferred from a key name;170 old media entries remain. Earlier
+40456299720/92e91423 stays red:12 missing int32_t/int64_t header definitions,
+no Windows proof. The cstdint prerequisite/early compile correct that source.
+Coherent Windows4/Web3 full40466021634 at160e25e8 includes this slice, root's
+spawn registrations, the cache guard and merged exit freshness. Its Windows/
+package/e2e results are pending; no integration acceptance is claimed yet.
+
+Net4 full40462148835/719ae176 failed both Windows tests: its oracle queried
+nine Up NDIS adapters with neither IP protocol bound; Windows2022 also
+reported1250 Hz input as1153.3 Hz without loss counters. Corrected narrow
+oracle40467169771/55a17156 passes both runners, skipping only interfaces
+supporting neither protocol and retaining strict actual IP metadata checks.
+Full40469857757/646f9fb1 is now pending with that correction and the reviewed
+four-file AAudio slice78ee5e12: explicit lossless capacity/zero-loss counters,
+unchanged frequency/frame gates and an independent controlled-overrun probe.
+The old audio cause remains unproved; no Net4 inventory closure is claimed.
+Test71 belongs to Media4,72 to
 Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
 spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
 NDK ABI callers, but production/runtime acceptance awaits full CI
-([brief](tracks/exec4-actions.md)). Test75 is the next ARM sticky-FPSR slice;
-next free test is76. Shared-library implementation and the new slices are
+([brief](tracks/exec4-actions.md)). Test75 is the ARM sticky-FPSR slice,
+76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
+([brief](tracks/exec4-spawn.md)); next free test is78.
+Shared-library implementation and the new slices are
 not verified AOT3/exec4/FPSR completion.
 
 ARM FPCR source49ade205 is independently full-verified in40451978087,
@@ -195,13 +216,18 @@ is claimed yet. Complete FPSR/env/default-object/host-CRT rounding remains open.
 Net4 full40456605869 was superseded after its standalone invocation omitted
 argv0; the corrected full40456946272/fa8b29e2 then failed before javac on a
 cached wificond sparse-checkout.lock. The prior cancelled framework's
-always-save captured that lock; CI cache lifecycle is being repaired before
-a new run. No timeout, skipped oracle or infrastructure failure is accepted
+always-save captured that lock. Corrected scoped framework40459897967
+recovered the exact poisoned cache;40461056132/9bb847a8 passes ten CI-only
+controls, including real active Git processes using -C/--git-dir/--work-tree.
+The helper removes only known stale locks on isolated Linux CI restores,
+refuses active Git/unknown paths and never saves a cancelled/locked snapshot.
+No timeout, skipped oracle or infrastructure failure is accepted
 as a passing Net4 runtime check.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0076 after reserving native3-time/0075 for ART monotonic elapsed clocks
+ADR is 0077 after reserving exec4-spawn/0076 for ordered child file actions
+([brief](tracks/exec4-spawn.md)), native3-time/0075 for ART monotonic elapsed clocks
 ([brief](tracks/native3-time.md)), native3-wide/0073 for wide/multibyte ABI contracts
 ([brief](tracks/native3-wide.md)) and exec4/0074 for explicit exec3 leftovers
 ([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/

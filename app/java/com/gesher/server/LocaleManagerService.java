@@ -89,6 +89,8 @@ public final class LocaleManagerService extends ILocaleManager.Default
             mInProcessPackage = pm.packages().iterator().next().packageName;
             WindowsHost.addListener(this);
         }
+        com.gesher.app.window.ApplicationDisplay.installConfigurationDispatcher(
+                LocaleManagerService::onSharedDisplayChanged);
     }
 
     // --- the configuration -------------------------------------------------------------
@@ -108,9 +110,24 @@ public final class LocaleManagerService extends ILocaleManager.Default
             c.setLayoutDirection(combined.get(0));
         }
         synchronized (LocaleManagerService.class) {
+            // Read geometry under the same sequence lock: an older rotation
+            // snapshot must not receive a newer concurrent change's sequence.
+            com.gesher.app.window.ApplicationDisplay.applyConfiguration(c);
             c.seq = sSeq;
         }
         return c;
+    }
+
+    /** The shared Application display changed while task overrides stay local. */
+    public static void onSharedDisplayChanged() {
+        LocaleManagerService service = sInstance;
+        if (service == null) return;
+        nextSeq();
+        if (service.mInProcessPackage != null) {
+            applyInProcess(configurationFor(service.mInProcessPackage), "shared display rotation");
+        } else {
+            service.mAtm.dispatchConfiguration(null);
+        }
     }
 
     /**

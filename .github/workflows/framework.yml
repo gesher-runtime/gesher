@@ -387,12 +387,14 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/localeapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/surfaceapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winlegacy/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           # Networking (docs/network.md): an app with INTERNET and ACCESS_NETWORK_STATE, one without.
           for a in netapp nonetapp; do
             BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/$a/build.sh out/app \
               --framework-res out/framework-res/framework-res.apk \
               --framework-classes out/framework/classes --core-classes out/coremod
           done
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/web3app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod  # web3 (ADR 0058)
 
       - name: Collect framework artifacts
         run: |
@@ -408,7 +410,9 @@ jobs:
           cp out/app/localeapp.apk dist-framework/
           cp out/app/surfaceapp.apk dist-framework/
           cp out/app/winapp.apk dist-framework/
+          cp out/app/winlegacy.apk dist-framework/
           cp out/app/netapp.apk out/app/nonetapp.apk dist-framework/
+          cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/

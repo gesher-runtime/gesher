@@ -30,9 +30,12 @@
 #include <memory>
 
 #include "text_input.h"
+#include "text_document.h"
 
 namespace gesher {
 namespace input {
+
+class TextService;
 
 class ImeWindow {
  public:
@@ -49,10 +52,16 @@ class ImeWindow {
   bool TakeTextEvent(TextEvent* out);
   // What the focused editor takes; applied on the window's thread.
   void SetTextInput(const TextInputState& state);
+  void SetDocument(TextDocument document);
+  void SetGeometry(TextGeometry geometry);
+  int32_t RunTextServiceTest();
+  // Native fixture inspection only, on the window thread. A weak reference
+  // lets a COM sink prove ownership during reentrant detach without hiding it.
+  std::weak_ptr<TextService> TextServiceForTest();
   // The editor's caret in client pixels: the system caret (screen readers,
   // magnifiers, IMEs use it), the composition and candidate windows'
   // position, IMR_QUERYCHARPOSITION's answer. Applied on the window's thread.
-  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height);
+  void SetCaret(int32_t x, int32_t y, int32_t width, int32_t height, int32_t epoch);
   // Ends the IME's composition: its string becomes the result (complete) or
   // goes (cancel). Applied on the window's thread.
   void CompleteComposition(bool cancel);
@@ -66,6 +75,7 @@ class ImeWindow {
   struct Impl;
 
  private:
+  friend struct TextServiceProbeAccess;
   explicit ImeWindow(void* hwnd, Impl* impl) : hwnd_(hwnd), impl_(impl) {}
   void Post(int op);
 
