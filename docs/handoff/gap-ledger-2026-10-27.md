@@ -107,12 +107,17 @@ FD/permission/identity cleanup checkbox may be closed from that compilation.
 Saved review checkpoints, reusing the existing prose index rather than
 rescanning/counting it:
 
+- C:/work/gesher-ci-review/semantic-gap-index-2026-10-28.json (navigation)
 - C:/work/gesher-ci-review/semantic-gap-checkpoint-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-exec-continuation-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-services-frontier-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-native-continuation-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-net-continuation-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-arm64-continuation-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-process-ownership-2026-10-28.json
 
-These cover selected AOT3 and Exec4 contracts only, with stable semantic IDs,
+These cover selected AOT3/Exec4/Services3/Native3/Net4/ARM64 and process contracts,
+with stable semantic IDs,
 source/section/audit-row references, owner, state, dependency, exact scoped
 evidence and concrete acceptance. Raw source paragraphs and inventory symbols
 are not a remaining-gap denominator. No current checkbox or inventory proof
