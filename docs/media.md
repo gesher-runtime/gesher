@@ -264,7 +264,11 @@ the microphone (looped, from its start each time recording starts);
   acceptance criterion. Integration a06d930 (coordination docs only above
   94ccde1) is merged. Source/PowerShell checks pass; new runtime phase
   evidence is pending. No local compilation or fixture execution is allowed.
-- Latest full runtime CI **40402212195** at
+#### Earlier runs and repairs
+
+Local fixture results in this history predate the owner's CI-only rule.
+
+- Full runtime CI **40402212195** at
   **6c76a9035f0f479f30fc025fc7d8b5c479cc8995**, still including integration
   117629e and the original 36-check/recording/boot gates. Media
   **121853665655** passes in 52 seconds: ffmpeg was absent, canonical HTTPS
@@ -290,7 +294,7 @@ the microphone (looped, from its start each time recording starts);
   1,526,758 us, range 156,994..186,583 us; bodies 16..19 us, CPU zero.
   MF work totals only 306/302 ms. This proves entry waiting, not memcpy or
   exit work; it does not yet distinguish suspend request, barrier or flip.
-- Prepared after that run: 0591 records initial thread state and atomic
+- The follow-up tested in 40416959340 extends 0591 with initial thread state and atomic
   ReadFlag observations; 0592 observes SuspendAll-to-ResumeAll causes and
   ThreadFlip resume/tail intervals. Logs occur after ART locks are released,
   with env opt-in, at most 64 pause events over 20 ms and the existing
@@ -298,7 +302,8 @@ the microphone (looped, from its start each time recording starts);
   app are retained by 59-media3 instead of silently filtered. No scheduling
   or suspension state is changed. Apply/source/PowerShell checks pass;
   C++ compilation and native/Java fixtures are CI-only under the owner's
-  local-load rule (integration f520fd1). These additions need full CI.
+  local-load rule (integration f520fd1). Their compile/runtime proof is now
+  40416959340 above; the device throughput gate remains open.
 - Diagnostic full CI **40398992353** at
   **64cf512f5334829c189cd1e3a9c2d4438bd9b70c**, including verified integration
   117629e (Native3 Unicode/Process), the 1,000-race camera repair, ART phase
@@ -314,7 +319,9 @@ the microphone (looped, from its start each time recording starts);
   and APT signature/hash validation. Install gets 240 seconds for the fresh
   dependency set; all command and global ten-minute bounds remain explicit.
   YAML/Bash syntax and present/missing/failing-tool control-flow fixtures
-  pass locally. Runtime/package/e2e and the new 36-check set remain unverified.
+  passed locally before the CI-only local-load rule. Runtime/package/e2e and
+  the new 36-check set were unverified at that checkpoint; 40402212195 above
+  subsequently runs them and retains the device camera failure.
 - Diagnostic CI **40395297550** at **786668275aa0846bf1952f5d8ff49d2124d1427d**:
   atomic request-selection repair, 1,000-race regression and the approved
   ART array entry/decode/body/exit diagnostic compile successfully (main
@@ -331,7 +338,8 @@ the microphone (looped, from its start each time recording starts);
   successful, missing-tool and failing-version control-flow fixtures pass
   locally; the failure fixture retains exit 42 and runs no generators.
   Expected media3 count remains 36, with all recording, picture, permission
-  and boot-timing gates unchanged. Full CI of this follow-up is pending.
+  and boot-timing gates unchanged. The following 40398992353 exposes the apt
+  command timeout, then 40402212195 supplies the actual runtime results.
 - Prepared after source 6293a20 (not part of CI 40386129131): request
   availability, selection and frame numbering now share one mLock section.
   Previously cancelRequest/flush could clear mRepeating between the two lock
@@ -339,14 +347,17 @@ the microphone (looped, from its start each time recording starts);
   regression reproduces that exact failure against 6293a20; the repaired
   class passes 1,000 contended cancel/flush selections, ordered frame numbers,
   queued-capture priority and disconnected stop on the JDK. Its additive
-  Windows check makes the next expected media3 count 36; full CI is pending.
+  Windows check makes the media3 count 36. Actual ART regression execution
+  passes in 40402212195 and 40416959340 on both runners.
   Repair source f8f443f is pushed; integration cd0b849 (README only) is
-  included via fa465c7; current integration 117629e is included via c9b1412,
+  included via fa465c7; integration 117629e is included via c9b1412,
   preserving its complete Process regression and verified Unicode checks.
   Coordinator-approved ART patch 0591 adds a bounded
   camera-thread array-transition trace (SOA entry/decode/body/exit and wall/CPU,
-  explicit incomplete/error labeling); it is not CI-verified yet.
-- Latest full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
+  explicit incomplete/error labeling). It compiles in 40395297550 and
+  produces runtime evidence in 40402212195; the extended flag/cause
+  diagnostics execute in 40416959340.
+- Earlier full CI **40386129131** at **6293a20ee08173d17bf3c643457d14b68ad74f9e**:
   terminal callback fix 6722364 plus native phase diagnostics 7c5024a.
   Integration 634a273 is included. All 28 job results are read: 20 success,
   six skipped and two failed runtime jobs (2022 **121797816741**, 2025
@@ -359,16 +370,17 @@ the microphone (looped, from its start each time recording starts);
   cycle is removed: capture loops now end near collection completion, and
   started/result callback phase maxima are below 272 us in both modes.
   This terminal repair does not close the active throughput failure.
-- Native phase evidence now locates the device slowdown in JNI array access,
+- Native phase evidence in that run locates the device slowdown in JNI array access,
   rather than MF: 2022 SetByteArrayRegion totals/maxes **1,594,570/153,561 us**
   across 22 reads, while MF capture totals 375,362 us (ReadSample 19,055 us).
   2025 has **958,136/104,695 us** across 30 reads, while MF totals 411,861 us
   (ReadSample 29,525 us). Single-process copies total only 480/357 us.
   Delivery also spends 157,450/436,574 us in ReleaseByteArrayElements
   (JNI_ABORT). Pinned ART source uses ScopedObjectAccess, array validation
-  and memcpy/free here; entry, body and exit waits are not yet separated.
-  No GC, JIT, scheduler or native crash cause is claimed from these totals.
-- Current package **121797816925** passes installed oatdump, app window/input
+  and memcpy/free here; that run does not separate entry, body and exit.
+  Those totals alone do not identify a GC, JIT, scheduler or native crash
+  cause; 40402212195 and 40416959340 provide the later entry/suspend proof.
+- That run's package **121797816925** passes installed oatdump, app window/input
   and uninstall cleanup. E2e **121798915469** (2022) and **121798915169** (2025)
   each pass all four pinned transport fixtures, ten apps including Just Player,
   TIC-80 and Puzzles, association/shortcut launch and `0 unexpected failures`.
@@ -395,8 +407,9 @@ the microphone (looped, from its start each time recording starts);
   2022 also has one 158,542 us metadata operation. The 2022 result callback's
   5,039,719 us maximum is terminal work after collection, not five seconds of
   active production. Single-process traces also have terminal ~5 s started
-  callbacks. Native/JNI sub-phase diagnostics are prepared to distinguish
-  MF pacing/ReadSample/conversion/copy from JNI and delivery waits.
+  callbacks. Native/JNI sub-phase diagnostics were then prepared to distinguish
+  MF pacing/ReadSample/conversion/copy from JNI and delivery waits;
+  40386129131 above supplies those measurements.
 - A separate terminal lock cycle is established by the pinned framework's
   bytecode: CameraDeviceImpl.close holds mInterfaceLock across disconnect;
   its local started/result callbacks acquire that lock; CameraDeviceUser
