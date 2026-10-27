@@ -166,3 +166,14 @@ live same-ref run. Required watch uses interval120 and writes the corresponding
 binder2-sg-modes-component-40579429217-watch.log in the review directory. Runtime
 is pending, with no acceptance inferred from the earlier green build-only run.
 No integration code/main/PR/tag/release operation occurred.
+
+Ordinary component40579429217/exacted741 is now terminal green12jobs,
+11success/one intentional smoke skip. Both actual Windows have63 independent
+cases in nine ABI/mode contexts,126 zero-failure actor reports totaling1440
+actual C++ checks,723 parent checks,63 exact observed successful-open audits,
+nine verified sender-death-before-delivery controls and28 actual normal0
+device-app completions. Nine supplier identities/five artifact packages,
+eleven fixture hashes/five jars/fifteen fresh image copies are checked. Read
+[the precise bounded proof](binder2-sg-ordinary-component-proof.md). SG remains
+outside the primary union; raw protocol/public-prefix/full and wider Binder2
+gates remain open. No new work on preserved filteredb52 occurred.
