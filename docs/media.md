@@ -260,9 +260,18 @@ the microphone (looped, from its start each time recording starts);
   that production block, not a full Heap object. This adds one independent
   check: **37 expected, all original 36 retained**. Two-second/30-frame,
   picture/tone/permission/terminal and boot criteria are unchanged. Only
-  source application/generation and parsers run locally; native compilation
-  and fixture execution await the candidate's full CI. Native3 owns the
-  separate NanoTime monotonic and malloc-pressure accounting gaps.
+  source application/generation and parsers run locally. In 40430522654,
+  main **121946800449** passes in 2m57s: time_utils.cc, heap.cc and the
+  generated regression compile with -Werror, and fixture/dalvikvm/oatdump
+  link. The generated block hashes are ce306488dc797f2750a92924cc4baa6e8b8dc9760304cbc1dd348fa55fd4c4d3
+  (patched) and 02b4ad9fa75e8a2394928564bbfa1a7aaf36c034f6c48efd859e6c5ce2a34511
+  (pristine). Framework **121946958910** passes javac/services dex; media
+  **121949272899** actually installs ffmpeg through the bounded canonical
+  route and builds all three APKs. Package **121949711691** passes actual
+  installed oatdump, image/fonts, window/input, install/dexopt,
+  association/shortcuts and full uninstall cleanup. Runtime/regression
+  execution and both e2e results remain pending. Native3 owns the separate
+  NanoTime monotonic and malloc-pressure accounting gaps.
 
 #### Earlier runs and repairs
 
