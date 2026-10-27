@@ -1,4 +1,5 @@
 #include "record_lock_descriptors.h"
+#include "record_lock_duplicate.h"
 #include "internal.h"
 #include <bcrypt.h>
 #include <new>
@@ -221,6 +222,8 @@ DescriptorGuard::~DescriptorGuard() { if (--descriptor_depth == 0) ReleaseSRWLoc
 int DescriptorFcntl(int descriptor, int command, void* user_flock) {
   const int saved_errno = errno;
   DescriptorGuard guard;
+  int private_error = DrainPrivateReservations();
+  if (private_error) return errno = private_error, -1;
   HANDLE file = gesher::HandleFromFd(descriptor);
   if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   PreparedOperation prepared{};
@@ -256,6 +259,8 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
 }
 
 ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
+  error_ = DrainPrivateReservations();
+  if (error_) return;
   if (!local) return;
   error_ = CloseCommitted();
   if (error_) return;

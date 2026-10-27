@@ -25,6 +25,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/path.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/process.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_descriptors.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_duplicate.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_liveness.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_operation.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_registry.cc

@@ -34,6 +34,7 @@
 #include "internal.h"
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
+#include "record_lock_duplicate.h"
 #include "socket_internal.h"
 
 namespace {
@@ -316,21 +317,7 @@ int fcntl(int fd, int cmd, ...) {
       return 0;
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
-      gesher::record_locks::DescriptorGuard descriptor_guard;
-      const int saved_errno = errno;
-      // The lowest free number >= arg, as on Linux. Search BEFORE creating
-      // any duplicate: a staging alias followed by a failed private close
-      // could otherwise leave an invisible OFD pin. The descriptor guard
-      // serializes participating fd publication through this actual dup2.
-      if (arg < 0) return errno = EINVAL, -1;
-      int target = static_cast<int>(arg);
-      while (gesher::HandleFromFd(target) != INVALID_HANDLE_VALUE) ++target;
-      int moved = dup2(fd, target);  // Includes socket/event/binder bookkeeping.
-      if (moved < 0) return -1;
-      // Probing a vacant CRT descriptor sets EBADF. That internal search and
-      // the successful duplication are not an application-visible error.
-      errno = saved_errno;
-      return moved;
+      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
     }
     case F_ADD_SEALS:
     case F_GET_SEALS:
