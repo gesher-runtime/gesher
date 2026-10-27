@@ -201,7 +201,7 @@ release completion. Preserve every gate; software work remains active.
 Native has actually reviewed Env85 exactb497b8c7997c02bd862daec9c473e57e38a4f5c6,
 component40564869955 attempt1: ten jobs, nine success/one intentional skip;
 all nine executed plain logs read. Windows122414930631/122414930394 both0,
-with actual256 pinned environment rows across six contexts/default-object
+with four actual ARM environment contexts of256 pinned rows/default-object
 controls and retained coherent942 Native2/JNI-V/varargs/FPCR/FPSR/oracle gates.
 Exact942 prerequisite and current API3 suppliers/jars/rebuilt fifteen copied
 images were checked. Frozen documentation report is forthcoming. This is
@@ -215,3 +215,52 @@ real adopted-file identity/handle reuse and one-way progress fixture source.
 Production remains peer-revieweddf80; compile/Android mode wiring and final
 fixture peer are pending. Integration code still equals accepted944; no new
 Media dispatch or code integration occurred.
+
+## Current local candidates and source-only work
+
+AOT full40557661255/source4502599386a693cc7673ea8a01f7ec09c915cccc was
+independently reviewed by the integrator:28jobs22success/sixskip, actual
+Windows122390523396/122390523351 each21PCL+21DLC/14Web3/whole0, package
+122390523488 actual23 and both e2e122391690045/122391690141 actual ten apps,
+four transports, association/shortcut and0unexpected. Frozen docs-only head
+0c1f4d57a2ddffe65bd6b8c8151ce544f17aae57 has empty entire non-doc diff450.
+Saved extracted actual evidence: aot3-coherent-full-40557661255-integration-review.json.
+No recurrence of Web3 in this full establishes a fix.
+
+New clean LOCAL candidatef4a2b3726cc9e1d81a117564ea45a578f7946dd1/ref
+wip/media4-aot-native-env-libcore-checkpoint combines that exact AOT scope
+with7beb Native/Env/Media/acceptedLibcore. Actual AOT application/installer/
+graph/DLC/test73 files equal frozen0c1; prior Native942/Envb497/Media/Libcore
+production/tests are unchanged. Inventory blob55e03c68ed061ecbfa718cfa02ca64516b9d9233
+is identical: all1157 rows/fields/proofs remain. This ref is unpushed and
+undispatched. Old7beb/eaa checkpoint refs and remote Media d552 remain intact.
+Pending: actual Web3 correction component, reviewed parent-intent merge,
+fresh same-source host/DLL/jars/images/fixtures and qualifying canonical full,
+then the integration merge/equality gate. No integration code merge occurred.
+
+Env precision: four actual ARM contexts each256 pinned cases (JNI/dalvikvm,
+single APK, device APK, native ELF), alongside six retained two-ABI Native2
+controls. Frozen5587c780bb6607d70cba2cfc29fe1fef591b3bff is docs-only above
+verifiedb497/40564869955. Earlier six-context environment wording was ambiguous
+and is corrected; it never meant six new environment contexts.
+
+SG compile-only40571824155/exact7e9549d89fc871f4d88a29e62c887e36723e6be8
+is green two jobs; actual host122427752555 compiles binder.cc and links broker/
+actors under Werror, Android122427752185 compiles both ABI actor objects.
+No runtime/ART/APK/full acceptance. Watch2129 completed0; no active watcher
+was restarted. Logs/metadata binder2-sg-compile-40571824155-* are saved.
+Interrupted unverified fixture WIPb52d0bda is safely preserved/pushed as
+wip/binder2-sg-relay-unverified. The manager reported an automatic content-filter
+interruption; the complete public transaction-prefix accounting/lifetime test
+remains explicitly open. Raw manual-handle and BR_NOOP prefix cases do not
+substitute. No further work on that test occurred in the replacement turn.
+Active SG worktree is clean on separate wip/binder2-sg-mode-wiring from known
+compile source7e9549, for ordinary ART/APK library/actor wiring only.
+
+Latest shared Web3 state reported by manager: Windows production query-bound
+017c293c53d0044be867f37def848bb4485f1fae implements four pre-ScopedEnv query
+handoffs, generation retirement, Java cancellation/deadlines/side-effect checks
+and bounded VM/event drain; runtime remains unverified, real lock/join fixture
+in progress. Native helper9dc is source-only pending peer/CI. No fix imported
+into the local candidate. Owner confirms all ten hardware gate environments
+are unavailable; they remain required blockers for final all-gap/release.

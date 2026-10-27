@@ -88,3 +88,15 @@ all docs/ADRs against later exact evidence, including the framework native
 registration/stand-in inventory and app/e2e status limits. Keep unresolved
 statements pending and link each supersession to source/run; neither old
 handover text nor this scheduling table silently closes an item.
+
+## SG public transaction-prefix requirement: preserved open
+
+Binder2 existing ADR0068/test88 still requires complete public transaction
+publication/read_consumed and local/remote resource ownership evidence after
+transport failure. Compile-only7e9549/40571824155 does not prove it; raw manual
+handle and BR_NOOP-only prefix source controls do not substitute. Interrupted
+WIPb52d0bda is preserved separately on wip/binder2-sg-relay-unverified after an
+automatic content-filter interruption reported by the manager. This required
+test remains unverified/open, not waived. Routine mode wiring proceeds from
+known compiled source on wip/binder2-sg-mode-wiring; no aggregate Binder2 or
+FD/permission/identity cleanup checkbox may be closed from that compilation.
