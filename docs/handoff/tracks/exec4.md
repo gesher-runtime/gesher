@@ -161,8 +161,15 @@ Remaining-contract source audit while CI builds (no acceptance claims):
   child-descriptor/directory failure semantics with actual native programs;
   these are source-audit findings, not a cause assigned to the old crash.
 
-Root must coordinate latest-integration acceptance before merging this
-verified slice. The candidate includes integration94ccde1; it does not import
-the concurrent Native3 width/CPU or monotonic-clock candidates. No integration,
-main, PR or release operation was performed by this track. CMakeLists.txt adds
-only exec4_environment_test; no ci.yml or production Main.java edit was made.
+Latest-integration acceptance is now being prepared at root's direction.
+The first verified source9f25080 remains immutable on wip/exec4-live-environ;
+its docs-only head76b8d5c is also frozen as wip/exec4-live-environ-reviewed.
+Merged origin/phase4/integration630c20c into the active wip/exec4 branch without
+conflicts. Its code was verified by root at42cc1c0 / full CI40432541082;
+630c20c differs only by docs. This adds the real startup profile/code checks
+absent from9f25080. The new combined source requires its own full CI before
+acceptance. Concurrent Native3 width/CPU and monotonic-clock candidates remain
+outside it. Future spawn semantics stay in a separate next-source slice.
+No integration/main, PR or release operation was performed by this track.
+CMakeLists.txt adds only exec4_environment_test; no authored ci.yml or
+production Main.java edit was made.
