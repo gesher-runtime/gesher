@@ -290,9 +290,17 @@ public final class LocaleManagerService extends ILocaleManager.Default
     }
 
     private LocaleConfig storedOverride(String packageName) {
-        Properties stored = Device.read(overrideFile(packageName));
-        String tags = stored != null ? stored.getProperty("locales") : null;
-        return tags == null ? null : new LocaleConfig(LocaleList.forLanguageTags(tags));
+        try {
+            Properties stored = Device.read(overrideFile(packageName));
+            String tags = stored != null ? stored.getProperty("locales") : null;
+            return tags == null ? null : new LocaleConfig(LocaleList.forLanguageTags(tags));
+        } catch (IllegalArgumentException e) {
+            // Properties.load rejects malformed Unicode escapes. Like the pinned XML
+            // parse-error getter, return no override instead of exposing a parser exception.
+            SystemServer.log(TAG + "the override LocaleConfig was not parsed for "
+                    + packageName + ": " + e);
+            return null;
+        }
     }
 
     private File overrideFile(String packageName) {
