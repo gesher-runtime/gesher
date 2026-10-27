@@ -34,7 +34,9 @@
 extern "C" {
 #endif
 
-#define GESHER_ARM64_API_VERSION 2
+// Version3 requires the shared tagged ARM va_list readers in the host shim.
+// Neither an old host/new DLL nor a new host/old DLL is compatible.
+#define GESHER_ARM64_API_VERSION 3
 
 // What the host gives the translator.
 struct gesher_arm64_host {
@@ -69,7 +71,7 @@ struct gesher_arm64_api {
   void* (*guest_symbol)(const char* name);
 
   // A host function whose argument `index` (0-based) is a va_list: the
-  // guest's AAPCS64 va_list is converted to a System V one when the guest
+  // guest's AAPCS64 va_list is converted to the private tagged host list when the guest
   // calls it. The translator knows the shim's (vsnprintf...) by name; the
   // JNI bridge registers its Call*MethodV forms.
   void (*add_va_list_function)(const void* fn, int index);

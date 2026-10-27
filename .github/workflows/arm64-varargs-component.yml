@@ -1,0 +1,124 @@
+name: arm64-varargs-component
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
+  ndk:
+    uses: ./.github/workflows/native2.yml
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build current API3 runtime, launcher, compiler and boot jars
+        run: |
+          ninja -C out dalvikvm dex2oat gesher-exec arm64_elf_test
+          tools/build-boot-jars.sh out/boot-jars
+          tests/build-test-apps.sh out/test-apps
+          mkdir -p dist-component
+          cp out/dalvikvm.exe out/dex2oat.exe out/gesher-exec.exe out/arm64_elf_test.exe dist-component/
+          cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
+          printf '%s\n' "$GITHUB_SHA" > dist-component/arm64-component-source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-api3-host
+          path: dist-component/
+  test:
+    needs: [framework, ndk, translator, host]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact Locale build sources and download scaffolding inside CI only
+        shell: pwsh
+        run: |
+          $base = gh api repos/${{ github.repository }}/actions/runs/40516054280 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'ca4ed3cfff46d4843485d89859370dc5b86a4146' -or
+              $base.name -cne 'ci' -or $base.conclusion -cne 'failure' -or $base.run_attempt -ne 1) {
+            throw 'Unexpected immutable Locale run/source/attempt'
+          }
+          $jobs = gh api repos/${{ github.repository }}/actions/runs/40516054280/jobs --paginate | ConvertFrom-Json
+          foreach ($name in 'build','framework / framework','boot-image / compile') {
+            $job = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Unproved build prerequisite $name" }
+          }
+          git diff --exit-code $base.head_sha HEAD -- aosp.lock patches cmake/aosp/art.cmake compat/base
+          if ($LASTEXITCODE -ne 0) { throw 'Changed ART/boot-image compatibility source needs separate review' }
+          Write-Host "ACTUAL_COMPONENT_SCAFFOLD run=$($base.id) source=$($base.head_sha) overall=red-Web3 build/framework/boot=success"
+          foreach ($artifact in 'windows-x64','framework','graphics','angle','media','webview','exec','boot-image') {
+            gh run download 40516054280 -R '${{ github.repository }}' -n $artifact -D dist
+            if ($LASTEXITCODE -ne 0) { throw "Missing immutable scaffolding $artifact" }
+          }
+          New-Item -ItemType Directory -Force old-jars | Out-Null
+          foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            Copy-Item "dist/$name.jar" "old-jars/$name.jar"
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64-api3-host
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native2
+          path: dist/native2
+      - name: Guard all five actual boot jars and rebuild image on any byte difference
+        shell: pwsh
+        run: |
+          if ((Get-Content dist/arm64-component-source.txt -Raw).Trim() -cne '${{ github.sha }}') {
+            throw 'Current native runtime provenance mismatch'
+          }
+          $same = $true
+          foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            $old = (Get-FileHash "old-jars/$name.jar" -Algorithm SHA256).Hash
+            $new = (Get-FileHash "dist/$name.jar" -Algorithm SHA256).Hash
+            Write-Host "ACTUAL_COMPONENT_JAR name=$name old=$old current=$new identical=$($old -ceq $new)"
+            if ($old -cne $new) { $same = $false }
+          }
+          if ($same) {
+            Write-Host 'ACTUAL_COMPONENT_BOOT reused immutable Locale image: all five current jars byte-identical'
+          } else {
+            tools/boot-image/fetch-profiles.ps1 -Out rebuilt-boot/profiles
+            tools/boot-image/compile.ps1 -Dist dist -Out rebuilt-boot -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles rebuilt-boot/profiles/art-boot-image-profile.txt,rebuilt-boot/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt -TimeoutMinutes 15
+            Copy-Item -Recurse -Force rebuilt-boot/framework/* dist/framework/
+            Write-Host 'ACTUAL_COMPONENT_BOOT rebuilt from current native compiler and all five current jars'
+          }
+      - name: Actual both-ABI Native2 ART/APK, copied JNI V, FPCR/FPSR and variadic contracts
+        shell: pwsh
+        run: tests/windows/run-arm64-component.ps1 -Dir "$PWD/dist"
+      - name: Component process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-component-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/gesher-arm64-component/logs-*/**
+          if-no-files-found: ignore
