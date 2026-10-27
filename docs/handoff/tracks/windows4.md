@@ -34,6 +34,38 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Full diagnostic **40417632512** at exact cde1c79 is COMPLETE RED: 28 jobs,
+20 success, six skipped, both Windows jobs failed. Both actual Windows logs
+were read: 2022 job 121919469641 has nine failures (41m20); 2025 job
+121919469507 has eleven (37m54). Package and both e2e results below remain green.
+No full-stage acceptance or roadmap tick follows from those scoped successes.
+
+The current failures are two final IME snapshots per runner (real composing
+and converted text/candidate placement now pass), two initial TSF reconversions
+per runner, legacy resize in single-process mode only and unfocused-task Display
+snapshots. Windows 2022 additionally has two empty password snapshots during a
+180-second WM_INPUTLANGCHANGEREQUEST/ImeBroker wait. Windows 2025 alone has an
+exec3 single-process native SIGSEGV after read-mode popen; the coordinator and
+exec4 peer own its investigation. Device exec3 and all 2022 exec3 checks pass.
+
+Actual new Java evidence: CursorAnchorGeometry passes under ART on both;
+later TSF reconversion and actual partial composition/caret2/live spans pass;
+device target28 content correctly shrinks/restores 500/800 with IME insets300.
+Single-process legacy trace instead has fitTypes/fitSides zero, unlike normal
+app binding. The scaled single driver lacks AppCompatCallbacks' disabled-change
+setup; the next source installs the same target-SDK table used in normal bind.
+WindowSession's natural-rotation/empty-bounds path also omitted full appBounds
+override, leaking the shared landscape size into the unfocused portrait task;
+every task now receives its full TaskConfiguration geometry.
+
+Initial TSF binding can query before InputMethodManager accepts its binding
+result and never requery an unchanged selection. The next source schedules a
+document/cursor query after enqueueing that result. The IME fixture's existing
+composition/inset poll now reads actual span-only completion as well as text
+changes, so it can observe finishComposingText without weakening the exact
+native-commit/no-composition assertion. These source corrections await CI;
+no local native build or new full run has been performed.
+
 Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
 and exec3), merged at 9d1445c. The media conflict preserves the integration's
 canonical HTTPS mirrors and 240-second install bound alongside command tracing.
