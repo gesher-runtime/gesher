@@ -72,6 +72,10 @@ jlong QueryFixture_nativeStart(JNIEnv*, jclass, jlong value, jint kind, jlong no
   Subclass(hwnd);  // preserve UIA's original chain, including NCDESTROY cleanup
   Epoch epoch = EpochOf(hwnd);
   if (!epoch || !epoch->alive.load()) return 0;
+  wchar_t module[32768];
+  DWORD module_length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
+  if (module_length == 0 || module_length >= std::size(module)) return 0;
+  std::fprintf(stderr, "gesher-a11y: ACTUAL_QUERY_FIXTURE_MODULE pid=%lu path=%ls\n", GetCurrentProcessId(), module);
   auto state = std::make_shared<FixtureQuery>();
   state->hwnd = hwnd; state->epoch = epoch; state->kind = kind; state->node = node; state->direct = direct == JNI_TRUE;
   uint64_t id;

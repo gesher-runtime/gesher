@@ -32,6 +32,8 @@ jobs:
 
       - name: Build
         run: |
+          # Canonical suite/package/e2e always receive the production role.
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           # Compile/link ordered spawn setup and its actual no-console caller first.
           ninja -C out exec4_no_console_probe gesher-exec
           # Check the new native format ABI bridge before the full AOSP graph.
@@ -80,10 +82,24 @@ jobs:
           tools/net/collect.sh third_party/aosp dist
           ls -la dist
 
+      - name: Freeze default-OFF production role and unchanged shared-code boundary
+        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
           path: dist/
+
+      - name: Build separately named same-source query-hook runtime after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+          ninja -C out dalvikvm
+          python3 tools/web3/host_roles.py capture-hook --build out --dist dist --state out/web3-production-state.json --out dist-web3-query
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web3-query-hook
+          path: dist-web3-query/
+          if-no-files-found: error
 
   # framework.jar's pipeline (host tools, coremod, framework-res, then
   # tools/framework/build.py): .github/workflows/framework.yml, which also
@@ -189,6 +205,7 @@ jobs:
         with:
           sparse-checkout: |
             tools/package
+            tools/web3
             tests/windows/shell
             tests/windows/graphics
 
@@ -227,6 +244,12 @@ jobs:
         with:
           name: media
           path: dist
+
+      - name: Verify installer input is production-only and excludes the query fixture
+        shell: pwsh
+        run: |
+          python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build installer
         shell: pwsh
@@ -602,6 +625,8 @@ jobs:
             tests
             tools/symbolize.py
             tools/boot-image
+            tools/web3
+            tools/package
             probes/native3/unicode
 
       - uses: actions/download-artifact@v4
@@ -674,6 +699,12 @@ jobs:
           name: native2
           path: dist/native2
 
+      - name: Verify normal suite consumes the default-OFF runtime only
+        shell: pwsh
+        run: |
+          python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run tests
         shell: pwsh
         run: |
@@ -684,3 +715,129 @@ jobs:
           Get-Content results.txt | Select-String -Pattern '^(PASS|FAIL|INFO)|failed' >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
           exit $code
+
+  # Extra isolated jobs execute the real regression in the SAME canonical
+  # full. Only these jobs download the separately named hook artifact.
+  web3-query-regression:
+    needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin all current full producers and packages before any download
+        id: suppliers
+        shell: pwsh
+        run: tools/web3/verify_full_suppliers.ps1
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.windows_x64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.framework }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.native_libs }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.arm64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.graphics }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.angle }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.boot_image }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.webview }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.exec }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.media }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.web3_query_hook }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+      - name: Verify exact same-source compiler roles, source boundaries and coherent payload
+        shell: pwsh
+        run: |
+          python tools/web3/host_roles.py verify --dist dist --hook
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($name in 'core-oj.jar','core-libart.jar','core-icu4j.jar','framework.jar','gesher-app.jar',
+                             'web3-query-tests.dex','web3app.apk','gesher_arm64.dll','web3_network.so','web3_network_arm64.so') {
+            if (-not (Test-Path -LiteralPath (Join-Path dist $name))) { throw "Missing current full query payload $name" }
+            Write-Host "ACTUAL_WEB3_FULL_MEMBER name=$name sha256=$((Get-FileHash -LiteralPath (Join-Path dist $name) -Algorithm SHA256).Hash) source=${{ github.sha }}"
+          }
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($extension in 'art','oat','vdex') {
+              $file = "dist/framework/x86_64/$image.$extension"
+              if (-not (Test-Path -LiteralPath $file)) { throw "Missing current full image $file" }
+              Write-Host "ACTUAL_WEB3_FULL_IMAGE member=$image.$extension sha256=$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash) source=${{ github.sha }}"
+            }
+          }
+      - name: Actual unwrapped failure and corrected monitor owner join, cancellation, VM and original14 gates
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/windows/run-web3-query-component.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" | Tee-Object -FilePath web3-query-results.txt
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web3-query-full-logs-${{ matrix.os }}
+          path: |
+            web3-query-results.txt
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+          if-no-files-found: warn
