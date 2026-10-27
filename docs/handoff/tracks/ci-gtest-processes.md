@@ -15,10 +15,16 @@ ci-gtest-streams-40600988297-. No CI artifact was downloaded locally.
 Actual helper runtimes were PowerShell7.6.8 and7.6.7 respectively, both
 .NET10.0.13. Each host passed43controls with0fail: all exact25prior40556470317
 PASSrecords plus18new actual-helper controls. Sixteen process executions per
-host each proved both read tasks completed, actual process-handle disposal,
+host means eight Invoke-CoreLibsTest20 calls and eight Invoke-ArtGtest21 calls;
+only these two helpers gained the new task/native-pipe observations. Each
+proved both read tasks completed, actual process-handle disposal,
 paired owned-reader/native-pipe closure and an independent invalid-handle
 probe for both captured pipe handles. Missing-executable cases create no
 process/reader and retain their original failure behavior.
+
+The retained25 controls exercise older RunTimed, SurfaceRun, InvokeOpenSl,
+N2Run and split start/wait behavior at their prior scopes. Repeating their
+records does not upgrade those helpers to this new paired pipe/task proof.
 
 For BOTH actual gtest helpers, the retained-writer control checks the recorded
 real child is still alive AFTER helper completion. Both tasks then have
