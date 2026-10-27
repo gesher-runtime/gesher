@@ -37,6 +37,22 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Diagnostic40520811180 atd62b3645 ran the real test73 on the pinned successful
+build artifacts from405123/96b. Both actual logs show all15 graph controls,
+both initial/updated oatdump headers, hot code and app images, every device
+result/compiled-image/stale-no-reinstall/update/old-install control and cleanup
+PASS. Each has exactly four single/Main failures: Entry is missing and ART
+reports expected one shared loader, found zero. The source cause is
+GesherAppDriver's APK-only PathClassLoader overriding both LoadedApk fields.
+
+The correction uses LoadedApk.getClassLoader, preserving its real graph/order,
+app loader selection and profile registration. Window/config/locale behavior
+is unchanged in source. First compile this Java source in scoped framework CI;
+then build fresh boot images from the new jars in the diagnostic workflow
+before running test73. Old runtime artifacts cannot verify this Java change.
+No new full is dispatched while component runtime proof and the independent
+Web3 teardown regression remain unresolved.
+
 In corrected full40512344714, actual Windows2022 job122221111406 completed
 with only one fixture failure after all15 real graph/registry controls passed:
 ReadAllText tried to read the active system_server.log without sharing write
