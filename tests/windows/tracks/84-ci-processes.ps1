@@ -37,21 +37,27 @@ try {
     $libsTests = $directory
     $artBin = $directory
     $env:GESHER_GTEST84_CWD = $directory
-    foreach ($mode in 'normal','nonzero','failed','zero-count','missing-summary','timeout','retained','missing-exe') {
-      $env:GESHER_GTEST84_MODE = $mode
+    foreach ($mode in 'normal','normal-relative','nonzero','failed','zero-count','missing-summary','timeout','retained','missing-exe') {
+      $env:GESHER_GTEST84_MODE = if ($mode -eq 'normal-relative') { 'normal' } else { $mode }
       $pidFile = Join-Path $process84Root "$helper-$mode.pid"
       $env:GESHER_GTEST84_PID = $pidFile
       $name = if ($mode -eq 'missing-exe') { 'absent84' } else { 'gtest84' }
       $timer = [Diagnostics.Stopwatch]::StartNew()
+      $relative = $mode -eq 'normal-relative'
       try {
+        if ($relative) {
+          Push-Location $process84Root
+          $libsTests = Split-Path -Leaf $directory
+          $artBin = $libsTests
+        }
         $records = @(& $helper -Name $name -Exclude @('Fixture.Excluded') -TimeoutSec 1 6>&1)
         $timer.Stop()
         $verdicts = @($records | Where-Object { $_ -is [bool] })
         $text = ($records | Where-Object { $_ -isnot [bool] } | ForEach-Object { "$_" }) -join "`n"
-        $expected = $mode -eq 'normal'
+        $expected = $mode -in @('normal','normal-relative')
         $correct = $verdicts.Count -eq 1 -and $verdicts[0] -eq $expected -and $timer.Elapsed.TotalSeconds -lt 20
         if ($mode -ne 'missing-exe') { $correct = $correct -and $text.Contains('disposed=True') }
-        if ($mode -eq 'normal') { $correct = $correct -and $text.Contains('1 tests passed') -and $text.Contains('readers=True') }
+        if ($expected) { $correct = $correct -and $text.Contains('1 tests passed') -and $text.Contains('readers=True') }
         if ($mode -eq 'nonzero') { $correct = $correct -and $text.Contains('exit 0x00000017') }
         if ($mode -eq 'failed') { $correct = $correct -and $text.Contains('Fixture.RealProcess') -and $text.Contains('1 failed') }
         if ($mode -eq 'timeout') { $correct = $correct -and $text.Contains('timed out after 1 s') }
@@ -68,6 +74,7 @@ try {
         if ($correct) { Write-Host "PASS  CI processes: actual $helper $mode parser/status/output/disposal within original bounds" }
         else { Write-Host "FAIL  CI processes: actual $helper $mode verdict=$($verdicts -join ',') expected=$expected after$($timer.Elapsed.TotalSeconds)"; $script:failed++ }
       } finally {
+        if ($relative) { Pop-Location; $libsTests = $directory; $artBin = $directory }
         if (Test-Path -LiteralPath $pidFile) {
           $owned = Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
           if ($owned) {
