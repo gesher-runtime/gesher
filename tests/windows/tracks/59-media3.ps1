@@ -140,6 +140,24 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }
+  # ART already supplies per-collection exclusive/total phase timings through
+  # -verbose:heap. Keep complete timing groups, including unknown heavy phases,
+  # instead of assuming KernelPreparation is the cause. Bound publication even
+  # if a runtime produces an unexpectedly large number of collections/rows.
+  $gcTimingGroups = 0
+  $gcTimingRows = 0
+  $gcTiming = $false
+  foreach ($trace in @($Out -split "`n")) {
+    if ($trace -match '\[Exclusive time\] \[Total time\]') {
+      ++$gcTimingGroups
+      $gcTiming = $gcTimingGroups -le 64
+    }
+    if ($gcTiming -and $gcTimingRows -lt 4096) {
+      Write-Host "INFO  media3 GC phase ($Mode): $($trace.TrimEnd())"
+      ++$gcTimingRows
+    }
+    if ($trace -match ': end, [0-9]') { $gcTiming = $false }
+  }
   # A completed test must not hide a crashed daemon behind successful media
   # round trips (post-GC metrics previously killed ReferenceQueueDaemon).
   LineCheck "media3 ($Mode): recordapp completes without uncaught app or daemon thread exceptions" $Out @("^${t}done") $Code "record-$Mode" @(
@@ -159,8 +177,11 @@ if (Test-Path "$Dir/recordapp.apk") {
   $env:GESHER_MEDIA_TRACE_RECORD = '1'
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-single'
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+  # Observe the existing collector's phase timings in record VMs only; the
+  # standalone request-race regression above keeps its original VM options.
+  $dvmRecTrace = $dvmRec + '-verbose:heap'
   # Single process.
-  $recOut = & "$Dir/dalvikvm.exe" @dvmRec com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
+  $recOut = & "$Dir/dalvikvm.exe" @dvmRecTrace com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
   $recCode = $LASTEXITCODE
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
@@ -169,7 +190,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   # environment the device's (GESHER_AUDIO_SOURCE, GESHER_CAMERA_TEST).
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-device'
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
-  $launcherRec = $dvmRec + 'com.gesher.app.Launcher'
+  $launcherRec = $dvmRecTrace + 'com.gesher.app.Launcher'
   $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
   $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
   if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
