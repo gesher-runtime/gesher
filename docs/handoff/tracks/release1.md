@@ -43,6 +43,11 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
+The owner's latest local-load instruction covers Java as well: all C/C++/Java
+compilation and native/JVM fixtures run only in CI, including tiny probes.
+The README reflects this. No local compiler or runtime fixture is required for
+the held release preparation.
+
 Current source also includes verified exec3 integration 94ccde1, merged without
 conflicts at f47a22f. The release-version branch CI remains held for verified
 Web3 and the coordinator's combined source; this merge supplies no new release

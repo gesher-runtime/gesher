@@ -104,7 +104,7 @@ The source is pinned to `android-16.0.0_r4`. See the
 GitHub Actions builds the pinned AOSP sources and Gesher with llvm-mingw and
 `-Werror`, then runs the Windows suites, installer smoke and real-app e2e.
 Use the repository's [CI workflow](.github/workflows/ci.yml) for complete
-validation. C/C++ compilation and native fixtures on the project workstation
+validation. C/C++/Java compilation and native/JVM fixtures on the project workstation
 run only in CI; source edits and lightweight script checks do not require a
 local AOSP build or WSL. Track contributors follow the
 [handoff rules](docs/handoff/track-rules.md).
