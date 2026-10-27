@@ -96,6 +96,23 @@ The original logger cold path must remain covered even if the independent
 one-write logging correction changes the phase marker transport. Runtime
 repair and the final coherent full run remain open.
 
+Static symbol ci40523288209 is GREEN at063c7326, reading only the exact
+recorded06 surfaces artifact inside CI. The actual disassembly proves
+startPhases0x23fc calls say and returns at0x2400; say0x2540 calls vprintf@plt
+and returns at0x2544, matching the crash backtrace. This narrows the ordinary
+call site without claiming runtime stack bounds. Native owns the generic
+conversion fix and its new controlled evidence.
+
+The independent logger correction now composes each marker and sends one
+write(1) instead of three stdio writes sharing the log with stderr traces.
+It preserves the original printf/vprintf/newline/fflush body as a noinline
+legacy_say cold regression. Before any phase marker, the real fixture calls
+that path with a zero-argument literal and eight integer arguments; test80
+requires an atomic return marker in addition to the unchanged ABI, phase,
+color, teardown and shutdown assertions. The formatter itself still needs
+the generic ARM va_list correction. No passing runtime result or old-cause
+claim follows from this new source preparation.
+
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
 cleared pending before publishing its weak view. The correction retries

@@ -20,13 +20,16 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static pthread_t g_thread;
 static _Atomic int g_running;
 static int g_invalidation_phases;
 static ANativeWindow* g_window;
 
-__attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
+// Retain the original ordinary va_list/stdout path as an independent cold
+// regression. A single-write logger must not hide a broken ARM conversion.
+__attribute__((noinline, format(printf, 1, 2))) static void legacy_say(const char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   printf("surfacegl: ");
@@ -34,6 +37,26 @@ __attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
   printf("\n");
   fflush(stdout);
   va_end(ap);
+}
+
+__attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
+  char text[512] = "surfacegl: ";
+  const size_t prefix = sizeof("surfacegl: ") - 1;
+  const size_t available = sizeof(text) - prefix - 1;
+  va_list ap;
+  va_start(ap, fmt);
+  const int size = vsnprintf(text + prefix, available, fmt, ap);
+  va_end(ap);
+  if (size < 0 || (size_t)size >= available) {
+    static const char error[] = "surfacegl: log formatting failed\n";
+    (void)write(STDOUT_FILENO, error, sizeof(error) - 1);
+    return;
+  }
+  const size_t length = prefix + (size_t)size;
+  text[length] = '\n';
+  // stdout and stderr have separate stdio locks. One complete write keeps
+  // the phase marker intact when native rendering traces share the log.
+  (void)write(STDOUT_FILENO, text, length + 1);
 }
 
 static void* loop(void* arg) {
@@ -124,6 +147,9 @@ static void start(JNIEnv* env, jobject surface, int phases) {
   }
   g_invalidation_phases = phases;
   if (phases) {
+    legacy_say("invalidation: legacy variadic literal");
+    legacy_say("invalidation: legacy integers %d,%d,%d,%d,%d,%d,%d,%d", 1, 2, 3, 4, 5, 6, 7, 8);
+    say("invalidation: legacy variadic probe returned");
 #if defined(__aarch64__)
     say("invalidation: abi arm64-v8a");
 #else

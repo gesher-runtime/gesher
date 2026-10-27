@@ -50,6 +50,9 @@ foreach ($line in @($ivText -split "`r?`n" | Where-Object { $_ })) { Write-Host 
 function InvalidationPhaseChecks([string] $Mode, [string] $Abi, $Result) {
   $problems = @()
   if (-not $Result.Text.Contains("surfacegl: invalidation: abi $Abi")) { $problems += "missing actual native ABI $Abi" }
+  if (-not $Result.Text.Contains('surfacegl: invalidation: legacy variadic probe returned')) {
+    $problems += 'the original printf/vprintf/fflush literal/integer cold path did not return'
+  }
   foreach ($phase in 1, 2) {
     if ($null -eq $Result.Shots[$phase]) { $problems += "no native phase $phase capture" }
     if (-not $Result.Text.Contains("surfacegl: invalidation: phase $phase ready")) {

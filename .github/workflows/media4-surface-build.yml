@@ -1,0 +1,21 @@
+name: media4-surface-build
+
+# Compile only: the strict Windows runtime gates remain in the final full ci.
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/media4-invalidation]
+    paths:
+      - .github/workflows/media4-surface-build.yml
+      - tests/apps/surfacegl/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: media4-surface-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  surfaces:
+    uses: ./.github/workflows/surfaces.yml
