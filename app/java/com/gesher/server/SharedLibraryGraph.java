@@ -141,6 +141,19 @@ public final class SharedLibraryGraph {
         return true;
     }
 
+    public boolean matchesArtifacts(File oatDirectory) {
+        File manifest = new File(oatDirectory, MANIFEST);
+        // Existing ordinary PCL[] installations predate graph manifests.
+        if (!manifest.exists()) return identity.isEmpty();
+        try {
+            List<String> lines = Files.readAllLines(manifest.toPath(), StandardCharsets.UTF_8);
+            return lines.size() >= 3 && lines.get(0).equals("gesher-shared-library-context-v1")
+                    && lines.get(1).equals(identity) && lines.get(2).equals(context);
+        } catch (IOException unreadable) {
+            return false;
+        }
+    }
+
     public void apply(ApplicationInfo app) {
         if (roots.isEmpty()) {
             app.sharedLibraryInfos = null;

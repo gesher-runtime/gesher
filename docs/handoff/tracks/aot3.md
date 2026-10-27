@@ -58,11 +58,20 @@ an installer can replace its old APK. SDK gates use the real pinned
 UnboundedSdkLevel, already bundled by framework-minus-apex under its actual
 jarjar name android.internal.modules.utils.build; no SDK helper is copied.
 Bootclasspath declarations must match a real current bootclasspath file.
-Installer/Dexopt matching-context compilation, unchanged-APK/library-update
-invalidation and real jar/app/oatdump test73 fixtures must follow before CI
-acceptance. No Java compilation
-or fixture execution occurred locally, and no AOT3 shared-library behavior is
-claimed verified by this initial source commit. Root priority remains the
+Compile-only framework40468151378 atc51ed7d2 is complete green: actual
+framework122068536860 read, javac0/0errors, gesher-app.jar569116 bytes and
+graphics/app outputs built. This validates source compilation only.
+
+The next source passes the new parsed package's graph directly to install
+dex2oat, resolves the installed APK independently for background compilation,
+and writes the content/context identity into the same atomic oat stage.
+Jar contents are rechecked before compilation and before publication.
+Unchanged-APK installs detect graph/content changes, stop the old app and
+recompile; long-lived PM records resolve fresh runtime graph objects instead
+of returning the previous jar/XML snapshot. Real jar/app/oatdump test73 and
+library-update/stale-code/rejection evidence still must follow before full
+acceptance. No compilation or fixture execution occurred locally, and no
+AOT3 shared-library runtime behavior is claimed verified. Root priority remains the
 active Net4 full and fresh Windows4/Web3 combinations after exit-freshness
 acceptance; source is kept separate from those frozen candidates.
 
