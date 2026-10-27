@@ -1,11 +1,12 @@
 # 0066. Locale2: persisted supported-locale overrides and selection reconciliation
 
-Status: proposed; source and CI fixtures prepared on `wip/locale2`, based on
-accepted integration `7b49a718`. Source71ee7a0c/scoped40509891830 compiles
-production and both APKs; all ten device groups pass on both runners, but nine
-single-process groups fail because the headless driver exits before the delayed
-fixture report. The next CI retains that settled report and adds a queued
-snapshot before the driver's documented EndLoop. Runtime acceptance is pending.
+Status: proposed for product acceptance. Source `004fff10` passes scoped
+40512781936: all four actual job logs read, 21 API/resource/restart/error/caller
+groups and a zero summary on each Windows host. All exact queued callbacks
+and the original settled device observations pass. Current coherent candidate
+adds accepted integration `bc6e05be` and frozen Wide/FPCR/FPSR `75e7ef29`;
+full product verification remains pending. Exact jobs, merge review, failed-run
+history and limits are in the [stage report](../handoff/tracks/locale2-persisted-config.md).
 Test 81 is reserved to this slice. No local compilation or ART/APK execution.
 
 ## Pinned contract
@@ -67,6 +68,11 @@ process/package, or the exact PID/package of a single-process launch. User 0
 is the supported user. `CURRENT_OR_SELF` can fall back to it; `CURRENT`, ALL
 and another user need authority not supplied by this bounded implementation.
 No system-PID or shared-host-UID privileged bypass is invented.
+The checks trust the normally registered ATMS package record; they do not
+establish process-registration attestation. In particular, assignPackage/
+unassignedProcess (610–634) and attachApplication's start-sequence/waiting-work
+assignment (around 848–888) are a broader Services3 trust boundary, not an
+adversarial registration test or a claimed fix in this slice.
 
 This does **not** implement Android's complete privileged permission model.
 Concrete Services3 prerequisites remain: `ApkPackage.installed` assigns every
@@ -80,11 +86,11 @@ cannot authorize private locale reads or cross-package writes. Privileged
 cross-package grants, installer identity and current-IME authority remain
 open. The ordinary owner/negative controls are not evidence for those grants.
 
-## Required evidence (pending)
+## Scoped evidence (full product gates pending)
 
 Test 81 uses two actual APKs, the real `LocaleManager` and `ILocaleManager`
 boundary, resources and configuration/default-locale results in single-process
-and device modes on both Windows runners. Planned controls include:
+and device modes on both Windows runners. Actual scoped controls include:
 
 - set/replacement/reordered equivalence, language/script matching and retained
   order; app and device restarts; actual French/Hebrew resources and callbacks;
@@ -101,7 +107,8 @@ and device modes on both Windows runners. Planned controls include:
   are denied. This Java API slice makes no NDK ABI claim.
 
 The fixture's `GESHER_LOCALES=en-US` is a controlled source, not evidence for
-Windows display-language changes or sign-in behavior. No PASS is claimed yet.
+Windows display-language changes or sign-in behavior. Scoped proof does not
+substitute for the pending full product gates.
 Single-mode observation must include every queued callback before Main's
 documented headless EndLoop: exact per-stage count, ordered locales/greeting
 payloads and final resource/default snapshot. Device mode retains the original

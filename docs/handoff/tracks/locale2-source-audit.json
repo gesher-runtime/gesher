@@ -1,7 +1,9 @@
 {
   "baseline": "android-16.0.0_r4",
   "integration": "7b49a7181fabeba0afd7e230d7b466ba656a679c",
-  "verification": "source inspection only; all compilation and runtime pending CI",
+  "verification": "scoped CI40512781936/source004fff10: four actual job logs read, both21PASS/zero; full coherent product verification pending",
+  "coherent_integration": "bc6e05bea341d1dc79920deaf3f069ad690fedc4",
+  "coherent_fpsr_stage": "75e7ef29645302a860e702207b43131f9f28b1d3",
   "source_root": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/",
   "sha256": {
     "services/core/java/com/android/server/locales/LocaleManagerService.java": "2aa666ec5d650fef42258fac347cdf46cd69b2920c0836790d59deefd57342b6",
