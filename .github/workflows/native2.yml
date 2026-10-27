@@ -36,6 +36,8 @@ jobs:
         with:
           sparse-checkout: |
             tests/native2
+            tests/native
+            probes/arm64/fpcr
             tests/apps/native2app
             tests/e2e
 
@@ -93,8 +95,13 @@ jobs:
             case $abi in x86_64) triple=x86_64-linux-android ;; *) triple=aarch64-linux-android ;; esac
             o=dist/$abi
             mkdir -p "$o"
+            fpcr_reference=()
+            if [[ $abi == arm64-v8a ]]; then
+              bash probes/arm64/fpcr/build-reference.sh "$llvm/bin/${triple}29-clang" /tmp/native2-fpcr-reference.o
+              fpcr_reference+=(/tmp/native2-fpcr-reference.o)
+            fi
             "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 -fstack-protector-strong -Wall -Werror \
-              -Wl,-soname,libnative2.so -o "$o/libnative2.so" tests/native2/native2_test.cpp \
+              -Wl,-soname,libnative2.so -o "$o/libnative2.so" tests/native2/native2_test.cpp "${fpcr_reference[@]}" \
               -lz -lEGL -lOpenSLES -laaudio -landroid -llog -ldl
             "$llvm/bin/${triple}29-clang" -shared -fPIC -O2 -Wl,-soname,libnative2_helper.so \
               -o "$o/libnative2_helper.so" tests/native2/native2_helper.c

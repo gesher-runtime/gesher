@@ -1,6 +1,7 @@
 # 0067. arm64-2: guest FPCR rounding across native boundaries
 
-Status: proposed. Source prepared; scoped and full CI verification pending.
+Status: proposed. First scoped ci 40442317928 at e7c2878 passes both
+Windows host/translator tests. Extended NDK contracts and full CI pending.
 This is the first rounding slice of arm64-2, not completion of that track.
 
 ## Context
@@ -36,8 +37,21 @@ guest-level callback chain that changes both guest and native rounding.
 Both Windows versions run this and the original translator smoke tests in
 the branch-only arm64-fpcr workflow. Full CI uses reserved test69.
 
-The NDK/JNI/APK/native-process contracts and independent pinned reference
-are still being prepared. No local compiler or native/JVM fixture runs.
+Actual logs of ci 40442317928 were read: production translator/guest objects
+compile with -Werror; both Windows versions print all four FPCR groups and
+0 test(s) failed, and the original translator smoke tests pass. This covers
+real positive/negative FADD, invalid modes, direct MSR and three guest nesting
+levels, native fenv restoration and concurrent guest state. It is not full
+NDK/APK or product acceptance.
+
+The next source adds the full licensed bionic fenv-arm64.c and ARM header,
+with actual-tag byte provenance checks. The unchanged body is compiled as
+guest code with renamed symbols, so its real MSR/MRS can be compared against
+shim calls. Shared NDK contracts add FADD/FRINTI, errno, pthread inheritance,
+concurrent modes and nested qsort callbacks to native2's ARM library and an
+actual ELF process. test69 consumes actual dalvikvm/single/device logs.
+These extensions await scoped/full CI. No local compiler or native/JVM
+fixture ran.
 FPSR exception/status/trap APIs and environment save/restore functions
 remain outside this slice; their old fallback implementations are not
 claimed as complete. Guest JIT pages, signals/ucontext, LSE, HFAs/variadic
