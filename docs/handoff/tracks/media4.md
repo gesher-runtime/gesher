@@ -206,6 +206,14 @@ still require actual Windows CI controls, including read-only, write-only,
 read-write, closed/invalid and nonseekable descriptors. No shared POSIX
 F_GETFL implementation is changed.
 
+CI-only fixture generation source now extracts independently encoded
+H.264/AAC (baseline/no B frames), VP9/Opus, VP8/Vorbis and Opus-only packets
+with ffprobe, with portable typed field/packet binaries and exact JSON
+source/field/packet SHA audits. The generator itself has only been parsed
+locally; it has not run and is not wired into CI until the real native
+callers and independent output verifier are ready. No encoded fixture or
+sample result is invented by this source preparation.
+
 Track formats retain the actual AOSP AMessage and return independently
 owned AMediaFormat wrappers. The MP4 writer now has source for the real
 ISO-6709 udta/0xA9xyz box, replacing the inherited SetLocation no-op; its
