@@ -64,8 +64,13 @@ assertion is skipped, warmed away, retried unchanged or relabeled green.
 Current64f33ff3 adds the same contract body to Native2's actual JNI/APK library,
 requires its marker in both ABI dalvikvm/single/device contexts, and reserves
 test86 for the original baseline/standalone/API controls. No production source
-changes follow scoped928. Compile-only40529197932 checks those Native2 libraries
-and APKs; its overall conclusion is pending. The copied JNI V controls compile
+changes follow scoped928. Compile-only40529197932 at exact
+64f33ff3a27364bcb46aeb3a0f75f38921fd2462 passes attempt1. The actual completed
+job122277019774 log was personally read: both NDK shared libraries and
+corresponding real APK native-library entries build, javac/d8 and the existing
+third-party/symbol pipeline complete, and the final artifact is published.
+This establishes compilation/packaging only. Its actual log and metadata use
+the40529197932 prefix in the same external review directory. The copied JNI V controls compile
 in the scoped source but have not yet executed through actual ART here.
 
 JNI/APK execution, all existing FPCR/FPSR/Wide regressions, original Surface,
