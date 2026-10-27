@@ -129,7 +129,13 @@ removing the full driver's accidental relative executable path. Every
 original action, PID, isolation, failure and no-console assertion is retained.
 The scoped driver now runs the entire unchanged assertion body with both an
 absolute Dir and relative Dir=dist on each Windows host. Only PowerShell
-parsing and whitespace checks run locally; CI runtime proof is pending.
+parsing and whitespace checks run locally.
+Scoped40549932840/source00c7af776e729abf9e533383ed7c6f685c300263 is
+complete GREEN4jobs. Both actual Windows logs122350989344/122350989592
+were read: each absolute and relative driver entry has all four mandatory
+two-ABI ordered-action/no-console PASS records, eight per host, then0failed.
+Source/artifact identity controls pass. This is component proof only; the
+old full/Web3 failure and the requirement for coherent full CI remain.
 
 ## Historical owner-requested stop checkpoint
 
