@@ -1,9 +1,12 @@
 # 0061. Text services, IME occlusion and the shared Application display
 
-Status: proposed (windows4). Native fixtures pass standalone40440617227 at
-5b5b51d on both runners. Full40447661700 at8d97726 provides actual Android
-evidence below but is red: four failed checks per runner. Corrected non-editor
-fixture and a complete zero-failure combined run remain required.
+Status: accepted for the bounded scope below. Full40466021634 at exact
+160e25e8a77857cc50dd3e7c76e0616fb9fd1043 passes all28 jobs (22success,
+6skip), both zero-failure Windows suites, package23 and both complete ten-app
+e2e sets. Root independently read/accepted the source and five critical logs.
+The corrected non-editor focus fixture passes in actual Android in both
+modes. Physical keyboard and arbitrary candidate discovery remain open.
+See [the frozen evidence report](../handoff/tracks/windows4-final.md).
 
 ## Context
 
@@ -12,7 +15,7 @@ always returned natural orientation. IME tests posted an internal message;
 actual IFrameworkInputPane callbacks, candidate occlusion, old-target resize
 and TSF document access/reconversion remain open in this track's brief.
 
-## Work in progress
+## Decision
 
 The shared default display returned to an Application's DisplayManager follows
 the focused visible task. Each Activity retains an explicit task rotation,
@@ -42,10 +45,10 @@ The native fixture checks activation while the real HWND already has keyboard
 focus, with a counterfactual copy that omits only this event. Standalone
 40440617227 verifies that negative copy; actual strict foreground HWND
 preconditions and both two-task Android transitions pass full40447661700 on
-both runners. Overall stage acceptance still requires a complete green run.
+both runners. The final combined run40466021634 also verifies these cases.
 See the [WM_ACTIVATE contract](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-activate).
 
-## Open verification
+## Verified scope and remaining limits
 
 54-windows4.ps1 has executable cases for existing Display objects and registered
 listeners, multiple visible portrait/landscape tasks, focus changes and both
@@ -54,7 +57,7 @@ preconditions and listener transitions pass full40447661700 in both actual
 Windows logs. The actual ART Configuration and CursorAnchorInfo assertions
 also pass, including Hebrew/Arabic/English direction at four rotations and
 replacement of missing measured geometry. This scoped evidence does not make
-the red full suite or a roadmap milestone accepted.
+the earlier red full suite accepted; final scoped acceptance uses40466021634.
 
 The COM-source IFrameworkInputPane test passes standalone CI40440617227 on
 Windows 2022 and 2025. That fixture uses the real production HWND, COM source
@@ -81,10 +84,12 @@ IME adapter, reentrant owner teardown, epochs, range geometry and partial
 compositions. Full40447661700 proves real EditText reconversion, live Java
 composing spans, Japanese completion/caret9, password/number rejection,
 reconnection and aXcd/caret2 after a partial composition in both modes on both
-runners. Its newly added non-editor observation fails because the first touch
-takes Button focus and deliberately skips onClick in pinned View.java; the
-prepared correction observes actual focus gain using the same strict oracle.
-That correction is not yet runtime verified. TSF key filtering runs before
+runners. Its earlier non-editor observation failed because the first touch
+takes Button focus and deliberately skips onClick in pinned View.java. The
+correction observes actual focus gain with the same strict oracle; final
+40466021634 proves focused=true, accepting=false, HRESULT8000ffff and
+unchanged text before normal-editor recovery on both modes/both runners.
+TSF key filtering runs before
 TranslateMessage queues character messages. The unchanged IME35 tests,
 including real Microsoft SendInput conversion and exact native commit, pass
 both modes/both runners in that full run.
@@ -118,6 +123,6 @@ occlusion: a rectangle must span the client's complete bottom edge to become
 bottom rows; a floating overlap has an empty visible IME source frame. The
 real COM probe covers middle/narrow floating rectangles and redocking, while
 the old-target APK checks visible-with-zero-insets content behavior. Standalone
-native CI does not replace the full Android observations above or the pending
-complete zero-failure run with the corrected non-editor fixture and latest
-coordinator-verified runtime prerequisites.
+native CI does not replace the full Android observations. Final40466021634
+contains the corrected focus fixture and verified coordinator process-exit
+freshness, with both complete Windows suites at zero failures.
