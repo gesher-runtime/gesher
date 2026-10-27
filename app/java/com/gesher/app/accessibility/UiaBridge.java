@@ -74,7 +74,7 @@ public final class UiaBridge {
     }
 
     static boolean start() {
-        return !sStopping && load() && nativeStart();
+        return !sStopping && load() && !sStopping && nativeStart();
     }
 
     static boolean screenReader() {

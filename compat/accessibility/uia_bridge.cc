@@ -79,9 +79,11 @@ void RetireWindow(void* value) {
   Epoch epoch;
   {
     std::lock_guard<std::mutex> lock(g_epochs_mutex);
-    auto& entry = g_epochs[hwnd];
-    if (!entry) entry = std::make_shared<WindowEpoch>(g_next_generation++);
-    epoch = entry;
+    auto found = g_epochs.find(hwnd);
+    // No provider/request exists for an unregistered HWND. Inserting a
+    // tombstone here would survive an unsubclassed NCDESTROY and poison reuse.
+    if (found == g_epochs.end()) return;
+    epoch = found->second;
     epoch->alive.store(false, std::memory_order_release);
   }
   g_queries->Retire(epoch);
