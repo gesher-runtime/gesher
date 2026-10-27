@@ -72,6 +72,13 @@ if ($out -match 'capture: (WASAPI shared mode capture on [^\r\n]+)') {
   $failed++
 }
 $env:GESHER_AUDIO_SOURCE = $micWav
+$m3BufferOut = RunTimed "$Dir/media_probe.exe" @('capture-buffers') 15
+$m3BufferCode = $LASTEXITCODE
+foreach ($trace in @($m3BufferOut -split "`n" | Where-Object { $_ -match '^capture buffers' })) {
+  Write-Host "INFO  media3: $($trace.Trim())"
+}
+LineCheck 'media3: a controlled unread capture stall loses frames in the 80ms ring while the configured one-second ring stays lossless' `
+  $m3BufferOut @('capture buffers: bounded small-ring loss and configured-capacity zero loss passed') $m3BufferCode
 $probeRec = Join-Path $m3Tmp 'probe-capture.wav'
 $out = & "$Dir/media_probe.exe" capture $probeRec 2>&1 | Out-String
 $code = $LASTEXITCODE
@@ -111,7 +118,9 @@ $recordChecks = @(
            "${t}audiorecord float stereo 48000 \(builder\): channels 2, read 48000 frames, 750 Hz then 1250 Hz") },
   @{ Name = 'AAudio input (a data callback stream, a blocking read) and an OpenSL ES recorder (an Android simple buffer queue) from an app''s NDK library: the microphone''s tones'
      P = @("${t}ndk aaudio input callback: direction input, rate 48000, 48000 frames, callbacks 50\+, frames read all, xruns 0, 750 Hz then 1250 Hz",
-           "${t}ndk aaudio input read: stereo 16-bit 44100, read 44100 frames, 750 Hz then 1250 Hz",
+           "${t}ndk aaudio input read: stereo 16-bit 44100, read 44100 frames, 750 Hz then 1250 Hz; requested capacity 44100, effective capacity 44100, captured \d+, frames read 44100, xruns 0, lossless true",
+           'AAudio input open trace: 44100 Hz, requested capacity 44100, effective capacity 44100',
+           'AAudio input stop trace: 44100 Hz, capacity 44100, requested 0 frames, returned 0 frames, captured \d+, read 44100, lost 0, xruns 0, timestamp \d+ ns',
            "${t}ndk opensl recorder: state recording, 16000 frames, 10 buffers, position 1 s, 750 Hz then 1250 Hz") },
   @{ Name = 'AAudio input overrun count is cumulative across three stop/start cycles with an unread capture ring'
      P = @("${t}ndk aaudio input overruns: 3 stop/start cycles, cumulative overruns 3\+") },
@@ -141,7 +150,7 @@ $recordChecks = @(
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
-      $_ -match 'AudioRecord (read|stop) trace:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
+      $_ -match 'AudioRecord (read|stop) trace:|AAudio input (open|read|stop) trace:|RecordTest ndk aaudio input read:|MediaRecorder video trace:|RecordTest recorder camera trace:|camera: capture phase trace:|camera native trace:|camera JNI array trace:|camera suspend trace:|\bGC\b|Suspending all threads took|SuspendAll|ResumeAll|ThreadFlip|WaitForGcToComplete'
     } | Select-Object -Unique)) {
     Write-Host "INFO  media3 ($Mode): $($trace.Trim())"
   }

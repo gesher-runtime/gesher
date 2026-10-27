@@ -20,7 +20,9 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <net/if.h>
+#include <netpacket/packet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -47,6 +49,23 @@ struct BionicTimeval {
   int64_t tv_sec;
   int64_t tv_usec;
 };
+
+// Pinned bionic's x86-64/arm64 LP64 ABI. The backend owns Linux-layout
+// objects, so only the call convention crosses the System V/Windows bridge.
+static_assert(sizeof(ifaddrs) == 56 && alignof(ifaddrs) == 8);
+static_assert(offsetof(ifaddrs, ifa_next) == 0 && offsetof(ifaddrs, ifa_name) == 8);
+static_assert(offsetof(ifaddrs, ifa_flags) == 16 && sizeof(ifaddrs::ifa_flags) == 4);
+static_assert(offsetof(ifaddrs, ifa_addr) == 24 && offsetof(ifaddrs, ifa_netmask) == 32);
+static_assert(offsetof(ifaddrs, ifa_ifu) == 40 && offsetof(ifaddrs, ifa_data) == 48);
+static_assert(sizeof(sockaddr_ll) == 20 && offsetof(sockaddr_ll, sll_ifindex) == 4);
+static_assert(offsetof(sockaddr_ll, sll_hatype) == 8 && offsetof(sockaddr_ll, sll_addr) == 12);
+static_assert(sizeof(sockaddr_in) == 16 && offsetof(sockaddr_in, sin_addr) == 4);
+static_assert(sizeof(sockaddr_in6) == 28 && offsetof(sockaddr_in6, sin6_addr) == 8);
+static_assert(offsetof(sockaddr_in6, sin6_scope_id) == 24);
+static_assert(AF_INET == 2 && AF_INET6 == 10 && AF_PACKET == 17);
+
+int BIONIC_SYSV Getifaddrs(ifaddrs** list) { return getifaddrs(list); }
+void BIONIC_SYSV Freeifaddrs(ifaddrs* list) { freeifaddrs(list); }
 
 int BIONIC_SYSV Socket(int domain, int type, int protocol) { return socket(domain, type, protocol); }
 int BIONIC_SYSV Socketpair(int domain, int type, int protocol, int* fds) {
@@ -584,6 +603,8 @@ void RegisterSocket(SymbolTable& t) {
   E("ntohs", Htons);
   E("if_nametoindex", IfNametoindex);
   E("if_indextoname", IfIndextoname);
+  E("getifaddrs", Getifaddrs);
+  E("freeifaddrs", Freeifaddrs);
   t["in6addr_any"] = const_cast<in6_addr*>(&g_in6addr_any);
   t["in6addr_loopback"] = const_cast<in6_addr*>(&g_in6addr_loopback);
   E("poll", Poll);
