@@ -370,6 +370,15 @@ class Env final : public A64::UserCallbacks {
     if (jit != nullptr) jit->SetFpcr(value);
     else fpcr_ = value;
   }
+  uint32_t Fpsr() {
+    A64::Jit* jit = CurrentJit();
+    return jit != nullptr ? jit->GetFpsr() : fpsr_;
+  }
+  void SetFpsr(uint32_t value) {
+    A64::Jit* jit = CurrentJit();
+    if (jit != nullptr) jit->SetFpsr(value);
+    else fpsr_ = value;
+  }
 
   std::optional<std::uint32_t> MemoryReadCode(uint64_t a) override {
     if (!InGuestCode(a)) return std::nullopt;
@@ -485,8 +494,10 @@ class Env final : public A64::UserCallbacks {
     HostFenvScope host_fenv;
     A64::Jit* parent = CurrentJit();
     uint32_t fpcr = parent != nullptr ? parent->GetFpcr() : fpcr_;
+    uint32_t fpsr = parent != nullptr ? parent->GetFpsr() : fpsr_;
     A64::Jit* jit = JitAt(depth_);
     jit->SetFpcr(fpcr);
+    jit->SetFpsr(fpsr);
     uint64_t saved_stack_cur = stack_cur_;
     uint64_t sp = (stack_cur_ - 256 - nstack * 8) & ~uint64_t{15};
     if (sp < reinterpret_cast<uint64_t>(stack_base_) + 0x20000) {
@@ -509,8 +520,12 @@ class Env final : public A64::UserCallbacks {
     last_x1_ = jit->GetRegister(1);
     last_fp_result_ = jit->GetVector(0)[0];
     fpcr_ = jit->GetFpcr();
+    fpsr_ = jit->GetFpsr();
     --depth_;
-    if (parent != nullptr) parent->SetFpcr(fpcr_);
+    if (parent != nullptr) {
+      parent->SetFpcr(fpcr_);
+      parent->SetFpsr(fpsr_);
+    }
     stack_cur_ = saved_stack_cur;
     return result;
   }
@@ -526,6 +541,7 @@ class Env final : public A64::UserCallbacks {
     // Enter() places SP below stack_cur_; _start wants SP == the block.
     A64::Jit* jit = JitAt(depth_);
     jit->SetFpcr(fpcr_);
+    jit->SetFpsr(fpsr_);
     ++depth_;
     for (int i = 0; i < 8; ++i) {
       jit->SetRegister(i, gpr[i]);
@@ -537,6 +553,7 @@ class Env final : public A64::UserCallbacks {
     jit->SetPC(reinterpret_cast<uint64_t>(entry));
     RunGuest(jit);
     fpcr_ = jit->GetFpcr();
+    fpsr_ = jit->GetFpsr();
     --depth_;
     return jit->GetRegister(0);
   }
@@ -634,6 +651,7 @@ class Env final : public A64::UserCallbacks {
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
+  uint32_t fpsr_ = 0;
   size_t depth_ = 0;
   uint8_t* tls_block_ = nullptr;
   uint64_t tls_pointer_ = 0;
@@ -805,6 +823,8 @@ bool InGuestCode(uintptr_t addr) {
 
 uint32_t GuestFpcr() { return ThreadEnv()->Fpcr(); }
 void SetGuestFpcr(uint32_t value) { ThreadEnv()->SetFpcr(value); }
+uint32_t GuestFpsr() { return ThreadEnv()->Fpsr(); }
+void SetGuestFpsr(uint32_t value) { ThreadEnv()->SetFpsr(value); }
 
 void AddVaListFunction(const void* fn, int index) {
   if (fn == nullptr) return;
