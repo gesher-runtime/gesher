@@ -25,7 +25,8 @@ try {
     $exitRun = Aot2Run "$Dir/dalvikvm.exe" ($exitLauncher + 'launch', $exitPackage,
       '--activity', $exitCase.Activity, '--hidden-window', '--keep-task') $exitEnvironment 120
     $exitExpected = "gesher-app: the process of $exitPackage ended (exit code $($exitCase.Code))"
-    $exitMatches = if ($exitCase.Code -eq 0) { $exitRun.Exit -eq 0 } else { $exitRun.Exit -ne 0 }
+    # A timeout sentinel/nonzero crash is not the launcher's explicit failure result.
+    $exitMatches = if ($exitCase.Code -eq 0) { $exitRun.Exit -eq 0 } else { $exitRun.Exit -eq 1 }
     if ($exitMatches -and $exitRun.Out.Contains($exitExpected) -and
         $exitRun.Out.Contains("Exec4 exit app: $($exitCase.Marker)")) {
       Write-Host "PASS  exec4 exit: $($exitCase.Activity) returns fresh app code $($exitCase.Code) and launcher code $($exitRun.Exit)"

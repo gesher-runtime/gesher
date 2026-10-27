@@ -676,16 +676,20 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // A process that dies before it attaches fails what waited for it.
         Thread watch = new Thread(() -> {
             while (true) {
+                int code;
                 synchronized (this) {
                     if (mStarting.get(seq) != pending) return;  // attached
+                    // exitCode consumes the native handle on completion. Keep
+                    // lookup and publication atomic with attach handing it to
+                    // processDied's observer, so two readers cannot consume it.
+                    code = Zygote.exitCode(pid);
+                    if (code != Zygote.STILL_ACTIVE) {
+                        mExitStatus.exited(packageName, seq, pid, code);
+                    }
                 }
-                int code = Zygote.exitCode(pid);
                 if (code != Zygote.STILL_ACTIVE) {
                     SystemServer.log("process " + pid + " for " + packageName
                             + " exited before attaching (exit code " + code + ")");
-                    synchronized (this) {
-                        mExitStatus.exited(packageName, seq, pid, code);
-                    }
                     startFailed(seq, pending);
                     return;
                 }
@@ -991,10 +995,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     if (code == Zygote.STILL_ACTIVE) SystemClock.sleep(250);
                 }
                 if (code != Zygote.STILL_ACTIVE) {
+                    boolean published;
                     synchronized (this) {
-                        mExitStatus.exited(app.packageName, app.startSeq, app.pid, code);
+                        published = mExitStatus.exited(app.packageName, app.startSeq, app.pid, code);
                     }
-                    SystemServer.log(app + " exited with code " + code);
+                    if (published) SystemServer.log(app + " exited with code " + code);
                 }
             }, "exit-code " + app.pid);
             t.setDaemon(true);
