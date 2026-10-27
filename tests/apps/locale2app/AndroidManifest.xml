@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.locale2app" android:versionCode="1" android:versionName="1.0">
+    <application android:label="Locale2" android:localeConfig="@xml/locales_config"
+        android:supportsRtl="true" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true" android:configChanges="locale|layoutDirection">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
+        <activity android:name=".MainActivity$Seed" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Equal" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Replace" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Clear" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Empty" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$NullList" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$FailureSeed" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Failure" android:exported="true" android:configChanges="locale|layoutDirection" />
+        <activity android:name=".MainActivity$Bounds" android:exported="true" android:configChanges="locale|layoutDirection" />
+    </application>
+</manifest>

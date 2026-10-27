@@ -1,0 +1,80 @@
+name: arm64-varargs-scoped
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build actual new loader and shared shim with warnings as errors
+        run: |
+          ninja -C out arm64_elf_test gesher-exec
+          mkdir -p dist-varargs-host
+          cp out/arm64_elf_test.exe out/gesher-exec.exe dist-varargs-host/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-varargs-host
+          path: dist-varargs-host/
+  test:
+    needs: [translator, host]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable real host runtime and download inside CI only
+        shell: pwsh
+        run: |
+          $run = gh api repos/${{ github.repository }}/actions/runs/40498782924 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '8ec4bf3c30160575c8df794ad2ca1406957adc98' -or
+              $run.conclusion -cne 'success') { throw 'Unexpected runtime provenance' }
+          Write-Host "ACTUAL_VARARGS_HOST_RUNTIME run=$($run.id) source=$($run.head_sha)"
+          gh run download 40498782924 -R '${{ github.repository }}' -n windows-x64 -D dist
+          if ($LASTEXITCODE -ne 0) { throw 'Missing immutable host runtime' }
+          New-Item -ItemType Directory -Force legacy | Out-Null
+          Copy-Item -LiteralPath dist/arm64_elf_test.exe -Destination legacy/arm64_elf_test.exe
+          gh run download 40498782924 -R '${{ github.repository }}' -n arm64 -D legacy-arm64
+          if ($LASTEXITCODE -ne 0) { throw 'Missing immutable API2 DLL' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64-varargs-host
+          path: dist
+      - name: Verify original logger, real formatted-output contracts and ABI mismatches
+        shell: pwsh
+        run: |
+          . tests/windows/run-arm64-varargs.ps1 -Dir "$PWD/dist"
+          Copy-Item -LiteralPath dist/gesher_arm64.dll -Destination legacy/gesher_arm64.dll
+          $oldHost = InvokeVarargs "$PWD/legacy/arm64_elf_test.exe" @("$PWD/dist/arm64_varargs_baseline.so") 1
+          Write-Host 'ACTUAL_VARARGS_API_MISMATCH old_host_new_dll exit=1'
+          if ($oldHost -notmatch 'version mismatch' -or
+              $oldHost -match 'guest library loaded\s+ok') { throw 'Old host accepted new private list ABI' }
+          Copy-Item -LiteralPath dist/arm64_elf_test.exe -Destination legacy-arm64/arm64_elf_test.exe
+          $oldDll = InvokeVarargs "$PWD/legacy-arm64/arm64_elf_test.exe" @("$PWD/dist/arm64_varargs_baseline.so") 1
+          Write-Host 'ACTUAL_VARARGS_API_MISMATCH new_host_old_dll exit=1'
+          if ($oldDll -notmatch 'version mismatch' -or
+              $oldDll -match 'guest library loaded\s+ok') { throw 'New host accepted old private list ABI' }
+          Write-Host 'PASS arm64 varargs: actual API2/API3 host-DLL mismatches reject before any guest library runs'
+          exit 0
