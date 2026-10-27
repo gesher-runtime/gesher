@@ -18,10 +18,11 @@ value length and bytes. After tracks come uint32 packet count and each
 packet's uint32 track, int64 timestamp in microseconds, uint32 flags,
 uint32 payload size and actual encoded payload.
 
-Still required before component CI: real typed NDK JNI/ELF/APK callers for
-both ABIs, offset/ownership/lifecycle/error/FD-access controls, both
-interleaved and track-blocked packet arrival, and independent container
-metadata/packet/decoded color/tone checks. The native bridge's ten entries
+Source for real typed NDK JNI/ELF/APK callers now includes both ABIs,
+offset/ownership/lifecycle/error/FD-access controls and both interleaved and
+track-blocked packet arrival. It is uncompiled/unexecuted preparation.
+Independent container metadata/packet/decoded color/tone checks and the
+test79 runner are still required before component CI. The native bridge's ten entries
 and MP4 location source remain unverified. Append, HEIF, B-frame/DTS/CTS
 and advanced metadata contracts remain open and must not be reported as
 covered by these presentation-ordered fixtures.

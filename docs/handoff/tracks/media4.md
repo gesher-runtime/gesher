@@ -209,9 +209,14 @@ F_GETFL implementation is changed.
 CI-only fixture generation source now extracts independently encoded
 H.264/AAC (baseline/no B frames), VP9/Opus, VP8/Vorbis and Opus-only packets
 with ffprobe, with portable typed field/packet binaries and exact JSON
-source/field/packet SHA audits. The generator itself has only been parsed
-locally; it has not run and is not wired into CI until the real native
-callers and independent output verifier are ready. No encoded fixture or
+source/field/packet SHA audits. Source for the same real typed contract now
+exists as two-ABI JNI/ELF callers, core dex and two single-ABI APKs. It
+exercises actual FD mode/ownership/seekability, state/error order, aliased
+AMessage ownership, padded-buffer offsets, interleaved/track-blocked writes
+and WebM timestamp controls. media.yml adds their generation/build sources;
+no new run has been dispatched and nothing was compiled or executed
+locally. The independent output verifier and test79 runner are still
+required before component CI. No encoded fixture or
 sample result is invented by this source preparation.
 
 Track formats retain the actual AOSP AMessage and return independently
