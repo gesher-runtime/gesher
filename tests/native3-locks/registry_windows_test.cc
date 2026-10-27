@@ -50,29 +50,69 @@ int Child(const wchar_t* mode, const wchar_t* path) {
   return 23;
 }
 
-bool RunChild(const wchar_t* mode, const wchar_t* path, PROCESS_INFORMATION* process) {
+struct OwnedChild {
+  PROCESS_INFORMATION process{};
+  HANDLE job = nullptr;
+};
+
+bool RunChild(const wchar_t* mode, const wchar_t* path, OwnedChild* child) {
   wchar_t executable[32768];
   DWORD length = GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
   if (length == 0 || length >= std::size(executable)) return false;
   std::wstring command = L"\"" + std::wstring(executable) + L"\" --child " + mode + L" \"" + path + L"\"";
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
-  if (!CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                       nullptr, nullptr, &startup, process)) return false;
-  DWORD status = WaitForSingleObject(process->hProcess, 10000);
+  child->job = CreateJobObjectW(nullptr, nullptr);
+  if (!child->job) return false;
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!SetInformationJobObject(child->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) return false;
+  // No fixture child executes before it belongs to the owned kill-on-close
+  // job. Keep both handles until exit is confirmed even on timeout/setup error.
+  if (!CreateProcessW(executable, command.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &startup, &child->process)) return false;
+  if (!AssignProcessToJobObject(child->job, child->process.hProcess) ||
+      ResumeThread(child->process.hThread) == static_cast<DWORD>(-1)) return false;
+  DWORD status = WaitForSingleObject(child->process.hProcess, 10000);
   if (status != WAIT_OBJECT_0) {
-    TerminateProcess(process->hProcess, 124);  // Only this fixture's child.
-    WaitForSingleObject(process->hProcess, 2000);
+    bool requested = TerminateProcess(child->process.hProcess, 124) != FALSE;
+    DWORD terminate_error = requested ? ERROR_SUCCESS : GetLastError();
+    DWORD terminated = WaitForSingleObject(child->process.hProcess, 2000);
+    std::fprintf(stderr, "OWNED_REGISTRY_CHILD_TIMEOUT pid=%lu terminate_requested=%d terminate_error=%lu wait=%lu\n",
+                 child->process.dwProcessId, requested, terminate_error, terminated);
+    // CloseChild still owns the job and process; it must confirm final exit.
     return false;
   }
   DWORD code = 0;
-  return GetExitCodeProcess(process->hProcess, &code) && code == 23;
+  return GetExitCodeProcess(child->process.hProcess, &code) && code == 23;
 }
 
-void CloseChild(PROCESS_INFORMATION* process) {
-  if (process->hThread) CloseHandle(process->hThread);
-  if (process->hProcess) CloseHandle(process->hProcess);
-  *process = {};
+void CloseChild(OwnedChild* child) {
+  if (child->job) {
+    if (!CloseHandle(child->job)) {
+      std::fprintf(stderr, "FATAL owned registry child job close failed: %lu\n", GetLastError());
+      ExitProcess(125);
+    }
+    child->job = nullptr;  // Windows terminates any still-live assigned child.
+  }
+  if (child->process.hProcess) {
+    DWORD status = WaitForSingleObject(child->process.hProcess, 0);
+    if (status != WAIT_OBJECT_0) {
+      bool requested = TerminateProcess(child->process.hProcess, 124) != FALSE;
+      DWORD terminate_error = requested ? ERROR_SUCCESS : GetLastError();
+      status = WaitForSingleObject(child->process.hProcess, 2000);
+      std::fprintf(stderr, "OWNED_REGISTRY_CHILD_FINAL_CLEANUP pid=%lu terminate_requested=%d terminate_error=%lu wait=%lu\n",
+                   child->process.dwProcessId, requested, terminate_error, status);
+    }
+    if (status != WAIT_OBJECT_0) {
+      std::fputs("FATAL owned registry child termination incomplete; no cleanup proof\n", stderr);
+      std::fflush(stderr);
+      ExitProcess(126);
+    }
+    CloseHandle(child->process.hProcess);
+  }
+  if (child->process.hThread) CloseHandle(child->process.hThread);
+  *child = {};
 }
 
 std::vector<unsigned char> Bytes(const RegistryState& state) {
@@ -160,7 +200,7 @@ int wmain(int argc, wchar_t** argv) {
         "rejected candidate preserves generation and every state byte");
   registry.Unlock();
 
-  PROCESS_INFORMATION child{};
+  OwnedChild child{};
   bool crashed = RunChild(L"unpublished", path, &child);
   Check(crashed, "actual owned child exits23 holding named mutex before commit");
   if (!crashed) { CloseChild(&child); return 4; }
@@ -175,7 +215,7 @@ int wmain(int argc, wchar_t** argv) {
   bool recovered = registry.Begin(&state) == 0;
   bool saw_child = false;
   if (recovered) {
-    for (const Record& record : state->locks) if (record.pid == static_cast<int32_t>(child.dwProcessId) && record.file == identity) {
+    for (const Record& record : state->locks) if (record.pid == static_cast<int32_t>(child.process.dwProcessId) && record.file == identity) {
       saw_child = true;
     }
   }
