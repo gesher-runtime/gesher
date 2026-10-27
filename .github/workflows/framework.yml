@@ -301,6 +301,13 @@ jobs:
           path: out/framework-res
           key: ${{ steps.res.outputs.cache-primary-key }}
 
+      - name: Build real after-app resource table and require byte-identical internal Java IDs
+        run: |
+          WORK_DIR="$PWD/work" FRAMEWORK_RES_OVERLAY_DIR="$PWD/tests/shared-libraries/after-res" \
+            tools/build-framework-res.sh out/framework-res-after > framework-res-after.log 2>&1 || { tail -50 framework-res-after.log; exit 1; }
+          diff -qr out/framework-res/framework-res-java out/framework-res-after/framework-res-java
+          test "$(sha256sum out/framework-res/framework-res.apk | cut -d' ' -f1)" != "$(sha256sum out/framework-res-after/framework-res.apk | cut -d' ' -f1)"
+          echo 'ACTUAL_AFTER_RESOURCE generated R/Manifest byte-identical; actual resource APK bytes differ'
       - name: Build the framework (generators + javac)
         run: |
           set +e
@@ -402,6 +409,7 @@ jobs:
           cp out/framework/framework-minus-apex.jar dist-framework/framework.jar
           cp out/framework-res/framework-res.apk out/app/gesher-app.jar out/app/build.prop \
             out/app/lifecycle.apk out/app/components.apk out/app/peer.apk out/app/uiapp.apk out/app/dbapp.apk out/app/devsvc.apk out/app/devices.apk out/app/nodevices.apk dist-framework/
+          cp out/framework-res-after/framework-res.apk dist-framework/framework-res-after.apk
           cp out/app/popupapp.apk dist-framework/
           cp out/app/gesher-camera.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
@@ -415,7 +423,7 @@ jobs:
           cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
-          cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
+          cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex dist-framework/
           ls -la dist-framework
 
