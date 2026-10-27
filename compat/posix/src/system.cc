@@ -515,6 +515,7 @@ int memfd_create(const char* name, unsigned int flags) {
                          CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  gesher::record_locks::DescriptorGuard descriptor_guard;
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
   if (fd < 0) CloseHandle(h);
