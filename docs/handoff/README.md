@@ -275,6 +275,9 @@ This merge combines newer exec3 code with the verified profile source, so
 full integration CI is required before another track merge. No controlled
 old-profile/new-profile performance claim is made.
 
+Combined integration ci 40432541082 at 42cc1c0 is running. Do not merge
+another track until its full result has been personally inspected.
+
 | Track | Result read / change | New verification |
 |---|---|---|
 | aot2 | Merged as 4d14466. All 13 track PASS lines per runner, both zero-failure summaries, actual package cleanup and both required TIC-80/Puzzles e2e results read. Remaining contracts assigned to aot3/ADR 0065. | ci 40320549410 at ae75766; head 20650a3 docs only. |
