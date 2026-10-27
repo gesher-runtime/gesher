@@ -269,8 +269,11 @@ the microphone (looped, from its start each time recording starts);
   **121949272899** actually installs ffmpeg through the bounded canonical
   route and builds all three APKs. Package **121949711691** passes actual
   installed oatdump, image/fonts, window/input, install/dexopt,
-  association/shortcuts and full uninstall cleanup. Runtime/regression
-  execution and both e2e results remain pending. Native3 owns the separate
+  association/shortcuts and full uninstall cleanup. E2e **121950424518**
+  (2022) / **121950424399** (2025) each pass four transport fixtures, all
+  ten apps (Just Player/TIC-80/Puzzles required), association/shortcut and
+  `0 unexpected failures`. Full Windows/regression execution remains
+  pending. Native3 owns the separate
   NanoTime monotonic and malloc-pressure accounting gaps.
 
 #### Earlier runs and repairs
