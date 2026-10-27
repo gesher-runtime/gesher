@@ -37,6 +37,22 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Owner-requested checkpoint: work stops above docs-onlyb93b5562511c701b193c4b951738efe1316ee1f3;
+no active own full/scoped CI remains. The latest source1120e8a6c9303890bc5d267286e4cc29c3d24438
+component40524933356 is green, actual jobs122261802698/122261801862 read21scopedPASS
++15graph/0FAIL each. Its completed120s watcher log is
+`C:/work/gesher-ci-review/aot3-shared-probe-40524933356-watch.log`.
+Compiler sourcef4378a98ccbd4d42496d44ba4dd3a7437c128ba0/run40523146557 is green;
+actual122255489323 javac0. Old full40512344714/96b remains RED (1 failure2022,
+4 on2025): active-log sharing plus deviceWeb3teardown/two following launches.
+Web3 observer40531106587 on accepted694 bytes did not reproduce the hang and
+does not resolve it. Next session: retain those failures, import only latest
+accepted integration, review the exact Main-loader/shared-log deltas, then
+complete one coherent full for this changed source when ready. Actual after
+resource/DLC app+image, secondary/staticSDK/factory loaders remain open;
+their source plan is CReview/aot3-after-resource-and-dlc-continuation.md.
+No new full, implementation, merge or release follows this owner checkpoint.
+
 Fresh-image component40524933356 at exact1120e8a6 is green on both Windows:
 actual122261802698/122261801862 each contain21 scoped PASS, all15 real graph
 controls and0FAIL. Main and device now both execute real PCL/DAG libraries,
