@@ -34,6 +34,16 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Current active full diagnostic **40433828877** uses exact source
+`0344cee6c70ecb8603bd7f19bdfd35a3b79fe20b`. It includes the focused Java,
+activation and fixture corrections below, coordinator profile integration
+9dd57f5 (verified startup merge2ba9a11) and the source-only Exec4 environment
+patch. Watch: C:/work/gesher-ci-review/windows4-40433828877-watch.log,
+interval120. No actual runtime result exists yet for these corrections, and
+the independent Exec4 stage remains unverified until its owner reads its CI.
+The earlier full red run below remains diagnostic evidence, not acceptance.
+All C/C++/Java compilation and native/JVM fixtures run only in CI.
+
 Full diagnostic **40417632512** at exact cde1c79 is COMPLETE RED: 28 jobs,
 20 success, six skipped, both Windows jobs failed. Both actual Windows logs
 were read: 2022 job 121919469641 has nine failures (41m20); 2025 job
@@ -196,6 +206,11 @@ Shared edits to review at final handoff (relative to integration 94ccde1):
   display changes. Services connects the Binder display/callback contract.
 - LocaleManagerService samples shared geometry with its configuration sequence
   and installs the initialized Runnable dispatcher for real process changes.
+- InputMethodManagerService now notifies its host after enqueueing the client
+  binding result; the scaled GesherAppDriver installs the same target-SDK
+  compatibility table as normal ActivityThread binding. The source-only Exec4
+  import additionally changes posix_bionic.cc and gesher_exec.cc as documented
+  above; the coordinator owns its separate verification.
 - tests/windows/tracks/35-ime.ps1 retains SendInput, actual composition/candidate
   observations and Enter. The coordinator-approved assertion correction compares
   the exact post-Enter all-kanji editor with the independently logged native
