@@ -220,10 +220,11 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-### media3 (stage 3) — runtime gates pass; combined full CI pending, 2026-10-27
+### media3 (stage 3) — runtime gates pass; full CI blocked by positive internet cases, 2026-10-27
 
-- **Final combined CI 40438975894 is running at
-  0148698211cb5cf2e7d2d5813f4d04f8756f4bdb, not yet verified:** current
+- **Combined CI 40438975894 is complete RED at
+  0148698211cb5cf2e7d2d5813f4d04f8756f4bdb:** all 28 job conclusions are
+  read, **21 success, six skipped, one failed**. Its
   integration **2f8ed7a481e26405f02bdd334d9e05512a0c3129** (docs-only above
   630c20c; coordinator's full 40432541082 at 42cc1c0) is merged.
   Source **06dbe8f** adds the coordinator-approved, three-file test slice
@@ -234,15 +235,14 @@ the microphone (looped, from its start each time recording starts);
   now requires a certificate cause or SSLPeerUnverifiedException; TCP
   timeout/refusal and unrelated handshake errors fail. Existing bounded
   TlsServer is byte-identical to the baseline; no runtime or workflow
-  change is imported, and Web3's pending full CI is not accepted as proof.
+  change is imported, and Web3's separate full CI is not accepted as proof.
   Patch SHA256 c9c8da5caa8b082432b90ef0bae81445d7d9ee3458e0cadd4314a8374e1ea4f3
   and all three result hashes match the source audit. eba9bbf also removes
   duplicate whole GC timing groups by full native timestamp/pid/tid header,
   preserving repeated phase rows and the 64-group/4,096-row bounds. Only
   source/hash checks, PowerShell parsing and a lightweight synthetic log
-  publication check run locally. Full combined CI is required for all
-  37 media3 checks, all four actual certificate rejections, both complete
-  Windows summaries, package and both e2e jobs before this is mergeable.
+  publication check run locally. Full combined CI still has to pass before
+  this is mergeable; no failed case is waived and no rerun is dispatched.
   Main **121974443338** succeeds in 3m53s, compiling time_utils.cc, heap.cc
   and the generated production-block regression and linking its executable,
   dalvikvm and oatdump; both generated block hashes match the earlier
@@ -254,9 +254,36 @@ the microphone (looped, from its start each time recording starts);
   and click/key/WM_CHAR/wheel/resize input, and full uninstall cleanup.
   E2e **121980276382** (2022) / **121980276374** (2025) each pass four
   transport fixtures, all ten apps including Just Player/TIC-80/Puzzles,
-  association and shortcut launch, and `0 unexpected failures`. Full
-  Windows **121979755616** (2022) / **121979755620** (2025) still run;
-  their actual media, certificate and boot checks remain pending.
+  association and shortcut launch, and `0 unexpected failures`.
+- Windows **121979755616** (2022) ends `0 test(s) failed`; Windows
+  **121979755620** (2025) ends `5 test(s) failed`, all net: example.com's
+  positive HTTPS GET throws FileNotFoundException, badssl.com's positive
+  virtual-host HTTPS test times out connecting after 15 seconds, the net
+  aggregate fails, and NetApp single/device each miss `200 Example Domain`
+  after the same FileNotFoundException. The log does not print the HTTP
+  status, so none is inferred. Google HTTPS 204 and real internet TLS1.3
+  with SNI/hostname verification pass on both runners. All four local
+  negative cases pass on both, with actual CertificateExpiredException,
+  hostname SSLPeerUnverifiedException and two trust-anchor failures. All
+  four server stops, root-removal/disposal paths and negative completion
+  are printed on each runner. Further network-test work is coordinated
+  separately; this source remains RED, without a third retry or full-green
+  freeze. It predates the coordinator's separately verified clock/width
+  integration 8922a3e (40434741055); that does not change this run's proof.
+- Actual runtime checks in 40438975894: **37 media3 and 12 part-1 device
+  PASS per runner**, plus all 18 AOT3 and 11 Exec3 checks. Camera single
+  process has 61 accepted/encoded/muxed frames on each; device has **58/60**
+  (2022/2025), zero rejects, queue drops or encoder failures, and the
+  independent decoded **30+ ordered-frame/picture** gate passes in all modes.
+  All original two-second, tone, duration, permission, onClosed, daemon
+  health and actual ART 1,000-race assertions pass unchanged. Original boot
+  criteria pass: interpreter 557/584 ms and JIT 416/437 (2022), interpreter
+  389/413 and JIT 303/333 (2025). There are two unique logged app GC groups
+  on each runner: KernelPreparation/CompactionPause 217,659/221,848 us
+  (2022) and 162,400/165,487 us (2025). These are logged groups, not total
+  process counters. One slow array entry per runner is 122,967/61,723 us,
+  with bodies 10/6 us; no global ThreadCpuNanoTime unimplemented warnings.
+  No single-patch FPS or mremap-optimization claim follows.
 - Candidate source **e8b37b9296e16cfa605b9b2f963bf4d234c17208**, full CI
   **40430522654**, has actual **37 media3 PASS on both Windows runners**.
   Attempt 1 has 28 conclusions: **21 success, six skipped, one failed**.
