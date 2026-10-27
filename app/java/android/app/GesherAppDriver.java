@@ -116,7 +116,6 @@ public final class GesherAppDriver {
         data.config = config;
         data.compatInfo = compat;
         data.disabledCompatChanges = disabledChanges;
-        data.loggableCompatChanges = new long[0];
         thread.mBoundApplication = data;
 
         configController.setConfiguration(config);
