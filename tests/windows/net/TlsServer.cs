@@ -2,6 +2,7 @@
 // stopping a TcpListener does not stop an in-flight SChannel handshake/read.
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -18,13 +19,23 @@ public sealed class GesherNetTlsServer : IDisposable {
     private readonly ConcurrentDictionary<TcpClient, byte> clients = new ConcurrentDictionary<TcpClient, byte>();
     private readonly ConcurrentBag<Task> workers = new ConcurrentBag<Task>();
     private readonly X509Certificate2 certificate;
+    private readonly IReadOnlyDictionary<string, X509Certificate2> virtualHosts;
+    private readonly ConcurrentQueue<string> serverNames = new ConcurrentQueue<string>();
+    private readonly ConcurrentQueue<string> certificateSelections = new ConcurrentQueue<string>();
     private readonly Task accept;
     private int stopped;
     public int Port { get; private set; }
     public int ActiveClients { get { return clients.Count; } }
 
-    public GesherNetTlsServer(X509Certificate2 certificate) {
+    public string[] SeenServerNames { get { return serverNames.ToArray(); } }
+    public string[] CertificateSelections { get { return certificateSelections.ToArray(); } }
+
+    public GesherNetTlsServer(X509Certificate2 certificate) : this(certificate, null) { }
+
+    public GesherNetTlsServer(X509Certificate2 certificate,
+                             IReadOnlyDictionary<string, X509Certificate2> virtualHosts) {
         this.certificate = certificate;
+        this.virtualHosts = virtualHosts;
         listener.Start();
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         accept = Accept();
@@ -48,12 +59,24 @@ public sealed class GesherNetTlsServer : IDisposable {
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             try {
                 using (var ssl = new SslStream(client.GetStream(), false)) {
-                    await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions {
-                        ServerCertificate = certificate,
+                    var authentication = new SslServerAuthenticationOptions {
                         ClientCertificateRequired = false,
                         EnabledSslProtocols = SslProtocols.Tls12,
                         CertificateRevocationCheckMode = X509RevocationMode.NoCheck
-                    }, timeout.Token).ConfigureAwait(false);
+                    };
+                    if (virtualHosts == null) {
+                        authentication.ServerCertificate = certificate;
+                    } else {
+                        authentication.ServerCertificateSelectionCallback = (_, name) => {
+                            string host = name ?? "";
+                            X509Certificate2 selected;
+                            if (!virtualHosts.TryGetValue(host, out selected)) selected = certificate;
+                            serverNames.Enqueue(host);
+                            certificateSelections.Enqueue(host + " => " + selected.Thumbprint);
+                            return selected;
+                        };
+                    }
+                    await ssl.AuthenticateAsServerAsync(authentication, timeout.Token).ConfigureAwait(false);
                     string header = "";
                     byte[] one = new byte[1];
                     while (!header.EndsWith("\r\n\r\n", StringComparison.Ordinal)) {
