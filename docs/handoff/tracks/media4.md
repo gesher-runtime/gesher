@@ -158,8 +158,15 @@ Corrected full ci **40459815375** is running at
 **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
 integration 53898b51's docs. Source 73c20d70 adds the explicit cstdint
 prerequisite and the early exact-object CI compile. Source is frozen;
-docs-only commits may follow. No host compilation/link/runtime acceptance
-is claimed before the corrected run's actual logs are inspected.
+docs-only commits may follow. Main build 122041490613 passes in 20m37s:
+the actual log shows the early bridge object compiled, both gesher-exec and
+dalvikvm linked, and 203 assembly boundaries/zero problems. Media build
+122043516317 passes in 1m3s with both NDK ABI/ELF and APK builds; framework
+122041532403 passes in 6m11s. Actual logs were read. Package 122048294220
+passes all 23 installed-runtime/window/input/uninstall checks; boot-image
+122048132669 passes in 28s. Windows jobs 122048294283 (2022) /
+122048294275 (2025) and e2e 122048949119 / 122048949121 are running.
+No test71/runtime or full-green acceptance yet.
 
 The first source candidate implements only the real NDK AMediaFormat
 subset described in ADR 0064: 21 System V function entries and 152 actual
@@ -194,9 +201,8 @@ and independent ELF executables, and both single-ABI APKs/dex published.
 Framework 122030408664 passes in 10m39s; actual NetApp/services dex logs were
 read. Root independently reviewed the source/ABI/data/wiring and found no
 actionable issue within that bounded review; actual CI exposed the header
-dependency above. No Windows matrix, package or e2e job ran. Host linkage and
-all runtime behavior remain unverified. Merge current integration before a
-new full candidate and read every job, both
+dependency above. No Windows matrix, package or e2e job ran at that source;
+the corrected candidate is tracked above. Read every job, both
 complete zero-failure Windows summaries, all test71 parts, package and
 required e2e before acceptance. The native API baseline metadata and roadmap
 are unchanged. All remaining contracts listed above stay open; later work
