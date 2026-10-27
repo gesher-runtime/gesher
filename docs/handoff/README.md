@@ -158,7 +158,9 @@ local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0073 after reserving web4/0072 for remaining WebView frame/port/proxy/
+ADR is 0075 after reserving native3-wide/0073 for wide/multibyte ABI contracts
+([brief](tracks/native3-wide.md)) and exec4/0074 for explicit exec3 leftovers
+([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/
 certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
 notes below are historical.
 
@@ -251,8 +253,30 @@ zero-failure summaries, actual installed oatdump/window/input/uninstall
 cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures).
 Frozen wip/aot3-cloud head b085b7d adds docs only; the merged code equals the
 verified tree, so no additional integration CI is needed for this merge.
-See [the report](tracks/aot3-cloud.md). Shared-library contexts, secondary
-dex and the separately prepared startup supplement remain open on aot3.
+See [the report](tracks/aot3-cloud.md). Shared-library contexts and secondary
+dex remain open on aot3.
+
+Exec3 is merged as 94ccde1, verified at 51bbfaccddf1fd7f466cab2a493874fbf0e1cb01
+in ci 40410489251. Root read all 28 jobs, all 11 exec3 PASS lines per runner,
+both zero-failure summaries, actual package install/input/uninstall and both
+required nine-app e2e logs (zero unexpected). Combined integration ci
+40416300047 at 94ccde1 is also fully green and personally inspected with the
+same gates. This satisfies rule g for that merge. The intermittent process
+fault recurring in Windows4 remains open on exec4; a green run alone does
+not establish its cause.
+
+The startup-profile stage is merged as 2ba9a11, verified at
+ca46e9967f8994fe329f3f10c88de7141e494f76 in ci 40414859801. Root read all
+28 jobs, all 18 aot3 PASS lines per runner, both zero-failure summaries,
+actual package input/uninstall and both required e2e logs (zero unexpected).
+Frozen wip/aot3-startup head dc6196a adds docs only. Original image-size and
+10%/30ms startup assertions remain unchanged; see [the report](tracks/aot3-startup.md).
+This merge combines newer exec3 code with the verified profile source, so
+full integration CI is required before another track merge. No controlled
+old-profile/new-profile performance claim is made.
+
+Combined integration ci 40432541082 at 42cc1c0 is running. Do not merge
+another track until its full result has been personally inspected.
 
 | Track | Result read / change | New verification |
 |---|---|---|
@@ -262,12 +286,12 @@ dex and the separately prepared startup supplement remain open on aot3.
 | surfaces | Merged as 4f99afd after reading every job, both zero-failure summaries, all 32 surfaces PASS lines per runner, package cleanup and both required TIC-80 e2e results. Remaining contracts assigned to surfaces2. | ci 40307919084 at b1b59a6, attempt 2; head 180782f docs only. |
 | web3 | Agent read ci 40376044459 at 939ec3: all 14 web3 checks pass each runner; 2025 has zero failures, 2022 has only the BOOT profile-vs-speed JIT failure (452/404 ms). Package/both actual e2e and bounded TLS cleanup pass. Earlier 40364697280 timed out in 2025 TLS cleanup and has no zero summary there. | Not mergeable. Root owns repeated boot startup diagnosis; no timing waiver. Remaining WebView contracts belong to web4/ADR 0072 and resolver/socket contracts to net4/ADR 0070. |
 | media3 | Agent read ci 40402212195 at 6c76a90: 35 scoped PASS lines per runner, exactly one camera FPS failure each; actual package and both ten-app e2e pass. JNI trace measures 157-242 ms/CPU0 in ScopedObjectAccess entry, versus 15-19 us in the copy body. Actual ART cancellation/flush race and all onClosed ordering checks pass. | Deeper bounded suspend/flip diagnostics are being prepared in ART 0591/0592; no specific barrier/flip cause is claimed. The unchanged 30+ frames/2 s gate remains open; other media contracts remain on media4/ADR 0064. |
-| exec3 | Agent fully read ci 40405306826 at 87d5ada: all 28 jobs success/skipped, both zero summaries, every exec3 check and actual ART camera-race/device checks, actual package and both e2e pass. This is combined runtime evidence after camera ownership changes, not proof of a specific earlier ntdll fault cause. | Final ci 40410489251 at 51bbfac tests the narrow default-tag liblog follow-up plus f520; pending. Combined integration with cloud profiles must be verified under rule g before a further track merge. |
+| exec3 / exec4 | Exec3 merged as 94ccde1 after root fully read ci 40410489251 at 51bbfac. Combined integration ci 40416300047 at 94ccde1 is fully green and personally inspected. | A Windows4 recurrence after popen-read remains open on exec4. Candidate 40430496516 at 9f25080 corrects a stale CRT environ slot and adds independent regressions; pending. No fault-cause claim from earlier green runs. |
 | native3 foundation | Merged as f677944; all four dalvikvm and four APK scoped PASS lines per runner, both zero-failure summaries, package cleanup and both required Puzzles/TIC-80 e2e logs personally read. Remaining scope continues on wip/native3. | ci 40344682373 at 1e881b5, attempt 2; frozen head 8b511a8 adds docs only. |
 | native3 continuation | Merged as 117629e after personally reading all jobs, both zero-failure summaries, full-code-point pinned Unicode parity, both ABI/APK modes, package cleanup and both required e2e logs. Remaining native3 contracts stay open. | ci 40386670586 at 6f6ac6f, attempt 1; head 9ba4bff docs only. Locked ICU4X reference separately verified in ci 40376822140 at 7ee6b32. |
 | aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |
-| aot3 continuation | Cloud stage merged as 6dc3f03 after root full verification of ci 40408733247 at 05ca072; frozen b085b7d docs only. Actual startup collection also passes independently on both runners in aot3-probes 40410450314, with exact artifact provenance. | Later wip/aot3 source prepares 1971 observed framework/core boot methods and 177 declaring classes, retaining original size/timing gates. Not yet compiled/verified. Shared-library contexts and secondary dex remain open. |
-| native3 width/CPU | Locked width oracle ci 40404677936 at 581e88f is fully read/green, including the old 14 digests and new full-code-point width digest/33 rows. Independent static reviews of width and later CPU clock source found no additional issue. | Full width ci 40404678100 at 581e88f is pending; frozen wip/native3-width excludes later ART CPU-clock patch 0572/95357af, which still needs CI. Non-current pthread clock selection and descriptor-inheritance diagnostics remain explicitly open on native3. |
+| aot3 continuation | Cloud stage merged as 6dc3f03, ci 40408733247/05ca072. Startup stage merged as 2ba9a11, ci 40414859801/ca46e99; root personally verified both full runs. | Combined integration after the startup merge is pending. Shared-library contexts and secondary dex remain open. |
+| native3 width/CPU | Native3-wide's NDK audit found unsigned ARM64 wchar32; the earlier width oracle incorrectly assumed signed values on both ABIs. Root withdrew the width checkbox. Signed x86 evidence remains valid; no complete ARM-width claim from ci 40404678100. Separate unsigned oracle 40423333599/a449d02 is fully inspected. | Corrected per-ABI whole-range tests, exact CPU-clock patch 0572, verified startup input and bounded AAC prepare observation are in full candidate 40430425743/b3ecc85, pending. Earlier 40418638643/b15ecea passes both CPU checks but fails AAC preparation/tone on 2025. Non-current pthread clocks, monotonic ART time and native allocator accounting remain open. |
 | windows4 | Diagnostic full ci 40396019963 at ed94b87 has 14/12 Windows failures in IME/display; package and both e2e pass. Subsequent COM/ACP/TSF epoch/ownership/geometry regressions are clean in actual fast ci 40411795761 at 828dc87 on both runners, with zero raw FAIL and all three native aggregates zero. | Combined full diagnostic 40413109702 at 74d1346 is pending. Real Android/JNI/IME/legacy resize still require runtime evidence; no full-green claim from standalone native fixtures. |
 | release1 | Exact 0.1.0 installer metadata/receipts and CI-only byte promotion prepared. Independent review reproduced/fixed mutable local receipt trust and candidate/publisher attempt drift; all 34 offline tests pass at reviewed 8073a31. | No tag/release/publication. Full branch installer/release CI waits for verified integration/web3; all final gap gates still apply. |
 
