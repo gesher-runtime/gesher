@@ -1,4 +1,5 @@
 # Read-only CI diagnosis: retain every interface and both protocol observations.
+param([switch]$ExpectOriginalMissing)
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'The Net4 executable probe runs only in CI' }
 $missing = 0
 $active = 0
@@ -27,5 +28,10 @@ foreach ($adapter in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInt
   }
 }
 if ($active -eq 0) { throw 'No active Windows network interface observed' }
-if ($missing -ne 0) { throw "The original oracle failed to select an index for $missing active interface(s)" }
-Write-Host "PASS net4 original oracle selects actual indexes for all $active active Windows interfaces"
+Write-Host "INFO net4 original oracle failed index selection for $missing of $active active NDIS interfaces"
+if ($ExpectOriginalMissing -and $missing -eq 0) { throw 'The original unbound-interface error was not reproduced' }
+. (Join-Path $PSScriptRoot 'IfaddrsOracle.ps1')
+[string[]]$rows = @(Get-Net4IfaddrsOracleRows)
+foreach ($row in $rows) { Write-Host "INFO net4 corrected oracle row: $row" }
+if ($rows.Count -lt 3) { throw 'The corrected oracle has fewer than three link/IP records' }
+Write-Host "PASS net4 corrected oracle: $($rows.Count) actual AF_UNSPEC link/IP records; original missing indexes $missing"

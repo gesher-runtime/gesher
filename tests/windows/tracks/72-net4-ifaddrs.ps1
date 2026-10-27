@@ -1,29 +1,7 @@
 # JNI/APK paths are required by 44-native2's new ifaddrs part in both ABIs
 # and both app modes. This standalone ELF uses an independent Windows snapshot.
-$oracleRows = [Collections.Generic.List[string]]::new()
-foreach ($adapter in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
-  if ($adapter.OperationalStatus -ne [Net.NetworkInformation.OperationalStatus]::Up) { continue }
-  $properties = $adapter.GetIPProperties()
-  $index = 0
-  try { $index = $properties.GetIPv4Properties().Index } catch { }
-  if ($index -eq 0) { try { $index = $properties.GetIPv6Properties().Index } catch { } }
-  if ($index -le 0) { throw 'An active Windows interface has no index for the Net4 oracle' }
-  $hardware = $adapter.GetPhysicalAddress().ToString().ToLowerInvariant()
-  if (-not $hardware) { $hardware = '-' }
-  $oracleRows.Add("P $index $hardware")
-  foreach ($unicast in $properties.UnicastAddresses) {
-    $address = $unicast.Address
-    $scope = 0
-    if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) { $family = 2 }
-    elseif ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
-      $family = 10
-      $scope = $address.ScopeId
-    } else { continue }
-    # Strip the textual %scope, while checking its real numeric value separately.
-    $numeric = [Net.IPAddress]::new($address.GetAddressBytes()).ToString()
-    $oracleRows.Add("A $index $family $($unicast.PrefixLength) $numeric $scope")
-  }
-}
+. (Join-Path $PSScriptRoot '../net/IfaddrsOracle.ps1')
+[string[]]$oracleRows = @(Get-Net4IfaddrsOracleRows)
 $oracle = Join-Path $env:RUNNER_TEMP "net4-ifaddrs-$([guid]::NewGuid()).txt"
 [IO.File]::WriteAllLines($oracle, $oracleRows, [Text.UTF8Encoding]::new($false))
 try {
