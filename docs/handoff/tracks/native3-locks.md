@@ -53,3 +53,17 @@ kernel comparator prepares10000 actual OFD mutations and20000 queries over
 independent descriptions using the same core, requiring actual Linux result/
 errno/range/type/PID agreement. No compiler or fixture ran locally; bounded
 source review precedes CI wiring/dispatch of this new core.
+
+Follow-up pure-core source now uses fixed512-record snapshot and514-record
+scratch storage instead of dynamic interval allocations, with explicit
+normalized-range/non-Unlock invariants. Seven zero/full/split/conversion/
+merge capacity outcomes require byte-identical old snapshots after ENOLCK.
+The independent kernel comparator additionally prepares17 signed-limit/EOF/
+relative boundary rows and deterministic seed0x47657368 with exact replay
+inputs on mismatch. Windows peer review found no bounded pure-interval source
+blocker; CI now compiles/runs it on Linux only. The native engine is still
+unwired, so no Windows record-lock acceptance follows. Mixed POSIX/OFD wait
+cycles are separately observed by real Linux worker requests before any wait
+graph implementation can be qualified. Shared registry, unknown-owner/PID
+reuse, close/stdio/spawn lifetimes, signal integration and full runtime gates
+remain mandatory open scope.

@@ -12,6 +12,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  interval-kernel-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/native3-locks
+            compat/posix/src
+      - name: Compile the actual fixed-capacity interval core and independent kernel comparator
+        run: g++ -std=c++17 -Wall -Wextra -Werror tests/native3-locks/range_kernel_oracle.cc -o /tmp/record-lock-range-kernel
+      - name: Compare capacity boundaries and 10000 mutations plus 20000 queries against actual Linux OFD locks
+        run: /tmp/record-lock-range-kernel
   reference:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
