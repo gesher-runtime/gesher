@@ -174,7 +174,7 @@ if (Test-Path "$Dir/mediaapp.apk") {
     $mediaOut
   } @('MediaTest ringtone defaults: ringtone file:.../Gesher_Ring.ogg, notification file:.../Gesher_Notification.ogg, alarm file:.../Gesher_Alarm.ogg',
       'MediaTest ringtone notification: playing true, ended true')
-  Check 'media: AAudio and OpenSL ES from an app''s NDK library (mediaapp.apk''s libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; no input streams yet' {
+  Check 'media: AAudio and OpenSL ES from an app''s NDK library (mediaapp.apk''s libmedia_ndk_test.so): a data callback stream, a blocking-write stream, a buffer queue player, a player of an asset by file descriptor; input refused without RECORD_AUDIO (media3)' {
     $global:LASTEXITCODE = $mediaExit
     $mediaOut
   } @('MediaTest ndk aaudio callback: rate 48000, channels 2, float 1, state AAUDIO_STREAM_STATE_STOPPED, burst ok, frames ok',
@@ -262,23 +262,34 @@ public static class GesherMediaCapture {
   }
   # Runs videoapp.apk in a window shown off the desktop; when it says its surfaces are
   # ready, reads the window back at the TextureView's and the SurfaceView's centers.
-  function RunVideoApp([string] $tag, [string[]] $extra) {
+  function RunVideoApp([string] $tag, [string[]] $extra, [bool] $device = $false) {
     $bcpVideo = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+    $dvmVideo = @("-Xbootclasspath:$bcpVideo", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false')
     $log = Join-Path $mediaTmp "videoapp-$tag.log"
     $env:GESHER_AUDIO_CAPTURE = Join-Path $mediaTmp "video-$tag"
+    $captureDir = $env:GESHER_AUDIO_CAPTURE
     New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+    $appLog = $null
+    $entry = @('com.gesher.app.Main', (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
+    if ($device) {
+      # A fresh device inherits this run's capture and decoder environment.
+      $null = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'shutdown') 2>&1 | Out-String
+      $appLog = Join-Path $root 'logs/com.gesher.videoapp.log'
+      # The package log normally appends: never accept an earlier run's lines.
+      if (Test-Path -LiteralPath $appLog) { Remove-Item -LiteralPath $appLog -Force }
+      $entry = @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
+    }
     # hwui's SkiaGL pipeline over ANGLE for the 'gl' run (docs/angle.md).
     if ($tag -eq 'gl') { $env:GESHER_HWUI_RENDERER = 'skiagl' }
     $p = Start-Process -FilePath "$Dir/dalvikvm.exe" -PassThru -NoNewWindow -RedirectStandardOutput $log `
-      -RedirectStandardError "$log.err" -ArgumentList (@("-Xbootclasspath:$bcpVideo",
-        "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false', 'com.gesher.app.Main',
-        (NoDrive "$Dir/videoapp.apk"), '--hidden-window') + $extra)
+      -RedirectStandardError "$log.err" -ArgumentList ($dvmVideo + $entry + $extra)
     $read = $null
     $closed = $false
     $deadline = (Get-Date).AddSeconds(300)
     while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 500
       $text = (Get-Content -Raw $log -ErrorAction SilentlyContinue) + (Get-Content -Raw "$log.err" -ErrorAction SilentlyContinue)
+      if ($appLog) { $text += "`n" + (Get-Content -LiteralPath $appLog -Raw -ErrorAction SilentlyContinue) }
       $m = [regex]::Match($text, 'VideoTest surfaces ready: texture view center (\d+),(\d+), surface view center (\d+),(\d+)')
       $h = [regex]::Match($text, 'first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
       # The app's checks are done: closing its window ends the run (WM_CLOSE finishes it).
@@ -296,10 +307,33 @@ public static class GesherMediaCapture {
         }
       }
     }
-    if (-not $p.HasExited) { $p.Kill($true); Write-Host "INFO  media: videoapp.apk ($tag) did not end within 300 s" }
-    Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_HWUI_RENDERER -ErrorAction SilentlyContinue
+    $timedOut = -not $p.HasExited
+    if ($timedOut) { $p.Kill($true); $p.WaitForExit(); Write-Host "INFO  media: videoapp.apk ($tag) did not end within 300 s" }
     $text = (Get-Content -Raw $log -ErrorAction SilentlyContinue) + (Get-Content -Raw "$log.err" -ErrorAction SilentlyContinue)
-    return @{ Out = $text; Exit = $(if ($p.HasExited) { $p.ExitCode } else { -1 }); Read = $read }
+    $captureText = $text
+    if ($appLog) {
+      $captureText = Get-Content -LiteralPath $appLog -Raw -ErrorAction SilentlyContinue
+      $text += "`n" + $captureText
+    }
+    # A device has several processes. Measure the app's own capture, never a
+    # longer silence file belonging to its launcher or system server.
+    $captureMatch = [regex]::Match("$captureText", 'audio output: capture to ([^\r\n]+\.wav) \(48000')
+    $capturePath = if ($captureMatch.Success) { $captureMatch.Groups[1].Value } else { $null }
+    $code = if ($timedOut) { -1 } else { $p.ExitCode }
+    if ($device) {
+      # This fixture installs its APK. Leave the package registry as it was
+      # before this run so later install/list/uninstall checks stay isolated.
+      $cleanup = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'uninstall', 'com.gesher.videoapp') 2>&1 | Out-String
+      $cleanupCode = $LASTEXITCODE
+      $text += "`n" + $cleanup
+      if ($cleanupCode -ne 0 -or $cleanup -notmatch 'gesher-app: uninstalled com\.gesher\.videoapp') {
+        Write-Host "INFO  media: videoapp.apk ($tag) cleanup failed (exit $cleanupCode)"
+        if ($code -eq 0) { $code = -1 }
+      }
+      $null = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'shutdown') 2>&1 | Out-String
+    }
+    Remove-Item Env:GESHER_AUDIO_CAPTURE, Env:GESHER_HWUI_RENDERER -ErrorAction SilentlyContinue
+    return @{ Out = $text; Exit = $code; Read = $read; CaptureDir = $captureDir; CapturePath = $capturePath }
   }
   # A window color near the expected one (each channel within 40).
   function NearColor([string] $hex, [int] $want) {
@@ -330,10 +364,10 @@ public static class GesherMediaCapture {
     $global:LASTEXITCODE = $videoExit
     $videoOut
   } @('VideoTest extractor h264.mp4: 2 tracks [video/avc 320x240, audio/mp4a-latm 44100 Hz 2 ch], duration ok, csd-0 SPS true, csd-1 true, 60 samples, 4 sync, Annex B true, last at 1966 ms')
-  Check 'media: MediaCodecList in videoapp.apk: the decoders this machine has (H.264 through Media Foundation, the audio decoders), their capabilities; no encoders' {
+  Check 'media: MediaCodecList in videoapp.apk: the decoders this machine has (H.264 through Media Foundation, the audio decoders), their capabilities; the H.264 encoder (media3)' {
     $global:LASTEXITCODE = $videoExit
     $videoOut
-  } @('VideoTest codec list: avc decoder c2.gesher.avc.decoder, aac decoder c2.gesher.aac.decoder, avc encoder null, 1920x1080 true, flexible YUV true, profiles 5, software true')
+  } @('VideoTest codec list: avc decoder c2.gesher.avc.decoder, aac decoder c2.gesher.aac.decoder, avc encoder c2.gesher.avc.encoder, 1920x1080 true, flexible YUV true, profiles 5, software true')
   Check 'media: MediaCodec in videoapp.apk: H.264 decoded to I420 ByteBuffers and an Image (synchronous), with a callback (asynchronous), a seek with flush; every frame in order, each quarter''s color; the AAC track to PCM' {
     $global:LASTEXITCODE = $videoExit
     $videoOut
@@ -385,6 +419,111 @@ public static class GesherMediaCapture {
       $videoOut
     } @("VideoTest codec $($c.Name) sync: c2.gesher.$($c.Name).decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red")
   }
+
+  # --- media3 (ADR 0059): part 1's leftovers -------------------------------------------
+  # MPEG-4 part 2 and H.263: Media Foundation's decoders where the machine has them, the
+  # m4v_h263 software decoder otherwise (the soft-only run below checks that one).
+  $m4vLines = @{
+    mpeg4 = @('VideoTest codec mpeg4 sync: c2.gesher.mpeg4.decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red')
+    h263 = @('VideoTest codec h263 sync: c2.gesher.h263.decoder, 352x288 color 19, ', ' frames, ordered true, colors [red, lime, blue, white], image 35 352x288 3 planes red')
+  }
+  function CheckM4v([string] $mode, [string] $out, [int] $exit) {
+    Check "media: MediaCodec in videoapp.apk ($mode): MPEG-4 part 2 from an MP4 clip decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $exit
+      $out
+    } $m4vLines.mpeg4
+    Check "media: MediaCodec in videoapp.apk ($mode): H.263 (352x288) from a 3GP clip decoded to I420 ByteBuffers and an Image; every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $exit
+      $out
+    } $m4vLines.h263
+  }
+  function CheckMedia3Playback([string] $Mode, $Run) {
+    $videoOut = $Run.Out
+    $videoExit = $Run.Exit
+    $prefix = if ($Mode -eq 'single process') { 'media' } else { "media ($Mode)" }
+    CheckM4v ("the machine's decoders; $Mode") $videoOut $videoExit
+    # WebM with audio: MatroskaExtractor's tracks and seeking, the audio through MediaCodec.
+    Check "${prefix}: WebM with audio in videoapp.apk (MatroskaExtractor): VP9 + Opus and VP8 + Vorbis tracks, the duration, a seek to the previous sync sample, the Opus and Vorbis tracks decoded by MediaCodec (each tone's frequency and length)" {
+      $global:LASTEXITCODE = $videoExit
+      $videoOut
+    } @('VideoTest webm vp9_opus: tracks [video/x-vnd.on2.vp9 320x240, audio/opus 48000 Hz 2 ch], duration ok; seek to 1.1 s: previous sync at 1000 ms (sync true), back to 0 ms; audio 48000 Hz 2 ch, 2 s, 880 Hz',
+        'VideoTest webm vp8_vorbis: tracks [video/x-vnd.on2.vp8 320x240, audio/vorbis 44100 Hz 2 ch], duration ok; seek to 1.1 s: previous sync at 1000 ms (sync true), back to 0 ms; audio 44100 Hz 2 ch, 2 s, 660 Hz')
+    Write-Host "INFO  media: $((($videoOut -split "`n") | Where-Object { $_ -match 'VideoTest webm \w+ \(info\)' } | ForEach-Object { $_.Trim() }) -join '; ')"
+    # The software decoders through MediaPlayer (into a TextureView; WebM's audio with
+    # them) and MediaMetadataRetriever.
+    Check "${prefix}: MediaPlayer in videoapp.apk plays the software decoders' clips into a TextureView: VP9 + Opus and VP8 + Vorbis WebM, VP8, AV1, H.265; the size, 30+ frames shown, the frame at 1.25 s blue, completion" {
+      $global:LASTEXITCODE = $videoExit
+      $videoOut
+    } @('VideoTest player vp9_opus: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+        'VideoTest player vp8_vorbis: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+        'VideoTest player vp8: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+        'VideoTest player av1: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)',
+        'VideoTest player hevc: size 320x240, duration ok, frames shown 30+, completed true (at 1.25 s: blue)')
+    Check "${prefix}: MediaMetadataRetriever in videoapp.apk over the software decoders' clips: the video size, the audio track, the frame at 1.25 s (VP9/Opus and VP8/Vorbis WebM, VP8, AV1, H.265)" {
+      $global:LASTEXITCODE = $videoExit
+      $videoOut
+    } @('VideoTest retriever vp9_opus: video 320x240, audio yes, at 1.25 s closest 320x240 blue',
+        'VideoTest retriever vp8_vorbis: video 320x240, audio yes, at 1.25 s closest 320x240 blue',
+        'VideoTest retriever vp8: video 320x240, audio null, at 1.25 s closest 320x240 blue',
+        'VideoTest retriever av1: video 320x240, audio null, at 1.25 s closest 320x240 blue',
+        'VideoTest retriever hevc: video 320x240, audio null, at 1.25 s closest 320x240 blue')
+    # WebM's audio reaches the output through MediaPlayer: the 880 Hz (Opus) and the 660 Hz
+    # (Vorbis) tones, 2 s each, in the run's capture.
+    $videoWav = if ($Run.CapturePath) { Get-Item -LiteralPath $Run.CapturePath -ErrorAction SilentlyContinue }
+      elseif ($Mode -eq 'single process') {
+        Get-ChildItem $Run.CaptureDir -Filter 'audio-*.wav' -ErrorAction SilentlyContinue |
+          Sort-Object Length | Select-Object -Last 1
+      } else { $null }
+    $webmSounds = if ($null -ne $videoWav) { MediaSounds $videoWav.FullName } else { @{ Text = 'no capture'; Sounds = @() } }
+    $found = @(foreach ($want in 880, 660) {
+      $webmSounds.Sounds | Where-Object { [math]::Abs($_.Hz - $want) -le $want * 0.02 -and [math]::Abs($_.Duration - 2.0) -le 0.1 } | Select-Object -First 1
+    })
+    if ($found.Count -eq 2) {
+      Write-Host "PASS  ${prefix}: MediaPlayer's WebM audio reaches the output (the capture has the Opus clip's 880 Hz and the Vorbis clip's 660 Hz tones, 2 s each)"
+    } else {
+      Write-Host "FAIL  ${prefix}: MediaPlayer's WebM audio reaches the output (880 Hz and 660 Hz tones of 2 s; found $($found.Count))"
+      Write-Host $webmSounds.Text
+      $script:failed++
+    }
+
+  }
+  CheckMedia3Playback 'single process' $video
+  # The software decoders alone: the same exact assertions in both process modes.
+  $env:GESHER_VIDEO_DECODERS = 'soft'
+  $soft = RunVideoApp 'soft' @('--ez', 'codecsOnly', 'true')
+  Remove-Item Env:GESHER_VIDEO_DECODERS
+  function CheckMedia3Soft([string] $Mode, $soft) {
+    $prefix = if ($Mode -eq 'single process') { 'media' } else { "media ($Mode)" }
+    Write-Host "INFO  media: soft-only run: $((($soft.Out -split "`n") | Where-Object { $_ -match 'GesherMedia.*video decoders' } | Select-Object -First 1))"
+    Check "${prefix}: GESHER_VIDEO_DECODERS=soft lists the software decoders only (libavc H.264, m4v_h263 MPEG-4 part 2 and H.263, libvpx, libdav1d, libhevc)" {
+      $global:LASTEXITCODE = $soft.Exit
+      $soft.Out
+    } @('video decoders: video/x-vnd.on2.vp8 (soft), video/x-vnd.on2.vp9 (soft), video/av01 (soft), video/hevc (soft), video/avc (soft), video/mp4v-es (soft), video/3gpp (soft)', 'VideoTest done')
+    Check "${prefix}: MediaCodec in videoapp.apk (software only): H.264 through libavc (B-frames reordered), every frame in order, each quarter's color" {
+      $global:LASTEXITCODE = $soft.Exit
+      $soft.Out
+    } @('VideoTest codec h264 sync: c2.gesher.avc.decoder, 320x240 color 19, 60 frames, ordered true, colors [red, lime, blue, white], image 35 320x240 3 planes red')
+    CheckM4v ("software only; $Mode") $soft.Out $soft.Exit
+  }
+  CheckMedia3Soft 'single process' $soft
+
+  # Repeat the new part-1 behaviors through the real device launcher. Each
+  # run starts a fresh server so its decoder selection/capture environment
+  # cannot be inherited from a previous single-process or device run.
+  $videoDevice = RunVideoApp 'device' @() $true
+  Check 'media (Gesher device): videoapp runs in its app process through the system server' {
+    $global:LASTEXITCODE = $videoDevice.Exit
+    $videoDevice.Out
+  } @('through the system server', 'startActivityAndWait: result 0', 'the process of com.gesher.videoapp ended (exit code 0)', 'VideoTest done')
+  CheckMedia3Playback 'Gesher device' $videoDevice
+  $env:GESHER_VIDEO_DECODERS = 'soft'
+  $softDevice = RunVideoApp 'device-soft' @('--ez', 'codecsOnly', 'true') $true
+  Remove-Item Env:GESHER_VIDEO_DECODERS
+  Check 'media (Gesher device): software-only videoapp runs in its app process through the system server' {
+    $global:LASTEXITCODE = $softDevice.Exit
+    $softDevice.Out
+  } @('through the system server', 'startActivityAndWait: result 0', 'the process of com.gesher.videoapp ended (exit code 0)', 'VideoTest done')
+  CheckMedia3Soft 'Gesher device' $softDevice
 } else {
   Write-Host 'INFO  media: videoapp.apk not in the build output; its checks skipped'
 }
