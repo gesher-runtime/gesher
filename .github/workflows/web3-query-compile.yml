@@ -1,0 +1,29 @@
+name: web3-query-compile
+on:
+  push:
+    branches: ['wip/web3-query-bound']
+    paths:
+      - '.github/workflows/web3-query-compile.yml'
+      - 'compat/accessibility/query_pool.*'
+      - 'compat/accessibility/uia_bridge.cc'
+      - 'cmake/webview.cmake'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: web3-query-compile-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  LLVM_MINGW_TAG: '20261006'
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Compile actual accessibility objects with their production Werror flags
+        run: ninja -C out gesher_web3
