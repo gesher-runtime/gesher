@@ -1,6 +1,7 @@
 # 0077 - Expose the linked UnixCopyFile native
 
-**Status:** proposed, 2026-10-27. No CI acceptance yet.
+**Status:** accepted bounded native-registration/copy slice, 2026-10-27,
+full40550474909 at944a0eeffe5157d662f0278e992c421eebc86255.
 
 ## Context
 
@@ -37,7 +38,12 @@ Primary links:
 They were fetched from the tag on android.googlesource.com; no local AOSP
 checkout/build or native/JVM fixture execution was used.
 
-Compilation, public copy and native runtime checks are pending. Short-write
+Compilation and all15 actual public/native copy groups pass on both Windows
+in full40550474909:28jobs22success/6skip, both whole suites0, installed
+package23 and both ten-app/transport/association/shortcut e2e0. The integration
+worker read every genuine child group and final verdict, not just the shell's
+aggregate PASS. [Exact evidence](../handoff/tracks/libcore-io-final.md).
+Short-write
 and EINTR loops retain upstream source but have no induced-runtime proof in
 this slice. This does not establish completeness of all libcore name-found
 natives, filesystem metadata, symbolic-link or asynchronous cancellation
