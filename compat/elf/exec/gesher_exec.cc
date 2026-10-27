@@ -25,6 +25,7 @@
 #include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <io.h>
 #include <malloc.h>
@@ -378,13 +379,17 @@ int RunArguments(const std::vector<std::string>& args) {
     }
     if (ex::ApplySpawnActions(request) != 0) return 127;
     ex::Launch launch;
-    if (ex::PrepareLaunchProgramInPath(request.program, request.argv, "", request.search,
-                                       request.search_path, &launch) != 0) return 127;
+    int prepared_error = ex::PrepareLaunchProgramInPath(request.program, request.argv, "", request.search,
+                                                       request.search_path, &launch);
+    if (prepared_error != 0) {
+      errno = prepared_error;
+      return ex::SpawnFailure("program lookup", request.program.c_str());
+    }
     if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
         (launch.kind == "script" && launch.application == ex::LauncherPath())) {
       int count = 0;
       wchar_t** prepared = CommandLineToArgvW(launch.command_line.c_str(), &count);
-      if (prepared == nullptr) return 127;
+      if (prepared == nullptr) return ex::SpawnFailure("prepared arguments", request.program.c_str());
       std::vector<std::string> next;
       for (int i = 1; i < count; ++i) next.push_back(ex::Narrow(prepared[i]));
       LocalFree(prepared);

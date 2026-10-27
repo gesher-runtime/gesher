@@ -86,4 +86,8 @@ inline bool DecodeSpawn(const std::vector<std::string>& args, SpawnRequest* out)
 // action, as pinned bionic spawn.cpp; zero after successful child setup.
 int ApplySpawnActions(const SpawnRequest& request);
 
+// Optional diagnostics retain the original child127 contract.
+int SpawnFailure(const char* operation, const char* path = "", int fd = -1,
+                 int new_fd = -1, int action = -1);
+
 }  // namespace gesher::exec

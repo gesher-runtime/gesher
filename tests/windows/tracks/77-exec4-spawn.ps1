@@ -1,4 +1,7 @@
 # Pinned bionic action/exec errors are real child127, after spawn0/PID.
+$execSpawnOldTrace = $env:GESHER_SPAWN_TRACE
+try {
+$env:GESHER_SPAWN_TRACE = '1'
 foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
   $execSpawnProgram = NoDrive "$Dir/exec4-spawn-$execSpawnAbi"
   $execSpawnWork = Join-Path $root ("exec4-spawn-$execSpawnAbi-" + [guid]::NewGuid().ToString('N'))
@@ -34,3 +37,4 @@ foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
     'PASS  spawn no-console: raw stdin -2, spawn0, actual child',
     'status0x2a00, parent unchanged')
 }
+} finally { $env:GESHER_SPAWN_TRACE = $execSpawnOldTrace }

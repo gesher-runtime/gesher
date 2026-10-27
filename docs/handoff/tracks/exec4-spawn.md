@@ -79,6 +79,13 @@ The first standalone Windows2025 step exits1 without output and is not
 startup evidence. Corrected probe packaging links libc++ statically, records
 exit codes, compares console/GUI subsystem startup and disassembles the
 actual failed CI launcher inside CI. No production fix is inferred yet.
+Scoped40517826361/ef5a90ba compiled the static console/GUI probes, then failed
+at inspection because released executables are stripped and llvm-nm reports
+no symbols. No Windows startup step ran. The corrected inspection uses the
+failed run's real dalvikvm.map and corresponding binary for the same compiled
+bionic wrapper; that is not a Gesher-exec link-map proof. New opt-in launcher
+diagnostics distinguish symbol lookup, flag restore/sweep, individual actions
+and later program lookup, preserving child127 and all original assertions.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
