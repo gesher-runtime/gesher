@@ -14,6 +14,15 @@ set(_media "${CMAKE_SOURCE_DIR}/compat/media")
 # AOSP's extractors and the open codecs (cmake/aosp/media_codecs.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/media_codecs.cmake)
 
+# Media4's NDK format bridge has no ART/JNI dependency. The actual pinned
+# AMediaFormat backend is shared by native processes and app libraries.
+add_library(gesher_media_format OBJECT ${_media}/ndk/media_format.cc)
+target_link_libraries(gesher_media_format PUBLIC stagefright_foundation gesher_bionic)
+target_compile_options(gesher_media_format PRIVATE -Wall -Wextra -Werror)
+set_target_properties(gesher_media_format PROPERTIES CXX_STANDARD 23)
+target_link_libraries(dalvikvm PRIVATE gesher_media_format)
+target_link_libraries(gesher-exec PRIVATE gesher_media_format)
+
 set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
   ${_media}/audio/shared_state.cc

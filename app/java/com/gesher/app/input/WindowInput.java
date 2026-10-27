@@ -42,6 +42,8 @@ public final class WindowInput implements AutoCloseable {
   public static final int EVENT_VISIBILITY = 16;
   /** A press outside a window watching outside touches: published as ACTION_OUTSIDE. */
   public static final int EVENT_OUTSIDE = 17;
+  /** Top-level activation, which need not change the existing keyboard focus. */
+  public static final int EVENT_ACTIVATED = 18;
 
   /** gesher::WindowEvent's modifiers. */
   public static final int MODIFIER_SHIFT = 1;
@@ -54,6 +56,9 @@ public final class WindowInput implements AutoCloseable {
   public static final int TEXT_COMPOSE = 2;
   public static final int TEXT_COMPOSE_END = 3;
   public static final int TEXT_EDITOR_ACTION = 4;
+  public static final int DOCUMENT_REPLACE = 5, DOCUMENT_SELECT = 6;
+  public static final int DOCUMENT_COMPOSITION_RANGE = 7, DOCUMENT_COMPOSITION_END = 8;
+  public static final int DOCUMENT_COMPOSITION_TEXT = 9;
 
   /**
    * Text for the window's focused editor (docs/input.md, "Text input"), in order with the
@@ -69,6 +74,8 @@ public final class WindowInput implements AutoCloseable {
      */
     void onTextEvent(WindowInput input, int seq, int kind, String text, int cursor,
         int targetStart, int targetEnd);
+    default void onDocumentEdit(WindowInput input, int seq, int kind, String text,
+        int epoch, int revision, int start, int end) { input.finishTextEvent(seq); }
   }
 
   /** Window events that are not input, and focus changes. */
@@ -148,14 +155,38 @@ public final class WindowInput implements AutoCloseable {
    * Enter performs (0: Enter is a key).
    */
   public synchronized void setTextInput(boolean active, boolean ime, int enterAction) {
+    setTextInput(active, ime, enterAction, 0);
+  }
+
+  public synchronized void setTextInput(boolean active, boolean ime, int enterAction, int epoch) {
     long ptr = mPtr;
-    if (ptr != 0) nSetTextInput(ptr, active, ime, enterAction);
+    if (ptr != 0) nSetTextInput(ptr, active, ime, enterAction, epoch);
+  }
+
+  /** A complete extracted UTF-16 snapshot; start/end are relative to its offset. */
+  public synchronized void setDocument(String text, int start, int end, int offset,
+      int epoch, int revision, boolean available) {
+    long ptr = mPtr;
+    if (ptr != 0) nSetDocument(ptr, text, start, end, offset, epoch, revision, available);
+  }
+
+  /** Real CursorAnchorInfo bounds in client pixels, keyed to editor/text identity. */
+  public synchronized void setTextGeometry(int epoch, int start, String text, int[] rectangles) {
+    long ptr = mPtr;
+    if (ptr != 0) nSetGeometry(ptr, epoch, start, text, rectangles);
+  }
+
+  /** Explicit fixture only: loads the CI-specified native Windows text service. */
+  public int runTextServiceTest() {
+    long ptr;
+    synchronized (this) { ptr = mPtr; }
+    return ptr != 0 ? nRunTextServiceTest(ptr) : -1;
   }
 
   /** The editor's caret in client pixels: the system caret and the IME's windows follow it. */
-  public synchronized void setCaret(int x, int y, int width, int height) {
+  public synchronized void setCaret(int x, int y, int width, int height, int epoch) {
     long ptr = mPtr;
-    if (ptr != 0) nSetCaret(ptr, x, y, width, height);
+    if (ptr != 0) nSetCaret(ptr, x, y, width, height, epoch);
   }
 
   /** Ends the IME's composition: committed, or cancelled. */
@@ -244,6 +275,13 @@ public final class WindowInput implements AutoCloseable {
     finishTextEvent(seq);
   }
 
+  private void onDocumentEdit(int seq, int kind, String text, int epoch, int revision,
+      int start, int end) {
+    TextListener listener = mTextListener;
+    if (listener != null) listener.onDocumentEdit(this, seq, kind, text, epoch, revision, start, end);
+    else finishTextEvent(seq);
+  }
+
   private long ptr() {
     if (mPtr == 0) {
       throw new IllegalStateException("closed");
@@ -261,8 +299,12 @@ public final class WindowInput implements AutoCloseable {
   private static native boolean nPostMessage(long hwnd, int msg, long wParam, long lParam);
   private static native long nClientToScreen(long hwnd, int x, int y);
   private static native void nSetTextInput(long ptr, boolean active, boolean ime,
-      int enterAction);
-  private static native void nSetCaret(long ptr, int x, int y, int width, int height);
+      int enterAction, int epoch);
+  private static native void nSetDocument(long ptr, String text, int start, int end,
+      int offset, int epoch, int revision, boolean available);
+  private static native void nSetGeometry(long ptr, int epoch, int start, String text, int[] rectangles);
+  private static native int nRunTextServiceTest(long ptr);
+  private static native void nSetCaret(long ptr, int x, int y, int width, int height, int epoch);
   private static native void nCompleteComposition(long ptr, boolean cancel);
   private static native void nFinishTextEvent(long ptr, int seq);
   private static native int nShowTouchKeyboard(long ptr, boolean show);

@@ -96,6 +96,17 @@ public final class GesherWebView {
         }
     }
 
+    /**
+     * The HWND of a WebView's WebView2 window (its container), or 0: UI Automation shows
+     * WebView2's own tree there (accessibility, ADR 0058).
+     */
+    public static long containerHwnd(android.webkit.WebView view) {
+        Object p = view != null ? view.getWebViewProvider() : null;
+        if (!(p instanceof GesherWebViewProvider)) return 0;
+        WebView2Host host = ((GesherWebViewProvider) p).host();
+        return host != null ? host.containerHwnd() : 0;
+    }
+
     /** The HWND of the Win32 window the view is attached to, or 0. */
     static long hwndOf(View view) {
         WindowSession session = WindowSession.get();
