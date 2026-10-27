@@ -57,15 +57,44 @@ The first surfaces stage merged as 4f99afd after full ci40307919084
 attempt2; all its retained graphics limits remain assigned here. No broad
 Surface2 roadmap row is closed by the first bounded correction below.
 
-Source-only work is in C:\work\gesher-media4-invalidation on
+The in-progress correction is in C:\work\gesher-media4-invalidation on
 wip/media4-invalidation, based on the accepted Windows integration6297e80a
 and Media4's separate format/OpenSL/native/AAudio candidate. No compiler or
 native/JVM/C# fixture is run locally. Root completed bounded source review
 of exact d239a7e38658ab2853a1344ccf5f893cba28c8bf after three review fixes.
-Full ci40507882249 is running at06d30d403481d3833f0c7d5f99db456841b72062;
-the only later change above reviewed d239 is integration10309b0a's
-services3.md documentation. No runtime acceptance is claimed yet. The
-source remains frozen while the prescribed interval120 watch runs.
+Full ci40507882249 is complete RED at
+06d30d403481d3833f0c7d5f99db456841b72062, with20 successful jobs, six skipped
+and two failed Windows suites. Root reviewed exact d239; only integration
+10309b0a's services3.md documentation was added before that full. Source06
+remains immutable evidence, with no unchanged rerun or inventory acceptance.
+Both completed Windows logs and all five critical test/package/e2e logs
+were read. Windows2022 ends4 test(s) failed and2025 ends2, exclusively new
+test80. All seven production-gate controls and prior Media4 format10,
+OpenSL16 and AAudio16 PASS lines pass on each host. Real x86 phase captures
+pass on2025 in both modes. On2022 the phase1 marker is visibly interleaved
+with native stderr traces, so the helper never takes either phase capture;
+this is not a failed pixel comparison. Both ARM modes crash on both hosts
+before the native ABI marker, with approximate guest pc2544 in
+libsurfacegl.so and startPhases+92/pc2400. Neither the missing marker nor the
+guest-read label alone proves which ordinary call failed.
+
+Package122223068647 passes all23 actual installer/window/input/uninstall
+checks with the exact installed OpenSL notice SHA256
+B78E6FE1973849F5F31CBF37835C907174D6A816721FD89E5EB734921F54E8DE.
+Both actual ten-app e2e jobs122224349335/518 pass with0 unexpected failures,
+including original mandatory untraced TIC and the separate mandatory traced
+scenario, four transport controls and association/shortcut launches. Default
+TIC shows8713/8729 non-background and2441 text pixels on2022/2025. This does
+not retroactively prove the cause of the older blank observation.
+
+A CI-only static symbol inspection of the exact recorded surfaces artifact
+is prepared; no artifact is downloaded locally, no app is rerun and no local
+compiler/fixture executes. Native owns generic ARM va_list conversion in
+its separate worktree. Its bounded hypothesis is an eager stack copy during
+ordinary variadic formatting; exact call-site/bounds evidence is required.
+The original logger cold path must remain covered even if the independent
+one-write logging correction changes the phase marker transport. Runtime
+repair and the final coherent full run remain open.
 
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also

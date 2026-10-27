@@ -175,31 +175,38 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
-Corrected coherent Surface/AAudio full ci40507882249 is running at
-06d30d403481d3833f0c7d5f99db456841b72062. Root reviewed exact d239a7e3,
-including generation-conditioned failed-post release, seven controlled
-gate cases, bounded new process/pipe waits, four real producer-only EGL
-contexts and original mandatory untraced TIC followed by a separate
-mandatory traced scenario. The only change above reviewed d239 is the
-latest integration10309b0a services3.md documentation. No runtime or new
-AAudio inventory acceptance is claimed before actual complete full logs.
-Source is frozen; later status commits are documentation only. Legacy
-SurfaceRun/test76 post-kill waits remain separate reported infrastructure
-leftovers. Source-only native muxer4a6b5c9b remains in its separate branch
-and is not included here.
+Corrected coherent Surface/AAudio full ci40507882249 is complete RED at
+06d30d403481d3833f0c7d5f99db456841b72062:20 successful, six skipped and two
+failed Windows jobs. Actual2022/2025 logs end4/2 test(s) failed, exclusively
+new test80 marker transport and ARM ordinary-call crashes (see surfaces2).
+All seven scheduling controls, format10/OpenSL16/AAudio16 scoped PASS lines
+pass on both hosts. Package has23 actual PASS and the exact installed notice
+hash. Both actual ten-app e2e jobs, original untraced TIC, separate mandatory
+traced TIC, four transport controls and association/shortcut pass with0
+unexpected failures. Source06 and the original red AAudio source remain
+immutable evidence; no unchanged retry or new inventory acceptance follows
+from a red full. Native owns the generic ARM va_list diagnosis/correction;
+the one-write marker correction and exact CI artifact symbol inspection
+remain local to this Surface branch. Later status/inspection commits do not
+change the frozen runtime. Legacy post-kill wait infrastructure is assigned
+to Root's separate test84. The unverified native muxer stays in its separate
+branch and is not imported here.
 
 The corrected coherent candidate is prepared separately in
 C:\work\gesher-media4-invalidation / wip/media4-invalidation after merging
 accepted Windows integration6297e80a. Its bounded Surface2 invalidation
-correction, test80 and post-failure no-input TIC diagnostics are source only;
+correction, test80 and post-failure no-input TIC diagnostics remain pending
+full acceptance;
 see surfaces2.md and proposed ADR0063. All original blank/text thresholds,
 AAudio/OpenSL/format/native checks and installed notice checks remain
-enabled. Full CI awaits the exact source review. Frozen format/OpenSL/native
+enabled. The exact source review and first full are recorded above; runtime
+repairs and a final green full remain required. Frozen format/OpenSL/native
 verified refs and the separate red AAudio source remain unchanged. No AAudio
 inventory acceptance follows from the red full40487303965 attempt2; its
 TIC-80 cause remains unproved. No source-only muxer factoring is imported
 into this candidate. Test79 remains reserved for that separate muxer work;
-test80 is invalidation, test81 belongs to Locale2, next free82.
+test80 is invalidation,81 Locale2,82 Resolver,83 libcore I/O,84 process test
+infrastructure,85 ownership and86 ARM varargs (next87).
 
 Full40487303965 attempt2 is complete RED at the same afebf1ec source:
 28 conclusions=21 success/six skipped/one failed e2e Windows2025. Both

@@ -1,0 +1,57 @@
+name: media4-surface-symbols
+
+# Static inspection of a previously compiled artifact, without running an app.
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/media4-invalidation]
+    paths: [.github/workflows/media4-surface-symbols.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: media4-surface-symbols-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  symbols:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify the immutable artifact source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          surface_source_sha=$(gh api repos/gesher-runtime/gesher/actions/runs/40507882249 --jq '.head_sha')
+          test "$surface_source_sha" = 06d30d403481d3833f0c7d5f99db456841b72062
+          printf 'Pinned Surface artifact source: %s\n' "$surface_source_sha"
+      - uses: actions/download-artifact@v4
+        with:
+          name: surfaces
+          path: recorded-surfaces
+          run-id: 40507882249
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore the Android NDK
+        uses: actions/cache/restore@v4
+        with:
+          path: android-ndk-r27c
+          key: ndk-27.2.12479018
+      - name: Fetch the Android NDK if absent
+        run: |
+          if [ ! -d android-ndk-r27c ]; then
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o ndk.zip \
+              https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+            unzip -q ndk.zip
+            rm ndk.zip
+          fi
+      - name: Inspect exact ARM call sites without executing the fixture
+        run: |
+          elf=recorded-surfaces/libsurfacegl-arm64.so
+          llvm=android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin
+          sha256sum "$elf"
+          "$llvm/llvm-readelf" -h "$elf"
+          "$llvm/llvm-readelf" --symbols "$elf"
+          "$llvm/llvm-readelf" --relocations "$elf"
+          "$llvm/llvm-addr2line" -f -C -e "$elf" 0x2544 0x2400 0x23a4
+          "$llvm/llvm-objdump" -d --start-address=0x22c0 --stop-address=0x2690 "$elf"
