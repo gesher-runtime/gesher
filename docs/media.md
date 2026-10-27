@@ -225,10 +225,16 @@ the microphone (looped, from its start each time recording starts);
   integration 7694f18 (docs only above the verified clock/width code).
   Root independently reviewed the corrected local HTTP/SNI fixtures,
   including the isolated SNI listener and selected-certificate controls.
-  All 37 media checks, live-environ67, clock68, actual SNI/hostname controls,
-  both zero-failure Windows summaries, package and both required ten-app
-  e2e results are still required. No runtime result is claimed before the
-  new run's actual logs are inspected; previous failed sources remain red.
+  Build 122005463021, framework 122005528851, media 122008335904 and
+  boot-image 122008335978 pass; their actual logs were read. Package
+  122008646942 passes all 23 installed-runtime/window/input/uninstall
+  checks. E2e 122009257652 (2022) / 122009257798 (2025) each pass four
+  transport fixtures, all ten apps, association/shortcut launch and
+  `0 unexpected failures`. Both Windows suites are still running. All 37
+  media checks, live-environ67, clock68, actual SNI/hostname controls and
+  both zero-failure summaries still require their actual logs. In particular
+  Java compilation is not runtime proof of the C# TLS fixture. Previous
+  failed sources remain red.
 
 - Prepared source 8364829 (HTTP/SNI implementation 4032be6a and reviewed
   listener isolation 8364829) combines the
@@ -248,8 +254,8 @@ the microphone (looped, from its start each time recording starts);
   production trust behavior, timeout or media assertion changes. Only
   PowerShell syntax, source comparisons and isolated-index patch/hash checks
   passed locally; no native/C#/Java compile, certificate/TLS fixture or JVM
-  ran. Root source review precedes one new full CI; this source has no
-  compilation/runtime acceptance yet. The earlier failed source below
+  ran. Root source review passed before the full run was dispatched; this
+  source has no full runtime acceptance yet. The earlier failed source below
   remains red and is not rerun or reclassified.
 
 ### media3 (stage 3) — runtime gates pass; full CI blocked by positive internet cases, 2026-10-27

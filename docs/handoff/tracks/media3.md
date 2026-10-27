@@ -72,13 +72,17 @@ deterministic HTTP/SNI/NetApp tests. No actual full-run acceptance yet;
 inspect every job, both zero summaries, selected-name/thumbprint and
 hostname-control PASS lines, package and both ten-app e2e logs first.
 
-The current candidate is source-only 8364829, incorporating verified
+The current candidate dd06d296 incorporates verified
 integration 8922a3e and the immutable reviewed Exec4 environment prerequisite
 76b8d5c. The HTTP/SNI implementation 4032be6a and listener isolation 8364829
 complete the deterministic positive fixture and real missing/unknown-SNI
 controls without allowing earlier HTTP traffic to supply their evidence; the exact NetApp
-slice d50f6e7b is also present. Root review is pending before one new full
-CI. No compiler/native/JVM/C# fixture runs locally. See docs/media.md and
+slice d50f6e7b is also present. Root approved the source review before the
+new full CI was dispatched. Build, framework, media, boot-image, package
+and both ten-app e2e jobs pass; their actual logs were read. The two Windows
+suites are still running, so the new C# TLS fixture, SNI/hostname controls
+and full runtime acceptance remain pending. No compiler/native/JVM/C#
+fixture runs locally. See docs/media.md and
 C:\work\gesher-ci-review\media3-positive-tls-reviewed.md/.json for exact
 source, patch hashes, preserved internet checks and pending verification.
 
