@@ -199,27 +199,60 @@ supporting neither protocol and retaining strict actual IP metadata checks.
 Full40469857757/646f9fb1 is green with that correction and the reviewed
 four-file AAudio slice78ee5e12: explicit lossless capacity/zero-loss counters,
 unchanged frequency/frame gates and an independent controlled-overrun probe.
-Root's independent five-log review is in progress. The old audio cause
+Root independently read all28 conclusions/five critical logs: both0, both
+ABI ART/standalone and four APK contexts, strict actual host-oracle9 rows,
+package23 and both ten-app e2e0. The old audio cause
 remains unproved; no Net4 inventory closure/integration merge is claimed.
-The final Net4 candidate must import accepted Windows integration6297e80a.
+Coherent full40499454478/694a4cd6 now imports accepted Windows6297e80a;
+all its product gates remain pending before integration acceptance.
 Test71 belongs to Media4,72 to
 Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
 spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
 NDK ABI callers, but production/runtime acceptance awaits full CI
 ([brief](tracks/exec4-actions.md)); full40466021634 now proves both ABI
 registration callers and their real child waits in the merged code.
-Root's new spawn child-actions full40498406783 is pending at exact
-e8e827e599077f994be650d1e7b7e40cc78b193c, containing accepted Windows160
-and current integrationdb847. Scoped40472829064/5f2653c6 and corrected
+Root's ordered spawn child-actions full40502225202 is pending at exact
+0808ba71b62ea784432de52f31bd3f86c9e2e3ad, containing accepted Windows160
+and current-at-dispatch integration7b49a718. Old40498406783/e8e827e5 was
+cancelled/superseded for a further source finding: UCRT uses-2 for unbound
+stdio, which must never be used as a Win32 file handle. The new actual
+no-console probe requires raw-2, real shim spawn/wait, an NDK child with
+closed0/exit42 and unchanged parent state on both ABIs. Scoped40472829064/
+5f2653c6 and corrected
 40497922800/47733cd3 build both actual NDK callers. Peer review found closed
 stdio became NUL during transport; the corrected bootstrap closes only
 those placeholders before actions, with actual closed0/failed-dup0 controls.
 No child-action runtime acceptance is claimed before that full run.
 Test75 is the ARM sticky-FPSR slice,
 76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
-([brief](tracks/exec4-spawn.md)); next free test is78.
+([brief](tracks/exec4-spawn.md));78 belongs to AAudio policy,79 to NDK muxer,
+80 to Surface invalidation and81 to Locale2 persistence (next free82).
 Shared-library implementation and the new slices are
 not verified AOT3/exec4/FPSR completion.
+
+Native FPSR coherent full40498782924/8ec4bf3c imports accepted Windows160
+and integration6297. Scoped40475532910/93f7637a passes all10384 actual
+QEMU/production comparisons on both hosts, retaining original cold/nested/
+thread and numeric/status controls; final JNI/APK/ELF/full-suite evidence
+remains pending. AOT shared-library full40503913306/c35abe7c is also pending
+on accepted Windows6297 after corrected compile-only40499783709/a79ae0f1
+and bounded source peer review. Empty default after-library resource, actual
+DLC paths, secondary dex and static SDK libraries remain explicit gaps.
+
+OpenSLd10/full40476766790 and nativee569/full40477536464 are independently
+root-verified bounded slices: both Windows0,14/16 scoped passes, package23
+and both ten-app e2e0 in each run. The native slice has actual two-ABI ELF,
+PCM callbacks/independent TLS and manifest allow/deny contexts. Root verified
+the exact34 IID metadata additions preserve every old field/143 format
+proofs and all53 UUID fields match pinned primary bytes. No integration
+merge is claimed before a coherent Windows/media source passes.
+AAudioafeb/full40487303965 attempt2 remains red for actual initial blank
+TIC80 on Windows2025; both whole suites0/16 policy passes, package23/notice
+hash and Windows2022 e2e0 do not waive that failure. A separate Surface
+candidate is being prepared with strict producer-only/no-input regression;
+the invalidation-latch source defect is not yet proved to have caused TIC80.
+Locale2/ADR0066 source work starts separately, retaining all broader locale
+and Windows language/format gaps.
 
 ARM FPCR source49ade205 is independently full-verified in40451978087,
 attempt2:22 success/6 skips, both Windows0, five scoped FPCR passes each,
