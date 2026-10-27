@@ -2,6 +2,8 @@
 # and every original timeout/exclusion remain in their respective tracks.
 function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
                              [string] $WorkingDirectory, [int] $TimeoutSec) {
+  $Executable = (Resolve-Path -LiteralPath $Executable -ErrorAction Stop).Path
+  $WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory -ErrorAction Stop).Path
   $process = [Diagnostics.Process]::new()
   $start = [Diagnostics.ProcessStartInfo]::new($Executable)
   $start.UseShellExecute = $false

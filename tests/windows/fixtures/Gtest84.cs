@@ -1,7 +1,6 @@
 // Compile/run only on CI. The real gtest helpers provide the actual argv/cwd
 // and output pipe handling; this executable supplies controlled child states.
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Threading;
 
