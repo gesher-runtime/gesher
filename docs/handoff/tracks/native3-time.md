@@ -11,6 +11,11 @@ native/JVM execution is allowed; use CI for every build/runtime check.
 
 ## Status and next steps
 
+Corrected full ci 40434741055 at bdfb230 is running, after merging current
+integration 29b7b18. Independent second source review found no remaining
+helper/domain/unit issue. Ten new checks retain the original CPU checks and
+full-suite assertions; actual compilation/runtime results remain pending.
+
 Full ci 40433469320 at c168b23 was cancelled after independent source review
 found InitTimeSpec still called the excluded wall-clock helper. No compiler
 or runtime result is accepted from that source. The corrected patch also
