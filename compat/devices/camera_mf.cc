@@ -696,6 +696,7 @@ void Pace(ULONGLONG* next) {
 class MfCapture : public Capture {
  public:
   ~MfCapture() override {
+    read_trace_.Log();
     SafeRelease(reader_);
     if (source_ != nullptr) source_->Shutdown();
     SafeRelease(source_);
@@ -747,12 +748,15 @@ class MfCapture : public Capture {
 
  public:
   HRESULT Read(uint8_t* nv12) override {
+    TraceSample trace(read_trace_);
     if (paced_) Pace(&next_);
+    trace.Step(0);
     for (;;) {
       DWORD stream = 0, flags = 0;
       LONGLONG timestamp = 0;
       IMFSample* sample = nullptr;
       HRESULT hr = reader_->ReadSample(kFirstVideoStream, 0, &stream, &flags, &timestamp, &sample);
+      trace.Step(1);
       if (FAILED(hr)) return hr;
       if (flags & (MF_SOURCE_READERF_ERROR | MF_SOURCE_READERF_ENDOFSTREAM)) {
         SafeRelease(sample);
@@ -762,9 +766,11 @@ class MfCapture : public Capture {
       IMFMediaBuffer* buffer = nullptr;
       hr = sample->ConvertToContiguousBuffer(&buffer);
       SafeRelease(sample);
+      trace.Step(2);
       if (FAILED(hr)) return hr;
       hr = CopyFrame(buffer, nv12);
       SafeRelease(buffer);
+      trace.Step(3);
       return hr;
     }
   }
@@ -801,6 +807,7 @@ class MfCapture : public Capture {
   IMFSourceReader* reader_ = nullptr;
   bool paced_ = false;  // the test camera's source makes frames at once: 30 a second here
   ULONGLONG next_ = 0;
+  TraceStats read_trace_{"MF read", {"pace", "ReadSample", "contiguous buffer", "copy frame"}};
 };
 
 // The test camera where Media Foundation is missing: the same picture, made
