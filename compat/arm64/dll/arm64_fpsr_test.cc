@@ -102,6 +102,8 @@ void CompareIndependentMatrix(const char* filename) {
     return;
   }
   size_t rows = 0, mismatches = 0;
+  size_t numeric_mismatches = 0, status_mismatches = 0, setup_mismatches = 0;
+  size_t query_mismatches = 0, native_mismatches = 0, missing_idc = 0, extra_inexact = 0, other_status = 0;
   const uint64_t operations64[] = {3, 13, 7, 6};
   for (uint64_t mode = 0; mode < 4; ++mode) for (uint64_t dn = 0; dn < 2; ++dn) for (uint64_t fz = 0; fz < 2; ++fz) {
     uint64_t control = (mode << 22) | (dn << 25) | (fz << 24);
@@ -125,8 +127,20 @@ void CompareIndependentMatrix(const char* filename) {
         uint64_t status = Call(4);
         int queried = One("fetestexcept", -1);
         uint64_t remaining_control = Call(0);
-        bool matches = selected == control && initialized == seed && actual == fields[6] && status == fields[7] &&
-                       queried == static_cast<int>(status & 0x9f) && remaining_control == control && Same(native);
+        bool setup_matches = selected == control && initialized == seed && remaining_control == control;
+        bool query_matches = queried == static_cast<int>(status & 0x9f);
+        bool native_matches = Same(native);
+        numeric_mismatches += actual != fields[6];
+        setup_mismatches += !setup_matches;
+        query_mismatches += !query_matches;
+        native_mismatches += !native_matches;
+        if (status != fields[7]) {
+          ++status_mismatches;
+          if ((fields[7] ^ status) == 0x80 && !(status & 0x80)) ++missing_idc;
+          else if ((fields[7] ^ status) == 0x10 && (status & 0x10)) ++extra_inexact;
+          else ++other_status;
+        }
+        bool matches = setup_matches && actual == fields[6] && status == fields[7] && query_matches && native_matches;
         ++rows;
         if (!matches) {
           if (mismatches < 24) std::printf(
@@ -145,6 +159,10 @@ void CompareIndependentMatrix(const char* filename) {
   std::string extra;
   bool complete = rows == 8192 && !(input >> extra);
   Check(complete, "all 8192 independent rows are consumed exactly once with no trailing data");
+  std::printf("INFO arm64 FPSR matrix classification: numeric=%zu status=%zu setup=%zu query=%zu native=%zu "
+              "missing_IDC=%zu extra_IXC=%zu other_status=%zu\n",
+              numeric_mismatches, status_mismatches, setup_mismatches, query_mismatches,
+              native_mismatches, missing_idc, extra_inexact, other_status);
   if (mismatches != 0) {
     std::printf("INFO arm64 FPSR matrix: %zu mismatching numeric/status cases of %zu\n", mismatches, rows);
     Check(false, "actual scalar instruction bits and status match independent pinned QEMU");
