@@ -28,6 +28,22 @@ no job/runtime/package/e2e conclusion is inferred. Later process proof freeze
 ce44b68f changes documentation only above component ebae; importing its exact
 scope report does not change the running full's source/code.
 
+Terminal supersession,2026-10-28: full40588525037 at exact4a47 failed.
+Its28jobs conclude16success/1failure/11skip. Build122486350945 compiled and
+collected production successfully, then host_roles.py capture-production
+raised KeyError for CMAKE_CXX_COMPILER, which the toolchain sets as an ordinary
+CMake variable rather than a cache entry. No production artifact upload or
+hook build followed. Six intentional probes skip; the five downstream
+boot-image/test/query-regression/package/e2e placeholders skip because the
+build failed. No runtime/full/package/e2e proof exists for this union. The
+Windows wiring owner is preparing the narrow compiler-identity correction;
+review changed source and freshly qualify all original gates before accepting
+it. Never retry unchanged red4a47 for luck. Existing source/history refs remain
+preserved; no integration code merge or release action occurred. Terminal
+metadata and actual build log are saved in C:/work/gesher-ci-review with this
+run's coherent-web3-union-full-40588525037 prefix. The required reattach watch
+ended1 with the already-completed failure; no dispatch/restart was performed.
+
 Starting f4a2b372 contains accepted Libcore944 plus Native942/Envb497, Media
 muxer d552 and qualified AOT450/frozen0c1. Their exact scoped/full evidence
 and limits remain in the prior union report. This changed source must qualify
