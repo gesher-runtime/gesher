@@ -148,3 +148,33 @@ Accepted width/current-CPU-clock history supersedes only its older scoped
 pending/withdrawn wording. The remaining libc/libm/binary128/platform bridges,
 clock/permission/signal/metadata/Vulkan families still require reconciliation.
 No Native87 source joins the primary union or receives CI acceptance here.
+
+## Release preparation feasibility, not readiness (2026-10-28)
+
+C:/work/gesher-ci-review/release1-next-candidate-feasibility-2026-10-28.md
+records a short saved-source review of release1fc3e0a8a. The current release
+guard's required-job/step manifest predates canonical FPSR reference, both
+query matrices and production seal/hook/query critical steps. A later separate
+candidate must reconcile that graph, explicit0.1.0 PE/filename selection,
+actual installed OpenSL source-hash equality and post-smoke authenticated
+receipt. Preserve reviewed source-pin/reauthentication/attempt/asset guards,
+real candidate dry-run and eventual both-runner released-byte installation/
+e2e cleanup. The old release helper's bounded wait and reader/task/pipe/process
+ownership also needs actual verification. No code/version/tag/main/asset or
+publication action occurred. Existing package23 and offline promotion review
+do not prove new notice/version/publication. All-gap/hardware gates remain.
+
+## Process cleanup evidence boundary (2026-10-28)
+
+Current frozen30db's process84/25 controls establish bounded wait/status/output
+behavior and actual process SafeHandle disposal, not reader/task drain or
+pipe-handle disposal. Windows' official.NET9 source review found that user-
+accessed StandardOutput/Error readers remain caller-owned after Process.Dispose.
+The separate20/21 component40597998338 at1a3b366f is green43controls/host
+(18new plus identical25 retained), but its scope is still parser/bounds/
+outputstatus/process SafeHandle. Both retained readersFalse cases prove
+incomplete-output classification; they are not task/pipe-drain proof. Explicit
+reader/task/pipe ownership follow-up remains source WIP and excluded from30db.
+Even a green current full must not close that broader cleanup contract.
+C:/work/gesher-ci-review/semantic-gap-process-ownership-2026-10-28.json records
+the source/evidence/owner/dependency/acceptance boundary and release consumer.
