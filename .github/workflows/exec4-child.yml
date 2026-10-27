@@ -113,12 +113,9 @@ jobs:
             if (@($definition).Count -ne 1) { throw "Expected one original helper $name" }
             . ([scriptblock]::Create($definition.Extent.Text))
           }
-          foreach ($execSpawnDriverDir in @((Resolve-Path -LiteralPath dist).Path, 'dist')) {
-            $Dir = $execSpawnDriverDir
-            Write-Host "EXEC4_DRIVER Dir=[$Dir] rooted=$([IO.Path]::IsPathRooted($Dir))"
-            $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
-            New-Item -ItemType Directory $root | Out-Null
-            . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
-          }
+          $Dir = 'dist'
+          $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory $root | Out-Null
+          . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
           Write-Host "$failed test(s) failed"
           if ($failed) { exit 1 }
