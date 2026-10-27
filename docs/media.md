@@ -220,18 +220,34 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-- Corrected Media4 full ci **40459815375** is running at
+- Corrected Media4 full ci **40459815375** is GREEN at
   **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
   integration 53898b51's docs and source correction 73c20d70 below. Main
   122041490613 passes the early bridge compile, both host executable links
   and 203 assembly boundaries/zero problems; media 122043516317 passes the
   two-ABI NDK/ELF/APK builds. Package 122048294220 passes all 23 actual
-  install/runtime/window/input/uninstall checks. Source is frozen while
-  both Windows and required e2e finish; test71/runtime acceptance is pending.
+  install/runtime/window/input/uninstall checks. All 28 jobs are read:
+  22 success/six skipped, attempt 1 without retries. Windows 122048294283
+  (2022) / 122048294275 (2025) each finish `0 test(s) failed`, with ten
+  test71 PASS lines: two ABIs in core ART JNI, standalone ELF and
+  single/device APK modes plus both device shutdowns. All eight semantic
+  parts per context were read: 21 real functions, 152 pointer data objects,
+  pinned values, typed/FPU/LP64 calls, ownership, errors, clear, debug text
+  and 128 lifetime cycles. This closes 143 historical baseline entries
+  (21 functions/122 data); 30 additional pinned data objects are verified
+  without extending the old list. Each ABI now reports libmediandk
+  276 checked/133 missing; 170 old media entries remain including OpenSL
+  and AAudio. All 37 media3, 12 part-1 device, 18 AOT3, 11 Exec3, env67 and
+  time68 checks pass per runner. E2e 122048949119 / 122048949121 each pass
+  all ten required apps, four transport fixtures, association/shortcut and
+  `0 unexpected failures`; actual package/e2e logs were read. Source stays
+  frozen c596 with docs-only successors. It predates the coordinator's
+  separately verified Java exit-status freshness fix; coherent combined
+  integration CI remains required. All other Media4 contracts stay open.
 
 - Media4's first NDK format slice has RED full ci **40456299720** at
   **92e914238cc8655aef472887ad9f494eec5c8a97**, after current integration
-  808ea746. ADR 0064 proposes the actual AOSP format backend through 21
+  808ea746. ADR 0064 uses the actual AOSP format backend through 21
   System V entries and 152 pointer data objects in both app/native process
   hosts. Test71 builds/runs both ABI libraries, standalone ELF and APK modes
   in CI only. Media job 122033620469 passes its actual NDK/Java/APK builds

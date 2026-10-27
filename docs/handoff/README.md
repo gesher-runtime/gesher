@@ -167,8 +167,18 @@ normal0/abnormal23/normal0 launcher behavior before Windows4/Web3 acceptance
 40449137605/4f253878: both14 scoped passes, both whole0, package23 passes
 and both nine-app e2e0. Its child-zero values still use the older cache.
 
-Media4's first format slice is running full CI40456299720 at92e914238,
-without inventory closure. Net4's interface-address slice is under review
+Media4's first format slice is full GREEN in CI40459815375 at
+c5962291855b13ebd0d21fcf72981db973ad9e72, attempt1:22 success/six skipped,
+both complete Windows0, ten test71 PASS lines each (both ABIs/four contexts),
+21 actual format functions/152 pointer objects, package23 and both required
+ten-app e2e0. Actual logs were read. The 313-symbol baseline is preserved;
+only143 format entries gain exact subsequent verification, leaving170 old
+media entries open (133 libmediandk/34 OpenSL/three AAudio). Source stays
+frozen c596 plus docs, pending the coordinator's coherent combined CI with
+the separately verified Java exit-status freshness prerequisite. Prior
+40456299720/92e914238 remains RED for12 unknown int32_t/int64_t header
+errors; c596 includes cstdint and proves the early exact-object compile.
+All broader Media4 gaps remain in its brief. Net4's interface-address slice is under review
 and its corrected CI result is pending. Test71 belongs to Media4,72 to
 Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
 spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both

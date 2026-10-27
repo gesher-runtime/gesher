@@ -598,6 +598,11 @@ Media ([media.md](media.md), ADR 0042):
       input; Surface/Camera2 H.264/AAC recording, independent decoded tones/
       frames, permission denial and terminal callbacks (stage 3,
       ci 40448521754, both runners and APK modes).
+- [x] Native AMediaFormat: 21 real AOSP functions and 152 pointer data
+      objects; typed values, ownership, errors and lifecycle on x86_64 and
+      arm64-v8a through core ART, standalone ELF and single/device APKs
+      (ci 40459815375, both runners; ADR 0064). Other NDK media families
+      remain open in media4.
 - [ ] Physical microphone/loopback, device removal/routes, remaining NDK
       exports, session/recorder/container contracts and protected media
       ([media4](handoff/tracks/media4.md), ADR 0064 reserved).
