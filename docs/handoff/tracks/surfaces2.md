@@ -88,7 +88,7 @@ TIC shows8713/8729 non-background and2441 text pixels on2022/2025. This does
 not retroactively prove the cause of the older blank observation.
 
 A CI-only static symbol inspection of the exact recorded surfaces artifact
-is prepared; no artifact is downloaded locally, no app is rerun and no local
+is complete; no artifact is downloaded locally, no app is rerun and no local
 compiler/fixture executes. Native owns generic ARM va_list conversion in
 its separate worktree. Its bounded hypothesis is an eager stack copy during
 ordinary variadic formatting; exact call-site/bounds evidence is required.
@@ -112,6 +112,14 @@ requires an atomic return marker in addition to the unchanged ABI, phase,
 color, teardown and shutdown assertions. The formatter itself still needs
 the generic ARM va_list correction. No passing runtime result or old-cause
 claim follows from this new source preparation.
+
+Compile-only ci40526285481 is GREEN at
+fd32798f3e81b5366ecc4e15effb48c9cea99947. The actual surfaces job122266656262
+log and metadata were read: both x86_64 and arm64-v8a native libraries and
+their separate APKs build successfully. The new compile-only workflow
+reuses surfaces.yml; it executes no Android app. This proves source/build
+compatibility only. Native's separate runtime bounds/ABI correction and a
+new strict coherent full run are still required.
 
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
