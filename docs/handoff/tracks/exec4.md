@@ -37,6 +37,17 @@ Windows/package/e2e gates. Follow the common merge/report rules; root merges.
 
 ## Status and next steps
 
+Current next-source slice, Root-owned2026-10-27: action registration now
+matches pinned bionic spawn.cpp354-376 by rejecting negative descriptors
+with EBADF before allocating/appending an action. Test74 uses real API34
+NDK callers in x86-64/arm64 ELF processes, checks15 error/errno controls
+and proves both spawn/spawnp still run real exit42 children afterward.
+Positive unopened descriptors remain accepted at registration. Latest
+integratione9859654 is merged; no scoped/full result is claimed yet.
+All compilers and executable fixtures run in CI. See[the source checkpoint](exec4-actions.md).
+This does not fix the separately audited child-time open/dup2/fchdir,
+attributes, full fork or executable-environment contracts below.
+
 Root takeover checkpoint: final combined ci40438421809/b429220 is complete
 red only on2022's two counted known badssl connection-timeout checks;2025
 whole0, test67/all exec3 checks on both and actual package/both e2e pass.
