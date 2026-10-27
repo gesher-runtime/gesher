@@ -1,6 +1,9 @@
 # 0079. ARM variadic-list conversion
 
-Status: proposed correction; compile/runtime acceptance pending.
+Status: scoped correction verified at928a09b7 in40528739976, attempt1;
+all four actual executed logs read, both real Windows consumer/compatibility
+jobs pass. Actual JNI/APK/Surface and coherent full product acceptance remain
+pending. See the [exact scoped report](../handoff/tracks/arm64-varargs-scoped.md).
 Windows test86 is reserved. Every compilation and executable fixture runs
 in CI. Source starts from verified integration3577b330 with the coordinator's
 docs-only checkpoint13603d54.
