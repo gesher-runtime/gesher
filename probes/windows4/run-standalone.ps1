@@ -1,5 +1,7 @@
 param([string] $Directory = 'dist-windows4', [string] $Logs = 'windows4-probe-logs')
 $ErrorActionPreference = 'Stop'
+Add-Type -Path "$PSScriptRoot/../../tests/windows/ime/ImeInput.cs"
+Write-Host 'PASS Windows4 host helper: ImeInput C# compiles; real layout recovery remains a full-CI check'
 [void][IO.Directory]::CreateDirectory([IO.Path]::GetFullPath($Logs))
 Write-Host "INFO Windows4 standalone native fixtures: source $env:GITHUB_SHA"
 Write-Host 'INFO COM window fixture uses the actual production HWND/COM/CV queue; real base/eventfd and Android integration remain full-CI-only.'

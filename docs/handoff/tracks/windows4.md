@@ -82,6 +82,23 @@ both arrays as expected; only the nonexistent redundant field assignment is
 removed. This build failure supplies no Android runtime result. Native fast
 40429258614 at 4a7ca61 separately checks the activation source/fixture.
 
+Fast 40429258614 is now complete green. Both actual Windows logs were read:
+all four canonical aggregates zero/raw FAIL zero; activation with unchanged
+actual keyboard focus passes, and six counterfactuals fail exactly their
+declared 1/1/4/4/1/1 assertions. Corrected framework 40429365809 at 5110c9b
+also succeeds after removal of the nonexistent field; its actual log still
+needs review before claiming the complete build evidence.
+
+The next IME fixture source addresses the observed Server2022 host stall
+without removing the existing CloudStore workaround: a layout HKL can change
+before WM_INPUTLANGCHANGEREQUEST finishes, and toggling the IME can restart
+the broker after cleanup. Within the existing 30-second layout-switch deadline,
+returning to US now checks a real bounded WM_NULL response and ends a restarted
+unresponsive broker through the existing cleanup. A new assertion requires
+actual US layout and a responsive window before the unchanged password-input
+check. This recovery behavior remains unverified until full CI. Standalone CI
+also compiles the updated C# helper, without claiming that as recovery proof.
+
 Current source includes verified runtime integration 94ccde1 (AOT/DM/StrictJarFile
 and exec3), merged at 9d1445c. The media conflict preserves the integration's
 canonical HTTPS mirrors and 240-second install bound alongside command tracing.
