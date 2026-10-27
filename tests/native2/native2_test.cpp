@@ -73,6 +73,7 @@
 #include "arm64_varargs.h"
 #include "../native/arm64_fpcr_contracts.h"
 #include "../native/arm64_fpsr_contracts.h"
+#include "../native/arm64_env_contracts.h"
 #include "native3_wide_contracts.h"
 
 namespace {
@@ -710,6 +711,12 @@ Part ArmFpsr() {
   p.notes.push_back("pinned FPSR flags0x9f, masks, real arithmetic, QC, pthread inheritance/isolation and nested callbacks");
   return p;
 }
+Part ArmEnvironment() {
+  Part p{"environment"};
+  p.Check(Arm64EnvContracts() == 0, "pinned full environment contracts");
+  p.notes.push_back("256 pinned rows, eight-byte canaries, imported/dynamic default, errno, threads and nested callbacks");
+  return p;
+}
 #endif
 
 std::string Run(const std::string& dir, const std::string& symbols) {
@@ -725,6 +732,7 @@ std::string Run(const std::string& dir, const std::string& symbols) {
 #if defined(__aarch64__)
   parts.push_back(ArmFpcr());
   parts.push_back(ArmFpsr());
+  parts.push_back(ArmEnvironment());
 #endif
   std::string out;
   bool ok = true;
