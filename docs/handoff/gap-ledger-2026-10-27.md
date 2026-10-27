@@ -110,6 +110,7 @@ rescanning/counting it:
 - C:/work/gesher-ci-review/semantic-gap-checkpoint-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-exec-continuation-2026-10-28.json
 - C:/work/gesher-ci-review/semantic-gap-services-frontier-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-native-continuation-2026-10-28.json
 
 These cover selected AOT3 and Exec4 contracts only, with stable semantic IDs,
 source/section/audit-row references, owner, state, dependency, exact scoped
@@ -137,3 +138,13 @@ neither invented causality nor fabricated successful status is permitted.
 
 All other source families remain unreconciled. The primary compiler-provenance
 correction/preflight and changed-source full take priority over further mapping.
+
+The later Native continuation records the record-lock family as one semantic
+contract with explicit nonblocking/blocking/close/ownership dimensions; current
+source fixes and registry-seam controls do not qualify production fcntl.
+Inotify cross-process events, shared file-backed remap, epoll/poll readiness,
+actual JVMTI agents, namespace isolation and allocator accounting remain open.
+Accepted width/current-CPU-clock history supersedes only its older scoped
+pending/withdrawn wording. The remaining libc/libm/binary128/platform bridges,
+clock/permission/signal/metadata/Vulkan families still require reconciliation.
+No Native87 source joins the primary union or receives CI acceptance here.
