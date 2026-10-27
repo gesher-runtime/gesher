@@ -49,8 +49,11 @@ subsequent verification rather than overwriting missing with a broad claim.
 media3 implements file-fed audio input, AAC/H.264/Opus encoding, container
 writers, audio/Surface/Camera2 MediaRecorder and ImageReader decoder output.
 Verified mux round trips cover H.264/AAC MP4 and Opus-only WebM, not WebM
-video/audio interleaving. The current device camera throughput failure
-also remains a media3 acceptance gate.
+video/audio interleaving. Media3's original camera throughput and terminal
+gates pass on both runners in 40438975894 (37 media3 and 12 part-1 device
+checks per runner), while that full source remains RED only for five net
+checks on Windows 2025. Media3 still requires full-suite acceptance before
+its stage is merged; this runtime evidence closes none of Media4's API gaps.
 The exact verified runs and remaining failed checks are in docs/media.md. CI uses
 a known WAV microphone source and GESHER_CAMERA_TEST; it does not establish
 physical microphone, loopback or Windows hardware interoperability.
