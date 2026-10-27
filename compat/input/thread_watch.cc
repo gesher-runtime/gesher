@@ -257,7 +257,11 @@ void DumpRemoteStack(HANDLE process, DWORD tid) {
   CONTEXT context;
   memset(&context, 0, sizeof(context));
   context.ContextFlags = CONTEXT_FULL;
-  SuspendThread(thread);
+  if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
+    cleanup(process);
+    CloseHandle(thread);
+    return;
+  }
   const bool ok = GetThreadContext(thread, &context) != 0;
   ResumeThread(thread);  // the walk reads memory that a waiting thread leaves as it is
   if (ok) {
@@ -476,6 +480,11 @@ ThreadWatch* StartThreadWatch(void* hwnd_ptr, const char* name) {
 
 void StopThreadWatch(ThreadWatch* watch) { delete watch; }
 void RetireThreadWatch(ThreadWatch* watch) { if (watch != nullptr) watch->Retire(); }
+
+void DumpProcessThreadWaits(uint32_t pid) {
+  if (pid == 0 || pid == GetCurrentProcessId()) return;
+  DumpProcessChains(pid);
+}
 
 bool ThreadWatchMessage(ThreadWatch* watch, uint32_t msg) {
   if (watch == nullptr || msg != PingMessage()) return false;
