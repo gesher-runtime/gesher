@@ -47,6 +47,34 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Verify immutable native support producers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceRun = '40502225202'
+          $sourceSha = '0808ba71b62ea784432de52f31bd3f86c9e2e3ad'
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $sourceSha -or
+              $run.status -cne 'completed' -or $run.run_attempt -ne 1 -or
+              $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY) { throw 'Wrong native support source' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun/attempts/1/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify support jobs' }
+          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $artifacts.total_count -gt 100) { throw 'Cannot verify support artifacts' }
+          foreach ($support in @(@('windows-x64', 'build'), @('arm64', 'arm64 / build'))) {
+            $job = @($jobs.jobs | Where-Object name -CEQ $support[1])
+            $artifact = @($artifacts.artifacts | Where-Object name -CEQ $support[0])
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or
+                $job[0].head_sha -cne $sourceSha -or $job[0].run_id -ne [long]$sourceRun -or
+                $artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].size_in_bytes -le 0 -or
+                $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+                $artifact[0].workflow_run.head_sha -cne $sourceSha -or
+                $artifact[0].workflow_run.id -ne [long]$sourceRun -or
+                $artifact[0].workflow_run.head_repository_id -ne $run.repository.id) { throw 'Wrong native support identity' }
+            Write-Host "EXEC4_SUPPORT name=$($support[0]) id=$($artifact[0].id) digest=$($artifact[0].digest) run=$sourceRun SHA=$sourceSha"
+          }
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64
@@ -67,13 +95,10 @@ jobs:
         with:
           name: exec4-child-hosts
           path: dist
-      - name: Run unchanged actual two-ABI spawn assertions with phase diagnostics
+      - name: Run actual two-ABI spawn assertions with absolute and relative Dir
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $Dir = (Resolve-Path dist).Path
-          $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
-          New-Item -ItemType Directory $root | Out-Null
           $failed = 0
           function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
           $tokens = $null
@@ -88,6 +113,12 @@ jobs:
             if (@($definition).Count -ne 1) { throw "Expected one original helper $name" }
             . ([scriptblock]::Create($definition.Extent.Text))
           }
-          . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
+          foreach ($execSpawnDriverDir in @((Resolve-Path -LiteralPath dist).Path, 'dist')) {
+            $Dir = $execSpawnDriverDir
+            Write-Host "EXEC4_DRIVER Dir=[$Dir] rooted=$([IO.Path]::IsPathRooted($Dir))"
+            $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory $root | Out-Null
+            . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
+          }
           Write-Host "$failed test(s) failed"
           if ($failed) { exit 1 }
