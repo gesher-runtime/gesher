@@ -113,6 +113,21 @@ target_compile_definitions(media_probe PRIVATE GESHER_MEDIA_STANDALONE)
 target_compile_options(media_probe PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_probe PRIVATE ole32 uuid pthread)
 
+# The CPU estimate block comes from the patched heap.cc compiled into ART.
+# Compile/run this regression in CI only (59-media3), preserving all valid
+# finite/unknown estimates and avoiding undefined zero-duration CPU ratios.
+set(_media_gc_estimate_cpp "${CMAKE_CURRENT_BINARY_DIR}/media-gc-estimate-test.cc")
+add_custom_command(OUTPUT "${_media_gc_estimate_cpp}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/media/generate_gc_estimate_test.py"
+    --art-root "${AOSP_DIR}/art"
+    --template "${CMAKE_SOURCE_DIR}/tests/media/gc_estimate_test.cc.in"
+    --output "${_media_gc_estimate_cpp}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tests/media/generate_gc_estimate_test.py"
+    "${CMAKE_SOURCE_DIR}/tests/media/gc_estimate_test.cc.in" "${AOSP_DIR}/art/runtime/gc/heap.cc"
+  VERBATIM)
+add_executable(media_gc_estimate_test "${_media_gc_estimate_cpp}")
+target_compile_options(media_gc_estimate_test PRIVATE -Wall -Wextra -Werror)
+
 # The surfaces hwui draws (stage 2, ADR 0051): SurfaceTexture and TextureView's layer,
 # SurfaceView's surface (compat/media/surface), built with hwui (its headers, Skia).
 target_sources(hwui PRIVATE
