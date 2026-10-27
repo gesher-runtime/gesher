@@ -343,3 +343,74 @@ operation occurred. The hardware plan now explicitly records the owner's
 confirmed unavailable environment and repository runners0; every ten-group
 gate remains. Correct next allocation is ADR0081/test89 (existing0068/test88
 belongs SG); no new allocation is made by this update.
+
+## Qualified Web3 prerequisite, prepared union and actual ordinary SG proof
+
+Web3 component40577659058 at fc17670355e8a694ecc83b632eb5e2610a968796 is
+independently accepted at bounded prerequisite scope:9jobs8success/one smoke
+skip, exactattempt1; all six supplier and both actual Windows logs read.
+Each Windows has eight pinned scaffold/four current artifact identities,
+twelve host-member hashes, five changed jars and fifteen actual rebuilt/copied
+image hashes. Expected unwrapped held-monitor/owner-join control remains
+blocked15s and only that owned process is terminated. Four actual corrected
+owner wrappers join before monitor release around3.01-3.04s, actual detach/
+cache0 and inflight drain, original14 controls plus mapped Main/device twice
+positive/canceled/stale, seven actual app-child0 and two shutdown0 per host.
+Frozen d192cab95c59616ecee61c18791bbbbda59d84b0 changes docs only; entire non-doc
+diff to fc176 is empty. Authoritative web3-query-component-proof.md and the
+integration source/evidence records retain exact limits. This proof uses the
+hook host; canonical production-OFF/full/package/e2e remain required.
+
+New LOCAL unqualified candidate source120f8120b00e258469864ad6a589179976196ff2,
+docs-only tip17fc9da8815df3d83f94c4804deeb433b728a6b7, is clean in
+gesher-media4-muxer/wip/media4-web3-union-pending, unpushed/undispatched.
+It preserves f4/7beb/eaa and remote Media d552 while adding exact frozenWeb3,
+process helpers and the complete bounded Exec ordered-spawn leaf. Framework
+merge retains AOT/DLC build/copies AND query dex. Native's independent AST
+peer of process port ade69654 confirms all current44/76 surrounding assertions
+and signatures preserved, only cleanup bodies ported; all25 component controls
+and remaining helpers equal ebae3e0b/40556470317. Exec frozen6e846e15c00af84a20bfb2a4869d3a3f850fcf1b
+has empty non-doc diff to82d41d2117ea587876e3cc1a153dc6486c8b4d6a;
+actual40582080725 attempt1 has all4jobs success and both genuine absolute/
+relative entries with8original passes/host0. Integrator read all four logs.
+Current Native/Env/Media/Libcore/query/AOT intent and all1157 inventory fields/
+proofs survive; blob55e03c68 is unchanged. See the new Media union pending report.
+
+Windows alone owns canonical full wiring in gesher-web3-full-bound/
+wip/web3-full-bound. Exact local58a085a2902ab8864e8ce8f559610464dbddec2f is
+source-only pending Native/integrator peer, not dispatched: explicit sealed
+productionOFF for normal suite/package/e2e, separate same-source/compiler ON
+hook artifact, two added full regression jobs with exact current supplier/role/
+hash guards. Explicit runtime selection preserves identical jar/image locations.
+Review/merge that wiring before freezing/dispatching any union full. Require
+all selected old/new gates including actual25 process controls and8Exec passes,
+both whole Windows0 within unchanged60min, package23 and both complete e2e0;
+then exact source/equality audit before phase4 code acceptance.
+
+Separate SG ordinary component40579429217 at ed741c99367d61df2bb2c07ae4d01753d9a03c06
+is green12jobs11success/one skip; all nine actual supplier and both Windows
+logs read. Each has nine contexts times seven cases,63 actual client+63 server
+reports totaling1440 actual C++ actor checks0, separately723parent checks0,
+63 successful-open occurrence audits, nine real sender-normal0-before-delivery
+and28 normal0 actual device apps. All source/run/attempt, five current artifact
+packages, eleven fixture hashes/five jars/fifteen fresh image copies checked.
+Frozen b49d29a0a570406b6dc7a81632d0b5da74d1884e/ref
+wip/binder2-sg-ordinary-component-verified is docs-only aboveed741. Exact
+bounded report binder2-sg-ordinary-component-proof.md preserves raw protocol,
+filtered public-prefixb52, remote-close/PID/other Binder2/full gaps. SG is NOT
+included in the primary union. Its watcher ended0 and was not restarted.
+
+Surface next-slice read-only plan is saved as
+C:/work/gesher-ci-review/surface-next-slice-feasibility-2026-10-27.md. Clean5c
+remains unqualified; original405078 stays red and loggerfd327 build-only.
+Only after the primary combined source qualifies: reconcile the reviewed13-file
+Surface/logger scope onto that exact green source, refresh currently unready
+same-source80/86 workflow/provenance/tools/image guards, preserve every original
+logger/pixel/phase/untraced+traced TIC gate, then actual component before later
+full. No Surface source edit/import/dispatch occurred. AOT after-resource and
+Native87 remain excluded and separately scoped; neither storage-seam checks
+nor build/source review establish productionfcntl or wider Native closure.
+
+Phase4 remains code-identical to accepted944; no code/main/PR/tag/release
+operation or extra full dispatch occurred. All hardware/all-gap/release gates
+and next unallocated ADR0081/test89 remain unchanged.
