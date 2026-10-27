@@ -72,15 +72,34 @@ jobs:
               $base.name -cne 'ci' -or $base.conclusion -cne 'failure' -or $base.run_attempt -ne 1) {
             throw 'Unexpected immutable Locale run/source/attempt'
           }
+          $repository = gh api repos/${{ github.repository }} | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $base.repository.id -ne $repository.id -or
+              $base.repository.full_name -cne '${{ github.repository }}') {
+            throw 'Immutable scaffold repository identity mismatch'
+          }
           $jobs = gh api repos/${{ github.repository }}/actions/runs/40516054280/jobs --paginate | ConvertFrom-Json
-          foreach ($name in 'build','framework / framework','boot-image / compile') {
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect immutable scaffold jobs' }
+          foreach ($name in 'build','framework / framework','boot-image / compile','graphics / build',
+                            'angle / build','media / media','webview / build','exec / exec') {
             $job = @($jobs.jobs | Where-Object name -CEQ $name)
-            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Unproved build prerequisite $name" }
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].run_id -ne $base.id -or
+                $job[0].head_sha -cne $base.head_sha -or $job[0].run_attempt -ne $base.run_attempt) {
+              throw "Unproved build prerequisite source/attempt $name"
+            }
           }
           git diff --exit-code $base.head_sha HEAD -- aosp.lock patches cmake/aosp/art.cmake compat/base
           if ($LASTEXITCODE -ne 0) { throw 'Changed ART/boot-image compatibility source needs separate review' }
           Write-Host "ACTUAL_COMPONENT_SCAFFOLD run=$($base.id) source=$($base.head_sha) overall=red-Web3 build/framework/boot=success"
+          $inventory = gh api repos/${{ github.repository }}/actions/runs/40516054280/artifacts --paginate | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect immutable scaffold artifacts' }
           foreach ($artifact in 'windows-x64','framework','graphics','angle','media','webview','exec','boot-image') {
+            $rows = @($inventory.artifacts | Where-Object name -CEQ $artifact)
+            if ($rows.Count -ne 1 -or $rows[0].id -le 0 -or $rows[0].expired -or $rows[0].size_in_bytes -le 0 -or
+                $rows[0].workflow_run.id -ne $base.id -or $rows[0].workflow_run.head_sha -cne $base.head_sha -or
+                $rows[0].workflow_run.repository_id -ne $repository.id -or $rows[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$') {
+              throw "Unexpected immutable scaffold artifact identity $artifact"
+            }
+            Write-Host "ACTUAL_COMPONENT_ARTIFACT name=$artifact id=$($rows[0].id) digest=$($rows[0].digest) source=$($rows[0].workflow_run.head_sha) repository=$($repository.id)"
             gh run download 40516054280 -R '${{ github.repository }}' -n $artifact -D dist
             if ($LASTEXITCODE -ne 0) { throw "Missing immutable scaffolding $artifact" }
           }
@@ -131,6 +150,15 @@ jobs:
               Set-Location -LiteralPath $workspace
             }
             Copy-Item -Recurse -Force "$workspace/rebuilt-boot/framework/*" "$workspace/dist/framework/"
+            foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+              foreach ($extension in 'art','oat','vdex') {
+                $member = "$image.$extension"
+                $produced = (Get-FileHash "$workspace/rebuilt-boot/framework/x86_64/$member" -Algorithm SHA256).Hash
+                $consumed = (Get-FileHash "$workspace/dist/framework/x86_64/$member" -Algorithm SHA256).Hash
+                if ($produced -cne $consumed) { throw "Rebuilt boot image copy identity mismatch $member" }
+                Write-Host "ACTUAL_COMPONENT_IMAGE member=$member sha256=$consumed rebuilt-copy-identical=True"
+              }
+            }
             Write-Host 'ACTUAL_COMPONENT_BOOT rebuilt from current native compiler and all five current jars'
           }
       - name: Actual both-ABI Native2 ART/APK, copied JNI V, FPCR/FPSR and variadic contracts
