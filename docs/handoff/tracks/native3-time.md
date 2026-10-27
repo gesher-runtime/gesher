@@ -11,6 +11,9 @@ native/JVM execution is allowed; use CI for every build/runtime check.
 
 ## Status and next steps
 
+Full ci 40433469320 at c168b23 is running. No native compilation/runtime
+result is claimed before inspecting its actual jobs and logs.
+
 Prepared source only. The patch selects CLOCK_MONOTONIC for NanoTime,
 MicroTime and MilliTime and excludes their unused wall-clock helper. The
 actual linked artbase fixture adds seven independent Win32 QPC/ordering/
