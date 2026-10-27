@@ -131,3 +131,16 @@ window in the intended namespace. No native compiler or fixture ran locally;
 bounded source peer review and actual Windows namespace/identity tests remain
 pending. This does not qualify malicious metadata writers, cross-session
 ACLs or descriptor/lock runtime lifetime behavior.
+
+Prepared native3-locks-registry.yml is source-only until bounded independent
+peer review. It compiles the actual registry/liveness/internal sources and
+existing Windows fixture using the pinned, archive-hash-verified LLVM-mingw
+toolchain, no AOSP/host build. Both Windows consumers require the same exact
+repository/run/attempt/source artifact, all source/header and executable byte
+hashes, an explicit system-DLL import allowlist and an external90s process-tree
+bound with failure output preserved. Local YAML/Python/PowerShell source
+parsing passed; no native compiler/fixture ran. Do not push the new narrow
+trigger or dispatch until the source peer is complete. Its intended scope is
+storage/identities only: partial inactive-bank-copy interruption, raw metadata
+corruption, OS-denied queries, actual PID reuse, cross-session/nonadministrator
+ACLs and every actual fcntl/descriptor/stdio/spawn/signal path remain open.
