@@ -537,3 +537,34 @@ producer green is not that proof. Current process84/25 and separate20/21/43
 controls remain bounded wait/status/output/process-SafeHandle proof, not
 reader/task/pipe-disposal or canceled partial-prefix proof. Separate cleanup
 source/components are excluded. No phase4 code/main/PR/tag/release acceptance.
+
+## Actual hook, production package and e2e consumers (2026-10-28)
+
+Full40596167427/exact30db remains ACTIVE under97520. Both added hook jobs
+122529278452(2022)/122529278293(2025) are green and actual logs independently
+read: all eleven current supplier IDs/digests, ten payload members and fifteen
+image hashes; named hook module at four distinct actual PIDs per host. The
+negative real held-monitor/owner-join control remains blocked15s and only that
+owned control is killed. Corrected four real joins complete before monitor
+release at3030/3021/3016/3015ms(2022),3029/3012/3022/3013ms(2025), preserving
+the original3s budget and500ms observation allowance. Actual JNI_OK detach,
+cache0 and in-flight VM/event drain pass. Main and device each show two real
+positive/canceled/stale cycles, attached0/no late action or cache publication;
+original14 and real app/device/fresh shutdown0 pass, original/totalfailures0.
+
+Package122529278391 is green with actual23 timestamped PASS records, raw
+installed production Hello/lifecycle0 and UI pixels/input/resize/uninstall.
+It consumes verified production-only44ff, executing source fixture exclusion;
+this does not verify new installed OpenSL notice or release0.1.0. Both e2e
+122530164696/122530164735 are green with actual ten apps, four transport
+controls, association/shortcut and0unexpected. Actual Puzzles generator PIDs
+7724/6892 exit0. Both download the same current packageartifact12779320697,
+digest8815eb8cd3bac3db5cf338ef982cda4d240a4916a4f0503741d1d2b8d0e9c130.
+Filename0.1.543 is ordinaryCI. Actual reviews are saved with this run's
+hook-package-actual-review.json and e2e-actual-review.json suffixes.
+
+Both normal Windows jobs122529278249/122529278265 still run. Their actual
+whole0, original14 productionOFF Web3, all Native/Env/Media/AOT/Libcore/resolver,
+twenty-five process and eight Exec controls, final all-job conclusions and
+post-candidate equality remain required before the authorized phase4 merge.
+No extra dispatch, primary source edit, code merge/main/PR/tag/release occurred.
