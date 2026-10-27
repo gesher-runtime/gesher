@@ -153,15 +153,23 @@ inline Result Run(const std::string& dir) {
     r.Check(started[i], "guest pthread starts");
     if (started[i]) r.Check(pthread_join(threads[i], nullptr) == 0 && outcomes[i], "concurrent lists are independent");
   }
-  FILE* file = tmpfile();
+  const std::string wide_path = dir + "/arm64-varargs-wide.txt";
+  FILE* file = fopen(wide_path.c_str(), "wb");
   r.Check(file != nullptr, "wide formatted-output stream opens");
   if (file) {
     int count = Wide(file, L"%.1f %d %.1f %d", 1.5, 7, 2.5, 8);
-    rewind(file);
-    char text[64] = {};
-    size_t bytes = fread(text, 1, sizeof(text) - 1, file);
-    r.Check(count == 11 && bytes == 11 && strcmp(text, "1.5 7 2.5 8") == 0, "wide formatter uses shared bank readers");
-    fclose(file);
+    r.Check(fflush(file) == 0 && fclose(file) == 0, "wide output flushes and closes");
+    // A separate byte-oriented stream avoids mixing byte and wide I/O on
+    // one FILE; rewind does not reset a stream's C orientation.
+    file = fopen(wide_path.c_str(), "rb");
+    r.Check(file != nullptr, "wide output opens as a separate byte stream");
+    if (file) {
+      char text[64] = {};
+      size_t bytes = fread(text, 1, sizeof(text) - 1, file);
+      r.Check(count == 11 && bytes == 11 && strcmp(text, "1.5 7 2.5 8") == 0, "wide formatter uses shared bank readers");
+      fclose(file);
+    }
+    remove(wide_path.c_str());
   }
   const std::string path = dir + "/arm64-varargs.gz";
   gzFile gz = gzopen(path.c_str(), "wb");

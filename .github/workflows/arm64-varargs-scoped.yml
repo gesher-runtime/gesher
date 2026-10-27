@@ -77,19 +77,15 @@ jobs:
       - name: Verify original logger, real formatted-output contracts and ABI mismatches
         shell: pwsh
         run: |
-          tests/windows/run-arm64-varargs.ps1 -Dir "$PWD/dist"
+          . tests/windows/run-arm64-varargs.ps1 -Dir "$PWD/dist"
           Copy-Item -LiteralPath dist/gesher_arm64.dll -Destination legacy/gesher_arm64.dll
-          $oldHost = & legacy/arm64_elf_test.exe dist/arm64_varargs_baseline.so 2>&1 | Out-String
-          $oldHostExit = $LASTEXITCODE
-          Write-Host "ACTUAL_VARARGS_API_MISMATCH old_host_new_dll exit=$oldHostExit"
-          Write-Host $oldHost
-          if ($oldHostExit -ne 1 -or $oldHost -notmatch 'version mismatch' -or
+          $oldHost = InvokeVarargs "$PWD/legacy/arm64_elf_test.exe" @("$PWD/dist/arm64_varargs_baseline.so") 1
+          Write-Host 'ACTUAL_VARARGS_API_MISMATCH old_host_new_dll exit=1'
+          if ($oldHost -notmatch 'version mismatch' -or
               $oldHost -match 'guest library loaded\s+ok') { throw 'Old host accepted new private list ABI' }
           Copy-Item -LiteralPath dist/arm64_elf_test.exe -Destination legacy-arm64/arm64_elf_test.exe
-          $oldDll = & legacy-arm64/arm64_elf_test.exe dist/arm64_varargs_baseline.so 2>&1 | Out-String
-          $oldDllExit = $LASTEXITCODE
-          Write-Host "ACTUAL_VARARGS_API_MISMATCH new_host_old_dll exit=$oldDllExit"
-          Write-Host $oldDll
-          if ($oldDllExit -ne 1 -or $oldDll -notmatch 'version mismatch' -or
+          $oldDll = InvokeVarargs "$PWD/legacy-arm64/arm64_elf_test.exe" @("$PWD/dist/arm64_varargs_baseline.so") 1
+          Write-Host 'ACTUAL_VARARGS_API_MISMATCH new_host_old_dll exit=1'
+          if ($oldDll -notmatch 'version mismatch' -or
               $oldDll -match 'guest library loaded\s+ok') { throw 'New host accepted old private list ABI' }
           Write-Host 'PASS arm64 varargs: actual API2/API3 host-DLL mismatches reject before any guest library runs'

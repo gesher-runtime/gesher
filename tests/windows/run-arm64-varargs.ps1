@@ -18,8 +18,11 @@ function InvokeVarargs([string] $Exe, [string[]] $Arguments, [int] $ExpectedExit
     $err = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit(60000)) {
       $process.Kill($true)
-      $process.WaitForExit()
-      throw 'Varargs child exceeded 60 seconds'
+      if (-not $process.WaitForExit(2000)) { throw 'Varargs child exceeded 60 seconds; termination did not complete within 2 seconds (124)' }
+      throw 'Varargs child exceeded 60 seconds (124)'
+    }
+    if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]] @($out, $err), 5000)) {
+      throw 'Varargs output pipes did not reach EOF within 5 seconds (124)'
     }
     $text = $out.GetAwaiter().GetResult() + $err.GetAwaiter().GetResult()
     Write-Host "ACTUAL_VARARGS_EXIT code=$($process.ExitCode) expected=$ExpectedExit executable=$Exe"
@@ -27,7 +30,10 @@ function InvokeVarargs([string] $Exe, [string[]] $Arguments, [int] $ExpectedExit
     if ($process.ExitCode -ne $ExpectedExit) { throw 'Unexpected actual varargs child exit' }
     return $text
   } finally {
-    if ($started -and -not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+    if ($started -and -not $process.HasExited) {
+      $process.Kill($true)
+      if (-not $process.WaitForExit(2000)) { Write-Host 'FAIL arm64 varargs: cleanup did not terminate child within 2 seconds' }
+    }
     $process.Dispose()
   }
 }
