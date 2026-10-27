@@ -46,6 +46,11 @@ The correction invokes the exact shipped Main.bootstrap reflectively at
 runtime, retaining real ART/resources and every graph assertion. No production
 or oracle change is made. Corrected compile/runtime proof remains required;
 the old red run supplies no fixture or shared-library runtime acceptance.
+Corrected continuation includes accepted Windows4/Web3 integration6297e80a
+(merge1e3f05d3), preserving both additive framework build/copy groups. The
+next scoped build verifies real dependency jars, both APK fixtures and the
+ART graph controls before a full runtime candidate. AOT remains separate
+from the frozen Net4/Windows sources.
 
 The shared-library continuation is assigned to the Windows4/Web3/release/Net4
 agent in this worktree. Root's cleanfb9aefb1 merge of integration808ea746 is
