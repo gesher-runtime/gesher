@@ -34,6 +34,35 @@ No roadmap checkmark for an implementation without CI verification.
 
 ## Status and next steps
 
+Latest full diagnostic **40441680201** at exact
+`5b5b51d0b858c6b08602af6450eed2a49025d71f` is COMPLETE RED: 28 jobs,
+20 success, six skipped, two failed Windows jobs. Actual logs 121985265563
+(2022) and 121985265568 (2025) each have exactly two failures: the first TSF
+reconversion in single-process and device modes. All stronger native-foreground
+preconditions/transitions and held/fresh shared/task Display snapshots now pass
+on both runners; so do IME35, target28 legacy resize, four local TLS rejection
+causes and the original gates. Actual main/framework/package and both e2e logs
+are read; installed runtime/window/input/uninstall and all nine apps including
+Puzzles/TIC80/four transport/association/shortcut/zero unexpected pass.
+
+The new trace identifies the initial TSF failure: epoch1 receives two valid
+ExtractedText replies (length11, selection7-11), then epoch2 binds a null
+connection and disables the native document. It is not a failed initial query.
+Pinned AOSP16 IMM sends WINDOW_FOCUS_GAIN_REPORT_ONLY with null editor and
+connections after input has started. Its IMMS returns a focus-only/null-editor
+result without calling startInputUncheckedLocked. Gesher incorrectly called
+Host.startInput for that notification and erased the live editor.
+
+The next source preserves the host binding for null-editor reports, returns
+SUCCESS_REPORT_WINDOW_FOCUS_ONLY for the same focused text-editor window (or
+the existing null-editor result otherwise), and invokes onInputBound only for
+an actual new session. A real-service ART regression covers preservation,
+new editorless windows, real restarts, real editor updates without connections,
+and headless results. The existing actual TSF/EditText/span/caret tests remain
+unchanged and still must pass. No runtime fix is claimed until that CI result.
+
+## Previous diagnostic and source preparation
+
 Completed full diagnostic **40433828877** uses exact source
 `0344cee6c70ecb8603bd7f19bdfd35a3b79fe20b`. It includes the focused Java,
 activation and fixture corrections below, coordinator profile integration

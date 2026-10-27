@@ -33,6 +33,7 @@ $w4Dvm = @("-Xbootclasspath:$w4Bcp", "-Ximage:$(NoDrive "$root/system")/framewor
 $w4Apk = NoDrive "$Dir/winapp.apk"
 W4NativeProbe dalvikvm.exe 'Windows4ConfigurationTest all passed' 'actual Configuration merging keeps Hebrew/Arabic/English layout direction at all four task rotations' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4ConfigurationTest'))
 W4NativeProbe dalvikvm.exe 'Windows4CursorGeometryTest all passed' 'actual CursorAnchorInfo preserves measured character bounds and explicitly replaces missing geometry without a caret' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4CursorGeometryTest'))
+W4NativeProbe dalvikvm.exe 'Windows4InputBindingTest all passed' 'actual input service retains a bound editor across later focus-only notifications and accepts real restarts' (@($w4Dvm) + @('-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Windows4InputBindingTest'))
 
 function W4Check([string] $Mode, [string] $What, $Problems) {
   if (@($Problems).Count -eq 0) { Write-Host "PASS  windows4: $What ($Mode)" }
