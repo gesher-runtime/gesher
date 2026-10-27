@@ -64,6 +64,14 @@ your domain, the verified SHA).
 
 ## Status and next steps
 
+Full ci 40448521754 is running at dd06d296e35ffd47fcecba9d0b88559360163500,
+after merging current integration 7694f18 and Root's independent source
+review of the corrected 8364829 fixtures. This source combines all 37
+media gates, verified clock/width and live-environ prerequisites with
+deterministic HTTP/SNI/NetApp tests. No actual full-run acceptance yet;
+inspect every job, both zero summaries, selected-name/thumbprint and
+hostname-control PASS lines, package and both ten-app e2e logs first.
+
 The current candidate is source-only 8364829, incorporating verified
 integration 8922a3e and the immutable reviewed Exec4 environment prerequisite
 76b8d5c. The HTTP/SNI implementation 4032be6a and listener isolation 8364829
