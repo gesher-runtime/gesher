@@ -59,3 +59,12 @@ heap fallback, enabling genuine small-map ENOMEM fixtures. Plain transaction
 heap fallback remains separately open. New protocol boundary/death/cancel/
 exactly-once/partial-consumption fixtures and second peer remain mandatory.
 No CI is dispatched from this checkpoint.
+
+Second peer of3a2efbc3 found a genuine claim-ACK ownership ambiguity and a
+preceding plain read-command publication failure that could strand a pending
+transaction. Current correction keeps broker-owned staging handles, adopts
+separate receiver copies, closes/zeros staging on finish/abort and closes the
+thread pipe for every read-stream failure. Common POSIX independent-process
+actors and a finite host parent are now source only. Remaining before CI:
+raw-wire lost-ACK/disconnect/death/FD-reuse and queue-progress controls,
+both ABI/ART/APK wiring, final peer/static checks. No source/runtime closure.

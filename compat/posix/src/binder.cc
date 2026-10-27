@@ -309,7 +309,8 @@ void CloseThreadPipe(BinderFile* file) {
 // new fd for the same open file in the receiver. Here the sender puts the
 // fd's Windows handle in the object (its 64-bit pad_binder, which shares the
 // fd's union), binderd duplicates it into the receiving process
-// (DuplicateHandle), and the receiver wraps the duplicate in a new fd. Only
+// (DuplicateHandle). That staging handle remains broker-owned; the receiver
+// duplicates it again and adopts only its distinct local copy. Only
 // fds backed by a Windows handle (files, memfds, pipes) travel; any other
 // goes as handle 0, which binderd refuses (BR_FAILED_REPLY).
 template <typename F>
@@ -338,9 +339,15 @@ void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
 bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
   bool ok = true;
   ForEachFdObject(data, data_size, offsets, offsets_size, [&](binder_fd_object& obj) {
-    HANDLE h = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
-    int fd = _open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_BINARY);
-    if (fd < 0) { CloseHandle(h); ok = false; }
+    HANDLE staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
+    HANDLE owned = nullptr;
+    int fd = -1;
+    if (DuplicateHandle(GetCurrentProcess(), staging, GetCurrentProcess(), &owned,
+                        0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+      if (fd < 0) CloseHandle(owned);
+    }
+    if (fd < 0) ok = false;
     obj.pad_binder = 0;
     obj.fd = static_cast<__u32>(fd);
   });
@@ -574,9 +581,16 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
       }
       continue;
     } else if (!r.Read(command.data() + 4, size)) {
+      CloseThreadPipe(file.get());
       return errno = EBADF, -1;
     }
-    if (!publish(command.data(), command.size())) return errno = EFAULT, -1;
+    if (!publish(command.data(), command.size())) {
+      // A preceding NOOP/reference command can fault before we parse the
+      // transaction later in this same broker reply. Closing the connection
+      // aborts that pending delivery and wakes its synchronous sender too.
+      CloseThreadPipe(file.get());
+      return errno = EFAULT, -1;
+    }
     rpos += 4 + size;
     bwr->read_consumed = rpos;
   }

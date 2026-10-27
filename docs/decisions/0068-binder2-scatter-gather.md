@@ -52,7 +52,31 @@ Then require current accepted integration, both full Windows suites0,
 installed package and both required e2e sets0. Neither this source nor a
 shape-helper test closes the transport or aggregate Binder2 scope.
 
-Current candidate has no new fixture/CI evidence yet. Receiver user-copy/
+Current candidate has new fixture source but no compile/CI evidence yet. Receiver user-copy/
 allocation failure cleanup and untrusted raw-wire dimensions require explicit
 review/tests alongside the new SG lifetime. Identity authority and other
 process/fd hooks remain coordinated with their owners, not implemented here.
+
+## Pending delivery and descriptor ownership
+
+The broker permits one uncommitted delivery per receiver thread. Claim only
+validates that delivery; it never transfers descriptor ownership. Each raw
+handle duplicated into the receiver is broker-owned staging until finish,
+abort or thread teardown. The receiver duplicates each staging handle again,
+then adopts its distinct owned copy. The broker closes and zeros staging
+handles exactly once before accepting or aborting the delivery. A lost claim
+acknowledgement therefore cannot leave ambiguous ownership, and a later
+broker abort cannot close a receiver descriptor whose handle value was reused.
+After local publication the caller owns its allocation/descriptors and the
+read_consumed prefix remains valid even if the finish acknowledgement fails.
+Before publication every failure rolls back local resources and remote
+transaction/oneway ownership; even failure publishing an earlier BR_NOOP
+closes the thread pipe because a later transaction may already be pending.
+These are source invariants awaiting real disconnect/ACK-loss/death fixtures.
+
+The shared POSIX actor source tests nested request/reply, two queued oneways
+after actual sender process exit, malformed layouts and invalid user pointers,
+real mapped-capacity ENOMEM and bad receiver read memory. The host parent
+uses separate processes and ordinary control files with finite deadlines.
+Raw-wire lifetime/FD reuse controls and Android ABI/ART/APK wiring remain
+unfinished; the fixture source itself is not verification.
