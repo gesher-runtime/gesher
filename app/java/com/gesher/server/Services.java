@@ -100,8 +100,11 @@ public final class Services {
         // No StandIn proxy: IAudioService's methods name android.bluetooth.BluetoothDevice,
         // which framework.jar does not have (a Proxy resolves every method's types).
         // AudioService.java: volumes, ringer mode, audio focus (docs/media.md).
+        AudioService audio = new AudioService();
         services.put(Context.AUDIO_SERVICE,
-                new com.gesher.server.stub.IAudioServiceStub(new AudioService()));
+                new com.gesher.server.stub.IAudioServiceStub(audio));
+        services.put(Context.MEDIA_SESSION_SERVICE, StandIn.of(
+                android.media.session.ISessionManager.class, new MediaSessionService(audio)).asBinder());
         services.put(ContentResolver.CONTENT_SERVICE_NAME,
                 StandIn.of(IContentService.class, new ContentService()).asBinder());
         // input_method: Windows' text input (docs/input.md "Text input", ADR 0039).
