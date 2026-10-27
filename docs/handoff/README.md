@@ -170,8 +170,28 @@ and both nine-app e2e0. Its child-zero values still use the older cache.
 Media4's first format slice is running full CI40456299720 at92e914238,
 without inventory closure. Net4's interface-address slice is under review
 and its corrected CI result is pending. Test71 belongs to Media4,72 to
-Net4 and73 to AOT3 shared-library work; next free test is74. Shared-library
-implementation remains source-design work, not a verified AOT3 stage.
+Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
+spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
+NDK ABI callers, but production/runtime acceptance awaits full CI
+([brief](tracks/exec4-actions.md)). Test75 is the next ARM sticky-FPSR slice;
+next free test is76. Shared-library implementation and the new slices are
+not verified AOT3/exec4/FPSR completion.
+
+ARM FPCR source49ade205 is independently full-verified in40451978087,
+attempt2:22 success/6 skips, both Windows0, five scoped FPCR passes each,
+six wide-conversion passes each, package23 passes and both nine-app e2e0.
+Only Windows2022's known untrusted-root.badssl.com TCP timeout was retried;
+actual certificate rejection then passed. Root read metadata and all five
+critical logs. Frozen wip/arm64-2-fpcr-verified=dab49ab0 is docs only above
+that source; it predates Media3 and exit-freshness, so no integration merge
+is claimed yet. Complete FPSR/env/default-object/host-CRT rounding remains open.
+
+Net4 full40456605869 was superseded after its standalone invocation omitted
+argv0; the corrected full40456946272/fa8b29e2 then failed before javac on a
+cached wificond sparse-checkout.lock. The prior cancelled framework's
+always-save captured that lock; CI cache lifecycle is being repaired before
+a new run. No timeout, skipped oracle or infrastructure failure is accepted
+as a passing Net4 runtime check.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
