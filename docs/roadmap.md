@@ -476,13 +476,24 @@ needs: [framework-build.md](framework-build.md).
       match pinned bionic ICU4X over every code point and invalid sentinels;
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
-      Widths and remaining NDK/POSIX scope stay open.
+      Remaining NDK/POSIX scope stays open.
 - [x] Pinned multibyte/C11 conversion states and bounds, LP64 wide numbers,
       locale aliases/CHAR_MAX layout, C collation and UTF-32 wide-time
       wrapper behavior: independent 248-case reference ci 40425021540 and
       actual x86_64/arm64 dalvikvm/single/device cases in full ci
       40425393716 at 57782e5, attempt 2, both Windows suites/package/e2e.
       Binary128, wide stdio/scanf and independent narrow tzcode remain open.
+- [x] Pinned bionic wcwidth/wcswidth: separate signed x86_64 and unsigned
+      ARM64 locked ICU4X digests cover all code points/four invalid sentinels;
+      actual whole-range NDK calls, 33 boundaries and bounded UTF-32 strings
+      pass both ABIs and APK modes. Full ci 40430425743 at b3ecc85, both
+      Windows suites, package and required e2e; supersedes the earlier
+      incomplete shared-signed ARM expectations in ci 40404678100.
+- [x] ART current-thread/process CPU clocks match independent Win32 native
+      brackets, including caller/worker identity and process CPU accumulation.
+      Full ci 40430425743 at b3ecc85, both Windows suites/package/e2e.
+      Non-current pthread clocks, monotonic elapsed clocks and native
+      allocator accounting remain separate open contracts.
 - [x] ELF loader for x86-64 Android `.so` files on Windows
 - [x] bionic on Win32: libc, libm, libdl, liblog and the NDK's libandroid
       over gesher-base (libandroid's non-graphics APIs)

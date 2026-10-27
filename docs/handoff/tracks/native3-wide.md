@@ -72,6 +72,21 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
+Combined acceptance candidate now includes current integration 2f8ed7a
+(combined startup gate 40432541082 at 42cc1c0 is verified) and frozen
+corrected per-ABI width/CPU-clock branch c8f30ec (full 40430425743 at
+b3ecc85 is verified). The guest_libc conflict retains both localeconv's
+ARM CHAR_MAX adapter and the corrected unsigned wchar width adapters,
+including both registrations. extra_bionic's exact comparison results and
+test44's six-case wide evidence capture remain intact alongside the width
+checks. Roadmap conflict resolution retains both scoped acceptance records.
+Local checks are source/digest/parser checks only. One final combined full
+CI is next; no combined runtime result is claimed yet. The separate pending
+native3-time/0573 source is not imported. Frozen native3-wide-verified is
+unchanged at e7c1b06.
+
+### Earlier scoped acceptance and source history
+
 Root acceptance checkpoint while the scoped agent is interrupted: full ci
 40425393716 at 57782e5, attempt 2, is fully green. Root read all 28
 conclusions (22 success/six skipped), both zero-failure summaries, all six

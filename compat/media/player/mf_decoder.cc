@@ -18,6 +18,7 @@
 
 #include "../audio/log.h"
 #include "decoder.h"
+#include "prepare_trace.h"
 
 namespace gesher::media {
 namespace {
@@ -75,9 +76,12 @@ const MfApi& Mf() {
 
 // The first decoder for `subtype`, activated.
 IMFTransform* FindDecoder(const GUID& subtype) {
+  PrepareTrace prepare_trace("AAC.FindDecoder");
   const MfApi& mf = Mf();
+  prepare_trace.Step("MF load/startup");
   if (!mf.ok) return nullptr;
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  prepare_trace.Step("COM init");
   MFT_REGISTER_TYPE_INFO in = {kMediaTypeAudio, subtype};
   IMFActivate** acts = nullptr;
   UINT32 count = 0;
@@ -86,12 +90,15 @@ IMFTransform* FindDecoder(const GUID& subtype) {
                         &in, nullptr, &acts, &count))) {
     return nullptr;
   }
+  prepare_trace.Step("MFT enumeration");
   IMFTransform* t = nullptr;
   for (UINT32 i = 0; i < count; i++) {
     if (t == nullptr) acts[i]->ActivateObject(kIidTransform, reinterpret_cast<void**>(&t));
     acts[i]->Release();
   }
   CoTaskMemFree(acts);
+  prepare_trace.Step("activation");
+  if (t != nullptr) prepare_trace.Complete();
   return t;
 }
 
@@ -102,12 +109,15 @@ class MfAacDecoder : public AudioDecoder {
   }
 
   bool Init(const Format& f, std::string* error) {
+    PrepareTrace prepare_trace("AAC.Init");
     int32_t rate = 0, channels = 0;
     f.GetInt32("sample-rate", &rate);
     f.GetInt32("channel-count", &channels);
     std::vector<uint8_t> asc;
     f.GetBuffer("csd-0", &asc);
+    prepare_trace.Step("format");
     t_ = FindDecoder(kAudioFormatAac);
+    prepare_trace.Step("find decoder");
     if (t_ == nullptr) {
       *error = "AAC needs Media Foundation's decoder, which this Windows lacks";
       return false;
@@ -128,13 +138,17 @@ class MfAacDecoder : public AudioDecoder {
     in->SetBlob(kMtUserData, user.data(), static_cast<UINT32>(user.size()));
     HRESULT hr = t_->SetInputType(0, in, 0);
     in->Release();
+    prepare_trace.Step("input setup");
     if (FAILED(hr)) {
       *error = "AAC: the decoder refuses the stream (0x" + Hex(hr) + ")";
       return false;
     }
     if (!SetOutput(error)) return false;
+    prepare_trace.Step("output negotiation");
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     t_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+    prepare_trace.Step("stream messages");
+    prepare_trace.Complete();
     return true;
   }
 
