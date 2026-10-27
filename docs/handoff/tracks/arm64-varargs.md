@@ -61,3 +61,28 @@ source regression and actual large gzvprintf retry. Scoped CI builds the
 actual host loader/shim and translator; real API2/API3 mismatch executions
 are required. Compile/runtime proof of this correction remains pending,
 including JNI/APK/full-suite/package/e2e and original Surface acceptance.
+
+Root's bounded source review found no further production blocker. Fixture
+reviews corrected a wide/byte stream-orientation oracle, bounded every new
+process/pipe wait and unconditional disposal, retained callback failures
+independently of qsort's final order, and explicitly return scoped-driver0
+after expected API mismatch exits. Original assertions remain. JNI primitive
+and mixed-object V calls additionally compare independent va_copy invocations.
+
+First correction scoped40527840216/d9bc86f3 is red before runtime: the real
+new host/shim builds successfully in job122272149040 and the strict translator
+compiles, but NDK guest compilation reports missing
+tests/native2/arm64_varargs_main.cpp because the reusable sparse checkout
+omitted tests/native2. Additive checkout correction928a09b7 is in fresh
+scoped40528739976; its actual results remain pending. No previous red
+runtime result is reclassified or waived.
+
+The following source additionally includes the same contract body in Native2's
+actual two-ABI JNI/APK library. Existing test44 requires its report in each
+dalvikvm/single-process/device context without removing previous markers.
+Reserved test86 runs the original shallow/deep body and both standalone ELF
+consumers plus direct API initialization rejection. These additions require
+their own compilation and actual coherent full execution. Locale2 full
+40516054280 is red for three Windows2025 Web3 lifecycle/launch failures;
+its source and the accepted FPSR leaf remain frozen. Full-environment/test85
+work waits for stable Locale integration rather than changing either leaf.
