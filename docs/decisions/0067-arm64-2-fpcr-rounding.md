@@ -37,14 +37,19 @@ restore the host environment after guest entries and native callbacks.
 
 ## Verification and limits
 
-The next sticky-FPSR slice is prepared on current integration e9859654/
-Media3 in the working branch, with reserved test75. It is not verified yet.
+The next sticky-FPSR slice uses reserved test75. Scoped40475532910 at
+93f7637a is green: all six actual executed logs were read, both Windows
+hosts match all10384 independent QEMU numeric/status cases and retain every
+cold/nested/thread assertion. Full product acceptance is still pending;
+the working branch now imports accepted exit integration db84749b above
+30deb08c and must import later accepted Windows prerequisites before full.
 It uses real dynarmic status state, pinned mask 0x9f including denormal,
 preserves QC, and propagates status through threads/nested entries. Tests
 compare the original pinned bodies and actual MSR/MRS/arithmetic/SQADD,
 with four-byte flag buffers and native host status restoration. Full
 environment/default-object and host CRT/libm contracts remain outside it.
-Only the FPCR source/report above is accepted until its own CI completes.
+Only the FPCR source/report above is accepted until its own full CI completes.
+See the [scoped evidence and remaining limits](../handoff/tracks/arm64-2-fpsr.md).
 
 The CI-built NDK assembly test performs actual MSR/MRS and positive/negative
 FADD instructions. Its native Windows caller checks all four modes,

@@ -1,0 +1,122 @@
+# arm64-2 sticky FPSR: scoped evidence, full acceptance pending
+
+Source 93f7637a090e40f3bfc3615a04bed2076dbf501c passes scoped
+ci 40475532910, six success/one skipped. All six actual executed job logs
+were personally read. Both Windows hosts match all 10384 independent QEMU
+numeric/status tuples, every diagnostic classification counter is 0, and
+both FPCR and FPSR fixtures end with `0 test(s) failed`.
+
+This is not full product acceptance. Actual FPSR execution through native2
+JNI/dalvikvm, single/device APKs, native ELF, package and both required e2e
+suites is prepared but pending full CI. Merge b839c307 imports accepted
+root integration db84749b (docs above 30deb08c, including verified exit
+freshness) into the working branch. Later accepted Windows prerequisites
+must still be imported before the coherent full candidate is dispatched.
+Root alone merges into integration/main. Immutable FPCR reference
+wip/arm64-2-fpcr-verified/dab49ab0 and original wide/e7c1b06 are unchanged.
+
+## Implementation and scope
+
+Use the real pinned dynarmic GetFpsr/SetFpsr for the five flag operations:
+feclearexcept, fetestexcept, fegetexceptflag, fesetexceptflag and
+feraiseexcept. Preserve QC outside pinned FE_ALL_EXCEPT 0x9f, including ARM
+denormal 0x80; fexcept_t pointers address exactly four bytes. Status inherits
+and persists through actual nested entries and pthread_create independently
+of native host flags and rounding. The original pinned bionic bodies are
+compiled as guest references with renamed symbols.
+
+Two native implementation boundaries polluted otherwise-correct cold guest
+status. Protect dynarmic cache-miss compilation and native executable-address
+classification/cache work with masked-nearest MXCSR, restoring exact live
+guest MXCSR afterward. Original cold assertions remain; identical warm
+controls are additional diagnostics. The dependency-cache key includes the
+patch helper digest, so an older native backend cannot satisfy a newer key.
+
+For only the eight scalar32/64 add/sub/mul/div emitters, classify operand
+bits under FZ to record IDC before the unchanged arithmetic/NaN path. Per
+FZ instruction isolate native UF/IX, remove that instruction's FTZ IX only
+when its own UF appears, then merge the complete previous hardware status.
+This preserves seeded IX and real IX from earlier arithmetic in the same
+translated block. The numeric/NaN path is unchanged. Other instruction
+families are outside this correction and are not claimed complete.
+
+Pinned dynarmic source 9d4582339990d4eae53f1dc7160686920fc2075c is strictly
+hash checked, including reverse reconstruction and idempotence. Actual CI
+records these patched-source digests:
+
+- a64_interface.cpp:
+  7743b21c4bd62c37c60fbd0eaf42c05c5a3f1133bd25944b3b30a4da33374851.
+- emit_x64_floating_point.cpp:
+  3a2181e72a70fba90f4be6704bd5c5899254ee156babdbfce4ae09e670b11da5.
+
+## Independent reference and actual results
+
+Unmodified QEMU 9.2.4 source b2995afed254e4804611df52210067a4d5dbdf0b
+executes a freestanding NDK r27c AArch64 ELF as Cortex-A53. Actual
+MSR/MRS/FADD/FSUB/FMUL/FDIV supply the numeric/status results; Linux
+write/exit only serialize output. It uses no libc or copied production
+fenv implementation. The actual QEMU binary SHA256 is
+4ccb5bea9e24502b0e938248e42e2aa68586a6b766d769de882b54c7350122da.
+
+The original 8192 rows cover all rounding/DN/FZ combinations, both widths,
+32 signed-zero/normal/overflow/underflow/subnormal/infinity/quiet and
+signaling NaN operand pairs, payload/sign/ordering, and cumulative seeds.
+Their complete original byte prefix must retain SHA256
+434b73d47dbd4d73fadda6a8879b0cf3fe4bf5a1419f5359148bc7b30b8210bb.
+Appended 144 cases test preseeded IX plus numerically dependent
+inexact→underflow and underflow→inexact sequences within one block.
+Appended 2048 normal-operand cases cover the boundary near the smallest
+normal across the same operations/control modes. Those boundary cases pass
+without any additional production correction.
+
+Current producer reference-source/vector/ELF SHA256 values, respectively:
+
+- a597f9a5de44dcf11785996c2ee347ba55b8e1abe8d3b4a4ec83c9939bd23d88.
+- 7a8f7553634321617e69783d6fa7bcdc3ec7231ed1e82d9cf16a69f6fbf4d003.
+- 4a2cf57bd41fd0b2ef00466771abb87a8c1f6265ae3f34a807504fab1862ff4e.
+
+Complete 10384-row matrix SHA256:
+f2b99a23a8071d84f2700ca7fa725574c763303fe594e173c6f2bd7375641d5b.
+
+Actual scoped40475532910 logs read:
+
+| Job | ID | Actual evidence |
+|---|---|---|
+| Pinned bionic source |122092720590| Complete licensed source/header provenance PASS |
+| NDK/native2 |122092720924| Both ABI/APK builds; extracted ARM reference bytes/definitions/no-unresolved audit PASS |
+| Independent QEMU |122092721227| Original prefix unchanged;10384 numeric/status inputs and cumulative/boundary controls PASS |
+| Translator build |122092851515| Production and host fixtures compile under-Werror; both exact patched hashes |
+| Windows 2022 |122093491451| All10384 cases, every classification counter 0, all FPCR/FPSR groups, both zero summaries |
+| Windows 2025 |122093491619| Same actual independent matrix, cold/nested/thread controls and zero summaries |
+
+The actual host PASS groups include original 8192, cumulative 144 and
+boundary 2048 independent cases, all six architectural flags plus SQADD QC,
+three guest levels with direct MSR, concurrent guest isolation and restored
+native host fenv. NDK fixtures additionally prepare 48 seeded FZ32/64 output
+checks for the full run.
+
+## Investigation history and open contracts
+
+Initial nine cold failures were retained and diagnosed using actual raw
+values. Compiler guard 40463561077 reduced them to two; executable-cache
+guard 40464902850 left only input-denormal. Independent8192 baseline
+40468480689 exposed 672 mismatching tuples per host. IDC-only
+40471466364/77fafc18 then proved numeric 0/status 32, missing_IDC 0 and
+extra_IXC 32 on both. Per-operation output status 40474911020/a4d17876
+passes 8336; boundary-only 40475532910/93f7637a passes 10384. No assertion was
+warmed away, ignored or converted into an expected failure.
+
+Full fenv_t save/restore, the ARM eight-byte __fe_dfl_env object and
+rounding-sensitive host CRT/libm remain open. Pinned trap-enable returns -1,
+disable/get return 0 and raise sets masked status; working traps are not
+claimed. Other ISA families, guest JIT pages, signals/ucontext, LSE,
+HFA/variadic binary128 and cache/stack allocation/cleanup remain open.
+
+FPSR edits outside compat/arm64 are the focused probes, Native2 module,
+native ABI/ELF/assembly fixtures, test 75 and reusable/scoped ARM workflows.
+There is no new FPSR edit to test 44 or the APK builder; test 75 reuses the
+complete actual records captured for FPCR. Earlier accepted Wide/FPCR shared
+edits and imported root/Media/Exit prerequisites retain their own reports.
+No inventory count, export presence claim or other track ownership changed.
+All compilation and native/JVM/emulated fixture execution occurred in CI;
+local work was source inspection/edits, hashing/parsing and Git only.
