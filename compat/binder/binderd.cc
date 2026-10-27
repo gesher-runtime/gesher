@@ -22,7 +22,8 @@
 //
 // File descriptors (BINDER_TYPE_FD) travel as Windows handles: the sender's
 // /dev/binder puts the fd's handle in the object, binderd duplicates it into
-// the receiving process and the receiver's /dev/binder wraps it in a new fd.
+// the receiving process as broker-owned staging. The receiver duplicates a
+// distinct owned copy for its fd; finish/abort closes the staging handle.
 //
 // Not done: fd arrays (BINDER_TYPE_FDA), security contexts
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
@@ -184,7 +185,7 @@ struct Thread {
   bool process_todo = false;
   Transaction* transaction_stack = nullptr;
   uint64_t pending_buffer = 0;
-  bool pending_fds_claimed = false;
+  bool pending_buffer_claimed = false;  // validation state, never FD ownership
   WorkList todo;
   ErrorWork return_error;
   ErrorWork reply_error;
@@ -513,9 +514,9 @@ void ReleaseBufferObjects(Buffer* buffer) {
         UpdateRefForHandle(proc, fp.handle, false, fp.hdr.type == BINDER_TYPE_HANDLE);
         break;
       case BINDER_TYPE_FD:
-        // Never delivered: the receiver has not taken the handle duplicated
-        // for it, so it is closed there.
-        if (!buffer->allow_user_free) CloseRemoteHandle(proc->pid, fp.binder);
+        // Staging handles always belong to the broker. Successful delivery
+        // already closes/zeros them; abort/release closes any still present.
+        CloseRemoteHandle(proc->pid, fp.binder);
         break;
       default:
         break;
@@ -888,7 +889,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
 }
 
 // BC_FREE_BUFFER
-void DoFreeBuffer(Proc* proc, uint64_t id, bool close_unclaimed_fds = false) {
+void DoFreeBuffer(Proc* proc, uint64_t id) {
   auto it = proc->buffers.find(id);
   if (it == proc->buffers.end()) {
     Log("proc %u: BC_FREE_BUFFER of unknown buffer %llu", proc->id, (unsigned long long)id);
@@ -913,8 +914,23 @@ void DoFreeBuffer(Proc* proc, uint64_t id, bool close_unclaimed_fds = false) {
       WakeProc(proc);
     }
   }
-  if (close_unclaimed_fds) buffer->allow_user_free = false;
   FreeBuffer(buffer, true);
+}
+
+// Close only broker-owned staging handles. The receiver's adopted descriptors
+// refer to distinct duplicates, so finish/abort/ACK loss cannot close a handle
+// whose value the receiver has already freed and reused.
+void CloseStagingFds(Buffer* buffer) {
+  for (uint64_t offset : buffer->offsets) {
+    if (!gesher::binder_sg::Range(offset, sizeof(binder_fd_object), buffer->data.size())) continue;
+    binder_fd_object object;
+    memcpy(&object, buffer->data.data() + offset, sizeof(object));
+    if (object.hdr.type != BINDER_TYPE_FD) continue;
+    const uint64_t staging = object.pad_binder;
+    object.pad_binder = 0;
+    memcpy(buffer->data.data() + offset, &object, sizeof(object));
+    CloseRemoteHandle(buffer->proc->pid, staging);
+  }
 }
 
 // Roll back a delivery the receiver could not publish. A synchronous caller
@@ -928,9 +944,10 @@ int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
   if (transaction != nullptr && (transaction->to_thread != thread || thread->transaction_stack != transaction)) {
     return -EINVAL;
   }
-  const bool claimed = thread->pending_fds_claimed;
+  if (accepted && !thread->pending_buffer_claimed) return -EINVAL;
   thread->pending_buffer = 0;
-  thread->pending_fds_claimed = false;
+  thread->pending_buffer_claimed = false;
+  CloseStagingFds(buffer);
   if (accepted) return 0;
   if (transaction != nullptr) {
     thread->transaction_stack = transaction->to_parent;
@@ -939,7 +956,7 @@ int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
     buffer->transaction = nullptr;
     SendFailedReply(transaction, BR_FAILED_REPLY);
   }
-  DoFreeBuffer(proc, id, !claimed);
+  DoFreeBuffer(proc, id);
   return 0;
 }
 
@@ -1419,7 +1436,7 @@ retry:
     tr.offsets_size = buffer->offsets.size() * sizeof(binder_size_t);
     buffer->allow_user_free = true;
     thread->pending_buffer = buffer->id;
-    thread->pending_fds_claimed = false;
+    thread->pending_buffer_claimed = false;
     rs->Put32(cmd);
     rs->out.Put(tr);
     rs->size += sizeof(tr);
@@ -1640,7 +1657,7 @@ void ServeThread(HANDLE pipe, In in) {
       int ret = 0;
       if (op == wire::kClaimBuffer) {
         if (id == 0 || id != thread->pending_buffer) ret = -EINVAL;
-        else thread->pending_fds_claimed = true;
+        else thread->pending_buffer_claimed = true;
       } else {
         ret = FinishBuffer(thread, id, accepted != 0);
       }
