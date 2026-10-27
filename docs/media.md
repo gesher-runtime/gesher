@@ -220,13 +220,16 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-- Prepared source d3dd4319 (HTTP/SNI implementation 4032be6a) combines the
+- Prepared source 8364829 (HTTP/SNI implementation 4032be6a and reviewed
+  listener isolation 8364829) combines the
   verified clock/width integration 8922a3e, latest integration docs 46c9cc1,
   immutable reviewed live-environ prerequisite 76b8d5c and exact NetApp
   local-HTTPS slice d50f6e7b. The new test-only fixture replaces the two
   remaining unstable public HTTP200/virtual-host endpoints with a valid
   local HTTPS body and two distinct virtual-host certificates on one
-  listener. Public DNS, Google HTTPS204 and Google TLS1.3/SNI/hostname
+  SNI listener; HTTP200 uses a separate default listener so it cannot
+  supply the missing-SNI control's empty-name evidence. Public DNS, Google
+  HTTPS204 and Google TLS1.3/SNI/hostname
   checks remain byte-identical. Missing/unknown SNI must select the default
   certificate and fail real HTTPS endpoint identification; server names
   and exact selected thumbprints are mandatory. Pinned Conscrypt ignores
