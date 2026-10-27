@@ -111,6 +111,15 @@ both inputs, writes the actual PID regardless of other assertion results
 and prints each original assertion's result. No assertion is removed. The
 next scoped run builds fresh NDK callers in its own workflow, retaining
 immutable ARM support from40502225202 and fresh host binaries.
+Scoped40520772723/9b9f625b passes all four jobs. Root independently read
+host/NDK build logs and both actual Windows logs: each has all four mandatory
+test77 ABI/action/no-console PASS lines and0 test(s) failed. The ordered
+caller now requires every independently recorded argv/closure/data/PID
+result, as well as actual42 and the returned PID matching the file.
+This validates the focused caller after both fixture corrections, not a
+cause for the old full127. Current integration3577b330 (docs above accepted
+Net4bc6) is merged before the next full run. No runtime/roadmap acceptance
+is claimed until both full suites, package and both e2e jobs pass.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
