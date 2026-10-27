@@ -23,7 +23,13 @@ int main() {
   if (child) {
     intptr_t before = _get_osfhandle(0);
     if (before != -2) {
-      printf("FAIL  spawn no-console: raw stdin %lld, expected -2\n", static_cast<long long>(before));
+      STARTUPINFOW initial{};
+      initial.cb = sizeof(initial);
+      GetStartupInfoW(&initial);
+      HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+      printf("FAIL  spawn no-console: raw stdin %lld, expected -2; win%p type%lu fileno%d flags%lu reserved%u startup%p\n",
+             static_cast<long long>(before), input, GetFileType(input), _fileno(stdin), initial.dwFlags,
+             static_cast<unsigned>(initial.cbReserved2), initial.hStdInput);
       return 1;
     }
     using Spawn = int (__attribute__((sysv_abi))*)(int*, const char*, const void*, const void*,

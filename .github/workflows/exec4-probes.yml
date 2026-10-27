@@ -44,20 +44,27 @@ jobs:
           run-id: 40502225202
           github-token: ${{ github.token }}
           path: failed-runtime
-      - name: Inspect the actual failed launcher's chdir binding
+      - name: Inspect mapped chdir code from the actual failed run
         run: |
           set -euo pipefail
           bin="$HOME/toolchain/$LLVM_MINGW_NAME/bin"
-          "$bin/llvm-nm" --demangle --defined-only failed-runtime/gesher-exec.exe | grep -E 'Chdir|Fchdir| chdir$| fchdir$|SetCurrent'
-          "$bin/llvm-objdump" --disassemble --demangle failed-runtime/gesher-exec.exe > launcher.s
           python3 - <<'PY'
           from pathlib import Path
-          printing = False
-          for line in Path('launcher.s').read_text().splitlines():
-              if line and not line[0].isspace() and line.endswith('>:'):
-                  printing = ('chdir' in line.lower() or 'SetCurrent(' in line)
-              if printing:
-                  print(line)
+          import os
+          import subprocess
+          import sys
+          sys.path.insert(0, 'tools')
+          from symbolize import load_map
+          base, addresses, names = load_map('failed-runtime/dalvikvm.map')
+          selected = [(a, n) for a, n in zip(addresses, names) if 'chdir' in n.lower()]
+          if not selected:
+              raise RuntimeError('No chdir entries in the saved CI map')
+          objdump = Path.home() / 'toolchain' / os.environ['LLVM_MINGW_NAME'] / 'bin/llvm-objdump'
+          for address, name in selected:
+              absolute = address if address >= 0x10000000 else 0x140000000 + address
+              print('ACTUAL_DALVIKVM_MAP', hex(address), name, flush=True)
+              subprocess.run([str(objdump), '--disassemble', '--start-address=' + hex(absolute),
+                  '--stop-address=' + hex(absolute + 128), 'failed-runtime/dalvikvm.exe'], check=True)
           PY
       - uses: actions/upload-artifact@v4
         with:
