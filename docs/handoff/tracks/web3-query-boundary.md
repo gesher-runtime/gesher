@@ -44,3 +44,17 @@ start is terminal; partial startup cleans created handles with a bound.
 Early web3-query-compile builds actual objects with existing production Werror
 flags in CI only. It supplies compile evidence, never runtime/fix acceptance.
 No local C/C++, Java or C# compiler or executable fixture was run.
+
+## Second WIP source slice (runtime unverified)
+
+The four real native wrappers now hand off before ScopedEnv/attach/JNI and
+publish deep native results only after worker detachment. Providers and their
+children retain one HWND generation; retirement runs before Window's real
+unmodified owner-thread join. Java receives native request tokens, rechecks
+after actual global/window monitors, shares the remaining deadline with UI
+Handler work, removes canceled tasks and guards cache/action publication.
+Main and app-process exit paths stop admission/drain native work and event
+callbacks before VM exit; failed drain takes explicit halt(1), not unsafe VM
+teardown. This is source only: Java/C++ compile and real contention/lifecycle
+regression are still required. The early 53c object compilation40570599325
+passed; it does not compile or qualify this later source.

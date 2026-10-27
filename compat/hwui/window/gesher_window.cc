@@ -24,6 +24,8 @@
 namespace gesher {
 namespace {
 
+std::atomic<Window::RetireCallback> g_retire_callback{nullptr};
+
 constexpr wchar_t kClassName[] = L"GesherWindow";
 
 std::wstring Widen(const std::string& s) {
@@ -334,7 +336,15 @@ void Window::Run(std::wstring title, int width, int height) {
   if (SUCCEEDED(com)) CoUninitialize();
 }
 
+void Window::SetRetireCallback(RetireCallback callback) {
+  g_retire_callback.store(callback, std::memory_order_release);
+}
+
 Window::~Window() {
+  // Retire UIA admission before waiting for the owner STA. The callback
+  // captures no Window lifetime and performs no Java/JNI call.
+  auto retire = g_retire_callback.load(std::memory_order_acquire);
+  if (retire != nullptr && hwnd_ != nullptr) retire(hwnd_);
   Unregister();  // no route or anchor names it any more
   if (hwnd_ != nullptr) {
     // DestroyWindow must run on the window's thread.
