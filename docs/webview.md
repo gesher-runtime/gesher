@@ -350,6 +350,15 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+Prepared source now includes coordinator integration
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge079e0d4b). Root personally
+verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296 and
+the merged non-doc tree matches that source. The Services merge preserves
+Web3 service changes and adds MediaSession registration; all five network
+test hashes remain identical. A fresh full run still requires the corrected
+exit-freshness prerequisite and both complete ten-app e2e suites, including
+Just Player/Puzzles/TIC80. No new CI is dispatched by this preparation merge.
+
 Strict-exit full CI **40449137605** completes green at exact
 `4f253878331b4662abe044fa71127b87b881fd1a`. Commit5d802f5 adds only the
 PowerShell exit checks and successful lifecycle output described below; app
