@@ -37,6 +37,22 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Full40503913306 at exactc35abe7c is complete red:28jobs20success/6skip/
+2failure. Both Windows jobs122199397625/122199397683 contain707 top PASS and
+only two failures from the first test73 setup call. Files.copy invokes the
+unregistered sun.nio.fs.UnixCopyFile.transfer native at fixture line62;
+the graph controls and real shared-library app did not execute. Package23
+and both ten-app e2e sets, including Puzzles/TIC80/JustPlayer, pass with zero
+unexpected failures; all actual logs were read. No shared-library runtime
+box is accepted from this red run.
+
+The corrected fixture copies the same real jar bytes using owned input/output
+streams, preserving all15 graph assertions and every test73 AOT/image/update/
+rejection oracle. The unrelated Files.copy native remains an explicit runtime
+gap. This next candidate merges accepted Net4 integrationbc6e05be, preserving
+the actual interface oracle and strict AAudio lossless controls. No compilation
+or fixture execution ran locally; corrected CI proof remains required.
+
 Corrected fixture scope40499783709 at immutablea79ae0f1 is complete green:
 both jobs succeed; actual122174345315 read javac0/0errors, graphics-tests.dex,
 sharedlibraryapp/sharedlibrarybad APKs and all three real DEX jars (549/546/687

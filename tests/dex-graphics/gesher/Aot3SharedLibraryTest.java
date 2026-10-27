@@ -7,10 +7,11 @@ import com.gesher.server.SharedLibraryGraph;
 import com.gesher.server.SharedLibraryRegistry;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 
 /** Real XML and DEX-jar graph validation under the shipped ART/framework. */
@@ -25,6 +26,18 @@ public final class Aot3SharedLibraryTest {
 
     private static String attribute(String value) {
         return value.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
+    }
+
+    private static void copyJar(File source, File destination) throws IOException {
+        // Copy real fixture bytes without depending on the unrelated, currently
+        // unregistered UnixCopyFile.transfer native used by Files.copy.
+        try (FileInputStream input = new FileInputStream(source);
+             FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int count; (count = input.read(buffer)) != -1;) {
+                output.write(buffer, 0, count);
+            }
+        }
     }
 
     private static String library(String name, File jar, String attributes) {
@@ -59,7 +72,7 @@ public final class Aot3SharedLibraryTest {
         File entry = new File(args[5]);
         File base = new File(root, "real jars אב α/base.jar");
         base.getParentFile().mkdirs();
-        Files.copy(original.toPath(), base.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        copyJar(original, base);
         String ordinary = library("base", base, "") + library("entry", entry, "dependency=\"base\"");
         SharedLibraryRegistry normal = registry(root, ordinary);
         SharedLibraryGraph first = normal.resolve(List.of("entry"), List.of("absent"), null);
@@ -78,7 +91,7 @@ public final class Aot3SharedLibraryTest {
         oat.mkdirs();
         first.writeManifest(oat);
         check(first.matchesArtifacts(oat), "the published graph manifest matches its current contents/context");
-        Files.copy(updated.toPath(), base.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        copyJar(updated, base);
         SharedLibraryGraph second = normal.resolve(List.of("entry"), List.of(), null);
         check(!first.contentsUnchanged() && first.classLoaderContext().equals(second.classLoaderContext())
                         && !first.identity().equals(second.identity()) && !second.matchesArtifacts(oat),
