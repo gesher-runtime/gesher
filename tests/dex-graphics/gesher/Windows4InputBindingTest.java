@@ -45,7 +45,7 @@ public final class Windows4InputBindingTest {
 
     private static void start(InputMethodManagerService service, Client client, IBinder window,
             EditorInfo editor, IRemoteInputConnection connection, int flags, int sequence) {
-        service.startInputOrWindowGainedFocus(editor != null ? StartInputReason.APP_CALLED_RESTART_INPUT
+        service.startInputOrWindowGainedFocus(editor != null ? StartInputReason.APP_CALLED_RESTART_INPUT_API
                         : StartInputReason.WINDOW_FOCUS_GAIN_REPORT_ONLY,
                 client, window, flags, 0, 0, editor, connection, null, null, 36, 0, null, false, sequence);
     }

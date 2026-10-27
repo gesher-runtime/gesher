@@ -64,6 +64,11 @@ The live TsfActivity additionally focuses a real non-editor button, requires
 IMM not accepting text, a failed TSF edit session and unchanged editor bytes,
 then returns to EditText for the actual partial-composition/caret2 assertion.
 The unit Host is therefore not the only planned editorless-input coverage.
+Targeted framework40445918077 at26e73f9 caught one fixture authoring error:
+the pinned restart reason is APP_CALLED_RESTART_INPUT_API. Production app
+compilation had succeeded; graphics-tests compilation failed at the old
+constant name. The fixture now uses the exact name from pinned IMM's
+restartInput path. This failed build is not runtime evidence.
 
 ## Previous diagnostic and source preparation
 
