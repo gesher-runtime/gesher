@@ -1,4 +1,4 @@
-// gesher-base: <ifaddrs.h> over GetAdaptersAddresses (src/socket.cc).
+// gesher-base: bionic LP64 <ifaddrs.h> over GetAdaptersAddresses (src/netdb.cc).
 #pragma once
 
 #include <sys/socket.h>

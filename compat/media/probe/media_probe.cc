@@ -15,6 +15,7 @@
 //   media_probe capture [out.wav]  records 2 s through the capture engine (capture.h:
 //                                  GESHER_AUDIO_SOURCE, the default capture endpoint,
 //                                  or silence) at 44100 Hz stereo, into out.wav
+//   media_probe capture-buffers    an unread stall with small/one-second rings
 //
 // The engine's own tests: what the framework adds on top (AudioTrack and the rest)
 // is tested through test apps.
@@ -430,6 +431,59 @@ int MediaFoundation() {
 }
 
 // The capture engine (media3, ADR 0059): what the input is, and 2 s of it.
+int CaptureBuffers() {
+  CaptureParams p;
+  p.sample_rate = 44100;
+  p.channels = 2;
+  p.format = PcmFormat::kS16;
+  p.capacity_frames = 3528;
+  std::string error;
+  auto small = OpenCapture(p, &error);
+  p.capacity_frames = 44100;
+  auto large = OpenCapture(p, &error);
+  if (small == nullptr || large == nullptr) {
+    printf("capture buffers: open failed: %s\n", error.c_str());
+    return 1;
+  }
+  small->Start();
+  large->Start();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  // Leave both rings unread until at least 200ms of actual samples arrive.
+  // The small ring must lose frames; the one-second ring must retain them.
+  while (large->frames_captured() < 8820 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  small->Stop();
+  large->Stop();
+  const auto a = small->stats(), b = large->stats();
+  printf("capture buffers small: requested 3528, effective %zu, captured %llu, read %llu, "
+         "lost %u, xruns %u\n", small->capacity_frames(),
+         static_cast<unsigned long long>(a.captured_frames),
+         static_cast<unsigned long long>(a.read_frames), a.lost_frames, a.overruns);
+  printf("capture buffers configured: requested 44100, effective %zu, captured %llu, read %llu, "
+         "lost %u, xruns %u\n", large->capacity_frames(),
+         static_cast<unsigned long long>(b.captured_frames),
+         static_cast<unsigned long long>(b.read_frames), b.lost_frames, b.overruns);
+  std::vector<int16_t> pcm(44100 * 2);
+  const ssize_t a_read = small->Read(pcm.data(), pcm.size() * sizeof(int16_t), false);
+  const ssize_t b_read = large->Read(pcm.data(), pcm.size() * sizeof(int16_t), false);
+  Expect(small->capacity_frames() == 3528 && a.captured_frames == 3528 && a.read_frames == 0 &&
+             a.lost_frames > 0 && a.overruns > 0,
+         "unread 80ms ring reports actual lost frames and cumulative xruns");
+  Expect(large->capacity_frames() == 44100 && b.captured_frames >= 8820 && b.read_frames == 0 &&
+             b.lost_frames == 0 && b.overruns == 0,
+         "configured one-second ring retains the same controlled capture stall");
+  Expect(a_read == static_cast<ssize_t>(a.captured_frames * 4) &&
+             b_read == static_cast<ssize_t>(b.captured_frames * 4) &&
+             small->frames_read() == a.captured_frames && large->frames_read() == b.captured_frames,
+         "both stopped rings drain exactly their retained frame counts");
+  small->Release();
+  large->Release();
+  printf("capture buffers: %s\n", failures == 0 ?
+         "bounded small-ring loss and configured-capacity zero loss passed" : "failed");
+  return failures == 0 ? 0 : 1;
+}
+
 int Capture(const char* out_path) {
   InputInfo info = GetInputInfo();
   printf("capture: %s%s\n", info.description.c_str(), info.device ? "" : " (no input device)");
@@ -494,6 +548,7 @@ int main(int argc, char** argv) {
   if (argc >= 2 && strcmp(argv[1], "wasapi") == 0) return Wasapi();
   if (argc >= 2 && strcmp(argv[1], "mf") == 0) return MediaFoundation();
   if (argc >= 2 && strcmp(argv[1], "capture") == 0) return Capture(argc >= 3 ? argv[2] : nullptr);
+  if (argc >= 2 && strcmp(argv[1], "capture-buffers") == 0) return CaptureBuffers();
   fprintf(stderr, "usage: media_probe tones | analyze <wav> | wasapi\n");
   return 2;
 }
