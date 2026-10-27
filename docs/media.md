@@ -220,6 +220,14 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- The independent native backend continuation runs full ci **40477536464**
+  at **e569341230b3970cadaeb48a235a12a4645da74a**, on wip/media4-native in
+  C:\work\gesher-media4-native. It includes the corrected signed16/core
+  permission fixtures, functional pure media linkage, the preserved manifest
+  provider and original ELF TLS initializer, plus actual both-ABI ELF and
+  callback/TLS checks. Peer source review found no blocker; compile/runtime
+  acceptance is pending. Source is frozen and no native API metadata changes.
+
 - OpenSL full ci **40470959941** is RED at
   **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
   db84749b/fresh exit-status30deb08c merged:20 success/six skipped/two failed.
