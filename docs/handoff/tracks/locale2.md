@@ -35,29 +35,22 @@ Merge current integration before final CI. No local AOSP build or WSL.
 ## Status and next steps
 
 First bounded slice started on 2026-10-27 in `C:\work\gesher-locale2`,
-`wip/locale2`, from accepted integration `7b49a718`. ADR0066 and test81 cover
-persisted override/replacement/clear, selected-locale reconciliation and ordinary
-caller/package/user boundaries. Source and actual APK fixtures are prepared;
-runtime/full acceptance are pending. Initial compile `40507901609` was canceled
-as superseded (not failed/retried). Source `f9f3f629`/compile `40508467291` passes
-framework javac0 and the production service/app build, then fails before APK
-compilation because the two new shell wrappers had Git mode100644. The next
-source corrects executable modes and adds branch-scoped CI: current-run Java/APK
-build plus exact immutable full-green native runtime40498782924/8ec4bf3c,
-with actual test81 on both Windows hosts. This is imageless scoped API evidence,
-not native rebuild, boot-image, package or e2e acceptance. Per-package override
-files avoid cached global map replacement between independent single-process
-apps. Source71ee7a0c/scoped40509891830 builds both APKs successfully and has
-all ten actual device groups PASS on both runners, but nine single-mode groups
-FAIL: Main's documented headless EndLoop runs before the fixture's delayed
-STATE/DONE. The next fixture retains its settled observation and adds a queue
-snapshot before EndLoop, without removing any expected value/callback control.
-It requires exact single-mode callback counts, every ordered locales/greeting
-payload and the final resource/default snapshot; device must still reach its
-settled snapshot. Missing asynchronous delivery remains a failure.
-A narrow malformed-Properties read error is also covered: no override is returned,
-as with the pinned XML parse error. All acceptance remains pending the next CI.
-No old compile result is reused as proof for changed source. See
+`wip/locale2`. ADR0066/test81 cover persisted override/replacement/clear,
+selected-locale reconciliation and ordinary caller/package/user boundaries.
+Exact source `004fff10` passes scoped `40512781936`: all four actual job logs
+read, 21 PASS groups/no FAIL/final zero on both Windows hosts. These are real
+public API/APK/resource/restart/error controls, including every ordered
+single-mode callback and the original settled device observation. Native
+runtime provenance is exact full40498782924/8ec4bf3c; execution is imageless.
+This does not establish the pending full product/package/e2e gates.
+
+Merge `acb144fb` imports latest accepted integration `bc6e05be`/Net4; merge
+`d698a74e` imports immutable verified Wide/FPCR/FPSR `75e7ef29`. The Native2
+include/Run conflict resolution retains ifaddrs, Wide, ArmFpcr and ArmFpsr,
+both reference builds, APK markers and complete captured evidence. Locale code
+is unchanged from scoped004fff10, ARM production from75e7, Net4 frombc6.
+The coherent full candidate is ready; actual full acceptance is pending.
+See [the stage report and failed-run history](locale2-persisted-config.md),
 [ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
 [pinned-source audit](locale2-source-audit.json).
 
@@ -65,5 +58,6 @@ Privileged grants/installer/IME identity, permission-gated broadcasts,
 uninstall/retain-data, Windows NLS/regional-format and native locale/time-zone
 contracts remain open. The all-packages-same-UID, PM all-packages UID query and
 AMS all-granted permission stand-ins are concrete Services3 gaps, not authority
-for this slice. The frozen Native/FPSR worktree and its active full CI are
-unchanged. No local compilation or native/JVM/C# fixture execution.
+for this slice. The verified Native/FPSR source/ref remains frozen; no pending
+spawn/AOT/Media continuation is imported. No local compilation or native/JVM/C#
+fixture execution.
