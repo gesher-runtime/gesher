@@ -22,7 +22,7 @@ function Invoke-CoreLibsTest([string] $Name, [string[]] $Exclude = @(), [int] $T
   if ($Exclude) { $arguments += "--gtest_filter=-$($Exclude -join ':')" }
   $execution = Invoke-GtestProcess -Executable $exe -Arguments $arguments -WorkingDirectory $libsTests -TimeoutSec $TimeoutSec
   if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
-    Write-Host "INFO  gtest process: complete=$($execution.ProcessComplete) readers=$($execution.ReadersComplete) disposed=$($execution.Disposed) exit=$($execution.Exit)"
+    Write-Host "INFO  gtest process: complete=$($execution.ProcessComplete) readers=$($execution.ReadersComplete) disposed=$($execution.Disposed) exit=$($execution.Exit) tasksdone=$($execution.ReaderTasksComplete) pipesclosed=$($execution.PipesClosed) pipe-output=$($execution.StdoutHandle) pipe-error=$($execution.StderrHandle)"
   }
   $timedOut = $execution.TimedOut
   $stdout = $execution.Stdout
@@ -33,7 +33,7 @@ function Invoke-CoreLibsTest([string] $Name, [string[]] $Exclude = @(), [int] $T
     ForEach-Object { ($_ -replace '^\[  FAILED  \] ', '') -replace ',.*$', '' } | Sort-Object -Unique)
   $excluded = if ($Exclude) { " ($($Exclude.Count) excluded, docs/core-libs.md)" } else { '' }
   if (-not $timedOut -and $execution.ProcessComplete -and $execution.ReadersComplete -and
-      $execution.Disposed -and -not $execution.Problem -and $execution.Exit -eq 0 -and $passed -gt 0 -and -not $failedTests) {
+      $execution.Disposed -and $execution.ReaderTasksComplete -and $execution.PipesClosed -and -not $execution.Problem -and $execution.Exit -eq 0 -and $passed -gt 0 -and -not $failedTests) {
     Write-Host "PASS  $Name`: $passed tests passed$excluded"
     return $true
   }
