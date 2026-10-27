@@ -38,6 +38,14 @@ environment workflow now includes the same explicit Temurin21 correction.
 Environment dispatch still waits for corrected coherent runtime proof; the
 red prerequisite is not retried unchanged or relabeled verified.
 
+Final peer-reviewed workflow guards retain absolute boot rebuild paths/caller
+restoration, fresh API3 profman/dexdump alongside runtime/tools, eight exact
+source/run/attempt supplier checks and15 rebuilt-image producer/consumer
+SHA256 matches. No bounded workflow/path/tool blocker was found. Env85 still
+has no runtime run and waits for corrected coherent evidence. Legacy Native2
+process cleanup remains separately open; scoped A64Run uses a strict60-second
+child bound.
+
 The earlier audit and proposed scope below are historical context; only
 the source/CI results subsequently recorded here can establish completion.
 
