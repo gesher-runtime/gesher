@@ -36,3 +36,17 @@ actual CI compilation/current-role checks and fresh changed-union full with
 actual whole suites, both regression jobs, package and both e2e. Successor
 integrator owns union construction/dispatch; this owner supplies source only.
 No local C/C++/Java/C# compilation or executable fixture was run.
+
+## 2026-10-28: first canonical guard failure retained
+
+Union4a47a20e/full40588525037 failed after production compilation, before
+production upload/hook/runtime/package/e2e. host_roles.py assumed the compiler
+was cached; toolchain line21 sets an ordinary CMake variable. The narrow
+correction reads the sole generated CMakeCXXCompiler.cmake record, requires
+its absolute real compiler/optional cached entry to agree, corroborates all
+four actual query CXX command driver/launcher paths, and hashes compiler,
+launcher and metadata bytes. Missing/ambiguous metadata fails closed; there
+is no guessed compiler fallback. Same-source/flags/exe/installer guards stay.
+A CI-only compiler-preflight mode exposes this exact extraction for focused
+real CMake OFF/ON verification. Source parsing only locally; changed-source
+preflight/full and all actual runtime/package/e2e gates remain pending.

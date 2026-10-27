@@ -77,8 +77,52 @@ def commands(build):
     return result
 
 def compiler(build):
-    path = Path(cache(build)["CMAKE_CXX_COMPILER"]).resolve(strict=True)
-    return {"path": str(path), "sha256": sha(path)}
+    # The toolchain sets an ordinary variable, so it need not appear in
+    # CMakeCache.txt. Use CMake's actual generated compiler record and require
+    # all four real CXX command lines to invoke that exact configured driver.
+    records = list((build / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake"))
+    require(len(records) == 1, "Expected one authoritative generated CXX compiler record")
+    metadata = records[0].resolve(strict=True)
+    matches = re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"]+)"\)\s*$',
+                         metadata.read_text(encoding="utf-8"), flags=re.MULTILINE)
+    require(len(matches) == 1, "Missing or ambiguous configured CXX driver")
+    configured = Path(matches[0])
+    require(configured.is_absolute(), "Configured compiler driver is not absolute")
+    path = configured.resolve(strict=True)
+    settings = cache(build)
+    if "CMAKE_CXX_COMPILER" in settings:
+        require(Path(settings["CMAKE_CXX_COMPILER"]).resolve(strict=True) == path,
+                "Cached compiler contradicts actual generated compiler")
+    launcher = settings.get("CMAKE_CXX_COMPILER_LAUNCHER", "")
+    require(";" not in launcher, "Unexpected multi-command compiler launcher")
+    launcher_path = None
+    if launcher:
+        resolved = shutil.which(launcher)
+        require(resolved is not None, "Configured compiler launcher cannot be resolved")
+        launcher_path = Path(resolved).resolve(strict=True)
+    seen = set()
+    for key, args in commands(build).items():
+        source = Path(key[1]).resolve().relative_to(ROOT).as_posix()
+        if source not in CHANGED:
+            continue
+        index = 1 if launcher_path is not None else 0
+        require(len(args) > index and args[index] == str(configured),
+                "Actual CXX command does not invoke the generated configured driver: " + source)
+        if launcher_path is not None:
+            actual_launcher = shutil.which(args[0])
+            require(actual_launcher is not None and Path(actual_launcher).resolve(strict=True) == launcher_path,
+                    "Actual CXX launcher differs from configured launcher")
+        seen.add(source)
+    require(seen == CHANGED, "Missing actual query CXX commands for configured compiler proof")
+    return {"path": str(path), "configured_driver": str(configured), "sha256": sha(path),
+            "metadata_file": str(metadata), "metadata_sha256": sha(metadata),
+            "launcher": str(launcher_path) if launcher_path is not None else None,
+            "launcher_sha256": sha(launcher_path) if launcher_path is not None else None}
+
+def compiler_preflight(args):
+    info = context()
+    print(json.dumps({"source": info["source"], "compiler": compiler(Path(args.build)),
+                      "actual_query_cpp_commands": sorted(CHANGED)}, sort_keys=True))
 
 def sources():
     return {name: sha(ROOT / name) for name in SHARED}
@@ -179,11 +223,14 @@ def main():
         item.add_argument("--dist", required=True)
         item.add_argument("--state", required=True)
         if name == "capture-hook": item.add_argument("--out", required=True)
+    item = sub.add_parser("compiler-preflight")
+    item.add_argument("--build", required=True)
     item = sub.add_parser("verify")
     item.add_argument("--dist", required=True)
     item.add_argument("--hook", action="store_true")
     args = parser.parse_args()
-    {"capture-production": capture_production, "capture-hook": capture_hook, "verify": verify}[args.command](args)
+    {"capture-production": capture_production, "capture-hook": capture_hook,
+     "compiler-preflight": compiler_preflight, "verify": verify}[args.command](args)
 
 if __name__ == "__main__":
     main()
