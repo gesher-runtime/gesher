@@ -24,6 +24,7 @@ struct Result {
 };
 
 inline thread_local const char* expected = nullptr;
+inline thread_local bool nested_result = true;
 
 __attribute__((noinline, format(printf, 1, 2))) inline bool Format(const char* fmt, ...) {
   va_list ap, first, second;
@@ -59,7 +60,7 @@ inline bool Mixed() {
 
 inline int Compare(const void* a, const void* b) {
   // Actual host qsort re-enters guest code while its caller's list is live.
-  if (!Mixed()) return 0;
+  nested_result = Mixed() && nested_result;
   return *static_cast<const int*>(a) - *static_cast<const int*>(b);
 }
 
@@ -68,13 +69,14 @@ __attribute__((noinline, format(printf, 1, 2))) inline bool Nested(const char* f
   va_start(ap, fmt);
   va_copy(copy, ap);
   int items[] = {4, 1, 3, 2};
+  nested_result = true;
   qsort(items, 4, sizeof(int), Compare);
   char a[64], b[64];
   int na = vsnprintf(a, sizeof(a), fmt, ap);
   int nb = vsnprintf(b, sizeof(b), fmt, copy);
   va_end(copy);
   va_end(ap);
-  return items[0] == 1 && items[1] == 2 && items[2] == 3 && items[3] == 4 &&
+  return nested_result && items[0] == 1 && items[1] == 2 && items[2] == 3 && items[3] == 4 &&
          na == 17 && nb == na && strcmp(a, "11 22 33 44 55 66") == 0 && strcmp(a, b) == 0;
 }
 
@@ -158,7 +160,9 @@ inline Result Run(const std::string& dir) {
   r.Check(file != nullptr, "wide formatted-output stream opens");
   if (file) {
     int count = Wide(file, L"%.1f %d %.1f %d", 1.5, 7, 2.5, 8);
-    r.Check(fflush(file) == 0 && fclose(file) == 0, "wide output flushes and closes");
+    const int flush_result = fflush(file);
+    const int close_result = fclose(file);
+    r.Check(flush_result == 0 && close_result == 0, "wide output flushes and closes");
     // A separate byte-oriented stream avoids mixing byte and wide I/O on
     // one FILE; rewind does not reset a stream's C orientation.
     file = fopen(wide_path.c_str(), "rb");

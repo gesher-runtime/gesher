@@ -89,3 +89,4 @@ jobs:
           if ($oldDll -notmatch 'version mismatch' -or
               $oldDll -match 'guest library loaded\s+ok') { throw 'New host accepted old private list ABI' }
           Write-Host 'PASS arm64 varargs: actual API2/API3 host-DLL mismatches reject before any guest library runs'
+          exit 0

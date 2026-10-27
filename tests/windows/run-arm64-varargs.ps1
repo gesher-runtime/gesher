@@ -30,11 +30,14 @@ function InvokeVarargs([string] $Exe, [string[]] $Arguments, [int] $ExpectedExit
     if ($process.ExitCode -ne $ExpectedExit) { throw 'Unexpected actual varargs child exit' }
     return $text
   } finally {
-    if ($started -and -not $process.HasExited) {
-      $process.Kill($true)
-      if (-not $process.WaitForExit(2000)) { Write-Host 'FAIL arm64 varargs: cleanup did not terminate child within 2 seconds' }
+    try {
+      if ($started -and -not $process.HasExited) {
+        $process.Kill($true)
+        if (-not $process.WaitForExit(2000)) { Write-Host 'FAIL arm64 varargs: cleanup did not terminate child within 2 seconds' }
+      }
+    } finally {
+      $process.Dispose()
     }
-    $process.Dispose()
   }
 }
 
