@@ -1,0 +1,121 @@
+name: exec4-child-diagnostics
+on:
+  push:
+    branches: [wip/exec4-spawn]
+    paths:
+      - .github/workflows/exec4-child.yml
+      - compat/elf/exec/spawn_actions.*
+      - compat/elf/exec/gesher_exec.cc
+      - tests/exec/no-console-spawn.cc
+      - tests/exec/exec4_spawn.c
+      - tests/windows/tracks/77-exec4-spawn.ps1
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: exec4-child-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  ndk:
+    uses: ./.github/workflows/exec.yml
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build only the actual launcher and no-console host caller
+        run: ninja -C out gesher-exec exec4_no_console_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec4-child-hosts
+          path: |
+            out/gesher-exec.exe
+            out/exec4_no_console_probe.exe
+  test:
+    needs: [build, ndk]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable native support producers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sourceRun = '40502225202'
+          $sourceSha = '0808ba71b62ea784432de52f31bd3f86c9e2e3ad'
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne $sourceSha -or
+              $run.status -cne 'completed' -or $run.run_attempt -ne 1 -or
+              $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY) { throw 'Wrong native support source' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun/attempts/1/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify support jobs' }
+          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$sourceRun/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $artifacts.total_count -gt 100) { throw 'Cannot verify support artifacts' }
+          foreach ($support in @(@('windows-x64', 'build'), @('arm64', 'arm64 / build'))) {
+            $job = @($jobs.jobs | Where-Object name -CEQ $support[1])
+            $artifact = @($artifacts.artifacts | Where-Object name -CEQ $support[0])
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or
+                $job[0].head_sha -cne $sourceSha -or $job[0].run_id -ne [long]$sourceRun -or
+                $artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].size_in_bytes -le 0 -or
+                $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+                $artifact[0].workflow_run.head_sha -cne $sourceSha -or
+                $artifact[0].workflow_run.id -ne [long]$sourceRun -or
+                $artifact[0].workflow_run.head_repository_id -ne $run.repository.id) { throw 'Wrong native support identity' }
+            Write-Host "EXEC4_SUPPORT name=$($support[0]) id=$($artifact[0].id) digest=$($artifact[0].digest) run=$sourceRun SHA=$sourceSha"
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec4-child-hosts
+          path: dist
+      - name: Run actual two-ABI spawn assertions with absolute and relative Dir
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = 0
+          function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          foreach ($name in @('RunTimed', 'CheckTimed')) {
+            $definition = $ast.FindAll({ param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $false) | Where-Object Name -eq $name
+            if (@($definition).Count -ne 1) { throw "Expected one original helper $name" }
+            . ([scriptblock]::Create($definition.Extent.Text))
+          }
+          $Dir = 'dist'
+          $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory $root | Out-Null
+          . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
+          Write-Host "$failed test(s) failed"
+          if ($failed) { exit 1 }
