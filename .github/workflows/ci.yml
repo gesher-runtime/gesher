@@ -29,6 +29,8 @@ jobs:
 
       - name: Build
         run: |
+          # Compile/link ordered spawn setup and its actual no-console caller first.
+          ninja -C out exec4_no_console_probe gesher-exec
           # Check the new native format ABI bridge before the full AOSP graph.
           ninja -C out CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj
           ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj

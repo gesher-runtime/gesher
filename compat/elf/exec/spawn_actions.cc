@@ -64,7 +64,8 @@ int ApplySpawnActions(const SpawnRequest& request) {
   // The existing UCRT inherited-fd protocol supports descriptors below7000.
   // Apply actions before closing these, so an explicit dup can retain one.
   for (int fd = 0; fd < 7000; ++fd) {
-    if (_get_osfhandle(fd) == -1) continue;
+    intptr_t value = _get_osfhandle(fd);
+    if (value == -1 || value == -2 || value == 0) continue;
     int flags = fcntl(fd, F_GETFD, 0);
     if (flags < 0) return 127;
     if ((flags & FD_CLOEXEC) != 0) close(fd);

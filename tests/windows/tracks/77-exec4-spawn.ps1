@@ -29,4 +29,8 @@ foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
     'dup2 from closed parent stdin fails in a real child with127',
     'closed-stdin failure prevents later file creation',
     '0 test(s) failed')
+  CheckTimed "exec4 spawn ($execSpawnAbi): actual UCRT no-console stdin remains closed" "$Dir/exec4_no_console_probe.exe" @(
+    '--run', $execSpawnProgram) @(
+    'PASS  spawn no-console: raw stdin -2, spawn0, actual child',
+    'status0x2a00, parent unchanged')
 }

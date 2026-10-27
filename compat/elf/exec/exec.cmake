@@ -17,6 +17,10 @@ add_executable(gesher-exec
 target_compile_options(gesher-exec PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher-exec PRIVATE gesher_exec_spawn gesher_bionic gesher_elf bcrypt shell32)
 
+add_executable(exec4_no_console_probe ${CMAKE_SOURCE_DIR}/tests/exec/no-console-spawn.cc)
+target_compile_options(exec4_no_console_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec4_no_console_probe PRIVATE gesher_exec_spawn gesher_bionic gesher_elf shell32)
+
 add_executable(exec3_tls_probe ${CMAKE_SOURCE_DIR}/tests/exec/fs-local-exec-probe.cc)
 target_include_directories(exec3_tls_probe PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
 target_compile_options(exec3_tls_probe PRIVATE -Wall -Wextra -Werror)

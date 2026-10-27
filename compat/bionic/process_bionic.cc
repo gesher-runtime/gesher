@@ -218,8 +218,11 @@ int SpawnProgram(const std::string& program, const std::vector<std::string>& arg
 std::vector<ex::ChildFd> InheritedFds() {
   std::vector<ex::ChildFd> out;
   for (int fd = 0; fd < 2048; ++fd) {
-    HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-    if (h != INVALID_HANDLE_VALUE && h != nullptr) out.push_back({fd, h});
+    intptr_t value = _get_osfhandle(fd);
+    // UCRT uses -2 for unbound standard streams in a no-console process.
+    if (value != -1 && value != -2 && value != 0) {
+      out.push_back({fd, reinterpret_cast<HANDLE>(value)});
+    }
   }
   return out;
 }
