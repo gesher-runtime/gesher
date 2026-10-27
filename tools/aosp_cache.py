@@ -32,6 +32,41 @@ def source_root(path):
     return root
 
 
+def git_paths(args, cwd, environment):
+    """Include actual cwd and Git's global path options, not arbitrary dash filters.
+
+    /proc may observe Git before or after its -C parsing, so path options are
+    checked against both the actual cwd and the replayed final relative base.
+    This deliberately fails closed across that short parsing transition.
+    """
+    bases, options, ordinary = [cwd], [], []
+    i = 1
+    while i < len(args):
+        arg = os.fsdecode(args[i])
+        option = value = None
+        if arg in ('-C', '--git-dir', '--work-tree') and i + 1 < len(args):
+            option, value = arg, os.fsdecode(args[i + 1])
+            i += 1
+        elif arg.startswith('--git-dir=') or arg.startswith('--work-tree='):
+            option, value = arg.split('=', 1)
+        elif arg.startswith('-C') and len(arg) > 2:
+            option, value = '-C', arg[2:]
+        elif arg and not arg.startswith('-'):
+            ordinary.append(arg)
+        if option == '-C' and value:
+            bases.append((bases[-1] / value).resolve())
+        elif option in ('--git-dir', '--work-tree'):
+            options.append(value)
+        i += 1
+    for entry in environment:
+        if entry.startswith(b'GIT_DIR=') or entry.startswith(b'GIT_WORK_TREE='):
+            options.append(os.fsdecode(entry.split(b'=', 1)[1]))
+    paths = list(bases) + [(cwd / value).resolve() for value in ordinary]
+    for base in (cwd, bases[-1]):
+        paths.extend((base / value).resolve() for value in options)
+    return paths
+
+
 def git_processes(root):
     """Detect Git commands by actual executable/cwd, including git -C children."""
     found = []
@@ -46,16 +81,8 @@ def git_processes(root):
             known_git = True
             cwd = Path(os.readlink(proc / 'cwd'))
             args = (proc / 'cmdline').read_bytes().split(b'\0')
-            paths = [cwd]
-            for arg in args[1:]:
-                text = os.fsdecode(arg)
-                if text and not text.startswith('-'):
-                    paths.append((cwd / text).resolve())
             environment = (proc / 'environ').read_bytes().split(b'\0')
-            for entry in environment:
-                if entry.startswith(b'GIT_DIR=') or entry.startswith(b'GIT_WORK_TREE='):
-                    paths.append((cwd / os.fsdecode(entry.split(b'=', 1)[1])).resolve())
-            if any(within(path, root) for path in paths):
+            if any(within(path, root) for path in git_paths(args, cwd, environment)):
                 found.append({'pid': int(proc.name), 'exe': exe, 'cwd': str(cwd)})
         except (FileNotFoundError, ProcessLookupError):
             continue  # process exited during inspection

@@ -103,10 +103,23 @@ locks. A Linux GitHub-Actions-only guard immediately after restore records
 incoming lock paths/hashes and removes only recognized stale Git locks under
 the exact AOSP workspace, before any source Git child. It refuses local or
 external paths, symlinks, unknown locks and active Git; snapshot never deletes.
-Seven fixtures (including a real held Git process) run in CI before restore.
+Lifecycle fixtures (including real held Git processes) run in CI before restore.
 Only Python AST/diff inspection has run locally; the fixtures and corrected
 full run still need CI. No unchanged retry or cache-key eviction hides the
 incoming-lock evidence. Net4 runtime source and historical inventory stay fixed.
+
+Scoped framework40459897967/a1c649b4 completes green; actual122041786365
+was read. Seven initial lifecycle fixtures pass. Before any source Git command,
+the exactccc8 cache restores zero-byte wificond index.lock and
+info/sparse-checkout.lock with the interrupted producer's mtime; prepare logs
+and removes both, javac completes with zero errors, and the snapshot has no
+active Git/locks. This confirms the cancelled-cache chain, not a parallel
+checkout failure. That scoped source still misses global Git path-option
+liveness forms identified by Root review. The next source parses --git-dir/
+--work-tree in equals/separate forms and successive relative -C bases; three
+additional fixtures hold real Git commands outside the source cwd and isolate
+those cases. Ten-fixture/corrected-source CI and full runtime proof remain
+required. The earlier seven-fixture success does not prove the new controls.
 
 The earlier fixture-only stage is merged through verified Media3 integration
 f17d03b1: four local certificate rejections, NetApp HTTPS and deterministic

@@ -47,10 +47,9 @@ class CacheBoundaryTest(unittest.TestCase):
             CACHE.guard('snapshot', self.root)
         self.assertTrue(lock.exists())
 
-    def test_active_real_git_refuses_cleanup_and_snapshot(self):
-        subprocess.run(['git', 'init', '-q', str(self.project)], check=True)
+    def held_git_blocks(self, args, cwd):
         lock = self.stale()
-        process = subprocess.Popen(['git', 'hash-object', '--stdin'], cwd=self.project,
+        process = subprocess.Popen(['git'] + args, cwd=cwd,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         try:
             deadline = time.monotonic() + 3
@@ -68,6 +67,40 @@ class CacheBoundaryTest(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate(timeout=5)
+
+    def test_active_real_git_refuses_cleanup_and_snapshot(self):
+        subprocess.run(['git', 'init', '-q', str(self.project)], check=True)
+        self.held_git_blocks(['hash-object', '--stdin'], self.project)
+
+    def outside_repository(self):
+        outside = self.workspace / 'outside-repository'
+        subprocess.run(['git', 'init', '-q', str(outside)], check=True)
+        subprocess.run(['git', 'init', '-q', str(self.project)], check=True)
+        return outside
+
+    def test_outside_cwd_git_dir_equal_and_separate_forms(self):
+        outside = self.outside_repository()
+        for path_options in (
+                ['--git-dir=' + str(self.git), '--work-tree=' + str(outside)],
+                ['--git-dir', str(self.git), '--work-tree', str(outside)]):
+            self.held_git_blocks(path_options + ['hash-object', '--stdin'], outside)
+
+    def test_outside_metadata_work_tree_equal_and_separate_forms(self):
+        outside = self.outside_repository()
+        for path_options in (
+                ['--git-dir=' + str(outside / '.git'), '--work-tree=' + str(self.project)],
+                ['--git-dir', str(outside / '.git'), '--work-tree', str(self.project)]):
+            self.held_git_blocks(path_options + ['hash-object', '--stdin'], outside)
+
+    def test_successive_relative_C_bases_and_relative_git_dir(self):
+        outside = self.outside_repository()
+        final = outside / 'one' / 'two'
+        final.mkdir(parents=True)
+        args = ['-C', 'one', '-C', 'two', '--git-dir', os.path.relpath(self.git, final),
+                'hash-object', '--stdin']
+        self.assertIn(self.git, CACHE.git_paths([os.fsencode(a) for a in ['git'] + args],
+                                              outside, []))
+        self.held_git_blocks(args, outside)
 
     def test_external_root_and_local_execution_refused(self):
         with self.assertRaises(CACHE.CacheError):
