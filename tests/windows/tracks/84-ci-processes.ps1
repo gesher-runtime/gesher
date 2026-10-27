@@ -16,18 +16,20 @@ if ($LASTEXITCODE -ne 0) {
 # and SurfaceRun's 8 s diagnostic/500 s phase bounds. Phases=0 isolates exit
 # cleanup without fabricating HWNDs, pixels or app phase markers.
 $process84SavedDir = $Dir
+$process84SavedSlHost = $slHost
 $process84SurfaceDir = Join-Path $process84Root 'surface-helper'
 New-Item -ItemType Directory $process84SurfaceDir | Out-Null
 $process84SurfaceExe = Join-Path $process84SurfaceDir 'dalvikvm.exe'
 Copy-Item -LiteralPath $process84Exe -Destination $process84SurfaceExe
 try {
   $Dir = $process84SurfaceDir
+  $slHost = $process84SurfaceDir
   $dvmSurfaces = @()
   foreach ($helper in 'SurfaceRun', 'InvokeOpenSl') {
     foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                        @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
       $pidFile = Join-Path $process84Root "$helper-$($case.Mode).pid"
-      $ownedExe = if ($helper -eq 'SurfaceRun') { $process84SurfaceExe } else { $process84Exe }
+      $ownedExe = $process84SurfaceExe
       $expected = if ($helper -eq 'SurfaceRun' -and $case.Mode -eq 'retained') { 0 } else { $case.Expected }
       $timer = [Diagnostics.Stopwatch]::StartNew()
       try {
@@ -35,7 +37,7 @@ try {
           $result = SurfaceRun -Arguments @($case.Mode, $pidFile) -Tag "process84-$($case.Mode)" -AppLogs @() -Phases 0
           $code = $result.Exit
         } else {
-          $result = InvokeOpenSl -Arguments @($case.Mode, $pidFile) -Exe $process84Exe
+          $result = InvokeOpenSl -Arguments @($case.Mode, $pidFile)
           $code = $result.Code
         }
         $text = $result.Text
@@ -82,7 +84,7 @@ try {
       }
     }
   }
-} finally { $Dir = $process84SavedDir }
+} finally { $Dir = $process84SavedDir; $slHost = $process84SavedSlHost }
 foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                    @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
   $pidFile = Join-Path $process84Root "$($case.Mode).pid"
