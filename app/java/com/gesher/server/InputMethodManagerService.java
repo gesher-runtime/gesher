@@ -73,6 +73,9 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
                 IRemoteInputConnection inputConnection, int startInputReason,
                 int startInputFlags, int softInputMode);
 
+        /** The client's binding result has been enqueued; host requests may follow it. */
+        default void onInputBound(IBinder windowToken) { }
+
         /** The keyboard layout (HKL) of the thread of window {@code windowToken}; 0: unknown. */
         long keyboardLayout(IBinder windowToken);
     }
@@ -267,6 +270,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         }
         try {
             client.onStartInputResult(result, startInputSeq);
+            if (host != null) host.onInputBound(windowToken);
         } catch (RemoteException e) {
             // The client is gone.
         }

@@ -386,12 +386,19 @@ public final class WindowsInputMethod implements InputMethodManagerService.Host,
         if (editorInfo != null && inputConnection != null) {
             log("input started in window \"" + w.title + "\": " + describe(editorInfo)
                     + ", keyboard layout " + Long.toHexString(keyboardLayout(windowToken)));
-            // After the client has its binding (its result message is queued before this):
-            // the editor reports its cursor from now on.
-            Handler h = w.handler != null ? w.handler : new Handler(Looper.getMainLooper());
-            h.post(() -> requestCursorUpdates(w));
         }
         return new InputMethodManagerService.Session(w, mClientChannel.dup());
+    }
+
+    @Override
+    public void onInputBound(IBinder windowToken) {
+        Window w = window(windowToken, false);
+        if (w == null) return;
+        Handler h = w.handler != null ? w.handler : new Handler(Looper.getMainLooper());
+        // startInput's earlier query may precede InputMethodManager accepting its
+        // result and return unavailable. Requery after that result is queued,
+        // including an unchanged initial selection that emits no updateSelection.
+        h.post(() -> { requestDocument(w); requestCursorUpdates(w); });
     }
 
     @Override
