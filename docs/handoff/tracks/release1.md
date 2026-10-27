@@ -43,6 +43,29 @@ with current tracks. No local AOSP builds or WSL; absolute worktree paths.
 
 ## Status and next steps
 
+Read-only continuation,2026-10-28: current clean sourcefc3e0a8a remains
+unqualified release preparation. Saved source-linked feasibility is
+C:/work/gesher-ci-review/release1-next-candidate-feasibility-2026-10-28.md.
+No code/version/tag/asset/main/publishing change or new release CI occurred.
+The old releaseguard REQUIRED_JOBS/steps predates the current canonical FPSR
+reference and both query-regression matrices, productionOFF sealing and hook
+build, plus actual query role/runtime steps. Its subset check must explicitly
+require the final current graph before promotion; merely checking conclusions
+of jobs that happen to exist is insufficient. Add missing-job/skipped-critical-
+step negatives during the later source preparation, without weakening guards.
+
+After exact coherent source qualifies, reconcile only the reviewed release
+version/receipt/installed-notice scope onto it; preserve all modern production/
+hook/source/image/fixture exclusion gates. Actual release_version0.1.0 full
+must prove PE/filename/version selection, installed OpenSL source-hash equality,
+post-smoke artifact receipt and every normal/query/package/e2e gate. Older
+package23 proves no new installed notice. The separate release verification
+process helper also needs bounded wait/reader/task/handle ownership review;
+current process SafeHandle checks do not prove pipe cleanup. Only all-gap/main
+closure later unlocks fresh complete main release-version CI, dry-run candidate,
+immutable receipt/pin/attempt promotion and both released-byte install/e2e
+checks. All hardware and other independent gaps remain required blockers.
+
 Owner-requested checkpoint: release source0e4304a25251fbfeb4499886e9e955abaa34f2f1
 is saved; this checkpoint changes documentation only. No release-version
 full, promotion workflow, tag, PR, main merge or release has been run here.
