@@ -121,6 +121,35 @@ cause for the old full127. Current integration3577b330 (docs above accepted
 Net4bc6) is merged before the next full run. No runtime/roadmap acceptance
 is claimed until both full suites, package and both e2e jobs pass.
 
+## Owner-requested stop checkpoint
+
+Work stopped on2026-10-27 for a new coordinating session. Full40521839555
+at b4c350b80b5b74ea87b2fe4933b185137b39449a is RED: Windows2022 has2 top
+failures (the two ABI action callers);2025 has those two plus3 repeated
+Web3 teardown/launch failures. Both actual no-console callers pass. Package
+and both e2e jobs have successful conclusions; their actual logs have not
+been independently reread by Root for this run.
+
+Root read both completed Windows logs122255368046/122255368845. The new
+phase diagnostics identify the remaining action failure precisely:
+
+> program lookup ... errno2 ... path[dist/exec4-spawn-arm64-v8a]
+> cwd[D:\a\_temp\gesher-root\...\a-\u05d2\b-\u05e9]
+
+The full driver passes relative Dir=dist; test77 consequently supplies a
+relative self-program path, then deliberately changes the child's directory.
+POSIX resolves that program after actions, so the lookup correctly fails.
+The scoped driver used absolute Dir and passed. Next action: make test77's
+actual self-program path absolute with Resolve-Path before NoDrive; retain
+the production post-action lookup semantics and every original assertion.
+No such fix was applied before this stop. This evidence explains the tested
+full's127 without a Unicode-chdir production claim; the ANSI import
+hypothesis was already disproved by scoped assembly/binding inspection.
+
+Plain logs: C:\work\gesher-ci-review\exec4-spawn-40521839555-root-test2022.log
+and test2025.log. Preserve the strict source/CI evidence and the unrelated
+Web3 failures. No retry, new CI dispatch or merge after the stop request.
+
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
 explicitly open in the aggregate Exec4 brief/ADR0074.
