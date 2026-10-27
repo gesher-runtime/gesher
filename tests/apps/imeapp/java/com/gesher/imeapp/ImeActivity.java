@@ -6,6 +6,7 @@ package com.gesher.imeapp;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Handler;
 import android.text.Editable;
 import android.text.Layout;
 import android.text.Selection;
@@ -13,6 +14,7 @@ import android.text.TextWatcher;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -32,6 +34,29 @@ public class ImeActivity extends Activity {
     private static final String TAG = "ImeActivity";
 
     private EditText mEdit;
+    private final Handler mInsetHandler = new Handler();
+    private final java.util.Map<String, String> mTextSnapshots = new java.util.HashMap<>();
+    private boolean mPollingComposition;
+    private final Runnable mCompositionInsets = new Runnable() {
+        @Override public void run() {
+            EditText last = findViewById(R.id.last);
+            // finishComposingText changes spans without changing characters, so
+            // TextWatcher alone cannot observe the actual post-Enter state.
+            reportText(last, "last");
+            if (BaseInputConnection.getComposingSpanStart(last.getText()) < 0) {
+                mPollingComposition = false;
+                return;
+            }
+            View decor = getWindow().getDecorView();
+            WindowInsets insets = decor.getRootWindowInsets();
+            if (insets != null) {
+                android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                say("ImeActivity composing IME insets " + ime.left + "," + ime.top + ","
+                        + ime.right + "," + ime.bottom + " decor " + decor.getWidth() + "x" + decor.getHeight());
+            }
+            mInsetHandler.postDelayed(this, 300);
+        }
+    };
 
     private static void say(String message) {
         System.out.println(message);
@@ -79,11 +104,11 @@ public class ImeActivity extends Activity {
             @Override
             public void afterTextChanged(Editable s) {
                 int cs = BaseInputConnection.getComposingSpanStart(s);
-                int ce = BaseInputConnection.getComposingSpanEnd(s);
-                String composing = cs >= 0 && ce > cs
-                        ? " composing " + cs + "-" + ce + " '" + escape(s.subSequence(cs, ce)) + "'"
-                        : "";
-                say("ImeActivity text " + name + ": " + escape(s.toString()) + composing);
+                reportText(edit, name);
+                if (name.equals("last") && cs >= 0 && !mPollingComposition) {
+                    mPollingComposition = true;
+                    mInsetHandler.post(mCompositionInsets);
+                }
                 edit.post(() -> reportCursor(edit, name));
             }
         });
@@ -95,6 +120,15 @@ public class ImeActivity extends Activity {
         edit.setOnFocusChangeListener((v, hasFocus) -> {
             if (hasFocus) say("ImeActivity focus " + name);
         });
+    }
+
+    private void reportText(EditText edit, String name) {
+        Editable text = edit.getText();
+        int start = BaseInputConnection.getComposingSpanStart(text);
+        int end = BaseInputConnection.getComposingSpanEnd(text);
+        String value = escape(text.toString()) + (start >= 0 && end > start
+                ? " composing " + start + "-" + end + " '" + escape(text.subSequence(start, end)) + "'" : "");
+        if (!value.equals(mTextSnapshots.put(name, value))) say("ImeActivity text " + name + ": " + value);
     }
 
     /** The cursor in window pixels: x, top-bottom. */
@@ -166,6 +200,7 @@ public class ImeActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mInsetHandler.removeCallbacks(mCompositionInsets);
         super.onDestroy();
         say("ImeActivity onDestroy");
     }
