@@ -222,8 +222,12 @@ the microphone (looped, from its start each time recording starts);
 
 - Corrected Media4 full ci **40459815375** is running at
   **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
-  integration 53898b51's docs and source correction 73c20d70 below. Source
-  is frozen while it runs; host compilation/link/runtime remain unverified.
+  integration 53898b51's docs and source correction 73c20d70 below. Main
+  122041490613 passes the early bridge compile, both host executable links
+  and 203 assembly boundaries/zero problems; media 122043516317 passes the
+  two-ABI NDK/ELF/APK builds. Package 122048294220 passes all 23 actual
+  install/runtime/window/input/uninstall checks. Source is frozen while
+  both Windows and required e2e finish; test71/runtime acceptance is pending.
 
 - Media4's first NDK format slice has RED full ci **40456299720** at
   **92e914238cc8655aef472887ad9f494eec5c8a97**, after current integration
