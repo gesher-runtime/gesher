@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Dir)
 $ErrorActionPreference = 'Stop'
 $actor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_actor.exe')).Path
+$wireActor = (Resolve-Path -LiteralPath (Join-Path $Dir 'binder_sg_wire_peer.exe')).Path
 $brokerExe = (Resolve-Path -LiteralPath (Join-Path $Dir 'binderd.exe')).Path
 $root = Join-Path ([IO.Path]::GetTempPath()) ('gesher-sg-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($root)
@@ -55,7 +56,9 @@ function Wait-SgFile([string]$Path, $Child) {
     return $false
 }
 try {
-    foreach ($case in @('normal', 'malformed', 'oneway', 'smallmap', 'badread')) {
+    foreach ($case in @('normal', 'malformed', 'oneway', 'smallmap', 'badread', 'prefixfault', 'adoptfail',
+        'wire-beforeclaim', 'wire-claimloss', 'wire-installabort', 'wire-finishloss', 'wire-queue',
+        'wire-death-beforeclaim', 'wire-death-afterclaim', 'wire-death-afterinstall', 'wire-death-afterfinish')) {
         $env:GESHER_BINDER = 'sg88-' + [guid]::NewGuid().ToString('N')
         $prefix = Join-Path $root $case
         $broker = $null; $server = $null; $client = $null
@@ -63,11 +66,14 @@ try {
             $broker = Start-Sg $brokerExe @($env:GESHER_BINDER) ($prefix + '.broker.log')
             # Probe the real driver endpoint without opening a competing
             # context manager. Actors retry their actual open below.
-            $server = Start-Sg $actor @('server', $case, $prefix) ($prefix + '.server.log')
+            $serverExe = if ($case.StartsWith('wire-')) { $wireActor } else { $actor }
+            $server = Start-Sg $serverExe @('server', $case, $prefix) ($prefix + '.server.log')
             if (-not (Wait-SgFile ($prefix + '.ready') $server)) { throw "Receiver not ready: $case" }
             $client = Start-Sg $actor @('client', $case, $prefix) ($prefix + '.client.log')
+            Assert-Sg ($client.Process.Id -ne $server.Process.Id -and $server.Process.Id -ne $broker.Process.Id -and
+                $client.Process.Id -ne $broker.Process.Id) "$case broker/sender/receiver have three actual distinct PIDs"
             if (-not (Wait-SgFile ($prefix + '.queued') $client)) { throw "Sender did not queue: $case" }
-            if ($case -eq 'oneway') {
+            if ($case -in @('oneway', 'wire-queue')) {
                 Assert-Sg ((Stop-Sg $client) -eq 0) "$case sender exits before receiver reads"
                 $client = $null
             }
@@ -78,6 +84,9 @@ try {
             }
             Assert-Sg ((Stop-Sg $server) -eq 0) "$case receiver assertions and bounded completion"
             $server = $null
+            if ($case.StartsWith('wire-death-')) {
+                Assert-Sg ([IO.File]::Exists($prefix + '.death')) "$case reached exact real process-death boundary"
+            }
         } finally {
             foreach ($child in @($client, $server, $broker)) {
                 if ($null -ne $child) { [void](Stop-Sg $child 1000) }

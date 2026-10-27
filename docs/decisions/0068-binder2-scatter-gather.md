@@ -80,3 +80,20 @@ real mapped-capacity ENOMEM and bad receiver read memory. The host parent
 uses separate processes and ordinary control files with finite deadlines.
 Raw-wire lifetime/FD reuse controls and Android ABI/ART/APK wiring remain
 unfinished; the fixture source itself is not verification.
+
+The focused source peer ofdf80f63b found no new definite blocker in the staging
+correction. Additional raw-peer fixture source now peeks the exact next
+length4/status0 ACK without consuming it before disconnect; tests pre-claim,
+claim loss, installed-copy abort, finish loss and real receiver exit at each
+boundary. It checks staging closure, real file identity through distinct owned
+copies, actual handle-number reuse, repeat old-buffer cleanup and queued
+one-way progress. The common actor adds real EMFILE descriptor exhaustion and
+a protected-page read destination retaining a valid BR_NOOP prefix. None has
+compiled or run yet. Android ABI/mode wiring and final peer remain pending.
+
+Wider descriptor cleanup/identity remains open: binderd's existing
+CloseRemoteHandle uses PID-only OpenProcess and ignores live duplicate-close
+failure. This leaf must not imply permission/identity completion. Future gates
+need controlled live PROCESS_DUP_HANDLE denial/recovery with observable
+retained-handle accounting and process-creation identity/PID-reuse controls,
+in addition to ordinary FD/Bitmap/InputChannel regressions.
