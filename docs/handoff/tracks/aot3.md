@@ -37,6 +37,15 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+DelegateLast component40554342416/source7c2beb18 is GREEN4jobs, actual logs
+read:21 PCL+21 DLC passes per Windows host,15 original graph controls repeated
+per APK shape,0failed; actual Main/device loader/code/image/stale/refresh and
+cleanup pass. This is component proof. Current accepted integrationb323a42c
+is now merged for qualifying full CI, with the bounded original-failure-first
+Web3 native observer included. See aot3-shared-diagnostic.md for exact
+producer/job identities and retained boundaries. Full acceptance and the
+separate after-resource/staticSDK/secondary/factory scopes remain open.
+
 Resumed test73 source extends the bounded shared-library component to an
 actual manifest-selected DelegateLastClassLoader APK, retaining all original
 PCL graph/runtime checks. Fresh CI-built Java fixtures and matching rebuilt

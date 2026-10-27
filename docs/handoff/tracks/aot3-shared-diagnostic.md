@@ -1,5 +1,30 @@
 # Shared Java libraries: bounded component evidence
 
+## DelegateLast component result and qualifying full preparation
+
+Corrected component40554342416/source7c2beb18ed6becb2fa449654320cc2b4d8a255ab
+is GREEN4jobs. Actual framework122366339848 reports javac0/errors0 and
+builds/publishes sharedlibrarydlc.apk. Both actual runtime logs
+122370177406/122370177548 contain21 PCL+21 DLC PASS,0failed and the original
+15 graph controls repeated for each APK shape (30 records, not30 new cases).
+Actual Main/device output names DelegateLastClassLoader and verifies the
+library-before duplicate, distinct loaders and1021000/1037000 results.
+Independent nested DLC context/hot oat code/app image, no-reinstall stale
+rejection, same-APK refresh, bad-update preservation and cleanup all pass.
+Current Java producer identities and freshly rebuilt matching images pass.
+
+The qualifying full source now includes accepted integrationb323a42c
+(code-equivalent to f3631763/full40519019567), retaining corrected Main loader
+and shared-log access plus DLC. A bounded separate Web3 observer is built
+fresh with the full source, copied into its CI runtime artifact and enabled
+by an explicit run-tests parameter; the installer has no wildcard entry for
+this diagnostic executable. Its actual held-process control runs before the
+original ordered suite, and native stacks are collected only after the
+original teardown failure is already recorded. No original acceptance
+deadline/fresh-child assertion is changed, and a no-recurrence full would
+not prove a Web3 correction. Static producer/copy/consumer checks and script
+parsing precede dispatch; coherent full proof remains pending.
+
 ## Resumed DelegateLastClassLoader source
 
 The resumed test73 source retains every PCL control and adds a real APK

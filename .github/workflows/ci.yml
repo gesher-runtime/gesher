@@ -27,6 +27,9 @@ jobs:
           # The former runtime-port job's cache already holds the runtime.
           ccache-key: runtime
 
+      - name: Build the separate bounded native teardown observer
+        run: bash tools/web3/build-teardown-probe.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
+
       - name: Build
         run: |
           # Check the new native format ABI bridge before the full AOSP graph.
@@ -62,6 +65,7 @@ jobs:
         run: |
           mkdir -p dist
           cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp dist-web3-observer/web3_process_waits.exe dist/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
@@ -669,7 +673,7 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: |
-          pwsh -NoProfile -File tests/windows/run-tests.ps1 dist | Tee-Object -FilePath results.txt
+          pwsh -NoProfile -File tests/windows/run-tests.ps1 dist -Web3Observer dist/web3_process_waits.exe | Tee-Object -FilePath results.txt
           $code = $LASTEXITCODE
           "### Tests — ${{ matrix.os }}" >> $env:GITHUB_STEP_SUMMARY
           '```' >> $env:GITHUB_STEP_SUMMARY
