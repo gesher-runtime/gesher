@@ -114,7 +114,15 @@ fenv. Host calls now leave Run and resume through a fresh dispatch. See
 [ADR 0067](decisions/0067-arm64-2-fpcr-rounding.md) and the
 [exact verification report](handoff/tracks/arm64-2-fpcr-verified.md).
 
-FPSR flags, full environment/default-object ABI, traps, rounding-sensitive
+The bounded sticky-FPSR slice is also verified in full ci 40498782924 at
+8ec4bf3c (attempt 1, both zero suites, actual JNI/APK/ELF, package and both
+ten-app e2e zeros). Five real flag operations preserve QC and pinned mask
+0x9f across nesting/threads; eight scalar32/64 add/sub/mul/div status paths
+match 10384 independent QEMU numeric/status cases, retaining cold controls
+and native host fenv restoration. See the
+[verified evidence and exact limits](handoff/tracks/arm64-2-fpsr.md).
+
+Full environment/default-object ABI, traps, rounding-sensitive
 host CRT/libm calls and the other arm64-2 contracts remain open. Native
 compilation and fixtures are CI-only. The older implementation notes below
 are historical observations, not permission to build or run locally.

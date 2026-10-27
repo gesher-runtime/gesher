@@ -1,4 +1,17 @@
-# arm64-2 sticky FPSR: scoped evidence, full acceptance pending
+# arm64-2 sticky FPSR: verified bounded stage
+
+Exact combined source `8ec4bf3c30160575c8df794ad2ca1406957adc98` passes full
+CI [40498782924](https://github.com/gesher-runtime/gesher/actions/runs/40498782924),
+attempt 1. All 29 job conclusions (23 success/six intentional skips) and all
+23 actual executed job logs were personally read. Both Windows suites print
+`0 test(s) failed`, with 723 actual PASS and no FAIL lines each. This count
+describes these logs; no native export inventory or historical count changes.
+
+Full acceptance is limited to FPCR and the five sticky-status operations,
+including the narrow eight-scalar-operation status correction, as detailed
+below. It does not close the full fenv/ARM track. The immutable verification
+branch is `wip/arm64-2-fpsr-verified`, with documentation only above this source.
+Earlier frozen FPCR `dab49ab0` and Wide `e7c1b06` references are unchanged.
 
 Source 93f7637a090e40f3bfc3615a04bed2076dbf501c passes scoped
 ci 40475532910, six success/one skipped. All six actual executed job logs
@@ -6,18 +19,71 @@ were personally read. Both Windows hosts match all 10384 independent QEMU
 numeric/status tuples, every diagnostic classification counter is 0, and
 both FPCR and FPSR fixtures end with `0 test(s) failed`.
 
-This is not full product acceptance. Actual FPSR execution through native2
-JNI/dalvikvm, single/device APKs, native ELF, package and both required e2e
-suites is prepared but pending full CI. Merge b839c307 imports accepted
+Actual FPSR execution through native2 JNI/dalvikvm, single/device APKs,
+native ELF, package and both required e2e suites passes in the combined full.
+Merge b839c307 imports accepted
 root integration db84749b (docs above 30deb08c, including verified exit
 freshness) into the working branch. Root then independently accepted exact
 Windows source160e25e8/full40466021634. Merge b946a69a imports that exact
 source, preserving all ARM production code unchanged from scoped93f7637a.
 Merge c39767a8 includes latest integration6297e80a; its additional non-doc
-diff is empty. The combined full candidate is ready; actual product gates
-remain pending. Unaccepted spawn/Media follow-ups are not imported.
+diff is empty. Unaccepted spawn/Media follow-ups are not imported. Later
+accepted Net4 integration `bc6e05be` is not in this candidate; root must run
+combined integration CI when its non-doc tree includes both stages.
 Root alone merges into integration/main. Immutable FPCR reference
 wip/arm64-2-fpcr-verified/dab49ab0 and original wide/e7c1b06 are unchanged.
+
+## Full job evidence
+
+| Executed job | ID | Personally read actual evidence |
+|---|---|---|
+| Main build |122170898774| Complete production build and published Windows binaries |
+| Framework host tools |122170899154| Cached/verified host tools and publication |
+| Assembly |122170899177| Required assembly objects and artifact |
+| Exec |122170899190| Actual launcher tail/command-line PASS |
+| Independent QEMU |122170899260| 10384 inputs; unchanged original prefix and cumulative/boundary provenance PASS |
+| POSIX build |122170899293| Final 629/629 links, including ART base/dex tests |
+| Surface apps |122170899358| Actual fixture APK builds |
+| Native libraries |122170899389| Both NDK ABIs build |
+| Graphics |122170899412| Final 824/824 libhwui build |
+| Native2 |122170899441| Both NDK/APK libraries; extracted ARM original-body bytes/definitions/no-unresolved audit PASS |
+| ANGLE |122170899443| Built artifact |
+| Libraries |122170899476| Built artifact |
+| Framework |122170986483| Framework/app javac and fixture APKs build |
+| ANGLE probe build |122170994352| Built probe |
+| Translator |122171017177| Production -Werror build, exact two patched backend hashes |
+| Media |122174132838| Built native/JNI media artifact |
+| WebView |122174133338| Built WebView artifact |
+| Boot image |122188597383| Actual 3-space Hello load and framework/app image compilation |
+| Package |122188810941| All 23 installer PASS, real installed UI input and complete uninstall |
+| Windows 2022 |122188811005| Final zero; six test66, five test69, five test75 PASS |
+| Windows 2025 |122188811041| Same actual groups and final zero |
+| E2E 2025 |122189672528| All 10 apps nonblank/input/exit, four transport cases, association/shortcut; 0 unexpected |
+| E2E 2022 |122189672566| Same ten apps and gates; 0 unexpected |
+
+Actual full PASS lines on both Windows runners include:
+
+```
+PASS  arm64-2 FPSR: real flags, arithmetic, nested callbacks, thread isolation and restored native fenv
+PASS  arm64-2 FPSR (dalvikvm): pinned flags, masks, real arithmetic, QC, pthread inheritance/isolation and nested callbacks
+PASS  arm64-2 FPSR (single): pinned flags, masks, real arithmetic, QC, pthread inheritance/isolation and nested callbacks
+PASS  arm64-2 FPSR (device): pinned flags, masks, real arithmetic, QC, pthread inheritance/isolation and nested callbacks
+PASS  arm64-2 FPSR: an actual native ELF process verifies pinned status, arithmetic, threads and nested callbacks
+0 test(s) failed
+```
+
+The host Check requires all original 8192, cumulative 144 and boundary 2048
+independent comparisons, every cold/nested/thread assertion and a zero summary;
+the detailed all-zero classification counters were also personally read in the
+same-production scoped run below. Full test66 retains both ABIs and all three
+modes. Actual Unicode records verify separate signed/unsigned wchar32 full-range
+width digests; CPU/QPC clocks, latest-child exit and both-ABI action-registration
+contracts also pass. No full-run output is inferred from export presence alone.
+
+Both actual TIC80 e2e records are nonblank and react to input: Windows 2025 has
+6635 non-background/3416 text pixels and changes 5836 pixels after the click;
+Windows 2022 has 8713/2441 and changes 612. Package evidence includes input to
+the installed app, device shutdown, association/shortcut removal and uninstall.
 
 ## Implementation and scope
 
@@ -96,8 +162,8 @@ Actual scoped40475532910 logs read:
 The actual host PASS groups include original 8192, cumulative 144 and
 boundary 2048 independent cases, all six architectural flags plus SQADD QC,
 three guest levels with direct MSR, concurrent guest isolation and restored
-native host fenv. NDK fixtures additionally prepare 48 seeded FZ32/64 output
-checks for the full run.
+native host fenv. NDK fixtures additionally verify 48 seeded FZ32/64 output
+checks in each actual full-run dalvikvm/single/device/native ELF context.
 
 ## Investigation history and open contracts
 
