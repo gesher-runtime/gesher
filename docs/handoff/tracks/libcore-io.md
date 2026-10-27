@@ -55,3 +55,18 @@ Next session must read final metadata and every actual critical log,
 especially all15 CopyFileTest groups and both zero-failure summaries.
 Watch log: C:\work\gesher-ci-review\libcore-io-full-40522376074-watch.log.
 No code change, new dispatch, merge or roadmap tick after the stop request.
+
+## Resumed verification (2026-10-27)
+
+Full40522376074 completed green on2913d484b4f3adee64acd44c5dd7b7e4a042d6f7:
+28jobs22success/6skip, both whole suites0, actual package23 and both ten-app
+transport/association/shortcut e2e0. However CheckTimed suppressed successful
+child output: only its aggregate verdict appears in plain job logs. No claim
+is made that the15 actual group records were independently read.
+
+Logging-only4671d3dd now prints actual captured child output, retaining every
+original expected group/final marker and exit gate. The shared process helper
+and production native are unchanged. Accepted integration3fb8255d is merged
+for coherent resolver+copy proof. A fresh full must expose all15 raw records
+on both Windows before acceptance. Saved prior logs are under
+C:/work/gesher-ci-review/libcore-io-40522376074-resume-*.log.
