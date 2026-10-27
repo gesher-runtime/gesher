@@ -75,6 +75,24 @@ AOT3 shared-library runtime behavior is claimed verified. Root priority remains 
 active Net4 full and fresh Windows4/Web3 combinations after exit-freshness
 acceptance; source is kept separate from those frozen candidates.
 
+Prepared test fixtures now build two different actual dependency DEX jars,
+an entry DEX jar and a real APK with direct calls through both separate
+library loaders. A duplicate class in the entry jar/APK detects the real
+before-app lookup order; a changed-required-library APK tests old-install
+preservation. ART-side XML/SDK/cycle/missing-dependency and content-update
+controls use those real jars, including a Unicode/space path. Framework
+build/copy additions are separate additive lines. Prepared test73 requires
+real oatdump hot-method code and app images, compiled execution with separate
+loaders in both modes, both-mode stale-artifact rejection before reinstall,
+same-path dependency recompile, and old-install preservation. To keep that
+counterfactual stable, it temporarily defers the existing background optimizer
+via its device policy, checks the actual server applies it, and restores the
+owned build.prop bytes in nested finally cleanup. Earlier normal idle and
+startup gates remain unchanged. Compilation/execution of these new fixtures
+is still pending. The
+pinned default config_sharedLibrariesLoadedAfterApp array is empty; serializer
+support alone is not claimed as runtime after-app policy coverage.
+
 Startup-profile stage fully verified: ci 40414859801 at
 ca46e9967f8994fe329f3f10c88de7141e494f76. Root read every job, all 18
 scoped PASS lines per runner, both zero-failure summaries, actual installed
