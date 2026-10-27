@@ -29,3 +29,16 @@ and CI run, positive and negative observations, cleanup and remaining limits.
 The project owner can supply the equipment/session capability; no such supply
 or permission is assumed from a passing hosted CI job. These requirements do
 not prevent ongoing software slices, source audits or existing hosted tests.
+
+## Confirmed environment blocker (owner response,2026-10-27)
+
+The owner explicitly confirmed that no suitable interactive hardware-equipped
+CI environment currently exists. The authorized repository runner inventory
+also returned total_count0/runners[]. All ten grouped positive environment
+gates above therefore have a confirmed external provisioning blocker; they
+continue to block all-gap/release completion. No gate is waived, softened or
+reclassified. Test providers, hosted negative controls and synthetic/WARP
+results cannot establish physical positive evidence. Owner/CI operator must
+provision the relevant equipment/session/topology and CI execution capability;
+track owners then run same-source positive/negative controls and the integrator
+reviews actual logs. Meaningful software work continues independently.
