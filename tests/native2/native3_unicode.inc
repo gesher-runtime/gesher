@@ -66,9 +66,21 @@ Part Unicode() {
   p.Check(width != nullptr, "wcwidth entry");
   if (width != nullptr) {
     for (const UnicodeWidthSample& sample : kUnicodeWidthSamples) {
-      p.Check(width(static_cast<wchar_t>(sample.codepoint)) == sample.width,
+      p.Check(width(static_cast<wchar_t>(sample.codepoint)) == WidthExpected(sample),
               "wcwidth oracle code point " + std::to_string(sample.codepoint));
     }
+    uint64_t digest = UINT64_C(0xcbf29ce484222325);
+    auto add_width = [&](uint32_t c) {
+      uint32_t value = static_cast<uint32_t>(width(static_cast<wchar_t>(c)));
+      for (unsigned shift = 0; shift < 32; shift += 8) {
+        digest = (digest ^ ((value >> shift) & 0xff)) * UINT64_C(0x100000001b3);
+      }
+    };
+    for (uint32_t c = 0; c <= 0x10ffff; ++c) add_width(c);
+    for (uint32_t c : {UINT32_C(0x110000), UINT32_C(0x7fffffff),
+                       UINT32_C(0x80000000), UINT32_C(0xffffffff)}) add_width(c);
+    p.Check(digest == kUnicodeWidthDigest,
+            std::string("wcwidth full-range ") + kUnicodeWidthAbi + " digest " + std::to_string(digest));
   }
   const wchar_t sequence[] = {L'A', 0x345, 0x115f, 0x1160, 0xad,
                               0x1d167, 0x1f600, 0, L'B', 0};
@@ -79,11 +91,12 @@ Part Unicode() {
   const wchar_t control[] = {L'A', 0xa0, L'B', 0};
   const wchar_t invalid[] = {static_cast<wchar_t>(0xffffffff), 0};
   p.Check(wcswidth(control, 1) == 1 && wcswidth(control, 2) == -1 &&
-              wcswidth(invalid, 1) == -1,
-          "wcswidth rejects control and signed invalid characters");
+              wcswidth(invalid, 1) == WidthExpected(kUnicodeWidthSamples[32]),
+          "wcswidth controls and target-specific high-bit input");
   freelocale(locale);
   p.notes.push_back(
       "pinned ICU4X boundaries; plain/_l/wctype/wctrans and errors");
   p.notes.push_back("pinned wcwidth/wcswidth: 33 boundaries, full-width strings and bounds");
+  p.notes.push_back(std::string(kUnicodeWidthAbi) + "; full-range width digest checked");
   return p;
 }
