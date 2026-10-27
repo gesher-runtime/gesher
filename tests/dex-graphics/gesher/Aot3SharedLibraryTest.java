@@ -66,6 +66,13 @@ public final class Aot3SharedLibraryTest {
         // makes graphics-tests' sourcepath recursively compile generated services.
         Class.forName("com.gesher.app.Main").getMethod("bootstrap", String.class,
                 String.class, String.class).invoke(null, "shared graph", args[0], args[1]);
+        boolean resourceAfter = java.util.Arrays.asList(android.content.res.Resources.getSystem()
+                .getStringArray(com.android.internal.R.array.config_sharedLibrariesLoadedAfterApp))
+                .contains("gesher.shared.entry");
+        if (args.length > 6 && resourceAfter != Boolean.parseBoolean(args[6])) {
+            throw new AssertionError("actual framework resource after-app policy differs from fixture");
+        }
+        System.out.println("ACTUAL_SHARED_RESOURCE_AFTER=" + resourceAfter);
         File root = new File(args[2]);
         File original = new File(args[3]);
         File updated = new File(args[4]);

@@ -21,3 +21,22 @@ Producer/package/consumer allowlist and complete artifact presence audit,
 scoped CI then qualifying changed-union full/package/e2e remain required.
 StaticSDK, secondary dex and app factory stay open.
 No local C/C++/Java/C# compilation or executable fixture was run.
+
+## Runtime harness source added (still unexecuted)
+
+73 now retains original before PCL/DLC and adds after-resource PCL/DLC cases,
+independently checks the actual runtime resource array, ~PCL context marker,
+APK-vs-library duplicate resolution, original hot method/image and same-path
+stale rejection/refresh. Original15 graph controls are repeated, not relabeled
+as new controls. A new shutdown wrapper retains only device PID+birth-matched
+kernel process handles, requires actual processes gone BEFORE resource swap,
+and records real exit codes. Failed graceful shutdown stays a failure even
+if finite owned cleanup later succeeds. The outermost finally restores exact
+resource bytes/SHA256 after existing policy/jar cleanup, including exceptions.
+PowerShell parsing and diff-check only passed; all execution is CI-only.
+
+Remaining: coherent current host/Java+boot-image component workflow and strict
+producer/package/consumer inventory, source peer/audit, actual scoped runtime
+and then changed-union full/package/e2e qualification. Current Web3fc component
+runs separately and remains the primary shared gate; this source is not merged
+or dispatched. StaticSDK/secondary dex/factory remain explicitly open.

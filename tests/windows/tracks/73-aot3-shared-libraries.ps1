@@ -1,6 +1,7 @@
 # Real system Java jars, LoadedApk dependency loaders and matching ART artifacts.
 function Aot3SharedCheck([string] $Name, [bool] $Okay, [string] $Output) {
   if ($sharedLoaderCase.Descriptor -eq 'DLC') { $Name = "DelegateLast: $Name" }
+  if ($sharedLoaderCase.After) { $Name = "after-resource: $Name" }
   if ($Okay) { Write-Host "PASS  aot3 shared libraries: $Name" }
   else {
     Write-Host "FAIL  aot3 shared libraries: $Name"
@@ -9,10 +10,61 @@ function Aot3SharedCheck([string] $Name, [bool] $Okay, [string] $Output) {
   }
 }
 
+# Capture actual kernel process handles from this fixture's device metadata.
+# A PID without the recorded birth identity is never cleanup authority.
+function Aot3SharedStopDevice {
+  $owned = @()
+  try {
+    $statePath = Join-Path $root 'data/system/gesher-device'
+    if (Test-Path -LiteralPath $statePath) {
+      $state = [IO.File]::ReadAllText($statePath)
+      foreach ($name in 'system_server','servicemanager','binderd') {
+        $idMatch = [regex]::Match($state, '(?m)^' + [regex]::Escape($name) + '=(\d+)\r?$')
+        $birthMatch = [regex]::Match($state, '(?m)^' + [regex]::Escape($name) + '\.start=(\d+)\r?$')
+        if (-not $idMatch.Success -or -not $birthMatch.Success -or [long]$birthMatch.Groups[1].Value -le 0) {
+          throw "Missing authoritative device process identity: $name"
+        }
+        $devicePid = [int]$idMatch.Groups[1].Value
+        $process = Get-Process -Id $devicePid -ErrorAction SilentlyContinue
+        if ($null -eq $process) { continue }
+        $null = $process.Handle
+        if ($process.StartTime.ToUniversalTime().ToFileTimeUtc() -ne [long]$birthMatch.Groups[1].Value) {
+          $process.Dispose(); continue
+        }
+        $owned += [pscustomobject]@{ Name=$name; Process=$process }
+      }
+    }
+    $stopped = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
+    if ($stopped.Exit -ne 0) { throw "Device shutdown launcher failed: $($stopped.Out)" }
+    foreach ($entry in $owned) {
+      $entry.Process.Refresh()
+      if (-not $entry.Process.HasExited) {
+        throw "Actual owned $($entry.Name) remains alive after shutdown; resource swap forbidden"
+      }
+      Write-Host "INFO aot3 resource shutdown: $($entry.Name) pid=$($entry.Process.Id) actual-exit=$($entry.Process.ExitCode)"
+    }
+    return $stopped
+  } finally {
+    foreach ($entry in $owned) {
+      try {
+        if (-not $entry.Process.HasExited) {
+          # Graceful acceptance has already failed. Finite owned cleanup cannot
+          # turn it into a successful resource-policy transition.
+          $entry.Process.Kill($true)
+          if (-not $entry.Process.WaitForExit(5000)) { throw 'Owned AOT device cleanup incomplete' }
+        }
+      } finally { $entry.Process.Dispose() }
+    }
+  }
+}
+
 foreach ($sharedLoaderCase in @(
-    @{ Apk = 'sharedlibraryapp.apk'; Descriptor = 'PCL'; Loader = 'dalvik.system.PathClassLoader' },
-    @{ Apk = 'sharedlibrarydlc.apk'; Descriptor = 'DLC'; Loader = 'dalvik.system.DelegateLastClassLoader' })) {
+    @{ Apk = 'sharedlibraryapp.apk'; Descriptor = 'PCL'; Loader = 'dalvik.system.PathClassLoader'; After=$false; Order='library-before' },
+    @{ Apk = 'sharedlibrarydlc.apk'; Descriptor = 'DLC'; Loader = 'dalvik.system.DelegateLastClassLoader'; After=$false; Order='library-before' },
+    @{ Apk = 'sharedlibraryafter.apk'; Descriptor = 'PCL'; Loader = 'dalvik.system.PathClassLoader'; After=$true; Order='application' },
+    @{ Apk = 'sharedlibraryafterdlc.apk'; Descriptor = 'DLC'; Loader = 'dalvik.system.DelegateLastClassLoader'; After=$true; Order='application' })) {
 $sharedRoot = Join-Path $aotRoot $(if ($sharedLoaderCase.Descriptor -eq 'PCL') { 'shared-libraries' } else { 'shared-libraries-DLC' })
+if ($sharedLoaderCase.After) { $sharedRoot += '-after-resource' }
 $sharedPackage = 'com.gesher.sharedapp'
 $sharedConfig = Join-Path $root 'system/etc/permissions/gesher-shared73.xml'
 $sharedBase = Join-Path $root 'system/framework/gesher-shared73-base.jar'
@@ -25,21 +77,37 @@ $sharedCode = $null
 $sharedFilesCreated = $false
 $sharedBuildProp = Join-Path $root 'system/build.prop'
 $sharedPropertiesBytes = $null
+$sharedResourcePath = Join-Path $root 'system/framework/framework-res.apk'
+$sharedResourceBytes = [IO.File]::ReadAllBytes($sharedResourcePath)
+$sharedResourceHash = (Get-FileHash -LiteralPath $sharedResourcePath -Algorithm SHA256).Hash
+$sharedContextOrder = if ($sharedLoaderCase.After) { '~PCL' } else { 'PCL' }
 try {
+  $stopped = Aot3SharedStopDevice
+  Aot3SharedCheck 'actual fresh device shutdown precedes resource-policy selection' ($stopped.Exit -eq 0) $stopped.Out
+  if ($sharedLoaderCase.After) {
+    Copy-Item -LiteralPath "$Dir/framework-res-after.apk" -Destination $sharedResourcePath -Force
+    Aot3SharedCheck 'actual after-app resource bytes are installed with unchanged Java IDs' `
+      ((Get-FileHash -LiteralPath $sharedResourcePath -Algorithm SHA256).Hash -eq
+       (Get-FileHash -LiteralPath "$Dir/framework-res-after.apk" -Algorithm SHA256).Hash -and
+       (Get-FileHash -LiteralPath $sharedResourcePath -Algorithm SHA256).Hash -ne $sharedResourceHash) $sharedResourcePath
+  }
   if (@($sharedOwned | Where-Object { Test-Path -LiteralPath $_ }).Count) {
     throw 'A shared73 fixture path already exists; refusing to overwrite it'
   }
   New-Item -ItemType Directory -Force $sharedRoot, (Split-Path $sharedConfig) | Out-Null
   $unit = Aot2Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$aotBcpApp", $aotImage,
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/graphics-tests.dex"), 'gesher.Aot3SharedLibraryTest',
-    (NoDrive "$Dir/build.prop"), (NoDrive "$Dir/framework-res.apk"), (NoDrive "$sharedRoot/registry"),
-    (NoDrive "$Dir/shared-base-v1.jar"), (NoDrive "$Dir/shared-base-v2.jar"), (NoDrive "$Dir/shared-entry.jar")) @{} 120
+    (NoDrive "$Dir/build.prop"), (NoDrive $sharedResourcePath), (NoDrive "$sharedRoot/registry"),
+    (NoDrive "$Dir/shared-base-v1.jar"), (NoDrive "$Dir/shared-base-v2.jar"), (NoDrive "$Dir/shared-entry.jar"),
+    $sharedLoaderCase.After.ToString().ToLowerInvariant()) @{} 120
   Write-Host $unit.Out
   Aot3SharedCheck 'actual ART validates required/optional libraries, SDK gates, graph ownership, cycles and same-path jar updates' `
     ($unit.Exit -eq 0 -and $unit.Out.Contains('Aot3SharedLibraryTest all passed: 15 real-jar/registry controls') -and $unit.Out -notmatch '(?m)^FAIL') $unit.Out
   if ($unit.Exit -ne 0) { throw 'Shared-library graph controls failed' }
+  Aot3SharedCheck 'fresh ART reads the actual selected before/after resource array' `
+    $unit.Out.Contains("ACTUAL_SHARED_RESOURCE_AFTER=$($sharedLoaderCase.After.ToString().ToLowerInvariant())") $unit.Out
 
-  $null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
+  $null = Aot3SharedStopDevice
   # Freeze the background optimizer while exercising deliberately stale files.
   # 61/63 already verify its normal idle behavior; their gates are unchanged.
   # This existing device policy is restored byte-for-byte in finally.
@@ -60,7 +128,7 @@ try {
     "--reference-profile-file=$(NoDrive $sharedProfile)", "--apk=$(NoDrive $sharedApk)", "--dex-location=$(NoDrive $sharedApk)")
   if ($created.Exit -ne 0 -or (Aot2Size $sharedProfile) -eq 0) { throw "Shared profile creation failed: $($created.Out)" }
   Aot3Metadata (Join-Path $sharedRoot 'sharedlibraryapp.dm') ([IO.File]::ReadAllBytes($sharedProfile))
-  $null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
+  $null = Aot3SharedStopDevice
   $null = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'uninstall', $sharedPackage) $sharedEnvironment 180
   $installed = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'install', (NoDrive $sharedApk)) $sharedEnvironment 400
   if ($installed.Exit -ne 0 -or $installed.Out -notmatch 'installed com\.gesher\.sharedapp \(version 1\) in (\S+)') {
@@ -79,7 +147,7 @@ try {
     $header = Aot2Run "$Dir/oatdump.exe" @("--oat-file=$odex", '--header-only', '--no-disassemble')
     Aot3SharedCheck "$Phase oatdump header contains the real nested dependency context and speed-profile filter" `
       ($header.Exit -eq 0 -and $header.Out -match 'compiler-filter\s*=\s*speed-profile' -and
-       $header.Out -match ('class-loader-context\s*=\s*' + [regex]::Escape($sharedLoaderCase.Descriptor) + '\[\]\{PCL\[') -and
+       $header.Out -match ('class-loader-context\s*=\s*' + [regex]::Escape($sharedLoaderCase.Descriptor) + '\[\]\{' + [regex]::Escape($sharedContextOrder) + '\[') -and
        $header.Out.Contains('gesher-shared73-entry.jar') -and $header.Out.Contains('gesher-shared73-base.jar')) $header.Out
     $code = Aot2Run "$Dir/oatdump.exe" @("--oat-file=$odex", "--dex-file=$sharedCode/base.apk", '--method-filter=hot', '--no-disassemble')
     Aot3SharedCheck "$Phase selected SharedActivity.hot has independently inspected compiled code" `
@@ -113,7 +181,7 @@ try {
       }
       $expectedText = "SharedActivity result=$Expected;"
       $passed = $run.Exit -eq 0 -and $fresh -and $out.Contains($expectedText) -and
-        $out.Contains('order=library-before; distinct app/entry/dependency loaders=true') -and
+        $out.Contains("order=$($sharedLoaderCase.Order); distinct app/entry/dependency loaders=true") -and
         $out.Contains("app loader=$($sharedLoaderCase.Loader)") -and $compiled
       $kind = if ($Aot) { 'matching compiled code/image' } else { 'stale code/image rejected without reinstall' }
       Aot3SharedCheck "$mode result $Expected uses $kind and separate real library loaders" $passed $out
@@ -158,7 +226,7 @@ try {
 } finally {
   try {
     $uninstall = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'uninstall', $sharedPackage) $sharedEnvironment 180
-    $shutdown = Aot2Run "$Dir/dalvikvm.exe" ($aotLauncher + 'shutdown') @{} 120
+    $shutdown = Aot3SharedStopDevice
     if ($null -ne $sharedCode) {
       Aot3SharedCheck 'the installed shared-library app is uninstalled and its device shuts down' `
         ($uninstall.Exit -eq 0 -and $shutdown.Exit -eq 0 -and -not (Test-Path -LiteralPath $sharedCode)) ($uninstall.Out + $shutdown.Out)
@@ -167,6 +235,7 @@ try {
     Aot3SharedCheck "device cleanup exception: $_" $false $_.ScriptStackTrace
   } finally {
     try {
+      try {
       if ($null -ne $sharedPropertiesBytes) {
         [IO.File]::WriteAllBytes($sharedBuildProp, $sharedPropertiesBytes)
         Aot3SharedCheck 'the temporary background-optimizer fixture policy is restored byte-for-byte' `
@@ -179,6 +248,11 @@ try {
           (@($sharedOwned | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0) ($sharedOwned -join "`n")
       }
     }
+      } finally {
+        [IO.File]::WriteAllBytes($sharedResourcePath, $sharedResourceBytes)
+        Aot3SharedCheck 'system framework resources are restored byte-for-byte after shutdown and cleanup' `
+          ((Get-FileHash -LiteralPath $sharedResourcePath -Algorithm SHA256).Hash -eq $sharedResourceHash) $sharedResourcePath
+      }
   }
 }
 }
