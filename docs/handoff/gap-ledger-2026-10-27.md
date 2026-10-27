@@ -101,3 +101,38 @@ automatic content-filter interruption reported by the manager. This required
 test remains unverified/open, not waived. Routine mode wiring proceeds from
 known compiled source on wip/binder2-sg-mode-wiring; no aggregate Binder2 or
 FD/permission/identity cleanup checkbox may be closed from that compilation.
+
+## Incremental semantic reconciliation (2026-10-28)
+
+Saved review checkpoints, reusing the existing prose index rather than
+rescanning/counting it:
+
+- C:/work/gesher-ci-review/semantic-gap-checkpoint-2026-10-28.json
+- C:/work/gesher-ci-review/semantic-gap-exec-continuation-2026-10-28.json
+
+These cover selected AOT3 and Exec4 contracts only, with stable semantic IDs,
+source/section/audit-row references, owner, state, dependency, exact scoped
+evidence and concrete acceptance. Raw source paragraphs and inventory symbols
+are not a remaining-gap denominator. No current checkbox or inventory proof
+changes, aggregate count, all-gap completion or release claim follows.
+
+AOT ordinary PCL/DLC shared-library graph proof450/full40557661255 is recorded
+as a qualified older leaf awaiting current combined-source full. After-resource
+ordering, secondary-dex ownership/update, static/SDK contexts and factory
+loaders remain separate open contracts. Older blanket oatdump/cloud/startup
+open wording is reconciled against their accepted bounded reports, without
+reopening them or extending their proof to the remaining families.
+
+Exec records distinguish PID-preserving exec, console interruption, binary
+events/logd, broader shell/real umask, remaining executable TLS, general fork,
+static executables, property authority/notifications and initial executable
+UTF-8 environment behavior. Qualified ordered-spawn82/component40582080725
+still needs actual canonical77/current-union full. Accepted registration and
+shared-library live-environment slices stay historical scoped supersessions.
+Shared identity/permission dependencies are cross-references, not duplicated
+implementation gaps in each consumer. Historical intermittent-crash causality
+and untracked adopted-exit limitations retain explicit unresolved classification;
+neither invented causality nor fabricated successful status is permitted.
+
+All other source families remain unreconciled. The primary compiler-provenance
+correction/preflight and changed-source full take priority over further mapping.
