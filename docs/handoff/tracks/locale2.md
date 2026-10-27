@@ -34,5 +34,17 @@ Merge current integration before final CI. No local AOSP build or WSL.
 
 ## Status and next steps
 
-Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted; all required
-work above remains open apart from the explicitly cited windows3 relaunch.
+First bounded slice started on 2026-10-27 in `C:\work\gesher-locale2`,
+`wip/locale2`, from accepted integration `7b49a718`. ADR0066 and test81 cover
+persisted override/replacement/clear, selected-locale reconciliation and ordinary
+caller/package/user boundaries. Source and actual APK fixtures are prepared;
+compilation/runtime/full acceptance are pending. See
+[ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
+[pinned-source audit](locale2-source-audit.json).
+
+Privileged grants/installer/IME identity, permission-gated broadcasts,
+uninstall/retain-data, Windows NLS/regional-format and native locale/time-zone
+contracts remain open. The all-packages-same-UID, PM all-packages UID query and
+AMS all-granted permission stand-ins are concrete Services3 gaps, not authority
+for this slice. The frozen Native/FPSR worktree and its active full CI are
+unchanged. No local compilation or native/JVM/C# fixture execution.

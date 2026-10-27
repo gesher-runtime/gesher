@@ -7,19 +7,30 @@ package com.gesher.server;
 import android.app.ILocaleManager;
 import android.app.LocaleConfig;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.res.AssetManager;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.os.Binder;
 import android.os.LocaleList;
+import android.os.Process;
+import android.os.SystemProperties;
+import android.os.UserHandle;
 import android.provider.Settings;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.util.DisplayMetrics;
 
 import com.gesher.app.DeviceProfile;
 import com.gesher.app.locale.SystemLocale;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Properties;
 
 /**
@@ -55,6 +66,7 @@ import java.util.Properties;
 public final class LocaleManagerService extends ILocaleManager.Default
         implements WindowsHost.Listener {
     private static final String TAG = "locale: ";
+    private static final String DYNAMIC_LOCALES = "i18n.feature.dynamic_locales_change";
 
     private static volatile LocaleManagerService sInstance;
     /** The configuration's sequence number: grows with every change. */
@@ -64,9 +76,10 @@ public final class LocaleManagerService extends ILocaleManager.Default
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final File mFile = new File(Device.dataDir(), "system/app_locales");
+    private final File mOverrideFile = new File(Device.dataDir(), "system/app_locale_configs");
     // Guarded by this: package -> language tags; package -> LocaleConfig override.
     private final Properties mLocales;
-    private final Properties mOverrides = new Properties();
+    private final Properties mOverrides;
     /** The package of this process, in an app's own process (single-process mode). */
     private volatile String mInProcessPackage;
 
@@ -77,6 +90,8 @@ public final class LocaleManagerService extends ILocaleManager.Default
         mPm = pm;
         Properties p = Device.read(mFile);
         mLocales = p != null ? p : new Properties();
+        p = Device.read(mOverrideFile);
+        mOverrides = p != null ? p : new Properties();
         sInstance = this;
         if (WindowsHost.inSystemServer()) {
             WindowsHost.addListener(this);
@@ -171,35 +186,39 @@ public final class LocaleManagerService extends ILocaleManager.Default
     @Override
     public void setApplicationLocales(String packageName, int userId, LocaleList locales,
             boolean fromDelegate) {
-        if (packageName == null || locales == null) {
-            throw new NullPointerException("packageName and locales must not be null");
-        }
-        if (mPm.get(packageName) == null) {
-            throw new IllegalArgumentException("Unknown package name " + packageName);
-        }
+        Objects.requireNonNull(packageName);
+        Objects.requireNonNull(locales);
+        enforceUser(userId, "setApplicationLocales");
+        enforceOwner(packageName, "android.permission.CHANGE_CONFIGURATION");
         String tags = locales.toLanguageTags();
         boolean changed;
         synchronized (this) {
-            String old = mLocales.getProperty(packageName, "");
-            changed = !old.equals(tags);
-            if (tags.isEmpty()) mLocales.remove(packageName);
-            else mLocales.setProperty(packageName, tags);
-            if (changed) persist();
+            changed = updateAppLocales(packageName, locales);
+            if (!changed && !tags.equals(mLocales.getProperty(packageName, ""))) {
+                SystemServer.log(TAG + packageName + "'s requested app locales were not committed");
+                return;
+            }
         }
         SystemServer.log(TAG + packageName + "'s app locales "
                 + (tags.isEmpty() ? "cleared (the system's)" : "set to " + tags)
                 + (fromDelegate ? " (by a delegate)" : "") + (changed ? "" : ", unchanged"));
-        if (!changed) return;
+        if (changed) dispatchAppLocales(packageName, locales);
+    }
+
+    private void dispatchAppLocales(String packageName, LocaleList locales) {
         nextSeq();
         if (mInProcessPackage != null) {
-            applyInProcess(configurationFor(mInProcessPackage), "app locales " + tags);
+            applyInProcess(configurationFor(mInProcessPackage), "app locales "
+                    + locales.toLanguageTags());
             return;
         }
         mAtm.dispatchConfiguration(packageName);
         // ACTION_LOCALE_CHANGED to the app whose locales changed (Android 13+: its effective
-        // locale changed); ACTION_APPLICATION_LOCALE_CHANGED goes to an installer, of which
-        // the device has none.
+        // locale changed). Installer/permission-gated ACTION_APPLICATION_LOCALE_CHANGED
+        // recipients remain a separate Locale2/Services3 contract.
         Intent i = new Intent(Intent.ACTION_LOCALE_CHANGED);
+        i.putExtra(Intent.EXTRA_PACKAGE_NAME, packageName);
+        i.putExtra(Intent.EXTRA_LOCALE_LIST, locales);
         i.addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
         i.setPackage(packageName);
         broadcast(i);
@@ -207,7 +226,10 @@ public final class LocaleManagerService extends ILocaleManager.Default
 
     @Override
     public LocaleList getApplicationLocales(String packageName, int userId) {
-        LocaleList l = packageName != null ? appLocales(packageName) : null;
+        Objects.requireNonNull(packageName);
+        enforceUser(userId, "getApplicationLocales");
+        enforceOwner(packageName, "android.permission.READ_APP_SPECIFIC_LOCALES");
+        LocaleList l = appLocales(packageName);
         return l != null ? l : LocaleList.getEmptyLocaleList();
     }
 
@@ -219,29 +241,148 @@ public final class LocaleManagerService extends ILocaleManager.Default
     @Override
     public void setOverrideLocaleConfig(String packageName, int userId,
             LocaleConfig localeConfig) {
+        if (!SystemProperties.getBoolean(DYNAMIC_LOCALES, true)) return;
+        Objects.requireNonNull(packageName);
+        enforceUser(userId, "setOverrideLocaleConfig");
+        enforceOwner(packageName, "android.permission.SET_APP_SPECIFIC_LOCALECONFIG");
+        LocaleList selected = null;
         synchronized (this) {
-            LocaleList l = localeConfig != null ? localeConfig.getSupportedLocales() : null;
-            if (l == null) mOverrides.remove(packageName);
-            else mOverrides.setProperty(packageName, l.toLanguageTags());
+            // Read the real APK resource config even when an override already exists.
+            // LocaleConfig(Context) would consult this service and read the override instead.
+            LocaleConfig original = resourceLocaleConfig(packageName);
+            if (original == null) return;
+            if (localeConfig != null && localeConfig.isSameLocaleConfig(
+                    storedOverride(packageName))) return;
+            Properties next = copy(mOverrides);
+            if (localeConfig == null) {
+                next.remove(packageName);
+            } else {
+                LocaleList supported = localeConfig.getSupportedLocales();
+                // Pinned framework contract: a non-null config with a null list is
+                // stored as an explicit empty override, not removal of the override.
+                next.setProperty(packageName, supported != null ? supported.toLanguageTags() : "");
+            }
+            if (!persist(mOverrideFile, next)) return;
+            mOverrides.clear();
+            mOverrides.putAll(next);
+            LocaleConfig supported = localeConfig != null ? localeConfig : original;
+            LocaleList before = appLocales(packageName);
+            if (before != null) {
+                List<Locale> retained = new ArrayList<>();
+                for (int n = 0; n < before.size(); n++) {
+                    if (supported.containsLocale(before.get(n))) retained.add(before.get(n));
+                }
+                if (retained.size() != before.size()) {
+                    LocaleList after = new LocaleList(retained.toArray(new Locale[0]));
+                    if (updateAppLocales(packageName, after)) selected = after;
+                }
+            }
         }
         SystemServer.log(TAG + packageName + "'s LocaleConfig override "
                 + (localeConfig != null ? localeConfig.getSupportedLocales() : "removed"));
+        if (selected != null) dispatchAppLocales(packageName, selected);
     }
 
     @Override
     public LocaleConfig getOverrideLocaleConfig(String packageName, int userId) {
-        String tags;
+        if (!SystemProperties.getBoolean(DYNAMIC_LOCALES, true)) return null;
+        Objects.requireNonNull(packageName);
+        enforceUser(userId, "getOverrideLocaleConfig");
+        // Supported locale configurations are public to callers in the same user. Unlike
+        // getApplicationLocales, the pinned getter has no package-owner/READ permission gate.
         synchronized (this) {
-            tags = mOverrides.getProperty(packageName);
+            return storedOverride(packageName);
         }
+    }
+
+    private LocaleConfig storedOverride(String packageName) {
+        String tags = mOverrides.getProperty(packageName);
         return tags == null ? null : new LocaleConfig(LocaleList.forLanguageTags(tags));
     }
 
-    private void persist() {
-        try {
-            Device.write(mFile, mLocales);
+    /** Ordinary app callers, for the device's single supported user (0). */
+    private static void enforceUser(int userId, String operation) {
+        // In the pinned UserController, CURRENT still requires cross-user authority;
+        // CURRENT_OR_SELF may fall back to the calling user. No privileged grant is inferred
+        // from Gesher's shared host UID or its generic all-granted permission stand-ins.
+        if (userId != UserHandle.USER_SYSTEM && userId != UserHandle.USER_CURRENT_OR_SELF) {
+            throw new SecurityException(operation + " requires cross-user authority for " + userId);
+        }
+    }
+
+    private void enforceOwner(String packageName, String permission) {
+        if (mPm.get(packageName) == null) {
+            throw new IllegalArgumentException("Unknown package name " + packageName);
+        }
+        int pid = Binder.getCallingPid();
+        ActivityTaskManagerService.ProcessRecord caller = mAtm.callerProcess(pid);
+        String owner = caller != null ? caller.packageName
+                : pid == Process.myPid() ? mInProcessPackage : null;
+        if (!packageName.equals(owner)) {
+            // Privileged cross-package permissions, installer and foreground IME authority
+            // need the Services3 identity/permission work; generic AMS.checkPermission is
+            // currently all-granted and must not expose another app's private locale state.
+            throw new SecurityException("Caller does not own " + packageName
+                    + "; requires " + permission);
+        }
+    }
+
+    private LocaleConfig resourceLocaleConfig(String packageName) {
+        ApkPackage pkg = mPm.get(packageName);
+        if (pkg == null) return null;
+        ApplicationInfo app = pkg.applicationInfo(0);
+        try (AssetManager assets = new AssetManager()) {
+            if (assets.addAssetPath(app.sourceDir) == 0) {
+                throw new IOException("cannot read APK resources " + app.sourceDir);
+            }
+            DisplayMetrics metrics = new DisplayMetrics();
+            metrics.setToDefaults();
+            Configuration config = new Configuration();
+            config.setToDefaults();
+            return new LocaleConfig(app, new Resources(assets, metrics, config));
         } catch (IOException e) {
-            SystemServer.log(TAG + "the app locales were not saved: " + e);
+            SystemServer.log(TAG + "the resource LocaleConfig was not read: " + e);
+            return null;
+        }
+    }
+
+    /** Called with this locked; publish in-memory state only after the file commits. */
+    private boolean updateAppLocales(String packageName, LocaleList locales) {
+        String tags = locales.toLanguageTags();
+        if (tags.equals(mLocales.getProperty(packageName, ""))) return false;
+        Properties next = copy(mLocales);
+        if (tags.isEmpty()) next.remove(packageName);
+        else next.setProperty(packageName, tags);
+        if (!persist(mFile, next)) return false;
+        mLocales.clear();
+        mLocales.putAll(next);
+        return true;
+    }
+
+    private static Properties copy(Properties original) {
+        Properties next = new Properties();
+        next.putAll(original);
+        return next;
+    }
+
+    /** A failed replacement never deletes the last committed file (unlike Device.write). */
+    private static boolean persist(File file, Properties properties) {
+        File pending = new File(file.getPath() + ".new");
+        try {
+            File parent = file.getParentFile();
+            if (!parent.isDirectory() && !parent.mkdirs()) {
+                throw new IOException("cannot create " + parent);
+            }
+            try (FileOutputStream out = new FileOutputStream(pending)) {
+                properties.store(out, "Gesher locale state");
+                out.getFD().sync();
+            }
+            Os.rename(pending.getPath(), file.getPath());
+            return true;
+        } catch (IOException | ErrnoException e) {
+            SystemServer.log(TAG + "state was not saved to " + file + ": " + e);
+            pending.delete();
+            return false;
         }
     }
 
