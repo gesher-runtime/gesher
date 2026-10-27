@@ -86,6 +86,18 @@ watched with interval 120; no combined runtime result is claimed yet. The separa
 native3-time/0573 source is not imported. Frozen native3-wide-verified is
 unchanged at e7c1b06.
 
+Current run progress: main build and boot image pass. Actual package job
+121990064884 was read: all 23 installer PASS lines, including installed
+oatdump/image/fonts, install/dexopt, associations/shortcuts, real window and
+click/keyboard/wheel/resize input, complete process/data/association/toast/
+Start-menu uninstall cleanup. Actual e2e2022 job 121990574707 passes all
+nine apps including required Puzzles/TIC-80, four transport fixtures and
+association/shortcut launches. Both Windows suites and e2e2025 remain
+pending; no full green or test-summary claim yet. Root has since verified
+and integrated 0573/time68 as 8922a3e; this frozen run predates it. The
+separate ARM FPCR candidate includes that newer integration and the frozen
+wide prerequisite, with combined full ci 40444486511 pending.
+
 ### Earlier scoped acceptance and source history
 
 Root acceptance checkpoint while the scoped agent is interrupted: full ci
