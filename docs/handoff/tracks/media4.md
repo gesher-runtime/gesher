@@ -206,7 +206,7 @@ inventory acceptance follows from the red full40487303965 attempt2; its
 TIC-80 cause remains unproved. No source-only muxer factoring is imported
 into this candidate. Test79 remains reserved for that separate muxer work;
 test80 is invalidation,81 Locale2,82 Resolver,83 libcore I/O,84 process test
-infrastructure,85 ownership and86 ARM varargs (next87).
+infrastructure and86 ARM varargs. Further reservations are coordinator-owned.
 
 Full40487303965 attempt2 is complete RED at the same afebf1ec source:
 28 conclusions=21 success/six skipped/one failed e2e Windows2025. Both
