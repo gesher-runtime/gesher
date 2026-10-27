@@ -47,3 +47,16 @@ the intentional final negative helper result through LASTEXITCODE. The
 scoped driver now explicitly exits its asserted failure count, exactly as
 the full run-tests.ps1 driver already does. All case expectations and helper
 status behavior remain unchanged. No full/product acceptance yet.
+
+## Owner-requested stop checkpoint
+
+Work stopped on2026-10-27. Changed-source scoped40526183946 at
+ec0f003cc149a0f985b5f280924477dc20414872 is GREEN on both Windows hosts.
+Root independently read actual122266298232/122266298625 logs: each compiles
+the real fixture and has four mandatory normal/23/timeout/retained-pipe
+PASS records, then0 test(s) failed and successful job conclusion. The last
+driver exits its asserted failure count; all negative helper statuses remain
+required. No full has been dispatched. Preserve the narrow source/proof;
+SurfaceRun/test76 and other legacy-helper work remains open. Coordinate
+broader full CI with the recurring Web3 investigation. No further changes
+or dispatches after the owner's stop request.
