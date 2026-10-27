@@ -64,10 +64,11 @@ your domain, the verified SHA).
 
 ## Status and next steps
 
-The current candidate is source-only d3dd4319, incorporating verified
+The current candidate is source-only 8364829, incorporating verified
 integration 8922a3e and the immutable reviewed Exec4 environment prerequisite
-76b8d5c. The HTTP/SNI implementation 4032be6a completes the deterministic
-positive fixture and real missing/unknown-SNI controls; the exact NetApp
+76b8d5c. The HTTP/SNI implementation 4032be6a and listener isolation 8364829
+complete the deterministic positive fixture and real missing/unknown-SNI
+controls without allowing earlier HTTP traffic to supply their evidence; the exact NetApp
 slice d50f6e7b is also present. Root review is pending before one new full
 CI. No compiler/native/JVM/C# fixture runs locally. See docs/media.md and
 C:\work\gesher-ci-review\media3-positive-tls-reviewed.md/.json for exact
