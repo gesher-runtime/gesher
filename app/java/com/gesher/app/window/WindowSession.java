@@ -450,7 +450,7 @@ public final class WindowSession extends IWindowSession.Stub {
         // A popup lays out in its app window's bounds (its display), as a dialog does in its
         // task's on a device.
         AppWindow root = root(w);
-        Rect bounds = root.bounds.isEmpty() ? displayBounds() : new Rect(root.bounds);
+        Rect bounds = root.bounds.isEmpty() ? TaskConfiguration.display(root.rotation) : new Rect(root.bounds);
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
@@ -474,22 +474,10 @@ public final class WindowSession extends IWindowSession.Stub {
                 WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
-        Configuration override = new Configuration();
-        if (!root.bounds.isEmpty() || root.rotation != android.view.Surface.ROTATION_0) {
-            // Resized by the user: the configuration of a freeform task of the window's size
-            // (TaskConfiguration, docs/lifecycle.md): its bounds (ViewRootImpl computes its
-            // frames from them, relayoutWindow's local layout), its screen size in dp, smallest
-            // width, orientation and screen layout. An Activity that handles those changes gets
-            // onConfigurationChanged (ViewRootImpl's activity config callback); the system
-            // server relaunches one that does not (resizeTask). A task turned for its
-            // Activity's orientation (windows3 track) has the display's rotation too.
-            override = TaskConfiguration.override(bounds, root.rotation);
-        }
-        // A portrait task retains rotation zero while the shared Application
-        // display follows a different focused landscape task.
-        override.windowConfiguration.setRotation(root.rotation);
-        override.windowConfiguration.setDisplayRotation(root.rotation);
-        override.windowConfiguration.setMaxBounds(TaskConfiguration.display(root.rotation));
+        // Every task overrides its full geometry, including appBounds at natural
+        // rotation. Otherwise an unfocused portrait Activity inherits the shared
+        // landscape appBounds even though its own maxBounds/rotation are correct.
+        Configuration override = TaskConfiguration.override(bounds, root.rotation);
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
     }
