@@ -19,6 +19,7 @@
 //    with an Android-style "Fatal signal" report (never a hang).
 
 #include "translator.h"
+#include <gesher/arm64_va_list.h>
 
 #include <windows.h>
 
@@ -183,7 +184,7 @@ thread_local int t_guest_running = 0;
 class Env;
 thread_local Env* t_env_raw = nullptr;
 
-// The System V AAPCS64 va_list conversion (see ConvertVaList).
+// Host list shape, with private ARM bank tags (see arm64_va_list.h).
 struct SysvVaListTag {
   uint32_t gp_offset;
   uint32_t fp_offset;
@@ -199,39 +200,25 @@ struct Aapcs64VaList {
 };
 struct VaListStorage {
   SysvVaListTag tag;
-  alignas(16) uint8_t reg_save[176];
-  uint64_t overflow[2 + 62];
+  gesher::abi::Arm64VaRegisters registers;
 };
+static_assert(sizeof(SysvVaListTag) == 24);
 
-// Converts the guest's AAPCS64 va_list to a System V one with the same
-// remaining arguments. AAPCS64 keeps separate GP and FP register save areas
-// and a stack area; System V a 6-GP + 8-XMM register save area and one
-// overflow area. Remaining FP registers (<= 8) map onto the XMM slots; up to
-// six remaining GP registers onto the GP slots, and any beyond six (a va_list
-// started before the 6th GP argument) are put in front of the guest's stack
-// area, which System V reads next for integers.
+// Keep all eight GP slots separate from the eight FP slots. A plain SysV
+// list cannot express that distinction: prefixing its overflow area with the
+// seventh/eighth GP slot reorders earlier FP overflow arguments. The shim
+// reads only the bank or actual stack slot requested by the consumer; even a
+// literal-only format must never speculatively read beyond the guest stack.
 void ConvertVaList(const Aapcs64VaList* a, VaListStorage* s) {
-  std::memset(s->reg_save, 0, sizeof(s->reg_save));
   int n_gp = a->gr_offs < 0 ? -a->gr_offs / 8 : 0;
   int n_fp = a->vr_offs < 0 ? -a->vr_offs / 16 : 0;
   if (n_fp > 8) n_fp = 8;
   if (n_gp > 8) n_gp = 8;
-  const uint8_t* gp = a->gr_top + a->gr_offs;
-  const uint8_t* fp = a->vr_top + a->vr_offs;
-  int in_regs = n_gp < 6 ? n_gp : 6;
-  s->tag.gp_offset = static_cast<uint32_t>((6 - in_regs) * 8);
-  std::memcpy(s->reg_save + (6 - in_regs) * 8, gp, in_regs * 8);
-  s->tag.fp_offset = static_cast<uint32_t>(48 + (8 - n_fp) * 16);
-  std::memcpy(s->reg_save + 48 + (8 - n_fp) * 16, fp, n_fp * 16);
-  s->tag.reg_save_area = s->reg_save;
-  if (n_gp > 6) {
-    int extra = n_gp - 6;
-    std::memcpy(s->overflow, gp + in_regs * 8, extra * 8);
-    std::memcpy(s->overflow + extra, a->stack, 62 * 8);
-    s->tag.overflow_arg_area = s->overflow;
-  } else {
-    s->tag.overflow_arg_area = a->stack;
-  }
+  s->registers = {a->gr_top, a->vr_top};
+  s->tag.gp_offset = gesher::abi::kArm64VaTag | static_cast<uint32_t>((8 - n_gp) * 8);
+  s->tag.fp_offset = gesher::abi::kArm64VaTag | static_cast<uint32_t>((8 - n_fp) * 16);
+  s->tag.reg_save_area = &s->registers;
+  s->tag.overflow_arg_area = a->stack;
 }
 
 // Pages already found to hold host code: a guest that calls a host pointer
@@ -565,7 +552,7 @@ class Env final : public A64::UserCallbacks {
           const int remaining_gp = a->gr_offs < 0 ? -a->gr_offs / 8 : 0;
           const int remaining_fp = a->vr_offs < 0 ? -a->vr_offs / 16 : 0;
           const auto source = reinterpret_cast<uint64_t>(a->stack);
-          const uint64_t bytes = remaining_gp > 6 ? 62 * 8 : 0;
+          const uint64_t bytes = 0;  // Conversion now reads metadata only.
           std::fprintf(stderr,
                        "ARM_VARARGS_BOUNDS sp=%llx stack=%llx top=%llx base=%llx "
                        "gp=%d fp=%d eager_bytes=%llu eager_end=%llx\n",
@@ -892,8 +879,9 @@ extern "C" __declspec(dllexport) void* gesher_arm64_bind(void* fn) { return Bind
 
 extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {
-  // Version 1 hosts (no run_program) are served too: the table only grew.
-  if (host == nullptr || host->version < 1 || host->version > GESHER_ARM64_API_VERSION) {
+  // API3 changes the private va_list representation consumed by the host
+  // shim. Reject old hosts before resolving any shim symbol or running code.
+  if (host == nullptr || host->version != GESHER_ARM64_API_VERSION) {
     return nullptr;
   }
   g_host = host;

@@ -2,8 +2,10 @@
 #pragma once
 
 #include "abi_types.h"
+#include <gesher/arm64_va_list.h>
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include <cstring>
 
@@ -20,9 +22,26 @@ struct SysvVaList {
   uint8_t* overflow_arg_area;
   uint8_t* reg_save_area;
 };
+static_assert(sizeof(SysvVaList) == 24);
+
+inline bool IsArm64VaList(const SysvVaList* ap) {
+  return (ap->gp_offset & abi::kArm64VaTagMask) == abi::kArm64VaTag;
+}
 
 inline uint64_t NextGp(SysvVaList* ap) {
   uint64_t v;
+  if (IsArm64VaList(ap)) {
+    uint32_t offset = ap->gp_offset & abi::kArm64VaOffsetMask;
+    if (offset < abi::kArm64VaGpBytes) {
+      const auto* registers = reinterpret_cast<const abi::Arm64VaRegisters*>(ap->reg_save_area);
+      std::memcpy(&v, registers->gp_top - (abi::kArm64VaGpBytes - offset), 8);
+      ap->gp_offset += 8;
+      return v;
+    }
+    std::memcpy(&v, ap->overflow_arg_area, 8);
+    ap->overflow_arg_area += 8;
+    return v;
+  }
   if (ap->gp_offset < 48) {
     std::memcpy(&v, ap->reg_save_area + ap->gp_offset, 8);
     ap->gp_offset += 8;
@@ -33,15 +52,30 @@ inline uint64_t NextGp(SysvVaList* ap) {
   return v;
 }
 
+// Both ordinary double and the existing binary128-to-double formatter use
+// this source selection. A 16-byte stack value retains its required alignment.
+inline const uint8_t* NextFpArea(SysvVaList* ap, size_t size) {
+  if (IsArm64VaList(ap)) {
+    uint32_t offset = ap->fp_offset & abi::kArm64VaOffsetMask;
+    if (offset < abi::kArm64VaFpBytes) {
+      const auto* registers = reinterpret_cast<const abi::Arm64VaRegisters*>(ap->reg_save_area);
+      ap->fp_offset += 16;
+      return registers->fp_top - (abi::kArm64VaFpBytes - offset);
+    }
+  } else if (ap->fp_offset < 176) {
+    const uint8_t* source = ap->reg_save_area + ap->fp_offset;
+    ap->fp_offset += 16;
+    return source;
+  }
+  auto source = reinterpret_cast<uintptr_t>(ap->overflow_arg_area);
+  if (size == 16) source = (source + 15) & ~uintptr_t{15};
+  ap->overflow_arg_area = reinterpret_cast<uint8_t*>(source + size);
+  return reinterpret_cast<const uint8_t*>(source);
+}
+
 inline double NextFp(SysvVaList* ap) {
   double v;
-  if (ap->fp_offset < 176) {
-    std::memcpy(&v, ap->reg_save_area + ap->fp_offset, 8);
-    ap->fp_offset += 16;
-  } else {
-    std::memcpy(&v, ap->overflow_arg_area, 8);
-    ap->overflow_arg_area += 8;
-  }
+  std::memcpy(&v, NextFpArea(ap, 8), 8);
   return v;
 }
 

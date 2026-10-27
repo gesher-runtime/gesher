@@ -4,7 +4,11 @@ on:
     branches: [wip/arm64-varargs]
     paths:
       - compat/arm64/**
+      - compat/bionic/shim_internal.h
+      - compat/bionic/stdio_bionic.cc
       - tests/native/arm64_varargs*
+      - tests/native2/arm64_varargs*
+      - tests/windows/run-arm64-varargs.ps1
       - tests/windows/run-arm64-varargs-baseline.ps1
       - .github/workflows/arm64.yml
       - .github/workflows/arm64-varargs-scoped.yml
@@ -14,11 +18,31 @@ permissions:
   contents: read
   actions: read
 
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
 jobs:
   translator:
     uses: ./.github/workflows/arm64.yml
-  baseline:
-    needs: translator
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build actual new loader and shared shim with warnings as errors
+        run: |
+          ninja -C out arm64_elf_test gesher-exec
+          mkdir -p dist-varargs-host
+          cp out/arm64_elf_test.exe out/gesher-exec.exe dist-varargs-host/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arm64-varargs-host
+          path: dist-varargs-host/
+  test:
+    needs: [translator, host]
     strategy:
       fail-fast: false
       matrix:
@@ -38,10 +62,34 @@ jobs:
           Write-Host "ACTUAL_VARARGS_HOST_RUNTIME run=$($run.id) source=$($run.head_sha)"
           gh run download 40498782924 -R '${{ github.repository }}' -n windows-x64 -D dist
           if ($LASTEXITCODE -ne 0) { throw 'Missing immutable host runtime' }
+          New-Item -ItemType Directory -Force legacy | Out-Null
+          Copy-Item -LiteralPath dist/arm64_elf_test.exe -Destination legacy/arm64_elf_test.exe
+          gh run download 40498782924 -R '${{ github.repository }}' -n arm64 -D legacy-arm64
+          if ($LASTEXITCODE -ne 0) { throw 'Missing immutable API2 DLL' }
       - uses: actions/download-artifact@v4
         with:
           name: arm64
           path: dist
-      - name: Observe real valid shallow and deep calls without a production correction
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64-varargs-host
+          path: dist
+      - name: Verify original logger, real formatted-output contracts and ABI mismatches
         shell: pwsh
-        run: tests/windows/run-arm64-varargs-baseline.ps1 -Dir "$PWD/dist"
+        run: |
+          tests/windows/run-arm64-varargs.ps1 -Dir "$PWD/dist"
+          Copy-Item -LiteralPath dist/gesher_arm64.dll -Destination legacy/gesher_arm64.dll
+          $oldHost = & legacy/arm64_elf_test.exe dist/arm64_varargs_baseline.so 2>&1 | Out-String
+          $oldHostExit = $LASTEXITCODE
+          Write-Host "ACTUAL_VARARGS_API_MISMATCH old_host_new_dll exit=$oldHostExit"
+          Write-Host $oldHost
+          if ($oldHostExit -ne 1 -or $oldHost -notmatch 'version mismatch' -or
+              $oldHost -match 'guest library loaded\s+ok') { throw 'Old host accepted new private list ABI' }
+          Copy-Item -LiteralPath dist/arm64_elf_test.exe -Destination legacy-arm64/arm64_elf_test.exe
+          $oldDll = & legacy-arm64/arm64_elf_test.exe dist/arm64_varargs_baseline.so 2>&1 | Out-String
+          $oldDllExit = $LASTEXITCODE
+          Write-Host "ACTUAL_VARARGS_API_MISMATCH new_host_old_dll exit=$oldDllExit"
+          Write-Host $oldDll
+          if ($oldDllExit -ne 1 -or $oldDll -notmatch 'version mismatch' -or
+              $oldDll -match 'guest library loaded\s+ok') { throw 'New host accepted old private list ABI' }
+          Write-Host 'PASS arm64 varargs: actual API2/API3 host-DLL mismatches reject before any guest library runs'
