@@ -72,28 +72,29 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
-Root checkpoint while the scoped agent is interrupted: full ci 40425393716
-at 57782e5 attempt 1 completed with only the known external badssl timeout
-on each Windows runner (two counted failures each). Root read both actual
-test logs: all six test66 ABI/mode checks pass per runner. Package and both
-e2e job statuses are green but their actual logs still require review.
-Root requested failed-jobs retry on the same run/source; attempt 2 is
-pending. No full acceptance or roadmap tick from the scoped passes alone.
-Integration has since advanced to 42cc1c0 with the independently verified
-startup profile; merge it before final combined acceptance. Preserve the
-separate corrected ARM-width override when root integrates that track.
+Root acceptance checkpoint while the scoped agent is interrupted: full ci
+40425393716 at 57782e5, attempt 2, is fully green. Root read all 28
+conclusions (22 success/six skipped), both zero-failure summaries, all six
+test66 ABI/mode PASS lines per runner, actual package window/input/uninstall
+and both required nine-app e2e/transport/association/shortcut logs (zero
+unexpected). Attempt 1 failed only the known external badssl connection
+timeout on both runners; the permitted failed-jobs retry passed unchanged.
+Root also read the independent 248-case reference and both production/NDK
+compilation logs in scoped ci 40425021540 at eb9f964.
 
-Current acceptance run: **full ci 40425393716 at 57782e5**, pending.
-Implementation is frozen at eb9f964 (the later commit changes docs only),
-with all 248 independent assertions and compilation verified in scoped
-40425021540. Fifteen completed build-job logs have been personally reviewed;
-the main runtime build is still running, so no Windows test/package/e2e
-acceptance result is claimed. Continue watching at interval 120, then inspect
-all remaining logs and test66's six cases per runner before updating coverage.
-Integration a06d930 is included; root's unsigned-width continuation remains
-separate and must retain both guest overrides when it is integrated.
+See native3-wide-verified.md for exact jobs. The implementation is frozen
+at eb9f964; verified full source 57782e5 and later heads add docs only.
+The duplicate ADR0073 filename is consolidated into the reserved
+0073-native3-wide-character-abi.md, retaining the detailed implementation
+and original scope/limits. This is documentation only.
 
-Prepared; scoped reference/compilation verified, production runtime pending.
+Final combination is still required: merge the current integration after
+root's pending rule-g gate, preserving both localeconv and corrected width
+guest overrides. Integration has advanced to 29b7b18; corrected width/CPU
+is separately verified in 40430425743/b3ecc85 and monotonic clocks are
+pending in native3-time. Coordinate with root before the final combined run.
+
+Scoped reference, compilation and production runtime are verified.
 The effective multibyte registrations now
 consolidate in locale_bionic.cc; the unused extra_bionic conversions are
 removed. State uses the actual four sequence bytes and preserves LP64's
