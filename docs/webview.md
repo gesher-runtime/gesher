@@ -350,7 +350,7 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Strict-exit full CI **40449137605** is running at exact
+Strict-exit full CI **40449137605** completes green at exact
 `4f253878331b4662abe044fa71127b87b881fd1a`. Commit5d802f5 adds only the
 PowerShell exit checks and successful lifecycle output described below; app
 assertions, runtime and deadlines are unchanged. Actual main122007461704
@@ -358,8 +358,15 @@ has203ABI boundaries/zero problems, framework122007511312 has javac zero
 errors and the app/graphics/Web3 builds, package122009867000 has installed
 oatdump/runtime/window/input/uninstall cleanup, and both e2e logs122010490181
 and122010490086 have all nine apps including Puzzles/TIC80, four transport
-cases, association/shortcut and zero unexpected failures. Both Windows suites
-remain pending. Watch: C:/work/gesher-ci-review/web3-40449137605-watch.log.
+cases, association/shortcut and zero unexpected failures. All28 jobs succeed
+or skip (22/6). Both actual Windows logs122009867037/122009867019 end with
+zero failed tests, all14Web3 PASS and no raw top-level FAIL. Each has five
+single-process VM0 results, six device-launcher0 results and six child-zero
+markers. Both A11y modes return from onDestroy and finish native-window/input/
+surface teardown. Original startup gates pass (JIT414/432 and479/506 ms).
+The child markers still require the freshness prerequisite below; this green
+run is not final proof of that property. Watch:
+C:/work/gesher-ci-review/web3-40449137605-watch.log.
 
 A separate backing-cache freshness prerequisite remains open: processDied
 removes a ProcessRecord before its asynchronous OS-exit poll publishes the
@@ -391,11 +398,12 @@ Watch: C:/work/gesher-ci-review/web3-40444053066-watch.log, interval120.
 Final source review found a termination-oracle gap: Web3Run checked deadlines
 and app assertions but not the wrapper exit code or the device launcher's
 actual child exit-code marker. A crash after done could therefore pass. The
-next source additionally requires both exit codes to be zero and prints the
+strict source additionally requires both exit codes to be zero and prints the
 actual lifecycle/child-completion lines even on success. Runtime, app assertions
 and deadlines remain unchanged. A fresh full source with that stronger oracle
-is required before the final Web3 handoff; the green source above is retained
-without claiming unprinted normal-exit evidence.
+has now passed as40449137605, but its backing-cache prerequisite above remains
+required before the final Web3 handoff. The earlier green source is retained
+without claiming unprinted normal-exit evidence or the prior stall's cause.
 
 Completed changed-source full CI **40432795403** uses exact
 `2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
