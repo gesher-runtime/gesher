@@ -25,5 +25,8 @@ foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
     'successful file action precedes failed program lookup',
     'spawnp searches caller PATH while passing exact argv and replacement envp',
     'every child preserves the parent directory and descriptor flags',
+    'unmentioned closed parent stdin stays EBADF in the child',
+    'dup2 from closed parent stdin fails in a real child with127',
+    'closed-stdin failure prevents later file creation',
     '0 test(s) failed')
 }

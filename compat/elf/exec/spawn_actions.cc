@@ -21,6 +21,13 @@ int ApplySpawnActions(const SpawnRequest& request) {
   auto fchdir = reinterpret_cast<Close>(gesher::bionic::LookupBionicSymbol("fchdir"));
   auto fcntl = reinterpret_cast<Fcntl>(gesher::bionic::LookupBionicSymbol("fcntl"));
   if (!open || !close || !dup2 || !chdir || !fchdir || !fcntl) return 127;
+  // The transport supplies NUL for absent standard handles so launcher startup
+  // is safe. Restore the parent's closed slots before actions such as dup2.
+  for (int fd = 0; fd < 3; ++fd) {
+    bool present = false;
+    for (const auto& f : request.fd_flags) present = present || f.first == fd;
+    if (!present) close(fd);
+  }
   for (const auto& f : request.fd_flags) {
     if (fcntl(f.first, F_SETFD, f.second) < 0) return 127;
   }
