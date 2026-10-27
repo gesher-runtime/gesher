@@ -28,6 +28,17 @@ using gesher::PathKind;
 
 namespace {
 
+// flockfile/funlockfile callers already own this recursive CRT stream lock.
+// Stdio must ALWAYS acquire it before the descriptor/registry guard: the
+// reverse order deadlocks with flockfile(stream) followed by close(otherfd).
+class StreamLock {
+ public:
+  explicit StreamLock(FILE* stream) : stream_(stream) { _lock_file(stream_); }
+  ~StreamLock() { _unlock_file(stream_); }
+ private:
+  FILE* stream_;
+};
+
 // The handle's file identity: two names of one file compare equal.
 bool SameFile(HANDLE a, const std::wstring& b_path) {
   HANDLE b = CreateFileW(b_path.c_str(), FILE_READ_ATTRIBUTES,
@@ -573,15 +584,15 @@ FILE* fopen(const char* path, const char* mode) {
 FILE* fopen64(const char* path, const char* mode) { return fopen(path, mode); }
 
 int fclose(FILE* stream) {
+  if (!stream) return errno = EINVAL, EOF;
+  StreamLock stream_lock(stream);
   gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
   if (transaction.Error()) return errno = transaction.Error(), EOF;
   // Use the CRT's documented unlocked entry under its stream lock, avoiding
   // recursion through this public fclose symbol.
-  _lock_file(stream);
   int result = _fclose_nolock(stream);
-  _unlock_file(stream);
   int saved = result == EOF ? gesher_errno_from_crt(errno) : errno;
-  int error = transaction.Finish();
+  int error = transaction.Finish(result == 0);
   if (error) return errno = error, EOF;
   errno = saved;
   return result;
@@ -590,11 +601,23 @@ int fclose(FILE* stream) {
 // The stream is reopened by the CRT on the Windows name (NUL for /dev/null),
 // keeping its FILE.
 FILE* freopen(const char* path, const char* mode, FILE* stream) {
+  if (!stream) return errno = EINVAL, nullptr;
+  StreamLock stream_lock(stream);
+  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
+  if (transaction.Error()) return errno = transaction.Error(), nullptr;
+  auto fail_reopen = [&](int requested_error) -> FILE* {
+    // Even a destination rejected before the CRT reopen still closes the
+    // original stream. Use the already-held stream/descriptor transaction
+    // exactly once, including when flushing/closing itself reports an error.
+    int closed = _fclose_nolock(stream);
+    int metadata_error = transaction.Finish(closed == 0);
+    errno = metadata_error ? metadata_error : requested_error;
+    return nullptr;
+  };
   int flags;
   char crt_mode[4];
   if (!ParseMode(mode, &flags, crt_mode)) {
-    errno = EINVAL;
-    return nullptr;
+    return fail_reopen(EINVAL);
   }
   if (path == nullptr) return stream;  // a mode change: the CRT cannot; Linux may refuse too
   std::wstring windows;
@@ -605,18 +628,14 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
       windows = L"NUL";
       break;
     case PathKind::kMissing:
-      errno = ENOENT;
-      return nullptr;
+      return fail_reopen(ENOENT);
     default:
-      errno = EACCES;
-      return nullptr;
+      return fail_reopen(EACCES);
   }
   std::wstring wmode(crt_mode, crt_mode + strlen(crt_mode));
-  gesher::record_locks::ClosingDescriptor transaction(_fileno(stream));
-  if (transaction.Error()) return errno = transaction.Error(), nullptr;
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
   int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
-  int error = transaction.Finish();
+  int error = transaction.Finish(result != nullptr);
   if (error) return errno = error, nullptr;
   errno = saved;
   return result;

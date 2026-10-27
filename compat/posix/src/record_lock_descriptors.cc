@@ -275,17 +275,20 @@ ClosingDescriptor::~ClosingDescriptor() {
   if (probe_) CloseHandle(probe_);
   if (begun_) { CancelPending(); local->registry.Unlock(); }
 }
-int ClosingDescriptor::Finish() {
+int ClosingDescriptor::Finish(bool closed_or_replaced) {
   if (completed_) return EINVAL;
   completed_ = true;
   if (error_) return error_;
   if (!begun_) return 0;
-  HANDLE current = gesher::HandleFromFd(descriptor_);
   bool same = false;
-  int error = current == INVALID_HANDLE_VALUE ? 0 : SameDescription(probe_, current, &same);
+  int error = 0;
+  if (!closed_or_replaced) {
+    HANDLE current = gesher::HandleFromFd(descriptor_);
+    error = current == INVALID_HANDLE_VALUE ? 0 : SameDescription(probe_, current, &same);
+  }
   if (!CloseHandle(probe_)) return WinError();
   probe_ = nullptr;  // Not a user alias; exclude it from the subsequent count.
-  if (error || same) return error;
+  if (error || (same && !closed_or_replaced)) return error;
   Pruned pruned{};
   PruneDeadOwners(staged_, &pruned);
   if (release_process_) {

@@ -34,7 +34,10 @@ class ClosingDescriptor {
   ClosingDescriptor(const ClosingDescriptor&) = delete;
   ClosingDescriptor& operator=(const ClosingDescriptor&) = delete;
   int Error() const { return error_; }
-  int Finish();  // Linux error number, or0. Caller preserves actual CRT errno.
+  // Successful close/replacement is evidence even if a dup2 target's new
+  // handle still names the SAME FILE_OBJECT. Failed operations use the actual
+  // captured-versus-current object check to discover whether the fd survived.
+  int Finish(bool closed_or_replaced = false);  // Linux error, or0.
 
  private:
   DescriptorGuard guard_;

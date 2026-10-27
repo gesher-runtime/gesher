@@ -153,7 +153,7 @@ int CloseDescriptor(int fd, bool application_close) {
     errno = socket_errno;
   }
   const int saved = errno;
-  const int error = transaction.Finish();
+  const int error = transaction.Finish(result == 0);
   if (error) return errno = error, -1;
   errno = saved;
   return result;
@@ -242,7 +242,7 @@ int dup2(int fd, int fd2) {
     return -1;
   }
   const int saved = errno;
-  const int metadata_error = transaction.Finish();
+  const int metadata_error = transaction.Finish(true);
   // fd2's old file is closed: forget what it was.
   gesher::ForgetDevice(fd2);
   gesher::ForgetEventObject(fd2);
