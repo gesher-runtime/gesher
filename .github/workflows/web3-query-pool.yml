@@ -46,10 +46,18 @@ jobs:
             -municode -static compat/accessibility/query_pool.cc tests/windows/web3/query_pool_test.cc \
             -o fixture/query_pool_test.exe
           toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/query_pool_test.exe > fixture/imports.txt
-          if rg -i 'Name:.*(libc\+\+|libunwind|libwinpthread)' fixture/imports.txt; then
-            echo 'Unexpected non-system runtime DLL dependency' >&2
-            exit 1
-          fi
+      - name: Require static C++ and pthread imports using an available standard library
+        shell: python
+        run: |
+          import re
+          from pathlib import Path
+          imports = Path('fixture/imports.txt').read_text()
+          names = re.findall(r'^\s*Name:\s*(\S+)', imports, flags=re.MULTILINE)
+          if not names:
+              raise SystemExit('Missing actual PE import names')
+          if any(re.search(r'libc\+\+|libunwind|libwinpthread', name, re.IGNORECASE) for name in names):
+              raise SystemExit('Unexpected non-system runtime DLL dependency: ' + ', '.join(names))
+          print('VERIFIED_STATIC_POOL_IMPORTS ' + ', '.join(names))
       - name: Record exact source and executable provenance
         shell: python
         run: |
