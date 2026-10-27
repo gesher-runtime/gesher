@@ -183,9 +183,15 @@ Root independently checked that every existing field/row remains unchanged;
 inferred from a key name;170 old media entries remain. Earlier
 40456299720/92e91423 stays red:12 missing int32_t/int64_t header definitions,
 no Windows proof. The cstdint prerequisite/early compile correct that source.
-Coherent Windows4/Web3 full40466021634 at160e25e8 includes this slice, root's
-spawn registrations, the cache guard and merged exit freshness. Its Windows/
-package/e2e results are pending; no integration acceptance is claimed yet.
+Coherent Windows4/Web3 full40466021634 at160e25e8 is merged as6297e80a,
+with docs-only head92cf470c: all28 jobs22success/6skip, both Windows0,
+38 Windows4/14 Web3/10 format/2 spawn-registration passes each, package23
+and both ten-app e2e0. Root independently read metadata and all five actual
+critical logs, including six fresh child-zero markers and the real0/23/0
+exit controls on each runner. The merged non-doc tree exactly matches160;
+rule-g needs no extra integration CI. Physical keyboard/candidate discovery,
+rich TSF and Web4 limits remain explicit in
+[the frozen evidence report](tracks/windows4-final.md).
 
 Media4 OpenSL follow-up is full-GREEN atd10bea3a in40476766790, attempt1:
 22 success/6 skips, both whole0/14 test76 PASS each. Both ABIs/core JNI and
@@ -219,15 +225,26 @@ nine Up NDIS adapters with neither IP protocol bound; Windows2022 also
 reported1250 Hz input as1153.3 Hz without loss counters. Corrected narrow
 oracle40467169771/55a17156 passes both runners, skipping only interfaces
 supporting neither protocol and retaining strict actual IP metadata checks.
-Full40469857757/646f9fb1 is now pending with that correction and the reviewed
+Full40469857757/646f9fb1 is green with that correction and the reviewed
 four-file AAudio slice78ee5e12: explicit lossless capacity/zero-loss counters,
 unchanged frequency/frame gates and an independent controlled-overrun probe.
-The old audio cause remains unproved; no Net4 inventory closure is claimed.
+Root's independent five-log review is in progress. The old audio cause
+remains unproved; no Net4 inventory closure/integration merge is claimed.
+The final Net4 candidate must import accepted Windows integration6297e80a.
 Test71 belongs to Media4,72 to
 Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
 spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
 NDK ABI callers, but production/runtime acceptance awaits full CI
-([brief](tracks/exec4-actions.md)). Test75 is the ARM sticky-FPSR slice,
+([brief](tracks/exec4-actions.md)); full40466021634 now proves both ABI
+registration callers and their real child waits in the merged code.
+Root's new spawn child-actions full40498406783 is pending at exact
+e8e827e599077f994be650d1e7b7e40cc78b193c, containing accepted Windows160
+and current integrationdb847. Scoped40472829064/5f2653c6 and corrected
+40497922800/47733cd3 build both actual NDK callers. Peer review found closed
+stdio became NUL during transport; the corrected bootstrap closes only
+those placeholders before actions, with actual closed0/failed-dup0 controls.
+No child-action runtime acceptance is claimed before that full run.
+Test75 is the ARM sticky-FPSR slice,
 76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
 ([brief](tracks/exec4-spawn.md));78 belongs to the separate source-only
 Media4 AAudio MMAP policy/legacy-stream identity slice; next free test is79.

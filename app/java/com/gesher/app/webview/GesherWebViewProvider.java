@@ -162,6 +162,142 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         volatile byte[] bytes;
     }
 
+    /** androidx.webkit's WebMessageListeners (ADR 0058), by JavaScript object name. */
+    private final Map<String, MessageListener> mMessageListeners =
+            Collections.synchronizedMap(new LinkedHashMap<>());
+    /** androidx.webkit's document-start scripts, in the order they were added. */
+    private final List<StartScript> mStartScripts =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** navigator.geolocation from Gesher's LocationManager (ADR 0058). */
+    private final GeolocationShim mGeolocation = new GeolocationShim(this);
+
+    static final class MessageListener {
+        final String name;
+        final String[] rules;
+        final java.lang.reflect.InvocationHandler listener;
+        final Map<String, Object> replyProxies = new ConcurrentHashMap<>();
+
+        MessageListener(String name, String[] rules, java.lang.reflect.InvocationHandler listener) {
+            this.name = name;
+            this.rules = rules;
+            this.listener = listener;
+        }
+    }
+
+    static final class StartScript {
+        final String script;
+        final String[] rules;
+
+        StartScript(String script, String[] rules) {
+            this.script = script;
+            this.rules = rules;
+        }
+    }
+
+    // ---- For androidx.webkit's glue (SupportLib) and GeolocationShim ----
+
+    WebView view() {
+        return mView;
+    }
+
+    Context context() {
+        return mContext;
+    }
+
+    WebView2Host host() {
+        return mHost;
+    }
+
+    WebChromeClient chrome() {
+        return mChrome;
+    }
+
+    GesherWebSettings settings() {
+        return mSettings;
+    }
+
+    String currentUrl() {
+        return mUrl;
+    }
+
+    Handler uiHandler() {
+        return mUi;
+    }
+
+    /** The origin ("scheme://host[:port]/") the app sees for a WebView2 URL. */
+    static String originOf(String webView2Url) {
+        return appOrigin(webView2Url);
+    }
+
+    void addMessageListener(String name, String[] rules,
+            java.lang.reflect.InvocationHandler listener) {
+        if (name == null || name.isEmpty() || listener == null) {
+            throw new IllegalArgumentException("a JavaScript object name and a listener are needed");
+        }
+        if (!name.matches("[A-Za-z_$][A-Za-z0-9_$]*")) {
+            throw new IllegalArgumentException("not a JavaScript identifier: " + name);
+        }
+        String[] r = checkRules(rules);
+        synchronized (mMessageListeners) {
+            if (mMessageListeners.containsKey(name)) {
+                throw new IllegalArgumentException(name + " is already added");
+            }
+            mMessageListeners.put(name, new MessageListener(name, r, listener));
+        }
+        runOnUi(this::updateDocumentScript);
+    }
+
+    void removeMessageListener(String name) {
+        if (mMessageListeners.remove(name) != null) runOnUi(this::updateDocumentScript);
+    }
+
+    StartScript addStartScript(String script, String[] rules) {
+        if (script == null) throw new IllegalArgumentException("null script");
+        StartScript s = new StartScript(script, checkRules(rules));
+        mStartScripts.add(s);
+        runOnUi(this::updateDocumentScript);
+        return s;
+    }
+
+    void removeStartScript(StartScript s) {
+        if (mStartScripts.remove(s)) runOnUi(this::updateDocumentScript);
+    }
+
+    /** A JavaScriptReplyProxy's message to the page's object {@code name}. */
+    void postToListener(String name, String data) {
+        postToListener(name, new WebMessage(data));
+    }
+
+    void postToListener(String name, WebMessage message) {
+        WebView2Host host = mHost;
+        if (host == null) return;
+        try {
+            JSONObject m = new JSONObject();
+            m.put("gesher", "listener");
+            m.put("name", name);
+            WebMessagePayload.write(m, message);
+            host.postWebMessage(m.toString());
+        } catch (org.json.JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void runOnUi(Runnable r) {
+        if (Looper.myLooper() == mUi.getLooper()) r.run(); else mUi.post(r);
+    }
+
+    /** Android's allowed origin rules, checked as AwContents checks them. */
+    private static String[] checkRules(String[] rules) {
+        if (rules == null) throw new IllegalArgumentException("null allowedOriginRules");
+        for (String r : rules) {
+            if (r == null || !(r.equals("*") || r.matches(
+                    "[a-zA-Z][a-zA-Z0-9+.-]*://(\\*\\.)?[^:/*]*(:\\d+)?/?"))) {
+                throw new IllegalArgumentException("not an origin rule: " + r);
+            }
+        }
+        return rules.clone();
+    }
+
     /** loadDataWithBaseURL: the data the next main document at this URL gets. */
     private volatile String mDataUrl;
     private volatile byte[] mData;
@@ -263,6 +399,16 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         script.append(PageScripts.PORTS);
         if (mTextZoom != 100) script.append(PageScripts.textZoom(mTextZoom));
         script.append(JsBridge.script(mInterfaces, mRequireAnnotation));
+        // androidx.webkit (ADR 0058): WebMessageListeners' objects, then the app's
+        // document-start scripts, in the order they were added.
+        script.append(PageScripts.ORIGINS);
+        script.append(GeolocationShim.SCRIPT);
+        for (MessageListener l : mMessageListeners.values()) {
+            script.append(PageScripts.messageListener(l.name, l.rules));
+        }
+        for (StartScript s : mStartScripts) {
+            script.append(PageScripts.documentStartScript(s.script, s.rules));
+        }
         String s = script.toString();
         if (s.equals(mLastDocumentScript)) return;
         mLastDocumentScript = s;
@@ -323,6 +469,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         if (mDestroyed) return;
         mDestroyed = true;
         removeListeners();
+        mGeolocation.pageGone();
         if (mHost != null) mHost.destroy();
         mHost = null;
     }
@@ -955,7 +1102,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             JSONObject m = new JSONObject();
             m.put("gesher", "post");
-            m.put("data", message.getData() != null ? message.getData() : "");
+            WebMessagePayload.write(m, message);
             m.put("origin", origin);
             m.put("ports", transfer(message.getPorts()));
             mHost.postWebMessage(m.toString());
@@ -995,7 +1142,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             JSONObject m = new JSONObject();
             m.put("gesher", "port");
             m.put("id", port.mId);
-            m.put("data", message.getData() != null ? message.getData() : "");
+            WebMessagePayload.write(m, message);
             m.put("ports", transfer(message.getPorts()));
             host.postWebMessage(m.toString());
         } catch (org.json.JSONException e) {
@@ -1314,8 +1461,13 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public AccessibilityNodeProvider getAccessibilityNodeProvider() {
-        return null;
+        // The page's nodes from WebView2's UI Automation tree (ADR 0058).
+        if (mHost == null) return null;
+        if (mAccessibility == null) mAccessibility = new WebViewAccessibility(this);
+        return mAccessibility;
     }
+
+    private WebViewAccessibility mAccessibility;
 
     @Override
     public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
@@ -1732,6 +1884,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 // The ports the page had are gone with it.
                 for (GesherWebMessagePort p : mPagePorts.values()) p.pageGone();
                 mPagePorts.clear();
+                mGeolocation.pageGone();
+                for (MessageListener l : mMessageListeners.values()) l.replyProxies.clear();
                 setProgress(10);
                 mClient.onPageStarted(mView, url, null);
                 break;
@@ -1842,7 +1996,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 if (chrome != null) chrome.onCloseWindow(mView);
                 break;
             case WebView2Host.EVENT_WEB_MESSAGE:
-                webMessage(a);
+                webMessage(a, b);
                 break;
             case WebView2Host.EVENT_DEVTOOLS_RESULT: {
                 ValueCallback<String> cb = mDevToolsCallbacks.remove(id);
@@ -1946,14 +2100,24 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     /** chrome.webview.postMessage from the page: a page port's message (PageScripts.PORTS). */
-    private void webMessage(String json) {
+    private void webMessage(String json, String source) {
         try {
             Object v = new org.json.JSONTokener(json).nextValue();
             if (!(v instanceof JSONObject)) return;
             JSONObject m = (JSONObject) v;
+            if (m.has("gesherGeo")) {
+                mGeolocation.onMessage(m, source);
+                return;
+            }
+            String listener = m.optString("gesherListener", null);
+            if (listener != null) {
+                MessageListener l = mMessageListeners.get(listener);
+                if (l != null) SupportLib.deliver(this, l, WebMessagePayload.read(m), source);
+                return;
+            }
             String id = m.optString("gesherPort", null);
             GesherWebMessagePort port = id != null ? mPagePorts.get(id) : null;
-            if (port != null) port.fromPage(m.optString("data"));
+            if (port != null) port.fromPage(WebMessagePayload.read(m));
         } catch (Exception e) {
             // not a port's message
         }
