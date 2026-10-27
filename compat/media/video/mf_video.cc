@@ -167,6 +167,9 @@ class MfVideoDecoder : public VideoDecoder {
     }
     // H.264/H.265: the parameter sets go in front of the first access unit.
     prefix_ = AnnexBParameterSets(f, mime_);
+    // The MPEG-4 decoder needs the VOL in the elementary stream too; the
+    // media type's sequence-header attribute alone does not initialize it.
+    if (mime_ == "video/mp4v-es") f.GetBuffer("csd-0", &prefix_);
     if (!SetOutput(error)) {
       // Many decoders know their output only after the first frame (a stream
       // change); until then any type may be refused.
@@ -223,6 +226,7 @@ class MfVideoDecoder : public VideoDecoder {
   void Flush() override {
     t_->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
     discontinuity_ = true;
+    prefix_sent_ = false;
   }
 
   void Drain(std::vector<VideoFrame>* out) override {

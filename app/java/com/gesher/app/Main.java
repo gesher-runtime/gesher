@@ -309,6 +309,12 @@ public final class Main {
         System.out.println(tag + ": loaded " + props + " properties from " + buildProp);
         System.out.flush();
 
+        // Zygote installs this on Android, before any MediaSessionManager is created.
+        if (android.media.MediaFrameworkPlatformInitializer.getMediaServiceManager() == null) {
+            android.media.MediaFrameworkPlatformInitializer.setMediaServiceManager(
+                    new android.media.MediaServiceManager());
+        }
+
         // 2b. The default locales: Windows' languages and regional format, or
         //     $GESHER_LOCALES (com.gesher.app.locale.SystemLocale, docs/fonts.md).
         com.gesher.app.locale.SystemLocale.applyDefault();

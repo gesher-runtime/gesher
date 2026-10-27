@@ -121,6 +121,11 @@ add_executable(elf_load_test tests/native/elf_load_test.cc)
 target_compile_options(elf_load_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_load_test PRIVATE gesher_bionic gesher_elf)
 
+# Live CRT environment storage after host and guest mutations (exec4).
+add_executable(exec4_environment_test tests/exec/environment-host-test.cc)
+target_compile_options(exec4_environment_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec4_environment_test PRIVATE gesher_bionic gesher_elf)
+
 # All-code-point comparison with the independent pinned ICU4X reference.
 add_executable(native3_unicode_test tests/native/native3_unicode_test.cc)
 target_compile_options(native3_unicode_test PRIVATE -Wall -Wextra -Werror)

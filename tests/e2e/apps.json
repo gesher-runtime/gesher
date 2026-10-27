@@ -70,6 +70,18 @@
       "actions": [ { "click": [600, 168] }, { "click": [600, 213] } ]
     },
     {
+      "package": "com.brouken.player",
+      "label": "Just Player",
+      "versionName": "0.217",
+      "versionCode": 2174,
+      "sha256": "89e459ee69f2350f5006fb514d7a7e7f2f9b4e590c3b03b1f4e66c0ffc16d1a2",
+      "license": "GPL-3.0-only",
+      "source": "https://github.com/moneytoo/Player",
+      "diagnoseLog": "FATAL|AndroidRuntime|Caused by:|Exception|Error|stand-in|GesherMedia|exited|boot class missing",
+      "why": "A video player (docs/media.md, media3): AndroidX Media3's ExoPlayer over MediaCodec, MediaCodecList and AudioTrack, its PlayerView and controls, an FFmpeg audio extension in native code (x86_64); Java. Started without a file it shows its player screen; a click shows its controls.",
+      "actions": [ { "click": [200, 400] } ]
+    },
+    {
       "package": "org.billthefarmer.notes",
       "label": "Notes",
       "versionName": "1.41",

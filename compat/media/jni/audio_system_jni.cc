@@ -17,6 +17,7 @@
 #include <mutex>
 #include <string>
 
+#include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/log.h"
 #include "../audio/shared_state.h"
@@ -96,15 +97,15 @@ jint JNICALL AS_getOutputLatency(JNIEnv*, jclass, jint) {
 
 // The output as an AudioDevicePort: one profile per PCM encoding the engine
 // takes, at the rates it resamples from.
-jobject OutputPort(JNIEnv* env, const OutputInfo& info) {
+jobject DevicePort(JNIEnv* env, bool input, int id, const std::string& device_name, int device_type) {
   jclass handleCls = env->FindClass("android/media/AudioHandle");
-  jobject handle = env->NewObject(handleCls, env->GetMethodID(handleCls, "<init>", "(I)V"),
-                                  kOutputDeviceId);
+  jobject handle = env->NewObject(handleCls, env->GetMethodID(handleCls, "<init>", "(I)V"), id);
   static const jint kRates[] = {8000, 11025, 12000, 16000, 22050, 24000, 32000,
                                 44100, 48000, 88200, 96000, 192000};
   jintArray rates = env->NewIntArray(sizeof(kRates) / sizeof(kRates[0]));
   env->SetIntArrayRegion(rates, 0, sizeof(kRates) / sizeof(kRates[0]), kRates);
-  const jint masks[] = {4 /* CHANNEL_OUT_MONO */, 12 /* CHANNEL_OUT_STEREO */};
+  // CHANNEL_OUT_MONO and _STEREO; CHANNEL_IN_MONO and _STEREO.
+  const jint masks[] = {input ? 16 : 4, 12};
   jintArray channelMasks = env->NewIntArray(2);
   env->SetIntArrayRegion(channelMasks, 0, 2, masks);
   jintArray indexMasks = env->NewIntArray(0);
@@ -132,12 +133,12 @@ jobject OutputPort(JNIEnv* env, const OutputInfo& info) {
     CheckException(env, "AudioDevicePort's constructor");
     return nullptr;
   }
-  jstring name = env->NewStringUTF(info.device_name.empty() ? "Gesher audio output"
-                                                            : info.device_name.c_str());
+  jstring name = env->NewStringUTF(device_name.empty() ? (input ? "Gesher audio input" : "Gesher audio output")
+                                                       : device_name.c_str());
   jstring address = env->NewStringUTF("");
-  jint layout = info.device_type == 0x2 ? 12 /* CHANNEL_OUT_STEREO */ : 0 /* CHANNEL_INVALID */;
+  jint layout = !input && device_type == 0x2 ? 12 /* CHANNEL_OUT_STEREO */ : 0 /* CHANNEL_INVALID */;
   jobject port = env->NewObject(portCls, portInit, handle, name, profiles, gains,
-                                static_cast<jint>(info.device_type), address, layout, none, none,
+                                static_cast<jint>(device_type), address, layout, none, none,
                                 descriptors);
   CheckException(env, "new AudioDevicePort");
   return port;
@@ -145,10 +146,16 @@ jobject OutputPort(JNIEnv* env, const OutputInfo& info) {
 
 jint JNICALL AS_listAudioPorts(JNIEnv* env, jclass, jobject ports, jintArray generation) {
   OutputInfo info = GetOutputInfo();
-  jobject port = OutputPort(env, info);
-  if (port != nullptr && ports != nullptr) {
-    jclass listCls = env->FindClass("java/util/ArrayList");
-    env->CallBooleanMethod(ports, env->GetMethodID(listCls, "add", "(Ljava/lang/Object;)Z"), port);
+  jobject port = DevicePort(env, false, kOutputDeviceId, info.device_name, info.device_type);
+  jclass listCls = env->FindClass("java/util/ArrayList");
+  jmethodID add = env->GetMethodID(listCls, "add", "(Ljava/lang/Object;)Z");
+  if (port != nullptr && ports != nullptr) env->CallBooleanMethod(ports, add, port);
+  // The input (media3, ADR 0059): a microphone, the loopback or GESHER_AUDIO_SOURCE's file;
+  // none when the capture engine has nothing but silence.
+  InputInfo input = GetInputInfo();
+  if (input.device && ports != nullptr) {
+    jobject in = DevicePort(env, true, kInputDeviceId, input.device_name, input.device_type);
+    if (in != nullptr) env->CallBooleanMethod(ports, add, in);
   }
   if (generation != nullptr) {
     jint g = static_cast<jint>(info.generation);
@@ -177,14 +184,20 @@ jint JNICALL AS_getDevicesForAttributes(JNIEnv* env, jclass, jobject, jobjectArr
 }
 
 jint JNICALL AS_getSupportedDeviceTypes(JNIEnv* env, jclass, jint flags, jobject intArray) {
-  if (intArray == nullptr || (flags & 2 /* GET_DEVICES_OUTPUTS */) == 0) return kOk;
+  if (intArray == nullptr) return kOk;
   jclass cls = env->GetObjectClass(intArray);
   jmethodID add = env->GetMethodID(cls, "add", "(I)V");
   if (add == nullptr) {
     env->ExceptionClear();
     return kOk;
   }
-  env->CallVoidMethod(intArray, add, static_cast<jint>(GetOutputInfo().device_type));
+  if (flags & 2 /* GET_DEVICES_OUTPUTS */) {
+    env->CallVoidMethod(intArray, add, static_cast<jint>(GetOutputInfo().device_type));
+  }
+  if (flags & 1 /* GET_DEVICES_INPUTS */) {
+    InputInfo input = GetInputInfo();
+    if (input.device) env->CallVoidMethod(intArray, add, static_cast<jint>(input.device_type));
+  }
   return kOk;
 }
 
@@ -270,20 +283,6 @@ const JNINativeMethod kProductStrategyMethods[] = {
      GESHER_NATIVE(APS_getAttributesForLegacyStream)},
 };
 
-// AudioRecord until capture comes (roadmap phase 8, stage 3): no recorder
-// (AUDIORECORD_ERROR_SETUP_NATIVEINITFAILED), so the record stays uninitialized.
-jint JNICALL AR_setup(JNIEnv*, jobject, jobject, jobject, jintArray, jint, jint, jint, jint,
-                      jintArray, jobject, jlong, jint, jint) {
-  MEDIA_LOGW("AudioRecord: no audio capture yet");
-  return -20;
-}
-
-const JNINativeMethod kAudioRecordMethods[] = {
-    {"native_setup",
-     "(Ljava/lang/Object;Ljava/lang/Object;[IIIII[ILandroid/os/Parcel;JII)I",
-     GESHER_NATIVE(AR_setup)},
-};
-
 std::atomic<bool> gAppNamed{false};
 
 }  // namespace
@@ -356,9 +355,6 @@ int RegisterAudioSystem(JNIEnv* env) {
     RegisterMethods(env, "android/media/audiopolicy/AudioProductStrategy", kProductStrategyMethods);
   }
   RegisterStandins(env, "android/media/audiopolicy/AudioVolumeGroup");
-  if (RegisterStandins(env, "android/media/AudioRecord")) {
-    RegisterMethods(env, "android/media/AudioRecord", kAudioRecordMethods);
-  }
   RegisterStandins(env, "android/media/ToneGenerator");
   return 0;
 }
@@ -376,6 +372,7 @@ int android::register_gesher_media(JNIEnv* env) {
   gesher::media::SetVm(env);
   gesher::media::RegisterAudioSystem(env);
   gesher::media::RegisterAudioTrack(env);
+  gesher::media::RegisterAudioRecord(env);
   register_gesher_media_surfaces(env);
   return 0;
 }
