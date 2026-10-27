@@ -64,9 +64,9 @@ foreach ($a in $abis) {
     (NoDrive "$n2/$($a.Abi)/libnative2.so"), (NoDrive $work), (NoDrive "$n2/symbols-$($a.Abi).txt")) | Out-String
   $code = $LASTEXITCODE
   $lines = $out -split "`r?`n"
-  foreach ($part in 'extras', 'unicode', 'dlopen', 'files') {
+  foreach ($part in 'extras', 'unicode', 'dlopen', 'files', 'ifaddrs') {
     $line = $lines | Where-Object { $_ -like "native2 $part*" } | Select-Object -First 1
-    if ($line -and $line -like "native2 $($part): ok*") {
+    if ($code -eq 0 -and $line -and $line -like "native2 $($part): ok*") {
       Write-Host "PASS  native2 ($($a.Tag)): $part through dalvikvm ($($line.Substring($line.IndexOf(':') + 2)))"
     } else {
       Write-Host "FAIL  native2 ($($a.Tag)): $part through dalvikvm (exit $code): $line"
@@ -183,6 +183,7 @@ $bcpN2 = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | 
 $dvmN2 = @("-Xbootclasspath:$bcpN2", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $apks = @(@{ Apk = 'native2app.apk'; Tag = 'x86_64' }, @{ Apk = 'native2app-arm64.apk'; Tag = 'arm64' })
 $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dlopen: ok', 'Native2Activity: native2 files: ok',
+  'Native2Activity: native2 ifaddrs: ok; LP64; IPv4/IPv6 loopback; netmasks/broadcast; packet index/hardware; independent lists',
   'Native2Activity: native2 unicode: ok; pinned ICU4X boundaries; plain/_l/wctype/wctrans and errors; pinned wcwidth/wcswidth: 33 boundaries, full-width strings and bounds',
   'Native2Activity: native2 bitmap: ok; direct pixels and PNG callback round trip',
   'Native2Activity: native3 Java Bitmap sees native pixels: true',
