@@ -148,10 +148,10 @@ function W4Legacy([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
 }
 
 function W4Tsf([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
-  $buttons = W3Wait $Read 0 'W4 TSF buttons reconvert (\d+),(\d+) password (\d+),(\d+) number (\d+),(\d+) normal (\d+),(\d+) partial (\d+),(\d+)' 40
+  $buttons = W3Wait $Read 0 'W4 TSF buttons reconvert (\d+),(\d+) password (\d+),(\d+) number (\d+),(\d+) normal (\d+),(\d+) partial (\d+),(\d+) noneditor (\d+),(\d+)' 40
   if (-not $buttons.Success) { throw 'No TSF fixture buttons' }
   $problems = @()
-  foreach ($step in @(@('reconvert', 1), @('password', 3), @('number', 5), @('normal', 7), @('reconvert', 1), @('partial', 9))) {
+  foreach ($step in @(@('reconvert', 1), @('password', 3), @('number', 5), @('normal', 7), @('reconvert', 1), @('noneditor', 11), @('partial', 9))) {
     $mark = W3Mark $Read
     $group = [int]$step[1]
     [GesherWin32]::Click($Window, [int]$buttons.Groups[$group].Value, [int]$buttons.Groups[$group + 1].Value)
@@ -160,6 +160,7 @@ function W4Tsf([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
       password { 'W4 TSF restricted password HRESULT 8000ffff unchanged true' }
       number { 'W4 TSF restricted number HRESULT 8000ffff unchanged true' }
       normal { 'W4 TSF normal selected Hebrew 7-11' }
+      noneditor { 'W4 TSF noneditor focused true accepting false HRESULT 8000ffff unchanged true' }
       partial { 'W4 TSF actual EditText partial true composition ended true selection 2-2' }
     }
     if (-not (W3Wait $Read $mark $pattern 25).Success) { $problems += "Missing $($step[0]) result: $pattern" }
@@ -171,7 +172,7 @@ function W4Tsf([string] $Mode, [IntPtr] $Window, [scriptblock] $Read) {
     if ($live -and -not (W3Wait $Read $mark $live 10).Success) { $problems += "Missing actual composing spans: $live" }
   }
   if ("$(& $Read)" -notmatch 'W4 TSF service HRESULT 0') { $problems += 'No successful actual Windows text-service edit session' }
-  W4Check $Mode 'real TSF service reconverts existing EditText selection, completes composition, blocks password/number, and reconnects normal editor' $problems
+  W4Check $Mode 'real TSF service reconverts existing EditText selection, completes composition, blocks password/number/editorless focus, and reconnects normal editor' $problems
 }
 
 W4Run 'single process' @('com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity', 'com.gesher.winapp.DisplayActivity', $w4Apk) {

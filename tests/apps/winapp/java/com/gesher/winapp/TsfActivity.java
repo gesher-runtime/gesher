@@ -16,7 +16,7 @@ import android.widget.LinearLayout;
 public final class TsfActivity extends Reporting {
     private final Handler handler = new Handler();
     private EditText edit;
-    private Button reconvert, password, number, normal, partial;
+    private Button reconvert, password, number, normal, partial, noneditor;
     private int generation;
 
     @Override protected void onCreate(Bundle saved) {
@@ -42,10 +42,13 @@ public final class TsfActivity extends Reporting {
         number = button(root, "Number", () -> restrict("number", InputType.TYPE_CLASS_NUMBER));
         normal = button(root, "Normal editor", this::normal);
         partial = button(root, "Partial composition edit", this::partial);
+        noneditor = button(root, "Focus without an editor", this::nonEditor);
+        noneditor.setFocusableInTouchMode(true);
         setContentView(root);
         root.post(() -> {
             say("W4 TSF buttons reconvert " + center(reconvert) + " password " + center(password)
-                    + " number " + center(number) + " normal " + center(normal) + " partial " + center(partial));
+                    + " number " + center(number) + " normal " + center(normal) + " partial " + center(partial)
+                    + " noneditor " + center(noneditor));
             normal();
         });
     }
@@ -95,6 +98,23 @@ public final class TsfActivity extends Reporting {
 
     private void reconvert(int attempt, int current) {
         reconvert(attempt, current, false);
+    }
+
+    private void nonEditor() {
+        int current = ++generation;
+        String before = edit.getText().toString();
+        noneditor.requestFocus();
+        InputMethodManager imm = getSystemService(InputMethodManager.class);
+        imm.restartInput(noneditor);
+        handler.postDelayed(() -> {
+            if (current != generation) return;
+            try {
+                int result = invokeService();
+                say("W4 TSF noneditor focused " + noneditor.hasFocus() + " accepting " + imm.isAcceptingText()
+                        + " HRESULT " + Integer.toHexString(result)
+                        + " unchanged " + edit.getText().toString().equals(before));
+            } catch (ReflectiveOperationException e) { say("W4 TSF failure " + e); }
+        }, 750);
     }
 
     private void partial() {
