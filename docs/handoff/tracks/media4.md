@@ -175,6 +175,19 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+The corrected coherent candidate is prepared separately in
+C:\work\gesher-media4-invalidation / wip/media4-invalidation after merging
+accepted Windows integration6297e80a. Its bounded Surface2 invalidation
+correction, test80 and post-failure no-input TIC diagnostics are source only;
+see surfaces2.md and proposed ADR0063. All original blank/text thresholds,
+AAudio/OpenSL/format/native checks and installed notice checks remain
+enabled. Full CI awaits the exact source review. Frozen format/OpenSL/native
+verified refs and the separate red AAudio source remain unchanged. No AAudio
+inventory acceptance follows from the red full40487303965 attempt2; its
+TIC-80 cause remains unproved. No source-only muxer factoring is imported
+into this candidate. Test79 remains reserved for that separate muxer work;
+test80 is invalidation, test81 belongs to Locale2, next free82.
+
 Full40487303965 attempt2 is complete RED at the same afebf1ec source:
 28 conclusions=21 success/six skipped/one failed e2e Windows2025. Both
 Windows122149452806/122149452762 finish0 test failures and all16 test78

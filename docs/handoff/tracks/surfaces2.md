@@ -2,7 +2,8 @@
 
 Reserved ADR: **0063**. Continue the remaining graphics/GL scope after the
 verified first surfaces stage is merged. Create wip/surfaces2 from current
-phase4/integration in its own worktree; no implementation is started yet.
+phase4/integration in its own worktree. The first bounded invalidation
+correction is being prepared alongside the coherent Media4 candidate.
 
 Read track-rules.md, graphics.md's surfaces status, ADRs 0006/0052/0056,
 the SurfaceTexture/TextureLayer and child EGL bridge, the native3 bitmap
@@ -36,7 +37,8 @@ bridge and the complete roadmap/ADR graphics limits before implementation.
 
 ## Verification and domain
 
-Use separate tests/windows/tracks/53-surfaces2.ps1 and small Java/NDK apps,
+Use separate tests/windows/tracks/80-surface-invalidation.ps1 for the first
+invalidation slice and small Java/NDK apps,
 both ABIs where native calls apply, single process and device. Require
 pixel readback, lifecycle/callback ordering, error paths and resource cleanup;
 keep 52-surfaces, native2/native3 bitmap checks, media and TIC-80 green.
@@ -51,6 +53,45 @@ hardware; distinguish a tested software contract from real hardware evidence.
 
 ## Status and next steps
 
-Unstarted. The first surfaces stage merged as 4f99afd after full ci
-40307919084 attempt 2; its retained open items are assigned here.
-This reservation does not close them or claim hardware support.
+The first surfaces stage merged as 4f99afd after full ci40307919084
+attempt2; all its retained graphics limits remain assigned here. No broad
+Surface2 roadmap row is closed by the first bounded correction below.
+
+Source-only work is in C:\work\gesher-media4-invalidation on
+wip/media4-invalidation, based on the accepted Windows integration6297e80a
+and Media4's separate format/OpenSL/native/AAudio candidate. No compiler or
+native/JVM/C# fixture is run locally. Full CI is pending source review.
+
+ViewSurfaceFor previously latched pending before obtaining an environment
+or live weak view and left it latched after a failed Java post. Draw also
+cleared pending before publishing its weak view. The correction retries
+after failed posts and binds the weak view before acknowledging the draw.
+A small production gate is shared with six CI-only controlled tests:
+no-env/no-view/Java-post failure followed by recovery, pending coalescing,
+a barrier that holds binding before acknowledgement, and concurrent
+producers. Opt-in bounded traces record actual latest-frame/request outcome,
+draw and consumed-frame numbers; a bounded pixel sample distinguishes black
+producer frames without making an unsampled value a pixel-count claim.
+
+The real SurfaceView/EGL app gains a separate activity: only the producer
+changes red/green to blue/yellow after twelve seconds. Test80 requires both
+captures with the existing color thresholds, actual native ABI markers,
+complete teardown and bounded device shutdown, in single-process and fresh
+device modes on both x86_64 and arm64-v8a. No input, resize or explicit
+View.invalidate is sent to this activity. The original SurfaceGL activity
+and its checks remain enabled.
+
+This source defect has not been proved to cause TIC-80's observed blank
+frame in Media4 full40487303965 attempt2. The original blank/text assertions
+and thresholds are unchanged. Only after an original blank assertion fails,
+the harness records fifteen one-second no-input captures with elapsed/UTC
+time, hash and pixel counts before its original click. Bounded surface and
+window traces are enabled for that app. A later nonblank diagnostic capture
+cannot turn the original failure into a pass. Both recorded app logs contain
+fonts.xml ENOENT followed by successful installed font-map loading; neither
+the first reported exception nor the source defect is a proven cause yet.
+
+Java EGL14/GLES20/GLSurfaceView, SurfaceTexture external-OES consumption,
+child transactions, Activity SkiaGL readback, hardware storage/fences,
+Vulkan and every other required item above remain open. No new API coverage
+metadata or roadmap acceptance is claimed before a complete green full run.
