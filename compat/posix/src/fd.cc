@@ -155,7 +155,8 @@ int CloseFdBody(int fd, bool unpublished) {
       gesher::Insert(fd, state);
       return errno = socket_errno, -1;
     }
-    _close(fd);
+    int crt_closed = gesher::CrtResult(_close(fd));
+    if (unpublished && crt_closed < 0) return -1;
     errno = socket_errno;
   }
   return result;
