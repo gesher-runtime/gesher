@@ -23,6 +23,7 @@ import com.android.internal.inputmethod.IRemoteComputerControlInputConnection;
 import com.android.internal.inputmethod.IRemoteInputConnection;
 import com.android.internal.inputmethod.InputBindResult;
 import com.android.internal.inputmethod.InputMethodInfoSafeList;
+import com.android.internal.inputmethod.StartInputFlags;
 import com.android.internal.view.IInputMethodManager;
 
 import com.gesher.app.input.WindowInput;
@@ -63,9 +64,9 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
     /** The input method of the process's windows. */
     public interface Host {
         /**
-         * Input starts in window {@code windowToken} (an IWindow's binder) of this process,
-         * or the window gains the focus: {@code editorInfo} and {@code inputConnection} are
-         * the focused editor's, or null when the window has none. Returns the session the
+         * Input starts in window {@code windowToken} (an IWindow's binder) of this process.
+         * {@code editorInfo} is the focused editor's; a focus-only report with no editor
+         * does not start or replace a host binding. Returns the session the
          * window's client talks to, or null. Called on the client's thread with its
          * InputMethodManager locked: the host posts its work, it does not call back.
          */
@@ -232,6 +233,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         Client c;
         Client previous;
         int sequence;
+        boolean sameWindowFocused;
         synchronized (this) {
             c = mClients.get(client.asBinder());
             if (c == null) {
@@ -241,6 +243,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
             }
             previous = mCurClient;
             mCurClient = c;
+            sameWindowFocused = windowToken != null && mCurWindow == windowToken;
             if (windowToken != null) mCurWindow = windowToken;
             sequence = ++mBindSequence;
         }
@@ -258,11 +261,25 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         }
         Host host = mHost;
         InputBindResult result;
-        if (host == null) {
-            result = editorInfo == null ? InputBindResult.NULL_EDITOR_INFO : InputBindResult.NO_IME;
+        boolean bound = false;
+        if (editorInfo == null) {
+            // AOSP16 IMM also reports WINDOW_FOCUS_GAIN_REPORT_ONLY after an
+            // editor has started. Its null editor/connection are a notification,
+            // not a request to erase that editor's live native document.
+            result = sameWindowFocused && (startInputFlags & StartInputFlags.IS_TEXT_EDITOR) != 0
+                    ? new InputBindResult(InputBindResult.ResultCode.SUCCESS_REPORT_WINDOW_FOCUS_ONLY,
+                            null, null, null, null, -1, false)
+                    : InputBindResult.NULL_EDITOR_INFO;
+            if (System.getenv("GESHER_TSF_TEST_SERVICE") != null) {
+                System.out.println("gesher-ime: focus-only report without a new editor binding, reason "
+                        + startInputReason + " flags 0x" + Integer.toHexString(startInputFlags));
+            }
+        } else if (host == null) {
+            result = InputBindResult.NO_IME;
         } else {
             Session s = host.startInput(windowToken, editorInfo, inputConnection,
                     startInputReason, startInputFlags, softInputMode);
+            bound = s != null;
             result = s == null ? InputBindResult.NO_EDITOR
                     : new InputBindResult(InputBindResult.ResultCode.SUCCESS_WITH_IME_SESSION,
                             s.session, null /* accessibilitySessions */, s.channel, IME_ID,
@@ -270,7 +287,7 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         }
         try {
             client.onStartInputResult(result, startInputSeq);
-            if (host != null) host.onInputBound(windowToken);
+            if (bound) host.onInputBound(windowToken);
         } catch (RemoteException e) {
             // The client is gone.
         }
