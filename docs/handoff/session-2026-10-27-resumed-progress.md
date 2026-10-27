@@ -121,3 +121,72 @@ environment or approval. Software-only implementation/CI continues meanwhile.
 Release1 remains preparation only in gesher-release /wip/release1 atfc3e0a8a.
 Every gap, coherent full, actual0.1.0 installer/version/notice/UI/input/uninstall,
 main provenance/PR/merge and immutable asset/hash/source identity gates remain.
+
+## Continuation update: accepted prerequisite and frozen candidates
+
+The preceding table preserves its earlier snapshot. Current accepted integration
+before this update is fbfd9bb3da9774b81fe66684e8d7dbe43c44acae, clean;
+this update changes documentation only. Resolver/Libcore acceptance and exact
+non-doc equality with944a remain as recorded above.
+
+- Native prerequisite942f2c16b1219cd25bcb1c1ca4215f41639cc88f is now actually
+  verified by component40556015168 attempt1: nine jobs, eight success and one
+  intentional smoke skip. Both actual Windows jobs122393236254/122393236300
+  finish0: six Native2 ABI/mode reports, shallow/deep and ELF contracts,
+  copied JNI-V/int/object and Arm64Jni, five FPCR/five FPSR and10384 oracle
+  rows per host. All eight producer identities, current API3 host/DLL/tools,
+  actual rebuild for four changed jars and all fifteen image-copy hashes
+  were read. Frozen head db9fa9adb15008d2c99e953a24fa2d4de923b32a is docs only
+  above942. This is a scoped Media/Env prerequisite, not full/Surface proof.
+  Authoritative report: gesher-arm64-varargs/docs/handoff/tracks/
+  arm64-varargs-component-verified.md; native-arm64-component-40556015168-*
+  plain logs under C:/work/gesher-ci-review.
+- Env85 source b497b8c7997c02bd862daec9c473e57e38a4f5c6/component40564869955
+  is pending, Native-owned watcher32504. It pins the exact942 accepted run,
+  ten-file reviewed-source allowlist, eight artifact identities and fifteen
+  copied-image hashes. No Env85 runtime acceptance yet.
+- Web3 exact-map analyses9d762847/40561026137 and61c9586f/40562238173 prove
+  the Window destructor joins the HWND owner STA blocked in an ART Java
+  monitor; WebView STA waits in GetMessage. The historical Java monitor's
+  precise identity remains unknown. The bounded native query-worker and
+  Java cancellation/lifetime correction is being developed separately in
+  gesher-web3-query-bound/wip/web3-query-bound from accepted a788 plus exact
+  Native db9. There is no fix component proof. Original failing observer
+  evidence and deadlines remain intact; diagnostic success is not closure.
+- Muxer API2 full40556596204 at d55212cf9dda1d6fd00015da815220608f10c608
+  is now terminal green (28 jobs:22 success/six skip; watcher28683 ended0).
+  Actual Windows jobs122378233713/122378233726 each show eight contexts,
+  144 semantic rows,96 FD rows,80 output/independent-decode rows, eight
+  nonzero-payload EOS assertions,24 boundary audits and whole0. Original
+  duration/tone/RMS gates are unchanged. Actual package122378233597 proves
+  all23 apps including UI/input/resize/uninstall; e2e122379483012 and
+  122379482992 each show ten apps, four transports, association/shortcut
+  controls and zero unexpected failures. Saved muxer-full-40556596204-
+  {test2022,test2025,package,e2e2022,e2e2025}.log and reviewed-proof.json
+  preserve the actual evidence. This API2 source lacks accepted Libcore and
+  Native942; it does not qualify the new union or the installed notice.
+- Media's clean local candidate eaa0eb05321f9a3da2c8150b4a8cf8d0a5eaf62a,
+  also ref wip/media4-native-libcore-checkpoint, merges accepted fbfd/Libcore
+  and exact frozen Native db9 into Media. All1157 old inventory rows/fields/
+  proofs were preserved without inflation. It is not pushed or dispatched;
+  origin/wip/media4-muxer remains immutable d552. Wait for actual Web3 fix
+  component proof, then freeze the selected union and freshly rebuild host,
+  DLL, framework jars and images together for its qualifying full.
+- Binder SG candidate76a121e8 and corrected checkpoint
+  3a2efbc39b61f842dd6ed3876d7e8cd8a019e016 remain uncompiled/unverified in
+  gesher-binder2-sg/wip/binder2-sg. Aggregate preallocation budget, aligned
+  receiver capacity, raw-wire body bounds and null/zero guards are corrected
+  in source. Guarded receiver publication now adds claim/finish ownership
+  protocol state; cancellation/death at each boundary, exactly-once buffer/
+  FD cleanup, synchronous caller unblocking, one-way progress and partial
+  read-consumed behavior require a second peer plus genuine independent-
+  process fixtures before CI. Existing FD/Bitmap/InputChannel regressions
+  remain mandatory. Existing ADR0068/test88 only; no additional ID consumed.
+- Native shared lock registry93464506 is source only, uncompiled and pending
+  peer. Pure-core/Linux evidence above does not establish Windows production
+  fd/stdio/spawn/signal/registry semantics.
+
+No new integration code merge, main/release operation, duplicate dispatch or
+CI restart occurred for this checkpoint. Hardware ten-group plan, repository
+runners0 and pending owner environment information remain unchanged. All-gap
+scope and next ADR0081/test89 are preserved.
