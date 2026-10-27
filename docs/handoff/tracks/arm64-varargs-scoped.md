@@ -79,6 +79,18 @@ builds succeed; both Windows jobs skip. This is compilation evidence only.
 The corrected workflow explicitly installs Temurin21 before boot jars and
 test apps; a new source/run is required. The original failed log is preserved.
 
+Further static prerequisite review corrected a conditional image-rebuild
+caller-directory leak: all profile/build/copy paths are absolute and finally
+restores the workspace. Every executed boot tool, including profman/dexdump,
+builds from current API3 source. Windows peer review found no bounded
+producer/path/tool blocker. Its final guard request is included: all eight
+scaffold producers require exact source/run/attempt success, all eight
+artifacts have unique ID/repository/source/SHA256 metadata, and all15 rebuilt
+image members must match their consumed copy byte-for-byte. Earliera112/b3cd
+runs are superseded by this source change, never unchanged retries. Runtime
+remains pending. Legacy N2Run cleanup stays in the process inventory; scoped
+A64Run uses the existing strict60-second InvokeVarargs bound.
+
 Baseline3b607e75/diagnostic40525678026 establishes the prior actual valid-call
 eager-copy defect on both hosts: shallow139, eager_end=top+0xa0 versus a
 separate deep0 control. This does not independently establish all original
