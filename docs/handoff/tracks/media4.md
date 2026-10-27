@@ -170,9 +170,14 @@ job or artifact download is needed. tests/windows/tracks/71-media4-format.ps1
 owns the new checks, with bounded processes, fresh device roots and native
 ABI/caller markers. All compilation and fixture execution are CI-only.
 
-CI is not dispatched yet. Finish static source/manifest/script review,
-merge current integration before the final candidate, then run full ci.yml
-and read every job, both complete zero-failure Windows summaries, all test71
-parts, package and required e2e before marking anything verified. The native
-API baseline metadata and roadmap are unchanged. All remaining contracts
-listed above stay open; later work must build on a CI-accepted slice.
+Full ci **40456299720** is running at
+**92e914238cc8655aef472887ad9f494eec5c8a97** (source 9f4dee5 after merging
+current integration 808ea746's docs). Source is frozen while it runs.
+PowerShell AST, XML/YAML, embedded-Python and Bash syntax/source checks pass;
+the 21 registrations and 152 names/values match the pinned source exactly.
+No compiler/native/JVM/C# fixture was run locally. Actual compilation,
+linking and runtime behavior are still unverified; read every job, both
+complete zero-failure Windows summaries, all test71 parts, package and
+required e2e before acceptance. The native API baseline metadata and roadmap
+are unchanged. All remaining contracts listed above stay open; later work
+must build on a CI-accepted slice.

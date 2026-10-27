@@ -220,6 +220,14 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Media4's first NDK format slice is running full ci **40456299720** at
+  **92e914238cc8655aef472887ad9f494eec5c8a97**, after current integration
+  808ea746. ADR 0064 proposes the actual AOSP format backend through 21
+  System V entries and 152 pointer data objects in both app/native process
+  hosts. Test71 builds/runs both ABI libraries, standalone ELF and APK modes
+  in CI only. This has source/parser checks, not runtime acceptance yet;
+  all remaining contracts are in [media4](handoff/tracks/media4.md).
+
 - Full ci **40448521754** is GREEN at
   **dd06d296e35ffd47fcecba9d0b88559360163500** after merging current
   integration 7694f18 (docs only above the verified clock/width code).
