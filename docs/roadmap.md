@@ -276,9 +276,10 @@ needs: [framework-build.md](framework-build.md).
 
 ## Libcore I/O follow-up
 
-- [ ] Expose the linked UnixCopyFile.transfer JNI entry and verify actual
+- [x] Expose the linked UnixCopyFile.transfer JNI entry and verify actual
       Files.copy, descriptor offsets/ownership, error order and a real
-      cancellation word on both Windows runners (ADR0077, test83; CI pending).
+      cancellation word on both Windows runners (ADR0077, test83;
+      full40550474909, both actual15 groups/whole0, package and both e2e).
 
 ## Phase 4 checklist
 
