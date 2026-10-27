@@ -12,7 +12,6 @@ import queue
 import subprocess
 import tempfile
 import threading
-import time
 
 
 class Client:
@@ -117,6 +116,7 @@ def run(executable):
                 if 'contended' in actual:
                     assert actual['contended'] and actual['stream_result'] == 0, actual
                 rows.append(dict(actor=actor, command=text, actual=actual))
+                print('ACTUAL_COMMAND_ROW ' + json.dumps(rows[-1], sort_keys=True), flush=True)
                 return actual
 
             def lock(actor, slot=0, cmd=6, kind=1, start=10, length=20, whence=0, pid=0,
@@ -161,7 +161,9 @@ def run(executable):
             # share OFD ownership. Same-process POSIX/OFD locks still conflict.
             command(0, 'open 2 2 2')
             lock(0, cmd=37)
-            lock(0, slot=2, cmd=36)
+            assert lock(0, cmd=36)['type'] == 2  # Same-description exclusion.
+            other_description = lock(0, slot=2, cmd=36)
+            assert other_description['type'] == 1 and other_description['pid'] == -1
             lock(0, slot=2, expected=-1, error=11)
             command(0, 'close 0')
             query(False)
@@ -210,6 +212,9 @@ def run(executable):
                 lock(1, start=100, pointer=pointer, expected=-1, error=14)
             lock(0, kind=2, start=0, length=0)
             query(False)
+            lock(1, cmd=5, pointer=2, expected=-1, error=14)
+            unchanged = lock(1, cmd=5, start=123, length=456, whence=0, pid=789)
+            assert unchanged['type'] == 2 and unchanged['start'] == 123 and unchanged['length'] == 456 and unchanged['pid'] == 789
             command(0, 'close 0')
 
             # Actual failed freopen closes the original regular stream, even
