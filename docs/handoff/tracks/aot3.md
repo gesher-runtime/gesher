@@ -37,6 +37,109 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Full40503913306 at exactc35abe7c is complete red:28jobs20success/6skip/
+2failure. Both Windows jobs122199397625/122199397683 contain707 top PASS and
+only two failures from the first test73 setup call. Files.copy invokes the
+unregistered sun.nio.fs.UnixCopyFile.transfer native at fixture line62;
+the graph controls and real shared-library app did not execute. Package23
+and both ten-app e2e sets, including Puzzles/TIC80/JustPlayer, pass with zero
+unexpected failures; all actual logs were read. No shared-library runtime
+box is accepted from this red run.
+
+The corrected fixture copies the same real jar bytes using owned input/output
+streams, preserving all15 graph assertions and every test73 AOT/image/update/
+rejection oracle. The unrelated Files.copy native remains an explicit runtime
+gap. This next candidate merges accepted Net4 integrationbc6e05be, preserving
+the actual interface oracle and strict AAudio lossless controls. No compilation
+or fixture execution ran locally; corrected CI proof remains required.
+
+Corrected fixture scope40499783709 at immutablea79ae0f1 is complete green:
+both jobs succeed; actual122174345315 read javac0/0errors, graphics-tests.dex,
+sharedlibraryapp/sharedlibrarybad APKs and all three real DEX jars (549/546/687
+bytes). Native peer independently matched all11 pinned-source audit digests
+and found no blocking issue in graph/registry/SDK/Installer/Dexopt/stale-control
+source. That is bounded static review, not runtime proof. Full40503913306
+uses exactc35abe7c, with the same non-documentation tree as revieweda79 and
+accepted runtime6297. The optional7b49 documentation merge did not occur:
+that abbreviated object name was ambiguous; its earlier inclusion sentence
+was incorrect. No code change, cancellation or duplicate dispatch follows.
+The one complete full candidate now tests actual PCL/DAG loading, compiled hot
+methods/app images, no-reinstall stale rejection, unchanged-APK refresh and
+old-install preservation, alongside all original Windows/package/e2e gates.
+After-resource/DLC actual app+image, secondary/static/SDK and arbitrary
+factory-loader contracts remain explicit open scope.
+
+Runtime graph/dexopt sourcee2e36137 compiles in scoped40470396915: both jobs
+green; actual122075942761 has javac0/0errors, graphics dex and appjar570004.
+Fixture compile40472620654 at7fe21800 is red in graphics-tests javac, after
+production compilation: importing Main.bootstrap recursively pulls generated
+service/compat sources outside that fixture's generated-server classpath.
+The correction invokes the exact shipped Main.bootstrap reflectively at
+runtime, retaining real ART/resources and every graph assertion. No production
+or oracle change is made. Corrected compile/runtime proof remains required;
+the old red run supplies no fixture or shared-library runtime acceptance.
+Corrected continuation includes accepted Windows4/Web3 integration6297e80a
+(merge1e3f05d3), preserving both additive framework build/copy groups. The
+next scoped build verifies real dependency jars, both APK fixtures and the
+ART graph controls before a full runtime candidate. AOT remains separate
+from the frozen Net4/Windows sources.
+
+The shared-library continuation is assigned to the Windows4/Web3/release/Net4
+agent in this worktree. Root's cleanfb9aefb1 merge of integration808ea746 is
+preserved. Test73 and ADR0065 remain reserved; secondary dex and APK-declared
+static/SDK libraries remain separate open contracts.
+
+Initial production source adds SharedLibraryGraph: immutable content-hashed
+Java library nodes, one dependency graph for real SharedLibraryInfo objects
+and ART PCL/DLC contexts, the same system-resource before/after partition as
+LoadedApk, content rechecks and an oat-stage identity manifest. The actual
+pinned10-argument SharedLibraryInfo constructor is used; library jars are
+never appended to the boot class path. Ordinary empty PCL graphs avoid new
+hash/provider work on the startup path.
+
+The next source adds a permissions/sysconfig XML registry and wires graph
+resolution into the newly parsed ApkPackage, so both single-process and
+device ApplicationInfo receive the same actual SharedLibraryInfo graph.
+Required/optional names, missing dependencies and cycles are handled before
+an installer can replace its old APK. SDK gates use the real pinned
+UnboundedSdkLevel, already bundled by framework-minus-apex under its actual
+jarjar name android.internal.modules.utils.build; no SDK helper is copied.
+Bootclasspath declarations must match a real current bootclasspath file.
+Compile-only framework40468151378 atc51ed7d2 is complete green: actual
+framework122068536860 read, javac0/0errors, gesher-app.jar569116 bytes and
+graphics/app outputs built. This validates source compilation only.
+
+The next source passes the new parsed package's graph directly to install
+dex2oat, resolves the installed APK independently for background compilation,
+and writes the content/context identity into the same atomic oat stage.
+Jar contents are rechecked before compilation and before publication.
+Unchanged-APK installs detect graph/content changes, stop the old app and
+recompile; long-lived PM records resolve fresh runtime graph objects instead
+of returning the previous jar/XML snapshot. Real jar/app/oatdump test73 and
+library-update/stale-code/rejection evidence still must follow before full
+acceptance. No compilation or fixture execution occurred locally, and no
+AOT3 shared-library runtime behavior is claimed verified. Root priority remains the
+active Net4 full and fresh Windows4/Web3 combinations after exit-freshness
+acceptance; source is kept separate from those frozen candidates.
+
+Prepared test fixtures now build two different actual dependency DEX jars,
+an entry DEX jar and a real APK with direct calls through both separate
+library loaders. A duplicate class in the entry jar/APK detects the real
+before-app lookup order; a changed-required-library APK tests old-install
+preservation. ART-side XML/SDK/cycle/missing-dependency and content-update
+controls use those real jars, including a Unicode/space path. Framework
+build/copy additions are separate additive lines. Prepared test73 requires
+real oatdump hot-method code and app images, compiled execution with separate
+loaders in both modes, both-mode stale-artifact rejection before reinstall,
+same-path dependency recompile, and old-install preservation. To keep that
+counterfactual stable, it temporarily defers the existing background optimizer
+via its device policy, checks the actual server applies it, and restores the
+owned build.prop bytes in nested finally cleanup. Earlier normal idle and
+startup gates remain unchanged. Compilation/execution of these new fixtures
+is still pending. The
+pinned default config_sharedLibrariesLoadedAfterApp array is empty; serializer
+support alone is not claimed as runtime after-app policy coverage.
+
 Startup-profile stage fully verified: ci 40414859801 at
 ca46e9967f8994fe329f3f10c88de7141e494f76. Root read every job, all 18
 scoped PASS lines per runner, both zero-failure summaries, actual installed
