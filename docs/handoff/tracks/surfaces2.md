@@ -129,6 +129,16 @@ retained. All Surface production, fixture, phase/original-TIC and build
 sources stay unchanged by this prerequisite merge. Native's separately
 reviewed ABI correction is not imported yet.
 
+Native's controlled baseline ci40525678026 now supplies actual bounds for
+the unchanged original Surface logger body, independently of this app.
+Both Windows job logs were read: deep calls return0 and print the literal;
+shallow calls return139 with7 GP/8 FP slots and a496-byte eager copy ending
+exactly0xa0 past the guest stack top. This proves an invalid speculative
+read for that valid controlled call. Static inspection places the original
+Surface fault at the same vprintf return seam, but this does not replace a
+corrected Surface run or prove the older TIC blank cause. Native owns the
+tagged-list correction, API-version rejection and its component/full proof.
+
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
 cleared pending before publishing its weak view. The correction retries
