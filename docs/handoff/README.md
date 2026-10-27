@@ -1,5 +1,11 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Latest owner-requested stop,2026-10-27:** read
+[the session checkpoint](session-2026-10-27-checkpoint.md) before using older
+status summaries below. All work is saved/pushed; the owner is starting a
+new session with a manager-only primary and delegated execution. Existing
+GitHub runs remain active, and no final/main/release acceptance is claimed.
+
 Everything up to "Phase 3+" is on `main` (PR #3, merge 86aa4c7): ART with
 nterp/JIT/AOT and a boot image, the framework, Gesher's own system server and
 app processes, Win32 app windows, input, fonts, the NDK (ELF loader, bionic
