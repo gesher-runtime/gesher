@@ -1,0 +1,88 @@
+name: exec4-child-diagnostics
+on:
+  push:
+    branches: [wip/exec4-spawn]
+    paths:
+      - .github/workflows/exec4-child.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: exec4-child-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build only the actual launcher and no-console host caller
+        run: ninja -C out gesher-exec exec4_no_console_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exec4-child-hosts
+          path: |
+            out/gesher-exec.exe
+            out/exec4_no_console_probe.exe
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          run-id: 40502225202
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: exec4-child-hosts
+          path: dist
+      - name: Run unchanged actual two-ABI spawn assertions with phase diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Dir = (Resolve-Path dist).Path
+          $root = Join-Path $env:RUNNER_TEMP ('exec4-child-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory $root | Out-Null
+          $failed = 0
+          function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            "$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          foreach ($name in @('RunTimed', 'CheckTimed')) {
+            $definition = $ast.FindAll({ param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $false) | Where-Object Name -eq $name
+            if (@($definition).Count -ne 1) { throw "Expected one original helper $name" }
+            . ([scriptblock]::Create($definition.Extent.Text))
+          }
+          . "$pwd/tests/windows/tracks/77-exec4-spawn.ps1"
+          Write-Host "$failed test(s) failed"
+          if ($failed) { exit 1 }

@@ -86,6 +86,10 @@ failed run's real dalvikvm.map and corresponding binary for the same compiled
 bionic wrapper; that is not a Gesher-exec link-map proof. New opt-in launcher
 diagnostics distinguish symbol lookup, flag restore/sweep, individual actions
 and later program lookup, preserving child127 and all original assertions.
+The exec4-child-diagnostics workflow builds only the real launcher/host
+caller and runs unchanged test77 on both Windows hosts, reusing immutable
+NDK/ARM artifacts from40502225202 inside CI. It executes no AOSP/JVM build,
+package or e2e acceptance, and cannot replace final coherent full CI.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
