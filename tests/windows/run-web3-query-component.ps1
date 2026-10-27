@@ -1,8 +1,11 @@
 # CI-only exact current Java/native component: real Web3 query/lifetime correction.
-param([Parameter(Mandatory)][string] $Dir)
+param([Parameter(Mandatory)][string] $Dir, [string] $RuntimeExe = '')
 $ErrorActionPreference = 'Stop'
 $failed = 0
 $Dir = (Resolve-Path -LiteralPath $Dir).Path
+if ([string]::IsNullOrEmpty($RuntimeExe)) { $RuntimeExe = Join-Path $Dir 'dalvikvm.exe' }
+$RuntimeExe = (Resolve-Path -LiteralPath $RuntimeExe -ErrorAction Stop).Path
+Write-Host "ACTUAL_QUERY_RUNTIME explicit-executable=$RuntimeExe sha256=$((Get-FileHash -LiteralPath $RuntimeExe -Algorithm SHA256).Hash)"
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 $root = Join-Path $env:RUNNER_TEMP "web3-query-component-$env:GITHUB_RUN_ID"
 if (Test-Path -LiteralPath $root) { throw 'Refusing to reuse an existing probe root' }
@@ -41,10 +44,15 @@ function InvokeBoundaryFixture([bool] $Unwrapped) {
   $quoted = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $process = $null
   try {
-    $process = Start-Process -FilePath "$Dir/dalvikvm.exe" -ArgumentList $quoted -WindowStyle Hidden -PassThru `
+    $process = Start-Process -FilePath $RuntimeExe -ArgumentList $quoted -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $exited = $process.WaitForExit($(if ($Unwrapped) { 15000 } else { 30000 }))
     $out = Get-Content -LiteralPath $stdout -Raw -ErrorAction SilentlyContinue
+    $moduleText = $out + "`n" + (Get-Content -LiteralPath $stderr -Raw -ErrorAction SilentlyContinue)
+    $moduleEvidence = 'ACTUAL_QUERY_FIXTURE_MODULE pid=' + $process.Id + ' path=' + [regex]::Escape($RuntimeExe)
+    if (-not [regex]::IsMatch($moduleText, $moduleEvidence, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+      throw 'Actual boundary VM did not identify the exact selected executable and PID'
+    }
     if ($Unwrapped) {
       if ($exited -or -not $out.Contains('ACTUAL_GLOBAL_MONITOR_WAITER') -or
           -not $out.Contains('ACTUAL_CLOSE_UNDER_GLOBAL_LOCK kind=0 direct=true')) {
@@ -76,7 +84,7 @@ InvokeBoundaryFixture $false
 
 # Execute the original14 real Web3 cases, with their original400/60+60s,
 # expected output and actual fresh app-process exit-zero checks unchanged.
-. "$PSScriptRoot/tracks/54-web3.ps1"
+. "$PSScriptRoot/tracks/54-web3.ps1" -Web3RuntimeExe $RuntimeExe
 if ($null -eq $sd) { throw 'Original Web3 device shutdown process was not recorded' }
 $sd.Refresh()
 if (-not $sd.HasExited -or $sd.ExitCode -ne 0) {
@@ -90,16 +98,26 @@ $originalFailed = $failed
 $mappedExpect = @('Web3 query boundary mapped done: positive=2 canceled=2 stale=2 attached=0')
 Web3ScreenReader $true
 try {
-  $null = Web3Run 'real mapped Dialog: actual positive/canceled/stale actions twice (single process)' `
+  $mapped = Web3Run 'real mapped Dialog: actual positive/canceled/stale actions twice (single process)' `
     @('com.gesher.app.Main','--window','--activity','com.gesher.web3app.QueryBoundaryActivity', (NoDrive "$Dir/web3app.apk")) `
     ($mappedExpect + 'gesher-app: done') 'Web3 query boundary mapped done'
+  if (-not [regex]::IsMatch($mapped, 'ACTUAL_QUERY_FIXTURE_MODULE pid=\d+ path=' + [regex]::Escape($RuntimeExe),
+                          [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+    throw 'Mapped Main did not identify the exact hook runtime'
+  }
   $env:ANDROID_DATA = NoDrive "$root/data-query-device"
   $env:GESHER_LOGS = NoDrive "$root/logs-query-device"
   New-Item -ItemType Directory -Force "$root/data-query-device" | Out-Null
   $env:GESHER_SHORTCUTS = '0'
-  $null = Web3Run 'real mapped Dialog: actual positive/canceled/stale actions twice (device app process)' `
+  $mapped = Web3Run 'real mapped Dialog: actual positive/canceled/stale actions twice (device app process)' `
     @('com.gesher.app.Launcher','launch',(NoDrive "$Dir/web3app.apk"),'--window','--activity','com.gesher.web3app.QueryBoundaryActivity') `
     $mappedExpect 'Web3 query boundary mapped done'
+  $child = [regex]::Match($mapped, 'app process for com\.gesher\.web3app: pid (\d+)')
+  if (-not $child.Success -or -not [regex]::IsMatch($mapped,
+      'ACTUAL_QUERY_FIXTURE_MODULE pid=' + $child.Groups[1].Value + ' path=' + [regex]::Escape($RuntimeExe),
+      [Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+    throw 'Actual mapped app child did not identify the exact hook runtime and PID'
+  }
 } finally {
   Web3ScreenReader $false
   # Fresh real device shutdown must finish0, never just print a done marker.
@@ -108,7 +126,7 @@ try {
   $quoted = (($vm + @('com.gesher.app.Launcher','shutdown')) | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $shutdown = $null
   try {
-    $shutdown = Start-Process -FilePath "$Dir/dalvikvm.exe" -ArgumentList $quoted -WindowStyle Hidden -PassThru `
+    $shutdown = Start-Process -FilePath $RuntimeExe -ArgumentList $quoted -WindowStyle Hidden -PassThru `
       -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (-not $shutdown.WaitForExit(120000)) { throw 'Actual fresh device shutdown exceeded original120s' }
     $shutdown.Refresh()
