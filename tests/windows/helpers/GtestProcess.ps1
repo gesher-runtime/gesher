@@ -113,6 +113,11 @@ function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
       $result.ReaderTasksComplete = @($tasks | Where-Object { -not $_.IsCompleted }).Count -eq 0
       if (-not $result.ReaderTasksComplete) { $problems += 'gtest readers did not stop within five seconds after cancellation' }
     }
+    # A stream may finish normally during cleanup. Keep that complete output
+    # without changing the ORIGINAL EOF-deadline verdict. A canceled
+    # ReadToEndAsync task does not expose its partially accumulated string.
+    if ($null -ne $stdout -and $stdout.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $result.Stdout = $stdout.Result }
+    if ($null -ne $stderr -and $stderr.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $result.Stderr = $stderr.Result }
     $closedPipes = 0
     foreach ($pipe in @(@{ Reader = $outReader; Handle = $outHandle }, @{ Reader = $errReader; Handle = $errHandle })) {
       if ($null -ne $pipe.Reader) {
