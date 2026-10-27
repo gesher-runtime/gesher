@@ -55,13 +55,25 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
-Reserved on 2026-10-26. No successor implementation or CI yet. Web3's latest
-complete diagnostic is 40432795403 at 2755f21, including verified startup
-merge2ba9a11. Both unchanged boot gates now pass. Windows 2022 has all14Web3
-and zero failed tests; 2025 fails device A11y teardown after all UIA/app
-assertions complete, followed by two device NetActivity launch timeouts.
-All four local invalid-certificate causes and cleanup pass on both; package
-and both required e2e jobs pass. Web3's next source adds teardown/tail
-diagnostics without changing deadlines or oracles. Verified Web3 must merge
-before dependent Net4 implementation in its own worktree. Every contract
-above remains open; scoped passing checks do not establish full acceptance.
+Root now owns C:\work\gesher-net4, branch wip/net4, from verified native
+integration 8922a3e. The first shared test-fixture slice is prepared with
+Media3: four real local certificate rejections, NetApp HTTPS and deterministic
+HTTP200/two-host SNI selection with missing/unknown-name controls, retaining
+actual example/Google DNS and Google HTTPS204/TLS1.3/SNI/hostname checks.
+Source review is pending; no Net4 runtime/API closure or inventory rewrite.
+The complete Media3 candidate will provide fresh CI proof before integration.
+
+Earlier Media3 full 40438975894/0148698 remains red only on 2025's five
+external-network failures, despite all media gates passing; no timeout is
+accepted as a certificate result. The first positive proposal's server
+evidence could be polluted by an earlier localhost HTTP connection. Separate
+HTTP and SNI listeners are required before acceptance. All contracts above,
+including the 84 assigned libc/resolver entries, remain open. Every compiler
+and native/JVM fixture runs in CI only.
+
+Web3 full40444053066 atcbf5639 completes green (22 success/six skipped),
+with all14 Web3 checks and zero failed tests on both runners, package and
+both e2e logs read. Its next source additionally requires wrapper/child
+exit codes zero; the earlier harness did not prove that after app done.
+That stricter full validation remains required before final Web3 handoff.
+No Net4 runtime/API contract is closed by the shared test-fixture preparation.
