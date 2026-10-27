@@ -175,6 +175,36 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Full40487303965 attempt2 is complete RED at the same afebf1ec source:
+28 conclusions=21 success/six skipped/one failed e2e Windows2025. Both
+Windows122149452806/122149452762 finish0 test failures and all16 test78
+passes were read per runner. Strict log checks verify12 ABI/context cases,
+60 semantic parts,192 invalid-policy preservation controls,36 real legacy
+output controls,24 mandatory-MMAP -881/null results and four allowed capture
+reads per runner; each ABI reports libaaudio56 checked/0 missing. No three-
+entry inventory acceptance follows from a red full run. Graphics retry
+122144503347 passes11m28s. Package122149452841 passes all23 actual checks
+and exact installed notice SHA256 B78E6FE1973849F5F31CBF37835C907174D6A816721FD89E5EB734921F54E8DE.
+E2e2022/122150311898 passes ten apps/four transports/association/shortcut,
+0 unexpected. E2e2025/122150312245 passes the other nine and all transports/
+association/shortcut, but TIC-80's initial capture has0/320000 non-background
+and0 text pixels,1 unexpected failure. Click subsequently changes320000
+pixels; close/exit is normal. Both complete app logs contain fonts.xml
+ENOENT followed by successful installed-font mapping, SDL focus/native main,
+EGL initialization and TIC hello; the font warning is not an established
+cause. A source-backed SurfaceView pending-latch defect is being addressed
+in a separate corrected worktree with cause uncertainty retained. No unchanged
+TIC rerun or threshold relaxation is planned. Original blank/text failure
+stays a failure even when later diagnostic captures are added.
+
+Exact actual logs/counts are in C:\work\gesher-ci-review with prefix
+media4-aaudio-40487303965-attempt2. Read-only CI40496914216 printed the
+existing complete TIC app/launcher logs inside CI, without executing the app
+or downloading artifacts locally; its job logs are media4-tic80-recorded-
+40496914216-{2022,2025}.log. Source afeb and all accepted immutable refs stay
+unchanged. Latest accepted integration6297e80a must be imported into the
+corrected Surface/AAudio/native candidate before its final full CI.
+
 Full ci **40487303965** is running at frozen source
 **afebf1ec28308673bb9b0a7745547753c6123da8**, with latest accepted integration
 db84749b and verified native backend35cf9aa1/e5693412 imported. It verifies
