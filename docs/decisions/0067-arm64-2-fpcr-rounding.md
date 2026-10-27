@@ -1,6 +1,15 @@
-# 0067. arm64-2: guest FPCR rounding across native boundaries
+# 0067. arm64-2: guest FPCR rounding and sticky FPSR across native boundaries
 
-Status: accepted for translated FPCR rounding only. Full ci 40451978087 at
+Status: accepted for translated FPCR rounding and the bounded sticky-FPSR
+contracts below. Combined full ci 40498782924 at exact source
+8ec4bf3c30160575c8df794ad2ca1406957adc98, attempt 1, is green: all 29
+conclusions (23 success/six skipped) and all 23 actual executed job logs were
+personally read, including both zero summaries, actual JNI/APK/native ELF,
+package and both ten-app e2e zeros. Exact FPSR scope, independent 10384-row
+oracle, compiler/status corrections and remaining limits are in the
+[FPSR verified report](../handoff/tracks/arm64-2-fpsr.md).
+
+Earlier FPCR-only full ci 40451978087 at
 49ade205, attempt 2, is green: all 28 conclusions (22 success/six skipped)
 and all 22 actual successful job logs were personally read, including both
 zero summaries, actual JNI/APK/native-process cases, package and both e2e.
@@ -37,19 +46,21 @@ restore the host environment after guest entries and native callbacks.
 
 ## Verification and limits
 
-The next sticky-FPSR slice uses reserved test75. Scoped40475532910 at
+The sticky-FPSR slice uses reserved test75. Scoped40475532910 at
 93f7637a is green: all six actual executed logs were read, both Windows
 hosts match all10384 independent QEMU numeric/status cases and retain every
-cold/nested/thread assertion. Full product acceptance is still pending;
+cold/nested/thread assertion. Combined full40498782924 also passes all actual
+JNI/dalvikvm, single/device APK and native ELF cases, package input/uninstall
+and both required ten-app e2e suites. It retains all cold assertions and all
+8192 original +144 cumulative +2048 boundary oracle cases. The source predates
+the later Net4 integration; combining that change still requires its own CI.
 the working branch includes accepted exit and exact Windows160e25e8,
 followed by latest integration6297e80a with no additional non-doc changes.
-The combined full candidate is ready; product acceptance remains pending.
 It uses real dynarmic status state, pinned mask 0x9f including denormal,
 preserves QC, and propagates status through threads/nested entries. Tests
 compare the original pinned bodies and actual MSR/MRS/arithmetic/SQADD,
 with four-byte flag buffers and native host status restoration. Full
 environment/default-object and host CRT/libm contracts remain outside it.
-Only the FPCR source/report above is accepted until its own full CI completes.
 See the [scoped evidence and remaining limits](../handoff/tracks/arm64-2-fpsr.md).
 
 The CI-built NDK assembly test performs actual MSR/MRS and positive/negative
@@ -83,9 +94,10 @@ The initial full failure on APK reference-object packaging was fixed
 without production changes; scoped ci 40451472255 and the actual full
 packaged-library byte/symbol audit pass. No local compiler or native/JVM
 fixture ran.
-FPSR exception/status/trap APIs and environment save/restore functions
-remain outside this slice; their old fallback implementations are not
-claimed as complete. Guest JIT pages, signals/ucontext, LSE, HFAs/variadic
+The five tested sticky-status operations are accepted. Full environment
+save/restore, ARM __fe_dfl_env and working traps remain outside this slice;
+their old fallback implementations are not claimed complete. Guest JIT
+pages, signals/ucontext, LSE, HFAs/variadic
 binary128 and cache/stack limits remain open arm64-2 contracts.
 Rounding-sensitive host CRT/libm calls are a separate open contract; this
 slice verifies translated guest arithmetic and the FPCR rounding entries.

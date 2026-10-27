@@ -573,7 +573,12 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       restored host fenv. Full ci 40451978087 attempt 2 at 49ade205, actual
       JNI/single/device/native-process cases, both zero suites/package/e2e
       ([0067](decisions/0067-arm64-2-fpcr-rounding.md)).
-- [ ] Remaining arm64-2 contracts: FPSR/environment, guest JIT pages,
+- [x] Arm64-2 bounded sticky FPSR slice: five pinned flag operations, actual
+      arithmetic/QC, cold/nested/thread state and host restoration; 10384
+      independent scalar32/64 oracle cases; actual JNI/APK/ELF and full
+      ci 40498782924 at 8ec4bf3c, both suites0/package/both ten-app e2e0
+      ([verified scope and open limits](handoff/tracks/arm64-2-fpsr.md)).
+- [ ] Remaining arm64-2 contracts: full environment/default object, guest JIT pages,
       signals/ucontext, LSE, HFA/variadic binary128 and cache/stack bounds
       ([brief](handoff/tracks/arm64-2.md)); host CRT/libm rounding stays open.
 
