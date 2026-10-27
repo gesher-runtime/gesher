@@ -1,7 +1,7 @@
 name: ci-process-cleanup
 on:
   push:
-    branches: [wip/ci-processes]
+    branches: [wip/ci-processes, wip/ci-gtest-processes]
     paths:
       - .github/workflows/ci-processes.yml
       - tests/windows/tracks/50-services.ps1
@@ -11,12 +11,16 @@ on:
       - tests/windows/tracks/76-media4-opensl.ps1
       - tests/windows/tracks/84-ci-processes.ps1
       - tests/windows/fixtures/Process84.cs
+      - tests/windows/fixtures/Gtest84.cs
+      - tests/windows/helpers/GtestProcess.ps1
+      - tests/windows/tracks/20-libs.ps1
+      - tests/windows/tracks/21-posix.ps1
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: ci-processes-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   test:
     strategy:
@@ -36,7 +40,10 @@ jobs:
           $failed = 0
           $tokens = $null
           $errors = $null
-          foreach ($helper in @(@('50-services.ps1', 'RunTimed'),
+          . "$pwd/tests/windows/helpers/GtestProcess.ps1"
+          foreach ($helper in @(@('20-libs.ps1', 'Invoke-CoreLibsTest'),
+                                @('21-posix.ps1', 'Invoke-ArtGtest'),
+                                @('50-services.ps1', 'RunTimed'),
                                 @('44-native2.ps1', 'N2Run'),
                                 @('50-services.ps1', 'StartTimed'),
                                 @('50-services.ps1', 'WaitTimed'),
