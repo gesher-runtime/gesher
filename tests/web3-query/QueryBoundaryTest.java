@@ -1,8 +1,6 @@
 package com.gesher.app.accessibility;
 
 import android.view.WindowManagerGlobal;
-import com.gesher.app.Main;
-import com.gesher.app.window.NativeWindow;
 import java.lang.reflect.Field;
 import java.util.Map;
 
@@ -21,8 +19,14 @@ public final class QueryBoundaryTest {
         System.out.println("PASS query-boundary: " + name);
         System.out.flush();
     }
+    private static Class<?> bridge() throws Exception {
+        return Class.forName("com.gesher.app.accessibility.UiaBridge");
+    }
+    private static boolean shutdownBridge() throws Exception {
+        return Boolean.TRUE.equals(bridge().getMethod("shutdown").invoke(null));
+    }
     private static boolean startBridge() throws Exception {
-        java.lang.reflect.Method start = UiaBridge.class.getDeclaredMethod("start");
+        java.lang.reflect.Method start = bridge().getDeclaredMethod("start");
         start.setAccessible(true);
         return Boolean.TRUE.equals(start.invoke(null));
     }
@@ -30,7 +34,7 @@ public final class QueryBoundaryTest {
         for (Map.Entry<Thread, StackTraceElement[]> entry : Thread.getAllStackTraces().entrySet()) {
             if (entry.getKey().getState() != Thread.State.BLOCKED) continue;
             for (StackTraceElement frame : entry.getValue()) {
-                if (frame.getClassName().equals(UiaBridge.class.getName())
+                if (frame.getClassName().equals("com.gesher.app.accessibility.UiaBridge")
                         && frame.getMethodName().equals("viewRoots")) {
                     System.out.println("ACTUAL_GLOBAL_MONITOR_WAITER thread=" + entry.getKey().getName()
                             + " state=" + entry.getKey().getState() + " frame=" + frame);
@@ -42,14 +46,15 @@ public final class QueryBoundaryTest {
         return false;
     }
     private static int cacheSize() throws Exception {
-        Field cache = UiaBridge.class.getDeclaredField("sRoots");
+        Field cache = bridge().getDeclaredField("sRoots");
         cache.setAccessible(true);
         return ((Map<?, ?>) cache.get(null)).size();
     }
     public static void main(String[] args) throws Exception {
         if (!"true".equals(System.getenv("GITHUB_ACTIONS"))) throw new AssertionError("CI only");
         boolean direct = args.length > 2 && args[2].equals("unwrapped-control");
-        Main.bootstrap("QueryBoundaryTest", args[0], args[1]);
+        Class.forName("com.gesher.app.Main").getMethod("bootstrap", String.class, String.class, String.class)
+                .invoke(null, "QueryBoundaryTest", args[0], args[1]);
         // Initialize getInstance BEFORE the lock barrier; every bare HWND is a
         // genuine cache miss and every operation must enter real viewRoots.
         WindowManagerGlobal global = WindowManagerGlobal.getInstance();
@@ -57,18 +62,23 @@ public final class QueryBoundaryTest {
         field.setAccessible(true);
         Object lock = field.get(global);
         require(startBridge(), "real UIA bridge starts");
-        java.lang.reflect.Method register = UiaBridge.class.getDeclaredMethod("nativeRegisterFixture", Class.class);
+        java.lang.reflect.Method register = bridge().getDeclaredMethod("nativeRegisterFixture", Class.class);
         register.setAccessible(true);
         require(Boolean.TRUE.equals(register.invoke(null, QueryBoundaryTest.class)), "CI-only real HWND hook registered");
         long previousGeneration = 0;
         java.util.concurrent.atomic.AtomicBoolean shutdownOkay = new java.util.concurrent.atomic.AtomicBoolean();
-        Thread shutdown = new Thread(() -> shutdownOkay.set(UiaBridge.shutdown()), "ActualUiaShutdown");
+        Thread shutdown = new Thread(() -> {
+            try { shutdownOkay.set(shutdownBridge()); }
+            catch (Exception failure) { failure.printStackTrace(); }
+        }, "ActualUiaShutdown");
+        Class<?> nativeWindow = Class.forName("com.gesher.app.window.NativeWindow");
         for (int kind = 0; kind < 4; kind++) {
-            NativeWindow window = NativeWindow.create("QueryBoundary-" + kind, 64, 64);
+            Object window = nativeWindow.getMethod("create", String.class, int.class, int.class)
+                    .invoke(null, "QueryBoundary-" + kind, 64, 64);
             long id;
             synchronized (lock) {
                 long queryStarted = System.nanoTime();
-                id = nativeStart(window.getHwnd(), kind, -1, direct);
+                id = nativeStart((Long) nativeWindow.getMethod("getHwnd").invoke(window), kind, -1, direct);
                 require(id != 0, "real fixture HWND dispatch kind=" + kind);
                 long generation = nativeGeneration(id);
                 require(generation > previousGeneration, "fresh HWND generation kind=" + kind);
@@ -79,7 +89,7 @@ public final class QueryBoundaryTest {
                         "owner query reached actual held global mLock kind=" + kind);
                 System.out.println("ACTUAL_CLOSE_UNDER_GLOBAL_LOCK kind=" + kind + " direct=" + direct);
                 System.out.flush();
-                window.close(); // REAL destructor waits for the owner; lock is STILL held.
+                nativeWindow.getMethod("close").invoke(window); // REAL destructor waits for the owner; lock is STILL held.
                 long queryAndCloseMs = (System.nanoTime() - queryStarted) / 1_000_000;
                 require(queryAndCloseMs <= 3500,
                         "real query plus owner join within original3s budget +500ms scheduling allowance: " + queryAndCloseMs);

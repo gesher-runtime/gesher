@@ -83,3 +83,33 @@ and hook-enabled native objects. Prior3350/862 startup failures were missing
 caller actions-read permission, corrected before this run; no compiler or
 fixture executed in those startup-failed runs. Any later source needs its own
 compile/runtime validation.
+
+## Component candidate prepared, not yet dispatched
+
+The exact current component workflow builds fresh framework/app/APK/fixture,
+NDK Web3 libraries and API3 translator plus current host/launcher/boot jars.
+It pins immutable green AOT450/full40557661255 only for scaffolding, validates
+all8 old suppliers/artifact identities and all5 fresh producers/4 packages,
+hashes every current native host package member and all5 actual boot jars,
+and rebuilds/copy-verifies all15 image files when any jar differs. Current
+Java/fixture/artifact presence and producer-to-consumer source identities are
+explicit. It runs the negative real-JNI control, actual4wrapper global-lock
+regression, original14 Web3 cases, mapped action controls in Main/device and
+strict fresh device shutdown; all original positive deadlines remain.
+
+Standalone production pool core was independently qualified by Native at
+25e708d2/run40575187153: actual128controls/host,0failures,bothWindows, explicit
+11systemDLLallowlist/Werror and true21worker exit+handle-close probes/host.
+Imported exact fixture/workflow commits; this is native-core-only proof.
+
+Early618 compiler native objects and actual framework/app Java succeeded;
+fixture compiler then failed because its sourcepath recursively compiled
+Main's generated-service dependencies. The fixture now reflects actual boot
+helpers from the newly built jar and compiles only its own source against
+framework classes. No runtime fixture executed in that failed compiler run.
+
+Native peer corrected the initial mapped lookup concern (PerformImpl has no
+find call); explicit actualaction-phase counter nevertheless now proves the
+queued task is the action, not a lookup. Sequential live HWND hooks are restored
+after each joined sender, with payload identity checks protecting HWND reuse.
+All of these later changes still need current CI compilation/runtime evidence.

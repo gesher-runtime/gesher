@@ -39,7 +39,7 @@ public final class QueryBoundaryActivity extends Activity {
         return method.invoke(null, args);
     }
     private int pending() throws Exception {
-        Field field = bridge.getDeclaredField("sPendingUi"); field.setAccessible(true);
+        Field field = bridge.getDeclaredField("sPendingActions"); field.setAccessible(true);
         return ((AtomicInteger) field.get(null)).get();
     }
     private int cached() throws Exception {
@@ -122,7 +122,7 @@ public final class QueryBoundaryActivity extends Activity {
             // real native query times out, proving its posted action is removed.
             long admission = System.nanoTime() + 1_500_000_000L;
             while (pending() == 0 && System.nanoTime() < admission) Thread.sleep(2);
-            check(pending() > 0, "actual guarded Handler action queued while UI thread held");
+            check(pending() > 0, "actual ACTION Handler task queued after cached-root lookup while UI thread held");
             long bound = began + 3_500_000_000L;
             while ((nativeState(id) & 2) == 0 && System.nanoTime() < bound) Thread.sleep(2);
             check((nativeState(id) & 6) == 6, "original3s query returns unavailable before UI release");

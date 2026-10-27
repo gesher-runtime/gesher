@@ -114,6 +114,7 @@ public final class UiaBridge {
     }
     private static final ThreadLocal<Request> sRequest = new ThreadLocal<>();
     private static final java.util.concurrent.atomic.AtomicInteger sPendingUi = new java.util.concurrent.atomic.AtomicInteger();
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingActions = new java.util.concurrent.atomic.AtomicInteger();
     private static boolean active() {
         Request q = sRequest.get();
         return q != null && q.active();
@@ -185,6 +186,9 @@ public final class UiaBridge {
 
     /** Shares the native request's original absolute budget; removes canceled work. */
     private static <T> T onUiThread(View view, java.util.concurrent.Callable<T> task) {
+        return onUiThread(view, task, false);
+    }
+    private static <T> T onUiThread(View view, java.util.concurrent.Callable<T> task, boolean action) {
         Request q = sRequest.get();
         if (q == null || !q.active()) return null;
         Handler h = view.getHandler();
@@ -206,6 +210,7 @@ public final class UiaBridge {
         FutureTask<T> f = new FutureTask<>(guarded);
         if (!q.active() || !h.post(f)) return null;
         sPendingUi.incrementAndGet();
+        if (action) sPendingActions.incrementAndGet();
         try {
             int left = q.remaining();
             if (left <= 0) return null;
@@ -219,6 +224,7 @@ public final class UiaBridge {
             f.cancel(false);
             h.removeCallbacks(f);
             sPendingUi.decrementAndGet();
+            if (action) sPendingActions.decrementAndGet();
         }
     }
 
@@ -448,7 +454,7 @@ public final class UiaBridge {
                 return AccessibilityInteractionClient.getInstance().performAccessibilityAction(
                         r.connectionId, AccessibilityWindowInfo.ANY_WINDOW_ID,
                         id == ROOT ? AccessibilityNodeInfo.ROOT_NODE_ID : id, a, actionArgs);
-            });
+            }, true);
             boolean ok = Boolean.TRUE.equals(result) && active();
             AccessibilityService.log("UI Automation: action " + action + " on node " + id
                     + (ok ? "" : " (not done)"));
