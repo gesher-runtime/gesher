@@ -146,15 +146,16 @@ Pages see the https origin: same-origin requests between assets work without
 | `WebStorage.deleteAllData`, `clearCache` | `Profile2.ClearBrowsingData` (DOM storage kinds; disk cache) |
 | `DownloadListener` | `DownloadStarting`: WebView2's download is cancelled and the listener gets the URL, user agent, Content-Disposition, MIME type and length (Android's WebView never downloads itself) |
 | `window.open`, `window.close` | `NewWindowRequested` with a deferral: with `supportMultipleWindows` (and a user gesture or `javaScriptCanOpenWindowsAutomatically`) `onCreateWindow` gets a `WebViewTransport` and the WebView put there becomes the window (`put_NewWindow`: `window.opener` works); otherwise the page opens in the same WebView, as Android's. `WindowCloseRequested` is `onCloseWindow` |
-| Permissions | `PermissionRequested` with a deferral: geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
+| Geolocation | navigator.geolocation in main frames from LocationManager (`GeolocationShim`, ADR 0058): the WebChromeClient decides per origin, positions are Windows' location service's or the app's test providers |
+| Permissions | `PermissionRequested` with a deferral: iframes' geolocation to `onGeolocationPermissionsShowPrompt` (retained answers in `GeolocationPermissions`), camera, microphone, MIDI SysEx to `onPermissionRequest` (its default denies), autoplay by `mediaPlaybackRequiresUserGesture`, the rest denied |
 | File chooser | DevTools `Page.setInterceptFileChooserDialog`: `<input type=file>` calls `onShowFileChooser` (`FileChooserParams` from the input); the Uris go in with `DOM.setFileInputFiles` (content: copied to the cache). Not handled by the app: a Windows file dialog (`IFileOpenDialog`, owned by the app's window, filters from `accept`) |
-| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings only; ports end with the page |
+| `createWebMessageChannel`, `postWebMessage` | `GesherWebMessagePort`: a port sent to the page is a `MessageChannel` of a document script (`PageScripts.PORTS`) relaying over `PostWebMessageAsJson` and `chrome.webview.postMessage`; strings and typed ArrayBuffer payloads through the support-library boundary; ports end with the page (ArrayBuffer CI pending) |
 | `copyBackForwardList`, `goBackOrForward(n)`, `clearHistory` | DevTools `Page.getNavigationHistory` (read after each history change), `Page.navigateToHistoryEntry`, `Page.resetNavigationHistory` |
 | `findAllAsync`, `findNext`, `clearMatches`, `findAll` | `ICoreWebView2Find` when the runtime has it (its 1-based index is Android's 0-based ordinal), else a script (`PageScripts.find`, CSS Custom Highlights); `findAll` (synchronous) uses the script |
 | `saveWebArchive` | DevTools `Page.captureSnapshot` (MHTML) |
 | `capturePicture` | `CapturePreview` (waited for up to 3 s) drawn into a `Picture` of the view's size: what is shown, not the whole page |
-| Accessibility | WebView2's own UI Automation tree under its window (screen readers read it directly); nothing in Android's accessibility tree |
-| androidx.webkit (`WebViewCompat`) | not reachable: no `org.chromium.support_lib_glue` boundary; `WebViewFeature.isFeatureSupported` is false |
+| Accessibility | the WebView's AccessibilityNodeProvider: WebView2's UI Automation tree as virtual views (click, focus, set text, scroll); UI Automation clients reading the app's window find WebView2's own tree under the WebView's element (ADR 0058) |
+| androidx.webkit (`WebViewCompat`) | Gesher's support library glue (`SupportLib`, ADR 0058): WebMessageListener, document-start scripts, ProxyController, multi-process query, the framework-backed features |
 
 ### JavaScript interfaces
 
@@ -306,9 +307,23 @@ drawing in a window that is covered or off the desktop;
   `ICoreWebView2_28` is there, `PageScripts.find` otherwise (`find: match 0
   of 4`, `match 1 of 4` on both).
 
+### web3 track (ADR 0058)
+
+- androidx.webkit: Gesher's support library glue (`SupportLib`, `org.chromium.support_lib_glue.SupportLibReflectionUtil`):
+  WebMessageListener (main frames, strings and ArrayBuffer payloads), document-start scripts, ProxyController (applies
+  to the process's WebView2 environment when set before it starts), multi-process query and
+  the framework-backed features. Test: web3app.apk (androidx.webkit 1.18.0 from Maven) in
+  54-web3.ps1.
+- navigator.geolocation from LocationManager (`GeolocationShim`), the WebView's
+  AccessibilityNodeProvider from WebView2's UI Automation tree (`WebViewAccessibility`), and
+  WebView2's tree under the WebView's element for UI Automation clients (docs/services.md).
+- Status and CI runs: see "Status and next steps (web3)" below.
+
 ### In progress
 
-- Nothing: verified at 55ab46a (ci run 40216380541).
+- web3 full-stage verification after correcting the completed geocoder probe
+  process lifetime; all 14 web3 scenarios already pass on both runners in
+  ci 40345505558. See the current gate below.
 
 ### Not done / limits
 
@@ -316,18 +331,281 @@ drawing in a window that is covered or off the desktop;
   a WebView show the app's surface; a view drawn over the WebView by a
   parent's `onDrawForeground`/`dispatchDraw` (not a child view) is not
   found.
-- `WebMessagePort`s carry strings only (no `ArrayBuffer` payloads, no ports
-  from the page to the app inside a port's message); `WebViewCompat`
-  (androidx.webkit boundary interfaces) is not implemented.
+- Page-to-app port messages cannot transfer additional ports. Typed `ArrayBuffer`
+  support through `WebViewCompat`, listeners, reply proxies and ports is implemented
+  with runtime scenario proof in ci 40345505558; framework `WebMessage` remains its Android string API.
 - Client certificates: only certificates in Windows' store can be sent;
   `proceed()` with any other key goes on without one. Tested: the request
   callback and `ignore()`.
 - `onSafeBrowsingHit` is never called (SmartScreen has no callback).
-- Accessibility: web content is WebView2's UI Automation tree only, not in
-  Android's `AccessibilityNodeProvider`.
+- Accessibility: Android page nodes and the external UIA tree are implemented;
+  external actions pass on both runtimes in ci 40345505558. The full-stage
+  gate is recorded below.
 - `capturePicture` is what is shown, not the whole page; text zoom does not
   reach cross-origin iframes or closed shadow roots; multi-step
   `goBackOrForward` may ask `shouldOverrideUrlLoading`.
 - Typical apps open their chooser with `FileChooserParams.createIntent()`
   (ACTION_GET_CONTENT): Gesher has no document picker Activity for it yet;
   apps that return false get the Windows dialog.
+
+### Status and next steps (web3)
+
+Prepared source now includes coordinator integration
+f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge079e0d4b). Root personally
+verified Media3/live-environ/deterministic-TLS full40448521754/dd06d296 and
+the merged non-doc tree matches that source. The Services merge preserves
+Web3 service changes and adds MediaSession registration; all five network
+test hashes remain identical. A fresh full run still requires the corrected
+exit-freshness prerequisite and both complete ten-app e2e suites, including
+Just Player/Puzzles/TIC80. No new CI is dispatched by this preparation merge.
+
+Strict-exit full CI **40449137605** completes green at exact
+`4f253878331b4662abe044fa71127b87b881fd1a`. Commit5d802f5 adds only the
+PowerShell exit checks and successful lifecycle output described below; app
+assertions, runtime and deadlines are unchanged. Actual main122007461704
+has203ABI boundaries/zero problems, framework122007511312 has javac zero
+errors and the app/graphics/Web3 builds, package122009867000 has installed
+oatdump/runtime/window/input/uninstall cleanup, and both e2e logs122010490181
+and122010490086 have all nine apps including Puzzles/TIC80, four transport
+cases, association/shortcut and zero unexpected failures. All28 jobs succeed
+or skip (22/6). Both actual Windows logs122009867037/122009867019 end with
+zero failed tests, all14Web3 PASS and no raw top-level FAIL. Each has five
+single-process VM0 results, six device-launcher0 results and six child-zero
+markers. Both A11y modes return from onDestroy and finish native-window/input/
+surface teardown. Original startup gates pass (JIT414/432 and479/506 ms).
+The child markers still require the freshness prerequisite below; this green
+run is not final proof of that property. Watch:
+C:/work/gesher-ci-review/web3-40449137605-watch.log.
+
+A separate backing-cache freshness prerequisite remains open: processDied
+removes a ProcessRecord before its asynchronous OS-exit poll publishes the
+package's last exit, and a later start does not clear that cached result.
+A fresh launcher log can therefore contain an earlier process generation's
+zero. The coordinator owns generation-aware clearing/publication, PID/start
+sequence race controls, unknown-exit failure and actual launcher checks in
+the exec4-exit slice. This agent will not edit those process-exit fields or
+methods. Preserve the strict run unchanged, but do not accept its child-zero
+marker as fresh OS-exit proof until that prerequisite is verified. This is
+not a claim about the cause of the earlier UIA teardown stall.
+
+The next source imports the reviewed positive HTTP/SNI test slice from Media3
+836482975254ec3fbcbbdb190398d65dc79fae11 (patch SHA256
+ae93ceeed2954f7795bdc052383b8a2be9277696236ea6441904b9b016e89689).
+All five resulting network test files match the combined audit's exact hashes;
+the negative-certificate and NetApp files already matched. This agent read
+the actual network scope in both Media40448521754/dd06d296 logs122008646975/
+122008646925: dedicated HTTP200, two names/distinct certificates on a separate
+SNI listener, exact missing/unknown-name hostname rejections, all four
+certificate causes, public Google checks, both NetApp modes and cleanup pass.
+The scope is tested through real HttpsURLConnection/Conscrypt and preserves
+the original public DNS/HTTPS204/TLS1.3/SNI/hostname blocks. It changes no
+production trust or timeout. This imported source still needs a new combined
+Web3 full run with the corrected process-exit prerequisite and latest verified
+integration. Strict4f25387 above remains evidence for its original frozen source.
+
+Completed full diagnostic **40444053066** uses exact
+`cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
+instrumentation below and coordinator-verified native clock/width integration
+8922a3e. Those runtime changes are not claimed as the cause of the prior
+teardown failure. Actual main121990960481 confirms patch0573, width/clock
+fixture builds and203ABI/zero problems. Framework121991012602 confirms javac
+zero errors and the new app/graphics/web3 APK. Package121993855040 confirms
+installed oatdump/runtime/window/input/uninstall cleanup. Both actual e2e
+logs121994560872/121994560985 have nine apps including Puzzles/TIC80, four
+transport cases, association/shortcut and zero unexpected failures each.
+Both actual Windows logs121996193503/121996193480 have all14Web3 and
+every-check-passed markers; every job succeeds/skips (22/6) and the original
+startup gates pass (JIT352/387 and391/423 ms). This is completed evidence
+for that source combination, not attribution of the previous teardown cause.
+Watch: C:/work/gesher-ci-review/web3-40444053066-watch.log, interval120.
+
+Final source review found a termination-oracle gap: Web3Run checked deadlines
+and app assertions but not the wrapper exit code or the device launcher's
+actual child exit-code marker. A crash after done could therefore pass. The
+strict source additionally requires both exit codes to be zero and prints the
+actual lifecycle/child-completion lines even on success. Runtime, app assertions
+and deadlines remain unchanged. A fresh full source with that stronger oracle
+has now passed as40449137605, but its backing-cache prerequisite above remains
+required before the final Web3 handoff. The earlier green source is retained
+without claiming unprinted normal-exit evidence or the prior stall's cause.
+
+Completed changed-source full CI **40432795403** uses exact
+`2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
+9dd57f5 (documentation-only after coordinator tip 42cc1c0), including verified
+startup profile merge 2ba9a11. The coordinator personally read profile source
+ca46e99/run 40414859801 (18 AOT checks per runner and original gates) and combined
+integration run 40416300047 before authorizing this one fresh Web3 run with
+the changed verified profile input. The original thresholds remain unchanged.
+Watch: C:/work/gesher-ci-review/web3-40432795403-watch.log, interval 120.
+All C/C++/Java compilation and native/JVM fixtures remain CI-only.
+It is COMPLETE RED: 28 jobs, 21 success, six skipped and one failed Windows
+job. Both actual Windows logs have been read; no full-stage acceptance follows.
+
+The current main build succeeds in 40m21 and its actual ABI check reports
+203 boundaries/zero problems. Framework job 121955313869 was read: javac
+zero errors and actual AndroidX WebKit 1.18.0 web3app build. Package job
+121967311150 succeeds in 2m1; the actual log confirms installed oatdump/boot/
+runtime, app HWND/input/resize and full uninstall cleanup. Windows jobs
+121967311074 (2022) ends with zero failed tests/all 14 Web3 checks. Windows
+2025 job 121967311081 has three failures: device A11yActivity completes every
+UIA/app assertion, including Chromium's button/DOM pressed2 and app done, but
+the process fails to exit after 60+60 seconds and WM_CLOSE and is killed.
+The two following NetActivity device launches then time out with no app
+markers. This is a real teardown/device-continuation failure. Both original
+boot gates now pass (JIT medians 414/439 ms on 2022 and 473/508 on 2025).
+All four local certificate rejection causes, real positive internet checks
+and complete TLS cleanup pass on both. Both actual e2e logs are read:
+121967975250 (2022) and 121967975130 (2025) pass all nine apps including
+Puzzles/TIC-80, four pinned-byte transport fixtures, APK association and Start
+menu shortcut, with zero unexpected failures each. Complete actual Windows
+results from a corrected full source remain required for acceptance.
+
+The next diagnostic source preserves every existing assertion and deadline.
+It prints the actual failure-log tail and bounded process/thread states after
+the existing exit deadline has already failed. Fixture lifecycle and window
+teardown phase markers identify the last completed operation. A late exit
+cannot turn that failure into PASS. No teardown fix is claimed from this
+instrumentation. Java UiaBridge.raise already queues through sEvents before
+native UIA calls; an initial hypothesis of an immediate COM outcall under
+the original caller's framework lock was rejected before any code change.
+
+Completed full ci **40376044459** at
+`939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
+and bounded TLS fixture cleanup. All 14 web3 checks pass per runner; the new
+TLS fixture and every root/negative/app cleanup marker complete on both.
+Windows 2025 ends with zero failed tests; Windows 2022 has one AOT2 JIT
+startup threshold failure (profile/speed medians 452/404 ms; interpreter
+571/612 ms). Package actual cleanup and both nine-app e2e jobs pass, including
+required TIC-80/Puzzles, four pinned-byte transport cases and zero unexpected
+failures. Every other job is success/skipped. The sole startup failure is not
+waived; the coordinator owns its diagnosis before another full combined run.
+Watch/logs: `C:/work/gesher-ci-review/web3-40376044459-watch.log` and
+`web3-40376044459-win2022.log` / `-win2025.log`. No merge gate is closed.
+
+Completed diagnostic ci **40364697280**, exact source
+`eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
+`C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. All 14 web3
+checks pass on both runners. Windows 2022 ends with `0 test(s) failed`;
+package actual cleanup and both nine-app e2e jobs pass with required
+TIC-80/Puzzles and zero unexpected failures. Windows 2025 reaches its
+60-minute limit without a final zero-failure summary. Its last PASS is
+56-net's complete internet/TLS/negative-certificate group at 17:26:36 UTC;
+the log is silent until cancellation at 18:08:55. This run is not mergeable.
+
+Current work merges verified AOT3 foundation f5ce6f6 and replaces the local
+TLS test servers' unbounded ThreadJob teardown with owned accepted sockets,
+cancellable handshakes/reads and bounded joins. An own Windows fixture passes
+idle accept, incomplete TLS handshake and accepted idle HTTP-read cleanup.
+Precise before/after cleanup markers distinguish server stop, ROOT-store
+removal and certificate disposal in the next CI. The old log identifies the
+cleanup interval, not which exact call blocked; no runtime assertion is waived.
+No full-stage milestone is closed before a complete new Windows/package/e2e
+run on this combined source.
+
+Next combined CI is ready with verified native3 foundation f677944f merged,
+native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes
+8eac61c/d2a5f7b. The native3 merge retained the newer native probe exit when
+resolving its older geocoder helper. The forwarding regression passes locally
+for partial UTF-8 titles, concurrent complete lines, log truncation and final
+fragments; exec.yml now checks out its helper and runs that JDK regression.
+Window/frame/action assertions remain unchanged. Full CI still must pass.
+
+Full-stage gate awaits the next combined run. Completed **ci 40353139413**
+at `6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3
+checks per runner, package and both e2e jobs. Windows 2022 fails only the
+completed geocoder probe's CLR teardown; Windows 2025 has the same failure
+and a windows3 launcher-log framing failure. These remain failed checks.
+Fix 1f1cc96 uses Win32 TerminateProcess on the isolated current probe only
+after its real answer is flushed (errors exit one; both guards remain).
+Own-byte child fixtures verify output and exit codes zero/one. exec3 owns
+the Launcher fix: an actual first-frame line was split by the launcher's own
+startActivityAndWait message while forwarding partial child-log chunks.
+Wait for its minimal patch before the next full web3 CI. No new roadmap
+milestone is closed before complete Windows/package/e2e success.
+
+Earlier completed run **40345505558 at 2130071** also has all **14 web3
+checks passing on each runner** (`INFO  web3: every check passed`):
+
+- androidx.webkit 1.18.0 from Maven: feature discovery, proxy override before
+  the first WebView, origin-aware listener/replies, document-start scripts
+  and removal, Safe Browsing setting and main-frame messages.
+- `WEB_MESSAGE_ARRAY_BUFFER`: a 70,000-byte pattern reaches listeners and
+  message ports intact; replies, empty buffers and app-to-page port data
+  retain binary types. Both process modes pass on both runners.
+- Geolocation from LocationManager test providers: getCurrentPosition,
+  watchPosition, permission prompt and disabled-setting error, in single
+  process and device app processes on both runners.
+- The Android page provider finds a heading/button/edit field and changes
+  DOM state. External UIA invokes an Android button, sets text, toggles a
+  checkbox, finds Chrome's subtree and invokes the web button. The Activity
+  stays alive until the DOM confirms `pressed 2`; assertions retain the
+  exact names, roles and action results on WebView2 131 and 155.
+- Selected-interface sockets, source addresses, DNS, HTTP and process binding;
+  all seven assigned libandroid networking calls from real x86_64 and
+  translated arm64 ELF libraries, in both process modes. See network.md.
+
+40345505558 also passes package install/run/input/uninstall cleanup and both
+e2e jobs: all nine apps, required TIC-80, four pinned-byte APK transport
+fixtures and `0 unexpected failures` each. Windows 2025 has zero failed
+tests. Windows 2022 has one failure outside web3: the geocoder probe printed
+the completed `InvalidCredentials` result but did not exit before its
+45-second guard. That timeout is a failure. Fix 58d7dc6 flushes the genuine
+awaited result, then exits zero; errors/inner timeouts exit one. Both the
+30-second wait and the outer 45-second guard remain. Environment.Exit itself still hung in 40353139413, so the native exit fix
+above now awaits CI; a local no-answer probe still failed the outer guard.
+
+Remaining WebView contracts belong to **web4 / ADR 0072**: subframe support
+for listeners/scripts/geolocation, additional page-to-app port transfers,
+late ProxyController environment replacement and reverse bypass, client
+certificate keys outside Windows, Safe Browsing callbacks, geometry/zoom/
+capture limits and the missing document-picker flow. These remain open;
+current scenario proof does not establish complete Android WebView behavior.
+Network/socket/resolver/hardware gaps belong to **net4 / ADR 0070** and are
+listed in network.md and its central handoff brief. Actual Narrator speech,
+real Wi-Fi/VPN hardware and captive-portal transitions are not CI claims.
+
+Earlier diagnostics explain the retained implementation choices:
+
+- 40309961504 / 40318144247 exposed hosted-HWND provider cycles. A real host
+  node uses `HOST_VIEW_ID=-1`, and a hosted override needs
+  `ProviderOptions_OverrideProvider`. An own native provider fixture without
+  ART or WebView2 reproduced the loop and verified that flag's effect.
+- 40325234847 exposed fixture all-caps, old Chromium's missing HeadingLevel
+  and the relative NDK load path. Exact button text, the semantic ARIA heading
+  fallback and absolute paths correct those cases.
+- 40338521188 exposed premature Activity completion and device-server
+  environment inheritance. External web invocation/DOM feedback now controls
+  completion; an Intent extra selects the device's arm64 library.
+- 40333695614 was superseded after builds/media succeeded; it has no complete
+  runtime result. A slow media preparation step is not a runtime failure or
+  an assumed known flake.
+
+Shared/additive edits: framework.yml's test app build, native-libs.yml's two
+NDK builds, conscrypt.cmake's network/proxy objects and oleaut32 link,
+webview.cmake's UIA client object, app bootstrap accessibility/proxy hooks,
+docs/services.md, and approved POSIX/bionic networking files listed in
+network.md. The coordinator reliability patch adds ci.yml's pinned APK cache,
+tests/e2e transport helpers/fixtures and the bounded 58-devices geocoder probe.
+The shared PrintWindow capture fix was imported from the coordinator and is
+already in verified aot2 integration.
+
+Pitfalls: detach threads attached to ART before exit; enable accessibility
+for screen-reader state rather than every ambient UIA client; restore the
+runner's proxy settings after tests; preserve byte pins across cache/mirrors.
+Use job logs, not artifact downloads, for review. Local checks are limited to
+source inspection and lightweight script parsing; C/C++ compilation and
+native fixture execution run only in CI.
+
+Recovery update (2026-10-27): current integration a0f32e1 (including verified
+AOT runtime merge 6dc3f03) is merged into the Web3 preparation branch. The
+coordinator's new native CI-only rule applies to every C/C++ fixture as well;
+there will be no local native compilation or execution. Web3's latest own
+full diagnostic remains 40376044459 at 939ec313d0fe5a2d8410ee700a927fad0538269e:
+all 14 Web3 checks pass on both runners, with package and both e2e jobs green;
+Windows 2022's boot performance failure still prevents full-stage acceptance.
+The earlier hold for coordinator startup diagnosis ended only after its
+verified profile input merged; current run40432795403 above is the single
+authorized changed-source validation. A final source must include the latest
+verified integration.
+The separate Windows4/native evidence does not establish Web3 or release
+completion. No roadmap item or release gate is closed by this merge.

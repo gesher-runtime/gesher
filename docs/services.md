@@ -253,6 +253,41 @@ package job (the activator's registration, the uninstaller's cleanup).
   their child surfaces no native window); an actual click on a toast is not automated
   (CI performs the activation as Windows' notification platform does).
 
+## Accessibility (web3 track, ADR 0058)
+
+Before the web3 track there was no `accessibility` service: AccessibilityManager had
+no service, nothing was ever enabled and nothing read an app's views. Now:
+
+- **The service, in every process**: `com.gesher.app.accessibility.AccessibilityService`
+  (IAccessibilityManager), put in ServiceManager's cache by `Services.installInProcess`
+  (single process) and `GesherAppProcess` (app processes), as the camera service; on
+  Windows the consumer of an app's accessibility is UI Automation, which reads each
+  process's windows in that process. Its clients (AccessibilityManagers) are enabled
+  (setState, relevant event types) while Windows' screen reader flag is set
+  (SPI_GETSCREENREADER: Narrator sets it; looked at every 2 s) or with
+  `$GESHER_ACCESSIBILITY=1`; the UI Automation bridge serves the windows only then (the
+  system's own UIA clients read windows all the time). ViewRootImpl then registers its windows' interaction
+  connections; AccessibilityEvents become UIA events: focus, announcements
+  (UiaRaiseNotificationEvent, Narrator speaks them), invoke, value and structure changes.
+  `getWindowTransformationSpec` is the identity.
+- **The UI Automation bridge** (`compat/accessibility/uia_bridge.cc`, libgesher_a11y.so;
+  `UiaBridge`): once accessibility is on, every GesherWindow of the process is subclassed
+  (a WinEvent hook finds them) and answers WM_GETOBJECT(UiaRootObjectId) with a fragment root of free-threaded
+  providers. Each element is an AccessibilityNodeInfo read through the window's
+  ViewRootImpl's direct accessibility connection (the AccessibilityInteractionController,
+  as TalkBack reads it); class names map to control types (Button, Edit, CheckBox,
+  RadioButton, Image, List, Text...), clickable nodes have Invoke, checkable ones Toggle,
+  editable ones Value; names are content descriptions or texts (an EditText's its hint),
+  bounds the window's client coordinates on the screen. A WebView's element hosts its
+  WebView2 window (`HostRawElementProvider`), so UIA shows WebView2's own page tree there.
+- **The other way**: a WebView's AccessibilityNodeProvider (docs/webview.md) is WebView2's
+  UIA tree as virtual views (`compat/accessibility/uia_client.cc`, a UIA client on a thread
+  of its own).
+- Tests: tests/windows/tracks/54-web3.ps1 (web3app.apk's A11yActivity; a UIA client in the
+  test as Narrator).
+- Limits: bounds ignore view scale/rotation; nodes are read on demand (a 200 ms cache);
+  no Android accessibility services (TalkBack-like apps) run: UI Automation is the client.
+
 ## Status and next steps
 
 ### Done and verified

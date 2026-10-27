@@ -143,6 +143,33 @@ affected (`<gesher/inet.h>`). The system server sets `GESHER_INET=0` for app
 processes of packages without it; gesher-app applies it in its own process
 (single process and `--system-server`).
 
+## Proxy and broadcasts (web3 track, ADR 0058)
+
+- **Windows' proxy settings** (the user's Internet Options as WinHTTP reads them:
+  `WinHttpGetIEProxyConfigForCurrentUser`) are Android's default proxy
+  (`com.gesher.net.WindowsProxy`, natives in `compat/net/windows_proxy.cc`,
+  libgesher_proxy.so): a proxy server becomes `ProxyInfo.buildDirectProxy(host, port,
+  exclusions)` (per-scheme WinINet strings: http's server; `<local>` has no Android
+  equivalent), a PAC URL a PAC proxy. Automatic detection (WPAD, on by default in Windows)
+  is not followed: every request would look for a script most networks do not have. Every process applies it with
+  `Proxy.setHttpProxyConfiguration` (http(s).proxyHost/Port/nonProxyHosts, as
+  ActivityThread at bind), so `Proxy.getDefaultHost()`, HttpURLConnection and OkHttp use
+  it, and follows Windows' changes (RegNotifyChangeKeyValue on the settings' key). Under a
+  PAC script, the framework's PacProxySelector asks `com.android.net.IProxyService`, which
+  every process serves itself with `WinHttpGetProxyForUrl` (Windows fetches and runs the
+  script, in process). `ConnectivityManager.getDefaultProxy()` and `getProxyForNetwork`
+  return it.
+- **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
+  sticky query, as BatteryService's battery broadcast) and sends it when the default
+  network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
+  EXTRA_NO_CONNECTIVITY.
+- **PendingIntent requests and listens** (`requestNetwork`, `registerNetworkCallback` with
+  a PendingIntent): the app's ConnectivityManager sends the PendingIntent with
+  EXTRA_NETWORK and EXTRA_NETWORK_REQUEST when a matching network is available;
+  `releaseNetworkRequest`/`unregisterNetworkCallback(PendingIntent)` end them.
+- Tests: tests/windows/tracks/54-web3.ps1 (web3app.apk's NetActivity on the Gesher device,
+  with Windows' settings set to the test's proxy, then to a PAC script, and restored).
+
 ## Tests
 
 `tests/windows/tracks/56-net.ps1`, with `tests/dex-net` (`net-tests.dex`,
@@ -158,9 +185,16 @@ plain Java on the core boot class path) and `tests/apps/netapp`,
   a certificate for localhost from it is rejected, trusted once the root is in
   the machine's ROOT store, rejected with `GESHER_WINDOWS_CERTS=0`, and
   rejected again once the root is removed;
+- netapp.apk's HTTPS check (`NetApp https`) goes to an HTTPS server of the script with a
+  certificate from the test root, kept in the machine's ROOT store while the apps run
+  (`$GESHER_NETAPP_HTTPS`; web3 track: ci 40240210807 had failed when example.com did not
+  answer);
 - on the internet: DNS, HTTPS GETs (example.com, google.com), TLS 1.3 with SNI
-  and hostname verification, badssl.com's expired, wrong-host, self-signed and
-  untrusted-root certificates rejected;
+  and hostname verification. The four rejection cases (expired, wrong host,
+  self-signed and unknown root) now use local TLS endpoints in 56-net with
+  separately generated certificates and only the intended test CA trusted.
+  Manual NetTest internet runs retain the public badssl defaults when
+  GESHER_TLS_REJECTION_URLS is unset;
 - netapp.apk in one process: ConnectivityManager's state, a default and a
   request callback, HTTPS through HttpsURLConnection with the network
   security config, cleartext refused (target SDK 36);
@@ -175,17 +209,145 @@ pushes to `wip/net`, for quick feedback; ci.yml builds and tests everything.
 
 ## Known gaps
 
-- No `CONNECTIVITY_ACTION` broadcast; `PendingIntent` network requests are
-  accepted and never fire.
-- Windows' proxy settings are not carried over (`getDefaultProxy()` is null).
-- Binding a socket or a process to a Network is accepted but Windows picks the
-  route; no per-network DNS.
+- (web3 track, ADR 0058: `CONNECTIVITY_ACTION` and `PendingIntent` requests, and Windows'
+  proxy settings, are done; see "Proxy and broadcasts" below.) PendingIntent requests are
+  kept by the app's process and end with it.
+- Pending CI (web3 continuation): socket/process bindings select Windows'
+  outgoing interface (both sides of dual-stack sockets); per-network DNS
+  uses `DnsQueryEx.InterfaceIndex` without falling back to another adapter.
+  `Network`'s socket factory and HTTP connection factory use these bindings.
 - VPNs are recognized by adapter type and name, a heuristic.
 - No Wi-Fi details (`TransportInfo`, SSID, signal strength).
 - BoringSSL without assembly (slower AES-GCM and bignum than a phone's).
-- Captive portals are not detected.
+- Pending CI (web3 continuation): the Network List Manager's
+  `NA_InternetConnectivityV4/V6` `WEBHIJACK` flags map to
+  `NET_CAPABILITY_CAPTIVE_PORTAL`, suppressing `VALIDATED` for that adapter.
+  A runner without a captive portal cannot verify a real portal transition.
 
-## Status and next steps (2026-10-25)
+## Status and next steps (web3)
+
+Completed full ci **40376044459** at
+`939ec313d0fe5a2d8410ee700a927fad0538269e`, with AOT3 foundation f5ce6f6
+and bounded TLS fixture cleanup. All 14 web3 checks and the new TLS fixture
+pass on each runner; root-test, all four negative and app-server cleanup
+markers complete on both, with accepted clients joined and certificates
+removed/disposed. Real internet/TLS and all certificate assertions still pass.
+Windows 2025 has zero failed tests; Windows 2022's sole failure is the AOT2
+JIT startup threshold (profile/speed medians 452/404 ms; interpreter 571/612).
+Package actual cleanup and both nine-app e2e jobs pass with required
+TIC-80/Puzzles and zero unexpected failures. Every other job is success/skipped.
+This is not mergeable; the coordinator owns startup diagnosis and a complete
+new combined CI remains required. Watch/logs are under
+`C:/work/gesher-ci-review/web3-40376044459-*`.
+
+Completed diagnostic ci **40364697280**, exact source
+`eee306b12a958286b72da8b30071438a9f1acdf3`; watch output:
+`C:/work/gesher-ci-review/web3-40364697280-successor-watch.log`. Both runners
+pass all 14 web3 checks; 2022 has zero failed tests and actual package cleanup
+and both nine-app e2e jobs pass with required TIC-80/Puzzles. Windows 2025
+times out at 60 minutes, with its last PASS at 17:26:36 UTC after the entire
+internet/TLS/local-negative-certificate group and no later output before
+cancellation at 18:08:55. Its zero-failure summary is absent; no merge gate
+is satisfied by that partial run.
+
+The next combined source includes verified AOT3 foundation f5ce6f6. The local
+TLS server fixture now owns its accepted sockets, cancels authentication/reads
+and joins within fixed limits. Own Windows idle-accept, incomplete-handshake
+and idle-read cleanup cases pass. Cleanup markers bracket server stop, store
+removal and certificate disposal; the previous log alone does not identify
+which call blocked. This follows the documented requirement to
+[close accepted connections separately](https://learn.microsoft.com/en-us/dotnet/api/system.net.sockets.tcplistener.stop).
+Real DNS/HTTPS/TLS and all negative certificate assertions remain enabled.
+
+Next combined CI is ready with verified native3 foundation f677944f merged,
+native geocoder exit 1f1cc96, and exec3's source-only Launcher framing fixes
+8eac61c/d2a5f7b. The native3 merge retained the newer native probe exit when
+resolving its older geocoder helper. The forwarding regression passes locally
+for partial UTF-8 titles, concurrent complete lines, log truncation and final
+fragments; exec.yml now checks out its helper and runs that JDK regression.
+Window/frame/action assertions remain unchanged. Full CI still must pass.
+
+Full-stage gate awaits a next combined CI with native geocoder probe exit
+1f1cc96 and exec3's Launcher line-framing fix. Completed ci 40353139413 at
+`6270c9e84e0a8f3486a77824ecb113c563d2871d` again passes all 14 web3 checks
+per runner, package and both e2e jobs. Windows 2022 fails the probe's CLR
+teardown; Windows 2025 also fails windows3 because a real first-frame line
+was split by a concurrent launcher status line. Neither failure is waived.
+The native probe exit preserves real-answer/error/30-second/45-second gates
+and passes focused own-byte exit-zero/one fixtures. Launcher is owned by
+exec3; no concurrent edit is made here. No milestone is closed before both
+Windows jobs, package and e2e pass completely.
+
+In completed ci **40345505558 at 2130071**, all 14 web3 checks pass on each
+runner, including these real network observations in both process modes:
+
+- Configured selected-interface DNS and refusal to fall back from a missing
+  network; actual `IP_UNICAST_IF`/`IPV6_UNICAST_IF` kernel binding and source
+  addresses, explicit TCP/UDP binding, process bind/unbind/invalid preservation,
+  and a bound HTTP connection whose server observes the selected source.
+- Real x86_64 and translated arm64 NDK ELF callers pass all seven assigned
+  libandroid networking APIs: selected TCP/process source, getaddrinfo,
+  pollable raw DNS query/send/result, packet ID, NXDOMAIN, cancellation,
+  closed descriptors, undersized buffers and invalid flags/networks. Each
+  ABI runs in single-process and device modes and identifies its compiled ABI.
+- Windows system proxy/PAC, direct bypass, sticky CONNECTIVITY_ACTION and
+  PendingIntent requests. The four local TLS negative-certificate cases
+  pass while live internet DNS/HTTPS/TLS assertions remain enabled.
+
+Package cleanup and both e2e jobs pass, including all nine apps, required
+TIC-80, four pinned-byte APK transport fixtures and zero unexpected failures.
+The full run still fails: Windows 2025 has zero failed tests; Windows 2022's
+only failure is a completed geocoder answer followed by a stuck PowerShell
+probe teardown. That 45-second timeout is not a passing probe. Minimal fix
+58d7dc6 flushes the awaited result and exits zero, while errors/inner timeouts
+exit one and both existing guards remain. Environment.Exit still hung in 40353139413; the native exit fix above now
+awaits combined CI.
+
+The raw DNS worker uses the chosen adapter's configured servers and bound
+UDP, up to three servers (one with NO_RETRY), cache bypass and TCP fallback
+for truncated answers. Only a completion byte uses its pollable socketpair;
+the full answer remains available until nresult consumes/closes the fd.
+Cancellation shuts down the active query. Forced truncation/TCP fallback,
+cache transitions (including mixed Java/NDK binding) and IPv6-only default
+selection remain for net4; current assertions do not prove those cases.
+
+**net4 / ADR 0070** owns the remaining 84 libc networking inventory entries,
+legacy resolver ABI/error state, shared socket flags/ancillary/truncation/
+urgent data/families, Wi-Fi/VPN/captive transitions, connectivity hidden APIs
+and BoringSSL acceleration. See [its handoff](handoff/tracks/net4.md).
+**web4 / ADR 0072** owns remaining WebView contracts separately.
+
+Approved expanded/shared edits: POSIX socket.cc, winsock.cc, netdb.cc,
+socket_internal.h and public gesher/inet.h; bionic networking wrappers;
+network_dns.cc plus its posix.cmake entry; WindowsNetworks/Network/native
+routing glue; conscrypt.cmake's oleaut32 link; native-libs.yml's two NDK
+fixture builds. Coordinator reliability helpers add ci.yml APK caching,
+tests/e2e transport fixtures and the bounded geocoder child process in
+58-devices.ps1. No new routing check reconfigures runner adapters, and no
+Windows ROOT store was changed locally.
+
+### ADR 0009 socket gap audit (2026-10-26)
+
+The binding work does not close these pre-existing gaps. Duplicated socket
+descriptors still store independent `O_NONBLOCK` metadata rather than sharing
+an open-file description. `recvmsg` drops ancillary data and output flags;
+`sendmsg` has no ancillary transport. `SCM_RIGHTS`, `IP_PKTINFO`, full datagram
+length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
+unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
+Legacy host/service/protocol resolver functions have no Gesher implementation
+(the separate thread-local `h_errno` does exist). The existing bionic exports
+forward directly to the Windows imports. A small probe using Gesher headers
+confirmed the ABI defect: Windows' 16-bit hostent fields are read as Linux's
+32-bit fields (`h_addrtype=262146,h_length=0` for native `2,4`). A neutral
+structure translation and correct resolver error state are required.
+These socket/resolver items are assigned to net4 / ADR 0070.
+
+The coordinator assigns epoll edge/nesting/poll-on-epoll/multiwaiter behavior
+and pipe polling to native3, and cross-process InputChannel/socket descriptor
+transport to binder2. Those tracks must coordinate any descriptor-sharing
+changes. Receive-timeout stream behavior and Windows WSAPoll platform limits
+also remain documented in ADR 0009. Real Wi-Fi, VPN, captive-portal transitions
+and disconnected-adapter selection are not verified by the hosted runner.
 
 **Branch** `wip/net` (worktree C:/work/gesher-net). **CI-verified green**: ci
 40141520320 (66d71de) and ci 40143168361 (47a4aeb, merged with
