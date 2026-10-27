@@ -73,7 +73,7 @@ int main() {
   startup.hStdError = error;
   // No lpReserved2/CRT fd block: stdin must actually be the UCRT -2 sentinel.
   PROCESS_INFORMATION process{};
-  BOOL started = CreateProcessW(self, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+  BOOL started = CreateProcessW(self, command.data(), nullptr, nullptr, TRUE, DETACHED_PROCESS,
                                 nullptr, nullptr, &startup, &process);
   CloseHandle(output);
   CloseHandle(error);

@@ -90,6 +90,16 @@ The exec4-child-diagnostics workflow builds only the real launcher/host
 caller and runs unchanged test77 on both Windows hosts, reusing immutable
 NDK/ARM artifacts from40502225202 inside CI. It executes no AOSP/JVM build,
 package or e2e acceptance, and cannot replace final coherent full CI.
+Scoped40519233739/9a90c55d succeeds in all three jobs. Root read actual
+build122241434258 and Windows122241590060/122241590177 logs: console
+CREATE_NO_WINDOW with NULL input acquires a real console handle92/104,
+whereas DETACHED_PROCESS with the same NULL input naturally has raw-2,
+Win32 NULL input, reserved0 and fileno-2 on both hosts. The no-console
+fixture now uses DETACHED_PROCESS and retains exact raw-2, actual shim
+spawn/wait, child closed0/exit42 and unchanged parent assertions. This fixes
+the fixture's startup precondition, not a demonstrated production defect.
+The initial scoped child diagnostic c727 run is superseded by this changed
+source before any runtime acceptance; the directory failure remains open.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
