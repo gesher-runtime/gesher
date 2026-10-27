@@ -67,13 +67,19 @@ function WaitCount([scriptblock] $ReadLog, [string] $Pattern, [int] $Count, [int
 # an earlier request late).
 function SwitchTo([IntPtr] $hwnd, [string] $Klid, [int] $Lang) {
   $deadline = (Get-Date).AddSeconds(30)
+  $checkBroker = $script:imeBrokerHangs -and $Lang -eq 0x0409
   do {
     [void][ImeInput]::SwitchLayout($hwnd, $Klid)
     $until = (Get-Date).AddSeconds(2)
     while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $until) {
       Start-Sleep -Milliseconds 200
     }
-  } while ((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -and (Get-Date) -lt $deadline)
+    # WM_INPUTLANGCHANGEREQUEST can publish the new HKL before its IME worker
+    # finishes. Toggling the IME off may also have restarted the known-broken
+    # Server2022 broker after the earlier cleanup. Observe actual thread progress.
+    $responsive = -not $checkBroker -or [ImeInput]::ThreadResponsive($hwnd)
+    if (-not $responsive) { EndImeBroker 'while completing the US layout switch' }
+  } while (((([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -ne $Lang) -or -not $responsive) -and (Get-Date) -lt $deadline)
   Start-Sleep -Milliseconds 500
 }
 
@@ -242,6 +248,10 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   [void][ImeInput]::Keys(0x19)  # the IME off
   SwitchTo $hwnd '00000409' 0x0409
   Start-Sleep -Seconds 1
+
+  $usLayout = ([ImeInput]::ThreadLayout($hwnd) -band 0xffff) -eq 0x0409
+  $usResponsive = [ImeInput]::ThreadResponsive($hwnd)
+  ImeCheck $Mode 'returning to the US layout leaves the actual window thread responsive before password input' ($usLayout -and $usResponsive) "layout US $usLayout, responsive $usResponsive"
 
   # A password field takes keys, and no compositions.
   [GesherWin32]::Click($hwnd, 200, 270)
