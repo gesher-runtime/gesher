@@ -11,6 +11,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.LocaleList;
 import android.os.Process;
@@ -76,10 +77,9 @@ public final class LocaleManagerService extends ILocaleManager.Default
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final File mFile = new File(Device.dataDir(), "system/app_locales");
-    private final File mOverrideFile = new File(Device.dataDir(), "system/app_locale_configs");
-    // Guarded by this: package -> language tags; package -> LocaleConfig override.
+    private final File mOverrideDir = new File(Device.dataDir(), "system/locale_configs");
+    // Guarded by this: package -> selected language tags.
     private final Properties mLocales;
-    private final Properties mOverrides;
     /** The package of this process, in an app's own process (single-process mode). */
     private volatile String mInProcessPackage;
 
@@ -90,8 +90,6 @@ public final class LocaleManagerService extends ILocaleManager.Default
         mPm = pm;
         Properties p = Device.read(mFile);
         mLocales = p != null ? p : new Properties();
-        p = Device.read(mOverrideFile);
-        mOverrides = p != null ? p : new Properties();
         sInstance = this;
         if (WindowsHost.inSystemServer()) {
             WindowsHost.addListener(this);
@@ -253,18 +251,14 @@ public final class LocaleManagerService extends ILocaleManager.Default
             if (original == null) return;
             if (localeConfig != null && localeConfig.isSameLocaleConfig(
                     storedOverride(packageName))) return;
-            Properties next = copy(mOverrides);
-            if (localeConfig == null) {
-                next.remove(packageName);
-            } else {
+            Properties next = new Properties();
+            if (localeConfig != null) {
                 LocaleList supported = localeConfig.getSupportedLocales();
                 // Pinned framework contract: a non-null config with a null list is
                 // stored as an explicit empty override, not removal of the override.
-                next.setProperty(packageName, supported != null ? supported.toLanguageTags() : "");
+                next.setProperty("locales", supported != null ? supported.toLanguageTags() : "");
             }
-            if (!persist(mOverrideFile, next)) return;
-            mOverrides.clear();
-            mOverrides.putAll(next);
+            if (!persist(overrideFile(packageName), next)) return;
             LocaleConfig supported = localeConfig != null ? localeConfig : original;
             LocaleList before = appLocales(packageName);
             if (before != null) {
@@ -296,8 +290,16 @@ public final class LocaleManagerService extends ILocaleManager.Default
     }
 
     private LocaleConfig storedOverride(String packageName) {
-        String tags = mOverrides.getProperty(packageName);
+        Properties stored = Device.read(overrideFile(packageName));
+        String tags = stored != null ? stored.getProperty("locales") : null;
         return tags == null ? null : new LocaleConfig(LocaleList.forLanguageTags(tags));
+    }
+
+    private File overrideFile(String packageName) {
+        // The pinned service uses one file per package. Independent single-process apps
+        // must not overwrite each other's overrides through a cached global Properties map.
+        // GET accepts unknown package names; encode separators instead of using them as paths.
+        return new File(mOverrideDir, Uri.encode(packageName) + ".properties");
     }
 
     /** Ordinary app callers, for the device's single supported user (0). */

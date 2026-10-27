@@ -45,10 +45,21 @@ public final class MainActivity extends Activity {
                     new LocaleConfig(LocaleList.forLanguageTags("fr-FR"))));
             deny("override clear", () -> service.setOverrideLocaleConfig(TARGET, 0, null));
             deny("public config cross-user", () -> service.getOverrideLocaleConfig(TARGET, 1));
-            manager.setApplicationLocales(LocaleList.forLanguageTags("en-US"));
-            if (!"en-US".equals(manager.getApplicationLocales().toLanguageTags())) {
+            manager.setOverrideLocaleConfig(new LocaleConfig(LocaleList.forLanguageTags("he-IL")));
+            manager.setApplicationLocales(LocaleList.forLanguageTags("he-IL"));
+            if (!"he-IL".equals(manager.getApplicationLocales().toLanguageTags())) {
                 throw new AssertionError("distinct package cannot set its own locales");
             }
+            manager.setOverrideLocaleConfig(null);
+            if (!manager.getApplicationLocales().isEmpty() || manager.getOverrideLocaleConfig() != null
+                    || new LocaleConfig(this).getStatus() != LocaleConfig.STATUS_NOT_SPECIFIED) {
+                throw new AssertionError("clear without a resource LocaleConfig did not reset selection");
+            }
+            if (!"he-IL,fr-FR".equals(service.getOverrideLocaleConfig(TARGET, 0)
+                    .getSupportedLocales().toLanguageTags())) {
+                throw new AssertionError("distinct package changed target override");
+            }
+            System.out.println("locale2other: ASSERT own override clear with no resource config resets selection; target unchanged");
             System.out.println("locale2other: PASS distinct registered package boundaries");
         } catch (Throwable error) {
             System.out.println("locale2other: FAIL " + error);
