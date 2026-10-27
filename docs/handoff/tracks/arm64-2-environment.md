@@ -19,6 +19,19 @@ repository/run identity, positive ID/size, nonexpired state and SHA256 digest
 metadata before its exact pinned-run download. Actual runtime remains
 pending; metadata guards establish source provenance, not product results.
 
+Interruption checkpoint: production/shared runtime tests54cccc22, artifact
+guardse543d8ea; the working branch is clean apart from subsequent checkpoint
+documentation. Windows peer review has completed with no bounded blocker,
+including actual reference renaming/link wiring. The source is not dispatched
+and must wait for coherent API3 component40549806536/c7a43653 runtime proof.
+No broad full until coherent prerequisites and the relevant Web3 gate pass.
+The review-checkpoint remote ref preserves the pending source without
+triggering the branch-specific environment workflow. Next action after
+coherent proof is to push `wip/arm64-env` (narrow environment-component
+trigger), watch with interval120, then read both actual256-row ELF/JNI/
+single/device results and every preserved FPCR/FPSR/JNI/variadic control.
+All aggregate/installer/e2e acceptance remains pending.
+
 The earlier audit and proposed scope below are historical context; only
 the source/CI results subsequently recorded here can establish completion.
 
