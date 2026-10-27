@@ -7,6 +7,11 @@ name: exec
 # .so files, and the dex of gesher.ExecTest, which runs it through
 # ProcessBuilder in dalvikvm. ci.yml calls this workflow.
 on:
+  push:
+    branches: ['wip/exec4']
+    paths:
+      - 'tests/exec/exec4_actions.c'
+      - '.github/workflows/exec.yml'
   workflow_dispatch:
   workflow_call:
 
