@@ -1,7 +1,8 @@
 # 0067. arm64-2: guest FPCR rounding across native boundaries
 
-Status: proposed. First scoped ci 40442317928 at e7c2878 passes both
-Windows host/translator tests. Extended NDK contracts and full CI pending.
+Status: proposed. Combined scoped ci 40443927632 at 053bbc0 passes exact
+source provenance, NDK builds and both Windows host/translator tests.
+Full JNI/APK/native-process and product acceptance remain pending.
 This is the first rounding slice of arm64-2, not completion of that track.
 
 ## Context
@@ -50,9 +51,17 @@ guest code with renamed symbols, so its real MSR/MRS can be compared against
 shim calls. Shared NDK contracts add FADD/FRINTI, errno, pthread inheritance,
 concurrent modes and nested qsort callbacks to native2's ARM library and an
 actual ELF process. test69 consumes actual dalvikvm/single/device logs.
-These extensions await scoped/full CI. No local compiler or native/JVM
-fixture ran.
+Extended scoped ci 40443134770 and combined scoped 40443927632 are green;
+all five successful logs of each were read. The original bodies and actual
+JNI/APK/native-process artifacts compile, while both Windows host fixtures
+pass every FPCR group and zero-failure summaries. The combined candidate
+also retains current integration 8922a3e's verified clocks/widths and the
+frozen verified wide/C11 prerequisite e7c1b06. Actual NDK process execution
+and the full suites/package/e2e still require full CI. No local compiler or
+native/JVM fixture ran.
 FPSR exception/status/trap APIs and environment save/restore functions
 remain outside this slice; their old fallback implementations are not
 claimed as complete. Guest JIT pages, signals/ucontext, LSE, HFAs/variadic
 binary128 and cache/stack limits remain open arm64-2 contracts.
+Rounding-sensitive host CRT/libm calls are a separate open contract; this
+slice verifies translated guest arithmetic and the FPCR rounding entries.
