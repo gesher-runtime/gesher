@@ -37,6 +37,15 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Startup-profile stage fully verified: ci 40414859801 at
+ca46e9967f8994fe329f3f10c88de7141e494f76. Root read every job, all 18
+scoped PASS lines per runner, both zero-failure summaries, actual installed
+input/uninstall and both required e2e logs (zero unexpected). See
+[the frozen startup report](aot3-startup.md). Original size/timing gates
+pass unchanged; this is not a before/after variance claim. The source
+predates exec3/94ccde1, so their merge requires combined integration CI.
+Shared-library contexts and secondary dex remain open.
+
 Frozen cloud stage is fully verified in ci 40408733247 at
 05ca072cad7a23d83403a0c039d47d4fec0c07b5. Every job, all 16 scoped aot3
 PASS lines per runner, both zero-failure summaries, actual installed
