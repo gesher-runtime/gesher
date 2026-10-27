@@ -46,6 +46,16 @@ has no runtime run and waits for corrected coherent evidence. Legacy Native2
 process cleanup remains separately open; scoped A64Run uses a strict60-second
 child bound.
 
+Coherent prerequisite is now actually verified at942f2c16b1219cd25bcb1c1ca4215f41639cc88f,
+component40556015168 attempt1: eight executed jobs success/one smoke skip,
+both actual Windows zero summaries, six Native2 contexts, copied JNI V,
+FPCR/FPSR10384 and original variadic consumers. Four jar differences caused
+real current-tool image rebuilds with all15 copy hashes equal. The environment
+workflow now verifies that exact successful run, both runtime jobs and its
+explicit reviewed source-file delta before any producer builds. It preserves
+all final942 supplier/artifact and current-tool/image guards. Env85 can now
+dispatch on its own branch; no full/Surface/package/e2e acceptance is implied.
+
 The earlier audit and proposed scope below are historical context; only
 the source/CI results subsequently recorded here can establish completion.
 
