@@ -183,6 +183,8 @@ struct Thread {
   bool waiting = false;  // on proc->waiting_threads
   bool process_todo = false;
   Transaction* transaction_stack = nullptr;
+  uint64_t pending_buffer = 0;
+  bool pending_fds_claimed = false;
   WorkList todo;
   ErrorWork return_error;
   ErrorWork reply_error;
@@ -886,7 +888,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
 }
 
 // BC_FREE_BUFFER
-void DoFreeBuffer(Proc* proc, uint64_t id) {
+void DoFreeBuffer(Proc* proc, uint64_t id, bool close_unclaimed_fds = false) {
   auto it = proc->buffers.find(id);
   if (it == proc->buffers.end()) {
     Log("proc %u: BC_FREE_BUFFER of unknown buffer %llu", proc->id, (unsigned long long)id);
@@ -911,7 +913,34 @@ void DoFreeBuffer(Proc* proc, uint64_t id) {
       WakeProc(proc);
     }
   }
+  if (close_unclaimed_fds) buffer->allow_user_free = false;
   FreeBuffer(buffer, true);
+}
+
+// Roll back a delivery the receiver could not publish. A synchronous caller
+// gets a genuine failed reply; oneway queue ownership is released normally.
+int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
+  Proc* proc = thread->proc;
+  auto found = proc->buffers.find(id);
+  if (id == 0 || thread->pending_buffer != id || found == proc->buffers.end()) return -EINVAL;
+  Buffer* buffer = found->second;
+  Transaction* transaction = buffer->transaction;
+  if (transaction != nullptr && (transaction->to_thread != thread || thread->transaction_stack != transaction)) {
+    return -EINVAL;
+  }
+  const bool claimed = thread->pending_fds_claimed;
+  thread->pending_buffer = 0;
+  thread->pending_fds_claimed = false;
+  if (accepted) return 0;
+  if (transaction != nullptr) {
+    thread->transaction_stack = transaction->to_parent;
+    transaction->to_thread = nullptr;
+    transaction->buffer = nullptr;
+    buffer->transaction = nullptr;
+    SendFailedReply(transaction, BR_FAILED_REPLY);
+  }
+  DoFreeBuffer(proc, id, !claimed);
+  return 0;
 }
 
 // --- thread and process release ---------------------------------------------------
@@ -919,6 +948,7 @@ void DoFreeBuffer(Proc* proc, uint64_t id) {
 // binder_thread_release
 void ThreadRelease(Thread* thread) {
   if (thread->is_dead) return;
+  if (thread->pending_buffer != 0) FinishBuffer(thread, thread->pending_buffer, false);
   Proc* proc = thread->proc;
   proc->threads.remove(thread);
   if (thread->waiting) {
@@ -1016,6 +1046,7 @@ struct In {
 struct Out {
   std::vector<uint8_t> bytes;
   void Write(const void* data, size_t n) {
+    if (n == 0) return;
     const uint8_t* b = static_cast<const uint8_t*>(data);
     bytes.insert(bytes.end(), b, b + n);
   }
@@ -1108,6 +1139,8 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         if (!in.Get(&td.copy_error)) return -EFAULT;
         if (td.copy_error == 0) {
           if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
+          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size;
+          if (body_size > static_cast<uint64_t>(in.end - in.p)) return -EFAULT;
           td.data.resize(td.tr.data_size);
           td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
           td.extra.resize(td.buffers_size);
@@ -1385,6 +1418,8 @@ retry:
     tr.data_size = buffer->data.size();
     tr.offsets_size = buffer->offsets.size() * sizeof(binder_size_t);
     buffer->allow_user_free = true;
+    thread->pending_buffer = buffer->id;
+    thread->pending_fds_claimed = false;
     rs->Put32(cmd);
     rs->out.Put(tr);
     rs->size += sizeof(tr);
@@ -1586,7 +1621,7 @@ void ServeThread(HANDLE pipe, In in) {
       uint32_t first, non_block;
       if (!req.Get(&read_size) || !req.Get(&first) || !req.Get(&non_block)) break;
       uint32_t consumed = 0;
-      int ret = ThreadWrite(proc, thread, req, &consumed);
+      int ret = thread->pending_buffer == 0 ? ThreadWrite(proc, thread, req, &consumed) : -EINVAL;
       ReadStream rs;
       rs.limit = static_cast<size_t>(read_size);
       if (ret == 0 && read_size > 0) {
@@ -1598,6 +1633,19 @@ void ServeThread(HANDLE pipe, In in) {
       reply.Put<int32_t>(ret);
       reply.Put<uint32_t>(consumed);
       reply.Write(rs.out.bytes.data(), rs.out.bytes.size());
+    } else if (op == wire::kClaimBuffer || op == wire::kFinishBuffer) {
+      uint64_t id;
+      uint32_t accepted = 0;
+      if (!req.Get(&id) || (op == wire::kFinishBuffer && !req.Get(&accepted))) break;
+      int ret = 0;
+      if (op == wire::kClaimBuffer) {
+        if (id == 0 || id != thread->pending_buffer) ret = -EINVAL;
+        else thread->pending_fds_claimed = true;
+      } else {
+        ret = FinishBuffer(thread, id, accepted != 0);
+      }
+      lock.unlock();
+      reply.Put<int32_t>(ret);
     } else if (op == wire::kIoctl) {
       uint32_t request;
       if (!req.Get(&request)) break;

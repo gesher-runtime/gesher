@@ -44,3 +44,18 @@ readiness stay open. The older reservation below is historical.
 Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted. Existing
 descriptor support is verified only in its cited contexts; the remaining
 contracts above are open, pending source audit and executable evidence.
+
+Peer review of76a121e8 identified real pre-CI blockers: aggregate wire budget
+was checked too late, aligned receiver bytes were not included in the cap,
+malicious wire body lengths could allocate before remaining-byte validation,
+and receiver copy/allocation/FD failure needed explicit ownership rollback.
+The correction is still unverified source: preflight every append/snapshot,
+check aligned dimensions and actual remaining frame, guard zero-byte writes,
+and use pending delivery claim/finish with guarded caller output copies.
+Unpublished delivery failure closes local FDs/allocation, unwinds the real
+synchronous caller and broker/oneway buffer; already published commands keep
+their read_consumed prefix. PTR allocations obey real mapped capacity without
+heap fallback, enabling genuine small-map ENOMEM fixtures. Plain transaction
+heap fallback remains separately open. New protocol boundary/death/cancel/
+exactly-once/partial-consumption fixtures and second peer remain mandatory.
+No CI is dispatched from this checkpoint.
