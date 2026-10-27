@@ -72,6 +72,17 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
+Root checkpoint while the scoped agent is interrupted: full ci 40425393716
+at 57782e5 attempt 1 completed with only the known external badssl timeout
+on each Windows runner (two counted failures each). Root read both actual
+test logs: all six test66 ABI/mode checks pass per runner. Package and both
+e2e job statuses are green but their actual logs still require review.
+Root requested failed-jobs retry on the same run/source; attempt 2 is
+pending. No full acceptance or roadmap tick from the scoped passes alone.
+Integration has since advanced to 42cc1c0 with the independently verified
+startup profile; merge it before final combined acceptance. Preserve the
+separate corrected ARM-width override when root integrates that track.
+
 Current acceptance run: **full ci 40425393716 at 57782e5**, pending.
 Implementation is frozen at eb9f964 (the later commit changes docs only),
 with all 248 independent assertions and compilation verified in scoped
