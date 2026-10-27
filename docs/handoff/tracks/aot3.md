@@ -37,6 +37,16 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+Runtime graph/dexopt sourcee2e36137 compiles in scoped40470396915: both jobs
+green; actual122075942761 has javac0/0errors, graphics dex and appjar570004.
+Fixture compile40472620654 at7fe21800 is red in graphics-tests javac, after
+production compilation: importing Main.bootstrap recursively pulls generated
+service/compat sources outside that fixture's generated-server classpath.
+The correction invokes the exact shipped Main.bootstrap reflectively at
+runtime, retaining real ART/resources and every graph assertion. No production
+or oracle change is made. Corrected compile/runtime proof remains required;
+the old red run supplies no fixture or shared-library runtime acceptance.
+
 The shared-library continuation is assigned to the Windows4/Web3/release/Net4
 agent in this worktree. Root's cleanfb9aefb1 merge of integration808ea746 is
 preserved. Test73 and ADR0065 remain reserved; secondary dex and APK-declared
