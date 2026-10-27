@@ -46,10 +46,20 @@ bool Same(NativeState before) {
   NativeState after = Native();
   return before.mode == after.mode && before.flags == after.flags && before.mxcsr == after.mxcsr;
 }
+void Trace(const char* phase, uint64_t expected, uint64_t observed, int queried = -1) {
+  uint64_t control = Call(0);
+  NativeState host = Native();
+  std::printf("INFO arm64 FPSR: %s expected=0x%08llx observed=0x%08llx query=0x%08x "
+              "fpcr=0x%08llx host_mode=0x%x host_flags=0x%x host_mxcsr=0x%08x\n",
+              phase, static_cast<unsigned long long>(expected), static_cast<unsigned long long>(observed),
+              queried, static_cast<unsigned long long>(control), host.mode, host.flags, host.mxcsr);
+}
 NativeState original_native, outer_native;
 uint64_t SYSV Inner(uint64_t expected, uint64_t replacement) {
   Check(Same(outer_native), "inner host inherits native flags and rounding");
-  Check(Call(4) == expected, "third guest level inherits actual FPSR");
+  uint64_t observed = Call(4);
+  Trace("third guest level", expected, observed);
+  Check(observed == expected, "third guest level inherits actual FPSR");
   Check(Call(5, replacement) == replacement, "third guest directly changes FPSR");
   std::fesetround(FE_TOWARDZERO);
   std::feraiseexcept(FE_INVALID);
@@ -60,7 +70,9 @@ uint64_t SYSV Outer(uint64_t expected, uint64_t replacement) {
   std::fesetround(FE_DOWNWARD);
   std::feraiseexcept(FE_OVERFLOW);
   outer_native = Native();
-  Check(Call(4) == expected, "nested guest inherits parent FPSR independently of host flags");
+  uint64_t observed = Call(4);
+  Trace("second guest level", expected, observed);
+  Check(observed == expected, "nested guest inherits parent FPSR independently of host flags");
   Check(Call(2, reinterpret_cast<uint64_t>(&Inner), expected, replacement) == replacement,
         "nested status callback completes");
   Check(Same(outer_native), "inner callback restores outer host flags and rounding");
@@ -94,6 +106,7 @@ int main(int argc, char** argv) {
   std::fesetround(FE_UPWARD);
   std::feraiseexcept(FE_DIVBYZERO);
   original_native = Native();
+  Trace("initial guest/native state", 0, Call(4));
   Check(Call(1, 0) == 0 && Call(5, kQc | 0x9f) == (kQc | 0x9f), "direct register writes reach real backend");
   Check(One("fetestexcept", -1) == 0x9f && One("fetestexcept", 0x48000080) == 0x80,
         "test masks include denormal and exclude QC/unknown bits");
@@ -121,16 +134,25 @@ int main(int argc, char** argv) {
     Call(1, op.control);
     Call(5, 0);
     (void)Call(op.operation, op.left, op.right);
-    Check(Call(4) == op.flags && One("fetestexcept", -1) == static_cast<int>(op.flags),
+    uint64_t observed = Call(4);
+    int queried = One("fetestexcept", -1);
+    Trace(op.operation == 6 ? "FDIV" : op.operation == 7 ? "FMUL" : "FADD", op.flags, observed, queried);
+    Check(observed == op.flags && queried == static_cast<int>(op.flags),
           "actual FDIV/FMUL/FADD produces exception status, including IDC");
     Check(Same(original_native), "real guest exception arithmetic preserves native fenv");
   }
   Call(1, 0);
   Call(5, 0);
-  Check(Call(8) == kQc && One("fetestexcept", -1) == 0, "actual SQADD sets QC outside the C exception mask");
+  uint64_t saturated = Call(8);
+  uint64_t saturation_status = Call(4);
+  int saturation_query = One("fetestexcept", -1);
+  Trace("SQADD returned status", kQc, saturated, saturation_query);
+  Trace("SQADD persisted status", kQc, saturation_status, saturation_query);
+  Check(saturated == kQc && saturation_query == 0, "actual SQADD sets QC outside the C exception mask");
   if (failures == 0) std::puts("PASS  arm64 FPSR: real FDIV FMUL FADD and saturating SIMD produce all six flags and QC");
   uint64_t before = kQc | 0x81, replacement = 0x92;
   Call(5, before);
+  Trace("before outer callback", before, Call(4));
   Check(Call(2, reinterpret_cast<uint64_t>(&Outer), before, replacement) == replacement && Call(4) == replacement,
         "nested status changes persist on outer guest return");
   Check(Same(original_native), "native exception flags and rounding restored after nested callbacks");
@@ -141,7 +163,9 @@ int main(int argc, char** argv) {
     std::fesetround(FE_DOWNWARD);
     std::feraiseexcept(i & 1 ? FE_INEXACT : FE_INVALID);
     NativeState native = Native();
-    Check(Call(4) == 0, "new foreign host thread has independent default guest FPSR");
+    uint64_t initial = Call(4);
+    Trace("new foreign thread", 0, initial);
+    Check(initial == 0, "new foreign host thread has independent default guest FPSR");
     for (unsigned iteration = 0; iteration < 32; ++iteration) {
       uint64_t own = kQc | (UINT64_C(1) << i);
       Check(Call(5, own) == own && One("fetestexcept", -1) == static_cast<int>(own & 0x9f),
