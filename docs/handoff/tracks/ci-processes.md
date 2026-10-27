@@ -6,6 +6,22 @@ Build and execute process fixtures only in CI.
 
 ## Status and next steps
 
+Resumed source extends the same ADR0078/test84 scope to actual SurfaceRun
+and InvokeOpenSl. SurfaceRun retains500s phase,120s exit and8s SIGQUIT
+diagnostic bounds, adds finite post-kill/final cleanup and finally disposal,
+and returns-1 for timed-out completion. The existing pixel/GL oracles remain
+unchanged and now also require actual successful process completion.
+The test76 file is imported exactly from coordinator-authorized frozen
+OpenSL58a24583d06432f0f025a7e845fcdbca885989e0 (docs above verified
+d10bea3a98bb8dfe76972209b6aff5df4fed58ec/full40476766790), changing only
+InvokeOpenSl's bounded termination/read/disposal. No Media worktree is edited.
+Test84 compiles the real fixture and invokes all three actual helper bodies
+for normal/23/timeout/retained-output cases. SurfaceRun uses file redirection,
+so its exited-parent/retained-file case must finish without waiting for EOF;
+the two pipe helpers must fail incomplete EOF within their explicit bounds.
+All helper defaults remain unchanged. Only local PowerShell parsing and
+whitespace checks are allowed; changed-source CI and full proof are pending.
+
 Root's source review of the Surface invalidation candidate found that legacy
 SurfaceRun/test76 process helpers can wait without a bound after attempting
 to kill a timed-out process, and can wait indefinitely for redirected pipe

@@ -5,6 +5,8 @@ on:
     paths:
       - .github/workflows/ci-processes.yml
       - tests/windows/tracks/50-services.ps1
+      - tests/windows/tracks/52-surfaces.ps1
+      - tests/windows/tracks/76-media4-opensl.ps1
       - tests/windows/tracks/84-ci-processes.ps1
       - tests/windows/fixtures/Process84.cs
   workflow_dispatch:
@@ -20,7 +22,7 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Verify actual shared helper against real process and retained pipe cases
@@ -32,14 +34,27 @@ jobs:
           $failed = 0
           $tokens = $null
           $errors = $null
-          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-            "$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
-          if ($errors.Count) { throw $errors[0] }
-          $definition = $ast.FindAll({ param($node)
-            $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
-          }, $false) | Where-Object Name -eq RunTimed
-          if (@($definition).Count -ne 1) { throw 'Expected exactly one actual RunTimed helper' }
-          . ([scriptblock]::Create($definition.Extent.Text))
+          foreach ($helper in @(@('50-services.ps1', 'RunTimed'),
+                                @('52-surfaces.ps1', 'SurfaceRun'),
+                                @('76-media4-opensl.ps1', 'InvokeOpenSl'))) {
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+              "$pwd/tests/windows/tracks/$($helper[0])", [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { throw $errors[0] }
+            $definition = $ast.FindAll({ param($node)
+              $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $false) | Where-Object Name -eq $helper[1]
+            if (@($definition).Count -ne 1) { throw "Expected exactly one actual helper $($helper[1])" }
+            . ([scriptblock]::Create($definition.Extent.Text))
+            if ($helper[1] -eq 'SurfaceRun') {
+              # Compile the unchanged real SIGQUIT helper only inside CI.
+              $signalHelper = $ast.FindAll({ param($node)
+                $node -is [System.Management.Automation.Language.IfStatementAst] -and
+                $node.Extent.Text.StartsWith("if (-not ('GesherSurfWin32'")
+              }, $false)
+              if (@($signalHelper).Count -ne 1) { throw 'Missing actual Surface SIGQUIT source' }
+              . ([scriptblock]::Create($signalHelper.Extent.Text))
+            }
+          }
           . "$pwd/tests/windows/tracks/84-ci-processes.ps1"
           Write-Host "$failed test(s) failed"
           exit $failed
