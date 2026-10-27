@@ -155,15 +155,21 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "Actual command suite exit=$($process.ExitCode)" }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_COMMAND_ORACLE rows=[1-9][0-9]* mismatches=0$' -Quiet)) { throw 'Missing actual command comparator completion' }
           } finally {
+            $cleanupProblems = @()
             if ($null -ne $process) {
-              if (-not $process.HasExited) {
-                $process.Kill($true)
-                if (-not $process.WaitForExit(5000)) { Write-Error 'Owned command process tree did not terminate' }
-              }
-              $process.Dispose()
+              try {
+                if (-not $process.HasExited) {
+                  $process.Kill($true)
+                  if (-not $process.WaitForExit(5000)) { $cleanupProblems += 'Owned command process tree did not terminate' }
+                }
+              } catch { $cleanupProblems += "Owned command cleanup: $_" }
+              try { $process.Dispose() } catch { $cleanupProblems += "Owned command disposal: $_" }
             }
-            if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout }
-            if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+            try { if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout } }
+            catch { $cleanupProblems += "Actual stdout replay: $_" }
+            try { if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr } }
+            catch { $cleanupProblems += "Actual stderr replay: $_" }
+            if ($cleanupProblems.Count) { throw ($cleanupProblems -join '; ') }
           }
       - uses: actions/upload-artifact@v4
         if: always()
