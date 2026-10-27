@@ -37,6 +37,33 @@ Windows/package/e2e gates. Follow the common merge/report rules; root merges.
 
 ## Status and next steps
 
+Current next-source slice, Root-owned2026-10-27: action registration now
+matches pinned bionic spawn.cpp354-376 by rejecting negative descriptors
+with EBADF before allocating/appending an action. Test74 uses real API34
+NDK callers in x86-64/arm64 ELF processes, checks15 error/errno controls
+and proves both spawn/spawnp still run real exit42 children afterward.
+Positive unopened descriptors remain accepted at registration. Latest
+integratione9859654 is merged. Scoped exec CI40458517945 at3e9f2e0d builds
+both NDK programs and passes existing host-JVM checks; production/runtime
+acceptance remains pending on full CI.
+All compilers and executable fixtures run in CI. See[the source checkpoint](exec4-actions.md).
+This does not fix the separately audited child-time open/dup2/fchdir,
+attributes, full fork or executable-environment contracts below.
+
+Root takeover checkpoint: final combined ci40438421809/b429220 is complete
+red only on2022's two counted known badssl connection-timeout checks;2025
+whole0, test67/all exec3 checks on both and actual package/both e2e pass.
+Root read all conclusions and five actual runtime/package/e2e logs. The
+original immutable9f/76b source retains full-green40430496516 attempt2 proof.
+No acceptance of the red combination or unchanged retry is claimed. Media's
+new coherent candidate includes verified76b, current native clock/width
+integration and deterministic local TLS fixtures; its full proof is pending.
+See exec4-recovery.md. Further spawn semantics remain a separate source slice.
+
+Temporary agent-slot handoff: see the compact [recovery checkpoint](exec4-recovery.md).
+Final combined CI40438421809 is monitored by root; leave its interval120 watch
+running and keep source/frozen refs unchanged until work resumes.
+
 Active own-runtime crash triage on wip/exec4, based on a06d930 (verified
 integration 94ccde1 code plus documentation). Frozen wip/exec3 is unchanged.
 Windows4 diagnostic CI40417632512 at cde1c79: Windows-2022 passes exec3;
@@ -161,8 +188,19 @@ Remaining-contract source audit while CI builds (no acceptance claims):
   child-descriptor/directory failure semantics with actual native programs;
   these are source-audit findings, not a cause assigned to the old crash.
 
-Root must coordinate latest-integration acceptance before merging this
-verified slice. The candidate includes integration94ccde1; it does not import
-the concurrent Native3 width/CPU or monotonic-clock candidates. No integration,
-main, PR or release operation was performed by this track. CMakeLists.txt adds
-only exec4_environment_test; no ci.yml or production Main.java edit was made.
+Latest-integration acceptance is now being prepared at root's direction.
+The first verified source9f25080 remains immutable on wip/exec4-live-environ;
+its docs-only head76b8d5c is also frozen as wip/exec4-live-environ-reviewed.
+Merged origin/phase4/integration630c20c into the active wip/exec4 branch without
+conflicts. Its code was verified by root at42cc1c0 / full CI40432541082;
+630c20c differs only by docs. This adds the real startup profile/code checks
+absent from9f25080. The new combined source requires its own full CI before
+acceptance. Concurrent Native3 width/CPU and monotonic-clock candidates remain
+outside it. Future spawn semantics stay in a separate next-source slice.
+Final combined full CI40438421809 runs at exact merge source
+b42922049201d5dc7ef1c1ca61cd7fb2db404220 on wip/exec4. Watch:
+C:\work\gesher-ci-review\exec4-final-combined-watch-40438421809.log,
+interval120. No combined result is claimed yet.
+No integration/main, PR or release operation was performed by this track.
+CMakeLists.txt adds only exec4_environment_test; no authored ci.yml or
+production Main.java edit was made.
