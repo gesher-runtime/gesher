@@ -1,10 +1,66 @@
 # Bounded CI process and output cleanup
 
 Coordinator-owned follow-up. ADR0078 and Windows test84 are reserved; no
-implementation or CI acceptance exists yet. Use a separate wip/ci-processes
-worktree before edits. Build and execute process fixtures only in CI.
+CI acceptance exists yet. Work in the separate wip/ci-processes worktree.
+Build and execute process fixtures only in CI.
 
 ## Status and next steps
+
+Split40554769899/source3d6979f2 is GREEN both Windows hosts; actual
+logs122367758689/122367759184 were read. Each has20 real controls and0failed,
+including all eight new split-start/wait cases and actual disposed native
+handles. This remains component-only proof, without a coherent full.
+
+The next source corrects actual N2Run/test44: its600s process default,
+working directory, environment and streamed stdout/stderr contract remain;
+timeouts or unfinished output return124, post-kill has5s and each reader10s.
+Finally disposes the real native handle. An opt-in CI diagnostic reports the
+actual SafeHandle.IsClosed only for test84; default output is unchanged.
+Five new actual cases include normal23/timeout/retained pipes plus child cwd
+and environment. All20 earlier cases remain. Changed-source CI is pending.
+
+### Earlier verified helper slices
+
+Corrected40552781028/source6dd5cc88 is GREEN both Windows hosts. Actual
+logs122360699800/122360700049 were read:12 controls each, all real
+RunTimed/SurfaceRun/InvokeOpenSl normal23/timeout/retained-output cases,
+then0failed. Surface's real120s+8s path and OpenSL's real120s path pass.
+This is component proof only; no full/runtime/package/e2e acceptance.
+
+The next source corrects split LocaleWait/test49 and WaitTimed/test50,
+retaining their original process deadline and10s per-pipe bounds. Incomplete
+readers are failures, unfinished Result is never read, post-kill is bounded
+and the process handle is disposed in finally. Test84 invokes actual
+LocaleStart/LocaleWait and StartTimed/WaitTimed, including an already-exited
+real parent with a live pipe-holding descendant, checks actual native-handle
+disposal and bounds cleanup by owned PID/image. Previous12 controls remain.
+Changed-source CI and coherent full remain pending.
+
+### Earlier resumed source and fixture history
+
+Resumed source extends the same ADR0078/test84 scope to actual SurfaceRun
+and InvokeOpenSl. SurfaceRun retains500s phase,120s exit and8s SIGQUIT
+diagnostic bounds, adds finite post-kill/final cleanup and finally disposal,
+and returns-1 for timed-out completion. The existing pixel/GL oracles remain
+unchanged and now also require actual successful process completion.
+The test76 file is imported exactly from coordinator-authorized frozen
+OpenSL58a24583d06432f0f025a7e845fcdbca885989e0 (docs above verified
+d10bea3a98bb8dfe76972209b6aff5df4fed58ec/full40476766790), changing only
+InvokeOpenSl's bounded termination/read/disposal. No Media worktree is edited.
+Test84 compiles the real fixture and invokes all three actual helper bodies
+for normal/23/timeout/retained-output cases. SurfaceRun uses file redirection,
+so its exited-parent/retained-file case must finish without waiting for EOF;
+the two pipe helpers must fail incomplete EOF within their explicit bounds.
+All helper defaults remain unchanged. Only local PowerShell parsing and
+whitespace checks are allowed; changed-source CI and full proof are pending.
+Scoped40551845130/source1b9f683f is red on both hosts after all four actual
+SurfaceRun cases pass, including the unchanged120s timeout and SIGQUIT path.
+The fixture incorrectly supplied an Exe parameter from a later OpenSL helper;
+the authorized frozen helper instead uses slHost/dalvikvm.exe. The corrected
+fixture configures that actual path and preserves its real signature. No
+OpenSL runtime result follows from the failed harness, and no unchanged retry
+or full acceptance is claimed. Many other legacy helpers remain inventoried
+for subsequent bounded slices after this changed-source component proof.
 
 Root's source review of the Surface invalidation candidate found that legacy
 SurfaceRun/test76 process helpers can wait without a bound after attempting
@@ -24,3 +80,39 @@ normal exit, nonzero exit, timeout, retained descendant pipe handles and
 failed/incomplete cleanup with actual CI-only subprocesses. Do not turn a
 timeout or unfinished reader into success. Verify both Windows versions and
 the unchanged full suite, package and e2e before claiming acceptance.
+
+First source slice is on C:\work\gesher-ci-processes, wip/ci-processes from
+verified13603d54. Only shared test50 RunTimed is corrected so far: preserve
+native status/-1, bounded post-kill/output completion, no unfinished Result
+read and finally disposal. Test84 compiles a real console fixture in CI and
+checks normal/23/timeout/retained-descendant-pipes, including owned fixture
+cleanup. The narrow ci-processes workflow invokes that actual helper without
+running the rest of test50. No local compiler/native fixture was executed.
+Scoped compilation/runtime, full CI and remaining Surface/test76 helpers
+are pending. ADR0078 records the exact limited scope and remaining cases.
+Scoped40524879609/c9a87f66 failed both hosts before compiling or executing
+the fixture: csc CS1504 reports a missing source path ending in
+tests/windows/Process84.cs. The corrected invocation resolves and logs the
+actual absolute fixture/compiler/output paths before calling csc, avoiding
+relative-segment interpretation. The helper's actual process behavior is
+still unverified; the old failure is retained and not retried unchanged.
+Changed-source40525679532/598cf01c compiles the actual fixture on both hosts
+and prints all four normal/23/timeout/retained-pipe PASS records followed by0
+test(s) failed. Its jobs remain red: the Actions PowerShell wrapper inherits
+the intentional final negative helper result through LASTEXITCODE. The
+scoped driver now explicitly exits its asserted failure count, exactly as
+the full run-tests.ps1 driver already does. All case expectations and helper
+status behavior remain unchanged. No full/product acceptance yet.
+
+## Owner-requested stop checkpoint
+
+Work stopped on2026-10-27. Changed-source scoped40526183946 at
+ec0f003cc149a0f985b5f280924477dc20414872 is GREEN on both Windows hosts.
+Root independently read actual122266298232/122266298625 logs: each compiles
+the real fixture and has four mandatory normal/23/timeout/retained-pipe
+PASS records, then0 test(s) failed and successful job conclusion. The last
+driver exits its asserted failure count; all negative helper statuses remain
+required. No full has been dispatched. Preserve the narrow source/proof;
+SurfaceRun/test76 and other legacy-helper work remains open. Coordinate
+broader full CI with the recurring Web3 investigation. No further changes
+or dispatches after the owner's stop request.

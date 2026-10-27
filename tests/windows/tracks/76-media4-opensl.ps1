@@ -26,16 +26,25 @@ function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [st
   $info.Environment['GESHER_MEDIA_TRACE_RECORD'] = '1'
   foreach ($key in $Environment.Keys) { $info.Environment[$key] = $Environment[$key] }
   $process = [Diagnostics.Process]::Start($info)
+  try {
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
   $timedOut = -not $process.WaitForExit(120000)
-  if ($timedOut) { $process.Kill($true); $process.WaitForExit() }
   $text = ''
-  if ($stdout.Wait(5000)) { $text += $stdout.Result } else { $timedOut = $true }
-  if ($stderr.Wait(5000)) { $text += $stderr.Result } else { $timedOut = $true }
+  if ($timedOut) {
+    $text += "`n(timed out after 120 s)"
+    try { $process.Kill($true) } catch { $text += "`n(process kill failed: $_)" }
+    if (-not $process.WaitForExit(5000)) { $text += "`n(process still alive five seconds after kill)" }
+  }
+  foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+    try {
+      if ($pipe.Task.Wait(5000)) { $text += $pipe.Task.Result }
+      else { $timedOut = $true; $text += "`n($($pipe.Name) did not complete within five seconds)" }
+    } catch { $timedOut = $true; $text += "`n($($pipe.Name) read failed: $_)" }
+  }
   $code = if ($timedOut) { -1 } else { $process.ExitCode }
-  $process.Dispose()
   return @{ Text = $text; Code = $code }
+  } finally { $process.Dispose() }
 }
 
 function CheckOpenSl([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra, [string] $Caller = 'JNI') {
