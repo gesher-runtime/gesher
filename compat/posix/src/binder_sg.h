@@ -22,8 +22,10 @@ inline bool Range(uint64_t at, uint64_t size, uint64_t limit) {
 }
 
 inline bool Dimensions(uint64_t data, uint64_t offsets, uint64_t extra) {
+  if (data > kMaxBytes) return false;
+  const uint64_t aligned_data = (data + 7) & ~uint64_t{7};
   return offsets % sizeof(binder_size_t) == 0 && extra % 8 == 0 &&
-      Range(data, offsets, kMaxBytes) && Range(data + offsets, extra, kMaxBytes);
+      Range(aligned_data, offsets, kMaxBytes) && Range(aligned_data + offsets, extra, kMaxBytes);
 }
 
 inline size_t ObjectSize(uint32_t type) {

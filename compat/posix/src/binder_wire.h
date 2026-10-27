@@ -51,6 +51,12 @@ enum Op : uint32_t {
   kWriteRead = 3,
   // -> {request, argument bytes}; <- {status (-errno or 0), argument bytes}
   kIoctl = 4,
+  // -> {buffer id}; <- {status}. Ownership of all duplicated FD handles
+  // passes to the receiver before it installs its local descriptors.
+  kClaimBuffer = 5,
+  // -> {buffer id, accepted (u32)}; <- {status}. A failed allocation/user
+  // copy abandons the delivery, unwinds its transaction and releases it.
+  kFinishBuffer = 6,
 };
 
 // The pipe name of a device: \\.\pipe\gesher-binder-<device>.
