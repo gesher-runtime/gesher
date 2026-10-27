@@ -1,8 +1,8 @@
 # Bounded CI process and output cleanup
 
 Coordinator-owned follow-up. ADR0078 and Windows test84 are reserved; no
-implementation or CI acceptance exists yet. Use a separate wip/ci-processes
-worktree before edits. Build and execute process fixtures only in CI.
+CI acceptance exists yet. Work in the separate wip/ci-processes worktree.
+Build and execute process fixtures only in CI.
 
 ## Status and next steps
 
@@ -24,3 +24,13 @@ normal exit, nonzero exit, timeout, retained descendant pipe handles and
 failed/incomplete cleanup with actual CI-only subprocesses. Do not turn a
 timeout or unfinished reader into success. Verify both Windows versions and
 the unchanged full suite, package and e2e before claiming acceptance.
+
+First source slice is on C:\work\gesher-ci-processes, wip/ci-processes from
+verified13603d54. Only shared test50 RunTimed is corrected so far: preserve
+native status/-1, bounded post-kill/output completion, no unfinished Result
+read and finally disposal. Test84 compiles a real console fixture in CI and
+checks normal/23/timeout/retained-descendant-pipes, including owned fixture
+cleanup. The narrow ci-processes workflow invokes that actual helper without
+running the rest of test50. No local compiler/native fixture was executed.
+Scoped compilation/runtime, full CI and remaining Surface/test76 helpers
+are pending. ADR0078 records the exact limited scope and remaining cases.
