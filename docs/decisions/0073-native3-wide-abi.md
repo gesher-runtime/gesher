@@ -1,7 +1,7 @@
 # 0073. native3-wide: pinned multibyte and LP64 wide ABI
 
 Status: proposed; independent conversion/integer/floating-grammar reference
-and compilation verified in ci 40423004909 at 569b497. Production runtime
+and compilation verified in ci 40425021540 at eb9f964. Production runtime
 awaits full CI. This does not close native3/0062.
 
 ## Context
@@ -95,7 +95,7 @@ The original FreeBSD wide-time wrapper also runs with pinned conversions
 and a host narrow C formatter, verifying its own UTF-32 buffers and error
 precedence without claiming an independent bionic tzcode implementation.
 
-Scoped ci 40423004909 verifies 237 reference assertions with zero failures,
+Scoped ci 40425021540 verifies 248 reference assertions with zero failures,
 the production object under pinned llvm-mingw/-Werror and both NDK library
 builds. test66 consumes actual test44 process logs for x86_64/arm64 dalvikvm
 and APK single/device modes. Their production runtime proof and final full
