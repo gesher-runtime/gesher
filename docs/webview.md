@@ -5,6 +5,18 @@ Edge WebView2 (the Chromium runtime Windows 10/11 ship), with no WebView APK.
 Work happens on branch `wip/webview`; the decision record is
 [ADR 0041](decisions/0041-webview-webview2.md).
 
+Current Web3 acceptance: full40466021634 at
+160e25e8a77857cc50dd3e7c76e0616fb9fd1043 combines the prepared Web3 code
+with Windows4 and verified process-exit freshness. Both actual Windows logs
+have14 Web3 PASS, five single-process VM0, six launcher0 and six fresh
+child0 records, and zero failed tests. All28 jobs, actual package23 and both
+ten-app e2e sets pass; Root independently accepted the bounded source.
+The formerly open backing-cache prerequisite is closed by the included
+generation/PID-aware exit implementation and actual app0/23/0 controls.
+[Frozen combined evidence](handoff/tracks/windows4-final.md) supersedes the
+older diagnostic status notes below. Web4/ADR0072 contracts remain open;
+this result does not establish arbitrary accessibility or screen-reader UX.
+
 ## How it fits
 
 ```
@@ -349,6 +361,15 @@ drawing in a window that is covered or off the desktop;
   apps that return false get the Windows dialog.
 
 ### Status and next steps (web3)
+
+For final coherent proof, this prepared Web3 source is merged into the owned
+Windows4 candidate rather than dispatched again unchanged. That candidate
+also includes verified integration30deb08c/exit freshness, ready Exec4test74,
+verified Media4formatc5962291 and only the scoped-verified Net4 cache helper.
+One fresh full source must prove all14Web3 checks, all wrapper/child exits and
+the Windows4/other scoped tests together, plus actual package and both ten-app
+e2e suites. The earlier strict4f25387 result below remains separate evidence;
+it is not retroactively upgraded to fresh-exit or combined-source acceptance.
 
 Prepared source now includes coordinator integration
 f17d03b1a96f4f0f62ad1d1101ec1eb01b93873d (merge079e0d4b). Root personally

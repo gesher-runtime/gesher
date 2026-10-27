@@ -12,6 +12,23 @@ semantics with services3/binder2. Preserve the tested shared property model.
 Acceptance requires actual semantic tests and full Windows/package/e2e CI,
 not an export inventory or a shell-only representation of missing behavior.
 
+## Verified process-exit results
+
+The package's cached exit result is bound to a unique start sequence and
+actual PID. A new start clears the old result; late/conflicting callbacks
+cannot publish an older success. The pending/death observer handoff keeps
+the destructive native exit query under its ownership lock. Launcher fails
+when the latest result remains unknown instead of manufacturing success.
+
+Accepted as a bounded slice in full CI 40455262527 at
+29fa0bdf665a2cc5ee707524e7edd2a670391451, merged35fba0ab. Both Windows
+suites have0 failed tests, actual ART generation/PID controls and the real
+same-package app0/23/0 versus launcher0/1/0 sequence. Installed package and
+both ten-app e2e pass. The merged code equals the verified source.
+This is not a cause attribution for the older UIA/native-crash reports.
+Untracked adopted exits remain unknown; the remaining exec4 contracts and
+this aggregate ADR's proposed status stay open.
+
 The first priority is a sporadic own-process native crash observed in
 Windows4 diagnostic CI40417632512 (single-process exec3 APK on Windows-2025).
 It follows the read-mode popen assertion and precedes posix_spawn's next
@@ -66,3 +83,14 @@ establish the precise cause of the older sentinel crash. Only the live shared-
 library environment correction is verified here; the initial executable UTF-8
 array and all remaining process/console/log/TLS/fork/property contracts remain
 open. Root owns latest-integration acceptance and merging.
+
+## Verified action-registration slice
+
+Full40466021634 at160e25e8 verifies test74's actual x86-64/arm64 NDK callers
+on both Windows runners:15 negative descriptor registrations return EBADF
+without changing errno or corrupting the action list, positive unopened
+descriptors register, and real spawn/spawnp children wait with exit42.
+Both full suites0, package23 and both ten-app e2e0 were independently read
+by root; merged6297e80a matches the verified non-doc tree. This accepts only
+registration boundaries. Ordered child-side action execution/failure127 is
+the separate proposed ADR0076, while the aggregate ADR0074 remains open.

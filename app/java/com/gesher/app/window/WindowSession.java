@@ -232,6 +232,7 @@ public final class WindowSession extends IWindowSession.Stub {
         int configRotation;
         /** A top-level window: where the touch keyboard covers its client area (IME insets). */
         final Rect ime = new Rect();
+        boolean imeVisible;
 
         AppWindow(IWindow client) {
             this.client = client;
@@ -449,11 +450,11 @@ public final class WindowSession extends IWindowSession.Stub {
         // A popup lays out in its app window's bounds (its display), as a dialog does in its
         // task's on a device.
         AppWindow root = root(w);
-        Rect bounds = root.bounds.isEmpty() ? displayBounds() : new Rect(root.bounds);
+        Rect bounds = root.bounds.isEmpty() ? TaskConfiguration.display(root.rotation) : new Rect(root.bounds);
         InsetsState state = out.insetsState;
         state.set(new InsetsState(), true /* copySources */);
         state.setDisplayFrame(bounds);
-        if (!root.ime.isEmpty()) {
+        if (root.imeVisible) {
             // The touch keyboard over the app window (windows3 track): the IME's insets, as
             // the IME window's are on a device. adjustResize and adjustPan follow
             // (ViewRootImpl, DecorView).
@@ -473,17 +474,10 @@ public final class WindowSession extends IWindowSession.Stub {
                 WindowConfiguration.WINDOWING_MODE_FULLSCREEN, requestedWidth, requestedHeight,
                 w.requestedVisibleTypes, 1f /* compatScale */, frames);
         Configuration global = processConfiguration();
-        Configuration override = new Configuration();
-        if (!root.bounds.isEmpty() || root.rotation != android.view.Surface.ROTATION_0) {
-            // Resized by the user: the configuration of a freeform task of the window's size
-            // (TaskConfiguration, docs/lifecycle.md): its bounds (ViewRootImpl computes its
-            // frames from them, relayoutWindow's local layout), its screen size in dp, smallest
-            // width, orientation and screen layout. An Activity that handles those changes gets
-            // onConfigurationChanged (ViewRootImpl's activity config callback); the system
-            // server relaunches one that does not (resizeTask). A task turned for its
-            // Activity's orientation (windows3 track) has the display's rotation too.
-            override = TaskConfiguration.override(bounds, root.rotation);
-        }
+        // Every task overrides its full geometry, including appBounds at natural
+        // rotation. Otherwise an unfocused portrait Activity inherits the shared
+        // landscape appBounds even though its own maxBounds/rotation are correct.
+        Configuration override = TaskConfiguration.override(bounds, root.rotation);
         out.mergedConfiguration.setConfiguration(global, override);
         out.syncSeqId = 0;
     }
@@ -639,6 +633,9 @@ public final class WindowSession extends IWindowSession.Stub {
                 }
                 w.handler.post(() -> applyResize(key));
                 break;
+            case WindowInput.EVENT_ACTIVATED:
+                w.handler.post(() -> onActivated(w));
+                break;
             case WindowInput.EVENT_FOCUS:
                 w.handler.post(() -> {
                     if (w.focused != (a != 0)) {
@@ -664,7 +661,8 @@ public final class WindowSession extends IWindowSession.Stub {
 
     /**
      * gesher::WindowEvent::kInputPane (compat/hwui/window): the Windows touch keyboard
-     * (IFrameworkInputPane) covers rows a to b of the window's client area (a = -1: none).
+     * (IFrameworkInputPane) covers rows a to b of the window's client area
+     * (a = -1: none; a = -2: visible floating pane, no edge inset).
      */
     private static final int EVENT_INPUT_PANE = 30;
 
@@ -683,10 +681,13 @@ public final class WindowSession extends IWindowSession.Stub {
         if (w == null || w.nativeWindow == null || w.popup) return;
         Rect ime = top < 0 || bottom <= top ? new Rect()
                 : new Rect(0, top, w.nativeWindow.getWidth(), bottom);
-        if (ime.equals(w.ime)) return;
+        boolean visible = top == -2 || !ime.isEmpty();
+        if (ime.equals(w.ime) && visible == w.imeVisible) return;
         w.ime.set(ime);
+        w.imeVisible = visible;
         log("window \"" + w.title() + "\": the touch keyboard "
-                + (ime.isEmpty() ? "covers nothing (IME insets none)"
+                + (visible && ime.isEmpty() ? "floats over content (IME visible, edge insets none)"
+                        : ime.isEmpty() ? "covers nothing (IME insets none)"
                         : "covers rows " + top + "-" + bottom + " (IME insets "
                                 + ime.toShortString() + ")"));
         List<AppWindow> group = new ArrayList<>();
@@ -702,6 +703,16 @@ public final class WindowSession extends IWindowSession.Stub {
                     new android.util.MergedConfiguration(), new InsetsState(),
                     new android.view.InsetsSourceControl.Array());
             layout(v, v.requestedWidth, v.requestedHeight, result);
+            log("IME layout \"" + v.title() + "\": requested " + v.requestedWidth + "x" + v.requestedHeight
+                    + ", frame " + result.frames.frame.toShortString()
+                    + ", parent " + result.frames.parentFrame.toShortString()
+                    + ", client " + v.nativeWindow.getWidth() + "x" + v.nativeWindow.getHeight()
+                    + ", softInput 0x" + Integer.toHexString(v.attrs.softInputMode)
+                    + ", fitTypes 0x" + Integer.toHexString(v.attrs.getFitInsetsTypes())
+                    + ", fitSides 0x" + Integer.toHexString(v.attrs.getFitInsetsSides())
+                    + ", privateFlags 0x" + Integer.toHexString(v.attrs.privateFlags)
+                    + ", flags 0x" + Integer.toHexString(v.attrs.flags)
+                    + ", systemUi 0x" + Integer.toHexString(v.attrs.systemUiVisibility | v.attrs.subtreeSystemUiVisibility));
             if (v.popup) v.frame.set(result.frames.frame);
             try {
                 v.client.resized(result, false /* reportDraw */, true /* forceLayout */,

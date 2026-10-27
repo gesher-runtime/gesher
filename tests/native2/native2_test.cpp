@@ -11,12 +11,13 @@
 //             app library by bare name, libc++_shared already loaded;
 //   files:    flock, the execute bit, symbolic links, inotify IN_MODIFY
 //             before close;
+//   ifaddrs:  real Linux-layout interface addresses/masks/link records and
+//             independent getifaddrs/freeifaddrs allocation lifetime;
 //   symbols:  every symbol named in the `symbols` file (lines
 //             "<set> <library> <symbol> <bind>") through dlsym(RTLD_DEFAULT).
 //             Executable-only __libc_init (LAUNCHER) is reported separately;
 //             gesher-exec's real program runs exercise that startup entry.
-// The last line is "native2: all passed" when every check of the first three
-// parts held.
+// The last line is "native2: all passed" when every checked part held.
 
 #include <jni.h>
 
@@ -67,6 +68,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "net4_ifaddrs.h"
 
 namespace {
 
@@ -445,7 +448,7 @@ Part Dlopen() {
       {"libGLESv1_CM.so", "glClear", true}, {"libGLESv2.so", "glDrawArrays", true},
       {"libGLESv3.so", "glDrawArraysInstanced", true}, {"libOpenSLES.so", "slCreateEngine", true},
       {"libaaudio.so", "AAudio_createStreamBuilder", true}, {"libjnigraphics.so", "AndroidBitmap_getInfo", true},
-      {"libmediandk.so", "AMediaCodec_createDecoderByType", false},
+      {"libmediandk.so", "AMediaFormat_new", true},
       {"libcamera2ndk.so", "ACameraManager_create", false}, {"libvulkan.so", "vkCreateInstance", false},
   };
   std::string present, absent;
@@ -690,7 +693,11 @@ std::vector<std::string> Symbols(const std::string& path) {
 #include "native3_unicode.inc"
 
 std::string Run(const std::string& dir, const std::string& symbols) {
-  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir)};
+  net4::Result interfaces = net4::RunIfaddrs();
+  Part interface_part{"ifaddrs"};
+  interface_part.failures = interfaces.failures;
+  interface_part.notes.push_back(interfaces.Summary());
+  std::vector<Part> parts = {Extras(dir), Unicode(), Dlopen(), Files(dir), interface_part};
   std::string out;
   bool ok = true;
   for (const Part& p : parts) {

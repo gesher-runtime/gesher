@@ -149,16 +149,164 @@ closure, CI, PR description and installer verification gates remain in force.
 The coordinator alone merges integration/main and publishes the release;
 track agents keep their existing branch-only scope.
 
-Local-load follow-up (owner chat, 2026-10-26): C/C++ fixture/compiler
-checks also move to CI. Do not start local C/C++ compilations, even for
-small Gesher-only fixtures; use source inspection/edits and lightweight
-script checks locally. The coordinator and agents checked the process list
-after the report and found no remaining compiler process. The earlier
-local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+Local-load follow-up (owner chat, 2026-10-26, reaffirmed 2026-10-27): every
+C/C++, Java and C# compilation and executable fixture runs in CI, including
+small Gesher-only probes. Local work is source inspection/edits, Git and
+lightweight script parsing. Root rechecked live compiler/build-tool processes
+on2026-10-27 and found none; agents received the same explicit instruction.
+Earlier local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
+
+Exit freshness is merged as35fba0ab: full CI 40455262527 at
+29fa0bdf665a2cc5ee707524e7edd2a670391451 passed attempt1,22 success/6 skips.
+Root read both whole0 Windows logs, test70's actual ART generation/PID
+controls and normal0/abnormal23/normal0 app results with launcher0/1/0,
+package23 actual installed UI/input/uninstall passes and both ten-app e2e0.
+Head7d219f59 adds docs only. The only merge conflict was the copied brief;
+the accepted source/history was retained. Merged code exactly matches29fa0bdf,
+so rule-g requires no extra integration CI. Prior scoped40452236687's
+omitted fixture PID remains recorded; corrected scoped40454416483 built it.
+Windows4/Web3 now need their final full run on this merged prerequisite
+([brief](tracks/exec4-exit.md)). Root independently read strict Web3 full
+40449137605/4f253878: both14 scoped passes, both whole0, package23 passes
+and both nine-app e2e0. Its child-zero values still use the older cache.
+
+Media4's format slice is full-verified atc5962291 in40459815375, attempt1:
+22 success/6 skips, both Windows0 and ten format PASS lines each, package23
+actual passes and both ten-app e2e0. Root read all five critical logs and
+64 semantic detail rows per runner across both ABIs and four execution paths.
+Immutable wip/media4-format-verified=ba3c1c2d adds docs only, including exact
+verification objects for143 old inventory entries (21 functions/122 data).
+Root independently checked that every existing field/row remains unchanged;
+30 further key objects are separate. No codec/DRM/hardware functionality is
+inferred from a key name;170 old media entries remain. Earlier
+40456299720/92e91423 stays red:12 missing int32_t/int64_t header definitions,
+no Windows proof. The cstdint prerequisite/early compile correct that source.
+Coherent Windows4/Web3 full40466021634 at160e25e8 is merged as6297e80a,
+with docs-only head92cf470c: all28 jobs22success/6skip, both Windows0,
+38 Windows4/14 Web3/10 format/2 spawn-registration passes each, package23
+and both ten-app e2e0. Root independently read metadata and all five actual
+critical logs, including six fresh child-zero markers and the real0/23/0
+exit controls on each runner. The merged non-doc tree exactly matches160;
+rule-g needs no extra integration CI. Physical keyboard/candidate discovery,
+rich TSF and Web4 limits remain explicit in
+[the frozen evidence report](tracks/windows4-final.md).
+
+Net4 full40462148835/719ae176 failed both Windows tests: its oracle queried
+nine Up NDIS adapters with neither IP protocol bound; Windows2022 also
+reported1250 Hz input as1153.3 Hz without loss counters. Corrected narrow
+oracle40467169771/55a17156 passes both runners, skipping only interfaces
+supporting neither protocol and retaining strict actual IP metadata checks.
+Full40469857757/646f9fb1 is green with that correction and the reviewed
+four-file AAudio slice78ee5e12: explicit lossless capacity/zero-loss counters,
+unchanged frequency/frame gates and an independent controlled-overrun probe.
+Root independently read all28 conclusions/five critical logs: both0, both
+ABI ART/standalone and four APK contexts, strict actual host-oracle9 rows,
+package23 and both ten-app e2e0. The old audio cause
+remains unproved; no Net4 inventory closure/integration merge is claimed.
+Coherent full40499454478/694a4cd6 imports accepted Windows6297e80a and is
+merged as bc6e05be, with frozen docs-only head1638c908. Root independently
+read all28 job conclusions and five actual critical logs: both whole suites0,
+strict ifaddrs host oracle9/entries9 for each ABI, package23 and both complete
+ten-app e2e0. The merged non-doc tree equals that verified source; rule-g
+needs no extra integration run. Only getifaddrs/freeifaddrs verification
+objects are refreshed; all143 format proofs and historical fields remain
+unchanged. The other82 Net4 inventory entries remain open. See
+[the frozen evidence report](tracks/net4-ifaddrs-final.md).
+Test71 belongs to Media4,72 to
+Net4 and73 to AOT3 shared-library work. Root's test74 covers pinned negative-fd
+spawn-action registration; scoped exec CI40458517945 at3e9f2e0d builds both
+NDK ABI callers, but production/runtime acceptance awaits full CI
+([brief](tracks/exec4-actions.md)); full40466021634 now proves both ABI
+registration callers and their real child waits in the merged code.
+Root's ordered spawn child-actions full40502225202 is red at exact
+0808ba71b62ea784432de52f31bd3f86c9e2e3ad, containing accepted Windows160
+and current-at-dispatch integration7b49a718. Old40498406783/e8e827e5 was
+cancelled/superseded for a further source finding: UCRT uses-2 for unbound
+stdio, which must never be used as a Win32 file handle. The new actual
+no-console probe requires raw-2, real shim spawn/wait, an NDK child with
+closed0/exit42 and unchanged parent state on both ABIs. Scoped40472829064/
+5f2653c6 and corrected
+40497922800/47733cd3 build both actual NDK callers. Peer review found closed
+stdio became NUL during transport; the corrected bootstrap closes only
+those placeholders before actions, with actual closed0/failed-dup0 controls.
+Both Windows suites report4 top-level failures: each ABI's successful
+Unicode directory-action cases exit127 rather than42, and each actual
+no-console fixture observes a valid raw stdin handle (88/104/108) rather
+than the expected-2. Expected child127, failed-action short circuit,
+close-on-exec, caller PATH and closed-parent-stdin controls pass. Root is
+investigating both failures; neither cause nor runtime acceptance is claimed.
+Test75 is the ARM sticky-FPSR slice,
+76 belongs to Media4 OpenSL and77 to root's ordered spawn child-actions
+([brief](tracks/exec4-spawn.md));78 belongs to AAudio policy,79 to NDK muxer,
+80 to Surface invalidation,81 to Locale2 persistence,82 to Net4 legacy
+resolver,83 to libcore file-copy natives and84 to bounded CI process cleanup
+(next free85).
+Shared-library implementation and the new slices are
+not verified AOT3/exec4/FPSR completion.
+
+Native FPSR coherent full40498782924/8ec4bf3c imports accepted Windows160
+and integration6297 and is independently root-accepted as a bounded leaf:
+29jobs23success/6skip, both Windows0 with five FPSR/five FPCR/six wide
+passes, package23 and both complete ten-app e2e0. Root also read the actual
+independent QEMU producer's10384-row proof. Frozen docs-only head75e7ef29
+predates accepted Net4; coherent Locale2 full40516054280/ca4ed3cf now combines
+both leaves, but its union is not accepted yet.
+Scoped40475532910/93f7637a passes all10384 actual
+QEMU/production comparisons on both hosts, retaining original cold/nested/
+thread and numeric/status controls. Full environment/default object/host-libm
+and remaining ARM ISA contracts stay open.
+AOT shared-library full40503913306/c35abe7c failed both Windows runners on
+the real missing UnixCopyFile.transfer JNI entry before graph assertions;
+[libcore-io](tracks/libcore-io.md) owns that gap. Corrected fixture-only
+stream-copy source96b12ab6 is in full40512344714 after accepted Net4bc6.
+Neither the earlier corrected compile-only40499783709/a79ae0f1 nor bounded
+source peer review establishes runtime completion. Empty default after-library resource, actual
+DLC paths, secondary dex and static SDK libraries remain explicit gaps.
+
+OpenSLd10/full40476766790 and nativee569/full40477536464 are independently
+root-verified bounded slices: both Windows0,14/16 scoped passes, package23
+and both ten-app e2e0 in each run. The native slice has actual two-ABI ELF,
+PCM callbacks/independent TLS and manifest allow/deny contexts. Root verified
+the exact34 IID metadata additions preserve every old field/143 format
+proofs and all53 UUID fields match pinned primary bytes. No integration
+merge is claimed before a coherent Windows/media source passes.
+AAudioafeb/full40487303965 attempt2 remains red for actual initial blank
+TIC80 on Windows2025; both whole suites0/16 policy passes, package23/notice
+hash and Windows2022 e2e0 do not waive that failure. A separate Surface
+candidate is being prepared with strict producer-only/no-input regression;
+the invalidation-latch source defect is not yet proved to have caused TIC80.
+Locale2/ADR0066 scoped40512781936/004fff10 passes21 actual groups on each
+Windows runner. Its coherent full40516054280/ca4ed3cf imports accepted Net4
+and the frozen FPSR leaf; package/e2e/full-suite acceptance is pending.
+Privileged/cross-package/multiuser authority and broader Windows language/
+format contracts remain open.
+
+ARM FPCR source49ade205 is independently full-verified in40451978087,
+attempt2:22 success/6 skips, both Windows0, five scoped FPCR passes each,
+six wide-conversion passes each, package23 passes and both nine-app e2e0.
+Only Windows2022's known untrusted-root.badssl.com TCP timeout was retried;
+actual certificate rejection then passed. Root read metadata and all five
+critical logs. Frozen wip/arm64-2-fpcr-verified=dab49ab0 is docs only above
+that source; it predates Media3 and exit-freshness, so no integration merge
+is claimed yet. Complete FPSR/env/default-object/host-CRT rounding remains open.
+
+Net4 full40456605869 was superseded after its standalone invocation omitted
+argv0; the corrected full40456946272/fa8b29e2 then failed before javac on a
+cached wificond sparse-checkout.lock. The prior cancelled framework's
+always-save captured that lock. Corrected scoped framework40459897967
+recovered the exact poisoned cache;40461056132/9bb847a8 passes ten CI-only
+controls, including real active Git processes using -C/--git-dir/--work-tree.
+The helper removes only known stale locks on isolated Linux CI restores,
+refuses active Git/unknown paths and never saves a cancelled/locked snapshot.
+No timeout, skipped oracle or infrastructure failure is accepted
+as a passing Net4 runtime check.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0076 after reserving native3-time/0075 for ART monotonic elapsed clocks
+ADR is 0079 after reserving libcore-io/0077 for the observed Files.copy JNI
+gap ([brief](tracks/libcore-io.md)) and ci-processes/0078 for legacy process
+cleanup waits ([brief](tracks/ci-processes.md)); exec4-spawn/0076 covers ordered child file actions
+([brief](tracks/exec4-spawn.md)), native3-time/0075 for ART monotonic elapsed clocks
 ([brief](tracks/native3-time.md)), native3-wide/0073 for wide/multibyte ABI contracts
 ([brief](tracks/native3-wide.md)) and exec4/0074 for explicit exec3 leftovers
 ([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/

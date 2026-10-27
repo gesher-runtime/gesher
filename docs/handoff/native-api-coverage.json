@@ -3618,7 +3618,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40499454478,
+        "attempt": 1,
+        "sha": "694a4cd6b067f1deea87015bceb2ad2160260154",
+        "status": "verified-interface-address-contexts",
+        "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
+      }
     },
     {
       "library": "libc.so",
@@ -3930,7 +3937,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40499454478,
+        "attempt": 1,
+        "sha": "694a4cd6b067f1deea87015bceb2ad2160260154",
+        "status": "verified-interface-address-contexts",
+        "scope": "Both ABIs through dalvikvm JNI, APKs in both modes and standalone ELF on both Windows runners: real LP64 lists, loopback/address/netmask/broadcast, link index/MAC, twelve simultaneously owned list mutation/free cycles and freeifaddrs(nullptr). Standalone matches nine independent Windows IP-bound link/address rows. Allocation failures, down/unbound adapters, other physical adapters and routing contracts remain open."
+      }
     },
     {
       "library": "libc.so",
@@ -8974,7 +8988,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -8986,7 +9007,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -8998,7 +9026,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9010,7 +9045,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9022,7 +9064,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9034,7 +9083,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9046,7 +9102,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9058,7 +9121,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9070,7 +9140,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9082,7 +9159,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9094,7 +9178,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9106,7 +9197,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9118,7 +9216,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9130,7 +9235,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9142,7 +9254,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9154,7 +9273,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9166,7 +9292,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9178,7 +9311,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9190,7 +9330,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9202,7 +9349,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9214,7 +9368,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9226,7 +9387,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9238,7 +9406,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9250,7 +9425,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9262,7 +9444,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9274,7 +9463,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9286,7 +9482,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9298,7 +9501,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9310,7 +9520,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9322,7 +9539,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9334,7 +9558,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9346,7 +9577,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9358,7 +9596,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9370,7 +9615,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9382,7 +9634,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9394,7 +9653,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9406,7 +9672,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9418,7 +9691,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9430,7 +9710,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9442,7 +9729,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9454,7 +9748,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9466,7 +9767,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9478,7 +9786,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9490,7 +9805,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9502,7 +9824,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9514,7 +9843,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9526,7 +9862,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9538,7 +9881,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9550,7 +9900,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9562,7 +9919,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9574,7 +9938,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9586,7 +9957,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9598,7 +9976,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9610,7 +9995,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9622,7 +10014,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9634,7 +10033,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9646,7 +10052,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9658,7 +10071,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9670,7 +10090,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9682,7 +10109,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9694,7 +10128,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9706,7 +10147,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9718,7 +10166,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9730,7 +10185,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9742,7 +10204,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9754,7 +10223,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9766,7 +10242,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9778,7 +10261,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9790,7 +10280,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9802,7 +10299,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9814,7 +10318,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9826,7 +10337,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9838,7 +10356,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9850,7 +10375,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9862,7 +10394,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9874,7 +10413,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9886,7 +10432,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9898,7 +10451,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9910,7 +10470,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9922,7 +10489,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9934,7 +10508,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9946,7 +10527,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9958,7 +10546,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9970,7 +10565,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9982,7 +10584,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -9994,7 +10603,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10006,7 +10622,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10018,7 +10641,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10030,7 +10660,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10042,7 +10679,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10054,7 +10698,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10066,7 +10717,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10078,7 +10736,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10090,7 +10755,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10102,7 +10774,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10114,7 +10793,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10126,7 +10812,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10138,7 +10831,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10150,7 +10850,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10162,7 +10869,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10174,7 +10888,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10186,7 +10907,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10198,7 +10926,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10210,7 +10945,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10222,7 +10964,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10234,7 +10983,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10246,7 +11002,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10258,7 +11021,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10270,7 +11040,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10282,7 +11059,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10294,7 +11078,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10306,7 +11097,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10318,7 +11116,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10330,7 +11135,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10342,7 +11154,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10354,7 +11173,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10366,7 +11192,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10378,7 +11211,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10390,7 +11230,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10402,7 +11249,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10414,7 +11268,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -10426,7 +11287,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-data-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pointer data object, exact pinned AOSP string value and ordinary typed-key storage; this does not implement the codec/DRM/hardware contract named by the key."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11626,7 +12494,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Old entries removed without changing failed outputs; typed reuse and copy independence. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11638,7 +12513,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Target replacement, null-source/destination errors, UTF-8/buffer values surviving source deletion. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11650,7 +12532,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Delete-null AMEDIA_OK, source deletion preserving copied values and 128 object lifetime cycles. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11662,7 +12551,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Binary caller bytes copied; size/data preserved after source deletion and missing getter outputs unchanged after clear. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11674,7 +12570,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual double set/get and typed dlsym calls across the floating-point ABI. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11686,7 +12589,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual float set/get values and strict double/float type mismatch preserving output. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11698,7 +12608,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full int32 and pinned-key set/get values, including negative minimum-near values and getter null/missing outputs. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11710,7 +12627,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full-width 0x1122334455667788 values and strict type mismatch preserving getter output. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11722,7 +12646,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). All four signed rectangle coordinates preserved through actual set/get calls. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11734,7 +12665,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). LP64 size_t value (1<<40)+23 without truncation. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11746,7 +12684,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). UTF-8 caller bytes copied, borrowed getter data and copied value surviving source deletion. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11758,7 +12703,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual pinned format allocation and 128 independent new/copy/clear/delete cycles. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11770,7 +12722,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Binary caller bytes copied; size/data preserved after source deletion and missing getter outputs unchanged after clear. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11782,7 +12741,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual double set/get and typed dlsym calls across the floating-point ABI. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11794,7 +12760,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Actual float set/get values and strict double/float type mismatch preserving output. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11806,7 +12779,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full int32 and pinned-key set/get values, including negative minimum-near values and getter null/missing outputs. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11818,7 +12798,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Full-width 0x1122334455667788 values and strict type mismatch preserving getter output. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11830,7 +12817,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). All four signed rectangle coordinates preserved through actual set/get calls. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11842,7 +12836,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). LP64 size_t value (1<<40)+23 without truncation. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11854,7 +12855,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). UTF-8 caller bytes copied, borrowed getter data and copied value surviving source deletion. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
@@ -11866,7 +12874,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40459815375,
+        "attempt": 1,
+        "sha": "c5962291855b13ebd0d21fcf72981db973ad9e72",
+        "status": "verified-native-format-api-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART, standalone ELF and APKs in single/device modes (test71). Typed debug text, borrowed text valid until the next call, and updated map values. Other native media families remain open."
+      }
     },
     {
       "library": "libmediandk.so",
