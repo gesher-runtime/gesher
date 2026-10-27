@@ -187,8 +187,9 @@ bool RejectedDimensions(Peer* peer) {
     if (test == 3) sg.buffers_size = 1;
     message.Put(sg); message.Put<int32_t>(0);
     int32_t status; uint32_t consumed;
+    const int32_t expected = test == 2 ? -EFAULT : -EINVAL;
     if (!Send(peer->thread, message) || !Receive(peer->thread, &reply) ||
-        !reply.Get(&status) || (status != -EINVAL && status != -EFAULT) || !reply.Get(&consumed) ||
+        !reply.Get(&status) || status != expected || !reply.Get(&consumed) ||
         consumed != 0 || !peer->Ioctl(BINDER_SET_MAX_THREADS)) return false;
   }
   return true;
