@@ -6,6 +6,7 @@ on:
       - .github/workflows/ci-processes.yml
       - tests/windows/tracks/50-services.ps1
       - tests/windows/tracks/49-locale.ps1
+      - tests/windows/tracks/44-native2.ps1
       - tests/windows/tracks/52-surfaces.ps1
       - tests/windows/tracks/76-media4-opensl.ps1
       - tests/windows/tracks/84-ci-processes.ps1
@@ -36,6 +37,7 @@ jobs:
           $tokens = $null
           $errors = $null
           foreach ($helper in @(@('50-services.ps1', 'RunTimed'),
+                                @('44-native2.ps1', 'N2Run'),
                                 @('50-services.ps1', 'StartTimed'),
                                 @('50-services.ps1', 'WaitTimed'),
                                 @('49-locale.ps1', 'LocaleStart'),

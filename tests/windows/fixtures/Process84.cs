@@ -37,6 +37,11 @@ public class Process84 {
     Console.Error.WriteLine("process84 stderr " + args[0]);
     if (args[0] == "normal") return 0;
     if (args[0] == "nonzero") return 23;
+    if (args[0] == "environment") {
+      Console.WriteLine("process84 cwd " + Environment.CurrentDirectory);
+      Console.WriteLine("process84 environment " + Environment.GetEnvironmentVariable("GESHER_PROCESS84_ENV"));
+      return 0;
+    }
     if (args[0] == "hold") { Thread.Sleep(60000); return 0; }
     if (args[0] == "timeout") {
       File.WriteAllText(args[1], System.Diagnostics.Process.GetCurrentProcess().Id.ToString());
