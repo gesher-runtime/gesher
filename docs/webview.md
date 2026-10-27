@@ -350,6 +350,28 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
+Strict-exit full CI **40449137605** is running at exact
+`4f253878331b4662abe044fa71127b87b881fd1a`. Commit5d802f5 adds only the
+PowerShell exit checks and successful lifecycle output described below; app
+assertions, runtime and deadlines are unchanged. Actual main122007461704
+has203ABI boundaries/zero problems, framework122007511312 has javac zero
+errors and the app/graphics/Web3 builds, package122009867000 has installed
+oatdump/runtime/window/input/uninstall cleanup, and both e2e logs122010490181
+and122010490086 have all nine apps including Puzzles/TIC80, four transport
+cases, association/shortcut and zero unexpected failures. Both Windows suites
+remain pending. Watch: C:/work/gesher-ci-review/web3-40449137605-watch.log.
+
+A separate backing-cache freshness prerequisite remains open: processDied
+removes a ProcessRecord before its asynchronous OS-exit poll publishes the
+package's last exit, and a later start does not clear that cached result.
+A fresh launcher log can therefore contain an earlier process generation's
+zero. The coordinator owns generation-aware clearing/publication, PID/start
+sequence race controls, unknown-exit failure and actual launcher checks in
+the exec4-exit slice. This agent will not edit those process-exit fields or
+methods. Preserve the strict run unchanged, but do not accept its child-zero
+marker as fresh OS-exit proof until that prerequisite is verified. This is
+not a claim about the cause of the earlier UIA teardown stall.
+
 Completed full diagnostic **40444053066** uses exact
 `cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
 instrumentation below and coordinator-verified native clock/width integration
