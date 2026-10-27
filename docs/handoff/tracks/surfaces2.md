@@ -121,6 +121,14 @@ reuses surfaces.yml; it executes no Android app. This proves source/build
 compatibility only. Native's separate runtime bounds/ABI correction and a
 new strict coherent full run are still required.
 
+The correction branch also merges accepted integration13603d54 before its
+next runtime candidate, retaining the accepted Net4 implementation and its
+verification metadata. The only merge conflict was the handoff reservation
+paragraph: all current assignments and the unaccepted AAudio status are
+retained. All Surface production, fixture, phase/original-TIC and build
+sources stay unchanged by this prerequisite merge. Native's separately
+reviewed ABI correction is not imported yet.
+
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
 cleared pending before publishing its weak view. The correction retries
