@@ -172,10 +172,93 @@ try {
   Write-Host 'INFO  net TLS cleanup: root-test complete'
 }
 
-# On the internet (the runners have it): DNS, HTTPS GETs with TLS 1.3 and SNI, and
-# certificates that must be rejected (expired, another host's, self-signed, an
-# untrusted root).
-$null = NetDex 'DNS and HTTPS on the internet, bad certificates rejected' @('internet') 300
+# Keep real internet DNS/Google HTTPS/TLS1.3/SNI/hostname verification. Own
+# the HTTP200/body oracle, virtual-host selection and all four rejection cases.
+. "$PSScriptRoot/../net/NegativeCertificates.ps1"
+$unknownKey = [Security.Cryptography.RSA]::Create(2048)
+$unknownRequest = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+  'CN=Gesher Untrusted Test Root', $unknownKey, [Security.Cryptography.HashAlgorithmName]::SHA256,
+  [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$unknownRequest.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+$unknownRoot = $unknownRequest.CreateSelfSigned($now.AddDays(-1), $now.AddDays(30))
+$negativeCertificates = @()
+$negativeServers = @()
+$positiveCertificates = @()
+$positiveServer = $null
+$httpServer = $null
+try {
+  $negativeCertificates = @(
+    (New-NetTestCertificate 'localhost' $rootCert $now.AddHours(-2) $now.AddHours(-1)),
+    (New-NetTestCertificate 'another.gesher.invalid' $rootCert $now.AddHours(-1) $now.AddDays(1)),
+    (New-NetTestCertificate 'localhost' $null $now.AddHours(-1) $now.AddDays(1) $true),
+    (New-NetTestCertificate 'localhost' $unknownRoot $now.AddHours(-1) $now.AddDays(1)))
+  $positiveCertificates = @(
+    (New-NetTestCertificate 'sni-one.gesher.invalid' $rootCert $now.AddHours(-1) $now.AddDays(1)),
+    (New-NetTestCertificate 'sni-two.gesher.invalid' $rootCert $now.AddHours(-1) $now.AddDays(1)))
+  $virtualHosts = [Collections.Generic.Dictionary[string, Security.Cryptography.X509Certificates.X509Certificate2]]::new([StringComparer]::OrdinalIgnoreCase)
+  $virtualHosts.Add('sni-one.gesher.invalid', $positiveCertificates[0])
+  $virtualHosts.Add('sni-two.gesher.invalid', $positiveCertificates[1])
+  $positiveServer = [GesherNetTlsServer]::new($serverCert, $virtualHosts)
+  # Keep HTTP200 traffic off the SNI listener: localhost may omit SNI and
+  # must not supply the empty-name evidence required from the missing-SNI control.
+  $httpServer = [GesherNetTlsServer]::new($serverCert)
+  $negativeUrls = @()
+  foreach ($certificate in $negativeCertificates) {
+    $server = [GesherNetTlsServer]::new($certificate)
+    $negativeServers += $server
+    $negativeUrls += "https://localhost:$($server.Port)/"
+  }
+  $machineRoot.Open('ReadWrite'); $machineRoot.Add($rootPublic); $machineRoot.Close()
+  $null = NetDex 'internet DNS/Google HTTPS/TLS1.3, local HTTP200/virtual hosts and four certificate rejections' @('internet') 300 @{
+    GESHER_TLS_POSITIVE_URL = "https://localhost:$($httpServer.Port)/"
+    GESHER_TLS_SNI_PORT = "$($positiveServer.Port)"
+    GESHER_TLS_REJECTION_URLS = $negativeUrls -join ','
+  }
+  Write-Host "INFO  net TLS virtual-host names: $($positiveServer.SeenServerNames -join ', ')"
+  Write-Host "INFO  net TLS virtual-host certificates: $($positiveServer.CertificateSelections -join ', ')"
+  Check 'net: the local TLS server receives both distinct SNI names and missing/wrong-SNI controls' {
+    $seen = @($positiveServer.SeenServerNames)
+    $selected = @($positiveServer.CertificateSelections)
+    ($positiveCertificates[0].Thumbprint -ne $positiveCertificates[1].Thumbprint) -and
+      ($seen -contains 'sni-one.gesher.invalid') -and ($seen -contains 'sni-two.gesher.invalid') -and
+      ($seen -contains '') -and ($seen -contains 'wrong-sni.gesher.invalid') -and
+      ($selected -contains "sni-one.gesher.invalid => $($positiveCertificates[0].Thumbprint)") -and
+      ($selected -contains "sni-two.gesher.invalid => $($positiveCertificates[1].Thumbprint)") -and
+      ($selected -contains " => $($serverCert.Thumbprint)") -and
+      ($selected -contains "wrong-sni.gesher.invalid => $($serverCert.Thumbprint)")
+  }
+} finally {
+  try {
+    try {
+      foreach ($server in $negativeServers) {
+        Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stop (active clients $($server.ActiveClients))"
+        $server.Dispose()
+        Write-Host "INFO  net TLS cleanup: negative server $($server.Port) stopped"
+      }
+    } finally {
+      try {
+        if ($null -ne $positiveServer) {
+          Write-Host "INFO  net TLS cleanup: positive virtual-host server $($positiveServer.Port) stop"
+          $positiveServer.Dispose()
+          Write-Host 'INFO  net TLS cleanup: positive virtual-host server stopped'
+        }
+      } finally {
+        if ($null -ne $httpServer) {
+          Write-Host "INFO  net TLS cleanup: positive HTTP server $($httpServer.Port) stop"
+          $httpServer.Dispose()
+          Write-Host 'INFO  net TLS cleanup: positive HTTP server stopped'
+        }
+      }
+    }
+  } finally {
+    Write-Host 'INFO  net TLS cleanup: negative certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+    Write-Host 'INFO  net TLS cleanup: negative certificates dispose'
+    foreach ($certificate in $negativeCertificates + $positiveCertificates) { $certificate.Dispose() }
+    $unknownRoot.Dispose(); $unknownKey.Dispose()
+  }
+  Write-Host 'INFO  net TLS cleanup: negative complete'
+}
 
 # Apps (tests/apps/netapp, nonetapp) through gesher-app: ConnectivityManager over the
 # connectivity service (com.gesher.server.ConnectivityService), its callbacks, HTTPS with
@@ -214,10 +297,20 @@ function NetExpect([string] $Name, [string] $Out, [int] $Code, [string[]] $Expec
   ($Out -split "`n" | Select-String -Pattern $Show | ForEach-Object { "INFO  $_".TrimEnd() }) | Out-Host
 }
 
+# The apps' HTTPS check (NetApp https) is against this machine, not the internet (ci
+# 40240210807 failed on windows-2025 when example.com did not answer): the test root back
+# in the machine's ROOT store and an HTTPS server with its certificate for localhost, until
+# the end of this script. ($GESHER_NETAPP_HTTPS; app processes inherit it.)
+$appTls = [GesherNetTlsServer]::new($serverCert)
+$machineRoot.Open('ReadWrite')
+$machineRoot.Add($rootPublic)
+$machineRoot.Close()
+$env:GESHER_NETAPP_HTTPS = "https://localhost:$($appTls.Port)/"
+try {
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/netapp.apk")) 400
 NetExpect 'netapp.apk in one process: ConnectivityManager (Windows'' active network, its capabilities, link properties and NetworkInfo), a default and a request callback, HTTPS through HttpsURLConnection, cleartext refused (target SDK 36)' $out $LASTEXITCODE @(
   'NetApp state: internet true', 'connected true', 'NetApp default callback: available true',
-  'NetApp request callback (INTERNET): available true', 'NetApp https: 200 Example Domain',
+  'NetApp request callback (INTERNET): available true', 'NetApp https: 200 expected page from https://localhost:',
   'NetApp cleartext http: refused', 'NetApp done', 'gesher-app: done')
 
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/nonetapp.apk")) 300
@@ -292,8 +385,17 @@ $out = "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)"
 if (-not $route) { $out += "`n(no default route on this machine)" }
 $failedBefore = $failed
 NetExpect "netapp.apk in an app process of a system server: ConnectivityManager over binder; an address added to and removed from the adapter of Windows' default route (interface $($route.ifIndex)) reaches its default network callback" $out $appCode @(
-  'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 Example Domain',
+  'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 expected page from https://localhost:',
   'NetApp watch: added seen true', 'NetApp watch: removed seen true', 'NetApp done', 'gesher-app: done')
 if ($failed -ne $failedBefore) {
   Get-Content "$netLogs/system_server.out", "$netLogs/system_server.err" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+}
+} finally {
+  Remove-Item Env:GESHER_NETAPP_HTTPS -ErrorAction SilentlyContinue
+  Write-Host 'INFO  net TLS cleanup: app server stop'
+  try { $appTls.Dispose() } finally {
+    Write-Host 'INFO  net TLS cleanup: app certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  }
+  Write-Host 'INFO  net TLS cleanup: app complete'
 }
