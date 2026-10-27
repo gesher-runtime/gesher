@@ -10,6 +10,7 @@ foreach ($execSpawnAbi in 'x86_64', 'arm64-v8a') {
     '--elf', $execSpawnProgram, 'exec4-spawn', $execSpawnProgram, (NoDrive $execSpawnWork)) @(
     "exec4 spawn ABI: $execSpawnAbi",
     'ordered relative open/dup/close/chdir/fchdir runs in the real child',
+    'INFO exec4 ordered child: argv1 fd301 fd321 parent1 copy1 relative1 pid1',
     'returned PID is the ELF program PID written by that child',
     'failed open returns spawn0 and a real child exit127',
     'missing dup2 source returns spawn0 and a real child exit127',
