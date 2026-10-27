@@ -225,7 +225,9 @@ the microphone (looped, from its start each time recording starts);
   808ea746. ADR 0064 proposes the actual AOSP format backend through 21
   System V entries and 152 pointer data objects in both app/native process
   hosts. Test71 builds/runs both ABI libraries, standalone ELF and APK modes
-  in CI only. This has source/parser checks, not runtime acceptance yet;
+  in CI only. Media job 122033620469 passes its actual NDK/Java/APK builds
+  for both ABIs; the main host build and runtime checks are still pending.
+  This is compilation evidence, not runtime acceptance;
   all remaining contracts are in [media4](handoff/tracks/media4.md).
 
 - Full ci **40448521754** is GREEN at

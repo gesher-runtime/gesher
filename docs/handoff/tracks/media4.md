@@ -175,8 +175,13 @@ Full ci **40456299720** is running at
 current integration 808ea746's docs). Source is frozen while it runs.
 PowerShell AST, XML/YAML, embedded-Python and Bash syntax/source checks pass;
 the 21 registrations and 152 names/values match the pinned source exactly.
-No compiler/native/JVM/C# fixture was run locally. Actual compilation,
-linking and runtime behavior are still unverified; read every job, both
+No compiler/native/JVM/C# fixture was run locally. Media job 122033620469
+passes in 1m32s: its actual log shows Werror NDK builds of both ABI libraries
+and independent ELF executables, and both single-ABI APKs/dex published.
+Framework 122030408664 passes in 10m39s; actual NetApp/services dex logs were
+read. Root independently reviewed the source/ABI/data/wiring and found no
+actionable issue within that review. The main host build is still compiling;
+host linkage and all runtime behavior remain unverified. Read every job, both
 complete zero-failure Windows summaries, all test71 parts, package and
 required e2e before acceptance. The native API baseline metadata and roadmap
 are unchanged. All remaining contracts listed above stay open; later work
