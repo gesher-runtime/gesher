@@ -175,9 +175,19 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+A separate media4-muxer-build workflow is prepared for compile-first CI:
+compile the real host bridge and link the independent reader oracle, then
+generate actual encoded packets and compile both NDK/ELF/APK ABIs. It reuses
+only framework artifacts of40507882249, with an explicit source assertion
+for06d30d403481d3833f0c7d5f99db456841b72062, entirely inside CI. It does not
+execute Gesher fixtures or replace a final full Windows matrix. That full
+still requires source peer review and the latest accepted integration.
+The running Surface405078 candidate is separate and immutable.
+
 The next independent native-muxer slice is source-only in
 C:\work\gesher-media4-muxer / wip/media4-muxer, from accepted native35cf9aa1.
-Test79 is reserved; Surface invalidation owns80, Locale2 owns81 (next82).
+Test79 is reserved; Surface invalidation owns80, Locale2 owns81, Resolver82,
+libcore I/O83 and test process infrastructure84 (next85).
 ADR0064 is retained. First preparation moves the
 three codec-configuration helper bodies unchanged out of encoder.cc and
 configures the actual MP4/WebM/Ogg writers once in a shared OBJECT target
