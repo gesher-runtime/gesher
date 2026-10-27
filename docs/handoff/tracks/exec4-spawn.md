@@ -24,8 +24,12 @@ exits127 on the first non-close failure; the parent returns0 and the real PID.
 The first implementation uses a versioned actual-child launcher bootstrap,
 bionic descriptor/directory APIs, restored close-on-exec metadata and the
 caller's PATH independent of replacement envp. ELF/sh/tool programs enter
-inside that actual process. Source a2576f49 is under bounded read-only peer
-review. Real NDK self-child fixtures now cover both ABIs: ordered relative
+inside that actual process. Source a2576f49 received bounded read-only peer
+review. It found absent stdio slots were transported as NUL, allowing a dup
+from a closed stdin to succeed. The child now closes those transport-only
+placeholders before restoring flags or applying actions. New actual closed0/
+failed-dup0 controls and UTF-8 relative directories cover this finding.
+Real NDK self-child fixtures now cover both ABIs: ordered relative
 actions, child-reported PID, six first-failure/exit127 controls, ignored close,
 close-on-exec same/copy cases, inherited directory fchdir, ABI O_DIRECTORY,
 actions before failed exec, caller PATH versus replacement envp and parent

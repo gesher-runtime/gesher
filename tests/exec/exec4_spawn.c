@@ -124,8 +124,8 @@ int main(int argc, char** argv) {
 #error Unsupported exec4 fixture ABI
 #endif
   char before[PATH_MAX], after[PATH_MAX], a[PATH_MAX], b[PATH_MAX], input[PATH_MAX], output[PATH_MAX];
-  if (!getcwd(before, sizeof(before)) || !join(a, sizeof(a), argv[2], "a") ||
-      !join(b, sizeof(b), a, "b") || !join(input, sizeof(input), b, "input.bin") ||
+  if (!getcwd(before, sizeof(before)) || !join(a, sizeof(a), argv[2], "a-\xd7\x92") ||
+      !join(b, sizeof(b), a, "b-\xd7\xa9") || !join(input, sizeof(input), b, "input.bin") ||
       !join(output, sizeof(output), b, "output.bin") || mkdir(a, 0700) || mkdir(b, 0700)) {
     perror("exec4 spawn directories"); return 1;
   }
@@ -143,11 +143,11 @@ int main(int argc, char** argv) {
   posix_spawn_file_actions_t actions;
   if (posix_spawn_file_actions_init(&actions)) return 1;
   add(posix_spawn_file_actions_addchdir_np(&actions, argv[2]));
-  add(posix_spawn_file_actions_addchdir_np(&actions, "a"));
-  add(posix_spawn_file_actions_addopen(&actions, 30, "b/input.bin", O_RDONLY, 0));
+  add(posix_spawn_file_actions_addchdir_np(&actions, "a-\xd7\x92"));
+  add(posix_spawn_file_actions_addopen(&actions, 30, "b-\xd7\xa9/input.bin", O_RDONLY, 0));
   add(posix_spawn_file_actions_adddup2(&actions, 30, 31));
   add(posix_spawn_file_actions_addclose(&actions, 30));
-  add(posix_spawn_file_actions_addopen(&actions, 32, "b", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0));
+  add(posix_spawn_file_actions_addopen(&actions, 32, "b-\xd7\xa9", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0));
   add(posix_spawn_file_actions_addfchdir_np(&actions, 32));
   add(posix_spawn_file_actions_addclose(&actions, 32));
   add(posix_spawn_file_actions_addclose(&actions, INT_MAX));
@@ -226,6 +226,30 @@ int main(int argc, char** argv) {
   check(getcwd(after, sizeof(after)) && strcmp(before, after) == 0 &&
             fcntl(parent_fd, F_GETFD) == parent_flags,
         "every child preserves the parent directory and descriptor flags");
+  int stdin_flags = fcntl(0, F_GETFD);
+  int saved_stdin = stdin_flags >= 0 ? dup(0) : -1;
+  check(stdin_flags < 0 || saved_stdin >= 0, "save the parent stdin before the closed-slot control");
+  if (stdin_flags < 0 || saved_stdin >= 0) {
+    if (saved_stdin >= 0) fcntl(saved_stdin, F_SETFD, FD_CLOEXEC);
+    close(0);
+    char* no_stdin[] = {(char*)child_name, "--closed", "0", NULL};
+    run_child(argv[1], no_stdin, environ, NULL, 0, 42,
+              "unmentioned closed parent stdin stays EBADF in the child");
+    if (!join(marker, sizeof(marker), argv[2], "after-closed-stdin-must-not-exist.bin")) return 1;
+    posix_spawn_file_actions_init(&actions);
+    add(posix_spawn_file_actions_adddup2(&actions, 0, 44));
+    add(posix_spawn_file_actions_addopen(&actions, 40, marker, O_WRONLY | O_CREAT | O_EXCL, 0600));
+    run_child(argv[1], plain, environ, &actions, 1, 127,
+              "dup2 from closed parent stdin fails in a real child with127");
+    check(access(marker, F_OK) == -1 && errno == ENOENT,
+          "closed-stdin failure prevents later file creation");
+    posix_spawn_file_actions_destroy(&actions);
+    if (saved_stdin >= 0) {
+      check(dup2(saved_stdin, 0) == 0 && fcntl(0, F_SETFD, stdin_flags) == 0,
+            "restore the parent's original stdin and flags");
+      close(saved_stdin);
+    }
+  }
   close(parent_fd);
   printf("%d test(s) failed\n", failed);
   return failed ? 1 : 0;
