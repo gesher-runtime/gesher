@@ -289,8 +289,10 @@ int RegisterMediaJniOthers(JNIEnv* env) {
   // false or null.
   RegisterMediaExtractor(env);
   RegisterMediaCodec(env);
-  for (const char* cls : {"android/media/MediaMuxer",
-                          "android/media/MediaRecorder", "android/media/MediaSync",
+  // Recording (media3, ADR 0059): MediaMuxer, MediaRecorder.
+  RegisterMediaMuxer(env);
+  RegisterMediaRecorder(env);
+  for (const char* cls : {"android/media/MediaSync",
                           "android/media/MediaHTTPConnection", "android/media/MediaCrypto",
                           "android/media/MediaDrm", "android/media/MediaDescrambler",
                           "android/media/MediaProfiles", "android/media/JetPlayer",
