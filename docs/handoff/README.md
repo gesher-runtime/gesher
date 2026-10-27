@@ -158,7 +158,8 @@ local fixtures built Gesher files only; AOSP/ART builds stayed in CI.
 
 Release preparation belongs to release1, ADR 0071
 ([brief](tracks/release1.md)). No release/tag is published yet. Next free
-ADR is 0075 after reserving native3-wide/0073 for wide/multibyte ABI contracts
+ADR is 0076 after reserving native3-time/0075 for ART monotonic elapsed clocks
+([brief](tracks/native3-time.md)), native3-wide/0073 for wide/multibyte ABI contracts
 ([brief](tracks/native3-wide.md)) and exec4/0074 for explicit exec3 leftovers
 ([brief](tracks/exec4.md)). Web4/0072 owns remaining frame/port/proxy/
 certificate/geometry contracts ([brief](tracks/web4.md)); earlier reservation
@@ -292,6 +293,7 @@ another track until its full result has been personally inspected.
 | aot3 oatdump | Merged as f5ce6f6. Personally read all 28 jobs (22 success/six skipped), all four new oatdump and 14 aot2 PASS lines per runner, both zero-failure summaries, installed-copy/input/uninstall cleanup and both required Puzzles/TIC-80 e2e logs (0 unexpected failures). No retry. | Full ci 40368334642 at 96ef687; frozen head d038b75 adds docs only. Merged code is the verified tree, so no extra integration CI is needed. |
 | aot3 continuation | Cloud stage merged as 6dc3f03, ci 40408733247/05ca072. Startup stage merged as 2ba9a11, ci 40414859801/ca46e99; root personally verified both full runs. | Combined integration after the startup merge is pending. Shared-library contexts and secondary dex remain open. |
 | native3 width/CPU | Native3-wide's NDK audit found unsigned ARM64 wchar32; the earlier width oracle incorrectly assumed signed values on both ABIs. Root withdrew the width checkbox. Signed x86 evidence remains valid; no complete ARM-width claim from ci 40404678100. Separate unsigned oracle 40423333599/a449d02 is fully inspected. | Corrected per-ABI whole-range tests, exact CPU-clock patch 0572, verified startup input and bounded AAC prepare observation are in full candidate 40430425743/b3ecc85, pending. Earlier 40418638643/b15ecea passes both CPU checks but fails AAC preparation/tone on 2025. Non-current pthread clocks, monotonic ART time and native allocator accounting remain open. |
+| native3-time | Prepared scoped ART patch 0573 for NanoTime/MicroTime/MilliTime and seven independent actual-artbase QPC/order/sleep/concurrent checks. Source-only apply/PowerShell parser checks pass; no local native compilation or execution. | Full ci 40433469320 at c168b23 is pending. Includes native3 b3ecc85 and integration 9dd57f5; does not close non-current pthread clock or native allocator contracts. |
 | windows4 | Diagnostic full ci 40396019963 at ed94b87 has 14/12 Windows failures in IME/display; package and both e2e pass. Subsequent COM/ACP/TSF epoch/ownership/geometry regressions are clean in actual fast ci 40411795761 at 828dc87 on both runners, with zero raw FAIL and all three native aggregates zero. | Combined full diagnostic 40413109702 at 74d1346 is pending. Real Android/JNI/IME/legacy resize still require runtime evidence; no full-green claim from standalone native fixtures. |
 | release1 | Exact 0.1.0 installer metadata/receipts and CI-only byte promotion prepared. Independent review reproduced/fixed mutable local receipt trust and candidate/publisher attempt drift; all 34 offline tests pass at reviewed 8073a31. | No tag/release/publication. Full branch installer/release CI waits for verified integration/web3; all final gap gates still apply. |
 
