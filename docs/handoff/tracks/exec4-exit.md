@@ -13,6 +13,13 @@ This source interleaving does not prove the cause of an earlier UIA stall.
 
 ## Status and next steps
 
+Source review found two additional issues before acceptance: the native
+exit query consumes its handle, so pending-process ownership, query and
+publication now stay under one short server lock before attach can hand
+off to the death observer. The abnormal runtime assertion also requires
+the launcher's exact exit1, rejecting the timeout sentinel. No result
+from the first scoped framework build implies runtime acceptance.
+
 Prepared source only: ProcessExitStatus binds results to a globally unique
 start sequence and actual PID, clears the old result at every new start,
 and rejects late/duplicate-conflicting callbacks. Both spawned and adopted
