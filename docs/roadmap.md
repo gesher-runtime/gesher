@@ -274,6 +274,13 @@ needs: [framework-build.md](framework-build.md).
         (these three: ci run 40191538466, both runners, single process and
         the Gesher device)
 
+## Libcore I/O follow-up
+
+- [x] Expose the linked UnixCopyFile.transfer JNI entry and verify actual
+      Files.copy, descriptor offsets/ownership, error order and a real
+      cancellation word on both Windows runners (ADR0077, test83;
+      full40550474909, both actual15 groups/whole0, package and both e2e).
+
 ## Phase 4 checklist
 
 - [x] Binder across processes: `/dev/binder` over Windows IPC, with
