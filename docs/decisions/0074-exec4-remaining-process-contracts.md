@@ -18,3 +18,24 @@ It follows the read-mode popen assertion and precedes posix_spawn's next
 assertion. Bounded opt-in first-fault context and actual-operation phase
 markers will establish a location before attributing a cause or accepting a
 fix. Previously verified exec3 snapshots and failed logs remain preserved.
+
+## Live environment data
+
+The ELF shared-library environment must bind to the live CRT pointer slot.
+A copied array pointer can become stale when host startup changes its
+environment after shim initialization, including Java Os.setenv or property
+session binding. Both `environ` and `__environ` use the same data address;
+refreshing a snapshot only in guest setenv cannot observe host mutations.
+[Microsoft's CRT documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/putenv-s-wputenv-s)
+specifies that both narrow and wide setters can change these array pointers.
+The existing narrow CRT representation is retained. The executable launcher
+still owns a separate initial UTF-8 array, whose mutation behavior is an open
+contract; this correction does not replace that array with an ACP encoding.
+
+The prepared regression first checks live slot identity without traversing
+old memory, then tests actual relocated ELF imports, host narrow/wide changes,
+guest mutations and a real posix_spawn child. It also runs through the two
+existing ART APK modes after Java host mutations. Compilation and execution
+remain CI-only; source inspection has not established that this defect caused
+the earlier sentinel crash. The frozen diagnostic remains active for that
+separate causal evidence.
