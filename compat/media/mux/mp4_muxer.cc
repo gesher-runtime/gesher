@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include <media/NdkMediaFormat.h>
@@ -267,6 +268,11 @@ class Mp4Muxer : public Muxer {
   }
 
   void SetOrientationHint(int degrees) override { rotation_ = degrees; }
+  void SetLocation(int latitude_e4, int longitude_e4) override {
+    latitude_e4_ = latitude_e4;
+    longitude_e4_ = longitude_e4;
+    has_location_ = true;
+  }
   int64_t BytesWritten() const override { return static_cast<int64_t>(pos_); }
 
  private:
@@ -320,6 +326,21 @@ class Mp4Muxer : public Muxer {
     m.End();
     for (size_t i = 0; i < tracks_.size(); i++) {
       Trak(&m, tracks_[i], static_cast<uint32_t>(i + 1), durations[i], start);
+    }
+    if (has_location_) {
+      const int lat = latitude_e4_ < 0 ? -latitude_e4_ : latitude_e4_;
+      const int lon = longitude_e4_ < 0 ? -longitude_e4_ : longitude_e4_;
+      char location[32];
+      const int length = std::snprintf(location, sizeof(location), "%c%02d.%04d%c%03d.%04d/",
+          latitude_e4_ < 0 ? '-' : '+', lat / 10000, lat % 10000,
+          longitude_e4_ < 0 ? '-' : '+', lon / 10000, lon % 10000);
+      m.Begin("udta");
+      m.Begin("\xA9xyz");
+      m.U16(static_cast<uint16_t>(length));
+      m.U16(0x15c7);  // AOSP's historical English language code.
+      m.Bytes(location, static_cast<size_t>(length));
+      m.End();
+      m.End();
     }
     m.End();
     return m.bytes();
@@ -535,6 +556,8 @@ class Mp4Muxer : public Muxer {
   std::vector<Track> tracks_;
   uint64_t mdat_at_ = 0, pos_ = 0;
   int rotation_ = 0;
+  bool has_location_ = false;
+  int latitude_e4_ = 0, longitude_e4_ = 0;
 };
 
 }  // namespace
