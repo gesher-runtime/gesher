@@ -29,7 +29,7 @@ $oracle = Join-Path $env:RUNNER_TEMP "net4-ifaddrs-$([guid]::NewGuid()).txt"
 try {
   foreach ($abi in 'x86_64', 'arm64-v8a') {
     $libraryPath = NoDrive "$n2/$abi"
-    $out = N2Run "$n2Dir/gesher-exec.exe" @('--elf', "$n2/$abi/net4_ifaddrs_test", (NoDrive $oracle)) `
+    $out = N2Run "$n2Dir/gesher-exec.exe" @('--elf', "$n2/$abi/net4_ifaddrs_test", 'net4_ifaddrs_test', (NoDrive $oracle)) `
       (Get-Location).Path @{ LD_LIBRARY_PATH = $libraryPath } 90 | Out-String
     $code = $LASTEXITCODE
     Write-Host $out

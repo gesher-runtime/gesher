@@ -77,6 +77,16 @@ diff checks have run locally. All C/C++/Java/C# compilation and every executable
 fixture are CI-only. Runtime/full CI and per-entry metadata remain pending;
 none of the84 historical entries or other contracts is marked closed.
 
+Full40456605869 at1f5a7e92 is superseded/cancelled once under Root's
+instruction after peer source review found a guaranteed fixture invocation
+error: gesher-exec --elf requires an explicit argv0 after the program path.
+Without it the oracle path became argv0, so the main received no oracle and
+the strict host-oracle>=3 assertion would fail. The next source adds the
+program name before the oracle path; no production code, assertion or timeout
+changes. The replaced run supplies no host-oracle/runtime acceptance. A new
+complete corrected full run is required; do not reinterpret it as a retry of
+unchanged code or relax the existing assertion.
+
 The earlier fixture-only stage is merged through verified Media3 integration
 f17d03b1: four local certificate rejections, NetApp HTTPS and deterministic
 HTTP200/two-host SNI selection with isolated missing/unknown-name controls,
