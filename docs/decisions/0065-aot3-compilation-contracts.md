@@ -75,5 +75,6 @@ Shared-library loader contexts and secondary dex compilation/invalidation
 remain open. The scoped oatdump and cloud rows are closed with their
 verifying runs; the aggregate remains open. The boot-startup profile
 supplement passes full ci 40414859801 with the original performance criteria;
-combined integration ci 40432541082 remains pending.
+combined integration ci 40432541082 at 42cc1c0 also passes every original
+gate on both Windows runners, actual package and both required e2e.
 No local AOSP build was run.

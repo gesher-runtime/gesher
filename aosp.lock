@@ -38,7 +38,7 @@ external/sqlite android/ dist/sqlite-autoconf-3500400/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl core/java/android/view/SurfaceView.java core/java/android/util/jar/StrictJarFile.java
+frameworks/base core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl core/java/android/view/SurfaceView.java media/java/android/media/session/MediaSessionManager.java core/java/android/util/jar/StrictJarFile.java
 
 # Graphics (docs/graphics.md): Skia, the libraries it, minikin and hwui build
 # on, and the fonts.
@@ -146,3 +146,7 @@ external/libwebm
 external/libvpx /config/generic/ /vp8/ /vp9/ /vpx/ /vpx_dsp/ /vpx_mem/ /vpx_ports/ /vpx_scale/ /vpx_util/
 external/libdav1d /config/x86_64/ /include/ /src/
 external/libhevc /common/ /decoder/
+# media3 (ADR 0059): libavc (H.264 decoder fallback, H.264 encoder), FDK AAC (the AAC
+# encoder where Media Foundation has none).
+external/libavc /common/ /decoder/ /encoder/
+external/aac

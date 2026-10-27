@@ -1,0 +1,143 @@
+diff --git a/runtime/thread_list.cc b/runtime/thread_list.cc
+--- a/runtime/thread_list.cc
++++ b/runtime/thread_list.cc
+@@ -23,6 +23,9 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
+ #include <map>
+ #include <sstream>
+ #include <tuple>
+@@ -63,6 +66,88 @@
+ namespace art HIDDEN {
+ 
+ using android::base::StringPrintf;
++
++#if defined(_WIN32) && defined(GESHER)
++namespace {
++
++// Opt-in observation only: never changes suspension state or scheduling. The
++// completion loggers below run after their function's ART locks are released.
++struct GesherMediaSuspendState {
++  uint64_t started;
++  char cause[192];
++  bool truncated;
++};
++thread_local GesherMediaSuspendState gGesherMediaSuspend{};
++std::atomic<unsigned> gGesherMediaPauseLines{0};
++
++bool GesherMediaPauseEnabled() {
++  static const bool enabled = [] {
++    const char* value = getenv("GESHER_MEDIA_TRACE_RECORD");
++    return value != nullptr && value[0] == '1' && value[1] == '\0';
++  }();
++  return enabled;
++}
++
++void GesherMediaPauseLog(const char* kind, const char* cause, bool truncated,
++                         uint64_t started, uint64_t resumed, uint64_t finished) {
++  if (finished - started < MsToNs(20) ||
++      gGesherMediaPauseLines.fetch_add(1u, std::memory_order_relaxed) >= 64) return;
++  Thread* self = Thread::Current();
++  fprintf(stderr, "camera suspend trace: %s, tid %d, cause %s%s; "
++          "begin/resume/end ns %llu/%llu/%llu; total/to-resume/tail us %llu/%llu/%llu\n",
++          kind, self != nullptr ? static_cast<int>(self->GetTid()) : 0, cause,
++          truncated ? " [truncated]" : "",
++          static_cast<unsigned long long>(started), static_cast<unsigned long long>(resumed),
++          static_cast<unsigned long long>(finished),
++          static_cast<unsigned long long>((finished - started) / 1000),
++          static_cast<unsigned long long>((resumed - started) / 1000),
++          static_cast<unsigned long long>((finished - resumed) / 1000));
++  fflush(stderr);
++}
++
++void GesherMediaSuspendBegin(const char* cause) {
++  if (!GesherMediaPauseEnabled()) return;
++  auto& state = gGesherMediaSuspend;
++  state.started = NanoTime();
++  const int length = snprintf(state.cause, sizeof(state.cause), "%s",
++                              cause != nullptr ? cause : "<null>");
++  state.cause[sizeof(state.cause) - 1] = '\0';
++  state.truncated = length < 0 || static_cast<size_t>(length) >= sizeof(state.cause);
++}
++
++class GesherMediaResumeTrace {
++ public:
++  ~GesherMediaResumeTrace() {
++    if (!GesherMediaPauseEnabled()) return;
++    auto& state = gGesherMediaSuspend;
++    if (state.started == 0) return;
++    const uint64_t started = state.started;
++    state.started = 0;
++    const uint64_t end = NanoTime();
++    // Includes requesting suspension, the caller's held interval and resume.
++    // It does not claim every mutator was stopped throughout that interval.
++    GesherMediaPauseLog("SuspendAll", state.cause, state.truncated, started, end, end);
++  }
++};
++
++class GesherMediaFlipTrace {
++ public:
++  explicit GesherMediaFlipTrace(uint64_t started)
++      : started_(GesherMediaPauseEnabled() ? started : 0) {}
++  void Resumed() { if (started_ != 0) resumed_ = NanoTime(); }
++  ~GesherMediaFlipTrace() {
++    if (started_ == 0) return;
++    const uint64_t end = NanoTime();
++    // The tail includes concurrent completion of per-thread flip functions.
++    GesherMediaPauseLog("ThreadFlip", "GC root flip", false, started_,
++                        resumed_ != 0 ? resumed_ : end, end);
++  }
++ private:
++  uint64_t started_, resumed_ = 0;
++};
++
++}  // namespace
++#endif
+ 
+ static constexpr uint64_t kLongThreadSuspendThreshold = MsToNs(5);
+ 
+@@ -609,6 +694,9 @@
+   // ThreadFlipBegin happens before we suspend all the threads, so it does not
+   // count towards the pause.
+   const uint64_t suspend_start_time = NanoTime();
++#if defined(_WIN32) && defined(GESHER)
++  GesherMediaFlipTrace media_flip_trace(suspend_start_time);
++#endif
+   VLOG(threads) << "Suspending all for thread flip";
+   {
+     ScopedTrace trace("ThreadFlipSuspendAll");
+@@ -687,6 +775,9 @@
+   AcquireMutatorLockSharedUncontended(self);
+ 
+   Locks::thread_suspend_count_lock_->Unlock(self);
++#if defined(_WIN32) && defined(GESHER)
++  media_flip_trace.Resumed();
++#endif
+   // Concurrent SuspendAll may now see zero suspend_all_count_, but block on mutator_lock_.
+ 
+   collector->GetHeap()->ThreadFlipEnd(self);
+@@ -892,6 +983,9 @@
+ 
+ void ThreadList::SuspendAll(const char* cause, bool long_suspend) {
+   Thread* self = Thread::Current();
++#if defined(_WIN32) && defined(GESHER)
++  GesherMediaSuspendBegin(cause);
++#endif
+ 
+   if (self != nullptr) {
+     VLOG(threads) << *self << " SuspendAll for " << cause << " starting...";
+@@ -1076,6 +1170,10 @@
+ }
+ 
+ void ThreadList::ResumeAll() {
++#if defined(_WIN32) && defined(GESHER)
++  // Declared before the mutex guards: completion is observed after unlock.
++  GesherMediaResumeTrace media_resume_trace;
++#endif
+   Thread* self = Thread::Current();
+   if (kDebugLocking) {
+     // Debug check that all threads are suspended.
