@@ -31,6 +31,7 @@ int main() {
     }
   };
   WideContracts(api, check);
+  WideTimeContracts(pinned::wcsftime, check);
   WideComparisonContracts<wchar_t>(pinned::llvm_signed::wcscmp, pinned::llvm_signed::wcsncmp,
       pinned::llvm_signed::wmemcmp, check);
   WideComparisonContracts<uint32_t>(pinned::llvm_unsigned::wcscmp, pinned::llvm_unsigned::wcsncmp,

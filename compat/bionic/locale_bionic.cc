@@ -654,19 +654,22 @@ float BIONIC_SYSV WcstofL(const wchar32* s, wchar32** end, void*) { return Wcsto
 
 size_t BIONIC_SYSV Wcsftime(wchar32* dst, size_t max, const wchar32* format, const void* tm,
                            void*) {
-  if (max >= SIZE_MAX / CtypeGetMbCurMax()) {
-    errno = kEINVAL;
-    return 0;
-  }
   using Buffer = std::unique_ptr<char, decltype(&std::free)>;
   const wchar32* fp = format;
   BionicMbstate state{};
   size_t bytes = Wcsrtombs(nullptr, &fp, 0, &state);
   if (bytes == kInvalid) return 0;
   Buffer narrow_format(static_cast<char*>(std::malloc(bytes + 1)), std::free);
-  Buffer output(static_cast<char*>(std::malloc(max * CtypeGetMbCurMax())), std::free);
-  if (!narrow_format || !output) return 0;
+  if (!narrow_format) return 0;
   Wcsrtombs(narrow_format.get(), &fp, bytes + 1, &state);
+  // Preserve bionic's error precedence: an invalid format reports EILSEQ
+  // before checking an otherwise overflowing destination size.
+  if (max >= SIZE_MAX / CtypeGetMbCurMax()) {
+    errno = kEINVAL;
+    return 0;
+  }
+  Buffer output(static_cast<char*>(std::malloc(max * CtypeGetMbCurMax())), std::free);
+  if (!output) return 0;
   using Format = size_t(BIONIC_SYSV*)(char*, size_t, const char*, const void*);
   auto strftime = reinterpret_cast<Format>(LookupBionicSymbol("strftime"));
   // Pinned FreeBSD wcsftime allocates max*MB_CUR_MAX but passes max bytes to

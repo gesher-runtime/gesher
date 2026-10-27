@@ -73,5 +73,27 @@ for variant in ("signed", "unsigned"):
     parts.append("#undef LIBC_NAMESPACE_DECL")
     if variant == "unsigned":
         parts.append("#undef wchar_t")
+parts.append("""
+// Environment adapters only: the original FreeBSD wrapper calls the pinned
+// conversions above and the host's narrow C formatter. Its own buffer/error
+// logic is unmodified; this does not substitute a new bionic tzcode oracle.
+using locale_t = void*;
+locale_t __get_locale() { return nullptr; }
+#define FIX_LOCALE(locale) static_cast<void>(locale)
+#undef MB_CUR_MAX
+#define MB_CUR_MAX 4
+#define SIZE_T_MAX SIZE_MAX
+char* malloc(size_t size) { return static_cast<char*>(::malloc(size)); }
+size_t wcsrtombs_l(char* dst, const wchar_t** src, size_t n, mbstate_t* state, locale_t) {
+  return wcsrtombs(dst, src, n, state);
+}
+size_t mbsrtowcs_l(wchar_t* dst, const char** src, size_t n, mbstate_t* state, locale_t) {
+  return mbsrtowcs(dst, src, n, state);
+}
+size_t strftime_l(char* dst, size_t n, const char* fmt, const struct tm* time, locale_t) {
+  return ::strftime(dst, n, fmt, time);
+}
+""")
+parts.append(source_part("upstream-freebsd/lib/libc/locale/wcsftime.c"))
 parts.append((root / "reference-main.cpp").read_text())
 Path(sys.argv[1]).write_text("\n".join(parts))
