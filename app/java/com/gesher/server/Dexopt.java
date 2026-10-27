@@ -150,7 +150,7 @@ final class Dexopt {
      * was done, for the install's log line, or null when dexopt is off or failed (the app
      * then runs from its APK).
      */
-    static String onInstall(String packageName, String codePath) {
+    static String onInstall(String packageName, String codePath, SharedLibraryGraph libraries) {
         prepareProfiles(packageName);
         String filter = filterFor("install", "speed-profile");
         File ref = referenceProfile(packageName);
@@ -158,7 +158,7 @@ final class Dexopt {
         File profile = metadata.isFile() ? importCloudProfile(packageName, codePath, metadata)
                 : hasData(ref) ? ref : null;
         if (filter.endsWith("-profile") && profile == null) filter = "verify";
-        return compile(packageName, codePath, filter, "install", profile);
+        return compile(packageName, codePath, filter, "install", profile, libraries);
     }
 
     /**
@@ -207,6 +207,26 @@ final class Dexopt {
      */
     static synchronized String compile(String packageName, String codePath, String filter,
             String reason, File profile) {
+        try {
+            ApkPackage parsed = ApkPackage.parse(new File(codePath, "base.apk").getPath());
+            if (!parsed.packageName.equals(packageName)) {
+                throw new IOException("compiled APK package name does not match " + packageName);
+            }
+            return compile(packageName, codePath, filter, reason, profile, parsed.sharedLibraries);
+        } catch (Exception invalidLibrary) {
+            SystemServer.log("dexopt: " + packageName + ": library resolution failed: " + invalidLibrary);
+            return null;
+        }
+    }
+
+    private static synchronized String compile(String packageName, String codePath, String filter,
+            String reason, File profile, SharedLibraryGraph libraries) {
+        try {
+            if (!libraries.contentsUnchanged()) throw new IOException("shared library changed before dex2oat");
+        } catch (IOException changedLibrary) {
+            SystemServer.log("dexopt: " + packageName + ": " + changedLibrary);
+            return null;
+        }
         Vm vm = Vm.current();
         if (vm == null) {
             SystemServer.log("dexopt: " + packageName + ": no -Ximage in this runtime's options;"
@@ -225,7 +245,7 @@ final class Dexopt {
         a.add("--instruction-set=" + ISA);
         a.add("--compiler-filter=" + filter);
         a.add("--compilation-reason=" + reason);
-        a.add("--class-loader-context=PCL[]");
+        a.add("--class-loader-context=" + libraries.classLoaderContext());
         // The boot image with its extensions (framework.jar, gesher-app.jar): the runtime
         // finds them next to a lone boot.art (ART patch 0012), dex2oat only with `<dir>/*`;
         // without them the app's classes that extend framework classes stay out of its
@@ -258,6 +278,15 @@ final class Dexopt {
             SystemServer.log("dexopt: " + packageName + ": dex2oat failed (exit code " + code
                     + ", " + filter + ", reason " + reason + "; dexopt.log); the app runs from its"
                     + " APK");
+            deleteTree(newDir.getParentFile());
+            return null;
+        }
+        try {
+            // Publish code and graph identity together, only while every jar is unchanged.
+            if (!libraries.contentsUnchanged()) throw new IOException("shared library changed during dex2oat");
+            libraries.writeManifest(newDir);
+        } catch (IOException changedLibrary) {
+            SystemServer.log("dexopt: " + packageName + ": graph not committed: " + changedLibrary);
             deleteTree(newDir.getParentFile());
             return null;
         }

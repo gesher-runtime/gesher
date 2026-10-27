@@ -49,6 +49,9 @@ function Web3ProcessState([int] $LauncherId, [string] $Text) {
           Write-Host "INFO  web3 teardown thread: pid $targetId tid $($thread.Id), state $state, wait $reason"
         } catch { Write-Host "INFO  web3 teardown thread: pid $targetId unavailable: $($_.Exception.Message)" }
       }
+      if (Get-Command Web3NativeProcessState -CommandType Function -ErrorAction SilentlyContinue) {
+        Web3NativeProcessState $targetId
+      }
     } catch { Write-Host "INFO  web3 teardown process: pid $targetId unavailable: $($_.Exception.Message)" }
   }
 }
@@ -101,6 +104,7 @@ function Web3Run([string] $Name, [string[]] $Arguments, [string[]] $Expect, [str
       # The existing deadline has already failed. Evidence collection cannot
       # turn a late exit into a passing result or extend the acceptance window.
       $problems += 'did not exit after 60+60 s and WM_CLOSE'
+      Write-Host "INFO  web3: original teardown deadline FAILED for $Name before diagnostic collection (60+60 s and WM_CLOSE)"
       Web3ProcessState $p.Id "$(& $read)"
       if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit(); $problems += 'killed' }
     }

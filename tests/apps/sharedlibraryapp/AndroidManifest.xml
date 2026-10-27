@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.sharedapp" android:versionCode="1" android:versionName="1">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+    <application android:label="Shared Java libraries" android:theme="@android:style/Theme.Material.Light">
+        <uses-library android:name="gesher.shared.entry" android:required="true" />
+        <uses-library android:name="gesher.shared.optional" android:required="false" />
+        <activity android:name=".SharedActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

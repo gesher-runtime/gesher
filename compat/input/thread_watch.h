@@ -30,5 +30,10 @@ bool ThreadWatchMessage(ThreadWatch* watch, uint32_t msg);
 void ThreadWatchEnter(ThreadWatch* watch, uint32_t msg, uint32_t* saved);
 void ThreadWatchLeave(ThreadWatch* watch, uint32_t saved);
 
+// Explicit diagnostic observer: at most 40 threads, each with its native stack
+// and wait chain. Call from a separate process, never the process being read.
+// Synchronous Windows WCT may block: the caller must bound this observer's life.
+void DumpProcessThreadWaits(uint32_t pid);
+
 }  // namespace input
 }  // namespace gesher

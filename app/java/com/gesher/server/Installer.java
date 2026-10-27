@@ -193,9 +193,15 @@ final class Installer {
                 && mPm.get(pkg) != null) {
             SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                     + old.codePath + ")");
-            // Installed before it was compiled at install (or its code was removed).
-            if (!new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
-                Dexopt.onInstall(pkg, old.codePath);
+            // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+            boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+            if (libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile()) {
+                if (libraryChange) {
+                    mAtm.forceStopPackage(pkg);
+                    SystemServer.log("install " + pkg + ": shared-library context/content changed");
+                }
+                Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
+                mPm.add(open(old));
             }
             return new String[] {pkg, "unchanged", old.codePath,
                     String.valueOf(parsed.versionCode())};
@@ -219,7 +225,7 @@ final class Installer {
         int libs = NativeLibs.extract(base.getPath(), new File(code, "lib/"
                 + NativeLibs.instructionSetDir(NativeLibs.forApk(base.getPath()))).getPath());
         // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
-        Dexopt.onInstall(pkg, code.getPath());
+        Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
         long now = System.currentTimeMillis();
         Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                 now);
