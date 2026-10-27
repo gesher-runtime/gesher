@@ -40,7 +40,7 @@ public class Process84 {
     if (args[0] == "hold") { Thread.Sleep(60000); return 0; }
     if (args[0] == "timeout") {
       File.WriteAllText(args[1], System.Diagnostics.Process.GetCurrentProcess().Id.ToString());
-      Thread.Sleep(60000);
+      Thread.Sleep(300000);
       return 0;
     }
     if (args[0] != "retained") return 2;

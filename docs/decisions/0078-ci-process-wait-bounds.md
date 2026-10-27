@@ -36,3 +36,12 @@ already exited; it reports incomplete output as failure within a bound.
 SurfaceRun/test76 and other legacy helpers need the same audit/correction
 before the aggregate process-cleanup track can close. Job-object containment
 or injected process-kill denial is not claimed by these four cases.
+
+The resumed source corrects actual SurfaceRun and frozen OpenSL InvokeOpenSl
+and exercises their real bodies in test84. Original phase/exit/diagnostic
+defaults and every pixel/native-media oracle are retained. SurfaceRun has
+file redirection; the retained-child case verifies bounded file reading
+after actual parent exit rather than imposing a nonexistent pipe-EOF wait.
+The two pipe helpers still require incomplete output to return failure.
+This extended source needs its own scoped and coherent full CI evidence;
+injected kill denial and job-object containment remain explicitly unproved.

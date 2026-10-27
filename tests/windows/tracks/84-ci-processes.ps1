@@ -11,6 +11,78 @@ if ($LASTEXITCODE -ne 0) {
   $script:failed++
   return
 }
+
+# Exercise the actual legacy helpers, preserving their original 120 s exit
+# and SurfaceRun's 8 s diagnostic/500 s phase bounds. Phases=0 isolates exit
+# cleanup without fabricating HWNDs, pixels or app phase markers.
+$process84SavedDir = $Dir
+$process84SurfaceDir = Join-Path $process84Root 'surface-helper'
+New-Item -ItemType Directory $process84SurfaceDir | Out-Null
+$process84SurfaceExe = Join-Path $process84SurfaceDir 'dalvikvm.exe'
+Copy-Item -LiteralPath $process84Exe -Destination $process84SurfaceExe
+try {
+  $Dir = $process84SurfaceDir
+  $dvmSurfaces = @()
+  foreach ($helper in 'SurfaceRun', 'InvokeOpenSl') {
+    foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
+                       @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
+      $pidFile = Join-Path $process84Root "$helper-$($case.Mode).pid"
+      $ownedExe = if ($helper -eq 'SurfaceRun') { $process84SurfaceExe } else { $process84Exe }
+      $expected = if ($helper -eq 'SurfaceRun' -and $case.Mode -eq 'retained') { 0 } else { $case.Expected }
+      $timer = [Diagnostics.Stopwatch]::StartNew()
+      try {
+        if ($helper -eq 'SurfaceRun') {
+          $result = SurfaceRun -Arguments @($case.Mode, $pidFile) -Tag "process84-$($case.Mode)" -AppLogs @() -Phases 0
+          $code = $result.Exit
+        } else {
+          $result = InvokeOpenSl -Arguments @($case.Mode, $pidFile) -Exe $process84Exe
+          $code = $result.Code
+        }
+        $text = $result.Text
+        $timer.Stop()
+        $bound = if ($case.Mode -eq 'timeout') { 145 } else { 25 }
+        $correct = $code -eq $expected -and $timer.Elapsed.TotalSeconds -lt $bound
+        if ($case.Mode -in @('normal', 'nonzero')) {
+          $correct = $correct -and $text.Contains("process84 stdout $($case.Mode)") -and
+            $text.Contains("process84 stderr $($case.Mode)")
+        } elseif ($case.Mode -eq 'timeout') {
+          $marker = if ($helper -eq 'SurfaceRun') { '(killed: still running 120 s after its last phase)' } else { '(timed out after 120 s)' }
+          $correct = $correct -and $text.Contains($marker) -and (Test-Path -LiteralPath $pidFile)
+        } else {
+          # SurfaceRun redirects to a file, not an EOF-waiting pipe: the
+          # actual parent may finish while a child still holds that file.
+          $retained = if (Test-Path -LiteralPath $pidFile) {
+            Get-Process -Id ([int](Get-Content -LiteralPath $pidFile -Raw)) -ErrorAction SilentlyContinue
+          } else { $null }
+          try { $correct = $correct -and $null -ne $retained -and -not $retained.HasExited }
+          finally { if ($retained) { $retained.Dispose() } }
+          if ($helper -eq 'InvokeOpenSl') { $correct = $correct -and $text.Contains('did not complete within five seconds') }
+        }
+        if ($correct) {
+          Write-Host "PASS  CI processes: actual $helper $($case.Mode) status$code output/retained-handle evidence within original bounds"
+        } else {
+          Write-Host "FAIL  CI processes: actual $helper $($case.Mode) status$code expected$expected after$($timer.Elapsed.TotalSeconds): $text"
+          $script:failed++
+        }
+      } finally {
+        if (Test-Path -LiteralPath $pidFile) {
+          $ownedPid = [int](Get-Content -LiteralPath $pidFile -Raw)
+          $ownedProcess = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
+          if ($ownedProcess) {
+            try {
+              if ($ownedProcess.Path -ne $ownedExe) { throw 'legacy-helper recorded PID is not its owned fixture' }
+              $ownedProcess.Kill($true)
+              if (-not $ownedProcess.WaitForExit(5000)) { throw 'legacy-helper fixture survived bounded cleanup' }
+            } catch {
+              Write-Host "FAIL  CI processes: actual $helper $($case.Mode) fixture cleanup: $_"
+              $script:failed++
+            } finally { $ownedProcess.Dispose() }
+          }
+        }
+      }
+    }
+  }
+} finally { $Dir = $process84SavedDir }
 foreach ($case in @(@{ Mode = 'normal'; Expected = 0 }, @{ Mode = 'nonzero'; Expected = 23 },
                    @{ Mode = 'timeout'; Expected = -1 }, @{ Mode = 'retained'; Expected = -1 })) {
   $pidFile = Join-Path $process84Root "$($case.Mode).pid"
