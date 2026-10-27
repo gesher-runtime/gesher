@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/net4-probes.yml
       - tests/windows/net/InspectIfaddrsOracle.ps1
+      - tests/windows/net/IfaddrsOracle.ps1
   workflow_dispatch:
 
 permissions:
@@ -27,4 +28,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Inspect actual Windows interface index selection
         shell: pwsh
-        run: ./tests/windows/net/InspectIfaddrsOracle.ps1
+        run: ./tests/windows/net/InspectIfaddrsOracle.ps1 -ExpectOriginalMissing

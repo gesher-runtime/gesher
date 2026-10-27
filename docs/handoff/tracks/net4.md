@@ -55,6 +55,19 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+Narrow40466896274 at4904ecc3 reproduces the oracle error on both Windows:
+nine active NDIS filter/switch interfaces have neither IPv4 nor IPv6 bound;
+both .NET protocol-property calls throw10043. The actual physical, loopback
+and vEthernet IP interfaces retain valid indexes. Microsoft documents that
+the production GetAdaptersAddresses(AF_UNSPEC) call, without
+GAA_FLAG_INCLUDE_ALL_INTERFACES, enumerates IP-bound interfaces. The corrected
+shared oracle logs unbound NDIS interfaces and includes every active IP-bound
+interface with strict index/address/prefix/scope/MAC checks. Its old raw
+failure is retained in the diagnostic output, and host-oracle>=3 is unchanged.
+This is an explicit oracle-domain correction; no production enumeration,
+ABI/lifetime assertion or timeout is changed. Corrected narrow and full CI
+are still required, including the separate reported Media3 failure.
+
 Full40462148835 at719ae176 is red: both Windows test72 scripts abort
 before the standalone caller because the .NET oracle did not obtain an
 interface index. Actual dalvikvm ifaddrs checks pass for both ABIs on each
