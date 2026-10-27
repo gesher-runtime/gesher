@@ -63,7 +63,7 @@ try {
     throw "Shared app install failed: $($installed.Out)"
   }
   $sharedCode = $Matches[1]
-  $policy = [IO.File]::ReadAllText($sharedServerLog)
+  $policy = Aot2Read $sharedServerLog
   if (-not $policy.Contains('background dexopt runs once the device is idle for 3600000 ms')) {
     throw 'The real server did not apply the stale-artifact control policy'
   }

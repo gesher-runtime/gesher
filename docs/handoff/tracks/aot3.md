@@ -37,6 +37,22 @@ explicit brief rather than disappearing when this stage is green.
 
 ## Status and next steps
 
+In corrected full40512344714, actual Windows2022 job122221111406 completed
+with only one fixture failure after all15 real graph/registry controls passed:
+ReadAllText tried to read the active system_server.log without sharing write
+access. The app installed, but its artifact/runtime assertions were not reached.
+Uninstall/shutdown, exact policy restoration and owned XML/jar removal passed.
+Windows2025 remains running and is preserved. The next fixture uses the
+suite's existing shared-read Aot2Read helper for that policy observation.
+
+A diagnostic-only aot3-shared-probes workflow now runs the identical test73
+using the already completed successful supplying jobs from exact405123/96b.
+It pins run/attempt/repository/SHA and artifact IDs/digests, rejects runtime
+or build source drift, and permits only the shared-log harness correction and
+probe files. A supplying full can still be running or red: this is explicit
+component evidence, never full acceptance. All original test73 assertions,
+compiled-app/image/stale/unchanged-APK/rejection and cleanup gates are retained.
+
 Corrected full40512344714 is running at exact96b12ab6f9b5146870c7a373e337f762010eb6f1.
 It includes accepted Net4 integrationbc6e05be through mergef67611d. The17
 non-documentation paths match the prior reviewed scope; only the fixture's
