@@ -1,5 +1,21 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Resumed integration acceptance,2026-10-27:** Net4 legacy resolver frozen
+`50017009bc4d94b5dc0c57103686fd0761de7bf8` is accepted from full40519019567,
+exact source `f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a`. The integration
+worker reread all28 job conclusions (22success/6skip), both whole-suite0
+summaries,16 actual ABI/policy/caller contexts plus independent WinSDK oracle
+and cleanup (18 top PASS records per runner), actual package23 installed
+UI/input/uninstall checks, and both ten-app/transport/association/shortcut
+e2e logs with0unexpected. The frozen head adds docs only; the merge's
+non-documentation tree exactly matches the verified source. No rule-g full
+is needed for this identical code. Inventory bytes/proof history are unchanged;
+the82 remaining Net4 inventory entries and other explicit contracts stay open.
+Libcore40522376074 is green but its successful CheckTimed output suppresses
+the15 raw child group records; acceptance awaits genuine group log visibility.
+Muxer40527788805 is red on both Windows with18 failures each, all eight
+contexts failing before semantic output; package/e2e do not waive that failure.
+
 **Latest owner-requested stop,2026-10-27:** read
 [the session checkpoint](session-2026-10-27-checkpoint.md) before using older
 status summaries below. All work is saved/pushed; the owner is starting a

@@ -10,6 +10,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <cstdlib>
+#include <memory>
 
 #include <string>
 #include <vector>
@@ -140,6 +142,30 @@ inline constexpr int kNiDgram = 16;
 
 GaiError ReverseResolve(const Address& address, char* host, size_t host_len, char* serv,
                      size_t serv_len, int flags);
+
+// Legacy database results own every byte. No Winsock pointer or 16-bit host
+// field crosses this boundary; netdb.cc publishes Linux-layout TLS objects.
+enum class HostError { kOk, kNotFound, kAgain, kNoRecovery, kNoData, kInternal };
+struct LegacyHost {
+  std::unique_ptr<char, decltype(&std::free)> storage{nullptr, &std::free};
+  char* name = nullptr;
+  char** aliases = nullptr;
+  Family family = Family::kOther;
+  size_t length = 0;
+  char** addresses = nullptr;
+};
+struct LegacyService {
+  std::unique_ptr<char, decltype(&std::free)> storage{nullptr, &std::free};
+  char* name = nullptr;
+  char** aliases = nullptr;
+  uint16_t port = 0;  // network byte order, without signed-short extension
+  char* protocol = nullptr;
+};
+HostError LegacyHostByName(const char* name, LegacyHost* result);
+HostError LegacyHostByAddress(const void* address, size_t length, Family family,
+                             LegacyHost* result);
+bool LegacyServiceByName(const char* name, const char* protocol, LegacyService* result);
+bool LegacyServiceByPort(int port, const char* protocol, LegacyService* result);
 
 // inet_pton/inet_ntop for kInet and kInet6.
 int Pton(Family family, const char* text, void* out);

@@ -1,9 +1,8 @@
 // gesher-base: name resolution (<netdb.h>), address text (<arpa/inet.h>),
 // and network interfaces (<net/if.h>, <ifaddrs.h>), over winsock.cc.
 //
-// gethostbyname, gethostbyaddr, getservbyname, getservbyport and
-// getprotobyname are declared but not implemented: nothing built uses them,
-// and a link error is clearer than a stub that always fails.
+// Legacy host/service lookups copy Winsock data into deeply owned Linux-layout
+// thread-local objects. Reentrant/database-enumeration APIs remain separate work.
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -21,6 +20,7 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "linux_socket.h"
 #include "socket_internal.h"
@@ -215,6 +215,155 @@ int getnameinfo(const struct sockaddr* addr, socklen_t addrlen, char* host, sock
 int* __get_h_errno(void) {
   static thread_local int h_errno_value = 0;
   return &h_errno_value;
+}
+
+namespace {
+
+static_assert(sizeof(hostent) == 32 && offsetof(hostent, h_addrtype) == 16);
+static_assert(sizeof(hostent::h_addrtype) == 4 && offsetof(hostent, h_length) == 20);
+static_assert(offsetof(hostent, h_addr_list) == 24);
+static_assert(sizeof(servent) == 32 && offsetof(servent, s_port) == 16);
+static_assert(sizeof(servent::s_port) == 4 && offsetof(servent, s_proto) == 24);
+
+int HostErrorOut(ws::HostError error) {
+  switch (error) {
+    case ws::HostError::kOk: return NETDB_SUCCESS;
+    case ws::HostError::kNotFound: return HOST_NOT_FOUND;
+    case ws::HostError::kAgain: return TRY_AGAIN;
+    case ws::HostError::kNoRecovery: return NO_RECOVERY;
+    case ws::HostError::kNoData: return NO_DATA;
+    case ws::HostError::kInternal: return NETDB_INTERNAL;
+  }
+  return NETDB_INTERNAL;
+}
+
+struct HostStorage {
+  hostent entry{};
+  ws::LegacyHost data;
+
+  hostent* Publish(ws::LegacyHost&& value) {
+    data = std::move(value);
+    entry = {data.name, data.aliases, FromFamily(data.family),
+             static_cast<int>(data.length), data.addresses};
+    return &entry;
+  }
+};
+
+struct ServiceStorage {
+  servent entry{};
+  ws::LegacyService data;
+
+  servent* Publish(ws::LegacyService&& value) {
+    data = std::move(value);
+    entry = {data.name, data.aliases, data.port, data.protocol};
+    return &entry;
+  }
+};
+
+// Separate per-thread host and service storage, as bionic's res_static uses.
+// Service calls cannot invalidate a held host result or change its h_errno.
+thread_local HostStorage g_host;
+thread_local ServiceStorage g_service;
+
+hostent* HostFailure(int error) {
+  h_errno = error;
+  return nullptr;
+}
+
+hostent* HostSystemFailure(int error) {
+  errno = error;
+  return HostFailure(NETDB_INTERNAL);
+}
+
+bool NumericHostCandidate(const char* name) {
+  const size_t length = strlen(name);
+  if (length == 0 || name[length - 1] == '.') return false;
+  if (name[0] >= '0' && name[0] <= '9'
+      && strspn(name, "0123456789.") == length) return true;
+  return strchr(name, ':') != nullptr
+      && strspn(name, "0123456789abcdefABCDEF:.") == length;
+}
+
+}  // namespace
+
+hostent* gethostbyname(const char* name) {
+  if (name == nullptr) return HostSystemFailure(EINVAL);
+  if (*name == '\0') return HostFailure(HOST_NOT_FOUND);
+  ws::LegacyHost result;
+  if (NumericHostCandidate(name)) {
+    // Pinned bionic uses inet_pton, rejecting Winsock's shorthand 127.1.
+    uint8_t address[4];
+    if (ws::Pton(ws::Family::kInet, name, address) != 1) {
+      return HostFailure(HOST_NOT_FOUND);
+    }
+    const size_t name_size = strlen(name) + 1;
+    if (name_size > SIZE_MAX - 3 * sizeof(char*) - sizeof(address)) {
+      return HostSystemFailure(EOVERFLOW);
+    }
+    result.storage.reset(static_cast<char*>(malloc(3 * sizeof(char*) + name_size + sizeof(address))));
+    if (!result.storage) return HostSystemFailure(ENOMEM);
+    result.aliases = reinterpret_cast<char**>(result.storage.get());
+    result.aliases[0] = nullptr;
+    result.addresses = result.aliases + 1;
+    result.addresses[1] = nullptr;
+    result.name = reinterpret_cast<char*>(result.addresses + 2);
+    memcpy(result.name, name, name_size);
+    result.addresses[0] = result.name + name_size;
+    memcpy(result.addresses[0], address, sizeof(address));
+    result.family = ws::Family::kInet;
+    result.length = sizeof(address);
+  } else {
+    if (!gesher_inet_allowed()) return HostSystemFailure(EACCES);
+    ws::HostError error = ws::LegacyHostByName(name, &result);
+    if (error != ws::HostError::kOk) return HostFailure(HostErrorOut(error));
+  }
+  hostent* published = g_host.Publish(std::move(result));
+  h_errno = NETDB_SUCCESS;
+  return published;
+}
+
+hostent* gethostbyaddr(const void* address, socklen_t length, int family) {
+  if (family != AF_INET && family != AF_INET6) return HostSystemFailure(EAFNOSUPPORT);
+  if (length != (family == AF_INET ? 4u : 16u) || address == nullptr) {
+    return HostSystemFailure(EINVAL);
+  }
+  in6_addr ipv6{};
+  if (family == AF_INET6) {
+    memcpy(&ipv6, address, sizeof(ipv6));
+    if (IN6_IS_ADDR_LINKLOCAL(&ipv6) || IN6_IS_ADDR_SITELOCAL(&ipv6)) {
+      return HostFailure(HOST_NOT_FOUND);
+    }
+    if (IN6_IS_ADDR_V4MAPPED(&ipv6) || IN6_IS_ADDR_V4COMPAT(&ipv6)) {
+      address = ipv6.s6_addr + 12;
+      family = AF_INET;
+      length = 4;
+    }
+  }
+  if (!gesher_inet_allowed()) return HostSystemFailure(EACCES);
+  ws::LegacyHost result;
+  ws::HostError error = ws::LegacyHostByAddress(address, length, ToFamily(family), &result);
+  if (error != ws::HostError::kOk) return HostFailure(HostErrorOut(error));
+  hostent* published = g_host.Publish(std::move(result));
+  h_errno = NETDB_SUCCESS;
+  return published;
+}
+
+servent* getservbyname(const char* name, const char* protocol) {
+  if (name == nullptr) { errno = EINVAL; return nullptr; }
+  ws::LegacyService result;
+  if (!ws::LegacyServiceByName(name, protocol, &result)) return nullptr;
+  // The pinned bionic database lookup matches its canonical name, not aliases.
+  if (strcmp(result.name, name) != 0
+      || (protocol != nullptr && strcmp(result.protocol, protocol) != 0)) return nullptr;
+  return g_service.Publish(std::move(result));
+}
+
+servent* getservbyport(int port, const char* protocol) {
+  if (port < 0 || port > 65535) return nullptr;
+  ws::LegacyService result;
+  if (!ws::LegacyServiceByPort(port, protocol, &result)) return nullptr;
+  if (result.port != port || (protocol != nullptr && strcmp(result.protocol, protocol) != 0)) return nullptr;
+  return g_service.Publish(std::move(result));
 }
 
 // --- address text -------------------------------------------------------------
