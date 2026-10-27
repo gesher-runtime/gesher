@@ -7,6 +7,14 @@ verified in full ci 40386670586 at 6f6ac6f, attempt 1; both Windows suites,
 package and required e2e logs personally read. See the scoped report in
 handoff/tracks/native3-unicode.md. Remaining NDK/POSIX scope stays open.
 
+Corrected signed/unsigned character widths and ART current-thread/process
+CPU clocks are accepted in full ci 40430425743 at b3ecc85, attempt 1;
+root inspected both Windows suites, package and both required e2e logs.
+See handoff/tracks/native3-width-clock.md. This supersedes the earlier
+shared-signed width expectations for unsigned ARM64. Monotonic elapsed and
+clock-selecting deadline behavior is separately accepted on ADR0075 in
+full ci 40434741055 at bdfb230; other native3 contracts remain open.
+
 ## Context
 
 native2 verifies the imports used by its real programs and the e2e apps,
@@ -90,5 +98,6 @@ plain/locale shim entries for every code point and four invalid values;
 NDK tests cover reference rows, handles and error paths in both ABIs/modes.
 The full comparison passes in ci 40386670586 on both Windows versions,
 including NDK boundary/handle/error checks in both ABIs and APK modes.
-No local AOSP/ICU build ran. wcwidth/wcswidth, collation and the rest of
-native3 remain open; only the scoped Unicode row is ticked.
+No local AOSP/ICU build ran. These classification results alone did not
+establish width behavior; the later corrected-width acceptance is described
+above. Collation/conversions and the rest of native3 remain separate scope.

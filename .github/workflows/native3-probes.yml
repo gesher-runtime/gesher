@@ -44,6 +44,20 @@ jobs:
           cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml > unicode-reference.log
           cat unicode-reference.log
           python3 probes/native3/unicode/verify.py unicode-reference.log
+      - name: Verify the pinned bionic character-width reference
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml -- --width > width-reference.log
+          cat width-reference.log
+          python3 probes/native3/unicode/verify-width.py width-reference.log
+      - name: Verify the pinned unsigned-wchar width reference
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo +1.87.0 run --release --locked --manifest-path probes/native3/unicode/Cargo.toml -- --width-unsigned > width-unsigned-reference.log
+          cat width-unsigned-reference.log
+          python3 probes/native3/unicode/verify-width.py width-unsigned-reference.log --unsigned
 
   build:
     runs-on: ubuntu-24.04
