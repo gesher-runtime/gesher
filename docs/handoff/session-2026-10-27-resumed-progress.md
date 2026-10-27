@@ -507,3 +507,33 @@ under C:/work/gesher-ci-review. Every old/new current-source actual gate is
 still required; old full40588525037 remains failed and unaccepted. No phase4
 code merge/main/PR/tag/release occurred. Integration remains code-identical
 to accepted944. Hardware/all-gap gates and separate excluded tracks remain.
+
+## Actual canonical producer roles now pass (2026-10-28)
+
+Same full40596167427/exact30db continues under existing watch97520; no
+restart/extra dispatch. Actual build122512511346 is green40m16s. Its real
+productionOFF role is emitted23:16:44UTC, Windows artifact12779280757 is
+sealed/uploaded23:16:50, then ONhook role23:17:08 and hook artifact12779270829
+upload follow. Actual source/run/attempt agree, configured compiler/launcher/
+metadata dictionaries and12 shared-source hashes match; the latter were also
+independently SHA256-compared to frozen30db Git blobs. Only the four original
+private-definition query objects differ. Production exe44ff4a4d17b7fa4d329ae9558f16f1a651485b3e2162c7725e7634d85e152f94
+remains separately bound to hook exe3ef589eb36ae687d244557aa66da237f9e38291baca7c8ecda23f2a83c9b1664.
+Actual producer evidence and full role records are saved as
+coherent-web3-union-full-40596167427-dual-host-actual-evidence.json.
+
+Boot producer122529052458 is green32s, with current five-jar compilation,
+all fifteen art/oat/vdex outputs and actual three-space boot Hello. Its
+artifact12777738989 is current. Framework122512562210 independently builds/
+copies AOT PCL/DLC/bad APKs/shared jars and queryDEX into the same current
+framework artifact12776002815, digest64482ac13d29f0c8a488483f30ad02d9bb1021a5b3dcf53a99e9a44850dd1f09.
+All eighteen completed producer plain logs/identities/artifact digests are
+indexed under this run's early-producers.json; no artifacts downloaded locally.
+
+Actual normal Windows jobs122529278249/122529278265, separate hook jobs
+122529278293/122529278452 and package122529278391 have started. Their runtime,
+module/PID, coherent image-copy, package/e2e and final totals remain pending;
+producer green is not that proof. Current process84/25 and separate20/21/43
+controls remain bounded wait/status/output/process-SafeHandle proof, not
+reader/task/pipe-disposal or canceled partial-prefix proof. Separate cleanup
+source/components are excluded. No phase4 code/main/PR/tag/release acceptance.
