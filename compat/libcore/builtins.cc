@@ -42,6 +42,7 @@ JNIEXPORT void JNICALL Java_sun_nio_fs_LinuxWatchService_configureBlocking(JNIEn
                                                                            jboolean);
 JNIEXPORT void JNICALL Java_sun_nio_fs_LinuxWatchService_socketpair(JNIEnv*, jclass, jintArray);
 JNIEXPORT jint JNICALL Java_sun_nio_fs_LinuxWatchService_poll(JNIEnv*, jclass, jint, jint);
+JNIEXPORT void JNICALL Java_sun_nio_fs_UnixCopyFile_transfer(JNIEnv*, jclass, jint, jint, jlong);
 }
 
 namespace {
@@ -89,6 +90,8 @@ const gesher_builtin_symbol kOpenjdk[] = {
      reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_socketpair)},
     {"Java_sun_nio_fs_LinuxWatchService_poll",
      reinterpret_cast<void*>(&Java_sun_nio_fs_LinuxWatchService_poll)},
+    {"Java_sun_nio_fs_UnixCopyFile_transfer",
+     reinterpret_cast<void*>(&Java_sun_nio_fs_UnixCopyFile_transfer)},
 };
 
 const bool registered = [] {
