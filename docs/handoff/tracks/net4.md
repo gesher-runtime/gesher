@@ -207,3 +207,10 @@ evidence could be polluted by an earlier localhost HTTP connection. Separate
 HTTP and SNI listeners are required before acceptance. All contracts above,
 including the 84 assigned libc/resolver entries, remain open. Every compiler
 and native/JVM fixture runs in CI only.
+
+Web3 full40444053066 atcbf5639 completes green (22 success/six skipped),
+with all14 Web3 checks and zero failed tests on both runners, package and
+both e2e logs read. Its next source additionally requires wrapper/child
+exit codes zero; the earlier harness did not prove that after app done.
+That stricter full validation remains required before final Web3 handoff.
+No Net4 runtime/API contract is closed by the shared test-fixture preparation.

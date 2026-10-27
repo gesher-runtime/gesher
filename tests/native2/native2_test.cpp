@@ -448,7 +448,7 @@ Part Dlopen() {
       {"libGLESv1_CM.so", "glClear", true}, {"libGLESv2.so", "glDrawArrays", true},
       {"libGLESv3.so", "glDrawArraysInstanced", true}, {"libOpenSLES.so", "slCreateEngine", true},
       {"libaaudio.so", "AAudio_createStreamBuilder", true}, {"libjnigraphics.so", "AndroidBitmap_getInfo", true},
-      {"libmediandk.so", "AMediaCodec_createDecoderByType", false},
+      {"libmediandk.so", "AMediaFormat_new", true},
       {"libcamera2ndk.so", "ACameraManager_create", false}, {"libvulkan.so", "vkCreateInstance", false},
   };
   std::string present, absent;
