@@ -3,7 +3,6 @@ package gesher;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.SharedLibraryInfo;
 
-import com.gesher.app.Main;
 import com.gesher.server.SharedLibraryGraph;
 import com.gesher.server.SharedLibraryRegistry;
 
@@ -50,7 +49,10 @@ public final class Aot3SharedLibraryTest {
     }
 
     public static void main(String[] args) throws Exception {
-        Main.bootstrap("shared graph", args[0], args[1]);
+        // Invoke the actual shipped bootstrap at runtime. Importing Main here
+        // makes graphics-tests' sourcepath recursively compile generated services.
+        Class.forName("com.gesher.app.Main").getMethod("bootstrap", String.class,
+                String.class, String.class).invoke(null, "shared graph", args[0], args[1]);
         File root = new File(args[2]);
         File original = new File(args[3]);
         File updated = new File(args[4]);
