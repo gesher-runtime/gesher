@@ -89,6 +89,11 @@ int main(int argc, char** argv) {
   }
 
   gesher_arm64_host host = {GESHER_ARM64_API_VERSION, g_resolve, g_describe};
+  Check("null host rejected before initialization", init(nullptr) == nullptr);
+  for (uint32_t version : {0u, 1u, 2u, GESHER_ARM64_API_VERSION + 1u}) {
+    gesher_arm64_host incompatible = {version, g_resolve, g_describe};
+    Check("incompatible host va_list ABI rejected", init(&incompatible) == nullptr);
+  }
   const gesher_arm64_api* api = init(&host);
   Check("translator initialised", api != nullptr && api->version == GESHER_ARM64_API_VERSION);
   if (!api) {
