@@ -14,6 +14,7 @@ public final class QueryBoundaryTest {
     private static native boolean nativeJoin(long id);
     private static native int nativeActive();
     private static native int nativeAttached();
+    private static native int nativeShutdowns();
     private static void require(boolean value, String name) {
         if (!value) throw new AssertionError(name);
         System.out.println("PASS query-boundary: " + name);
@@ -59,6 +60,8 @@ public final class QueryBoundaryTest {
         register.setAccessible(true);
         require(Boolean.TRUE.equals(register.invoke(null, QueryBoundaryTest.class)), "CI-only real HWND hook registered");
         long previousGeneration = 0;
+        java.util.concurrent.atomic.AtomicBoolean shutdownOkay = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread shutdown = new Thread(() -> shutdownOkay.set(UiaBridge.shutdown()), "ActualUiaShutdown");
         for (int kind = 0; kind < 4; kind++) {
             NativeWindow window = NativeWindow.create("QueryBoundary-" + kind, 64, 64);
             long id;
@@ -79,6 +82,13 @@ public final class QueryBoundaryTest {
                         "actual owner joined with unavailable result before lock release kind=" + kind);
                 require(nativeActive() == 1 && nativeAttached() == 1,
                         "canceled worker remains attached only until held lock releases kind=" + kind);
+                if (kind == 3) {
+                    shutdown.start();
+                    long stopEntry = System.nanoTime() + 1_000_000_000L;
+                    while (nativeShutdowns() == 0 && System.nanoTime() < stopEntry) Thread.sleep(2);
+                    require(nativeShutdowns() == 1 && nativeAttached() == 1,
+                            "actual shutdown starts while canceled JNI worker still holds lifetime");
+                }
             }
             require(nativeJoin(id), "actual sender joined exit0 kind=" + kind);
             long drain = System.nanoTime() + 3_000_000_000L;
@@ -87,7 +97,9 @@ public final class QueryBoundaryTest {
                     "lock release drains and detaches actual JNI worker kind=" + kind);
             require(cacheSize() == 0, "canceled cache miss publishes no late root kind=" + kind);
         }
-        require(UiaBridge.shutdown(), "actual VM boundary drains native and event workers");
+        shutdown.join(3000);
+        require(!shutdown.isAlive() && shutdownOkay.get(),
+                "actual in-flight shutdown drains native and event workers after lock release");
         require(nativeActive() == 0 && nativeAttached() == 0, "shutdown actual attached workers0");
         require(!startBridge(), "terminal shutdown never restarts a dead pool");
         System.out.println("ACTUAL_QUERY_BOUNDARY_SUMMARY four-kinds=4 owner-join=4 detached=0 cache=0");

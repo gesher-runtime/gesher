@@ -129,6 +129,7 @@ jboolean QueryFixture_nativeJoin(JNIEnv*, jclass, jlong id) {
 }
 jint QueryFixture_nativeActive(JNIEnv*, jclass) { return static_cast<jint>(g_queries->ActiveCount()); }
 jint QueryFixture_nativeAttached(JNIEnv*, jclass) { return static_cast<jint>(g_attached_queries.load()); }
+jint QueryFixture_nativeShutdowns(JNIEnv*, jclass) { return static_cast<jint>(g_fixture_shutdowns.load()); }
 jboolean RegisterQueryFixture(JNIEnv* env, jclass, jclass type) {
   if (!type) return JNI_FALSE;
   const JNINativeMethod methods[] = {
@@ -138,6 +139,7 @@ jboolean RegisterQueryFixture(JNIEnv* env, jclass, jclass type) {
     {"nativeJoin", "(J)Z", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeJoin)},
     {"nativeActive", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeActive)},
     {"nativeAttached", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeAttached)},
+    {"nativeShutdowns", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(QueryFixture_nativeShutdowns)},
   };
   bool okay = env->RegisterNatives(type, methods, sizeof(methods) / sizeof(methods[0])) == JNI_OK;
   return okay ? JNI_TRUE : JNI_FALSE;
