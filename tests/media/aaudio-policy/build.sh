@@ -14,6 +14,10 @@ for abi in x86_64 arm64-v8a; do
   "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
     -shared -fPIC -Wl,-soname,libaaudio_policy.so -o "$out/$abi/libaaudio_policy.so" \
     "$here/aaudio_policy_test.cc" -laaudio -ldl
+  "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+    -DMEDIA4_AAUDIO_ELF -fPIE -pie -Wl,-rpath,'$ORIGIN' -o "$out/$abi/aaudio-policy-test" \
+    "$here/aaudio_policy_test.cc" -laaudio -ldl
   cp "$llvm/sysroot/usr/lib/$triple/libc++_shared.so" "$out/$abi/"
   "$llvm/bin/llvm-readelf" -h "$out/$abi/libaaudio_policy.so" | head -20
+  "$llvm/bin/llvm-readelf" -h "$out/$abi/aaudio-policy-test" | head -20
 done

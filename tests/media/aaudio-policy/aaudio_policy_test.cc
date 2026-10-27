@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
@@ -56,14 +57,14 @@ void Configure(AAudioStreamBuilder* builder, aaudio_direction_t direction) {
   AAudioStreamBuilder_setBufferCapacityInFrames(builder, 44100);
 }
 
-std::string Run(bool allowed, bool has_manifest) {
+std::string Run(bool allowed, const char* caller, bool has_manifest) {
   Report r;
 #if defined(__aarch64__)
   r.text = "media4 aaudio ABI: arm64-v8a\n";
 #else
   r.text = "media4 aaudio ABI: x86_64\n";
 #endif
-  r.text += "media4 aaudio caller: JNI\n";
+  r.text += "media4 aaudio caller: " + std::string(caller) + "\n";
   int before = r.failed;
   void* library = dlopen("libaaudio.so", RTLD_NOW);
   void* system = dlopen("/system/lib64/libaaudio.so", RTLD_NOW);
@@ -189,6 +190,7 @@ std::string Run(bool allowed, bool has_manifest) {
     }
     r.Part("permission", before, allowed ? "manifest allowed actual legacy capture/read/stop" :
            has_manifest ? "manifest denied input returns -889 without object" :
+           std::strcmp(caller, "executable") == 0 ? "native process without recording identity returns -889 without object" :
                           "bare core without recording identity returns -889 without object");
   }
   r.Check(get() == kUnspecified, "restore the original process policy");
@@ -200,11 +202,21 @@ std::string Run(bool allowed, bool has_manifest) {
 
 }  // namespace
 
+#if defined(MEDIA4_AAUDIO_ELF)
+int main(int argc, char** argv) {
+  if (argc != 1 || std::strcmp(argv[0], "aaudio-policy-test") != 0) return 2;
+  const std::string report = Run(false, "executable", false);
+  std::fputs(report.c_str(), stdout);
+  std::fflush(stdout);
+  return report.find("media4 aaudio: all passed\n") != std::string::npos ? 0 : 1;
+}
+#else
 extern "C" JNIEXPORT jstring JNICALL Java_gesher_AAudioPolicyTest_run(JNIEnv* env, jclass, jboolean allowed) {
-  return env->NewStringUTF(Run(allowed, false).c_str());
+  return env->NewStringUTF(Run(allowed, "JNI", false).c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_com_gesher_aaudiopolicy_AAudioPolicyActivity_run(
     JNIEnv* env, jclass, jboolean allowed) {
-  return env->NewStringUTF(Run(allowed, true).c_str());
+  return env->NewStringUTF(Run(allowed, "JNI", true).c_str());
 }
+#endif

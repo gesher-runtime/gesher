@@ -185,10 +185,15 @@ ALWAYS fails new input/output opens with NO_SERVICE(-881)/null because no
 Android MMAP service exists; format validation takes priority. Typed dynamic
 calls use exact pinned API36 signatures with the older r27 NDK, alongside
 real legacy PCM output and manifest-aware capture/read/stop/close cases.
-Both-ABI libraries, four allowed/denied APKs, core DEX and strict test78
-markers are prepared. No compilation/runtime proof or inventory change is
+Both-ABI libraries and genuine ELF executables, four allowed/denied APKs,
+core DEX and strict test78 markers are prepared. No compilation/runtime proof or inventory change is
 claimed. Standalone coverage must use the separately verified real backend,
-not a policy-only library; real native full40477536464 is now green and imported. Full
+not a policy-only library; real native full40477536464 is now green and imported.
+Each ELF has the real argv0 and executable caller marker, shares every
+policy/output/validation case, and independently denies input without
+identity. Test78 requires16 passes per runner, including both ELF callers
+and four device shutdowns. CI compiles the exact AAudio host object before
+the full graph to expose header/ABI errors early. Full
 builder validation, platform-policy getters, routing and error callbacks
 remain open. Only PS AST/Bash/XML/YAML/source checks ran locally.
 

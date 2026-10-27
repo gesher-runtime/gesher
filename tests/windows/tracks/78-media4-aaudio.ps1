@@ -1,5 +1,5 @@
 # Real AAudio policy/capability and permission-aware stream contracts (media4, ADR0064).
-# No independent native-launcher backend is claimed by these JNI/APK checks.
+# The standalone callers use the genuine backend verified in full40477536464.
 $slHost = (Resolve-Path $Dir).Path
 $slDir = Join-Path $slHost 'media/aaudio-policy'
 $slExpected = @(
@@ -41,8 +41,8 @@ try {
   }
 } finally { $wave.Dispose() }
 
-function InvokeAAudioPolicy([string[]] $Arguments, [hashtable] $Environment = @{}) {
-  $info = [Diagnostics.ProcessStartInfo]::new("$slHost/dalvikvm.exe")
+function InvokeAAudioPolicy([string[]] $Arguments, [hashtable] $Environment = @{}, [string] $Exe = "$slHost/dalvikvm.exe") {
+  $info = [Diagnostics.ProcessStartInfo]::new($Exe)
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
@@ -66,9 +66,11 @@ function InvokeAAudioPolicy([string[]] $Arguments, [hashtable] $Environment = @{
   return @{ Text = $text; Code = $code }
 }
 
-function CheckAAudioPolicy([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra) {
+function CheckAAudioPolicy([string] $Abi, [string] $Mode, [bool] $Allowed, [hashtable] $Result, [string[]] $Extra, [string] $Caller = 'JNI') {
   $permission = if ($Mode -eq 'core JNI') { 'bare core without recording identity returns -889 without object' }
-  elseif ($Allowed) { 'manifest allowed actual legacy capture/read/stop' } else {
+  elseif ($Allowed) { 'manifest allowed actual legacy capture/read/stop' } elseif ($Caller -eq 'executable') {
+    'native process without recording identity returns -889 without object'
+  } else {
     'manifest denied input returns -889 without object'
   }
   $permissionTrace = if ($Allowed) { 'expected allowed, result 0, object true' } else {
@@ -77,7 +79,7 @@ function CheckAAudioPolicy([string] $Abi, [string] $Mode, [bool] $Allowed, [hash
   if ($Allowed) {
     $Extra += 'media4 aaudio input trace: read 128, nonzero true, mmap false, live policy 3'
   }
-  $missing = @(($slExpected + "media4 aaudio ABI: $Abi" + 'media4 aaudio caller: JNI' +
+  $missing = @(($slExpected + "media4 aaudio ABI: $Abi" + "media4 aaudio caller: $Caller" +
     "media4 aaudio permission: ok; $permission" + "media4 aaudio permission trace: $permissionTrace" + $Extra) |
     Where-Object { -not $Result.Text.Contains($_) })
   if ($Result.Code -eq 0 -and $missing.Count -eq 0 -and
@@ -105,6 +107,9 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
   $core = InvokeAAudioPolicy ($slCoreVm + @('-cp', (NoDrive "$slDir/aaudio-policy-tests.dex"),
     'gesher.AAudioPolicyTest', (NoDrive "$native/libaaudio_policy.so")))
   CheckAAudioPolicy $abi.Name 'core JNI' $false $core @()
+  $elf = InvokeAAudioPolicy @('--elf', "$native/aaudio-policy-test", 'aaudio-policy-test') `
+    @{ LD_LIBRARY_PATH = (NoDrive $native) } -Exe "$slHost/gesher-exec.exe"
+  CheckAAudioPolicy $abi.Name 'standalone ELF' $false $elf @() 'executable'
   foreach ($permission in @(@{ Suffix = ''; Allowed = $true; Name = 'allowed' },
                             @{ Suffix = '-denied'; Allowed = $false; Name = 'denied' })) {
     $apk = "$slHost/aaudiopolicyapp$($permission.Suffix)-$($abi.Label).apk"
