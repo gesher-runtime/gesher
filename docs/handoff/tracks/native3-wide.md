@@ -72,31 +72,38 @@ contracts with the run ID. Keep this status current at meaningful pushes.
 
 ## Status and next steps
 
-Combined acceptance candidate now includes current integration 2f8ed7a
-(combined startup gate 40432541082 at 42cc1c0 is verified) and frozen
-corrected per-ABI width/CPU-clock branch c8f30ec (full 40430425743 at
-b3ecc85 is verified). The guest_libc conflict retains both localeconv's
-ARM CHAR_MAX adapter and the corrected unsigned wchar width adapters,
-including both registrations. extra_bionic's exact comparison results and
-test44's six-case wide evidence capture remain intact alongside the width
-checks. Roadmap conflict resolution retains both scoped acceptance records.
-Local checks are source/digest/parser checks only. Final combined full ci
-40439802052 at 7302b20432e9b31e30897ced7b372f0e835c4603 is running,
-watched with interval 120; no combined runtime result is claimed yet. The separate pending
-native3-time/0573 source is not imported. Frozen native3-wide-verified is
-unchanged at e7c1b06.
+Combined wide acceptance is verified in full ci 40439802052 at
+7302b20432e9b31e30897ced7b372f0e835c4603, attempt 1. Personally read all
+28 conclusions (22 success/six skipped), all 22 successful job logs, both
+final zero-failure summaries and all six actual test66 ABI/mode PASS lines
+per runner. Signed/unsigned whole-range width digests, 33 boundary rows,
+all four APK cases and actual ART CPU-clock checks also pass. No retry.
+This source includes current-at-dispatch integration 2f8ed7a and corrected
+width/CPU prerequisite c8f30ec, preserving both localeconv and unsigned-width
+guest adapters and their registrations. Exact test44 evidence capture and
+both tracks' acceptance records remain intact. Same-source scoped ci
+40439801814 was read in full: upstream provenance, 248 reference assertions
+with zero failures, production locale/guest -Werror and both NDK builds.
 
-Current run progress: main build and boot image pass. Actual package job
-121990064884 was read: all 23 installer PASS lines, including installed
-oatdump/image/fonts, install/dexopt, associations/shortcuts, real window and
-click/keyboard/wheel/resize input, complete process/data/association/toast/
-Start-menu uninstall cleanup. Actual e2e2022 job 121990574707 passes all
-nine apps including required Puzzles/TIC-80, four transport fixtures and
-association/shortcut launches. Both Windows suites and e2e2025 remain
-pending; no full green or test-summary claim yet. Root has since verified
-and integrated 0573/time68 as 8922a3e; this frozen run predates it. The
+Actual package job 121990064884 passes all 23 installer checks, including
+installed oatdump/image/fonts, install/dexopt, associations/shortcuts, real
+window/click/keyboard/wheel/resize input and complete uninstall cleanup.
+Both actual e2e jobs 121990574707/121990574682 pass nine apps including
+required Puzzles/TIC-80, four transport fixtures and association/shortcut
+launches; each ends with 0 unexpected failures. Exact test jobs and scope
+are in native3-wide-verified.md. Fourteen baseline entries gain only scoped
+verification metadata; native3 ownership, historical counts and baseline
+source/observations remain unchanged. wcstold_l remains missing/open.
+
+Only documentation may advance above verified source 7302b20. The original
+frozen native3-wide-verified ref is unchanged at e7c1b06. Root has since
+verified and integrated 0573/time68 as 8922a3e; this run predates it. The
 separate ARM FPCR candidate includes that newer integration and the frozen
-wide prerequisite, with combined full ci 40444486511 pending.
+wide prerequisite, with coherent full ci 40444486511 at e0f9601 pending.
+Root alone merges integration/main and decides that combined acceptance.
+Binary128/libm, wide scanf/stdio, independent narrow gdtoa/tzcode and the
+remaining native3/POSIX contracts remain explicitly open. All compilation
+and native/JVM fixture execution were CI-only.
 
 ### Earlier scoped acceptance and source history
 
