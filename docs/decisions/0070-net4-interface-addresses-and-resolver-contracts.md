@@ -1,10 +1,12 @@
 # 0070. Network interface addresses and remaining resolver contracts
 
-Status: verified bounded interface-address candidate, coherent full40499454478
-at694a4cd6b067f1deea87015bceb2ad2160260154, including accepted Windows4/Web3
-integration6297. Coordinator independent acceptance/merge follows. Only the two scoped entries receive
-verification metadata. Historical baseline counts and remaining Net4
-contracts are unchanged. [Frozen evidence](../handoff/tracks/net4-ifaddrs-final.md).
+Status: the bounded interface stage40499454478/694 was independently accepted
+and merged by Root asbc6e05be. The next bounded legacy host/service correction
+is verified by full40519019567/f363, both actual Windows0failed, and awaits
+Root independent acceptance. [Resolver evidence](../handoff/tracks/net4-resolver-final.md).
+Only the two interface entries have inventory verification metadata; the four
+legacy symbols already existed. Historical counts,145 proof objects and82
+remaining Net4 entries are unchanged. [Interface evidence](../handoff/tracks/net4-ifaddrs-final.md).
 
 ## Contract and implementation
 
@@ -58,10 +60,19 @@ mandatory before accepting the source.
 
 ## Remaining scope
 
+The separate legacy component replaces raw Windows host/service result
+pointers with deeply owned neutral copies and Linux-layout thread-local
+publication, with explicit resolver error conversion. Full40519019567/f363
+supplies test82's16 actual NDK contexts per runner, independent WinSDK data,
+four-thread ownership/error races, permission and negative controls.
+[The component brief](../handoff/tracks/net4-resolver.md) records exact pinned
+semantics and explicit uninduced provider/OOM cases. Baseline metadata and
+the accepted interface stage are unchanged; this is no full resolver parity.
+
 The 84-entry historical Net4 export baseline remains unchanged. These two
 entries may gain scoped verification metadata only after actual CI evidence;
-the aggregate historical counts must not be rewritten. Hostent translation,
-resolver/query/name-wire APIs, shared nonblocking ownership, ancillary data,
+the aggregate historical counts must not be rewritten. Broader host/family/
+reentrant contracts, resolver/query/name-wire APIs, shared nonblocking ownership, ancillary data,
 unsupported socket families, IPv6-only default DNS, connectivity/hardware
 details and accelerated crypto remain the separate contracts in the Net4
 brief. This slice establishes no AF_PACKET socket implementation or physical

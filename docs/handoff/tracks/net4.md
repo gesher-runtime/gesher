@@ -55,6 +55,23 @@ Merge latest integration before final CI and read every claimed PASS line.
 
 ## Status and next steps
 
+The separate legacy resolver candidate is now full-green40519019567 at
+f36317637e01fdeeebcb1cbc4777c1cc8f9cea9a: both Windows0failed/730topPASS,
+all16 real NDK contexts per runner, independent host/service oracle8 per
+allowed standalone ABI, actual four-thread TLS/error/lifetime/permission
+controls and cleanup. Package23 and both ten-app e2e sets0unexpected pass;
+all successful logs and28job outcomes were read. [Bounded resolver evidence](net4-resolver-final.md).
+These four pre-existing exports needed real ABI/result ownership correction,
+not new symbol rows. Inventory bytes/counts/145 existing proofs and the82
+remaining Net4 entries stay unchanged. Root alone accepts/merges this source.
+
+The next bounded legacy resolver component starts in the separate
+`wip/net4-resolver` worktree from accepted integrationbc6e05be; test82 and
+existing ADR0070 are reserved. [Its brief](net4-resolver.md) records exact
+Android/WinSDK ABI and lifetime/error semantics. Production source is prepared;
+real NDK/oracle/negative/thread-lifetime fixtures and CI proof follow. The
+accepted interface stage stays frozen. No additional entry/count is closed.
+
 Coherent full **40499454478**, exact source
 `694a4cd6b067f1deea87015bceb2ad2160260154`, attempt1, is complete green:
 28jobs22success/6skip, both actual Windows suites0failed with712 top PASS

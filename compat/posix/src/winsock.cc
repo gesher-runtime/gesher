@@ -41,6 +41,11 @@ struct WinsockApi {
   decltype(&::shutdown) shutdown;
   decltype(&::inet_pton) inet_pton;
   decltype(&::inet_ntop) inet_ntop;
+  // Exact WinSDK legacy signatures; resolve dynamically like the socket API.
+  hostent* (WSAAPI* gethostbyname)(const char*);
+  hostent* (WSAAPI* gethostbyaddr)(const char*, int, int);
+  servent* (WSAAPI* getservbyname)(const char*, const char*);
+  servent* (WSAAPI* getservbyport)(int, const char*);
 };
 
 template <typename Fn>
@@ -70,6 +75,10 @@ const WinsockApi& Api() {
     LoadProc(ws2, "shutdown", &a.shutdown);
     LoadProc(ws2, "inet_pton", &a.inet_pton);
     LoadProc(ws2, "inet_ntop", &a.inet_ntop);
+    LoadProc(ws2, "gethostbyname", &a.gethostbyname);
+    LoadProc(ws2, "gethostbyaddr", &a.gethostbyaddr);
+    LoadProc(ws2, "getservbyname", &a.getservbyname);
+    LoadProc(ws2, "getservbyport", &a.getservbyport);
     return a;
   }();
   return api;
@@ -678,6 +687,113 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms) {
 
 namespace {
 
+static_assert(sizeof(void*) == 8 && sizeof(hostent) == 32);
+static_assert(offsetof(hostent, h_addrtype) == 16 && sizeof(hostent::h_addrtype) == 2);
+static_assert(offsetof(hostent, h_length) == 18 && sizeof(hostent::h_length) == 2);
+static_assert(offsetof(hostent, h_addr_list) == 24);
+static_assert(sizeof(servent) == 32 && offsetof(servent, s_proto) == 16);
+static_assert(offsetof(servent, s_port) == 24 && sizeof(servent::s_port) == 2);
+
+HostError FromLegacyError(int error) {
+  switch (error) {
+    case WSAHOST_NOT_FOUND: return HostError::kNotFound;
+    case WSATRY_AGAIN: return HostError::kAgain;
+    case WSANO_RECOVERY: return HostError::kNoRecovery;
+    case WSANO_DATA: return HostError::kNoData;
+    default: errno = ErrnoFromWsa(error); return HostError::kInternal;
+  }
+}
+
+size_t LegacyCount(char* const* values) {
+  size_t count = 0;
+  if (values != nullptr) while (values[count] != nullptr) ++count;
+  return count;
+}
+
+bool LegacySize(size_t amount, size_t* total) {
+  if (amount > SIZE_MAX - *total) { errno = EOVERFLOW; return false; }
+  *total += amount;
+  return true;
+}
+
+char* CopyLegacyString(const char* source, char** cursor) {
+  char* result = *cursor;
+  const size_t length = strlen(source) + 1;
+  memcpy(result, source, length);
+  *cursor += length;
+  return result;
+}
+
+HostError CopyLegacyHost(const hostent* source, LegacyHost* result) {
+  if (source == nullptr) return FromLegacyError(WSAGetLastError());
+  result->family = FromWinFamily(source->h_addrtype);
+  const int length = result->family == Family::kInet ? 4
+      : result->family == Family::kInet6 ? 16 : 0;
+  if (length == 0 || source->h_length != length || source->h_name == nullptr
+      || source->h_addr_list == nullptr) {
+    errno = EIO;
+    return HostError::kInternal;
+  }
+  const size_t aliases = LegacyCount(source->h_aliases);
+  const size_t addresses = LegacyCount(source->h_addr_list);
+  if (addresses == 0) return HostError::kNoData;
+  if (addresses > SIZE_MAX / sizeof(char*) - 2
+      || aliases > SIZE_MAX / sizeof(char*) - 2 - addresses
+      || addresses > SIZE_MAX / static_cast<size_t>(length)) {
+    errno = EOVERFLOW;
+    return HostError::kInternal;
+  }
+  size_t bytes = (aliases + addresses + 2) * sizeof(char*);
+  if (!LegacySize(strlen(source->h_name) + 1, &bytes)
+      || !LegacySize(addresses * length, &bytes)) return HostError::kInternal;
+  for (size_t i = 0; i < aliases; ++i) {
+    if (!LegacySize(strlen(source->h_aliases[i]) + 1, &bytes)) return HostError::kInternal;
+  }
+  result->storage.reset(static_cast<char*>(malloc(bytes)));
+  if (!result->storage) { errno = ENOMEM; return HostError::kInternal; }
+  result->aliases = reinterpret_cast<char**>(result->storage.get());
+  result->addresses = result->aliases + aliases + 1;
+  char* cursor = reinterpret_cast<char*>(result->addresses + addresses + 1);
+  result->name = CopyLegacyString(source->h_name, &cursor);
+  for (size_t i = 0; i < aliases; ++i) {
+    result->aliases[i] = CopyLegacyString(source->h_aliases[i], &cursor);
+  }
+  result->aliases[aliases] = nullptr;
+  for (size_t i = 0; i < addresses; ++i) {
+    result->addresses[i] = cursor;
+    memcpy(cursor, source->h_addr_list[i], length);
+    cursor += length;
+  }
+  result->addresses[addresses] = nullptr;
+  result->length = length;
+  return HostError::kOk;
+}
+
+bool CopyLegacyService(const servent* source, LegacyService* result) {
+  if (source == nullptr) return false;
+  if (source->s_name == nullptr || source->s_proto == nullptr) return false;
+  const size_t aliases = LegacyCount(source->s_aliases);
+  if (aliases > SIZE_MAX / sizeof(char*) - 1) { errno = EOVERFLOW; return false; }
+  size_t bytes = (aliases + 1) * sizeof(char*);
+  if (!LegacySize(strlen(source->s_name) + 1, &bytes)
+      || !LegacySize(strlen(source->s_proto) + 1, &bytes)) return false;
+  for (size_t i = 0; i < aliases; ++i) {
+    if (!LegacySize(strlen(source->s_aliases[i]) + 1, &bytes)) return false;
+  }
+  result->storage.reset(static_cast<char*>(malloc(bytes)));
+  if (!result->storage) { errno = ENOMEM; return false; }
+  result->aliases = reinterpret_cast<char**>(result->storage.get());
+  char* cursor = reinterpret_cast<char*>(result->aliases + aliases + 1);
+  result->name = CopyLegacyString(source->s_name, &cursor);
+  result->protocol = CopyLegacyString(source->s_proto, &cursor);
+  result->port = static_cast<uint16_t>(source->s_port);
+  for (size_t i = 0; i < aliases; ++i) {
+    result->aliases[i] = CopyLegacyString(source->s_aliases[i], &cursor);
+  }
+  result->aliases[aliases] = nullptr;
+  return true;
+}
+
 GaiError FromWinGai(int error) {
   switch (error) {
     case 0: return GaiError::kOk;
@@ -714,6 +830,28 @@ bool NarrowInto(const wchar_t* utf16, char* out, size_t out_len) {
 }
 
 }  // namespace
+
+HostError LegacyHostByName(const char* name, LegacyHost* result) {
+  if (!Startup()) return HostError::kInternal;
+  return CopyLegacyHost(Api().gethostbyname(name), result);
+}
+
+HostError LegacyHostByAddress(const void* address, size_t length, Family family,
+                             LegacyHost* result) {
+  if (!Startup()) return HostError::kInternal;
+  return CopyLegacyHost(Api().gethostbyaddr(static_cast<const char*>(address),
+      static_cast<int>(length), ToWinFamily(family)), result);
+}
+
+bool LegacyServiceByName(const char* name, const char* protocol, LegacyService* result) {
+  if (!Startup()) return false;
+  return CopyLegacyService(Api().getservbyname(name, protocol), result);
+}
+
+bool LegacyServiceByPort(int port, const char* protocol, LegacyService* result) {
+  if (!Startup()) return false;
+  return CopyLegacyService(Api().getservbyport(port, protocol), result);
+}
 
 GaiError ResolveDefault(const char* node, const char* service, const AddrInfo* hints,
                        std::vector<AddrInfo>* results) {
