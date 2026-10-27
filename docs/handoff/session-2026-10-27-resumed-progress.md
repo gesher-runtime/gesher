@@ -444,3 +444,34 @@ and remote Media d552 refs remain. SGb49, after-resource958 cleanup-source and
 Surface5c remain excluded. Both actual SG ordinary component logs/provenance
 are frozen separately; its watcher ended0, with no raw/public-prefix work.
 No phase4 code merge, main/PR/tag/release or further allocation occurred.
+
+## Canonical union terminal build guard failure (2026-10-28)
+
+Successor recovery found watch40543 no longer present. A single prescribed
+reattach to existing full40588525037 returned its terminal failure; no new
+dispatch, retry or CI restart occurred. Exact source remains
+4a47a20ef652eff2dfd6d477cf1acbc29d98fc45. Saved terminal metadata records
+28jobs:16success,1failure,11skipped. Six skips are the intentional reusable
+probes; boot-image, normal test, query regression, package and e2e were
+blocked downstream and provide no acceptance evidence.
+
+Actual build122486350945 compiled/collected production artifacts successfully,
+then failed at the default-OFF role capture before artifact upload or hook
+build: tools/web3/host_roles.py:80 accesses cache(build)["CMAKE_CXX_COMPILER"]
+and raises KeyError. The toolchain sets that compiler as an ordinary CMake
+variable, so its absence from CMakeCache.txt is not a compiler build failure.
+The Windows wiring owner has the focused correction; retain exact actual
+compiler identity, production/hook shared-source/flag/role guards and every
+runtime/package/e2e gate. Require reviewed changed source and a fresh complete
+full; do not rerun unchanged red4a47 for luck.
+
+Actual plain build and Media producer logs plus terminal metadata are saved
+under coherent-web3-union-full-40588525037-* in C:/work/gesher-ci-review.
+The successful framework producer's previously saved merge-intent record
+still proves AOT/DLC fixtures and query dex in its same current artifact;
+producer success does not establish runtime or combined qualification.
+Integration5262a19f remains clean with entire non-doc tree identical to
+accepted944a0eef; candidatecd82c49a was clean with entire non-doc tree
+identical to failed full4a47. No code/main/PR/tag/release operation occurred.
+SG, after-resource, Native87 and Surface remain excluded; every hardware
+and all-gap completion gate remains open as previously recorded.
