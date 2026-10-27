@@ -253,10 +253,20 @@ function NetExpect([string] $Name, [string] $Out, [int] $Code, [string[]] $Expec
   ($Out -split "`n" | Select-String -Pattern $Show | ForEach-Object { "INFO  $_".TrimEnd() }) | Out-Host
 }
 
+# The apps' HTTPS check (NetApp https) is against this machine, not the internet (ci
+# 40240210807 failed on windows-2025 when example.com did not answer): the test root back
+# in the machine's ROOT store and an HTTPS server with its certificate for localhost, until
+# the end of this script. ($GESHER_NETAPP_HTTPS; app processes inherit it.)
+$appTls = [GesherNetTlsServer]::new($serverCert)
+$machineRoot.Open('ReadWrite')
+$machineRoot.Add($rootPublic)
+$machineRoot.Close()
+$env:GESHER_NETAPP_HTTPS = "https://localhost:$($appTls.Port)/"
+try {
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/netapp.apk")) 400
 NetExpect 'netapp.apk in one process: ConnectivityManager (Windows'' active network, its capabilities, link properties and NetworkInfo), a default and a request callback, HTTPS through HttpsURLConnection, cleartext refused (target SDK 36)' $out $LASTEXITCODE @(
   'NetApp state: internet true', 'connected true', 'NetApp default callback: available true',
-  'NetApp request callback (INTERNET): available true', 'NetApp https: 200 Example Domain',
+  'NetApp request callback (INTERNET): available true', 'NetApp https: 200 expected page from https://localhost:',
   'NetApp cleartext http: refused', 'NetApp done', 'gesher-app: done')
 
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/nonetapp.apk")) 300
@@ -331,8 +341,17 @@ $out = "$(Get-Content -Raw $appLog -ErrorAction SilentlyContinue)"
 if (-not $route) { $out += "`n(no default route on this machine)" }
 $failedBefore = $failed
 NetExpect "netapp.apk in an app process of a system server: ConnectivityManager over binder; an address added to and removed from the adapter of Windows' default route (interface $($route.ifIndex)) reaches its default network callback" $out $appCode @(
-  'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 Example Domain',
+  'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 expected page from https://localhost:',
   'NetApp watch: added seen true', 'NetApp watch: removed seen true', 'NetApp done', 'gesher-app: done')
 if ($failed -ne $failedBefore) {
   Get-Content "$netLogs/system_server.out", "$netLogs/system_server.err" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
+}
+} finally {
+  Remove-Item Env:GESHER_NETAPP_HTTPS -ErrorAction SilentlyContinue
+  Write-Host 'INFO  net TLS cleanup: app server stop'
+  try { $appTls.Dispose() } finally {
+    Write-Host 'INFO  net TLS cleanup: app certificate store remove'
+    try { $machineRoot.Open('ReadWrite'); $machineRoot.Remove($rootPublic); $machineRoot.Close() } catch { }
+  }
+  Write-Host 'INFO  net TLS cleanup: app complete'
 }
