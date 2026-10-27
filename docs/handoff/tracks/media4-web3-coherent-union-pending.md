@@ -18,6 +18,16 @@ regression hosts retained. The following earlier preparation narrative is
 historical; this source is ready for one freshly frozen canonical qualification
 run, not accepted/integrated code. No CI result is inferred from static checks.
 
+Canonical full40588525037 was dispatched exactly once at frozen
+4a47a20ef652eff2dfd6d477cf1acbc29d98fc45 after confirming no live same-ref
+run, using `gh workflow run ci.yml --ref wip/media4-web3-union-pending -R
+gesher-runtime/gesher`. Required watch16062 writes
+C:/work/gesher-ci-review/coherent-web3-union-full-40588525037-watch.log at
+interval120. Every earlier scoped/full gate remains; this full is active and
+no job/runtime/package/e2e conclusion is inferred. Later process proof freeze
+ce44b68f changes documentation only above component ebae; importing its exact
+scope report does not change the running full's source/code.
+
 Starting f4a2b372 contains accepted Libcore944 plus Native942/Envb497, Media
 muxer d552 and qualified AOT450/frozen0c1. Their exact scoped/full evidence
 and limits remain in the prior union report. This changed source must qualify
