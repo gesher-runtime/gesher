@@ -1,10 +1,28 @@
 # Bounded CI process and output cleanup
 
-Coordinator-owned follow-up. ADR0078 and Windows test84 are reserved; no
-CI acceptance exists yet. Work in the separate wip/ci-processes worktree.
+Coordinator-owned follow-up. ADR0078 and Windows test84 remain reserved.
+Bounded helper components are verified below; no coherent full acceptance.
+Work in the separate wip/ci-processes worktree.
 Build and execute process fixtures only in CI.
 
 ## Status and next steps
+
+Exact current sourceebae3e0b28513aa6f3567be4066bb76714dda29d,
+component40556470317 is GREEN both Windows hosts. Actual jobs122373745827
+and122373746029 logs were read:25 mandatory real controls perhost and0failed.
+Includes all prior20 controls plus N2Run normal/exit23/timeout124/retained
+pipes124/working-directory+environment, with actual native handle disposal.
+Original N2Run600s default/status/stream contract remains. The latest source
+is NOT yet coherent-full/package/e2e proof. Earlier pending statements below
+are historical. Live overall goal resumed after the historical stop section.
+
+Plain logs C:/work/gesher-ci-review/ci-process-native2-40556470317-test2022.log
+and-test2025.log; watch.log and integration-run.json share that prefix.
+Future union should import helper-only deltas, not replace whole44/76 files:
+current Native/varargs and extended OpenSL signatures must remain. Full must
+actually run all25controls plus unchanged real Native/Surface/Media gates.
+Remaining legacy-helper inventory, actual kill-denial injection/job-object
+containment and other distinct subprocess behaviors remain open.
 
 Split40554769899/source3d6979f2 is GREEN both Windows hosts; actual
 logs122367758689/122367759184 were read. Each has20 real controls and0failed,
