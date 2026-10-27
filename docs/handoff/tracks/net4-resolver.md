@@ -7,6 +7,15 @@ and its immutable `wip/net4-coherent-verified` ref remain unchanged.
 
 ## Status and next steps
 
+Scoped NDK40516203951 at exactaaef8b0e is complete green; actual job
+122230657268 was read. Both standalone/JNI ABI callers compile with Werror,
+the Java caller dex builds, and all four permission/ABI APKs are packaged
+from the actual libraries. This is compile/package proof only. A separate
+short CI workflow now compiles the three actual production translation units
+with the production exception/ABI/Werror flags and runs only the independent
+WinSDK oracle on both Windows versions. It needs no AOSP build and downloads
+no runtime artifact. Complete actual NDK/runtime/full proof remains required.
+
 The initial native2 workflow dispatch returned404 because that workflow is
 not present on the default branch; it created no run. A narrowly scoped push
 trigger for this branch and these fixture/build files starts NDK compilation
