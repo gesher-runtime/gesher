@@ -177,3 +177,11 @@ eleven fixture hashes/five jars/fifteen fresh image copies are checked. Read
 [the precise bounded proof](binder2-sg-ordinary-component-proof.md). SG remains
 outside the primary union; raw protocol/public-prefix/full and wider Binder2
 gates remain open. No new work on preserved filteredb52 occurred.
+
+Additional read-only source inventory: ordinary CopyToUser calls
+WriteProcessMemory without an explicit writable-page check. Existing PROT_NONE
+prefixfault evidence does not prove stable read-only-output rejection. Preserve
+the actual component scope and require separate EFAULT/unchanged bytes and
+protection/ownership-cleanup controls; concurrent protection races also remain
+open. See the precise proof's remaining-gates section. This note changes no
+production or fixture source and does not resume the filtered transport task.
