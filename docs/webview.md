@@ -350,7 +350,7 @@ drawing in a window that is covered or off the desktop;
 
 ### Status and next steps (web3)
 
-Current full diagnostic **40444053066** is running at exact
+Completed full diagnostic **40444053066** uses exact
 `cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
 instrumentation below and coordinator-verified native clock/width integration
 8922a3e. Those runtime changes are not claimed as the cause of the prior
@@ -360,9 +360,20 @@ zero errors and the new app/graphics/web3 APK. Package121993855040 confirms
 installed oatdump/runtime/window/input/uninstall cleanup. Both actual e2e
 logs121994560872/121994560985 have nine apps including Puzzles/TIC80, four
 transport cases, association/shortcut and zero unexpected failures each.
-The two Windows test jobs121996193503/121996193480 are still running;
-none of those completed checks establishes full Web3 acceptance.
+Both actual Windows logs121996193503/121996193480 have all14Web3 and
+every-check-passed markers; every job succeeds/skips (22/6) and the original
+startup gates pass (JIT352/387 and391/423 ms). This is completed evidence
+for that source combination, not attribution of the previous teardown cause.
 Watch: C:/work/gesher-ci-review/web3-40444053066-watch.log, interval120.
+
+Final source review found a termination-oracle gap: Web3Run checked deadlines
+and app assertions but not the wrapper exit code or the device launcher's
+actual child exit-code marker. A crash after done could therefore pass. The
+next source additionally requires both exit codes to be zero and prints the
+actual lifecycle/child-completion lines even on success. Runtime, app assertions
+and deadlines remain unchanged. A fresh full source with that stronger oracle
+is required before the final Web3 handoff; the green source above is retained
+without claiming unprinted normal-exit evidence.
 
 Completed changed-source full CI **40432795403** uses exact
 `2755f218b41f3e4c474d3151ce66a2f005d3aa8a`. It merges current integration
