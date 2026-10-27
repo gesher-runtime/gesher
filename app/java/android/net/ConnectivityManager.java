@@ -14,6 +14,7 @@ import android.os.ServiceManager;
 
 import com.gesher.net.IConnectivity;
 import com.gesher.net.WindowsNetworks;
+import com.gesher.net.WindowsProxy;
 
 import java.net.InetAddress;
 import java.util.ArrayList;
@@ -80,7 +81,6 @@ public class ConnectivityManager {
     public static final int MULTIPATH_PREFERENCE_UNMETERED = MULTIPATH_PREFERENCE_HANDOVER
             | MULTIPATH_PREFERENCE_RELIABILITY | MULTIPATH_PREFERENCE_PERFORMANCE;
 
-    private static volatile Network sProcessNetwork;
 
     private final Context mContext;
 
@@ -211,7 +211,8 @@ public class ConnectivityManager {
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN, !vpn)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET,
                         !n.gateways.isEmpty() || n.isDefault || vpn)
-                .setCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED, n.internet)
+                .setCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED, n.internet && !n.captivePortal)
+                .setCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL, n.captivePortal)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED, !n.metered)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING, !n.roaming)
                 .setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED, !n.congested);
@@ -359,14 +360,17 @@ public class ConnectivityManager {
     public void removeDefaultNetworkActiveListener(OnNetworkActiveListener l) {
     }
 
-    /** Windows' proxy is not carried over: none, as on a device without one. */
+    /**
+     * Windows' proxy settings (the user's Internet Options: a proxy server, a PAC script or
+     * automatic detection), as Android's default proxy (web3 track, ADR 0058), or null.
+     */
     public ProxyInfo getDefaultProxy() {
-        return null;
+        return WindowsProxy.defaultProxy();
     }
 
     /** @hide */
     public ProxyInfo getProxyForNetwork(Network network) {
-        return null;
+        return WindowsProxy.defaultProxy();
     }
 
     /** @hide */
@@ -391,23 +395,22 @@ public class ConnectivityManager {
     }
 
     public boolean bindProcessToNetwork(Network network) {
-        sProcessNetwork = network;
-        return true;
+        return setProcessDefaultNetwork(network);
     }
 
     public Network getBoundNetworkForProcess() {
-        return sProcessNetwork;
+        return getProcessDefaultNetwork();
     }
 
     @Deprecated
     public static boolean setProcessDefaultNetwork(Network network) {
-        sProcessNetwork = network;
-        return true;
+        return WindowsNetworks.bindProcess(network == null ? 0 : network.netId);
     }
 
     @Deprecated
     public static Network getProcessDefaultNetwork() {
-        return sProcessNetwork;
+        int netId = WindowsNetworks.processNetwork();
+        return netId == 0 ? null : new Network(netId);
     }
 
     // --- callbacks ---------------------------------------------------------------
@@ -422,7 +425,63 @@ public class ConnectivityManager {
     }
 
     public void registerNetworkCallback(NetworkRequest request, PendingIntent operation) {
-        snapshot();  // the permission check
+        intentCallback(request, operation, Kind.LISTEN);
+    }
+
+    /** PendingIntent requests and listens (web3 track, ADR 0058): operation -> its callback. */
+    private static final Map<PendingIntent, NetworkCallback> sIntentCallbacks = new HashMap<>();
+
+    /**
+     * A request or listen whose callback is a PendingIntent: sent, as ConnectivityService
+     * sends it, when a matching network is available, with EXTRA_NETWORK and
+     * EXTRA_NETWORK_REQUEST filled in. The same PendingIntent replaces an earlier request.
+     * Kept by this process (the system server keeps Android's).
+     */
+    private void intentCallback(NetworkRequest request, PendingIntent operation, Kind kind) {
+        if (request == null) throw new IllegalArgumentException("null NetworkRequest");
+        if (operation == null) throw new NullPointerException("PendingIntent cannot be null.");
+        releaseNetworkRequest(operation);
+        final Context context = mContext;
+        NetworkCallback cb = new NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                android.content.Intent fill = new android.content.Intent();
+                fill.putExtra(EXTRA_NETWORK, network);
+                fill.putExtra(EXTRA_NETWORK_REQUEST, request);
+                try {
+                    operation.send(context, 0, fill);
+                } catch (PendingIntent.CanceledException e) {
+                    releaseNetworkRequest(operation);
+                }
+            }
+        };
+        register(request, cb, null, kind, 0);
+        synchronized (sLock) {
+            sIntentCallbacks.put(operation, cb);
+        }
+    }
+
+    /**
+     * CONNECTIVITY_ACTION for a snapshot, as ConnectivityService sends it (sticky): the
+     * default network's NetworkInfo and type, or no connectivity.
+     * @hide
+     */
+    public static android.content.Intent connectivityAction(WindowsNetworks.Snapshot s) {
+        android.content.Intent intent = new android.content.Intent(CONNECTIVITY_ACTION);
+        intent.addFlags(android.content.Intent.FLAG_RECEIVER_REPLACE_PENDING);
+        WindowsNetworks.Net n = s.defaultNetwork();
+        if (n != null) {
+            NetworkInfo info = networkInfoOf(n);
+            intent.putExtra(EXTRA_NETWORK_INFO, info);
+            intent.putExtra(EXTRA_NETWORK_TYPE, info.getType());
+        } else {
+            NetworkInfo info = new NetworkInfo(TYPE_NONE, 0, "NONE", "");
+            info.setDetailedState(NetworkInfo.DetailedState.DISCONNECTED, null, null);
+            intent.putExtra(EXTRA_NETWORK_INFO, info);
+            intent.putExtra(EXTRA_NETWORK_TYPE, TYPE_NONE);
+            intent.putExtra(EXTRA_NO_CONNECTIVITY, true);
+        }
+        return intent;
     }
 
     public void registerDefaultNetworkCallback(NetworkCallback networkCallback) {
@@ -466,13 +525,26 @@ public class ConnectivityManager {
     }
 
     public void requestNetwork(NetworkRequest request, PendingIntent operation) {
-        snapshot();
+        intentCallback(request, operation, Kind.BEST);
     }
 
     public void releaseNetworkRequest(PendingIntent operation) {
+        if (operation == null) throw new NullPointerException("PendingIntent cannot be null.");
+        NetworkCallback cb;
+        synchronized (sLock) {
+            cb = sIntentCallbacks.remove(operation);
+        }
+        if (cb != null) {
+            try {
+                unregisterNetworkCallback(cb);
+            } catch (IllegalArgumentException e) {
+                // already gone
+            }
+        }
     }
 
     public void unregisterNetworkCallback(PendingIntent operation) {
+        releaseNetworkRequest(operation);
     }
 
     public void unregisterNetworkCallback(NetworkCallback networkCallback) {

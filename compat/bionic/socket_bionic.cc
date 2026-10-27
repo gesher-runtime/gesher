@@ -15,11 +15,14 @@
 // <sys/socket.h>.
 
 #include "shim_internal.h"
+#include <gesher/inet.h>
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <net/if.h>
+#include <netpacket/packet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -46,6 +49,23 @@ struct BionicTimeval {
   int64_t tv_sec;
   int64_t tv_usec;
 };
+
+// Pinned bionic's x86-64/arm64 LP64 ABI. The backend owns Linux-layout
+// objects, so only the call convention crosses the System V/Windows bridge.
+static_assert(sizeof(ifaddrs) == 56 && alignof(ifaddrs) == 8);
+static_assert(offsetof(ifaddrs, ifa_next) == 0 && offsetof(ifaddrs, ifa_name) == 8);
+static_assert(offsetof(ifaddrs, ifa_flags) == 16 && sizeof(ifaddrs::ifa_flags) == 4);
+static_assert(offsetof(ifaddrs, ifa_addr) == 24 && offsetof(ifaddrs, ifa_netmask) == 32);
+static_assert(offsetof(ifaddrs, ifa_ifu) == 40 && offsetof(ifaddrs, ifa_data) == 48);
+static_assert(sizeof(sockaddr_ll) == 20 && offsetof(sockaddr_ll, sll_ifindex) == 4);
+static_assert(offsetof(sockaddr_ll, sll_hatype) == 8 && offsetof(sockaddr_ll, sll_addr) == 12);
+static_assert(sizeof(sockaddr_in) == 16 && offsetof(sockaddr_in, sin_addr) == 4);
+static_assert(sizeof(sockaddr_in6) == 28 && offsetof(sockaddr_in6, sin6_addr) == 8);
+static_assert(offsetof(sockaddr_in6, sin6_scope_id) == 24);
+static_assert(AF_INET == 2 && AF_INET6 == 10 && AF_PACKET == 17);
+
+int BIONIC_SYSV Getifaddrs(ifaddrs** list) { return getifaddrs(list); }
+void BIONIC_SYSV Freeifaddrs(ifaddrs* list) { freeifaddrs(list); }
 
 int BIONIC_SYSV Socket(int domain, int type, int protocol) { return socket(domain, type, protocol); }
 int BIONIC_SYSV Socketpair(int domain, int type, int protocol, int* fds) {
@@ -254,8 +274,10 @@ int NiFlagsIn(int f) {
   return out;
 }
 
-int BIONIC_SYSV Getaddrinfo(const char* node, const char* service, const BionicAddrinfo* hints,
-                            BionicAddrinfo** res) {
+int GetaddrinfoOnInterface(const char* node, const char* service, const BionicAddrinfo* hints,
+                          BionicAddrinfo** res, uint32_t index) {
+  if (res == nullptr) return EaiOut(EAI_FAIL);
+  *res = nullptr;
   addrinfo h{};
   if (hints != nullptr) {
     h.ai_flags = AiFlagsIn(hints->ai_flags);
@@ -264,7 +286,7 @@ int BIONIC_SYSV Getaddrinfo(const char* node, const char* service, const BionicA
     h.ai_protocol = hints->ai_protocol;
   }
   addrinfo* list = nullptr;
-  int rc = getaddrinfo(node, service, hints != nullptr ? &h : nullptr, &list);
+  int rc = gesher_getaddrinfo_interface(node, service, hints != nullptr ? &h : nullptr, index, &list);
   if (rc != 0) return EaiOut(rc);
   // One allocation per entry: the entry, its address and its canonical name,
   // so freeaddrinfo frees each entry with one free().
@@ -297,6 +319,57 @@ int BIONIC_SYSV Getaddrinfo(const char* node, const char* service, const BionicA
   *res = head;
   return 0;
 }
+
+int BIONIC_SYSV Getaddrinfo(const char* node, const char* service, const BionicAddrinfo* hints,
+                           BionicAddrinfo** res) {
+  return GetaddrinfoOnInterface(node, service, hints, res, UINT32_MAX);
+}
+
+bool NetworkIndex(uint64_t handle, uint32_t* index) {
+  if (handle == 0) { *index = 0; return true; }
+  uint32_t net_id = static_cast<uint32_t>(handle >> 32);
+  if (static_cast<uint32_t>(handle) != 0xcafed00d || net_id <= 100 || net_id > INT32_MAX) return false;
+  *index = net_id - 100;
+  return true;
+}
+
+int BIONIC_SYSV SetProcNetwork(uint64_t handle) {
+  uint32_t index = 0;
+  if (!NetworkIndex(handle, &index)) return errno = EINVAL, -1;
+  int error = gesher_set_process_interface(index);
+  return error == 0 ? 0 : (errno = error, -1);
+}
+
+int BIONIC_SYSV SetSockNetwork(uint64_t handle, int fd) {
+  uint32_t index = 0;
+  if (!NetworkIndex(handle, &index)) return errno = EINVAL, -1;
+  int error = gesher_bind_socket_interface(fd, index);
+  return error == 0 ? 0 : (errno = error, -1);
+}
+
+int BIONIC_SYSV GetaddrinfoForNetwork(uint64_t handle, const char* node, const char* service,
+                                    const BionicAddrinfo* hints, BionicAddrinfo** res) {
+  uint32_t index = 0;
+  if (!NetworkIndex(handle, &index)) return errno = EINVAL, EaiOut(EAI_SYSTEM);
+  if (index == 0) index = UINT32_MAX;  // The process binding, otherwise Windows' default.
+  return GetaddrinfoOnInterface(node, service, hints, res, index);
+}
+
+int BIONIC_SYSV ResNquery(uint64_t handle, const char* name, int dns_class, int type, uint32_t flags) {
+  uint32_t index = 0;
+  return NetworkIndex(handle, &index) ? gesher_res_nquery(index, name, dns_class, type, flags) : -ENONET;
+}
+
+int BIONIC_SYSV ResNsend(uint64_t handle, const uint8_t* query, size_t size, uint32_t flags) {
+  uint32_t index = 0;
+  return NetworkIndex(handle, &index) ? gesher_res_nsend(index, query, size, flags) : -ENONET;
+}
+
+int BIONIC_SYSV ResNresult(int fd, int* rcode, uint8_t* answer, size_t size) {
+  return gesher_res_nresult(fd, rcode, answer, size);
+}
+
+void BIONIC_SYSV ResCancel(int fd) { gesher_res_cancel(fd); }
 void BIONIC_SYSV Freeaddrinfo(BionicAddrinfo* a) {
   while (a != nullptr) {
     BionicAddrinfo* next = a->ai_next;
@@ -504,6 +577,13 @@ void RegisterSocket(SymbolTable& t) {
   E("__sendto_chk", SendtoChk);
   E("__recvfrom_chk", RecvfromChk);
   E("getaddrinfo", Getaddrinfo);
+  E("android_setprocnetwork", SetProcNetwork);
+  E("android_setsocknetwork", SetSockNetwork);
+  E("android_getaddrinfofornetwork", GetaddrinfoForNetwork);
+  E("android_res_nquery", ResNquery);
+  E("android_res_nsend", ResNsend);
+  E("android_res_nresult", ResNresult);
+  E("android_res_cancel", ResCancel);
   E("freeaddrinfo", Freeaddrinfo);
   E("gai_strerror", GaiStrerror);
   E("getnameinfo", Getnameinfo);
@@ -523,6 +603,8 @@ void RegisterSocket(SymbolTable& t) {
   E("ntohs", Htons);
   E("if_nametoindex", IfNametoindex);
   E("if_indextoname", IfIndextoname);
+  E("getifaddrs", Getifaddrs);
+  E("freeifaddrs", Freeifaddrs);
   t["in6addr_any"] = const_cast<in6_addr*>(&g_in6addr_any);
   t["in6addr_loopback"] = const_cast<in6_addr*>(&g_in6addr_loopback);
   E("poll", Poll);

@@ -76,6 +76,11 @@ extern "C" {
 
 int getaddrinfo(const char* node, const char* service, const struct addrinfo* hints,
                 struct addrinfo** res) {
+  return gesher_getaddrinfo_interface(node, service, hints, UINT32_MAX, res);
+}
+
+int gesher_getaddrinfo_interface(const char* node, const char* service, const struct addrinfo* hints,
+                                uint32_t if_index, struct addrinfo** res) {
   if (res == nullptr) return EAI_FAIL;
   *res = nullptr;
   if (node == nullptr && service == nullptr) return EAI_NONAME;
@@ -105,7 +110,7 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
   }
   std::vector<ws::AddrInfo> results;
   ws::GaiError error =
-      ws::Resolve(node, service, hints != nullptr ? &ws_hints : nullptr, &results);
+      ws::Resolve(node, service, hints != nullptr ? &ws_hints : nullptr, &results, if_index);
   if (error != ws::GaiError::kOk) return ToGaiError(error);
 
   addrinfo** tail = res;
@@ -134,6 +139,31 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
     *tail = &block->info;
     tail = &block->info.ai_next;
   }
+  return 0;
+}
+
+int gesher_resolve_interface(const char* host, uint32_t if_index, char** addresses) {
+  if (addresses == nullptr || host == nullptr) return EINVAL;
+  *addresses = nullptr;
+  addrinfo hints{};
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* list = nullptr;
+  int error = gesher_getaddrinfo_interface(host, nullptr, &hints, if_index, &list);
+  if (error != 0) return error == EAI_SYSTEM ? errno : EHOSTUNREACH;
+  std::string text;
+  for (auto* entry = list; entry != nullptr; entry = entry->ai_next) {
+    char address[NI_MAXHOST];
+    if (getnameinfo(entry->ai_addr, entry->ai_addrlen, address, sizeof(address),
+                    nullptr, 0, NI_NUMERICHOST) == 0) {
+      text += address;
+      text += '\n';
+    }
+  }
+  freeaddrinfo(list);
+  if (text.empty()) return EHOSTUNREACH;
+  *addresses = static_cast<char*>(malloc(text.size() + 1));
+  if (*addresses == nullptr) return ENOMEM;
+  memcpy(*addresses, text.c_str(), text.size() + 1);
   return 0;
 }
 
@@ -293,6 +323,7 @@ struct IfAddrsBlock {
   sockaddr_storage broadcast;
   char name[IFNAMSIZ];
 };
+static_assert(offsetof(IfAddrsBlock, ifa) == 0, "freeifaddrs owns the complete entry allocation");
 
 IfAddrsBlock* NewEntry(const ws::Interface& iface) {
   auto* block = static_cast<IfAddrsBlock*>(calloc(1, sizeof(IfAddrsBlock)));

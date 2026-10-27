@@ -82,6 +82,7 @@ public final class GesherAppDriver {
 
     /** handleBindApplication, scaled down. */
     private static ActivityThread bindApplication(ApplicationInfo appInfo) throws Exception {
+        com.gesher.app.window.ApplicationDisplay.installClient();
         // ActivityThread.main() would construct it and attach(false) it to
         // ActivityManagerService; here the parts of attach() that set up this process.
         ActivityThread thread = new ActivityThread();
@@ -103,6 +104,8 @@ public final class GesherAppDriver {
         } catch (Throwable t) {
             log("VMRuntime.setTargetSdkVersion: " + t);
         }
+        long[] disabledChanges = com.gesher.server.CompatChanges.disabledFor(appInfo.targetSdkVersion);
+        AppCompatCallbacks.install(disabledChanges, new long[0]);
         // The device's, with the app's own locales (LocaleManager, locale track).
         Configuration config = com.gesher.server.LocaleManagerService.configurationFor(
                 appInfo.packageName);
@@ -112,6 +115,7 @@ public final class GesherAppDriver {
         data.processName = appInfo.processName;
         data.config = config;
         data.compatInfo = compat;
+        data.disabledCompatChanges = disabledChanges;
         thread.mBoundApplication = data;
 
         configController.setConfiguration(config);
@@ -212,6 +216,7 @@ public final class GesherAppDriver {
         sRequestedOrientation = info.screenOrientation;
         sRotation = com.gesher.app.window.TaskConfiguration.rotationFor(info.screenOrientation,
                 android.view.Surface.ROTATION_0);
+        com.gesher.app.window.ApplicationDisplay.update(sRotation);
         Configuration override = taskOverride(sRotation);
         sOverride = override;
         if (override != null) {
@@ -294,9 +299,8 @@ public final class GesherAppDriver {
         return activity;
     }
 
-    /** The override of a task turned to {@code rotation} (null: not turned). */
+    /** Every task has an explicit display rotation, including the natural zero. */
     private static Configuration taskOverride(int rotation) {
-        if (rotation == android.view.Surface.ROTATION_0) return null;
         return com.gesher.app.window.TaskConfiguration.override(
                 com.gesher.app.window.TaskConfiguration.display(rotation), rotation);
     }
@@ -325,6 +329,7 @@ public final class GesherAppDriver {
                 + " turned from " + com.gesher.app.window.TaskConfiguration.rotationName(sRotation)
                 + " to " + com.gesher.app.window.TaskConfiguration.rotationName(rotation));
         sRotation = rotation;
+        com.gesher.app.window.ApplicationDisplay.update(sRotation);
         Configuration override = taskOverride(rotation);
         configurationChanged(a, sToken, sInfo, override != null ? override : new Configuration(),
                 Display.DEFAULT_DISPLAY);

@@ -378,13 +378,17 @@ class ThreadWatch {
   }
 
   ~ThreadWatch() {
+    Retire();
+    CloseHandle(thread_handle_);
+  }
+
+  void Retire() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       stop_ = true;
     }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
-    CloseHandle(thread_handle_);
   }
 
   void Answered() { answered_.store(true); }
@@ -471,6 +475,7 @@ ThreadWatch* StartThreadWatch(void* hwnd_ptr, const char* name) {
 }
 
 void StopThreadWatch(ThreadWatch* watch) { delete watch; }
+void RetireThreadWatch(ThreadWatch* watch) { if (watch != nullptr) watch->Retire(); }
 
 bool ThreadWatchMessage(ThreadWatch* watch, uint32_t msg) {
   if (watch == nullptr || msg != PingMessage()) return false;

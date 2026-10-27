@@ -577,16 +577,19 @@ int BIONIC_SYSV FaDestroy(BionicFileActions** p) {
   return 0;
 }
 int BIONIC_SYSV FaAddOpen(BionicFileActions** p, int fd, const char* path, int flags, uint32_t mode) {
+  if (fd < 0) return EBADF;
   auto* a = new BionicFileAction{nullptr, 0, fd, fd, path != nullptr ? path : "", flags, mode};
   AddAction(p, a);
   return 0;
 }
 int BIONIC_SYSV FaAddClose(BionicFileActions** p, int fd) {
+  if (fd < 0) return EBADF;
   auto* a = new BionicFileAction{nullptr, 1, fd, fd, "", 0, 0};
   AddAction(p, a);
   return 0;
 }
 int BIONIC_SYSV FaAddDup2(BionicFileActions** p, int fd, int new_fd) {
+  if (fd < 0 || new_fd < 0) return EBADF;
   auto* a = new BionicFileAction{nullptr, 2, fd, new_fd, "", 0, 0};
   AddAction(p, a);
   return 0;
@@ -597,6 +600,7 @@ int BIONIC_SYSV FaAddChdir(BionicFileActions** p, const char* path) {
   return 0;
 }
 int BIONIC_SYSV FaAddFchdir(BionicFileActions** p, int fd) {
+  if (fd < 0) return EBADF;
   auto* a = new BionicFileAction{nullptr, 4, fd, fd, "", 0, 0};
   AddAction(p, a);
   return 0;
