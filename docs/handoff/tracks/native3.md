@@ -82,6 +82,12 @@ is unchanged; neither this probe nor process private bytes closes that gap.
 The documented API minimum and older Windows 10 support require design and
 actual CI evidence before a production change. No local native compile/run.
 
+Heap observation ci 40435931234 at d4e8a95 is now fully inspected: all four
+jobs pass, both Windows probes end with zero failures. Exact malloc/realloc/
+free deltas, HeapWalk equality and exclusion of a touched 32 MiB mapping
+pass; queries measure 18-33.2 us with 432/444 blocks. This remains research,
+not an ART-process/older-Windows bound or a production allocator fix.
+
 CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
 2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
 finish within the unchanged 5s wait, then 27/28 recorded tones). Both actual

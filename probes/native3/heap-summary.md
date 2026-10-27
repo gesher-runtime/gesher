@@ -20,3 +20,12 @@ and locking review. See [HeapWalk's documented locking/cost](https://learn.micro
 
 Both Windows runner logs must be inspected. Every compile and native run
 occurs in native3-probes CI; no local native/Java build or execution.
+
+Observed in native3-probes 40435931234 at d4e8a95: root read all four jobs
+and both actual Windows logs, each with zero failures. The 8 MiB malloc and
+16 MiB realloc deltas are exact; independent HeapWalk totals equal the
+observed allocated count (432/444 blocks). A separate 32 MiB committed and
+touched VirtualAlloc mapping leaves that count unchanged; free returns to
+baseline. Measured queries take 18-33.2 us in these small standalone heaps.
+This is neither a bound for a populated ART process nor older-Windows proof.
+Production accounting and its failure/compatibility policy remain open.
