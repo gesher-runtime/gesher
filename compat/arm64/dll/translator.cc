@@ -558,6 +558,25 @@ class Env final : public A64::UserCallbacks {
     if (va_index >= 0 && va_index < 8) {
       uint64_t& slot = va_index < 6 ? gpr[va_index] : stack[va_index - 6];
       if (slot != 0) {
+        char trace[2] = {};
+        if (GetEnvironmentVariableA("GESHER_ARM64_VARARGS_TRACE", trace, sizeof(trace)) != 0 &&
+            trace[0] == '1') {
+          const auto* a = reinterpret_cast<const Aapcs64VaList*>(slot);
+          const int remaining_gp = a->gr_offs < 0 ? -a->gr_offs / 8 : 0;
+          const int remaining_fp = a->vr_offs < 0 ? -a->vr_offs / 16 : 0;
+          const auto source = reinterpret_cast<uint64_t>(a->stack);
+          const uint64_t bytes = remaining_gp > 6 ? 62 * 8 : 0;
+          std::fprintf(stderr,
+                       "ARM_VARARGS_BOUNDS sp=%llx stack=%llx top=%llx base=%llx "
+                       "gp=%d fp=%d eager_bytes=%llu eager_end=%llx\n",
+                       static_cast<unsigned long long>(gsp),
+                       static_cast<unsigned long long>(source),
+                       static_cast<unsigned long long>(stack_top_),
+                       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(stack_base_)),
+                       remaining_gp, remaining_fp, static_cast<unsigned long long>(bytes),
+                       static_cast<unsigned long long>(source + bytes));
+          std::fflush(stderr);
+        }
         ConvertVaList(reinterpret_cast<const Aapcs64VaList*>(slot), &va);
         slot = reinterpret_cast<uint64_t>(&va.tag);
       }
