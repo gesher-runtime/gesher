@@ -414,3 +414,33 @@ nor build/source review establish productionfcntl or wider Native closure.
 Phase4 remains code-identical to accepted944; no code/main/PR/tag/release
 operation or extra full dispatch occurred. All hardware/all-gap/release gates
 and next unallocated ADR0081/test89 remain unchanged.
+
+## Fresh canonical union qualification dispatched
+
+Native and integrator completed bounded source peer of exact Windows wiring
+58a085a2902ab8864e8ce8f559610464dbddec2f with no definite blocker. Merge08909b8b
+retains productionOFF configuration before the original Exec early compile,
+all AOT/DLC/query framework producers, current Media/observer/Native/Env intent,
+and original54 assertions/deadlines while routing an explicitly named runtime.
+Only the separate hook artifact/regression jobs receive the ON binary; suite,
+package and e2e retain sealed OFF production. Both roles preserve identical
+jar/image locations and exact compiler/shared-source/flag/hash/source proofs.
+Static YAML/Python/PowerShell and original60min/matrix checks pass; no local
+compiler or native/JVM/C# fixture runs.
+
+After verifying no live same-ref run, the sole integrator pushed frozen
+4a47a20ef652eff2dfd6d477cf1acbc29d98fc45 on wip/media4-web3-union-pending and
+used the prescribed canonical ci.yml command exactly once. New full40588525037
+is ACTIVE, not accepted. Required watch16062 writes
+C:/work/gesher-ci-review/coherent-web3-union-full-40588525037-watch.log at120s.
+Do not duplicate/restart this full or infer any conclusion before actual
+terminal jobs and all scope/package/e2e/new-regression logs are read.
+
+Current clean pushed candidate tipcd82c49ab0a84696be3c51d2a5f7017a7fb5bb77
+only adds documentation to full source4a47, including Windows' process proof
+freezece44b68f01ae7d15b0ca7b0354e1199b16261533 (entire non-doc diff toebae empty).
+All1157 inventory fields/history remain exact55e03c68. Original f4/7beb/eaa
+and remote Media d552 refs remain. SGb49, after-resource958 cleanup-source and
+Surface5c remain excluded. Both actual SG ordinary component logs/provenance
+are frozen separately; its watcher ended0, with no raw/public-prefix work.
+No phase4 code merge, main/PR/tag/release or further allocation occurred.
