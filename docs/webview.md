@@ -379,6 +379,21 @@ methods. Preserve the strict run unchanged, but do not accept its child-zero
 marker as fresh OS-exit proof until that prerequisite is verified. This is
 not a claim about the cause of the earlier UIA teardown stall.
 
+The next source imports the reviewed positive HTTP/SNI test slice from Media3
+836482975254ec3fbcbbdb190398d65dc79fae11 (patch SHA256
+ae93ceeed2954f7795bdc052383b8a2be9277696236ea6441904b9b016e89689).
+All five resulting network test files match the combined audit's exact hashes;
+the negative-certificate and NetApp files already matched. This agent read
+the actual network scope in both Media40448521754/dd06d296 logs122008646975/
+122008646925: dedicated HTTP200, two names/distinct certificates on a separate
+SNI listener, exact missing/unknown-name hostname rejections, all four
+certificate causes, public Google checks, both NetApp modes and cleanup pass.
+The scope is tested through real HttpsURLConnection/Conscrypt and preserves
+the original public DNS/HTTPS204/TLS1.3/SNI/hostname blocks. It changes no
+production trust or timeout. This imported source still needs a new combined
+Web3 full run with the corrected process-exit prerequisite and latest verified
+integration. Strict4f25387 above remains evidence for its original frozen source.
+
 Completed full diagnostic **40444053066** uses exact
 `cbf56399203dbdc2729f20a40b8ff69b821145a6`, with the lifecycle/window/log-tail
 instrumentation below and coordinator-verified native clock/width integration
