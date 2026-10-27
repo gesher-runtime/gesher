@@ -97,3 +97,13 @@ factoring and remains open; no placeholder is linked into gesher-exec.
 Canonical effect/3D identifiers support exact unsupported results, not
 effects or 3D audio. Full configuration, loss-of-control, output-mix and
 device-policy behavior remain separate Media4 contracts.
+
+The separate native-launcher continuation proposes factoring pure audio,
+player/video and NDK targets into both hosts, with actual hostgraphics/window
+dependencies and no JNI player in gesher-exec. Its recording gate denies a
+native process without an identity provider; ART installs the unchanged
+Java manifest decision. The JNI and native callback paths share the actual
+once-per-thread ELF TLS initializer in bionic. Both-ABI standalone callers
+and real callback/TLS checks are prepared; no compilation or runtime proof
+is claimed before its separate CI. App-child recording identity propagation
+still needs a service-authorized contract and remains explicitly open.

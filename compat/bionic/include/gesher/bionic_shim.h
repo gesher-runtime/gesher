@@ -18,6 +18,10 @@ void* LookupBionicSymbol(const char* name);
 // imports it is loaded.
 void AddBionicSymbol(const char* name, void* address);
 
+// Sets up this thread's real ELF TLS once before entering loaded code.
+// Also used by native media callbacks, without a Java VM dependency.
+void EnterLoadedCode();
+
 // Lets signals other processes send (gesher-base's signal mailbox) reach the
 // .so's handlers. `authoritative`: the shim owns every signal, so SIG_DFL
 // acts as Linux's default (gesher-exec, whose program has the shim as its
