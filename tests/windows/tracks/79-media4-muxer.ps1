@@ -44,7 +44,9 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   # every actual record and required count while normalizing only CR bytes.
   $text = $Result.Text.Replace("`r", '')
   $missing = @(@("media4 muxer ABI: $Abi", "media4 muxer caller: $Caller", 'media4 muxer: all passed',
-    'media4 muxer descriptor-access-ownership-seekability: ok', 'media4 muxer empty-lifecycle-and-error-order: ok') |
+    'media4 muxer descriptor-access-ownership-seekability: ok', 'media4 muxer empty-lifecycle-and-error-order: ok',
+    'media4 muxer Ogg boundary: packets 0 result=ok', 'media4 muxer Ogg boundary: packets 1 result=ok',
+    'media4 muxer Ogg boundary: packets 2 result=ok') |
     Where-Object { -not $text.Contains($_) })
   $parts = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer [^\r\n]+: ok\r?$'))
   $fds = @([regex]::Matches($text, '(?m)^(?:MediaMuxerActivity: )?media4 muxer fd trace: [^\r\n]+$'))
@@ -57,7 +59,7 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
     Write-Host $text
     $script:failed++
   }
-  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:|[^\r\n]+: ok)' })) {
+  foreach ($line in @($text -split "`r?`n" | Where-Object { $_ -match 'media4 muxer (ABI:|caller:|Ogg boundary:|fd trace:|invalid-fd trace:|unsupported trace:|empty trace:|output:|write failure:|[^\r\n]+: ok)' })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
   $verification = InvokeMuxer "$Dir/media_muxer_verify.exe" @((NoDrive $Output)) @{} 180
@@ -72,15 +74,29 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   foreach ($line in @($verification.Text -split "`r?`n" | Where-Object { $_ })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
+  $decodedOgg = [regex]::Match($verification.Text, 'audio trace: [^\r\n]*opus-interleaved\.ogg; [^\r\n]*frames (\d+)')
+  $decodedFrames = if ($decodedOgg.Success) { $decodedOgg.Groups[1].Value } else { '-1' }
   $packetAudit = InvokeMuxer (Get-Command python).Source @(
     "$PSScriptRoot/../../media/ndk-muxer/verify-ogg-packets.py",
-    '--fixture', "$mxDir/fixtures/opus.json", '--output', "$Output/opus-interleaved.ogg") @{} 30
+    '--fixture', "$mxDir/fixtures/opus.json", '--output', "$Output/opus-interleaved.ogg", '--decoded-frames', $decodedFrames) @{} 30
   Write-Host $packetAudit.Text
   if ($packetAudit.Code -eq 0 -and $packetAudit.Text.Contains('media4 muxer Ogg packet verification: 0 failure(s)')) {
     Write-Host "PASS  media4 muxer ($Abi; $Mode): actual Ogg audio packets match every independent source packet with no empty EOS packet"
   } else {
     Write-Host "FAIL  media4 muxer ($Abi; $Mode): independent Ogg packet boundary/hash verification exit $($packetAudit.Code)"
     $script:failed++
+  }
+  foreach ($count in 0, 1, 2) {
+    $boundaryAudit = InvokeMuxer (Get-Command python).Source @(
+      "$PSScriptRoot/../../media/ndk-muxer/verify-ogg-packets.py", '--fixture', "$mxDir/fixtures/opus.json",
+      '--output', "$Output/opus-boundary-$count.ogg", '--limit', "$count") @{} 30
+    Write-Host $boundaryAudit.Text
+    if ($boundaryAudit.Code -eq 0 -and $boundaryAudit.Text.Contains('media4 muxer Ogg packet verification: 0 failure(s)')) {
+      Write-Host "PASS  media4 muxer ($Abi; $Mode): actual $count-packet Ogg EOS, source payload order, granules and independent CRC"
+    } else {
+      Write-Host "FAIL  media4 muxer ($Abi; $Mode): actual $count-packet Ogg boundary verification exit $($boundaryAudit.Code)"
+      $script:failed++
+    }
   }
 }
 

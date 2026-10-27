@@ -593,3 +593,42 @@ full's successful build producers; source/attempt/jobs and five jars/images
 are guarded. Both relative Dir=dist and absolute Dir exercise the full eight
 contexts on each Windows version. Component acceptance remains pending and
 does not replace a coherent full or the Surface/AAudio/notice prerequisite.
+
+## Causal Ogg baseline and bounded correction
+
+Component40551802498/ddf794ba reached real muxer work after preserving caller
+cwd, exposing relative System.load and Java CRLF/forwarded CRCRLF harness
+issues. Corrected harnesscf065357 retains all18/12/10 assertions. Actual
+component40552907031 then passes those semantic/FD/output gates in every
+8-context relative and absolute suite on each Windows, but independently
+decodes only9/10 containers. Every Ogg has102408 decoded48k frames.
+
+The separate Ogg page auditor proves104pages,102audio packets versus101
+immutable ffprobe source packets: all101 payload size/hash/order match and
+one additional packet is empty. WebM using identical101 source packets already
+decodes96648 frames (101*960-312pre-skip); the extra5760 is the decoder's PLC
+response to the writer's zero-byte EOS packet. Original full2s target +/-5%,
+tone +/-2% and amplitude assertions are unchanged. The new exact source-packet/
+pre-skip oracle supplements them; it does not shift the2s target.
+
+Primary RFC7845 section3 requires a zero-octet audio packet be treated as
+malformed; sections4/4.3 define cumulative48k granules and subtract pre-skip:
+https://www.rfc-editor.org/rfc/rfc7845.html#section-3
+https://www.rfc-editor.org/rfc/rfc7845.html#section-4
+The candidate retains one real packet, marks its page EOS at Stop, terminates
+an empty stream on the nonempty OpusTags page, ignores an explicit zero-byte
+EOS notification, and removes the incorrect extra pre-skip in granules.
+Bounded Native peer found no new EOS/granule blocker; it found a preexisting
+CRC lazy-table race, now replaced by compile-time immutable initialization.
+
+Actual NDK0/1/2-packet writers start concurrently before ordinary Ogg work;
+independent audits require payload/hash/order, correct last real packet EOS,
+CRC and cumulative granules. The original101-packet and ten actual decodes
+remain mandatory. Current hosts and NDK/APK fixtures are freshly built in
+CI; unchanged ART/ABI/five jars/boot/DLL are pinned to the matching original
+5d9e source with explicit producer/source guards. No DLL-only upgrade occurs.
+
+All validation is pending for this production correction. Malformed TOC/code3,
+large multipage packets/lacing, exact end trimming, append/HEIF/B-frameDTS/CTS,
+advanced metadata and the broader container/recorder contracts remain open.
+The source and existing red proofs are retained, not reclassified.
