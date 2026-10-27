@@ -220,13 +220,38 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
-- The independent native backend continuation runs full ci **40477536464**
-  at **e569341230b3970cadaeb48a235a12a4645da74a**, on wip/media4-native in
-  C:\work\gesher-media4-native. It includes the corrected signed16/core
-  permission fixtures, functional pure media linkage, the preserved manifest
-  provider and original ELF TLS initializer, plus actual both-ABI ELF and
-  callback/TLS checks. Peer source review found no blocker; compile/runtime
-  acceptance is pending. Source is frozen and no native API metadata changes.
+- Native OpenSL full ci **40477536464** is GREEN at **e5693412**, attempt1:
+  all28 jobs=22 success/six skipped, both Windows whole0 and16 test76 PASS
+  each. Both ABI standalone ELF callers now pass the same actual UUID/
+  typed-query/negotiation/PCM/permission contracts as JNI/APKs; all12
+  contexts per runner require actual callback calls1/TLS valid/caller TLS
+  unchanged,60 semantic rows and48 volume results. Pure functional backend
+  OBJECT targets link into both hosts; JNI retains the real manifest gate
+  and native without identity denies11/no object. Actual package23 and
+  both ten-app/four-transport/association/shortcut e2e0 logs were read.
+  The original lossless AAudio/format/env/time/fresh-exit gates also pass.
+  Source is frozen with docs-only successors. Configuration/effects/device
+  policy and native-child recording identity remain open; separate AAudio
+  MMAP/notice source in test78 is unverified and excluded from this run.
+
+- Corrected OpenSL full ci **40476766790** is GREEN at
+  **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt1:22 success/six
+  skipped, both Windows whole0 and14 test76 PASS each. Both ABIs pass core
+  JNI and real manifest-allowed/denied single/device APKs, all50 semantic
+  rows and40 volume results per runner. All53 UUID pointer objects/pinned
+  values, copied-ID capability negotiation and typed queries pass; bare
+  core returns real0x0B denial, and APK grants/denials are independent.
+  Actual ARM raw64936→signed16 -600 and all -600/-32768/-1/0 round trips
+  pass. Only34 exact IID verification objects are added;136 old media
+  export entries remain. Both actual package23 and required ten-app/four-
+  transport e2e0 logs were read. Original format10/media3-38/env67/time68/
+  freshExit70 gates pass. The lossless AAudio gate retains44100 original
+  750/1250Hz frames with capacity44100/lost0/xruns0; the controlled small
+  rings lose5613/5537 frames versus configured0 with actual counter proof.
+  The old1153.3Hz cause remains unproved. This source is frozen with
+  docs-only successors and contains integration db84749b/freshExit30deb.
+  Separate native-backend/TLS/callback source e5693412/full40477536464 is
+  independently accepted above; no effects/3D or full OpenSL contract follows.
 
 - OpenSL full ci **40470959941** is RED at
   **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
@@ -237,24 +262,17 @@ the microphone (looped, from its start each time recording starts);
   package23 and both ten-app/four-transport e2e0 pass. No OpenSL acceptance
   follows. Corrected source requires the existing0x0B/no-identity denial
   and normalizes the volume boundary explicitly, with actual raw/value/
-  permission diagnostics and valid signed16 edges. Its new CI remains pending.
+  permission diagnostics and valid signed16 edges. The corrected CI is green above.
   AAudio's original750/1250Hz,44100-frame lossless gate passes in both modes
   and runners with actual lost0/xruns0; the controlled small rings lose
   frames while configured rings retain all. The old1153.3Hz cause remains
   unproved. Details and exact job ids are in the Media4 brief.
 
-- Media4's accepted format source below is frozen on
-  `wip/media4-format-verified` at docs-only ba3c1c2d. Active source78ee5e12
-  separately corrects the blocking AAudio lossless fixture's missing
-  one-second capacity and adds actual capacity/frame/loss/xrun diagnostics
-  plus a controlled small/configured ring probe. The unchanged 750/1250 Hz
-  and 44100-frame gate is stronger with mandatory zero loss/xruns; the
-  old1153.3 Hz failure lacks counters and is not a proven overrun. Root
-  approved the exact four-file slice for Net4's next candidate; runtime
-  acceptance is pending. Prepared OpenSL source/test76 adds canonical UUID
-  data, typed query/negotiation/exposure and native permission contracts
-  on both JNI/APK ABIs. No new OpenSL CI acceptance or independent launcher
-  backend is claimed; follow [media4](handoff/tracks/media4.md).
+- Media4's format-only source below stays frozen on
+  `wip/media4-format-verified` at docs-only ba3c1c2d. The separate78ee5e12
+  AAudio fixture correction is now verified in40476766790 above, preserving
+  the old frequency/frame gates and adding real capacity/loss/xrun proof.
+  All broader [media4](handoff/tracks/media4.md) contracts stay open.
 
 - Corrected Media4 full ci **40459815375** is GREEN at
   **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current

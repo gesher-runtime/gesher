@@ -414,7 +414,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -426,7 +433,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -438,7 +452,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -450,7 +471,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -462,7 +490,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -474,7 +509,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -486,7 +528,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -498,7 +547,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -510,7 +566,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -522,7 +585,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -534,7 +604,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -546,7 +623,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -558,7 +642,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -570,7 +661,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -582,7 +680,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -594,7 +699,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -606,7 +718,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -618,7 +737,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -630,7 +756,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -642,7 +775,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -654,7 +794,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -666,7 +813,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -678,7 +832,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -690,7 +851,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -702,7 +870,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -714,7 +889,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -726,7 +908,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -738,7 +927,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -750,7 +946,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -762,7 +965,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -774,7 +984,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -786,7 +1003,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -798,7 +1022,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libOpenSLES.so",
@@ -810,7 +1041,14 @@
         "windows-2022/arm64",
         "windows-2025/x86_64",
         "windows-2025/arm64"
-      ]
+      ],
+      "verification": {
+        "ci_run": 40476766790,
+        "attempt": 1,
+        "sha": "d10bea3a98bb8dfe76972209b6aff5df4fed58ec",
+        "status": "verified-opensl-iid-values-and-capability-contexts",
+        "scope": "Both Windows runners and x86_64/arm64-v8a via core ART JNI and manifest-allowed/denied APKs in single/device modes (test76). Actual canonical 16-byte UUID pointer object, pinned fields and ELF indirection; copied-value lookup and required/optional engine capability outcomes for all 53 IDs. Unsupported effects/3D/device IDs retain explicit unsupported outcomes; their methods and the standalone native backend are not verified by this entry."
+      }
     },
     {
       "library": "libaaudio.so",
