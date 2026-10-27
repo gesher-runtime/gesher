@@ -100,9 +100,12 @@ frozen native3-wide-verified ref is unchanged at e7c1b06. Root has since
 verified and integrated 0573/time68 as 8922a3e; this run predates it. The
 separate ARM FPCR candidate includes that newer integration and the frozen
 wide prerequisite, with corrected full ci 40451978087 at 49ade205. Attempt
-1 passes all actual wide/FPCR cases on both runners, package/both e2e and
-the 2025 zero summary. Only 2022's known badssl TCP timeout remains;
-attempt 2 retries that failed job alone on unchanged source.
+2 is fully green: all 28 conclusions (22 success/six skipped), both zero
+summaries, all actual wide/FPCR cases, package and both e2e were personally
+read. Attempt 1's only failure was 2022's known badssl TCP timeout; that
+single failed job passed on unchanged source. Exact proof and open ARM/
+host-CRT limits are in arm64-2-fpcr-verified.md. Newer Media3/exit code
+still requires coherent combined CI.
 Root alone merges integration/main and decides that combined acceptance.
 Binary128/libm, wide scanf/stdio, independent narrow gdtoa/tzcode and the
 remaining native3/POSIX contracts remain explicitly open. All compilation

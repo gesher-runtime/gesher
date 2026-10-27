@@ -1,17 +1,15 @@
 # 0067. arm64-2: guest FPCR rounding across native boundaries
 
-Status: proposed; full acceptance awaits the failed-job retry below.
-Corrected full ci 40451978087 at 49ade205, attempt 1, passes actual FPCR
-host/dalvikvm/single/device/native-process cases on both runners. All 22
-executed job logs were read: 21 success, one failure and six skipped jobs.
-2025 ends with zero failures; only the known badssl TCP-connect timeout
-causes two counted failures on 2022. Attempt 2 retries only that failed
-job on unchanged source. Both actual package/e2e checks already pass.
-Initial full 40444486511 failed because the APK builder omitted the
-original-body reference object; the corrected builder links it and audits
-the actual extracted library's bytes and defined/undefined symbols.
-Scoped correction ci 40451472255 verifies that audit and both host fixtures.
-This is the first rounding slice of arm64-2, not completion of that track.
+Status: accepted for translated FPCR rounding only. Full ci 40451978087 at
+49ade205, attempt 2, is green: all 28 conclusions (22 success/six skipped)
+and all 22 actual successful job logs were personally read, including both
+zero summaries, actual JNI/APK/native-process cases, package and both e2e.
+Attempt 1 failed only the known 2022 badssl TCP-connect timeout; its one
+failed job was retried on unchanged source. The new payload verifies real
+certificate rejection and ends with zero failures. This is the first
+rounding slice of arm64-2; the rest of that track remains open. Exact source,
+jobs, retry provenance, shared edits and limits are in the
+[verified report](../handoff/tracks/arm64-2-fpcr-verified.md).
 
 ## Context
 
@@ -64,9 +62,12 @@ all five successful logs of each were read. The original bodies and actual
 JNI/APK/native-process artifacts compile, while both Windows host fixtures
 pass every FPCR group and zero-failure summaries. The combined candidate
 also retains current integration 8922a3e's verified clocks/widths and the
-frozen verified wide/C11 prerequisite e7c1b06. Actual NDK process execution
-and the full suites/package/e2e still require full CI. No local compiler or
-native/JVM fixture ran.
+frozen verified wide/C11 prerequisite e7c1b06. The corrected full run now
+verifies actual NDK execution and all product gates as recorded above.
+The initial full failure on APK reference-object packaging was fixed
+without production changes; scoped ci 40451472255 and the actual full
+packaged-library byte/symbol audit pass. No local compiler or native/JVM
+fixture ran.
 FPSR exception/status/trap APIs and environment save/restore functions
 remain outside this slice; their old fallback implementations are not
 claimed as complete. Guest JIT pages, signals/ucontext, LSE, HFAs/variadic
