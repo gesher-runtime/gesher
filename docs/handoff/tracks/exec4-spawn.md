@@ -100,6 +100,17 @@ spawn/wait, child closed0/exit42 and unchanged parent assertions. This fixes
 the fixture's startup precondition, not a demonstrated production defect.
 The initial scoped child diagnostic c727 run is superseded by this changed
 source before any runtime acceptance; the directory failure remains open.
+Actual scoped40519578648/c727 and40519977200/4346 both enter the ordered
+child and exit41, with successful inherited-directory fchdir. The latter
+also proves both real no-console ABI controls after DETACHED_PROCESS.
+The original full's127 is not reproduced or explained by these narrower
+runs. Root found another fixture defect: --ordered opens input.bin before
+checking its parent's closed descriptor, allowing that open to reuse the
+same number. The corrected caller checks closure first, independently reads
+both inputs, writes the actual PID regardless of other assertion results
+and prints each original assertion's result. No assertion is removed. The
+next scoped run builds fresh NDK callers in its own workflow, retaining
+immutable ARM support from40502225202 and fresh host binaries.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain

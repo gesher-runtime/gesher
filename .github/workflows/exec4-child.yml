@@ -7,6 +7,7 @@ on:
       - compat/elf/exec/spawn_actions.*
       - compat/elf/exec/gesher_exec.cc
       - tests/exec/no-console-spawn.cc
+      - tests/exec/exec4_spawn.c
       - tests/windows/tracks/77-exec4-spawn.ps1
   workflow_dispatch:
 permissions:
@@ -19,6 +20,8 @@ env:
   LLVM_MINGW_TAG: "20261006"
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
+  ndk:
+    uses: ./.github/workflows/exec.yml
   build:
     runs-on: ubuntu-24.04
     steps:
@@ -35,7 +38,7 @@ jobs:
             out/gesher-exec.exe
             out/exec4_no_console_probe.exe
   test:
-    needs: build
+    needs: [build, ndk]
     strategy:
       fail-fast: false
       matrix:
@@ -53,8 +56,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: exec
-          run-id: 40502225202
-          github-token: ${{ github.token }}
           path: dist
       - uses: actions/download-artifact@v4
         with:

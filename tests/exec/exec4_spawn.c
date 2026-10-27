@@ -42,13 +42,19 @@ static int child_main(int argc, char** argv) {
   int okay = 0;
   if (strcmp(argv[1], "--plain") == 0) return 42;
   if (strcmp(argv[1], "--ordered") == 0 && argc == 3) {
+    int name_ok = strcmp(argv[0], child_name) == 0;
+    int removed30 = closed_fd(30), removed32 = closed_fd(32);
+    // A subsequent open may legitimately reuse the now-closed parent's slot.
+    int removed_parent = closed_fd(atoi(argv[2]));
     int relative = open("input.bin", O_RDONLY);
-    okay = strcmp(argv[0], child_name) == 0 && closed_fd(30) && closed_fd(32) &&
-           closed_fd(atoi(argv[2])) && read_data(31) && read_data(relative);
+    int copy_ok = read_data(31), relative_ok = read_data(relative);
     if (relative >= 0) close(relative);
     char pid[48];
     int length = snprintf(pid, sizeof(pid), "%d\n", (int)getpid());
-    okay = okay && length > 0 && write(33, pid, (size_t)length) == length;
+    int pid_ok = length > 0 && write(33, pid, (size_t)length) == length;
+    printf("INFO exec4 ordered child: argv%d fd30%d fd32%d parent%d copy%d relative%d pid%d relative-fd%d\n",
+           name_ok, removed30, removed32, removed_parent, copy_ok, relative_ok, pid_ok, relative);
+    okay = name_ok && removed30 && removed32 && removed_parent && copy_ok && relative_ok && pid_ok;
   } else if (strcmp(argv[1], "--closed") == 0 && argc == 3) {
     okay = closed_fd(atoi(argv[2]));
   } else if (strcmp(argv[1], "--keep") == 0 && argc == 4) {
