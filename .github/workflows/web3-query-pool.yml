@@ -46,7 +46,7 @@ jobs:
             -municode -static compat/accessibility/query_pool.cc tests/windows/web3/query_pool_test.cc \
             -o fixture/query_pool_test.exe
           toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/query_pool_test.exe > fixture/imports.txt
-      - name: Require static C++ and pthread imports using an available standard library
+      - name: Require a nonempty explicit system-DLL import allowlist
         shell: python
         run: |
           import re
@@ -55,8 +55,17 @@ jobs:
           names = re.findall(r'^\s*Name:\s*(\S+)', imports, flags=re.MULTILINE)
           if not names:
               raise SystemExit('Missing actual PE import names')
-          if any(re.search(r'libc\+\+|libunwind|libwinpthread', name, re.IGNORECASE) for name in names):
-              raise SystemExit('Unexpected non-system runtime DLL dependency: ' + ', '.join(names))
+          # Actual imports from the pinned static toolchain; no wildcard DLLs,
+          # external C++/pthread runtime or ambient runner PATH dependency.
+          allowed = {'kernel32.dll', 'api-ms-win-crt-stdio-l1-1-0.dll',
+                     'api-ms-win-crt-runtime-l1-1-0.dll', 'api-ms-win-crt-locale-l1-1-0.dll',
+                     'api-ms-win-crt-heap-l1-1-0.dll', 'api-ms-win-crt-private-l1-1-0.dll',
+                     'api-ms-win-crt-string-l1-1-0.dll', 'api-ms-win-crt-convert-l1-1-0.dll',
+                     'api-ms-win-crt-math-l1-1-0.dll', 'api-ms-win-crt-environment-l1-1-0.dll',
+                     'api-ms-win-crt-filesystem-l1-1-0.dll'}
+          unexpected = sorted(set(name.casefold() for name in names) - allowed)
+          if unexpected:
+              raise SystemExit('Unexpected runtime DLL dependency: ' + ', '.join(unexpected))
           print('VERIFIED_STATIC_POOL_IMPORTS ' + ', '.join(names))
       - name: Record exact source and executable provenance
         shell: python
