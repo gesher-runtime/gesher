@@ -146,10 +146,26 @@ unchanged test80 and86 on both runners. The prepared component driver loads
 the original SurfaceRun function/type from the track52 AST and the original
 WindowChecks module, retaining every pixel/phase/ABI/teardown gate without
 copying their implementation. Runtime/boot/font setup follows the full
-harness. The workflow source guard and Native prerequisite are not ready
-yet; no component dispatch or original Surface repair is claimed. Broad
+harness. A WIP media4-surface-component.yml now derives from Native's exact
+0cfcd2e0 guarded component workflow: fresh framework/host/NDK/DLL/Surface
+APKs, immutable Locale scaffolding with successful critical jobs, exact
+five-jar hashes and boot-image rebuild on any jar difference. Surface adds
+the real scheduling unit and requires successful graphics/ANGLE scaffold
+jobs. It is saved source only, not imported with Native or dispatched. Broad
 full also waits for the separate common Web3 correction. Muxer full405277
 remains an independent frozen candidate.
+
+Owner-requested nearest-checkpoint stop: no further implementation, import
+or CI dispatch. The current Native source candidate is0cfcd2e0 (docs-only
+headc7837ff4), including exact Locale2/FPSR/int136. Native reports its new
+component workflow dispatch returned404 because the workflow is not on the
+default branch; no such component run exists. The next session must review
+and register a narrow branch/path push trigger, prove that exact component,
+then import the same proved prerequisite here. This Surface WIP workflow
+also currently has workflow_dispatch only and needs registration before use.
+No passing original Surface runtime or full acceptance is claimed. Existing
+full405078/06 stays RED: Windows2022 four failures and2025 two, exclusively
+test80; the original untraced TIC plus separate traced scenario both passed.
 
 ViewSurfaceFor previously latched pending before obtaining an environment
 or live weak view and left it latched after a failed Java post. Draw also
