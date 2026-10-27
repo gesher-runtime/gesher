@@ -318,25 +318,17 @@ int fcntl(int fd, int cmd, ...) {
     case F_DUPFD_CLOEXEC: {
       gesher::record_locks::DescriptorGuard descriptor_guard;
       const int saved_errno = errno;
-      // The lowest free number >= arg, as on Linux. dup (fd.cc) duplicates
-      // sockets and eventfds too; fds are never inherited, so the two match.
+      // The lowest free number >= arg, as on Linux. Search BEFORE creating
+      // any duplicate: a staging alias followed by a failed private close
+      // could otherwise leave an invisible OFD pin. The descriptor guard
+      // serializes participating fd publication through this actual dup2.
       if (arg < 0) return errno = EINVAL, -1;
-      int dup_fd = dup(fd);
-      if (dup_fd < 0) return -1;
-      if (dup_fd >= arg) { errno = saved_errno; return dup_fd; }
       int target = static_cast<int>(arg);
       while (gesher::HandleFromFd(target) != INVALID_HANDLE_VALUE) ++target;
-      int moved = dup2(dup_fd, target);
-      const int move_errno = errno;
-      int closed = gesher::CloseInternalDuplicate(dup_fd);
-      if (moved < 0) return errno = move_errno, -1;
-      if (closed < 0) {
-        const int close_errno = errno;
-        gesher::CloseInternalDuplicate(moved);  // No unreported successful target.
-        return errno = close_errno, -1;
-      }
+      int moved = dup2(fd, target);  // Includes socket/event/binder bookkeeping.
+      if (moved < 0) return -1;
       // Probing a vacant CRT descriptor sets EBADF. That internal search and
-      // private duplicate cleanup are not an application-visible fcntl error.
+      // the successful duplication are not an application-visible error.
       errno = saved_errno;
       return moved;
     }
