@@ -18,12 +18,14 @@
 #include <netioapi.h>
 #include <objbase.h>
 #include <netlistmgr.h>
+#include <ocidl.h>
 #include <windows.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 #include <wctype.h>
+#include <stdlib.h>
 
 #include <map>
 #include <mutex>
@@ -83,6 +85,7 @@ std::string Address(const SOCKADDR* sa) {
 // What the Network List Manager says of an adapter.
 struct NlmInfo {
   bool internet = false;
+  bool captive_portal = false;
   bool metered = false;
   bool roaming = false;
   bool congested = false;
@@ -115,6 +118,25 @@ std::map<GUID, NlmInfo, bool (*)(const GUID&, const GUID&)> QueryNlm(bool* machi
           NlmInfo& info = out[adapter];
           info.internet =
               (cc & (NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
+          INetwork* network = nullptr;
+          if (SUCCEEDED(c->GetNetwork(&network)) && network != nullptr) {
+            IPropertyBag* properties = nullptr;
+            if (SUCCEEDED(network->QueryInterface(__uuidof(IPropertyBag),
+                reinterpret_cast<void**>(&properties)))) {
+              const wchar_t* names[] = {L"NA_InternetConnectivityV4", L"NA_InternetConnectivityV6"};
+              for (const wchar_t* property : names) {
+                VARIANT value;
+                VariantInit(&value);
+                if (SUCCEEDED(properties->Read(property, &value, nullptr)) &&
+                    (value.vt == VT_UINT || value.vt == VT_UI4 || value.vt == VT_I4)) {
+                  info.captive_portal = info.captive_portal || (value.ulVal & 1) != 0;
+                }
+                VariantClear(&value);
+              }
+              properties->Release();
+            }
+            network->Release();
+          }
           INetworkConnectionCost* cost = nullptr;
           if (SUCCEEDED(c->QueryInterface(kIidNetworkConnectionCost,
                                           reinterpret_cast<void**>(&cost)))) {
@@ -240,6 +262,7 @@ std::string Snapshot() {
              is_default ? 1 : 0);
     out += line;
     out += Field(Narrow(a->FriendlyName)) + "\t" + Field(Narrow(a->Description)) + "\n";
+    if (info.captive_portal) out += "portal\t" + std::to_string(index) + "\t1\n";
     for (auto* u = a->FirstUnicastAddress; u != nullptr; u = u->Next) {
       snprintf(line, sizeof(line), "addr\t%lu\t%s\t%u\n", index,
                Address(u->Address.lpSockaddr).c_str(), u->OnLinkPrefixLength);
@@ -315,7 +338,48 @@ jboolean WindowsNetworks_nativeInetAllowed(JNIEnv*, jclass) {
   return gesher_inet_allowed() ? JNI_TRUE : JNI_FALSE;
 }
 
+jstring WindowsNetworks_nativeResolve(JNIEnv* env, jclass, jstring host, jint if_index) {
+  const char* query = env->GetStringUTFChars(host, nullptr);
+  if (query == nullptr) return nullptr;
+  char* addresses = nullptr;
+  int error = gesher_resolve_interface(query, static_cast<uint32_t>(if_index), &addresses);
+  env->ReleaseStringUTFChars(host, query);
+  if (error != 0) {
+    jclass type = env->FindClass("java/net/UnknownHostException");
+    char message[128];
+    snprintf(message, sizeof(message), "DNS on interface %d failed (errno %d)", if_index, error);
+    if (type != nullptr) env->ThrowNew(type, message);
+    return nullptr;
+  }
+  jstring result = env->NewStringUTF(addresses);
+  free(addresses);
+  return result;
+}
+
+jint WindowsNetworks_nativeBindSocket(JNIEnv*, jclass, jint fd, jint if_index) {
+  return gesher_bind_socket_interface(fd, static_cast<uint32_t>(if_index));
+}
+
+jint WindowsNetworks_nativeSocketInterface(JNIEnv*, jclass, jint fd) {
+  uint32_t index = 0;
+  int error = gesher_socket_interface(fd, &index);
+  return error == 0 ? static_cast<jint>(index) : -error;
+}
+
+jboolean WindowsNetworks_nativeBindProcess(JNIEnv*, jclass, jint if_index) {
+  return gesher_set_process_interface(static_cast<uint32_t>(if_index)) == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+jint WindowsNetworks_nativeProcessInterface(JNIEnv*, jclass) {
+  return static_cast<jint>(gesher_process_interface());
+}
+
 const JNINativeMethod kMethods[] = {
+    {"nativeResolve", "(Ljava/lang/String;I)Ljava/lang/String;", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeResolve)},
+    {"nativeBindSocket", "(II)I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeBindSocket)},
+    {"nativeSocketInterface", "(I)I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeSocketInterface)},
+    {"nativeBindProcess", "(I)Z", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeBindProcess)},
+    {"nativeProcessInterface", "()I", NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeProcessInterface)},
     {"nativeSnapshot", "()Ljava/lang/String;",
      NATIVEHELPER_SYSV_JNI_ENTRY(WindowsNetworks_nativeSnapshot)},
     {"nativeWaitForChange", "(I)Z",

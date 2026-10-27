@@ -41,6 +41,46 @@ public final class ConnectivityService extends IConnectivity.Stub {
         mPm = pm;
         mAtm = atm;
         sInstance = this;
+        // CONNECTIVITY_ACTION (web3 track, ADR 0058): sticky, made when the first sticky
+        // query (a registerReceiver) comes, then sent whenever the default network changes.
+        StickyBroadcasts.addStarter(this::startBroadcasts);
+    }
+
+    /** The default network the last CONNECTIVITY_ACTION told of ("" before the first). */
+    private String mBroadcastState;
+
+    private void startBroadcasts() {
+        synchronized (this) {
+            if (mBroadcastState != null) return;
+            mBroadcastState = "";
+        }
+        connectivityChanged(snapshot(), false);
+        startWatching();
+    }
+
+    /**
+     * Sends CONNECTIVITY_ACTION (and keeps it sticky) when the default network or its
+     * connectivity differs from the last one told of.
+     */
+    private void connectivityChanged(String text, boolean send) {
+        WindowsNetworks.Snapshot s = WindowsNetworks.parse(text);
+        WindowsNetworks.Net n = s.defaultNetwork();
+        String state = n == null ? "none" : n.netId() + " " + n.kind;
+        synchronized (this) {
+            if (mBroadcastState == null || state.equals(mBroadcastState)) return;
+            mBroadcastState = state;
+        }
+        android.content.Intent intent = android.net.ConnectivityManager.connectivityAction(s);
+        StickyBroadcasts.put(intent);
+        SystemServer.log("connectivity: CONNECTIVITY_ACTION, default network " + state);
+        Services.Created created = Services.sLast;
+        if (send && created != null) {
+            try {
+                created.am.sendBroadcastFor("android", intent, null);
+            } catch (RuntimeException e) {
+                SystemServer.log("connectivity: CONNECTIVITY_ACTION not sent: " + e);
+            }
+        }
     }
 
     /**
@@ -179,6 +219,7 @@ public final class ConnectivityService extends IConnectivity.Stub {
             if (Boolean.getBoolean("gesher.net.trace")) {
                 SystemServer.log("connectivity: Windows' networks changed:\n" + now);
             }
+            connectivityChanged(now, true);
             for (IConnectivity.IListener l : listeners) {
                 try {
                     l.onSnapshot(now);
