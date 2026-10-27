@@ -42,6 +42,14 @@
 
 namespace gesher::bionic {
 
+void EnterLoadedCode() {
+  thread_local bool ready = false;
+  if (!ready) {
+    ready = true;
+    elf::SetupThreadTls();
+  }
+}
+
 namespace {
 
 // A sysv_abi wrapper around a function F whose signature means the same to the

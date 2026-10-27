@@ -34,6 +34,10 @@
 
 namespace gesher::media {
 
+// AudioDeviceInfo and the native routing getters use the same process-local IDs.
+constexpr int kOutputDeviceId = 2;
+constexpr int kInputDeviceId = 3;
+
 enum class PcmFormat : int { kU8, kS16, kS24Packed, kS32, kFloat };
 
 size_t BytesPerSample(PcmFormat f);

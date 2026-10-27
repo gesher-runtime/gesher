@@ -43,10 +43,9 @@
 #include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/log.h"
-#include "../jni/media_jni.h"
+#include "../audio/record_permission.h"
 #include "../player/data_source.h"
 #include "../player/player.h"
-#include "jni_bridge.h"
 
 #define SYSV __attribute__((sysv_abi))
 
@@ -850,7 +849,7 @@ SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* 
     case 32: f = is_float ? PcmFormat::kFloat : PcmFormat::kS32; break;
     default: return kContentUnsupported;
   }
-  if (!MayRecordAudio(nullptr)) {
+  if (!RecordingAllowed()) {
     MEDIA_LOGE("OpenSL ES: the app does not have android.permission.RECORD_AUDIO");
     return kPermissionDenied;
   }

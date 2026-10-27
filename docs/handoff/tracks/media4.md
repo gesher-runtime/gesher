@@ -171,6 +171,25 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Separate source-only continuation **wip/media4-native** lives in
+**C:\work\gesher-media4-native**, cut from docs-only4d5f3532 above the
+still-frozen OpenSL CI source2b343aa7 below. It factors pure audio, file/video
+player and NDK OBJECT targets into both dalvikvm and gesher-exec, linking
+functional hostgraphics/window dependencies without the JNI player. Native
+callbacks use the original once-per-thread SetupThreadTls body moved into
+the bionic shim; JNI delegates to that same entry. A pure recording gate
+defaults to deny without an identity provider; ART installs the unchanged
+MayRecordAudio manifest/bare-core decision. No manifest gate is bypassed.
+The same NDK fixture additionally builds a real ELF executable and requires
+native PCM callbacks with independent initialized guest TLS on both ABIs,
+alongside all original JNI/allowed-denied APK contracts. Native processes
+without a recording identity must return 0x0B with no recorder object.
+Only source/diff and script parsing checks have run for this continuation;
+no new compiler, native fixture or acceptance exists yet. The active full
+40470959941 remains on its original source and is not affected by this branch.
+Native-child identity propagation, full configuration/effects/volume policy
+and the other remaining Media4 contracts remain open.
+
 Full ci **40470959941** is running at
 **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
 integration db84749b (docs above fresh-exit30deb08c). Main build
