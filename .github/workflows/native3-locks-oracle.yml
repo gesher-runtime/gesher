@@ -1,0 +1,27 @@
+name: native3-locks-oracle
+on:
+  push:
+    branches: ['wip/native3-locks']
+    paths:
+      - '.github/workflows/native3-locks-oracle.yml'
+      - 'tests/native3-locks/linux_reference.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/native3-locks
+      - name: Actual Linux process and OFD record-lock semantics
+        run: python3 tests/native3-locks/linux_reference.py --output record-lock-reference.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native3-locks-reference
+          path: record-lock-reference.json
