@@ -16,7 +16,7 @@ public class Gtest84 {
     Console.WriteLine("[ RUN      ] Fixture.RealProcess");
     Console.Error.WriteLine("gtest84 actual stderr " + mode);
     if (mode == "timeout") {
-      File.WriteAllText(pidFile, Process.GetCurrentProcess().Id.ToString());
+      File.WriteAllText(pidFile, System.Diagnostics.Process.GetCurrentProcess().Id.ToString());
       Thread.Sleep(300000);
       return 0;
     }
