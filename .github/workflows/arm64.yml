@@ -52,6 +52,7 @@ jobs:
             compat/arm64
             cmake/toolchain-llvm-mingw.cmake
             tests/native
+            tests/native2
             tests/apps/nativeactivity
             tests/exec
 
