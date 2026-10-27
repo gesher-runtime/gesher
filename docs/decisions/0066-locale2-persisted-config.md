@@ -5,7 +5,10 @@ Status: proposed for product acceptance. Source `004fff10` passes scoped
 groups and a zero summary on each Windows host. All exact queued callbacks
 and the original settled device observations pass. Current coherent candidate
 adds accepted integration `bc6e05be` and frozen Wide/FPCR/FPSR `75e7ef29`;
-full product verification remains pending. Exact jobs, merge review, failed-run
+full40516054280/ca4ed3cf is red: Windows2025 reports three Web3 lifecycle/launch
+failures, while every21 Locale2 group and five FPCR/five FPSR/six Wide groups
+pass on both hosts. Windows2022 ends0; package23 and both ten-app e2e0 pass.
+No complete product acceptance or retry is claimed. Exact jobs, merge review, failed-run
 history and limits are in the [stage report](../handoff/tracks/locale2-persisted-config.md).
 Test 81 is reserved to this slice. No local compilation or ART/APK execution.
 

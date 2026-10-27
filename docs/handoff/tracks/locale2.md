@@ -49,7 +49,17 @@ Merge `acb144fb` imports latest accepted integration `bc6e05be`/Net4; merge
 include/Run conflict resolution retains ifaddrs, Wide, ArmFpcr and ArmFpsr,
 both reference builds, APK markers and complete captured evidence. Locale code
 is unchanged from scoped004fff10, ARM production from75e7, Net4 frombc6.
-The coherent full candidate is ready; actual full acceptance is pending.
+Coherent full40516054280/ca4ed3cf completed red, attempt1:29 conclusions,
+22success/one failure/six skips. Windows2022 job122243136456 ends0;
+Windows2025 job122243136436 ends3, all Web3: A11yActivity fails to reach
+fresh normal0 after60+60s/WM_CLOSE, then proxy and PAC NetActivity each
+miss their400s completion/normal0. Both hosts nevertheless pass every21
+Locale2 group, five FPCR, five FPSR and six Wide groups. Package23 and both
+ten-app e2e plus four transport/association/shortcut controls pass. The five
+actual critical logs and every job conclusion were personally read; exact
+details remain in the stage report. No cause, waiver, unchanged retry,
+full product acceptance or integration merge is claimed. Source stays frozen
+for the owning Windows/Web3 correction and a fresh coherent verification.
 See [the stage report and failed-run history](locale2-persisted-config.md),
 [ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
 [pinned-source audit](locale2-source-audit.json).
