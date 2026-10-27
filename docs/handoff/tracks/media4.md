@@ -171,6 +171,14 @@ must have minimal additive edits and be listed in the final report.
 
 ## Status and next steps
 
+Full ci **40470959941** is running at
+**2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, after merging accepted
+integration db84749b (docs above fresh-exit30deb08c). Main build
+122077706841 is pending. Source is frozen; following commits are docs only.
+This is the first OpenSL/test76 runtime candidate and includes the separately
+reviewed AAudio78ee5e12 fixture correction. No new compile/runtime acceptance
+or OpenSL inventory closure is claimed until all actual full-run gates pass.
+
 Frozen **wip/media4-format-verified** points at docs-only
 **ba3c1c2dc94e2e6e69c8e7c050df9dc3145c0317** above the accepted format
 source below. The active branch now prepares a separate AAudio fixture
