@@ -204,6 +204,8 @@ Part Wide() {
   p.Check(format_time && time_l && sizeof(struct tm) == 56 && offsetof(struct tm, tm_gmtoff) == 40 &&
               offsetof(struct tm, tm_zone) == 48, "wide time entry/layout");
   if (format_time && time_l) {
+    WideTimeContracts(format_time,
+        [&](bool ok, const std::string& what) { p.Check(ok, what); });
     struct tm time{};
     time.tm_year = 124; time.tm_mon = 1; time.tm_mday = 29;
     time.tm_hour = 23; time.tm_min = 7; time.tm_sec = 6;

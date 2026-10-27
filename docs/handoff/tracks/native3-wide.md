@@ -177,6 +177,15 @@ compilation; it supplies no runtime acceptance claim. Current integration
 remains a06d930 and is included before the next complete acceptance run.
 Root's unsigned width follow-up is separate and has not been modified here.
 
+Full ci 40423326965 at 76cf72e is pending. A final source comparison found
+one wrapper error-order mismatch: invalid wcsftime format must report EILSEQ
+before a SIZE_MAX destination reports EINVAL. The wrapper now follows the
+pinned allocation/conversion order. Shared tests and the original FreeBSD
+wrapper reference cover invalid/empty formats, zero/overflow bounds, Unicode
+zone output and malformed zone bytes. The reference uses a host narrow C
+formatter only; narrow strftime/tm code remains unchanged. This correction
+needs scoped CI and the subsequent complete runtime acceptance run.
+
 Root separately verified Unicode width in ci 40404678100 at 581e88f; this
 track does not modify its classification/case/width implementations or
 ART patch 0572. Final verification must first include current integration.

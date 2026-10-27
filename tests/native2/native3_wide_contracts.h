@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <climits>
 #include <cmath>
+#include <ctime>
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -327,4 +329,46 @@ void WideFloatingContracts(Double to_double, Float to_float, Check check) {
     check(to_double(text, &end) == 0 && end == text && to_float(text, &end) == 0 && end == text && errno == 0,
           "floating high-bit wchar input stops in both signedness ABIs");
   }
+}
+
+template <class Format, class Check>
+void WideTimeContracts(Format format, Check check) {
+  static_assert(sizeof(struct tm) == 56 && offsetof(struct tm, tm_gmtoff) == 40 &&
+                offsetof(struct tm, tm_zone) == 48);
+  struct tm time{};
+  time.tm_year = 124; time.tm_mon = 1; time.tm_mday = 29;
+  time.tm_hour = 23; time.tm_min = 7; time.tm_sec = 6;
+  time.tm_wday = 4; time.tm_yday = 59; time.tm_gmtoff = 19800; time.tm_zone = "TEST";
+  wchar_t out[128];
+  std::fill(std::begin(out), std::end(out), 0x55);
+  const wchar_t* expected = L"\U0001f642 2024-02-29 23:07:06 +0530 TEST";
+  check(format(out, 128, L"\U0001f642 %Y-%m-%d %H:%M:%S %z %Z", &time) == wcslen(expected) &&
+            !wcscmp(out, expected), "pinned wide time UTF32/tm/zone output");
+  std::fill(std::begin(out), std::end(out), 0x55);
+  check(format(out + 1, 4, L"\U0001f642", &time) == 0 && out[0] == 0x55 && out[1] == 0x55 && out[5] == 0x55,
+        "pinned wide time narrow byte bound/guards");
+  check(format(out + 1, 5, L"\U0001f642", &time) == 1 && out[1] == 0x1f642 && out[2] == 0 && out[3] == 0x55,
+        "pinned wide time supplementary output uses one unit");
+  out[1] = 0x55;
+  check(format(out + 1, 0, L"%Y", &time) == 0 && out[1] == 0x55, "wide time zero output bound");
+  errno = 0;
+  check(format(out + 1, SIZE_MAX, L"%Y", &time) == 0 && errno == 22 && out[1] == 0x55,
+        "wide time overflow guard/error");
+  const wchar_t invalid[] = {static_cast<wchar_t>(0x200000), 0};
+  for (size_t max : {size_t{0}, size_t{128}, SIZE_MAX}) {
+    errno = 0;
+    check(format(out + 1, max, invalid, &time) == 0 && errno == 84 && out[1] == 0x55,
+          "pinned wide time invalid format precedes zero/overflow bounds");
+  }
+  errno = 0;
+  check(format(out + 1, 128, L"", &time) == 0 && errno == 0 && out[1] == 0x55,
+        "pinned wide time empty format preserves destination");
+  time.tm_zone = "\xf0\x9f\x99\x82";
+  check(format(out + 1, 5, L"%Z", &time) == 1 && out[1] == 0x1f642 && out[2] == 0 && out[3] == 0x55,
+        "pinned wide time UTF8 zone becomes UTF32");
+  time.tm_zone = "\xed\xa0\x80";
+  out[1] = 0x55;
+  errno = 0;
+  check(format(out + 1, 128, L"%Z", &time) == 0 && errno == 84 && out[1] == 0x55,
+        "pinned wide time malformed zone errors without wide output");
 }
