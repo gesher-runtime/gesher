@@ -62,6 +62,14 @@ CI merge current integration; tick only CI-verified roadmap items with run ids.
 
 ## Status and next steps
 
+Full candidate ci 40430425743 at b3ecc85 is running. It combines the
+independently verified startup input, corrected unsigned ARM width oracle
+and actual per-ABI complete digest checks, CPU patch 0572 and bounded AAC
+prepare observation. Locked reference/Windows-helper ci 40426388584 at
+5229764 is fully green and root inspected both reference digests/33 rows
+and both 17-case binary128 helper logs. This does not replace full runtime
+acceptance or implement the remaining binary128 libm functions.
+
 CI 40418638643 at b15ecea is complete and red: 2022 has zero failures;
 2025 has exactly two media failures (AAC/M4A asset prepareAsync did not
 finish within the unchanged 5s wait, then 27/28 recorded tones). Both actual
