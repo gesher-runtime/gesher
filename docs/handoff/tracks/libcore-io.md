@@ -1,8 +1,8 @@
 # Libcore file-copy natives
 
 Coordinator-owned follow-up. ADR0077 and Windows test83 are reserved; no
-implementation or CI acceptance exists yet. Use a separate wip/libcore-io
-worktree before changing production code. All compilation and native/JVM
+CI acceptance exists yet. Worktree C:\work\gesher-libcore-io is on
+wip/libcore-io from integration3577b330. All compilation and native/JVM
 execution belongs in CI.
 
 ## Status and next steps
@@ -27,3 +27,18 @@ both Windows runners. Preserve the independent AOT3 graph/image oracles.
 Before acceptance, merge current integration and verify a full CI run,
 including package and both e2e sets. Keep any remaining I/O native gaps
 explicit; no roadmap box is ticked for this observation.
+
+Source inspection found the actual upstream UnixCopyFile.c is already in
+the configured libopenjdk source list; only its name-found entry is missing
+from compat/libcore/builtins.cc. The candidate adds that exact JNICALL
+declaration/table row and retains the original native body. Test83 exercises
+15 real public/native groups, including UTF8 paths, buffer boundaries,
+offsets, descriptor ownership, read/EOF/error/cancellation ordering and
+clearing a real cancellation word. ADR0077 records pinned hashes and the
+uninduced short-write/EINTR limits. Source review, compilation and CI remain
+pending; no local compiler or JVM/native fixture has run.
+Bounded read-only peer review confirms the exact signature/table row and
+all15 fixture groups match the pinned native's ordering; no source blocker
+was found. PowerShell AST/diff checks pass only. A full CI run is next; the
+baseline already contains current verified integration3577b330. No roadmap
+box is ticked before actual compile/runtime/package/e2e verification.
