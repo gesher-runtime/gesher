@@ -15,19 +15,31 @@ function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
   $process.StartInfo = $start
   $stdout = $null
   $stderr = $null
+  $outReader = $null
+  $errReader = $null
+  $outHandle = $null
+  $errHandle = $null
+  $cancellation = [Threading.CancellationTokenSource]::new()
   $started = $false
   $handle = $null
   $problems = @()
   $result = [pscustomobject]@{ Stdout = ''; Stderr = ''; Exit = $null;
     TimedOut = $false; ProcessComplete = $false; ReadersComplete = $false;
-    Disposed = $false; Problem = '' }
+    Disposed = $false; ReaderTasksComplete = $false; PipesClosed = $false;
+    StdoutHandle = [IntPtr]::Zero; StderrHandle = [IntPtr]::Zero; Problem = '' }
   try {
     if (-not $process.Start()) { throw 'gtest process did not start' }
     $started = $true
     $null = $process.Handle
     $handle = $process.SafeHandle
-    $stdout = $process.StandardOutput.ReadToEndAsync()
-    $stderr = $process.StandardError.ReadToEndAsync()
+    $outReader = $process.StandardOutput
+    $errReader = $process.StandardError
+    $outHandle = $outReader.BaseStream.SafeFileHandle
+    $errHandle = $errReader.BaseStream.SafeFileHandle
+    $result.StdoutHandle = $outHandle.DangerousGetHandle()
+    $result.StderrHandle = $errHandle.DangerousGetHandle()
+    $stdout = $outReader.ReadToEndAsync($cancellation.Token)
+    $stderr = $errReader.ReadToEndAsync($cancellation.Token)
     $result.TimedOut = -not $process.WaitForExit($TimeoutSec * 1000)
     if ($result.TimedOut) {
       try { $process.Kill($true) } catch { $problems += "kill: $_" }
@@ -56,6 +68,29 @@ function Invoke-GtestProcess([string] $Executable, [string[]] $Arguments,
     # whose real child retains the pipe. Preserve either completed stream.
     if ($null -ne $stdout -and $stdout.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $result.Stdout = $stdout.Result }
     if ($null -ne $stderr -and $stderr.Status -eq [Threading.Tasks.TaskStatus]::RanToCompletion) { $result.Stderr = $stderr.Result }
+    # Process.Dispose deliberately does not close user-accessed readers. Stop
+    # their pending I/O first, prove both tasks finished within a cleanup bound,
+    # then explicitly dispose both readers. Cancellation never makes an expired
+    # original EOF/exit deadline successful.
+    try { $cancellation.Cancel() } catch { $problems += "gtest reader cancellation: $_" }
+    $tasks = [Threading.Tasks.Task[]]@(@($stdout, $stderr) | Where-Object { $null -ne $_ })
+    if ($tasks.Count) {
+      try { [void][Threading.Tasks.Task]::WaitAll($tasks, 5000) }
+      catch { # Canceled/faulted tasks are inspected below; no unbounded wait.
+        foreach ($task in $tasks) {
+          if ($task.IsFaulted) { $problems += "gtest reader cleanup fault: $($task.Exception)" }
+        }
+      }
+      $result.ReaderTasksComplete = @($tasks | Where-Object { -not $_.IsCompleted }).Count -eq 0
+      if (-not $result.ReaderTasksComplete) { $problems += 'gtest readers did not stop within five seconds after cancellation' }
+    }
+    foreach ($reader in @($outReader, $errReader)) {
+      if ($null -ne $reader) {
+        try { $reader.Dispose() } catch { $problems += "gtest reader dispose: $_" }
+      }
+    }
+    $result.PipesClosed = $null -ne $outHandle -and $null -ne $errHandle -and $outHandle.IsClosed -and $errHandle.IsClosed
+    try { $cancellation.Dispose() } catch { $problems += "gtest cancellation dispose: $_" }
     try { $process.Dispose(); $result.Disposed = $null -eq $handle -or $handle.IsClosed }
     catch { $problems += "gtest dispose: $_" }
   }

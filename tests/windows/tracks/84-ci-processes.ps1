@@ -28,6 +28,21 @@ foreach ($name in 'GESHER_GTEST84_MODE','GESHER_GTEST84_PID','GESHER_GTEST84_CWD
 }
 $gtest84SavedLibs = $libsTests
 $gtest84SavedArt = $artBin
+if (-not ('Gtest84NativeHandles' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class Gtest84NativeHandles {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool GetHandleInformation(IntPtr handle, out uint flags);
+  public static bool Closed(IntPtr handle) {
+    uint flags;
+    return handle != IntPtr.Zero && !GetHandleInformation(handle, out flags) && Marshal.GetLastWin32Error() == 6;
+  }
+}
+'@
+}
+Write-Host "ACTUAL_GTEST_RUNTIME powershell=$($PSVersionTable.PSVersion) framework=$([Runtime.InteropServices.RuntimeInformation]::FrameworkDescription)"
 try {
   $env:GESHER_CI_PROCESS_TRACE = '1'
   foreach ($helper in 'Invoke-CoreLibsTest','Invoke-ArtGtest') {
@@ -56,7 +71,14 @@ try {
         $text = ($records | Where-Object { $_ -isnot [bool] } | ForEach-Object { "$_" }) -join "`n"
         $expected = $mode -in @('normal','normal-relative')
         $correct = $verdicts.Count -eq 1 -and $verdicts[0] -eq $expected -and $timer.Elapsed.TotalSeconds -lt 20
-        if ($mode -ne 'missing-exe') { $correct = $correct -and $text.Contains('disposed=True') }
+        if ($mode -ne 'missing-exe') {
+          $pipeEvidence = [regex]::Match($text, 'tasksdone=True pipesclosed=True pipe-output=(\d+) pipe-error=(\d+)')
+          $actualPipesClosed = $pipeEvidence.Success -and
+            [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[1].Value) -and
+            [Gtest84NativeHandles]::Closed([IntPtr][long]$pipeEvidence.Groups[2].Value)
+          $correct = $correct -and $text.Contains('disposed=True') -and $actualPipesClosed
+          Write-Host "ACTUAL_GTEST_PIPE_CLEANUP helper=$helper case=$mode tasks-stopped=$($pipeEvidence.Success) native-pipes-invalid=$actualPipesClosed"
+        }
         if ($expected) { $correct = $correct -and $text.Contains('1 tests passed') -and $text.Contains('readers=True') }
         if ($mode -eq 'nonzero') { $correct = $correct -and $text.Contains('exit 0x00000017') }
         if ($mode -eq 'failed') { $correct = $correct -and $text.Contains('Fixture.RealProcess') -and $text.Contains('1 failed') }
