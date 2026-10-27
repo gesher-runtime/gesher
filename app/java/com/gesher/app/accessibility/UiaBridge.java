@@ -82,6 +82,8 @@ public final class UiaBridge {
     }
 
     private static native boolean nativeStart();
+    // Registered only by the CI-hook build; normal builds have no fixture hook.
+    private static native boolean nativeRegisterFixture(Class<?> fixture);
     private static native int nativeRemaining(long token);
     private static native boolean nativeShutdown();
 
