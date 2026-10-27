@@ -119,3 +119,15 @@ is bounded and failure stops before another mutex wait. Source is pending
 peer review/CI; no local compiler or fixture ran. Actual denied owner query,
 cross-session/nonadministrator ACLs, corruption/concurrent publication and
 all runtime fcntl/lifetime/signal integration remain open.
+
+Metadata namespace source hardening now opens the authoritative ProgramData
+directory and both Gesher/RecordLocks-v1 parents without delete sharing,
+rejects directory reparses/non-directories, and retains all three handles
+through metadata-file open and validation. The file's final normalized DOS
+path must equal the path derived from the retained canonical parent handle;
+the metadata file itself rejects reparse/directory attributes and stays open
+without delete sharing. This closes the earlier parent check/open rename
+window in the intended namespace. No native compiler or fixture ran locally;
+bounded source peer review and actual Windows namespace/identity tests remain
+pending. This does not qualify malicious metadata writers, cross-session
+ACLs or descriptor/lock runtime lifetime behavior.

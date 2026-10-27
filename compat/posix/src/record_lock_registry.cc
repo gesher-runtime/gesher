@@ -92,21 +92,58 @@ bool ValidState(const RegistryState& state) {
 
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
 
+struct ParentDirectories {
+  HANDLE handles[3]{INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+  ~ParentDirectories() {
+    for (HANDLE handle : handles) if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+  }
+};
+
+int Directory(const wchar_t* path, SECURITY_ATTRIBUTES* security, bool create, HANDLE* retained) {
+  if (create && !CreateDirectoryW(path, security) && GetLastError() != ERROR_ALREADY_EXISTS) return WinError();
+  HANDLE directory = CreateFileW(path, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (directory == INVALID_HANDLE_VALUE) return WinError();
+  BY_HANDLE_FILE_INFORMATION info{};
+  int error = 0;
+  if (!GetFileInformationByHandle(directory, &info)) error = WinError();
+  else if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) error = ELOOP;
+  else if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) error = ENOTDIR;
+  if (error) CloseHandle(directory);
+  else *retained = directory;
+  return error;
+}
+
+int CanonicalPath(HANDLE handle, wchar_t* path, size_t count) {
+  DWORD length = GetFinalPathNameByHandleW(handle, path, static_cast<DWORD>(count),
+                                         FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (!length) return WinError();
+  return length >= count ? ENAMETOOLONG : 0;
+}
+
 // Shared metadata has the same secured global location in standalone and
 // installed contexts, independent of environment overrides/session IDs. A
 // failed namespace/ACL operation is an error, never a per-session fallback.
-int MetadataPath(wchar_t* path, size_t count, SECURITY_ATTRIBUTES* security) {
+int MetadataPath(wchar_t* path, size_t count, SECURITY_ATTRIBUTES* security, ParentDirectories* parents) {
   PWSTR program_data = nullptr;
   HRESULT result = SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT, nullptr, &program_data);
   if (FAILED(result)) return EACCES;
-  int written = std::swprintf(path, count, L"%ls\\Gesher", program_data);
+  int error = Directory(program_data, security, false, &parents->handles[0]);
   CoTaskMemFree(program_data);
-  if (written < 0 || static_cast<size_t>(written) >= count) return ENAMETOOLONG;
-  if (!CreateDirectoryW(path, security) && GetLastError() != ERROR_ALREADY_EXISTS) return WinError();
+  if (error) return error;
+  error = CanonicalPath(parents->handles[0], path, count);
+  if (error) return error;
   size_t length = std::wcslen(path);
+  int written = std::swprintf(path + length, count - length, L"\\Gesher");
+  if (written < 0 || static_cast<size_t>(written) >= count - length) return ENAMETOOLONG;
+  error = Directory(path, security, true, &parents->handles[1]);
+  if (error) return error;
+  length = std::wcslen(path);
   written = std::swprintf(path + length, count - length, L"\\RecordLocks-v1");
   if (written < 0 || static_cast<size_t>(written) >= count - length) return ENAMETOOLONG;
-  if (!CreateDirectoryW(path, security) && GetLastError() != ERROR_ALREADY_EXISTS) return WinError();
+  error = Directory(path, security, true, &parents->handles[2]);
+  if (error) return error;
   length = std::wcslen(path);
   written = std::swprintf(path + length, count - length, L"\\registry.bin");
   return written < 0 || static_cast<size_t>(written) >= count - length ? ENAMETOOLONG : 0;
@@ -148,8 +185,12 @@ int Registry::Open() {
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
       L"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)", SDDL_REVISION_1, &descriptor, nullptr)) return WinError();
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+  // Keep every canonical parent open without delete sharing until the file
+  // handle is acquired and checked. A rename/recreate cannot redirect the
+  // path between the parent validation and metadata open.
+  ParentDirectories parents;
   wchar_t path[32768];
-  int error = MetadataPath(path, std::size(path), &security);
+  int error = MetadataPath(path, std::size(path), &security, &parents);
   if (!error) {
     mutex_ = CreateMutexW(&security, FALSE, L"Global\\Gesher.RecordLocks.v1");
     if (!mutex_) error = WinError();
@@ -165,6 +206,11 @@ int Registry::Open() {
     if (file_ == INVALID_HANDLE_VALUE) error = WinError();
   }
   LocalFree(descriptor);
+  if (!error) {
+    wchar_t actual[32768];
+    error = CanonicalPath(file_, actual, std::size(actual));
+    if (!error && _wcsicmp(actual, path) != 0) error = ELOOP;
+  }
   if (!error) {
     BY_HANDLE_FILE_INFORMATION info{};
     LARGE_INTEGER size{};
