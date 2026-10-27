@@ -21,7 +21,14 @@
 #define MIN(a, b) std::min(a, b)
 
 namespace pinned {
-struct mbstate_t { unsigned char __seq[4]; unsigned char __reserved[4]; };
+struct mbstate_t {
+  unsigned char __seq[4];
+  unsigned char __reserved[4];
+  // C permits the pinned wcsftime.c's `static const mbstate_t initial;` and
+  // zero-initializes it. This constructor supplies that same C behavior
+  // when the unchanged C body joins the C++ reference translation unit.
+  constexpr mbstate_t() : __seq{}, __reserved{} {}
+};
 size_t mbrtoc32(char32_t*, const char*, size_t, mbstate_t*);
 size_t c32rtomb(char*, char32_t, mbstate_t*);
 size_t mbrtowc(wchar_t*, const char*, size_t, mbstate_t*);

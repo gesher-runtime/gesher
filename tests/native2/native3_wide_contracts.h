@@ -8,6 +8,8 @@
 #include <climits>
 #include <cmath>
 #include <ctime>
+#include <cwchar>
+#include <iterator>
 #include <algorithm>
 #include <cstring>
 #include <string>
