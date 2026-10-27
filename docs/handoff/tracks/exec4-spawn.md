@@ -55,6 +55,12 @@ while the parent's raw sentinel remains unchanged. Both ABI callers are
 mandatory in test77; main CI builds this host target and launcher early.
 This is a source finding, not an error observed in the earlier run.
 Full40498406783 is superseded by the corrected source before acceptance.
+Corrected full40502225202 is dispatched at exact
+0808ba71b62ea784432de52f31bd3f86c9e2e3ad after merging accepted current
+integration7b49a718 (docs above Windows6297/160). The second bounded peer
+review of6eeb773d found no blocker; neither review supplies runtime proof.
+Watch C:\work\gesher-ci-review\exec4-spawn-full-40502225202-watch.log,
+interval120. The candidate remains immutable while this run executes.
 
 Spawn attributes/signals/scheduling/IDs, complete fork/image replacement,
 console delivery, descriptor limits and remaining Exec4 contracts remain
