@@ -1,0 +1,5 @@
+# Surface visual current checkpoint (source only)
+
+Base fb0a4fe24286ccf2d69ed4fe987989fddc7db1b9 is the verified 30db union. Ported the 13-file d239a7e3 reviewed patch: ci.yml (one target reconciled), cmake/aosp/media.cmake, frame_invalidation.h, surface_jni.cc, surfacegl AndroidManifest.xml, build.sh, GlActivity.java, InvalidationActivity.java, surfacegl.c, e2e/apps.json, e2e/run-e2e.ps1, surfaces/invalidation_test.cc, and track80. Applied fd32798f logger/build correction; copied 5c578ffb source-only component workflow and c9f6b258 driver for adaptation. Nothing here is runtime-qualified.
+
+BLOCKED FROM DISPATCH BY INCOMPLETE WORK: component workflow still references historical red Locale supplier and lacks current source/attempt/artifact identities, fresh profman/dexdump, 15-image hash checks and fresh proof. Replace this scaffolding, audit API3 host/DLL and exact track80/86 body and helpers, then peer review and dispatch changed source. Preserve original cold printf/vprintf regression, phase/pixel thresholds, original and traced TIC gates. No physical hardware proof is claimed.

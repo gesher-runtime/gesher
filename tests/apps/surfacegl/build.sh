@@ -5,8 +5,8 @@
 #   tests/apps/surfacegl/build.sh <out-dir> --ndk <NDK dir> --android-jar <android.jar> \
 #       --build-tools <build-tools dir> --r8 <r8.jar>
 #
-# The NDK builds jni/surfacegl.c into lib/x86_64/libsurfacegl.so (C, against
-# libandroid, libEGL and libGLESv3); aapt2 links the manifest and resources
+# The NDK builds jni/surfacegl.c for x86_64 and arm64-v8a (C, against
+# libandroid, libEGL and libGLESv2); aapt2 links the manifest and resources
 # against the SDK's android.jar, javac and d8 compile the Activity, and the APK
 # is zip-aligned with its .so stored uncompressed. Unsigned: gesher-app does
 # not verify signatures. Runs on the Linux runner
@@ -36,17 +36,22 @@ trap 'rm -rf "$work"' EXIT
 
 # Native code.
 llvm=$ndk/toolchains/llvm/prebuilt/linux-x86_64
-mkdir -p "$work/apk/lib/x86_64"
-"$llvm/bin/x86_64-linux-android26-clang" -shared -fPIC -O2 -fstack-protector-strong \
-  -Wall -Wextra -Werror -fvisibility=hidden \
-  -Wl,-soname,libsurfacegl.so -o "$work/apk/lib/x86_64/libsurfacegl.so" "$app/jni/surfacegl.c" \
-  -landroid -lEGL -lGLESv2 -llog
-cp "$work/apk/lib/x86_64/libsurfacegl.so" "$out/libsurfacegl.so"
-echo "--- libsurfacegl.so: needed, and what it imports ---"
-"$llvm/bin/llvm-readelf" -d "$work/apk/lib/x86_64/libsurfacegl.so" | grep -E 'NEEDED|SONAME'
-"$llvm/bin/llvm-readelf" --dyn-syms -W "$work/apk/lib/x86_64/libsurfacegl.so" |
-  awk '$7 == "UND" && $8 != "" {print $4, $8}' | sort -u | tr '\n' ' '
-echo
+for abi in x86_64 arm64-v8a; do
+  triple=x86_64-linux-android
+  suffix=
+  if [[ $abi == arm64-v8a ]]; then triple=aarch64-linux-android; suffix=-arm64; fi
+  mkdir -p "$work/apk/lib/$abi"
+  "$llvm/bin/${triple}26-clang" -shared -fPIC -O2 -fstack-protector-strong \
+    -Wall -Wextra -Werror -fvisibility=hidden \
+    -Wl,-soname,libsurfacegl.so -o "$work/apk/lib/$abi/libsurfacegl.so" "$app/jni/surfacegl.c" \
+    -landroid -lEGL -lGLESv2 -llog
+  cp "$work/apk/lib/$abi/libsurfacegl.so" "$out/libsurfacegl${suffix}.so"
+  echo "--- libsurfacegl.so $abi: needed, and what it imports ---"
+  "$llvm/bin/llvm-readelf" -d "$work/apk/lib/$abi/libsurfacegl.so" | grep -E 'NEEDED|SONAME'
+  "$llvm/bin/llvm-readelf" --dyn-syms -W "$work/apk/lib/$abi/libsurfacegl.so" |
+    awk '$7 == "UND" && $8 != "" {print $4, $8}' | sort -u | tr '\n' ' '
+  echo
+done
 
 # Resources and manifest.
 "$tools/aapt2" compile --dir "$app/res" -o "$work/res.zip"
@@ -64,7 +69,12 @@ java -cp "$r8" com.android.tools.r8.D8 --release --min-api 26 --lib "$android_ja
 # Into the APK: the dex compressed, the library stored; then alignment
 # (-p: .so files on 4 KiB page boundaries).
 (cd "$work/dex" && zip -q "$work/unaligned.apk" classes.dex)
-(cd "$work/apk" && zip -q -0 "$work/unaligned.apk" lib/x86_64/*.so)
-"$tools/zipalign" -f -p 4 "$work/unaligned.apk" "$out/surfacegl.apk"
-unzip -l "$out/surfacegl.apk"
-echo "surfacegl.apk written to $out"
+for abi in x86_64 arm64-v8a; do
+  name=surfacegl
+  if [[ $abi == arm64-v8a ]]; then name=surfacegl-arm64; fi
+  cp "$work/unaligned.apk" "$work/$name.apk"
+  (cd "$work/apk" && zip -q -0 "$work/$name.apk" "lib/$abi/libsurfacegl.so")
+  "$tools/zipalign" -f -p 4 "$work/$name.apk" "$out/$name.apk"
+  unzip -l "$out/$name.apk"
+  echo "$name.apk written to $out"
+done
