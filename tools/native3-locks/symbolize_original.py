@@ -114,6 +114,8 @@ def main():
         data = binary.read_bytes()
         pe = struct.unpack_from('<I', data, 0x3c)[0]
         assert data[pe:pe + 4] == b'PE\0\0'
+        assert struct.unpack_from('<H', data, pe + 4)[0] == 0x8664, 'Requires original AMD64 image'
+        assert struct.unpack_from('<H', data, pe + 24)[0] == 0x20b, 'Requires PE32+ eight-byte IAT slots'
         sections = struct.unpack_from('<H', data, pe + 6)[0]
         optional_size = struct.unpack_from('<H', data, pe + 20)[0]
         table = pe + 24 + optional_size
@@ -143,7 +145,12 @@ def main():
         for block in re.findall(r'^Import \{\n(.*?)^\}', imports, re.MULTILINE | re.DOTALL):
             dll = re.findall(r'^\s*Name: (\S+)\s*$', block, re.MULTILINE)
             addresses = re.findall(r'^\s*ImportAddressTableRVA: (0x[0-9a-fA-F]+)\s*$', block, re.MULTILINE)
-            symbols = re.findall(r'^\s*Symbol: (.*?) \([0-9]+\)\s*$', block, re.MULTILINE)
+            symbol_lines = [line for line in block.splitlines() if line.lstrip().startswith('Symbol:')]
+            symbols = []
+            for line in symbol_lines:
+                parsed = re.fullmatch(r'\s*Symbol: (.*?) \([0-9]+\)\s*', line)
+                assert parsed, ('Unsupported original import symbol format', line)
+                symbols.append(parsed.group(1))
             assert len(dll) == len(addresses) == 1 and symbols
             first = int(addresses[0], 16)
             for index, symbol in enumerate(symbols):
