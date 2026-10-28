@@ -1,5 +1,7 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+[Bounded requirement matrix and unsurveyed scope](requirement-matrix-2026-10-29.md).
+
 **Latest continuation, 2026-10-29:** TSF8ad component actual audit is complete and bounded; Binder authenticated private admission remains source-only and is a security prerequisite for secondary AOT. Services corrected fixture needs fresh proof. Interactive hardware Windows CI does not exist; hardware remains an external blocker. Read [the continuation checkpoint](session-2026-10-28-aot-native-full.md#continued-audit-and-security-dependency-2026-10-29).
 
 **Newest accepted integration, 2026-10-28:** full40731915058/attempt1 at exact81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a is accepted:38jobs32success/6intentional skips, both normal whole0, all new AOT/selected Native and original gates,84 verified archive receipts, package23/two e2e0. Frozen80d5920e adds docs only; --no-ff mergef1550540186b4ae3f17a5e501a886ec1c4d5d613 has an empty entire non-doc diff to81fd before/after commit; inventory55e03/all1157 preserved. Read [the bounded acceptance](tracks/coherent-aot-native-40731915058-accepted.md). Services/TSF remain separate pending actual audit/future full; Native raw-CLOEXEC, blocking/signals, AOTsecondary and hardware/main/release stay open. This supersedes older active-full/component statuses below.
