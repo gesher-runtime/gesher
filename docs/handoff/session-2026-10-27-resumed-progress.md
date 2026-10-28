@@ -629,3 +629,53 @@ in gap-ledger-2026-10-27.md and the exact accepted report. Terra owns initial
 Surface CI-only strict fetch/hash/extract helper and negative controls;
 integration owns Binder/future canonical propagation only after peer and
 qualification. No local artifact download or primary code merge occurred.
+
+## Parallel bounded checkpoints, 2026-10-28
+
+Primary remains phase4 code-identical to verified30db/full405961; no further
+code/main/PR/tag/release operation. The archive-integrity gap above remains
+open until actual strict helper proof, distinct from actual runtime31/0.
+
+- Windows reader component40655610161/attempt1/sourcef5f8fe91 is bounded green:
+  both43 retained controls0 plus eight actual reader observations (four
+  RunTimed/four InvokeOpenSl), real handle invalidity/reprobe and original
+  retained-writer EOF failure preserved. Frozen921418533f4fb35d52e988bc644db8d590207ee3
+  adds docs only. This leaf is excluded from primary; broader helpers and
+  coherent full acceptance remain required.
+- Terra owns new C:/work/gesher-surface-visual-current,
+  wip/surface-current-visual from qualifiedfb0a4fe; old5c remains read-only.
+  Component40658868233/source5256964b was last reported active by its owner,
+  unchanged while strict-archive preparation continues. Source peer preserved
+  original80/86/logger/pixel/phase/TIC gates; new actual fresh child birth/exe/
+  pinned-handle/normal0 checks retain original timing. Strict helpers at
+  prepared620175cf await final independent source peer and actual negative/
+  archive observations. Neither scoped source nor an active run is acceptance.
+- Native common component40659198571 failed: Linux150 rows and four real futex
+  observations, Windows2022 same150 plus four WCT observations, with strict
+  comparison failing the actual freopen existing-file/child ENOTDIR20 versus
+  Windows ENOENT2. Windows2025 failed before execution because Python command
+  resolution returned Object[]. The thirteen duplicate modes were not reached.
+  These are retained failures, not normalization/waivers. Independently peered
+  changed source1dc2e245 adds narrow post-failed-CRT UTF16 ancestor errno
+  classification, genuine absent-disk/Unicode reopen controls, lossless wide
+  command-line paths and single Python executable selection. Fresh actual CI
+  is required. Earlier Linux stdio timeout remains historical; raw-wchan
+  observer correction was a hypothesis-led fixture change, not certain cause.
+  All inherited-OFD/atomic-CLOEXEC/blocking/signal/cross-ABI/ART gates stay open.
+- Sole integrator owns C:/work/gesher-binder2-sg, now isolated
+  wip/binder2-stable-readonly. Reconciliationa474aef preserves qualified union
+  plus ordinaryed741; guard15029 and additive RW/RO/page/FD observer fixtures
+  582326 are source-only. Native independent peer at552c5488 found no remaining
+  bounded guard/fixture blocker after missing OutputActorPid was predeclared;
+  four source hashes and precise peer are saved in ci-review. Current clean
+  pushed2430c0372ddf61503266288c8c3e6353a5950416 adds a fresh-component draft,
+  with NO push trigger and no dispatch: exact ancestry/delta/current attempts,
+  whole host payload and configured compiler guards are prepared; strict ZIP/
+  collision helpers and their own preflight remain mandatory before launch.
+  Existing seven ordinary scenarios and actual PID/normal completion/open
+  audits are retained. No filtered/raw/public-prefix work was resumed.
+
+Helper proof may qualify independently of unrelated Surface pixels; reuse
+exact reviewed bytes and run the strict negative/real archive controls in each
+consumer rather than serialize Binder behind visual acceptance. All compiler/
+native/JVM/C# execution remains CI-only, with no local artifact downloads.
