@@ -29,6 +29,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   # chromium.googlesource.com/angle/angle: the upstream commit AOSP's
@@ -77,7 +78,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: probes/angle
+          sparse-checkout: |
+            probes/angle
+            tools/ci
+            tools/surface
 
       - name: Cache toolchain
         id: toolchain
@@ -93,10 +97,16 @@ jobs:
           curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/$LLVM_MINGW_NAME.tar.xz" \
             | tar -xJ -C ~/toolchain
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: angle-sdk
-          path: angle-sdk
+      - name: Strict current angle-sdk artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          producer='angle / build'
+          if [[ "$GITHUB_WORKFLOW" == angle ]]; then producer='build'; fi
+          python3 tools/ci/artifact_receipt.py --name angle-sdk --producer "$producer" --destination ci-suppliers/angle_sdk
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/angle_sdk --destination angle-sdk --ledger ci-owners-angle-sdk.json --owner angle_sdk
 
       - name: Build angle_probe
         run: |
