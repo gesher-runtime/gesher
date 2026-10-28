@@ -14,7 +14,10 @@ env:
   LLVM_MINGW_TAG: "20261006"
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 jobs:
+  # This Services-only copy lacks the native TSF build inputs. Integration must
+  # restore routing for its canonical TSF workflow after bringing those inputs.
   preflight:
+    if: github.ref == 'refs/heads/wip/tsf-format-current'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

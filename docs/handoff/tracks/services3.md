@@ -63,3 +63,14 @@ services as protected. Locale2 may use registered caller PID/package for its
 bounded ordinary owner operations; that does not close these global gaps.
 PackageManagerService.getInstallerPackageName263-264 also returns null;
 installer identity/broadcast coverage needs a real install-source contract.
+
+The copied TSF workflow is gated to `refs/heads/wip/tsf-format-current`;
+its dependent jobs skip on Services refs, which lack the native TSF target and
+manifest. Services runs its own controller and worker fixture on both Windows
+runners. Four shared controller files retain their 8ad629 controller blob pins;
+the workflow has a separate Services routing pin. During integration, replace
+the copy with the canonical TSF workflow and adapt or remove the Services
+routing pin in the same change, after bringing its native dependencies. The
+supervisor fixture launches a pwsh child via ProcessPath; it does not claim
+Windows PowerShell 5 support. Fresh Services CI on both Windows runners remains
+required.
