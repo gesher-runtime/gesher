@@ -317,6 +317,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   unsigned document_script_inflight = 0;
   bool document_script_failed = false;
   UINT_PTR document_script_timer = 0;
+  ULONGLONG document_script_deadline = 0;
   std::vector<std::function<void(Impl*)>> document_waiting;
 
   struct Frame {
@@ -614,9 +615,22 @@ void ClearDocumentTimer(Impl* impl) {
     g_timers.erase(impl->document_script_timer);
     impl->document_script_timer = 0;
   }
+  impl->document_script_deadline = 0;
+}
+
+bool CheckDocumentDeadline(Impl* impl) {
+  if (impl->document_script_deadline == 0 || GetTickCount64() < impl->document_script_deadline)
+    return true;
+  if (!impl->document_script_failed) {
+    impl->document_script_failed = true;
+    impl->document_waiting.clear();
+    impl->Report(kFailed, 0, E_FAIL, L"document script registration exceeded three seconds");
+  }
+  return false;
 }
 
 void DrainDocumentNavigations(Impl* impl) {
+  CheckDocumentDeadline(impl);
   if (impl->document_script_inflight != 0) return;
   ClearDocumentTimer(impl);
   auto waiting = std::move(impl->document_waiting);
@@ -627,6 +641,7 @@ void DrainDocumentNavigations(Impl* impl) {
 
 void ArmDocumentTimer(const std::shared_ptr<Impl>& impl) {
   if (impl->document_script_timer != 0) return;
+  if (impl->document_script_deadline == 0) impl->document_script_deadline = GetTickCount64() + 3000;
   if (g_next_timer == 0 || g_next_timer == std::numeric_limits<UINT_PTR>::max()) {
     impl->document_script_failed = true;
     impl->document_waiting.clear();
@@ -653,6 +668,7 @@ void ArmDocumentTimer(const std::shared_ptr<Impl>& impl) {
 }
 
 void RunDocumentNavigation(Impl* impl, std::function<void(Impl*)> navigation) {
+  CheckDocumentDeadline(impl);
   if (impl->document_script_failed) {
     impl->Report(kFailed, 0, E_FAIL, L"navigation rejected after document script failure");
   } else if (impl->document_script_inflight != 0) {
@@ -1863,6 +1879,8 @@ void Host::ExecuteScript(const std::wstring& script, int64_t callback_id) {
 void Host::SetDocumentScript(const std::wstring& script) {
   std::weak_ptr<Impl> weak = impl_;
   Do(impl_, [script, weak](Impl* impl) {
+    if (impl->document_script_inflight != 0 &&
+        (!CheckDocumentDeadline(impl) || impl->document_script_failed)) return;
     impl->document_script_failed = false;
     if (!impl->document_script_id.empty()) {
       HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
@@ -1878,13 +1896,18 @@ void Host::SetDocumentScript(const std::wstring& script) {
     if (script.empty()) { DrainDocumentNavigations(impl); return; }
     ++impl->document_script_inflight;
     ArmDocumentTimer(impl->shared_from_this());
-    if (impl->document_script_failed) { --impl->document_script_inflight; return; }
+    if (impl->document_script_failed) {
+      --impl->document_script_inflight;
+      if (impl->document_script_inflight == 0) ClearDocumentTimer(impl);
+      return;
+    }
     HRESULT started = impl->webview->AddScriptToExecuteOnDocumentCreated(
         script.c_str(),
         GESHER_CALLBACK(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
                         [weak, generation](HRESULT error, LPCWSTR id) -> HRESULT {
                           auto impl = weak.lock();
                           if (!impl || impl->destroyed || !impl->webview) return S_OK;
+                          CheckDocumentDeadline(impl.get());
                           if (SUCCEEDED(error) && id != nullptr) {
                             if (generation != impl->document_script_generation) {
                               HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
