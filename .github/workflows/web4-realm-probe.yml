@@ -23,6 +23,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Probe checkout does not match run source' }
           Write-Host "SOURCE $env:GITHUB_SHA RUN $env:GITHUB_RUN_ID ATTEMPT $env:GITHUB_RUN_ATTEMPT OS $env:RUNNER_OS"
           dotnet --info
           New-Item -ItemType Directory -Force nuget | Out-Null
