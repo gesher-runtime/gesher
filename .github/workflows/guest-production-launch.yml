@@ -1,0 +1,92 @@
+name: Shared restricted guest launch component
+on:
+  push:
+    branches: [wip/guest-production-launch]
+    paths: ['tests/guest-production-launch/**', 'compat/framework/restricted_launch.h', '.github/workflows/guest-production-launch.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: guest-production-launch-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify pinned llvm-mingw archive
+        run: |
+          set -euo pipefail
+          mkdir -p ~/toolchain
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz -o toolchain.tar.xz
+          echo '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4  toolchain.tar.xz' | sha256sum -c -
+          tar -xJf toolchain.tar.xz -C ~/toolchain
+      - name: Compile actual fixture and bind compiler receipt
+        run: python3 tests/guest-production-launch/receipt.py build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guest-isolation-${{ github.sha }}-${{ github.run_attempt }}
+          path: guest-artifact/
+          if-no-files-found: error
+  probe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact current-run producer archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name "guest-isolation-$env:GITHUB_SHA-$env:GITHUB_RUN_ATTEMPT" --producer build --destination guest-artifact
+          if ($LASTEXITCODE -ne 0) { throw 'strict archive receipt failed' }
+          python tests/guest-production-launch/receipt.py verify
+          if ($LASTEXITCODE -ne 0) { throw 'source/compiler/executable receipt failed' }
+      - name: Exercise actual AppContainer controls through qualified supervisor
+        shell: pwsh
+        env:
+          GESHER_CI_PROCESS_TRACE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . "$pwd/tests/windows/helpers/CloseProcessReaders.ps1"
+          $tokens = $null; $errors = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile("$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          $definitions = @($ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] }, $false) | Where-Object Name -eq 'RunTimed')
+          if ($definitions.Count -ne 1) { throw 'qualified supervisor missing or ambiguous' }
+          . ([scriptblock]::Create($definitions[0].Extent.Text))
+          $output = RunTimed (Resolve-Path guest-artifact/guest-isolation-probe.exe).Path @() 45
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 0) { throw "fixture/supervisor failed: $code" }
+          $expected = @(
+            'PASS shared-api forbidden-flags-fail-closed suspended-owned-rollback',
+            'PASS shared-api unlisted-inheritable-event-denied',
+            'PASS parent suspended-token-sid pid=',
+            'PASS parent same-endpoint-isolated-positive-challenge fresh-host-positive protected-dacl',
+            'PASS child actual-token-sid',
+            'PASS child host-process-dup-denied error=5',
+            'PASS child host-process-write-denied error=5',
+            'PASS child host-process-thread-denied error=5',
+            'PASS child host-thread-context-denied error=5',
+            'PASS child host-thread-suspend-denied error=5',
+            'PASS child trusted-code-write-denied error=5',
+            'PASS child trusted-config-write-denied error=5',
+            'PASS child host-ipc-denied error=5',
+            'PASS child explicit-resource-pipe challenge=Gesher-resource-v1',
+            'PASS parent trusted-files-unchanged host-ipc-positive=1 child-exit=0',
+            'PASS parent owned-child-handles-files-profile-cleanup',
+            'BOUNDARY shared-restricted-launch-only production-SpawnOwned-adoption-open trusted-same-user-host-outside-scope',
+            'INFO READER_CLEANUP helper=RunTimed tasksdone=True pipesclosed=True processclosed=True'
+          )
+          foreach ($row in $expected) { if (-not $output.Contains($row)) { throw "missing actual control: $row" } }
+          Write-Host "GUEST_PROBE_VERDICT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT runner=${{ matrix.os }} scope=shared-launch-api-only-production-adoption-open"
