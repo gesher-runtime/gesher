@@ -1,5 +1,15 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Resume after cleanup, 2026-10-28:** read
+[the retained-worktree/account checkpoint](session-2026-10-28-after-cleanup.md)
+before using any historical checkout path. Only canonical Git, integration,
+AOTresource-current, Native3-locks and Web4-frames remain. Fifty retired
+worktrees are recoverable from preserved branches/cleanup refs; do not recreate
+obsolete trees. Qualified primary code still equals7bb/full40678371420.
+Native65 is diagnostic-only, AOT5d3 source-only and Web4e3abd unrun; all actual
+qualification and remaining gaps persist. The current GitHub account gate is
+palmoni5 immediately before each write, with gh-authenticated transport.
+
 **Newest integration acceptance, 2026-10-28:** canonical full40678371420/attempt1
 at exact7bbccfcddbac826f50b78175f4d23f8702fd7741 is accepted:35jobs29success/
 six original intentional probes skipped, both actual normal Windows whole0,
