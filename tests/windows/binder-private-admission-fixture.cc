@@ -215,6 +215,7 @@ int wmain(int argc, wchar_t** argv) {
       Marker(dir+u"PASS"); return 0;
     }
     Check(!startup.present && argc == 4, "root requires broker, manager and owned empty directory");
+    Check(z::JoinJob(0), "fixture root kill-on-close job");
     std::u16string dir = U(argv[3])+u"\\";
     Check(!Exists(dir+u"PASS"), "fresh controlled directory required");
     std::wstring device = L"private-admission-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());

@@ -27,6 +27,7 @@ public final class PackageIdentityFixture {
         check(args.length == 3 || args.length == 5, "requires two APKs and an update of A");
         if (!Zygote.nativeIsAuthority()) {
             check(args.length == 3, "private writer bootstrap required for inherited arguments");
+            check(Zygote.joinJob(0), "fixture root kill-on-close job");
             String exe = Zygote.exePath();
             String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
             String device = "uid-fixture-" + java.util.UUID.randomUUID();
