@@ -14,6 +14,7 @@
 #include <string>
 
 #include "internal.h"
+#include "record_lock_descriptors.h"
 
 namespace {
 
@@ -281,6 +282,7 @@ pid_t fork(void) { return errno = ENOSYS, -1; }
 
 int pipe2(int fds[2], int flags) {
   int mode = _O_BINARY | ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
+  gesher::record_locks::DescriptorGuard descriptor_guard;
   return gesher::CrtResult(_pipe(fds, 64 * 1024, mode));
 }
 
