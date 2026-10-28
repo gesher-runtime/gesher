@@ -12,8 +12,47 @@
 #include <vector>
 #include "../../compat/framework/restricted_launch.h"
 
+// A failed cleanup destructor must not allocate even when allocation is fatal.
+static bool g_forbid_allocations = false;
+void* operator new(size_t size) {
+  if (g_forbid_allocations) abort();
+  void* result = malloc(size ? size : 1);
+  if (!result) abort();
+  return result;
+}
+void* operator new[](size_t size) { return ::operator new(size); }
+void operator delete(void* pointer) noexcept { free(pointer); }
+void operator delete[](void* pointer) noexcept { free(pointer); }
+void operator delete(void* pointer, size_t) noexcept { free(pointer); }
+void operator delete[](void* pointer, size_t) noexcept { free(pointer); }
+
 namespace gesher::guest {
 struct RestrictedLaunchTestAccess {
+  static bool ExhaustionRejects(const wchar_t* executable, wchar_t* cmd, const wchar_t* directory,
+                               const STARTUPINFOW& startup, PSID sid, const std::vector<HANDLE>& allowlist) {
+    std::array<RestrictedLaunch::Pending*, 64> reservations{};
+    for (auto& reservation : reservations) {
+      reservation = RestrictedLaunch::Reserve();
+      if (!reservation) return false;
+    }
+    RestrictedLaunch rejected;
+    const auto result = rejected.Start(executable, cmd, nullptr, directory, startup, 0, sid, allowlist);
+    bool ok = result.error == ERROR_TOO_MANY_CMDS && result.cleanup.confirmed && !rejected.process();
+    for (auto* reservation : reservations) reservation->state.store(0, std::memory_order_release);
+    return ok;
+  }
+  static bool BusyRetryPreservesUnknown() {
+    for (auto& slot : RestrictedLaunch::Slots()) {
+      unsigned expected = 2;
+      if (!slot.state.compare_exchange_strong(expected, 3, std::memory_order_acquire)) continue;
+      bool ok = RestrictedLaunch::RetryQuarantined() == 1;
+      auto evidence = RestrictedLaunch::PendingRetirements();
+      ok = ok && evidence.size() == 1 && !evidence[0].confirmed && evidence[0].wait_error == ERROR_BUSY;
+      slot.state.store(2, std::memory_order_release);
+      return ok;
+    }
+    return false;
+  }
   static BOOL WINAPI DenyTermination(HANDLE, UINT) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
   static DWORD WINAPI FailWait(HANDLE, DWORD) { SetLastError(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
   static DWORD WINAPI FailResume(HANDLE) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return static_cast<DWORD>(-1); }
@@ -336,6 +375,11 @@ static int exercise(Fixture& f) {
   STARTUPINFOW startup{}; startup.cb = sizeof(startup);
   const std::vector<HANDLE> allowlist{handles[0], handles[1]};
   {
+    std::wstring rejected_cmd = cmd;
+    if (!gesher::guest::RestrictedLaunchTestAccess::ExhaustionRejects(f.executable.c_str(),
+        rejected_cmd.data(), f.root.c_str(), startup, f.sid, allowlist)) return 80;
+  }
+  {
     gesher::guest::RestrictedLaunch invalid;
     std::wstring bad = cmd;
     if (invalid.Start(f.executable.c_str(), bad.data(), nullptr, f.root.c_str(), startup,
@@ -371,11 +415,15 @@ static int exercise(Fixture& f) {
     if (abandoned.Start(f.executable.c_str(), rollback_cmd.data(), nullptr, f.root.c_str(), startup,
                         0, f.sid, allowlist).error != ERROR_SUCCESS) return 78;
     gesher::guest::RestrictedLaunchTestAccess::Inject(abandoned, true);
+    g_forbid_allocations = true;
   }
+  g_forbid_allocations = false;
+  if (!gesher::guest::RestrictedLaunchTestAccess::BusyRetryPreservesUnknown()) return 81;
   const auto pending = gesher::guest::RestrictedLaunch::PendingRetirements();
   if (pending.size() != 1 || pending[0].confirmed || pending[0].terminate_error != ERROR_ACCESS_DENIED ||
       pending[0].wait_error != ERROR_INVALID_HANDLE || gesher::guest::RestrictedLaunch::RetryQuarantined() != 0 ||
       !gesher::guest::RestrictedLaunch::PendingRetirements().empty()) return 79;
+  puts("PASS shared-api bounded-admission-allocation-free-handoff-busy-retry-unknown");
   puts("PASS shared-api unconfirmed-retirement-evidence-owned-retry-quarantine");
   puts("PASS shared-api forbidden-flags-fail-closed suspended-owned-rollback");
   gesher::guest::RestrictedLaunch launch;

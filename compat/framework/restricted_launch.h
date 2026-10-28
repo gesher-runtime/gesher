@@ -3,7 +3,8 @@
 #pragma once
 #include <windows.h>
 #include <vector>
-#include <mutex>
+#include <array>
+#include <atomic>
 
 namespace gesher::guest {
 
@@ -34,14 +35,18 @@ class RestrictedLaunch {
     if (!retired.confirmed) {
       // Keep all owned handles available for explicit retry. Never silently
       // classify an unproved rollback as an ordinary rejected launch.
-      std::lock_guard<std::mutex> lock(QuarantineLock());
-      Quarantine().push_back({process_, thread_, job_, retired});
+      // Admission reserved this fixed slot before any process was created.
+      // Handoff is allocation-free and never waits for a retry or another owner.
+      slot_->process = process_; slot_->thread = thread_; slot_->job = job_;
+      slot_->evidence = retired;
+      slot_->state.store(2, std::memory_order_release);
       OutputDebugStringW(L"Gesher restricted launch: retirement unconfirmed; owner quarantined\n");
       return;
     }
     if (thread_) CloseHandle(thread_);
     if (job_) CloseHandle(job_);  // kill-on-close even after failed termination
     if (process_) CloseHandle(process_);
+    if (slot_) slot_->state.store(0, std::memory_order_release);
   }
 
   // The command buffer is writable as required by CreateProcessW. Startup may
@@ -71,6 +76,8 @@ class RestrictedLaunch {
         if (!found) return ERROR_INVALID_HANDLE;
       }
     }
+    slot_ = Reserve();
+    if (!slot_) return ERROR_TOO_MANY_CMDS;
     job_ = CreateJobObjectW(nullptr, nullptr);
     if (!job_) return GetLastError();
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -142,21 +149,43 @@ class RestrictedLaunch {
   // An owner destroyed after unconfirmed cleanup remains tracked. A trusted
   // supervisor can retry all such exact instances and inspect pending evidence.
   static std::vector<Retirement> PendingRetirements() {
-    std::lock_guard<std::mutex> lock(QuarantineLock());
     std::vector<Retirement> result;
-    for (const auto& pending : Quarantine()) result.push_back(pending.evidence);
+    result.reserve(64);  // allocate before acquiring any slot
+    for (auto& pending : Slots()) {
+      unsigned expected = 2;
+      if (pending.state.compare_exchange_strong(expected, 3, std::memory_order_acquire)) {
+        result.push_back(pending.evidence);
+        pending.state.store(2, std::memory_order_release);
+      } else if (expected == 3) {
+        // A concurrent inspector/retry owns the evidence; report unknown.
+        result.push_back({false, ERROR_BUSY, ERROR_BUSY});
+      }
+    }
     return result;
   }
-  static size_t RetryQuarantined() {
-    std::lock_guard<std::mutex> lock(QuarantineLock());
-    auto& pending = Quarantine();
-    for (auto it = pending.begin(); it != pending.end();) {
-      it->evidence = Retire(it->process, it->job, TerminateJobObject, WaitForSingleObject);
-      if (!it->evidence.confirmed) { ++it; continue; }
-      CloseHandle(it->thread); CloseHandle(it->job); CloseHandle(it->process);
-      it = pending.erase(it);
+  // One total budget, capped at one second, across the entire fixed pool.
+  // No global mutex is held while Windows retirement APIs execute. Busy slots
+  // are skipped and remain owned; exhaustion rejects admission before creation.
+  static size_t RetryQuarantined(DWORD budget_ms = 1000) {
+    ULONGLONG deadline = GetTickCount64() + (budget_ms > 1000 ? 1000 : budget_ms);
+    for (auto& pending : Slots()) {
+      if (GetTickCount64() >= deadline) break;
+      unsigned expected = 2;
+      if (!pending.state.compare_exchange_strong(expected, 3, std::memory_order_acquire)) continue;
+      ULONGLONG now = GetTickCount64();
+      DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
+      pending.evidence = Retire(pending.process, pending.job, TerminateJobObject,
+                                WaitForSingleObject, remaining);
+      if (!pending.evidence.confirmed) { pending.state.store(2, std::memory_order_release); continue; }
+      CloseHandle(pending.thread); CloseHandle(pending.job); CloseHandle(pending.process);
+      pending.state.store(0, std::memory_order_release);
     }
-    return pending.size();
+    size_t count = 0;
+    for (auto& pending : Slots()) {
+      unsigned state = pending.state.load(std::memory_order_acquire);
+      if (state == 2 || state == 3) ++count;
+    }
+    return count;
   }
   HANDLE process() const { return process_; }
   HANDLE job() const { return job_; }
@@ -167,16 +196,28 @@ class RestrictedLaunch {
   friend struct RestrictedLaunchTestAccess;  // fixture-only private fault injection
   using Terminate = BOOL (WINAPI*)(HANDLE, UINT);
   using Wait = DWORD (WINAPI*)(HANDLE, DWORD);
-  struct Pending { HANDLE process, thread, job; Retirement evidence; };
-  static std::vector<Pending>& Quarantine() { static std::vector<Pending> pending; return pending; }
-  static std::mutex& QuarantineLock() { static std::mutex lock; return lock; }
-  static Retirement Retire(HANDLE process, HANDLE job, Terminate terminate, Wait wait) {
+  struct Pending {
+    std::atomic<unsigned> state{0};  // free, reserved owner, pending, inspector/retry
+    HANDLE process = nullptr, thread = nullptr, job = nullptr;
+    Retirement evidence;
+  };
+  static std::array<Pending, 64>& Slots() { static std::array<Pending, 64> slots; return slots; }
+  static Pending* Reserve() {
+    for (auto& pending : Slots()) {
+      unsigned expected = 0;
+      if (pending.state.compare_exchange_strong(expected, 1, std::memory_order_acquire)) return &pending;
+    }
+    return nullptr;
+  }
+  Pending* slot_ = nullptr;
+  static Retirement Retire(HANDLE process, HANDLE job, Terminate terminate, Wait wait,
+                           DWORD timeout = 5000) {
     Retirement result;
     if (!process) return result;
     if (wait(process, 0) != WAIT_OBJECT_0) {
       if (!terminate(job, 137)) result.terminate_error = GetLastError();
     }
-    DWORD state = wait(process, 5000);
+    DWORD state = wait(process, timeout);
     result.confirmed = state == WAIT_OBJECT_0;
     if (!result.confirmed) result.wait_error = state == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
     return result;

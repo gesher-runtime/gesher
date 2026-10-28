@@ -23,7 +23,7 @@ process handle within five seconds. Failure never invokes unrestricted creation;
 no breakaway flags or retries are accepted. Start/Resume return structured original-error and cleanup evidence; Stop returns
 confirmation plus termination and wait errors. A failed stop retains exact handles
 for retry. The destructor moves unconfirmed ownership and error evidence into a
-tracked quarantine, emits an OutputDebugString diagnostic, and never drops owned
+fixed-capacity quarantine reserved before process creation, emits an OutputDebugString diagnostic, and never drops owned
 handles. The supervisor can inspect PendingRetirements and RetryQuarantined; only
 a signaled process allows handle retirement. This is not an orphan-free claim
 when termination cannot be confirmed.
@@ -82,3 +82,13 @@ denial and wait failure against a real suspended child. It checks exact error
 evidence and retained process/job identity, restores real functions and proves
 actual retirement; another real suspended owner exercises destructor quarantine,
 pending evidence and successful retry. No runtime result is inferred from source.
+
+The repeat peer additionally blocked unbounded mutex-held retry and destructor
+allocation. Corrected ownership uses 64 fixed atomic slots, reserved before job or
+process creation. Exhaustion rejects admission before creation. Destructor
+handoff uses the reserved slot without allocation or locks. Retry skips busy slots
+and shares one total budget capped at 1000ms across the pool; unknown cleanup
+keeps exact handles. The fixture fills reservations and proves rejection, makes
+C++ allocations fatal during actual failed-cleanup destruction, and simulates a
+busy retry owner to require explicit unknown evidence while retaining ownership.
+These are source-only controls pending compilation and actual CI.
