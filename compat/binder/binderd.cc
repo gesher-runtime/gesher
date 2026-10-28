@@ -22,10 +22,10 @@
 //
 // File descriptors (BINDER_TYPE_FD) travel as Windows handles: the sender's
 // /dev/binder puts the fd's handle in the object, binderd duplicates it into
-// the receiving process and the receiver's /dev/binder wraps it in a new fd.
+// the receiving process as broker-owned staging. The receiver duplicates a
+// distinct owned copy for its fd; finish/abort closes the staging handle.
 //
-// Not done: fd arrays (BINDER_TYPE_FDA), scatter-
-// gather buffers (BINDER_TYPE_PTR, used by HIDL), security contexts
+// Not done: fd arrays (BINDER_TYPE_FDA), security contexts
 // (BR_TRANSACTION_SEC_CTX), freezing, priority inheritance, polling; such
 // transactions fail with BR_FAILED_REPLY.
 #include <windows.h>
@@ -49,6 +49,7 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../posix/src/binder_sg.h"
 
 namespace {
 
@@ -155,6 +156,7 @@ struct Buffer {
   bool allow_user_free = false;  // delivered to the receiver
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
+  std::vector<uint8_t> extra;
 };
 
 struct Transaction : Work {
@@ -182,6 +184,8 @@ struct Thread {
   bool waiting = false;  // on proc->waiting_threads
   bool process_todo = false;
   Transaction* transaction_stack = nullptr;
+  uint64_t pending_buffer = 0;
+  bool pending_buffer_claimed = false;  // validation state, never FD ownership
   WorkList todo;
   ErrorWork return_error;
   ErrorWork reply_error;
@@ -510,9 +514,9 @@ void ReleaseBufferObjects(Buffer* buffer) {
         UpdateRefForHandle(proc, fp.handle, false, fp.hdr.type == BINDER_TYPE_HANDLE);
         break;
       case BINDER_TYPE_FD:
-        // Never delivered: the receiver has not taken the handle duplicated
-        // for it, so it is closed there.
-        if (!buffer->allow_user_free) CloseRemoteHandle(proc->pid, fp.binder);
+        // Staging handles always belong to the broker. Successful delivery
+        // already closes/zeros them; abort/release closes any still present.
+        CloseRemoteHandle(proc->pid, fp.binder);
         break;
       default:
         break;
@@ -631,6 +635,8 @@ struct TransactionData {
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
   uint64_t buffers_size = 0;
+  int32_t copy_error = 0;
+  std::vector<uint8_t> extra;
 };
 
 // Translates the objects of a buffer from the sender's terms (proc) to the
@@ -656,6 +662,10 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
     }
     uint32_t type;
     memcpy(&type, buffer->data.data() + off, sizeof(type));
+    if (type == BINDER_TYPE_PTR) {
+      ++*translated;  // Owned extra storage is released with the same Buffer.
+      continue;
+    }
     if (type != BINDER_TYPE_BINDER && type != BINDER_TYPE_WEAK_BINDER &&
         type != BINDER_TYPE_HANDLE && type != BINDER_TYPE_WEAK_HANDLE &&
         type != BINDER_TYPE_FD) {
@@ -804,8 +814,10 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       }
     }
   }
-  if (td.buffers_size != 0) {
-    Log("proc %u: scatter-gather buffers are not supported", proc->id);
+  gesher::binder_sg::Layout sg_layout;
+  if (td.copy_error != 0 ||
+      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
+    Log("proc %u: invalid transaction user copy or scatter-gather layout", proc->id);
     return fail(BR_FAILED_REPLY);
   }
 
@@ -828,6 +840,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   buffer->async_transaction = (tr.flags & TF_ONE_WAY) != 0;
   buffer->data = std::move(td.data);
   buffer->offsets = std::move(td.offsets);
+  buffer->extra = std::move(td.extra);
   target_proc->buffers[buffer->id] = buffer;
   t->buffer = buffer;
 
@@ -904,11 +917,55 @@ void DoFreeBuffer(Proc* proc, uint64_t id) {
   FreeBuffer(buffer, true);
 }
 
+// Close only broker-owned staging handles. The receiver's adopted descriptors
+// refer to distinct duplicates, so finish/abort/ACK loss cannot close a handle
+// whose value the receiver has already freed and reused.
+void CloseStagingFds(Buffer* buffer) {
+  for (uint64_t offset : buffer->offsets) {
+    if (!gesher::binder_sg::Range(offset, sizeof(binder_fd_object), buffer->data.size())) continue;
+    binder_fd_object object;
+    memcpy(&object, buffer->data.data() + offset, sizeof(object));
+    if (object.hdr.type != BINDER_TYPE_FD) continue;
+    const uint64_t staging = object.pad_binder;
+    object.pad_binder = 0;
+    memcpy(buffer->data.data() + offset, &object, sizeof(object));
+    CloseRemoteHandle(buffer->proc->pid, staging);
+  }
+}
+
+// Roll back a delivery the receiver could not publish. A synchronous caller
+// gets a genuine failed reply; oneway queue ownership is released normally.
+int FinishBuffer(Thread* thread, uint64_t id, bool accepted) {
+  Proc* proc = thread->proc;
+  auto found = proc->buffers.find(id);
+  if (id == 0 || thread->pending_buffer != id || found == proc->buffers.end()) return -EINVAL;
+  Buffer* buffer = found->second;
+  Transaction* transaction = buffer->transaction;
+  if (transaction != nullptr && (transaction->to_thread != thread || thread->transaction_stack != transaction)) {
+    return -EINVAL;
+  }
+  if (accepted && !thread->pending_buffer_claimed) return -EINVAL;
+  thread->pending_buffer = 0;
+  thread->pending_buffer_claimed = false;
+  CloseStagingFds(buffer);
+  if (accepted) return 0;
+  if (transaction != nullptr) {
+    thread->transaction_stack = transaction->to_parent;
+    transaction->to_thread = nullptr;
+    transaction->buffer = nullptr;
+    buffer->transaction = nullptr;
+    SendFailedReply(transaction, BR_FAILED_REPLY);
+  }
+  DoFreeBuffer(proc, id);
+  return 0;
+}
+
 // --- thread and process release ---------------------------------------------------
 
 // binder_thread_release
 void ThreadRelease(Thread* thread) {
   if (thread->is_dead) return;
+  if (thread->pending_buffer != 0) FinishBuffer(thread, thread->pending_buffer, false);
   Proc* proc = thread->proc;
   proc->threads.remove(thread);
   if (thread->waiting) {
@@ -1006,6 +1063,7 @@ struct In {
 struct Out {
   std::vector<uint8_t> bytes;
   void Write(const void* data, size_t n) {
+    if (n == 0) return;
     const uint8_t* b = static_cast<const uint8_t*>(data);
     bytes.insert(bytes.end(), b, b + n);
   }
@@ -1095,12 +1153,17 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         } else if (!in.Get(&td.tr)) {
           return -EFAULT;
         }
-        if (td.tr.offsets_size % sizeof(binder_size_t) != 0) return -EINVAL;
-        td.data.resize(td.tr.data_size);
-        td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
-        if (!in.Read(td.data.data(), td.data.size()) ||
-            !in.Read(td.offsets.data(), td.tr.offsets_size)) {
-          return -EFAULT;
+        if (!in.Get(&td.copy_error)) return -EFAULT;
+        if (td.copy_error == 0) {
+          if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
+          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size;
+          if (body_size > static_cast<uint64_t>(in.end - in.p)) return -EFAULT;
+          td.data.resize(td.tr.data_size);
+          td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
+          td.extra.resize(td.buffers_size);
+          if (!in.Read(td.data.data(), td.data.size()) ||
+              !in.Read(td.offsets.data(), td.tr.offsets_size) ||
+              !in.Read(td.extra.data(), td.extra.size())) return -EFAULT;
         }
         DoTransaction(proc, thread, td, cmd == BC_REPLY || cmd == BC_REPLY_SG);
         break;
@@ -1372,12 +1435,16 @@ retry:
     tr.data_size = buffer->data.size();
     tr.offsets_size = buffer->offsets.size() * sizeof(binder_size_t);
     buffer->allow_user_free = true;
+    thread->pending_buffer = buffer->id;
+    thread->pending_buffer_claimed = false;
     rs->Put32(cmd);
     rs->out.Put(tr);
     rs->size += sizeof(tr);
     rs->out.Put(buffer->id);
+    rs->out.Put<uint64_t>(buffer->extra.size());
     rs->out.Write(buffer->data.data(), buffer->data.size());
     rs->out.Write(buffer->offsets.data(), tr.offsets_size);
+    rs->out.Write(buffer->extra.data(), buffer->extra.size());
     TRACE("proc %u thread %d: %s %d delivered", proc->id, thread->tid,
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {
@@ -1571,7 +1638,7 @@ void ServeThread(HANDLE pipe, In in) {
       uint32_t first, non_block;
       if (!req.Get(&read_size) || !req.Get(&first) || !req.Get(&non_block)) break;
       uint32_t consumed = 0;
-      int ret = ThreadWrite(proc, thread, req, &consumed);
+      int ret = thread->pending_buffer == 0 ? ThreadWrite(proc, thread, req, &consumed) : -EINVAL;
       ReadStream rs;
       rs.limit = static_cast<size_t>(read_size);
       if (ret == 0 && read_size > 0) {
@@ -1583,6 +1650,19 @@ void ServeThread(HANDLE pipe, In in) {
       reply.Put<int32_t>(ret);
       reply.Put<uint32_t>(consumed);
       reply.Write(rs.out.bytes.data(), rs.out.bytes.size());
+    } else if (op == wire::kClaimBuffer || op == wire::kFinishBuffer) {
+      uint64_t id;
+      uint32_t accepted = 0;
+      if (!req.Get(&id) || (op == wire::kFinishBuffer && !req.Get(&accepted))) break;
+      int ret = 0;
+      if (op == wire::kClaimBuffer) {
+        if (id == 0 || id != thread->pending_buffer) ret = -EINVAL;
+        else thread->pending_buffer_claimed = true;
+      } else {
+        ret = FinishBuffer(thread, id, accepted != 0);
+      }
+      lock.unlock();
+      reply.Put<int32_t>(ret);
     } else if (op == wire::kIoctl) {
       uint32_t request;
       if (!req.Get(&request)) break;
