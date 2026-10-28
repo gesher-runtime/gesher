@@ -133,3 +133,33 @@ unit; its source boundary and typed host-source manifest include the patch.
 The patch applies cleanly to the pinned source in a source-only check.
 Exact-source independent peer and a fresh changed-source component remain
 required; no local C/C++/Java/C# compile/fixture or artifact download occurred.
+
+### Second actual result: complete hierarchy before opening DEX
+
+The exact2c patch source passed independent Native peer, then changed-source
+component40724339436 ran under the required120s watch(session48887). It is
+terminal FAILURE, again7success/2failed/1intentional skip. Both Windows now
+PASS all four stale-after counterfactuals but FAIL all12 after-policy matching-
+compiled positive cases. Actual ART logs consistently report expected after
+list1, found0, for PCL and DLC. Four resource restores and all original before
+policies still pass. The stricter comparison is retained; no assertion is
+relaxed to accept an always-rejected compiled after-policy artifact.
+
+The second exact pinned source reveals the initialization gap:
+libcore/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java copies
+sharedLibraryLoaders before constructing DexPathList, but assigns the final
+sharedLibraryLoadersAfter field only afterward. ART snapshots that loader
+while DexPathList opens the app DEX, so it sees an incomplete after hierarchy.
+The source's own comment requires the hierarchy to be finalized before opening
+DEX. Saved official source SHA256:
+e7e5f2a524999229d7fdf8f24866ad4f4e5c6059641d4247003f0c40c0778426;
+file aot3-pinned-r4-BaseDexClassLoader.java in the review directory.
+
+New libcore patch0730-aot3-complete-after-library-hierarchy-before-dex-open
+moves the existing defensive after-array copy before the existing DexPathList
+construction. Field declarations/types, loader search order, native context
+validation and every runtime fixture/assertion stay unchanged. Both ART and
+libcore patches are explicit in the source boundary/typed host source hashes.
+Pinned-source patch application is checked locally without Java/native compile.
+Independent exact-source peer and a fresh changed-source CI remain required.
+Raw logs/terminal JSON/independent failure audit retain both previous red runs.
