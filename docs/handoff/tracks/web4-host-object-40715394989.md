@@ -1,0 +1,8 @@
+# Frame host-object experiment 40715394989
+
+The selected diagnostic failed on both Windows runners at source `80adf973c9805d92e1b68c3318b0809dfde3c7fb`, run 40715394989, attempt 1. The pinned SDK built on both; both probe processes exited with failure. Native peer review of that exact source passed before the run. This is not production qualification.
+
+* Windows 2022, runtime 131.0.2903.86: `CoreWebView2Frame.FrameCreated` subscription failed with `ICoreWebView2Frame7` E_NOINTERFACE for each registered top-level child, preventing nested registration and the selected complete test. Direct observations showed a/b allowed and bad/opaque denied; the run timed out waiting for all selected frames. Registration failed before the subsequent lifecycle event subscriptions, so no lifecycle result is implied.
+* Windows 2025, runtime 155.0.4283.62: a/b/nested first calls reached their respective native objects and bad was denied. The frame configured with `sandbox=allow-scripts` reported `OK|opaque|ok:5` through its own frame event, and the run failed the denial assertion. This is evidence of the selected fixture's behavior, not a proven explanation of the engine's origin handling or a general statement about every opaque frame.
+
+Neither job reached the held navigation, stale-proxy retirement, or cross-origin top-level phases. No unchanged retry is justified. Investigate independently whether the engine exposes an actual opaque security origin in the selected fixture and how it filters the host object; do not use page-reported origin as authority or assume sandbox configuration alone proves the engine's filtering behavior. The older runtime's missing recursive event is a separate capability limit. Full Web4 and production security/lifecycle remain open.
