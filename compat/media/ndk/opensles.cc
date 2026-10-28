@@ -22,7 +22,7 @@
 //
 // Every function is a System V entry the .so calls through its vtables or its
 // imports (SLAPIENTRY is empty on Android); the interface IDs are data symbols
-// the .so's imports bind to, compared by address. Callbacks run on threads set
+// the .so's imports bind to, compared by UUID value. Callbacks run on threads set
 // up for loaded code.
 
 #include <algorithm>
@@ -31,6 +31,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -43,10 +44,9 @@
 #include "../audio/capture.h"
 #include "../audio/engine.h"
 #include "../audio/log.h"
-#include "../jni/media_jni.h"
+#include "../audio/record_permission.h"
 #include "../player/data_source.h"
 #include "../player/player.h"
-#include "jni_bridge.h"
 
 #define SYSV __attribute__((sysv_abi))
 
@@ -69,7 +69,7 @@ constexpr SLresult kParameterInvalid = 2;
 constexpr SLresult kBufferInsufficient = 7;
 constexpr SLresult kContentUnsupported = 9;
 constexpr SLresult kFeatureUnsupported = 12;
-constexpr SLresult kPermissionDenied = 0x0D;  // SL_RESULT_PERMISSION_DENIED
+constexpr SLresult kPermissionDenied = 0x0B;
 
 constexpr SLuint32 kObjectUnrealized = 1, kObjectRealized = 2;
 constexpr SLuint32 kPlayStopped = 1, kPlayPaused = 2, kPlayPlaying = 3;
@@ -89,29 +89,12 @@ struct SLInterfaceID_ {
 };
 using SLInterfaceID = const SLInterfaceID_*;
 
-// The interface IDs, by address (their contents only tell them apart in dumps).
-#define IID(var, n) const SLInterfaceID_ var##_data = {0x67657300u + n, 0x6d65, 0x6469, 0x6100, {0, 0, 0, 0, 0, n}}; \
-  const SLInterfaceID var = &var##_data
-IID(kIidNull, 0);
-IID(kIidObject, 1);
-IID(kIidEngine, 2);
-IID(kIidPlay, 3);
-IID(kIidBufferQueue, 4);
-IID(kIidAndroidSimpleBufferQueue, 5);
-IID(kIidVolume, 6);
-IID(kIidSeek, 7);
-IID(kIidAndroidConfiguration, 8);
-IID(kIidPrefetchStatus, 9);
-IID(kIidPlaybackRate, 10);
-IID(kIidEffectSend, 11);
-IID(kIidEnvironmentalReverb, 12);
-IID(kIidRecord, 13);
-IID(kIidEngineCapabilities, 14);
-IID(kIidMetadataExtraction, 15);
-IID(kIidMuteSolo, 16);
-IID(kIidAndroidEffect, 17);
-IID(kIidDynamicInterfaceManagement, 18);
-#undef IID
+// Actual pointer objects: ELF imports bind to the variable, then to its UUID.
+#define OPENSL_IID(name, ...) const SLInterfaceID_ name##_data = {__VA_ARGS__}; \
+  const SLInterfaceID name = &name##_data;
+#include "opensles_iids.inc"
+#undef OPENSL_IID
+static_assert(sizeof(SLInterfaceID_) == 16);
 
 struct DataLocatorHeader { SLuint32 type; };
 struct DataLocatorUri { SLuint32 type; const char* uri; };
@@ -145,6 +128,68 @@ Object* ObjectOf(const void* self) {
 
 enum class Kind { kEngine, kOutputMix, kPlayer, kRecorder };
 
+enum class Slot { kObject, kEngine, kPlay, kQueue, kVolume, kSeek, kConfig, kPrefetch, kRecord };
+constexpr uint32_t KindBit(Kind kind) { return 1u << static_cast<unsigned>(kind); }
+constexpr uint32_t SlotBit(Slot slot) { return 1u << static_cast<unsigned>(slot); }
+constexpr uint32_t kPlayers = KindBit(Kind::kPlayer), kRecorders = KindBit(Kind::kRecorder);
+constexpr uint32_t kAllKinds = KindBit(Kind::kEngine) | KindBit(Kind::kOutputMix) | kPlayers | kRecorders;
+
+struct Interface {
+  SLInterfaceID id;
+  Slot slot;
+  uint32_t kinds;
+  bool implicit, prerealize;
+};
+
+const Interface kInterfaces[] = {
+    {SL_IID_OBJECT, Slot::kObject, kAllKinds, true, true},
+    {SL_IID_ENGINE, Slot::kEngine, KindBit(Kind::kEngine), true, false},
+    {SL_IID_PLAY, Slot::kPlay, kPlayers, true, false},
+    {SL_IID_BUFFERQUEUE, Slot::kQueue, kPlayers | kRecorders, false, false},
+    {SL_IID_ANDROIDSIMPLEBUFFERQUEUE, Slot::kQueue, kPlayers | kRecorders, false, false},
+    {SL_IID_VOLUME, Slot::kVolume, kPlayers, false, false},
+    {SL_IID_SEEK, Slot::kSeek, kPlayers, false, false},
+    {SL_IID_ANDROIDCONFIGURATION, Slot::kConfig, kPlayers | kRecorders, false, true},
+    {SL_IID_PREFETCHSTATUS, Slot::kPrefetch, kPlayers, false, false},
+    {SL_IID_RECORD, Slot::kRecord, kRecorders, true, false},
+};
+
+bool SameId(SLInterfaceID a, SLInterfaceID b) {
+  return a != nullptr && b != nullptr && memcmp(a, b, sizeof(*a)) == 0;
+}
+
+const Interface* FindInterface(Kind kind, bool queue, SLInterfaceID id) {
+  for (const auto& i : kInterfaces) {
+    if ((i.kinds & KindBit(kind)) == 0 || !SameId(id, i.id)) continue;
+    if (kind == Kind::kPlayer &&
+        ((i.slot == Slot::kQueue && !queue) ||
+         ((i.slot == Slot::kSeek || i.slot == Slot::kPrefetch) && queue))) return nullptr;
+    return &i;
+  }
+  return nullptr;
+}
+
+SLresult CheckInterfaces(Kind kind, bool queue, SLuint32 count, const SLInterfaceID* ids,
+                         const SLboolean* required, uint32_t* exposed) {
+  uint32_t mask = 0;
+  for (const auto& i : kInterfaces) {
+    if ((i.kinds & KindBit(kind)) != 0 && i.implicit) mask |= SlotBit(i.slot);
+  }
+  if (count > 0 && (ids == nullptr || required == nullptr)) return kParameterInvalid;
+  bool unsupported = false;
+  for (SLuint32 n = 0; n < count; n++) {
+    if (ids[n] == nullptr) return kParameterInvalid;
+    if (const auto* i = FindInterface(kind, queue, ids[n])) {
+      mask |= SlotBit(i->slot);
+    } else if (required[n]) {
+      unsupported = true;
+    }
+  }
+  if (unsupported) return kFeatureUnsupported;
+  *exposed = mask;
+  return kSuccess;
+}
+
 struct Object {
   Kind kind;
   ItfSlot object_itf;
@@ -157,6 +202,7 @@ struct Object {
   ItfSlot prefetch_itf;
   ItfSlot record_itf;
   SLuint32 state = kObjectUnrealized;
+  uint32_t exposed = 0;
 
   // Recorders.
   std::shared_ptr<CaptureStream> capture;
@@ -287,24 +333,23 @@ SLresult SYSV ObjGetState(const void* self, SLuint32* state) {
 SLresult SYSV ObjGetInterface(const void* self, SLInterfaceID iid, void* out) {
   Object* o = ObjectOf(self);
   if (out == nullptr) return kParameterInvalid;
-  if (o->state != kObjectRealized) return kPreconditionsViolated;
+  *static_cast<Itf*>(out) = nullptr;
+  if (iid == nullptr) return kParameterInvalid;
+  const auto* info = FindInterface(o->kind, o->queue_player, iid);
+  if (info == nullptr) return kFeatureUnsupported;
+  if (o->state != kObjectRealized && !info->prerealize) return kPreconditionsViolated;
+  if ((o->exposed & SlotBit(info->slot)) == 0) return kFeatureUnsupported;
   ItfSlot* slot = nullptr;
-  if (iid == kIidObject) slot = &o->object_itf;
-  if (o->kind == Kind::kEngine && iid == kIidEngine) slot = &o->engine_itf;
-  if (o->kind == Kind::kPlayer) {
-    if (iid == kIidPlay) slot = &o->play_itf;
-    if (iid == kIidVolume) slot = &o->volume_itf;
-    if (iid == kIidAndroidConfiguration) slot = &o->config_itf;
-    if (o->queue_player && (iid == kIidBufferQueue || iid == kIidAndroidSimpleBufferQueue)) {
-      slot = &o->queue_itf;
-    }
-    if (!o->queue_player && iid == kIidSeek) slot = &o->seek_itf;
-    if (!o->queue_player && iid == kIidPrefetchStatus) slot = &o->prefetch_itf;
-  }
-  if (o->kind == Kind::kRecorder) {
-    if (iid == kIidRecord) slot = &o->record_itf;
-    if (iid == kIidAndroidSimpleBufferQueue || iid == kIidBufferQueue) slot = &o->queue_itf;
-    if (iid == kIidAndroidConfiguration) slot = &o->config_itf;
+  switch (info->slot) {
+    case Slot::kObject: slot = &o->object_itf; break;
+    case Slot::kEngine: slot = &o->engine_itf; break;
+    case Slot::kPlay: slot = &o->play_itf; break;
+    case Slot::kQueue: slot = &o->queue_itf; break;
+    case Slot::kVolume: slot = &o->volume_itf; break;
+    case Slot::kSeek: slot = &o->seek_itf; break;
+    case Slot::kConfig: slot = &o->config_itf; break;
+    case Slot::kPrefetch: slot = &o->prefetch_itf; break;
+    case Slot::kRecord: slot = &o->record_itf; break;
   }
   if (slot == nullptr) return kFeatureUnsupported;
   *static_cast<Itf*>(out) = reinterpret_cast<Itf>(slot);
@@ -545,7 +590,14 @@ const void* const kQueueVtable[] = {
 
 // --- SLVolumeItf ------------------------------------------------------------------------
 
-SLresult SYSV VolSetLevel(const void* self, SLmillibel level) {
+SLresult SYSV VolSetLevel(const void* self, SLint32 raw_level) {
+  // AAPCS64 leaves the high bits of a narrow argument unspecified. Normalize
+  // the actual 16-bit value before the host System V signed comparison.
+  const SLmillibel level = static_cast<SLmillibel>(raw_level);
+  const char* trace = getenv("GESHER_MEDIA_TRACE_RECORD");
+  if (trace != nullptr && trace[0] == '1') {
+    MEDIA_LOGI("OpenSL volume boundary trace: raw32 %d, signed16 %d", raw_level, static_cast<int>(level));
+  }
   Object* o = ObjectOf(self);
   o->level = std::min<SLmillibel>(level, 0);
   ApplyVolume(o);
@@ -663,23 +715,36 @@ const void* const kPrefetchVtable[] = {
 
 SLresult SYSV EngUnsupported() { return kFeatureUnsupported; }
 
-SLresult SYSV EngCreateOutputMix(const void*, Itf* out, SLuint32, const SLInterfaceID*,
-                                 const SLboolean*) {
+SLresult SYSV EngCreateOutputMix(const void*, Itf* out, SLuint32 count, const SLInterfaceID* ids,
+                                 const SLboolean* required) {
   if (out == nullptr) return kParameterInvalid;
+  *out = nullptr;
+  uint32_t exposed;
+  SLresult result = CheckInterfaces(Kind::kOutputMix, false, count, ids, required, &exposed);
+  if (result != kSuccess) return result;
   Object* o = NewObject(Kind::kOutputMix);
+  o->exposed = exposed;
   *out = reinterpret_cast<Itf>(&o->object_itf);
   return kSuccess;
 }
 
 SLresult SYSV EngCreateAudioPlayer(const void*, Itf* out, const SLDataSource* src, const SLDataSink* sink,
-                                   SLuint32, const SLInterfaceID*, const SLboolean*) {
-  if (out == nullptr || src == nullptr || src->locator == nullptr) return kParameterInvalid;
+                                   SLuint32 count, const SLInterfaceID* ids, const SLboolean* required) {
+  if (out == nullptr) return kParameterInvalid;
+  *out = nullptr;
+  if (src == nullptr || src->locator == nullptr) return kParameterInvalid;
   if (sink == nullptr || sink->locator == nullptr ||
       static_cast<DataLocatorHeader*>(sink->locator)->type != kLocatorOutputMix) {
     return kContentUnsupported;
   }
   SLuint32 type = static_cast<DataLocatorHeader*>(src->locator)->type;
+  uint32_t exposed;
+  SLresult result = CheckInterfaces(Kind::kPlayer,
+      type == kLocatorBufferQueue || type == kLocatorAndroidSimpleBufferQueue,
+      count, ids, required, &exposed);
+  if (result != kSuccess) return result;
   std::unique_ptr<Object> o(NewObject(Kind::kPlayer));
+  o->exposed = exposed;
   if (type == kLocatorBufferQueue || type == kLocatorAndroidSimpleBufferQueue) {
     if (src->format == nullptr) return kParameterInvalid;
     auto* pcm = static_cast<DataFormatPcm*>(src->format);
@@ -763,11 +828,16 @@ SLresult SYSV PlayerRealize(const void* self, SLboolean async) {
 
 // The audio input device into an Android simple buffer queue of PCM.
 SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* src, const SLDataSink* sink,
-                                     SLuint32, const SLInterfaceID*, const SLboolean*) {
-  if (out == nullptr || src == nullptr || src->locator == nullptr || sink == nullptr ||
+                                     SLuint32 count, const SLInterfaceID* ids, const SLboolean* required) {
+  if (out == nullptr) return kParameterInvalid;
+  *out = nullptr;
+  if (src == nullptr || src->locator == nullptr || sink == nullptr ||
       sink->locator == nullptr || sink->format == nullptr) {
     return kParameterInvalid;
   }
+  uint32_t exposed;
+  SLresult result = CheckInterfaces(Kind::kRecorder, true, count, ids, required, &exposed);
+  if (result != kSuccess) return result;
   struct IoDevice { SLuint32 type, device_type, device_id; void* device; };
   auto* io = static_cast<IoDevice*>(src->locator);
   if (io->type != kLocatorIoDevice || io->device_type != kIoDeviceAudioInput) return kContentUnsupported;
@@ -787,11 +857,12 @@ SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* 
     case 32: f = is_float ? PcmFormat::kFloat : PcmFormat::kS32; break;
     default: return kContentUnsupported;
   }
-  if (!MayRecordAudio(nullptr)) {
+  if (!RecordingAllowed()) {
     MEDIA_LOGE("OpenSL ES: the app does not have android.permission.RECORD_AUDIO");
     return kPermissionDenied;
   }
   std::unique_ptr<Object> o(NewObject(Kind::kRecorder));
+  o->exposed = exposed;
   o->queue_capacity = std::max<SLuint32>(static_cast<DataLocatorQueue*>(sink->locator)->num_buffers, 1);
   o->rate = pcm->samples_per_sec / 1000;
   CaptureParams p;
@@ -811,9 +882,49 @@ SLresult SYSV EngCreateAudioRecorder(const void*, Itf* out, const SLDataSource* 
   return kSuccess;
 }
 
-SLresult SYSV EngQueryNum(const void*, SLuint32* n) {
-  if (n != nullptr) *n = 0;
+bool ObjectKind(SLuint32 id, Kind* kind) {
+  switch (id) {
+    case 0x1001: *kind = Kind::kEngine; return true;
+    case 0x1004: *kind = Kind::kPlayer; return true;
+    case 0x1005: *kind = Kind::kRecorder; return true;
+    case 0x1009: *kind = Kind::kOutputMix; return true;
+    default: return false;
+  }
+}
+
+SLresult QueryNumInterfaces(Kind kind, SLuint32* n) {
+  if (n == nullptr) return kParameterInvalid;
+  *n = 0;
+  for (const auto& i : kInterfaces) {
+    if ((i.kinds & KindBit(kind)) != 0) ++*n;
+  }
   return kSuccess;
+}
+
+SLresult QueryInterfaces(Kind kind, SLuint32 index, SLInterfaceID* id) {
+  if (id == nullptr) return kParameterInvalid;
+  *id = nullptr;
+  for (const auto& i : kInterfaces) {
+    if ((i.kinds & KindBit(kind)) == 0) continue;
+    if (index-- == 0) {
+      *id = i.id;
+      return kSuccess;
+    }
+  }
+  return kParameterInvalid;
+}
+
+SLresult SYSV EngQueryNum(const void*, SLuint32 object_id, SLuint32* n) {
+  if (n == nullptr) return kParameterInvalid;
+  Kind kind;
+  return ObjectKind(object_id, &kind) ? QueryNumInterfaces(kind, n) : kFeatureUnsupported;
+}
+
+SLresult SYSV EngQueryInterfaces(const void*, SLuint32 object_id, SLuint32 index, SLInterfaceID* id) {
+  if (id == nullptr) return kParameterInvalid;
+  *id = nullptr;
+  Kind kind;
+  return ObjectKind(object_id, &kind) ? QueryInterfaces(kind, index, id) : kFeatureUnsupported;
 }
 SLresult SYSV EngQueryNumExt(const void*, SLuint32* n) {
   if (n != nullptr) *n = 0;
@@ -836,7 +947,7 @@ const void* const kEngineVtable[] = {
     reinterpret_cast<const void*>(&EngUnsupported),        // CreateMetadataExtractor
     reinterpret_cast<const void*>(&EngUnsupported),        // CreateExtensionObject
     reinterpret_cast<const void*>(&EngQueryNum),           // QueryNumSupportedInterfaces
-    reinterpret_cast<const void*>(&EngUnsupported),        // QuerySupportedInterfaces
+    reinterpret_cast<const void*>(&EngQueryInterfaces),    // QuerySupportedInterfaces
     reinterpret_cast<const void*>(&EngQueryNumExt),        // QueryNumSupportedExtensions
     reinterpret_cast<const void*>(&EngUnsupported),        // QuerySupportedExtension
     reinterpret_cast<const void*>(&EngIsExtensionSupported),
@@ -866,22 +977,30 @@ Object* NewObject(Kind kind) {
 }
 
 // slCreateEngine and slQueryNumSupportedEngineInterfaces / slQuerySupportedEngineInterfaces.
-SLresult SYSV CreateEngine(Itf* out, SLuint32, const void*, SLuint32, const SLInterfaceID*,
-                           const SLboolean*) {
+SLresult SYSV CreateEngine(Itf* out, SLuint32 option_count, const void* options,
+                           SLuint32 count, const SLInterfaceID* ids, const SLboolean* required) {
   if (out == nullptr) return kParameterInvalid;
+  *out = nullptr;
+  if (option_count > 0 && options == nullptr) return kParameterInvalid;
+  struct EngineOption { SLuint32 feature, data; };
+  const auto* opt = static_cast<const EngineOption*>(options);
+  for (SLuint32 i = 0; i < option_count; i++) {
+    if (opt[i].feature != 1 && opt[i].feature != 2) return kParameterInvalid;
+    if (opt[i].feature == 2 && opt[i].data != 0) return kFeatureUnsupported;
+  }
+  uint32_t exposed;
+  SLresult result = CheckInterfaces(Kind::kEngine, false, count, ids, required, &exposed);
+  if (result != kSuccess) return result;
   Object* o = NewObject(Kind::kEngine);
+  o->exposed = exposed;
   *out = reinterpret_cast<Itf>(&o->object_itf);
   return kSuccess;
 }
 SLresult SYSV QueryNumEngineInterfaces(SLuint32* n) {
-  if (n == nullptr) return kParameterInvalid;
-  *n = 1;
-  return kSuccess;
+  return QueryNumInterfaces(Kind::kEngine, n);
 }
 SLresult SYSV QueryEngineInterfaces(SLuint32 index, SLInterfaceID* id) {
-  if (id == nullptr || index != 0) return kParameterInvalid;
-  *id = kIidEngine;
-  return kSuccess;
+  return QueryInterfaces(Kind::kEngine, index, id);
 }
 
 void Register() {
@@ -889,32 +1008,9 @@ void Register() {
   AddBionicSymbol("slCreateEngine", reinterpret_cast<void*>(&CreateEngine));
   AddBionicSymbol("slQueryNumSupportedEngineInterfaces", reinterpret_cast<void*>(&QueryNumEngineInterfaces));
   AddBionicSymbol("slQuerySupportedEngineInterfaces", reinterpret_cast<void*>(&QueryEngineInterfaces));
-  struct {
-    const char* name;
-    const SLInterfaceID* id;
-  } const ids[] = {
-      {"SL_IID_NULL", &kIidNull},
-      {"SL_IID_OBJECT", &kIidObject},
-      {"SL_IID_ENGINE", &kIidEngine},
-      {"SL_IID_PLAY", &kIidPlay},
-      {"SL_IID_BUFFERQUEUE", &kIidBufferQueue},
-      {"SL_IID_ANDROIDSIMPLEBUFFERQUEUE", &kIidAndroidSimpleBufferQueue},
-      {"SL_IID_VOLUME", &kIidVolume},
-      {"SL_IID_SEEK", &kIidSeek},
-      {"SL_IID_ANDROIDCONFIGURATION", &kIidAndroidConfiguration},
-      {"SL_IID_PREFETCHSTATUS", &kIidPrefetchStatus},
-      {"SL_IID_PLAYBACKRATE", &kIidPlaybackRate},
-      {"SL_IID_EFFECTSEND", &kIidEffectSend},
-      {"SL_IID_ENVIRONMENTALREVERB", &kIidEnvironmentalReverb},
-      {"SL_IID_RECORD", &kIidRecord},
-      {"SL_IID_ENGINECAPABILITIES", &kIidEngineCapabilities},
-      {"SL_IID_METADATAEXTRACTION", &kIidMetadataExtraction},
-      {"SL_IID_MUTESOLO", &kIidMuteSolo},
-      {"SL_IID_ANDROIDEFFECT", &kIidAndroidEffect},
-      {"SL_IID_DYNAMICINTERFACEMANAGEMENT", &kIidDynamicInterfaceManagement},
-  };
-  // Data symbols: each .so import of SL_IID_X binds to the variable holding the ID.
-  for (const auto& i : ids) AddBionicSymbol(i.name, const_cast<SLInterfaceID*>(i.id));
+#define OPENSL_IID(name, ...) AddBionicSymbol(#name, const_cast<SLInterfaceID*>(&name));
+#include "opensles_iids.inc"
+#undef OPENSL_IID
 }
 
 [[maybe_unused]] const bool g_registered = (Register(), true);

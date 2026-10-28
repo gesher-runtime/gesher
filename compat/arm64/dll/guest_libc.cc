@@ -15,6 +15,7 @@
 //    code (AArch64, emitted here), not the host's;
 //  - the floating-point environment (FPCR/FPSR, fenv_t, FE_* values);
 //  - four O_* open flags (O_DIRECTORY, O_NOFOLLOW, O_DIRECT, O_LARGEFILE);
+//  - localeconv's CHAR_MAX sentinels (unsigned char on Android arm64);
 //  - dlsym: returns these definitions for those names;
 //  - the shim's va_list functions (vsnprintf...): registered so the guest's
 //    AAPCS64 va_list is converted to System V when the guest calls them.
@@ -25,6 +26,8 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <memory>
+#include <new>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -54,6 +57,33 @@ void SetErrno(int e) {
 constexpr int kENOSYS = 38;
 constexpr int kEFAULT = 14;
 
+// pthread_create inherits its caller's floating-point environment. Capture
+// guest FPCR/FPSR rather than the host's restored x86 environment here.
+using ThreadStart = void*(GESHER_SYSV*)(void*);
+using ThreadCreate = int(GESHER_SYSV*)(void*, const void*, ThreadStart, void*);
+ThreadCreate g_pthread_create = nullptr;
+struct GuestThreadStart {
+  ThreadStart function;
+  void* argument;
+  uint32_t fpcr;
+  uint32_t fpsr;
+};
+void* GESHER_SYSV StartGuestThread(void* opaque) {
+  std::unique_ptr<GuestThreadStart> start(static_cast<GuestThreadStart*>(opaque));
+  GuestThreadStart captured = *start;
+  start.reset();  // A guest may terminate with pthread_exit rather than return.
+  SetGuestFpcr(captured.fpcr);
+  SetGuestFpsr(captured.fpsr);
+  return captured.function(captured.argument);
+}
+int GESHER_SYSV GuestPthreadCreate(void* thread, const void* attributes, ThreadStart function, void* argument) {
+  auto* start = new (std::nothrow) GuestThreadStart{function, argument, GuestFpcr(), GuestFpsr()};
+  if (start == nullptr) return 12;  // Android ENOMEM.
+  int result = g_pthread_create(thread, attributes, StartGuestThread, start);
+  if (result != 0) delete start;
+  return result;
+}
+
 // arm64's wchar_t is unsigned; x86_64's common width entry takes signed wchar32.
 using WidthFn = int(GESHER_SYSV*)(uint32_t);
 WidthFn g_wcwidth = nullptr;
@@ -72,6 +102,27 @@ int GESHER_SYSV GuestWcswidth(const uint32_t* s, size_t n) {
     total += width;
   }
   return total;
+}
+
+// --- localeconv: identical LP64 pointers, architecture-specific char values ----
+struct Arm64Lconv {
+  const char* strings[10];
+  uint8_t indicators[14];
+};
+static_assert(sizeof(Arm64Lconv) == 96 && offsetof(Arm64Lconv, indicators) == 80);
+void* g_localeconv = nullptr;
+
+const Arm64Lconv* GESHER_SYSV GuestLocaleconv() {
+  static const Arm64Lconv locale = [] {
+    using Function = const void*(GESHER_SYSV*)();
+    Arm64Lconv result;
+    std::memcpy(&result, reinterpret_cast<Function>(g_localeconv)(), sizeof(result));
+    // Both bionic locales use CHAR_MAX for all fourteen monetary indicators.
+    // The host/x86-64 char is signed (127); Android arm64 char is unsigned.
+    std::memset(result.indicators, 0xff, sizeof(result.indicators));
+    return result;
+  }();
+  return &locale;
 }
 
 // --- struct stat ---------------------------------------------------------------
@@ -226,6 +277,7 @@ int ToGuestFlags(int f) {
 void* g_open = nullptr;
 void* g_openat = nullptr;
 void* g_fcntl = nullptr;
+void* g_spawn_addopen = nullptr;
 
 int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
   return reinterpret_cast<int(GESHER_SYSV*)(const char*, int, int)>(g_open)(path, ToHostFlags(flags), mode);
@@ -233,6 +285,10 @@ int GESHER_SYSV GuestOpen(const char* path, int flags, int mode) {
 int GESHER_SYSV GuestOpenat(int dirfd, const char* path, int flags, int mode) {
   return reinterpret_cast<int(GESHER_SYSV*)(int, const char*, int, int)>(g_openat)(
       dirfd, path, ToHostFlags(flags), mode);
+}
+int GESHER_SYSV GuestSpawnAddOpen(void* actions, int fd, const char* path, int flags, uint32_t mode) {
+  return reinterpret_cast<int(GESHER_SYSV*)(void*, int, const char*, int, uint32_t)>(g_spawn_addopen)(
+      actions, fd, path, ToHostFlags(flags), mode);
 }
 int64_t GESHER_SYSV GuestFcntl(int fd, int cmd, int64_t arg) {
   constexpr int kGetfl = 3, kSetfl = 4;
@@ -397,23 +453,63 @@ const uint32_t kLongjmp[] = {
 };
 
 // --- the floating-point environment ------------------------------------------------
-// The guest's is its FPCR/FPSR, which the translator does not expose, and
-// bionic's arm64 fenv_t (8 bytes) and FE_* values are not x86-64's (the
-// shim's): only the default rounding mode (FE_TONEAREST = 0) is accepted, and
-// no exception flags are reported.
-int GESHER_SYSV FeSetround(int mode) { return mode == 0 ? 0 : -1; }
+// Rounding uses the actual per-thread FPCR, including direct guest MSR.
+// Sticky exception flags and environment snapshots use the actual FPSR.
+// The pinned ARM LP64 environment is two 32-bit registers, unlike x86 fenv_t.
+int GESHER_SYSV FeSetround(int mode) {
+  if (mode < 0 || mode > 3) return -1;
+  uint32_t fpcr = GuestFpcr();
+  uint32_t next = (fpcr & ~(UINT32_C(3) << 22)) | (static_cast<uint32_t>(mode) << 22);
+  if (next != fpcr) SetGuestFpcr(next);
+  return 0;
+}
+int GESHER_SYSV FeGetround() { return (GuestFpcr() >> 22) & 3; }
 int GESHER_SYSV FeZero() { return 0; }
-int GESHER_SYSV FeZero1(int) { return 0; }
-int GESHER_SYSV FeGetenv(uint32_t* env) {
-  if (env != nullptr) env[0] = env[1] = 0;  // fpcr, fpsr
+constexpr uint32_t kArmFeAll = 0x9f;  // Includes Android ARM FE_DENORMAL (0x80).
+int GESHER_SYSV FeTestexcept(int excepts) {
+  return GuestFpsr() & (static_cast<uint32_t>(excepts) & kArmFeAll);
+}
+int GESHER_SYSV FeClearexcept(int excepts) {
+  SetGuestFpsr(GuestFpsr() & ~(static_cast<uint32_t>(excepts) & kArmFeAll));
   return 0;
 }
-int GESHER_SYSV FeSetenv(const uint32_t*) { return 0; }
-int GESHER_SYSV FeGetexceptflag(uint32_t* flag, int) {
-  if (flag != nullptr) *flag = 0;
+struct ArmFenv { uint32_t control; uint32_t status; };
+static_assert(sizeof(ArmFenv) == 8);
+const ArmFenv kArmDefaultEnv = {0, 0};
+int GESHER_SYSV FeGetenv(ArmFenv* env) {
+  env->control = GuestFpcr();
+  env->status = GuestFpsr();
   return 0;
 }
-int GESHER_SYSV FeSetexceptflag(const uint32_t*, int) { return 0; }
+int GESHER_SYSV FeSetenv(const ArmFenv* env) {
+  if (env->control != GuestFpcr()) SetGuestFpcr(env->control);
+  SetGuestFpsr(env->status);
+  return 0;
+}
+int GESHER_SYSV FeHoldexcept(ArmFenv* env) {
+  FeGetenv(env);
+  SetGuestFpsr(GuestFpsr() & ~kArmFeAll);
+  return 0;
+}
+int GESHER_SYSV FeUpdateenv(const ArmFenv* env) {
+  uint32_t excepts = GuestFpsr() & kArmFeAll;
+  FeSetenv(env);
+  SetGuestFpsr(GuestFpsr() | excepts);
+  return 0;
+}
+int GESHER_SYSV FeGetexceptflag(uint32_t* flag, int excepts) {
+  *flag = GuestFpsr() & (static_cast<uint32_t>(excepts) & kArmFeAll);
+  return 0;
+}
+int GESHER_SYSV FeSetexceptflag(const uint32_t* flag, int excepts) {
+  uint32_t mask = static_cast<uint32_t>(excepts) & kArmFeAll;
+  SetGuestFpsr((GuestFpsr() & ~mask) | (*flag & mask));
+  return 0;
+}
+int GESHER_SYSV FeRaiseexcept(int excepts) {
+  uint32_t flag = static_cast<uint32_t>(excepts);
+  return FeSetexceptflag(&flag, excepts);
+}
 
 struct Fallback {
   const char* name;
@@ -421,11 +517,11 @@ struct Fallback {
 };
 #define FB(n, f) {n, reinterpret_cast<void*>(&f)}
 const Fallback kFenv[] = {
-    FB("fesetround", FeSetround),   FB("fegetround", FeZero),
-    FB("fetestexcept", FeZero1),    FB("feclearexcept", FeZero1),
-    FB("feraiseexcept", FeZero1),   FB("fegetenv", FeGetenv),
-    FB("fesetenv", FeSetenv),       FB("feholdexcept", FeGetenv),
-    FB("feupdateenv", FeSetenv),    FB("fegetexceptflag", FeGetexceptflag),
+    FB("fesetround", FeSetround),   FB("fegetround", FeGetround),
+    FB("fetestexcept", FeTestexcept), FB("feclearexcept", FeClearexcept),
+    FB("feraiseexcept", FeRaiseexcept), FB("fegetenv", FeGetenv),
+    FB("fesetenv", FeSetenv),       FB("feholdexcept", FeHoldexcept),
+    FB("feupdateenv", FeUpdateenv), FB("fegetexceptflag", FeGetexceptflag),
     FB("fesetexceptflag", FeSetexceptflag), FB("fegetexcept", FeZero),
 };
 #undef FB
@@ -469,6 +565,12 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
 void InitGuestLibc() {
   for (const VaFn& v : kVaFunctions) AddVaListFunction(Host(v.name), v.index);
 
+  g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
+  if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));
+
+  g_localeconv = Host("localeconv");
+  if (g_localeconv) Override("localeconv", reinterpret_cast<void*>(&GuestLocaleconv));
+
   g_stat = Host("stat");
   g_lstat = Host("lstat");
   g_fstat = Host("fstat");
@@ -503,6 +605,7 @@ void InitGuestLibc() {
   g_open = Host("open");
   g_openat = Host("openat");
   g_fcntl = Host("fcntl");
+  g_spawn_addopen = Host("posix_spawn_file_actions_addopen");
   if (g_open) {
     for (const char* n : {"open", "open64", "__open_2"}) Override(n, reinterpret_cast<void*>(&GuestOpen));
   }
@@ -510,11 +613,15 @@ void InitGuestLibc() {
     for (const char* n : {"openat", "openat64", "__openat_2"}) Override(n, reinterpret_cast<void*>(&GuestOpenat));
   }
   if (g_fcntl) Override("fcntl", reinterpret_cast<void*>(&GuestFcntl));
+  if (g_spawn_addopen) Override("posix_spawn_file_actions_addopen", reinterpret_cast<void*>(&GuestSpawnAddOpen));
 
   g_dlsym = Host("dlsym");
   if (g_dlsym) Override("dlsym", reinterpret_cast<void*>(&GuestDlsym));
 
   for (const Fallback& f : kFenv) Override(f.name, f.fn);
+  // Data imports and dlsym must return the ARM object itself, never a callable
+  // trampoline or the common host shim's different x86 environment layout.
+  g_overrides["__fe_dfl_env"] = const_cast<ArmFenv*>(&kArmDefaultEnv);
 
   void* sj = EmitGuestCode(kSetjmp, sizeof(kSetjmp) / 4);
   void* lj = EmitGuestCode(kLongjmp, sizeof(kLongjmp) / 4);

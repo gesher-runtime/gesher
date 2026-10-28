@@ -115,17 +115,30 @@ JNIEXPORT jint JNICALL Java_gesher_Arm64Jni_callbacks(JNIEnv* env, jclass cls, j
 // --- the va_list forms -----------------------------------------------------------
 
 static jint call_static_int_v(JNIEnv* env, jclass cls, jmethodID mid, ...) {
-  va_list ap;
+  va_list ap, copy;
   va_start(ap, mid);
+  va_copy(copy, ap);
   jint r = (*env)->CallStaticIntMethodV(env, cls, mid, ap);
+  jint again = (*env)->CallStaticIntMethodV(env, cls, mid, copy);
+  va_end(copy);
   va_end(ap);
+  check("CallStaticIntMethodV independent va_copy", r == again);
   return r;
 }
 
 static jobject call_static_object_v(JNIEnv* env, jclass cls, jmethodID mid, ...) {
-  va_list ap;
+  va_list ap, copy;
   va_start(ap, mid);
+  va_copy(copy, ap);
   jobject r = (*env)->CallStaticObjectMethodV(env, cls, mid, ap);
+  jobject again = (*env)->CallStaticObjectMethodV(env, cls, mid, copy);
+  const char* first = r ? (*env)->GetStringUTFChars(env, (jstring)r, NULL) : NULL;
+  const char* second = again ? (*env)->GetStringUTFChars(env, (jstring)again, NULL) : NULL;
+  check("CallStaticObjectMethodV independent va_copy", first && second && strcmp(first, second) == 0);
+  if (first) (*env)->ReleaseStringUTFChars(env, (jstring)r, first);
+  if (second) (*env)->ReleaseStringUTFChars(env, (jstring)again, second);
+  if (again) (*env)->DeleteLocalRef(env, again);
+  va_end(copy);
   va_end(ap);
   return r;
 }

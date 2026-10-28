@@ -1,9 +1,15 @@
 # Runs on a Windows machine against the CI build output.
 #   pwsh tests/windows/run-tests.ps1 <dir with *.exe, hello.dex, hello.apk>
-param([Parameter(Mandatory)] [string] $Dir)
+param([Parameter(Mandatory)] [string] $Dir, [string] $Web3Observer = '')
 
 $ErrorActionPreference = 'Stop'
 $failed = 0
+
+if ($Web3Observer) {
+  $script:web3Observer = (Resolve-Path -LiteralPath $Web3Observer).Path
+  . "$PSScriptRoot/web3/Observer.ps1"
+  Web3ObserverControl
+}
 
 function Check([string] $Name, [scriptblock] $Run, [string[]] $Expect) {
   $out = & $Run 2>&1 | Out-String

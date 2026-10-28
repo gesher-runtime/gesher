@@ -1,0 +1,181 @@
+name: aot3-shared-probes
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/aot3']
+    paths:
+      - '.github/workflows/aot3-shared-probes.yml'
+      - 'tests/windows/aot3-shared-probe.ps1'
+      - 'tests/windows/tracks/73-aot3-shared-libraries.ps1'
+      - 'tests/apps/sharedlibraryapp/**'
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_RUN: '40512344714'
+  SOURCE_SHA: '96b12ab6f9b5146870c7a373e337f762010eb6f1'
+  FRAMEWORK_RUN: '${{ github.run_id }}'
+  FRAMEWORK_SHA: '${{ github.sha }}'
+concurrency:
+  group: aot3-shared-probes-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
+  shared-runtime:
+    needs: framework
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pin the supplying build and permit only diagnostic harness changes
+        id: source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read selected source run' }
+          if ($run.head_sha -cne $env:SOURCE_SHA -or $run.status -notin @('completed','in_progress') -or $run.run_attempt -ne 1 -or
+              $run.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or $run.name -cne 'ci') { throw 'Wrong supplying CI source/attempt/repository' }
+          $paths = git diff --name-only $env:SOURCE_SHA HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect runtime-source equality' }
+          $harness = @('.github/workflows/aot3-shared-probes.yml','tests/windows/aot3-shared-probe.ps1','tests/windows/tracks/73-aot3-shared-libraries.ps1')
+          $allow = $harness + @('app/java/android/app/GesherAppDriver.java', '.github/workflows/framework.yml',
+            'tests/apps/sharedlibraryapp/build.sh',
+            'tests/apps/sharedlibraryapp/java/com/gesher/sharedapp/SharedActivity.java')
+          foreach ($path in $paths) {
+            if ($path -notlike 'docs/*' -and $path -notin $allow) { throw "Runtime/build source drift: $path" }
+          }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/attempts/1/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $jobs.total_count -gt 100) { throw 'Cannot verify supplying jobs' }
+          foreach ($name in 'build','native-libs / native-libs','graphics / build',
+              'angle / build','arm64 / build','webview / build','exec / exec') {
+            $selected = @($jobs.jobs | Where-Object { $_.name -ceq $name })
+            if ($selected.Count -ne 1 -or $selected[0].conclusion -cne 'success' -or
+                $selected[0].head_sha -cne $env:SOURCE_SHA -or $selected[0].run_id -ne [long]$env:SOURCE_RUN) { throw "Unverified supplying job $name" }
+          }
+          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $artifacts.total_count -gt 100) { throw 'Cannot pin artifacts' }
+          foreach ($name in 'windows-x64','native-libs','graphics','angle','arm64','webview','exec') {
+            $selected = @($artifacts.artifacts | Where-Object { $_.name -ceq $name })
+            if ($selected.Count -ne 1 -or $selected[0].expired -or $selected[0].id -le 0 -or $selected[0].size_in_bytes -le 0 -or
+                $selected[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+                $selected[0].workflow_run.head_sha -cne $env:SOURCE_SHA -or
+                $selected[0].workflow_run.id -ne [long]$env:SOURCE_RUN -or
+                $selected[0].workflow_run.head_repository_id -ne $run.repository.id) { throw "Wrong/expired artifact $name" }
+            "$name=$($selected[0].id)" >> $env:GITHUB_OUTPUT
+            Write-Host "AOT_SHARED_SOURCE artifact=$name id=$($selected[0].id) digest=$($selected[0].digest) run=$env:SOURCE_RUN SHA=$env:SOURCE_SHA attempt=1"
+          }
+          Write-Host "AOT_SHARED_DIAGNOSTIC_ONLY supplying full status=$($run.status), conclusion=$($run.conclusion); all artifact jobs succeeded"
+          # Changed Java must come from its own exact successful compiler run.
+          # All current compiled Java/build sources must match that revision.
+          $framework = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:FRAMEWORK_RUN" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read the selected Java compiler run' }
+          if ($framework.head_sha -cne $env:FRAMEWORK_SHA -or $framework.status -notin @('in_progress','completed') -or
+              $framework.run_attempt -ne 1 -or
+              $framework.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or $framework.name -cne 'aot3-shared-probes') {
+            throw 'Wrong or unverified Java compiler source'
+          }
+          $javaPaths = git diff --name-only $env:FRAMEWORK_SHA HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot compare compiled Java source' }
+          foreach ($path in $javaPaths) {
+            if ($path -notlike 'docs/*' -and $path -notin $harness) { throw "Java/build source drift: $path" }
+          }
+          $javaJobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:FRAMEWORK_RUN/attempts/1/jobs?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $javaJobs.total_count -gt 100) { throw 'Cannot verify Java jobs' }
+          foreach ($name in 'framework / host-tools','framework / framework') {
+            $selected = @($javaJobs.jobs | Where-Object { $_.name -ceq $name })
+            if ($selected.Count -ne 1 -or $selected[0].conclusion -cne 'success' -or
+                $selected[0].head_sha -cne $env:FRAMEWORK_SHA) { throw "Unverified Java job $name" }
+          }
+          $javaArtifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:FRAMEWORK_RUN/artifacts?per_page=100" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $javaArtifacts.total_count -gt 100) { throw 'Cannot pin Java artifact' }
+          $selected = @($javaArtifacts.artifacts | Where-Object { $_.name -ceq 'framework' })
+          if ($selected.Count -ne 1 -or $selected[0].expired -or $selected[0].id -le 0 -or $selected[0].size_in_bytes -le 0 -or
+              $selected[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or
+              $selected[0].workflow_run.head_sha -cne $env:FRAMEWORK_SHA -or
+              $selected[0].workflow_run.id -ne [long]$env:FRAMEWORK_RUN -or
+              $selected[0].workflow_run.head_repository_id -ne $framework.repository.id) { throw 'Wrong Java artifact identity' }
+          "framework=$($selected[0].id)" >> $env:GITHUB_OUTPUT
+          Write-Host "AOT_SHARED_JAVA_SOURCE run=$env:FRAMEWORK_RUN SHA=$env:FRAMEWORK_SHA attempt=1 id=$($selected[0].id) digest=$($selected[0].digest)"
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.windows-x64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.framework }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.FRAMEWORK_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.native-libs }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.graphics }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.angle }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.arm64 }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.webview }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.exec }}
+          path: dist
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN }}
+      - name: Build fresh boot images for the exact newly compiled Java jars
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File tools/boot-image/fetch-profiles.ps1 -Out probe-image/profiles
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned boot profile fetch failed' }
+          pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out probe-image `
+            -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed `
+            -BootProfiles probe-image/profiles/art-boot-image-profile.txt,probe-image/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt `
+            -TimeoutMinutes 15
+          if ($LASTEXITCODE -ne 0) { throw 'Fresh Java boot-image compilation failed' }
+          New-Item -ItemType Directory -Force dist/framework/x86_64 | Out-Null
+          Copy-Item probe-image/framework/x86_64/* dist/framework/x86_64/
+          Write-Host "AOT_SHARED_FRESH_IMAGE runtime=$env:SOURCE_RUN/$env:SOURCE_SHA Java=$env:FRAMEWORK_RUN/$env:FRAMEWORK_SHA"
+      - name: Run actual graph, compiled-app, stale-artifact and cleanup controls
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/windows/aot3-shared-probe.ps1 dist

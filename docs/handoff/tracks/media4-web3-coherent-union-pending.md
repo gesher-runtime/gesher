@@ -1,0 +1,131 @@
+# Prepared coherent Web3/Media/AOT/Native/Env/Libcore/Exec/process union
+
+Latest authoritative state,2026-10-28: new canonical full40596167427 is
+ACTIVE at exact frozen30db7709838839d28be68d8b467a57b26a3ac667, not accepted.
+Required watch97520 uses interval120 and writes
+C:/work/gesher-ci-review/coherent-web3-union-full-40596167427-watch.log.
+The prescribed ci.yml command was dispatched once after confirming no live
+same-ref full. Do not dispatch/restart a duplicate or infer runtime proof.
+
+Merge30db imports only reviewed primary correction34ba544b (docs-only above
+12db63e5). Entire non-doc delta from failed4a47 is host_roles.py alone;
+all other code/workflows/fixtures are byte-identical, inventory exact55e03c68.
+The separate preflight workflow was excluded. Actual configuration-only
+preflight40595401850/source9bda/job122509916936 is independently read/green:
+OFF/ON compiler/launcher/metadata dictionaries equal, compiler-first export
+with configured ccache, exactly four query objects differ by the one private
+flag, and four actual generated-evidence negatives reject. The helper blob
+7889dd3e is identical in that preflight, frozen primary and new union.
+This is provenance-mechanism proof only; every normal/hook/full/package/e2e
+gate below remains required in the new current-source full. Failed4a47/
+40588525037 is preserved. No phase4 code/main/PR/tag/release merge occurred.
+
+Earlier preparation and run statuses below are retained historical context;
+the latest state above supersedes their pending/unpushed descriptions.
+
+LOCAL unqualified source120f8120b00e258469864ad6a589179976196ff2 on
+wip/media4-web3-union-pending, C:/work/gesher-media4-muxer. It is not pushed,
+dispatched or merged into phase4. Original f4/7beb/eaa checkpoint refs and
+remote Media d552 remain intact. All commits retain both parent histories.
+
+Superseding ready-for-CI source checkpoint:08909b8bb0b07bd85cf18460b0086eefb7be16eb
+adds exact reviewed canonical wiring58a085a2 after both Native and integrator
+bounded peers. The only CI merge conflict retains explicit productionOFF
+configuration BEFORE the original Exec early build; all current AOT/Media/
+observer additions remain. Original54 assertions/diagnostics/deadlines survive
+with the explicit runtime parameter; all other incoming role/supplier/driver/
+test-only module guards equal58a. Protected previous union production/fixtures
+and inventory remain unchanged. YAML/Python/PowerShell parse and whitespace
+checks passed without local fixture execution, full test60min and both added
+regression hosts retained. The following earlier preparation narrative is
+historical; this source is ready for one freshly frozen canonical qualification
+run, not accepted/integrated code. No CI result is inferred from static checks.
+
+Canonical full40588525037 was dispatched exactly once at frozen
+4a47a20ef652eff2dfd6d477cf1acbc29d98fc45 after confirming no live same-ref
+run, using `gh workflow run ci.yml --ref wip/media4-web3-union-pending -R
+gesher-runtime/gesher`. Required watch16062 writes
+C:/work/gesher-ci-review/coherent-web3-union-full-40588525037-watch.log at
+interval120. Every earlier scoped/full gate remains; this full is active and
+no job/runtime/package/e2e conclusion is inferred. Later process proof freeze
+ce44b68f changes documentation only above component ebae; importing its exact
+scope report does not change the running full's source/code.
+
+Terminal supersession,2026-10-28: full40588525037 at exact4a47 failed.
+Its28jobs conclude16success/1failure/11skip. Build122486350945 compiled and
+collected production successfully, then host_roles.py capture-production
+raised KeyError for CMAKE_CXX_COMPILER, which the toolchain sets as an ordinary
+CMake variable rather than a cache entry. No production artifact upload or
+hook build followed. Six intentional probes skip; the five downstream
+boot-image/test/query-regression/package/e2e placeholders skip because the
+build failed. No runtime/full/package/e2e proof exists for this union. The
+Windows wiring owner is preparing the narrow compiler-identity correction;
+review changed source and freshly qualify all original gates before accepting
+it. Never retry unchanged red4a47 for luck. Existing source/history refs remain
+preserved; no integration code merge or release action occurred. Terminal
+metadata and actual build log are saved in C:/work/gesher-ci-review with this
+run's coherent-web3-union-full-40588525037 prefix. The required reattach watch
+ended1 with the already-completed failure; no dispatch/restart was performed.
+
+Starting f4a2b372 contains accepted Libcore944 plus Native942/Envb497, Media
+muxer d552 and qualified AOT450/frozen0c1. Their exact scoped/full evidence
+and limits remain in the prior union report. This changed source must qualify
+freshly; old scoped evidence does not become a new combined full.
+
+The following prepared additions have exact bounded evidence:
+
+- Web3 frozen d192cab9 is docs-only above fc176703/component40577659058:
+  nine jobs, eight success/one skip. Integrator read all six producer and
+  both actual Windows logs. Both actual original14 plus real held-monitor/
+  four-wrapper owner joins, mapped positive/canceled/stale Main/device
+  controls, detached/cache0 and actual fresh app/device exits0. Preserved
+  independent review records are in the review directory. This proof uses
+  the test-hook host; canonical production-OFF/hook split remains mandatory.
+- Process ebae3e0b/component40556470317: actual25 controls per host0. Native
+  independently reviewed resolved port ade69654. Entire surrounding44/76
+  bodies and parameter lists are identical to the prior candidate: Native
+  evidence/varargs plus OpenSL Exe/callback/TLS/standalone-ELF assertions stay.
+  Only bounded helper bodies change; other helpers/Process84/all25 controls
+  equal the component source. Canonical auto-discovered84 compiles the real
+  C# fixture in CI and must actually execute25 controls in the next full.
+- Exec frozen6e846e15 is docs-only above82d41d21/component40582080725:
+  four jobs success, all four logs independently read; both actual Windows
+  show absolute rootedTrue/relative dist rootedFalse and eight original
+  action/child127/isolation/no-console passes0. This is the complete bounded
+  ordered-spawn/action/ARM-addopen flag leaf, not just a PS path correction.
+  Merge retains Native/Env guest source, adding only its seven-line addopen
+  translation, actual two-ABI actors/probe and dual-entry canonical77.
+
+The only Web3 merge conflict was framework fixture copying. Both qualified
+AOT/DLC compile/copy paths and the new query dex compiler/copy survive. All
+incoming query implementation/fixtures equal frozen d192; all qualified AOT
+application/test/tool files survive. Process76 add/add was resolved by keeping
+the current entire track and porting only the cleanup body. Exec merged
+without conflict. The coverage inventory remains exact blob
+55e03c68ed061ecbfa718cfa02ca64516b9d9233: all1157 old rows/fields/proofs remain.
+
+## Required before dispatch or integration
+
+Windows owns canonical full wiring in C:/work/gesher-web3-full-bound,
+wip/web3-full-bound; current source checkpoint58a085a2 is unexecuted and
+pending Native/integrator source peer. It seals production defaultOFF for
+normal suite/package/e2e, builds a separately named same-source/compiler ON
+host, and executes two additional full regression jobs with exact current
+supplier/role/hash guards. Explicit runtime selection keeps identical five
+jar/image locations; no relocated/stale/imageless shortcut is permitted.
+Do not dispatch this union before that concrete wiring is reviewed/merged.
+
+Then freeze the selected exact source, freshly build matching host/DLL/jars/
+images/fixtures, and require all job conclusions success/skipped, both whole
+Windows0, actual new/preserved scope output, package23 and both complete e2e0.
+Require canonical77 eight passes/host and84 actual25/host; retain original
+sixty-minute Windows full job budget. Only after the qualifying changed-union
+full and exact source/equality audit may phase4 accept this code.
+
+SG ordinary component b49d29a0/ed741/40579429217 is separate and excluded:
+63 real cases per host passed but raw/public-prefix/remote-close/PID/full
+contracts remain open. After-resource4511 and Native87 are source-only and
+excluded. Surface5c remains red/unqualified and excluded; its saved next-slice
+plan starts after this combined source qualifies. No new installed-notice,
+Surface, hardware/all-gap or release acceptance is inferred. All ten hardware
+groups remain required with no equipped environment and repository runners0.

@@ -1,6 +1,6 @@
-# 0064: Native media format contracts over the pinned AOSP backend
+# 0064: Native media format and bounded OpenSL contracts
 
-Status: proposed (media4; first source candidate, CI pending)
+Status: accepted (format ci40459815375; bounded OpenSL ci40476766790/40477536464)
 
 ## Context
 
@@ -49,14 +49,98 @@ address of that object, not the first byte of its string literal.
 
 ## Consequences
 
-Compilation and every native/JVM fixture run happen only in CI. The first
-source candidate has only source/hash, PowerShell/XML/YAML parser and shell
-syntax checks locally; no runtime acceptance or new roadmap tick follows.
-All test71 gates, existing native2 availability checks, both complete
-Windows suites, package and required e2e must pass before acceptance.
+Compilation and every native/JVM fixture run happen only in CI. Full ci
+**40459815375**, attempt 1 at **c5962291855b13ebd0d21fcf72981db973ad9e72**,
+passes all 28 jobs (22 success, six skipped). Windows jobs 122048294283
+(2022) and 122048294275 (2025) each finish with `0 test(s) failed`. Each
+runner proves both ABIs in all four contexts, all eight semantic parts per
+context and both device shutdowns: ten test71 PASS lines. Package
+122048294220 passes all 23 checks; e2e 122048949119 / 122048949121 each pass
+all ten apps and report `0 unexpected failures`. Actual job logs were read.
 
-The 313-symbol historical baseline is retained. Subsequent exact run/ABI/
-semantic observations will describe the implemented format subset; the
+The original full ci 40456299720 at 92e914238 remains RED: main build
+122030308024 reports 12 unknown int32_t/int64_t type errors in the AOSP
+header, before Windows/package/e2e run. The accepted source explicitly
+includes cstdint before that header and compiles the exact bridge object
+early in CI. Build 122041490613 proves that compile, both host links and
+203 assembly boundaries/zero problems. Only source/hash and lightweight
+script/parser checks run locally.
+
+The 313-symbol historical baseline is retained. Exact per-entry subsequent
+verification covers 143 old entries: 21 functions and 122 data objects.
+Another 30 pinned data objects are tested without adding them to that
+historical list. Both native2 ABI logs now report 133 missing libmediandk
+entries of 276 checked; 170 old media entries remain (133 libmediandk,
+34 OpenSL and three AAudio). This verification covers ordinary metadata,
+not the codec/DRM feature named by any key. The
 remaining NDK codec/extractor/muxer/image/DRM APIs, OpenSL/AAudio contracts,
 physical capture/routes, recorder/session/container validation and hardware/
 protected-media work remain explicitly open in the Media4 brief.
+
+This source predates the coordinator's separately verified Java exit-status
+freshness fix. Combined integration CI must verify that prerequisite with
+this slice before the coordinator accepts the integrated tree.
+
+## Accepted follow-up: OpenSL identifiers and capability contracts
+
+Reuse pinned OpenSLES_IID.cpp's53 real16-byte UUID pointer objects (correct
+the existing19 and add34 old missing symbols), including full source notice.
+Compare copied UUID values rather than pointer identity. Use the exact typed
+engine/global query signatures and supported class subsets; validate output,
+index/object/null and required/optional arrays, reset failed outputs, and
+expose only implicit/requested interfaces with pinned prerealize behavior.
+Unsupported effects/3D/device identifiers retain explicit unsupported results.
+Use actual0x0B recording denial with no object. The production manifest gate
+is unchanged; bare-core ART without a framework media identity also denies.
+Normalize the volume argument's low16 bits explicitly at the host boundary:
+the ARM guest does not promise incoming short sign extension. Actual current
+CI records raw64936→signed16 -600, with set/get/value success at -600/-32768/
+-1/0. No register contents are inferred for the previous failing source.
+
+Full ci **40476766790**, attempt1 at **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**,
+contains accepted integration db84749b/freshExit30deb08c and passes22 jobs/
+six skipped. Windows122099872570/122099872556 finish0 failures, with14 test76
+PASS each: ten ABI/context combinations plus four device shutdowns. All50
+semantic rows and40 volume result rows per runner were read, including real
+manifest-allowed/denied single/device APKs and bare-core denial. Actual
+package122099872538 passes23 checks and e2e122100699777/122100699799 each
+passes ten apps/four transports/association/shortcut with0 unexpected
+failures. Exactly34 new IID inventory verification objects preserve all
+historical fields and143 prior format proofs.136 old media entries remain.
+No effect/3D method or full OpenSL engine is established by those constants.
+
+The earlier full40470959941/2b343aa7 remains RED: both runners exactly six
+test76 failures from the core fixture's incorrect grant assumption and the
+ARM signed16 boundary. Corrected source was verified above without retrying
+that unchanged candidate. The same green run also verifies the stronger
+lossless AAudio fixture: requested/effective44100-frame capacity, original
+750/1250Hz/44100-frame gate, zero lost/xruns and a controlled small-ring loss
+versus configured-ring zero-loss case. Old1153.3Hz cause remains unproved.
+
+## Accepted follow-up: standalone functional backend and guest-thread entry
+
+Source e5693412 factors pure audio/player-core/NDK OBJECT files into both
+dalvikvm and gesher-exec with the actual window/graphics dependencies,
+keeping Java/JNI layers on ART. Move the exact old once-per-thread guest
+entry guard and SetupThreadTls call into the bionic shim; JNI delegates to
+that same implementation. A pure permission provider defaults to deny when
+no recording identity is installed, while ART registers the unchanged
+MayRecordAudio manifest/bare-core decision. No recording grant is invented.
+
+Full **40477536464**, attempt1 at
+**e569341230b3970cadaeb48a235a12a4645da74a**, passes22 jobs/six skipped,
+both whole0, actual package23 and both ten-app/four-transport e2e0. Actual
+logs and all60 semantic rows/48 volume rows/12 callback traces per runner
+were read. The same NDK fixture runs through core JNI, genuine standalone
+ELF and allowed/denied single/device APKs on both ABIs;16 PASS include four
+device shutdowns. Every context requires one real PCM callback with valid
+independent guest TLS and unchanged caller TLS. Native processes without
+identity correctly deny11/no object, while real APK grants/denials remain
+independent. Actual both-host links and203 assembly boundaries/zero
+problems pass. Only documentation changes follow the verified source.
+
+Native-child recording identity, full configuration, loss-of-control,
+output-mix/effects/device contracts remain open. Separate AAudio API36 MMAP
+source/test78 and installed-notice verification are prepared on another
+branch and are not accepted by this run. Full builder validation,
+platform-policy getters, routing and error callbacks remain open as well.

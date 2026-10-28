@@ -220,9 +220,88 @@ the microphone (looped, from its start each time recording starts);
 
 ## Status and next steps
 
+- Native OpenSL full ci **40477536464** is GREEN at **e5693412**, attempt1:
+  all28 jobs=22 success/six skipped, both Windows whole0 and16 test76 PASS
+  each. Both ABI standalone ELF callers now pass the same actual UUID/
+  typed-query/negotiation/PCM/permission contracts as JNI/APKs; all12
+  contexts per runner require actual callback calls1/TLS valid/caller TLS
+  unchanged,60 semantic rows and48 volume results. Pure functional backend
+  OBJECT targets link into both hosts; JNI retains the real manifest gate
+  and native without identity denies11/no object. Actual package23 and
+  both ten-app/four-transport/association/shortcut e2e0 logs were read.
+  The original lossless AAudio/format/env/time/fresh-exit gates also pass.
+  Source is frozen with docs-only successors. Configuration/effects/device
+  policy and native-child recording identity remain open; separate AAudio
+  MMAP/notice source in test78 is unverified and excluded from this run.
+
+- Corrected OpenSL full ci **40476766790** is GREEN at
+  **d10bea3a98bb8dfe76972209b6aff5df4fed58ec**, attempt1:22 success/six
+  skipped, both Windows whole0 and14 test76 PASS each. Both ABIs pass core
+  JNI and real manifest-allowed/denied single/device APKs, all50 semantic
+  rows and40 volume results per runner. All53 UUID pointer objects/pinned
+  values, copied-ID capability negotiation and typed queries pass; bare
+  core returns real0x0B denial, and APK grants/denials are independent.
+  Actual ARM raw64936→signed16 -600 and all -600/-32768/-1/0 round trips
+  pass. Only34 exact IID verification objects are added;136 old media
+  export entries remain. Both actual package23 and required ten-app/four-
+  transport e2e0 logs were read. Original format10/media3-38/env67/time68/
+  freshExit70 gates pass. The lossless AAudio gate retains44100 original
+  750/1250Hz frames with capacity44100/lost0/xruns0; the controlled small
+  rings lose5613/5537 frames versus configured0 with actual counter proof.
+  The old1153.3Hz cause remains unproved. This source is frozen with
+  docs-only successors and contains integration db84749b/freshExit30deb.
+  Separate native-backend/TLS/callback source e5693412/full40477536464 is
+  independently accepted above; no effects/3D or full OpenSL contract follows.
+
+- OpenSL full ci **40470959941** is RED at
+  **2b343aa7cc25d441d36bcbc1b88ab2e7e827fa88**, with accepted integration
+  db84749b/fresh exit-status30deb08c merged:20 success/six skipped/two failed.
+  Both Windows jobs fail exactly6 test76 cases: core recording-grant
+  expectations (actual bare-core denial) and all five ARM signed16 volume
+  cases. Actual data/query/negotiation and both APK permission variants pass;
+  package23 and both ten-app/four-transport e2e0 pass. No OpenSL acceptance
+  follows. Corrected source requires the existing0x0B/no-identity denial
+  and normalizes the volume boundary explicitly, with actual raw/value/
+  permission diagnostics and valid signed16 edges. The corrected CI is green above.
+  AAudio's original750/1250Hz,44100-frame lossless gate passes in both modes
+  and runners with actual lost0/xruns0; the controlled small rings lose
+  frames while configured rings retain all. The old1153.3Hz cause remains
+  unproved. Details and exact job ids are in the Media4 brief.
+
+- Media4's format-only source below stays frozen on
+  `wip/media4-format-verified` at docs-only ba3c1c2d. The separate78ee5e12
+  AAudio fixture correction is now verified in40476766790 above, preserving
+  the old frequency/frame gates and adding real capacity/loss/xrun proof.
+  All broader [media4](handoff/tracks/media4.md) contracts stay open.
+
+- Corrected Media4 full ci **40459815375** is GREEN at
+  **c5962291855b13ebd0d21fcf72981db973ad9e72**, after merging current
+  integration 53898b51's docs and source correction 73c20d70 below. Main
+  122041490613 passes the early bridge compile, both host executable links
+  and 203 assembly boundaries/zero problems; media 122043516317 passes the
+  two-ABI NDK/ELF/APK builds. Package 122048294220 passes all 23 actual
+  install/runtime/window/input/uninstall checks. All 28 jobs are read:
+  22 success/six skipped, attempt 1 without retries. Windows 122048294283
+  (2022) / 122048294275 (2025) each finish `0 test(s) failed`, with ten
+  test71 PASS lines: two ABIs in core ART JNI, standalone ELF and
+  single/device APK modes plus both device shutdowns. All eight semantic
+  parts per context were read: 21 real functions, 152 pointer data objects,
+  pinned values, typed/FPU/LP64 calls, ownership, errors, clear, debug text
+  and 128 lifetime cycles. This closes 143 historical baseline entries
+  (21 functions/122 data); 30 additional pinned data objects are verified
+  without extending the old list. Each ABI now reports libmediandk
+  276 checked/133 missing; 170 old media entries remain including OpenSL
+  and AAudio. All 37 media3, 12 part-1 device, 18 AOT3, 11 Exec3, env67 and
+  time68 checks pass per runner. E2e 122048949119 / 122048949121 each pass
+  all ten required apps, four transport fixtures, association/shortcut and
+  `0 unexpected failures`; actual package/e2e logs were read. Source stays
+  frozen c596 with docs-only successors. It predates the coordinator's
+  separately verified Java exit-status freshness fix; coherent combined
+  integration CI remains required. All other Media4 contracts stay open.
+
 - Media4's first NDK format slice has RED full ci **40456299720** at
   **92e914238cc8655aef472887ad9f494eec5c8a97**, after current integration
-  808ea746. ADR 0064 proposes the actual AOSP format backend through 21
+  808ea746. ADR 0064 uses the actual AOSP format backend through 21
   System V entries and 152 pointer data objects in both app/native process
   hosts. Test71 builds/runs both ABI libraries, standalone ELF and APK modes
   in CI only. Media job 122033620469 passes its actual NDK/Java/APK builds

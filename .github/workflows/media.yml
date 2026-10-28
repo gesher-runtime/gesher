@@ -21,6 +21,8 @@ jobs:
           sparse-checkout: |
             tests/apps
             tests/media/ndk-format
+            tests/media/opensl-contracts
+            tests/media/ndk-muxer
             compat/media/sounds
 
       - uses: actions/download-artifact@v4
@@ -86,6 +88,8 @@ jobs:
           timeout --kill-after=5s 120s bash -x tests/apps/mediaapp/gen-media.sh
           # videoapp's clips (stage 2): a color per half second, one per codec.
           timeout --kill-after=5s 180s bash -x tests/apps/videoapp/gen-media.sh
+          timeout --kill-after=5s 180s python3 tests/media/ndk-muxer/generate-fixtures.py \
+            --out out/media/ndk-muxer/fixtures --video-assets tests/apps/videoapp/assets
           # Gesher's default ringtone, notification and alarm sounds, for the
           # tests and the installer.
           timeout --kill-after=5s 60s bash -x compat/media/sounds/gen-system-sounds.sh out
@@ -119,6 +123,12 @@ jobs:
       - name: Build Media4 NDK format fixtures
         run: bash tests/media/ndk-format/build.sh out android-ndk-r27c
 
+      - name: Build Media4 OpenSL contract fixtures
+        run: bash tests/media/opensl-contracts/build.sh out android-ndk-r27c
+
+      - name: Build Media4 NDK muxer fixtures
+        run: bash tests/media/ndk-muxer/build.sh out android-ndk-r27c
+
       - name: Build mediaapp.apk
         run: |
           chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign
@@ -137,6 +147,12 @@ jobs:
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediaformatapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/openslapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediamuxerapp/build.sh out \
             --framework-res work/framework/framework-res.apk \
             --framework-classes work/framework-classes --core-classes work/coremod
           ls -la out

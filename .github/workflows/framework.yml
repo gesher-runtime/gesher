@@ -342,8 +342,10 @@ jobs:
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/sharedlibraryapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -384,6 +386,8 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifeapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/localeapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/locale2app/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/locale2other/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/surfaceapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/winlegacy/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
@@ -407,6 +411,7 @@ jobs:
           cp out/app/imeapp.apk dist-framework/
           cp out/app/lifeapp.apk dist-framework/
           cp out/app/localeapp.apk dist-framework/
+          cp out/app/locale2app.apk out/app/locale2other.apk dist-framework/
           cp out/app/surfaceapp.apk dist-framework/
           cp out/app/winapp.apk dist-framework/
           cp out/app/winlegacy.apk dist-framework/
@@ -414,7 +419,8 @@ jobs:
           cp out/app/web3app.apk dist-framework/
           cp out/app/services-tests.dex dist-framework/
           cp out/app/exitstatusapp.apk dist-framework/
-          cp out/app/graphics-tests.dex dist-framework/
+          cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
+          cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework
 
       - uses: actions/upload-artifact@v4

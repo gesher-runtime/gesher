@@ -13,6 +13,9 @@ if (-not (Test-Path "$n2/native2-test.dex")) {
 }
 $n2 = (Resolve-Path $n2).Path
 $n2Dir = (Resolve-Path $Dir).Path
+$arm64FpcrEvidence = [Collections.Generic.List[object]]::new()
+# test66 reuses these actual process logs for its six ABI/mode assertions.
+$n2WideEvidence = [Collections.Generic.List[object]]::new()
 
 # Runs a program with a time limit (a translated or broken run must never
 # hang the job), in $WorkDir (by default the current directory: $bcp's paths
@@ -29,19 +32,30 @@ function N2Run([string] $Exe, [string[]] $Arguments, [string] $WorkDir = (Get-Lo
   $psi.RedirectStandardError = $true
   foreach ($k in $Environment.Keys) { $psi.Environment[$k] = $Environment[$k] }
   $p = [Diagnostics.Process]::Start($psi)
+  $nativeId = $p.Id
+  $nativeHandle = $p.SafeHandle
+  try {
   $stdout = $p.StandardOutput.ReadToEndAsync()
   $stderr = $p.StandardError.ReadToEndAsync()
-  if (-not $p.WaitForExit($Seconds * 1000)) {
-    $p.Kill($true)
-    $p.WaitForExit()
+  $incomplete = -not $p.WaitForExit($Seconds * 1000)
+  if ($incomplete) {
+    try { $p.Kill($true) } catch { Write-Output "N2 process kill failed: $_" }
+    if (-not $p.WaitForExit(5000)) { Write-Output 'N2 process still alive five seconds after kill' }
     Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
-    $global:LASTEXITCODE = 124
-  } else {
-    $p.WaitForExit()
-    $global:LASTEXITCODE = $p.ExitCode
   }
-  $stdout.Result
-  $stderr.Result
+  foreach ($pipe in @(@{ Task = $stdout; Name = 'stdout' }, @{ Task = $stderr; Name = 'stderr' })) {
+    try {
+      if ($pipe.Task.Wait(10000)) { Write-Output $pipe.Task.Result }
+      else { $incomplete = $true; Write-Output "N2 $($pipe.Name) did not complete within ten seconds" }
+    } catch { $incomplete = $true; Write-Output "N2 $($pipe.Name) read failed: $_" }
+  }
+  $global:LASTEXITCODE = if ($incomplete) { 124 } else { $p.ExitCode }
+  } finally {
+    $p.Dispose()
+    if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+      Write-Output "INFO N2 process cleanup: pid=$nativeId native handle closed=$($nativeHandle.IsClosed)"
+    }
+  }
 }
 
 $abis = @(@{ Abi = 'x86_64'; Tag = 'x86_64' }, @{ Abi = 'arm64-v8a'; Tag = 'arm64' })
@@ -63,8 +77,10 @@ foreach ($a in $abis) {
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.Native2Test',
     (NoDrive "$n2/$($a.Abi)/libnative2.so"), (NoDrive $work), (NoDrive "$n2/symbols-$($a.Abi).txt")) | Out-String
   $code = $LASTEXITCODE
+  $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
+  $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'dalvikvm'; Exit = $code; Report = $out })
   $lines = $out -split "`r?`n"
-  foreach ($part in 'extras', 'unicode', 'dlopen', 'files', 'ifaddrs') {
+  foreach ($part in 'extras', 'unicode', 'dlopen', 'files', 'ifaddrs', 'varargs') {
     $line = $lines | Where-Object { $_ -like "native2 $part*" } | Select-Object -First 1
     if ($code -eq 0 -and $line -and $line -like "native2 $($part): ok*") {
       Write-Host "PASS  native2 ($($a.Tag)): $part through dalvikvm ($($line.Substring($line.IndexOf(':') + 2)))"
@@ -183,6 +199,7 @@ $bcpN2 = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | 
 $dvmN2 = @("-Xbootclasspath:$bcpN2", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
 $apks = @(@{ Apk = 'native2app.apk'; Tag = 'x86_64' }, @{ Apk = 'native2app-arm64.apk'; Tag = 'arm64' })
 $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dlopen: ok', 'Native2Activity: native2 files: ok',
+  'Native2Activity: native2 varargs: ok; literal/few/many GP/FP; ordered shared overflow; va_copy; nested/thread; wide and binary128 source; gzvprintf retry',
   'Native2Activity: native2 ifaddrs: ok; LP64; IPv4/IPv6 loopback; netmasks/broadcast; packet index/hardware; independent lists',
   'Native2Activity: native2 unicode: ok; pinned ICU4X boundaries; plain/_l/wctype/wctrans and errors; pinned wcwidth/wcswidth: 33 boundaries, full-width strings and bounds',
   'Native2Activity: native2 bitmap: ok; direct pixels and PNG callback round trip',
@@ -191,7 +208,10 @@ $n2Lines = @('Native2Activity: native2 extras: ok', 'Native2Activity: native2 dl
   'Native2Activity: native2: all passed', 'Native2Activity onResume: all passed', 'gesher-app: done')
 foreach ($a in $apks) {
   Check "native2 ($($a.Tag)): gesher-app runs $($a.Apk) (single process): System.loadLibrary from the APK, the library's checks pass" {
-    N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Main', (NoDrive "$n2/$($a.Apk)"))) (Get-Location).Path @{} 900
+    $fpcrOut = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Main', (NoDrive "$n2/$($a.Apk)"))) (Get-Location).Path @{} 900 | Out-String
+    $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'single'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+    $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'single'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+    $fpcrOut
   } $n2Lines
 }
 
@@ -204,8 +224,11 @@ $env:GESHER_SHORTCUTS = '0'
 try {
   foreach ($a in $apks) {
     Check "native2 ($($a.Tag)): the Gesher device: $($a.Apk)'s process (started by the system server) loads its library and passes the checks" {
-      N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'launch', (NoDrive "$n2/$($a.Apk)"), '--headless')) `
-        (Get-Location).Path @{} 900
+      $fpcrOut = N2Run "$n2Dir/dalvikvm.exe" ($dvmN2 + @('com.gesher.app.Launcher', 'launch', (NoDrive "$n2/$($a.Apk)"), '--headless')) `
+        (Get-Location).Path @{} 900 | Out-String
+      $arm64FpcrEvidence.Add(@{ Abi = $a.Tag; Mode = 'device'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+      $n2WideEvidence.Add(@{ Abi = $a.Tag; Mode = 'device'; Exit = $LASTEXITCODE; Report = $fpcrOut })
+      $fpcrOut
     } ($n2Lines + @('gesher-app: app process for com.gesher.native2'))
   }
 } finally {

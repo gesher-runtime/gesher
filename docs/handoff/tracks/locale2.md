@@ -34,5 +34,40 @@ Merge current integration before final CI. No local AOSP build or WSL.
 
 ## Status and next steps
 
-Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted; all required
-work above remains open apart from the explicitly cited windows3 relaunch.
+First bounded slice started on 2026-10-27 in `C:\work\gesher-locale2`,
+`wip/locale2`. ADR0066/test81 cover persisted override/replacement/clear,
+selected-locale reconciliation and ordinary caller/package/user boundaries.
+Exact source `004fff10` passes scoped `40512781936`: all four actual job logs
+read, 21 PASS groups/no FAIL/final zero on both Windows hosts. These are real
+public API/APK/resource/restart/error controls, including every ordered
+single-mode callback and the original settled device observation. Native
+runtime provenance is exact full40498782924/8ec4bf3c; execution is imageless.
+This does not establish the pending full product/package/e2e gates.
+
+Merge `acb144fb` imports latest accepted integration `bc6e05be`/Net4; merge
+`d698a74e` imports immutable verified Wide/FPCR/FPSR `75e7ef29`. The Native2
+include/Run conflict resolution retains ifaddrs, Wide, ArmFpcr and ArmFpsr,
+both reference builds, APK markers and complete captured evidence. Locale code
+is unchanged from scoped004fff10, ARM production from75e7, Net4 frombc6.
+Coherent full40516054280/ca4ed3cf completed red, attempt1:29 conclusions,
+22success/one failure/six skips. Windows2022 job122243136456 ends0;
+Windows2025 job122243136436 ends3, all Web3: A11yActivity fails to reach
+fresh normal0 after60+60s/WM_CLOSE, then proxy and PAC NetActivity each
+miss their400s completion/normal0. Both hosts nevertheless pass every21
+Locale2 group, five FPCR, five FPSR and six Wide groups. Package23 and both
+ten-app e2e plus four transport/association/shortcut controls pass. The five
+actual critical logs and every job conclusion were personally read; exact
+details remain in the stage report. No cause, waiver, unchanged retry,
+full product acceptance or integration merge is claimed. Source stays frozen
+for the owning Windows/Web3 correction and a fresh coherent verification.
+See [the stage report and failed-run history](locale2-persisted-config.md),
+[ADR0066](../../decisions/0066-locale2-persisted-config.md) and the
+[pinned-source audit](locale2-source-audit.json).
+
+Privileged grants/installer/IME identity, permission-gated broadcasts,
+uninstall/retain-data, Windows NLS/regional-format and native locale/time-zone
+contracts remain open. The all-packages-same-UID, PM all-packages UID query and
+AMS all-granted permission stand-ins are concrete Services3 gaps, not authority
+for this slice. The verified Native/FPSR source/ref remains frozen; no pending
+spawn/AOT/Media continuation is imported. No local compilation or native/JVM/C#
+fixture execution.

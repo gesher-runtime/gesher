@@ -45,6 +45,7 @@
 #include <vector>
 
 #include "exec_spawn.h"
+#include "spawn_actions.h"
 
 // gesher-base: kill() of a process other than this one's children (signal
 // mailbox, compat/posix/src/process.cc).
@@ -191,12 +192,8 @@ UnsetenvFn g_unsetenv = nullptr;
 // Builds the child fd set, environment and cwd, spawns `argv[0]`, tracks the
 // pid. `search`: look argv[0] up in PATH (execvp/posix_spawnp). Returns the
 // pid, or -1 with errno set.
-int SpawnProgram(const std::string& program, const std::vector<std::string>& argv,
-                 const std::vector<std::string>& env, const std::string& dir, bool search,
-                 const std::vector<ex::ChildFd>& fds) {
-  ex::Launch launch;
-  int e = ex::PrepareLaunchProgram(program, argv, dir, search, &launch);
-  if (e != 0) return errno = e, -1;
+int SpawnPrepared(const ex::Launch& launch, const std::vector<std::string>& env,
+                   const std::string& dir, const std::vector<ex::ChildFd>& fds) {
   std::wstring environment = ex::EnvironmentBlock(env);
   std::wstring cwd = dir.empty() ? L"" : ex::WindowsPath(dir);
   PROCESS_INFORMATION pi = {};
@@ -208,12 +205,24 @@ int SpawnProgram(const std::string& program, const std::vector<std::string>& arg
   return pid;
 }
 
+int SpawnProgram(const std::string& program, const std::vector<std::string>& argv,
+                 const std::vector<std::string>& env, const std::string& dir, bool search,
+                 const std::vector<ex::ChildFd>& fds) {
+  ex::Launch launch;
+  int e = ex::PrepareLaunchProgram(program, argv, dir, search, &launch);
+  if (e != 0) return errno = e, -1;
+  return SpawnPrepared(launch, env, dir, fds);
+}
+
 // The parent's currently open fds and their handles.
 std::vector<ex::ChildFd> InheritedFds() {
   std::vector<ex::ChildFd> out;
   for (int fd = 0; fd < 2048; ++fd) {
-    HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-    if (h != INVALID_HANDLE_VALUE && h != nullptr) out.push_back({fd, h});
+    intptr_t value = _get_osfhandle(fd);
+    // UCRT uses -2 for unbound standard streams in a no-console process.
+    if (value != -1 && value != -2 && value != 0) {
+      out.push_back({fd, reinterpret_cast<HANDLE>(value)});
+    }
   }
   return out;
 }
@@ -630,50 +639,36 @@ int BIONIC_SYSV AttrStubPtrArg(BionicSpawnattr**, void*) { return 0; }
 
 int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const* actions_in,
                  const BionicSpawnattr* const*, char* const argv[], char* const envp[], bool search) {
-  std::map<int, HANDLE> handles;
-  for (const ex::ChildFd& f : InheritedFds()) handles[f.fd] = f.handle;
-  std::vector<int> opened;
-  std::string dir = CurrentDir();
+  if (path == nullptr || argv == nullptr) return EFAULT;
+  ex::SpawnRequest request;
+  request.search = search;
+  request.program = path;
+  const wchar_t* search_path = _wgetenv(L"PATH");
+  if (search_path != nullptr) request.search_path = ex::Narrow(search_path);
+  request.argv = FromList(argv);
+  if (request.argv.empty()) request.argv.push_back(path);
+  std::vector<ex::ChildFd> fds = InheritedFds();
+  for (const ex::ChildFd& f : fds) {
+    DWORD flags = 0;
+    if (!GetHandleInformation(f.handle, &flags)) return ex::ErrnoFromWin32(GetLastError());
+    request.fd_flags.emplace_back(f.fd, (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : 1);
+  }
   if (actions_in != nullptr && *actions_in != nullptr) {
     for (const BionicFileAction* a = (*actions_in)->head; a != nullptr; a = a->next) {
-      switch (a->what) {
-        case 0: {  // open
-          int fd = g_open != nullptr ? g_open(a->path.c_str(), a->flags, static_cast<int>(a->mode)) : -1;
-          if (fd >= 0) {
-            opened.push_back(fd);
-            handles[a->new_fd] = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-          } else {
-            handles.erase(a->new_fd);
-          }
-          break;
-        }
-        case 1:  // close
-          handles.erase(a->fd);
-          break;
-        case 2: {  // dup2
-          auto it = handles.find(a->fd);
-          if (it != handles.end()) handles[a->new_fd] = it->second;
-          break;
-        }
-        case 3:  // chdir
-          dir = a->path;
-          break;
-        default:
-          break;
-      }
+      request.actions.push_back({a->what, a->fd, a->new_fd, a->flags, a->mode, a->path});
     }
   }
-  std::vector<ex::ChildFd> fds;
-  for (auto& kv : handles) {
-    if (kv.second != INVALID_HANDLE_VALUE && kv.second != nullptr) fds.push_back({kv.first, kv.second});
+  ex::Launch launch;
+  launch.application = ex::LauncherPath();
+  ex::AppendQuoted(&launch.command_line, launch.application);
+  launch.command_line += L" --spawn";
+  for (const std::string& arg : ex::EncodeSpawn(request)) {
+    launch.command_line += L' ';
+    ex::AppendQuoted(&launch.command_line, ex::Widen(arg));
   }
-  std::vector<std::string> args = FromList(argv);
-  if (args.empty()) args.push_back(path);
+  if (launch.command_line.size() + 1 > 32767) return E2BIG;
   std::vector<std::string> env = envp != nullptr ? FromList(envp) : CurrentEnv();
-  int pid = SpawnProgram(path, args, env, dir, search, fds);
-  for (int fd : opened) {
-    if (g_close != nullptr) g_close(fd);
-  }
+  int pid = SpawnPrepared(launch, env, CurrentDir(), fds);
   if (pid < 0) return errno;  // posix_spawn returns the error number
   if (pid_out != nullptr) *pid_out = pid;
   return 0;
