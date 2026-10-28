@@ -753,3 +753,41 @@ before designing actual CS/OwningThread/same-FILE causal observation. A changed
 module hash cannot be relabeled as the prior2025 module. No Native component
 criterion/deadline changed. Local checks were source AST/YAML/diff parsing only;
 independent focused peer is required before this separate diagnostic CI push.
+
+### Actual named CRT implementation40686447043: dynamic layout basis only
+
+Source73f27c91/run40686447043 succeeded2/2: Windows2025 job122809898579,
+Windows2022 job122809898830; required watch exit0. Actual modules match the
+prior runtime versions/hashes:2025 ucrtbase10.0.26100.33648/
+9601850e2ede2cd86b441223557cae0fa7f5e33b1dd9d481c58c8cc2d688bdc3,
+2022 ucrtbase10.0.20348.5756/
+d06d0a421398fb663c6c49586e09774143460fdb1dce489aa9844846b9398555.
+Guarded loaded128-byte reads matched exact file bytes and owned disassembly
+snapshots. The actual named exports on BOTH versions consist first of
+48 83 c1 30 (add rcx,0x30), then48 ff25 +signedrel32 (indirect tail jump).
+Actual2025 lockRVA0x6e610/IAT0xfcad8; unlockRVA0x715d0/IAT0xfcaf0.
+Actual2022 lockRVA0x24280/IAT0xc7a60; unlockRVA0x4770/IAT0xc7a58.
+No lock owner or Native runtime acceptance follows from this static evidence.
+Plain logs/metadata: C:/work/gesher-ci-review/native3-crt-40686447043*.
+
+Prepared next fixture-only data diagnostic decodes the observed exact eleven
+instruction bytes at the ACTUAL public worker _lock_file/_unlock_file exports,
+checks same retained CRT module/IAT allocation and actual resolved jump targets
+against named EnterCriticalSection/LeaveCriticalSection, and requires matching
+positive decoded offsets. Unsupported code fails rather than guessing FILE ABI.
+CRITICAL_SECTION size/field offsets are checked against the compiler's Windows
+header. Guarded reads require aligned same-allocation committed FILE/lock range.
+The exact same live FILE is sampled before owner lock (owner0/recursion0), after
+actual _lock_file (actual current ownerTID/creation-time/recursion1), and while the
+owned actual closer is waiting (sameCS/sameowner/recursion1/notcompleted). LockCount
+and DebugInfo are recorded only, without assuming modern-version wait-count or
+debug-list semantics. No FILE/CS read occurs after owner unlock permits fclose.
+Existing actual closer birth/stack and independent close/unlock/completion
+outputs remain. The actual WCT criterion and5s/10s/180s deadlines are unchanged,
+so a Windows2025 one-node chain remains failure even if all CS data is obtained.
+
+Production code remains1dc2e245; no acceptance change or equivalent-proof ADR
+exception is made. This new source must receive focused pointer/lifetime/decode
+peer before fresh component CI. Local activity was source/YAML/diff checking
+only, with no C++ build or native fixture execution. All broader open requirements
+remain unchanged, including both ABI/bionic/ART and full/package/e2e acceptance.

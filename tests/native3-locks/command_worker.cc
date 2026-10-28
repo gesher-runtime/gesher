@@ -22,6 +22,7 @@
 #include <wct.h>
 #include <io.h>
 #include "stack_probe.h"
+#include "crt_lock_probe.h"
 #else
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -177,6 +178,8 @@ int main(int argc, char** argv) {
   if (setrlimit(RLIMIT_NOFILE, &limit)) return Failure("actual Linux fd limit");
 #else
   if (!EnableOwnWaitChainProbe()) return Failure("actual own-thread WCT privilege");
+  native3_crt_lock_probe::Layout crt_layout;
+  if (!crt_layout.Initialize()) return Failure("actual named CRT lock implementation decode");
 #endif
   static_assert(sizeof(struct flock) == 32 && offsetof(struct flock, l_start) == 8);
   for (int& descriptor : descriptors) descriptor = -1;
@@ -278,8 +281,23 @@ int main(int argc, char** argv) {
       int stream_result = -1, stream_error = 0;
 #ifdef _WIN32
       wait_trace = {};
+      FILETIME owner_created{}, owner_exited{}, owner_kernel{}, owner_user{};
+      if (!GetThreadTimes(GetCurrentThread(), &owner_created, &owner_exited, &owner_kernel, &owner_user))
+        return Failure("actual stream owner birth");
+      const DWORD stream_owner = GetCurrentThreadId();
+      const uint64_t stream_owner_birth = native3_stack_probe::Birth(owner_created);
+      if (stream_owner_birth == 0) return Failure("actual stream owner birth is empty");
+      native3_crt_lock_probe::Snapshot before{}, held{}, waiting{};
+      if (!crt_layout.Read(stream, &before) || before.owner != 0 || before.recursion != 0)
+        return Failure("actual stream lock before owner acquisition");
 #endif
       LockStream(stream);
+#ifdef _WIN32
+      if (!crt_layout.Read(stream, &held) || held.address != before.address ||
+          held.owner != stream_owner || held.recursion != 1) {
+        Failure("actual stream lock held by expected owner"); std::_Exit(96);
+      }
+#endif
       std::thread closer([&] {
 #ifdef _WIN32
         FILETIME created{}, exited{}, kernel{}, user{};
@@ -314,6 +332,15 @@ int main(int argc, char** argv) {
         if (!contended) std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
 #ifdef _WIN32
+      // Read only while this real owner still holds the stream lock. Never
+      // inspect the FILE/embedded lock after unlock permits fclose to free it.
+      if (completed.load(std::memory_order_acquire) || !crt_layout.Read(stream, &waiting) ||
+          waiting.address != held.address || waiting.owner != stream_owner || waiting.recursion != 1) {
+        Failure("actual live FILE lock owner during closer wait"); std::_Exit(96);
+      }
+      native3_crt_lock_probe::Report("before", stream, before, stream_owner, stream_owner_birth);
+      native3_crt_lock_probe::Report("held", stream, held, stream_owner, stream_owner_birth);
+      native3_crt_lock_probe::Report("waiting", stream, waiting, stream_owner, stream_owner_birth);
       DumpWaitTrace(entering.load(std::memory_order_acquire), ThreadId(), stream, stream_fd,
           completed.load(std::memory_order_acquire));
 #endif

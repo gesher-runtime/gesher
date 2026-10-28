@@ -163,7 +163,7 @@ jobs:
             Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
           }
           Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
-      - name: Actual independent-process common-layer calls compared with Linux kernel rows
+      - name: Actual Linux row comparison and independent live FILE critical-section owner snapshots
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
