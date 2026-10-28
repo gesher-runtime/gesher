@@ -647,6 +647,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * itself.
      */
     void startProcess(String packageName, String reason) {
+        synchronized (mPm.launchGate) {
+            startProcessGuarded(packageName, reason);
+        }
+    }
+
+    private void startProcessGuarded(String packageName, String reason) {
         ProcessStarter starter = mStarter;
         if (starter == null) return;
         long seq;
@@ -777,6 +783,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * others told to exit; waits up to 5 s for them to go.
      */
     void forceStopPackage(String packageName) {
+        synchronized (mPm.launchGate) {
+            forceStopPackageGuarded(packageName);
+        }
+    }
+
+    private void forceStopPackageGuarded(String packageName) {
+        ApkPackage installed = mPm.get(packageName);
+        if (installed != null) {
+            PackageIdentity identity = installed.identity();
+            if (!Zygote.nativeRevokeInstall(identity.packageName, identity.installInstance)) {
+                throw new IllegalStateException("could not revoke owned install children");
+            }
+        }
         List<ProcessRecord> stop = new ArrayList<>();
         synchronized (this) {
             for (ProcessRecord p : mProcesses) {

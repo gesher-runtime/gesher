@@ -156,10 +156,17 @@ static jstring ZygoteJavaString(JNIEnv* env, const std::u16string& s) {
 }
 
 static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
-                         jobjectArray unset, jstring logPath, jboolean breakaway) {
+                         jobjectArray unset, jstring logPath, jboolean breakaway, jint uid,
+                         jstring package, jstring install) {
     return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
                                  ZygoteStrings(env, unset), ZygoteString(env, logPath),
-                                 breakaway == JNI_TRUE);
+                                 breakaway == JNI_TRUE, uid, ZygoteString(env, package),
+                                 ZygoteString(env, install));
+}
+
+static jboolean Zygote_revokeInstall(JNIEnv* env, jclass, jstring package, jstring install) {
+    return gesher::zygote::RevokeInstall(ZygoteString(env, package), ZygoteString(env, install))
+        ? JNI_TRUE : JNI_FALSE;
 }
 
 static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
@@ -212,8 +219,9 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
 
 static const JNINativeMethod gZygoteMethods[] = {
     {"nativeSpawn",
-     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;ZILjava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_spawn)},
+    {"nativeRevokeInstall", "(Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_revokeInstall)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},
     {"nativeKill", "(I)Z", GESHER_JNI(Zygote_kill)},

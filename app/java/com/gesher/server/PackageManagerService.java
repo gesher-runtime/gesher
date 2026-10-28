@@ -30,6 +30,9 @@ import java.util.Map;
  * see one version of the map, replaced as a whole.
  */
 public final class PackageManagerService extends IPackageManager.Default {
+    // Lock order: launchGate, ATM monitor, PM monitor. Install publication and
+    // CreateProcess/register/resume must never cross an install mutation.
+    final Object launchGate = new Object();
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
 
     public PackageManagerService(Collection<ApkPackage> packages) {

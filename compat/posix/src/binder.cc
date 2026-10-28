@@ -31,6 +31,7 @@
 #include "binder_internal.h"
 #include "binder_sg.h"
 #include "binder_wire.h"
+#include "launch_context.h"
 #include "internal.h"
 
 namespace gesher {
@@ -361,12 +362,11 @@ void CloseReceivedFds(uint8_t* data, size_t data_size, const void* offsets, size
   });
 }
 
-// The uid the driver gives this process's transactions (Binder.getCallingUid
-// in the receiver): getuid(), or $GESHER_BINDER_UID. Every gesher-base process
-// is uid 10000; the system server sets GESHER_BINDER_UID=1000 (SYSTEM_UID)
-// before it opens the driver, so that apps see their calls come from the
-// system, as ApplicationThread checks.
+// Honest package children use the same immutable startup snapshot as getuid.
+// Legacy standalone/system processes retain the old environment fallback. Both
+// are client compatibility values, NEVER authorization for broker admission.
 uint32_t BinderUid() {
+  if (gesher::launch::kStartup.present) return gesher::launch::kStartup.uid;
   const char* uid = getenv("GESHER_BINDER_UID");
   if (uid != nullptr && uid[0] != '\0') return static_cast<uint32_t>(strtoul(uid, nullptr, 10));
   return getuid();

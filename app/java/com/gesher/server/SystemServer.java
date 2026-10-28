@@ -216,9 +216,9 @@ public final class SystemServer {
             // Android's INTERNET permission: no inet sockets without it (docs/network.md).
             String inet = ConnectivityService.internetEnvironment(packageName);
             if (inet != null) env.add(inet);
-            return Zygote.spawn(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+            return Zygote.spawnPackage(Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk))), env, logFile.getPath(), false);
+                    String.valueOf(targetSdk))), env, logFile.getPath(), identity);
         });
     }
 

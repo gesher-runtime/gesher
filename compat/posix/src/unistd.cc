@@ -15,14 +15,16 @@
 
 #include "internal.h"
 #include "record_lock_descriptors.h"
+#include "launch_context.h"
 
 namespace {
 
-// Android gives each app its own uid; Gesher reports the first app uid, or
-// $GESHER_UID when whoever started the process set one (read once, as a
-// process's uid does not change).
+// Package children take their immutable CreateProcess startup UID before any
+// environment compatibility fallback. The snapshot is self-description, never
+// a broker credential. Standalone legacy processes retain their old fallback.
 uid_t AppUid() {
   static const uid_t uid = [] {
+    if (gesher::launch::kStartup.present) return static_cast<uid_t>(gesher::launch::kStartup.uid);
     const char* env = getenv("GESHER_UID");
     char* end = nullptr;
     unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;

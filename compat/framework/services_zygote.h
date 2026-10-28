@@ -21,7 +21,10 @@ namespace zygote {
 // before resuming. This local bookkeeping grants no Binder registration authority.
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway);
+          bool breakaway, int uid = -1, const std::u16string& package = {},
+          const std::u16string& install = {});
+// Revokes exact owned child instances; does not reopen numeric PIDs.
+bool RevokeInstall(const std::u16string& package, const std::u16string& install);
 
 // The process's creation time (a FILETIME), or 0 when no such process runs.
 // Owned children use the retained CreateProcess instance. Unknown/adopted PIDs

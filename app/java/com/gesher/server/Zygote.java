@@ -25,7 +25,8 @@ public final class Zygote {
     }
 
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
-            String logPath, boolean breakaway);
+            String logPath, boolean breakaway, int uid, String packageName, String installInstance);
+    static native boolean nativeRevokeInstall(String packageName, String installInstance);
     static native long nativeStartTime(int pid);
     static native int nativeExitCode(int pid);
     static native boolean nativeKill(int pid);
@@ -49,9 +50,24 @@ public final class Zygote {
      */
     public static int spawn(String commandLine, List<String> setEnv, String logPath,
             boolean breakaway) {
+        return spawnWithIdentity(commandLine, setEnv, logPath, breakaway, null);
+    }
+
+    /** Explicit per-child self/Binder compatibility snapshot; never broker authority. */
+    static int spawnPackage(String commandLine, List<String> setEnv, String logPath,
+            PackageIdentity identity) {
+        return spawnWithIdentity(commandLine, setEnv, logPath, false, identity);
+    }
+
+    private static int spawnWithIdentity(String commandLine, List<String> setEnv, String logPath,
+            boolean breakaway, PackageIdentity identity) {
         new File(logPath).getParentFile().mkdirs();
         int pid = nativeSpawn(commandLine, setEnv.toArray(new String[0]),
-                new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), breakaway);
+                identity == null ? new String[] {"GESHER_BINDER_UID"}
+                        : new String[] {"GESHER_BINDER_UID", "GESHER_UID"}, windowsPath(logPath),
+                breakaway, identity == null ? -1 : identity.uid,
+                identity == null ? "" : identity.packageName,
+                identity == null ? "" : identity.installInstance);
         if (pid <= 0) {
             throw new IllegalStateException("starting " + commandLine + " failed: Win32 error "
                     + (-pid));

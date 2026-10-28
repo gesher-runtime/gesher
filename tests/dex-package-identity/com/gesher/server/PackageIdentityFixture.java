@@ -34,6 +34,10 @@ public final class PackageIdentityFixture {
         PackageIdentity first = pm.launchIdentity(a);
         PackageIdentity other = pm.launchIdentity(b);
         check(first.uid != other.uid, "distinct installed packages must have distinct uids");
+        // Real VMs for both identities, with deliberately wrong inherited/replaced
+        // UID environment. Includes B, whose nondefault UID caught the peer defect.
+        childUid(pm, first);
+        childUid(pm, other);
         check(pm.getPackageUid(a, 0, 0) == first.uid, "getPackageUid");
         check(pm.getApplicationInfo(a, 0, 0).uid == first.uid, "ApplicationInfo uid");
         check(a.equals(pm.getNameForUid(first.uid)), "exact UID name");
@@ -64,5 +68,30 @@ public final class PackageIdentityFixture {
         check(installer.uninstall(a) && installer.uninstall(b), "owned installs removed");
         System.out.println("PACKAGE_INSTALL_UID_IDENTITY_PASS (transport authority remains unqualified)");
         System.exit(0);
+    }
+
+    private static void childUid(PackageManagerService pm, PackageIdentity identity)
+            throws Exception {
+        check(pm.getApplicationInfo(identity.packageName, 0, 0).uid == identity.uid
+                && pm.getPackageUid(identity.packageName, 0, 0) == identity.uid,
+                "PM UID agrees before real child launch");
+        String vm = Zygote.vmCommandLine(PackageIdentityFixture.class.getName());
+        File output = new File(Device.dataDir(), "child-" + identity.uid + ".log");
+        int pid = Zygote.spawnPackage(Zygote.commandLine(vm, PackageUidChild.class.getName(),
+                List.of(String.valueOf(identity.uid))),
+                List.of("GESHER_UID=19999", "GESHER_BINDER_UID=1000"),
+                output.getPath(), identity);
+        long deadline = android.os.SystemClock.uptimeMillis() + 30_000;
+        int code;
+        while ((code = Zygote.exitCode(pid)) == Zygote.STILL_ACTIVE) {
+            if (android.os.SystemClock.uptimeMillis() > deadline) {
+                Zygote.kill(pid);
+                throw new AssertionError("real child UID probe timed out");
+            }
+            Thread.sleep(20);
+        }
+        check(code == 0, "real child UID probe failed: " + code);
+        check(java.nio.file.Files.readString(output.toPath()).contains(
+                "CHILD_UID_PASS " + identity.uid), "child UID result missing");
     }
 }

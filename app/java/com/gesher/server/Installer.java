@@ -77,7 +77,10 @@ final class Installer {
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
-        if (!f.isFile()) return entries;
+        if (Files.notExists(f.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return entries;
+        if (!Files.isRegularFile(f.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("packages.list is not a regular identity registry");
+        }
         List<String[]> legacy = new ArrayList<>();
         java.util.Set<Integer> uids = new java.util.HashSet<>();
         for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
@@ -211,6 +214,12 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
+        synchronized (mPm.launchGate) {
+            return installGuarded(apk);
+        }
+    }
+
+    private String[] installGuarded(String apk) throws Exception {
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
@@ -288,6 +297,12 @@ final class Installer {
 
     /** Uninstalls the package: its processes, code, data and entry. */
     synchronized boolean uninstall(String packageName) throws IOException {
+        synchronized (mPm.launchGate) {
+            return uninstallGuarded(packageName);
+        }
+    }
+
+    private boolean uninstallGuarded(String packageName) throws IOException {
         Entry e = mEntries.get(packageName);
         if (e == null) return false;
         mAtm.forceStopPackage(packageName);

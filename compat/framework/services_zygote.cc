@@ -19,6 +19,7 @@
 
 #include "services_zygote.h"
 #include "../posix/src/binder_wire.h"
+#include "../posix/src/launch_context.h"
 
 namespace gesher {
 namespace zygote {
@@ -28,9 +29,12 @@ std::mutex g_lock;
 struct Child {
   HANDLE process;
   int64_t birth;
+  std::u16string package;
+  std::u16string install;
 };
 std::map<int, Child> g_children;  // exact retained instances, never reopened for owned queries
 HANDLE g_job = nullptr;
+std::vector<HANDLE> g_quarantined;  // failed rollback: retain until death, never authorize
 
 const wchar_t* W(const std::u16string& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
 
@@ -98,7 +102,9 @@ HANDLE Job() {
 
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway) {
+          bool breakaway, int uid, const std::u16string& package,
+          const std::u16string& install) {
+  if (uid < -1 || uid > 19999) return -ERROR_INVALID_PARAMETER;
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
   // Appending only: stdout and stderr share the handle, and every write goes
   // to the end, also with another process appending to the same log.
@@ -131,6 +137,12 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     si.StartupInfo.hStdInput = nul;
     si.StartupInfo.hStdOutput = log;
     si.StartupInfo.hStdError = log;
+    launch::Context context;
+    if (uid >= 0) {
+      context.uid = static_cast<uint32_t>(uid);
+      si.StartupInfo.cbReserved2 = sizeof(context);
+      si.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(&context);
+    }
     si.lpAttributeList = attributes;
     std::u16string env = EnvironmentBlock(set, unset);
     std::u16string cmd = command_line;  // CreateProcessW may write to it
@@ -162,7 +174,7 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
         int pid = static_cast<int>(pi.dwProcessId);
         // Retain the actual CreateProcess instance before any child instruction.
         // This local child map is not yet the broker's authorized launch registry.
-        auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth});
+        auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth, package, install});
         if (!birth || !inserted.second) {
           if (inserted.second) g_children.erase(inserted.first);
           result = -static_cast<int>(ERROR_INVALID_DATA);
@@ -175,7 +187,14 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
       }
       if (result <= 0) {
         TerminateProcess(pi.hProcess, 137);
-        CloseHandle(pi.hProcess);
+        if (WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0) {
+          CloseHandle(pi.hProcess);
+        } else {
+          // No success publication. Keep the owned instance if termination is
+          // unconfirmed; never turn a failed launch into an untracked child.
+          std::lock_guard<std::mutex> guard(g_lock);
+          g_quarantined.push_back(pi.hProcess);
+        }
       }
       CloseHandle(pi.hThread);
     } else {
@@ -186,6 +205,26 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
   CloseHandle(nul);
   CloseHandle(log);
   return result;
+}
+
+bool RevokeInstall(const std::u16string& package, const std::u16string& install) {
+  if (package.empty() || install.empty()) return false;
+  std::lock_guard<std::mutex> guard(g_lock);
+  bool ok = true;
+  for (const auto& entry : g_children) {
+    const auto& child = entry.second;
+    if (child.package == package && child.install == install &&
+        WaitForSingleObject(child.process, 0) == WAIT_TIMEOUT) {
+      ok = (TerminateProcess(child.process, 137) != FALSE) && ok;
+    }
+  }
+  for (auto it = g_quarantined.begin(); it != g_quarantined.end();) {
+    if (WaitForSingleObject(*it, 0) == WAIT_OBJECT_0) {
+      CloseHandle(*it);
+      it = g_quarantined.erase(it);
+    } else ++it;
+  }
+  return ok;
 }
 
 int64_t StartTime(int pid) {
