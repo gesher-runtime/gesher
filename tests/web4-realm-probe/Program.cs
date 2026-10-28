@@ -30,6 +30,7 @@ sealed class ProbeForm : Form
     readonly TaskCompletionSource holdEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource holdRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
     int port;
+    bool eventFailure;
     public int Result { get; private set; } = 1;
     record Context(string Session, int Id, string Unique, string Origin, string Frame, bool Default);
 
@@ -111,6 +112,7 @@ sealed class ProbeForm : Form
             { Console.WriteLine("STALE_CONTEXT_REJECTION " + e.Message); staleRejected = true; }
             await Task.Delay(500, timeout.Token);
             if (!staleRejected || observations.ContainsKey("stale-reply")) throw new Exception("stale context accepted reply");
+            if (eventFailure) throw new Exception("an event, binding or session setup failed");
             Console.WriteLine("PLATFORM_PROBE_PASS contexts, origins, binding callers, held navigation, unique-context replies and stale rejection");
             Result = 0;
         }
@@ -145,8 +147,11 @@ sealed class ProbeForm : Form
             {
                 int id = root.GetProperty("executionContextId").GetInt32();
                 string label = root.GetProperty("payload").GetString() ?? "";
-                if (contexts.TryGetValue((session, id), out var c)) observations.TryAdd(label, c);
-                else Console.WriteLine("UNMATCHED_BINDING " + label);
+                if (contexts.TryGetValue((session, id), out var c))
+                {
+                    if (!observations.TryAdd(label, c)) { eventFailure = true; Console.WriteLine("DUPLICATE_BINDING " + label); }
+                }
+                else { eventFailure = true; Console.WriteLine("UNMATCHED_BINDING " + label); }
             }
             else if (name == "Runtime.executionContextDestroyed")
             {
@@ -156,7 +161,7 @@ sealed class ProbeForm : Form
             else if (name == "Runtime.executionContextsCleared")
                 foreach (var key in contexts.Keys.Where(k => k.Item1 == session)) contexts.TryRemove(key, out _);
         }
-        catch (Exception e) { Console.WriteLine("CDP_EVENT_FAILURE " + e); }
+        catch (Exception e) { eventFailure = true; Console.WriteLine("CDP_EVENT_FAILURE " + e); }
     }
 
     async Task SetupSession(string session)
@@ -168,7 +173,7 @@ sealed class ProbeForm : Form
             await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.addBinding", "{\"name\":\"realmProbe\"}");
             await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.runIfWaitingForDebugger", "{}");
         }
-        catch (Exception e) { Console.WriteLine("SESSION_SETUP_FAILURE " + session + " " + e); }
+        catch (Exception e) { eventFailure = true; Console.WriteLine("SESSION_SETUP_FAILURE " + session + " " + e); }
     }
 
     async Task Evaluate(Context context, string expression)
