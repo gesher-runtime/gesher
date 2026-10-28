@@ -761,9 +761,15 @@ all actual expanded job counts and runtime conclusions remain pending.
   concurrent protection/unmap/partial-copy and wider Binder contracts stay open.
 - Native sourcef6b1fbfa/component40667374462 remains OVERALL RED:13 duplicate modes
   and Windows2022 passed bounded assertions, but Windows2025 WCT has no actual
-  CRT owner proof. Its production leaf is excluded. New4f8ad228 diagnostic-only
-  stack capture has source peer, not runtime qualification; unchanged original
-  WCT criterion/deadline remains required. Blocking/OFD/spawn/signals/ART and
+  CRT owner proof. Its production leaf is excluded. Diagnostic4f8ad228 actually
+  ran40674284726 and is terminal FAIL: Windows2025's owned closer has nine real
+  PCs through RtlEnterCriticalSection+0xf2 and worker+0x9836/+0x3a02, checked
+  suspend/resume0-to1 and actual System32 version/hash observations. WCT still
+  returns one blocked node/no owner after324 queries, so its original criterion
+  fails. Linux161, Windows2022161+four WCT and both thirteen duplicate modes
+  with8399 assertions passed again; the overall Native leaf remains UNQUALIFIED.
+  Mapping actual RVA/lock identity is next; no alternate-PC acceptance or reset
+  of original WCT criterion/deadline. Blocking/OFD/spawn/signals/ART and
   other Native/hardware gaps stay open.
 - Terra owns separate Web4 C:/work/gesher-web4-frames from immutable30db,
   wip/web4-childframes; early child-frame identity work is source-only and
