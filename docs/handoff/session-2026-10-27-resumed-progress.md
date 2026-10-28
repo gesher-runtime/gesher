@@ -679,3 +679,44 @@ Helper proof may qualify independently of unrelated Surface pixels; reuse
 exact reviewed bytes and run the strict negative/real archive controls in each
 consumer rather than serialize Binder behind visual acceptance. All compiler/
 native/JVM/C# execution remains CI-only, with no local artifact downloads.
+
+## Strict helper bounded proof and Binder component launch, 2026-10-28
+
+Surface40662612433/attempt1/source786e9535 (docs-only above independently
+reviewed21441571) is red overall but independently provides bounded actual
+helper proof: both Windows122731573200/122731573075 each show nine actual
+adversarial rejections, positives, thirteen authenticated raw ZIP SHA256-
+before-extraction records, isolated explicit-owner assembly, identity negatives
+and whole-host missing/extra checks. Integrator reread both actual saved logs.
+The later caller-PWD relative rebuilt-boot copy error occurs before fifteen
+image records or Surface80/86; neither Surface nor full acceptance is claimed.
+The helpers' source byte identities are independently frozen and may be reused
+for their own actual preflight without waiting for unrelated Surface pixels.
+
+Binder narrow component40664399508 is ACTIVE, exact source
+6375ce97f5febfbd88fd210aaa31d3c315177535, pushed once after no live same-ref
+run existed. Prescribed watch at120s uses session27486 and writes
+C:/work/gesher-ci-review/binder-stable-readonly-40664399508-watch.log.
+No manual duplicate dispatch, restart or unchanged-red retry occurred.
+
+Actual cheap prerequisite122735129867 passed11s BEFORE releasing all expensive
+producers. Its independently read plain log verifies all three exact helper
+Git blobs and canonical raw hashes, all nine negative controls plus positives,
+qualified30db/ordinaryed741/a474 ancestry and one real pinned archive12777738989
+with digestc0eb1475 before extraction. That archive is preflight-only and never
+enters current runtime assembly. Windows CRLF working-tree downloader hash8eb
+was caught by Terra peer before dispatch and corrected to canonical Git blob
+SHA256d82ec81f14f879958eeae2489acecc2ec39cc903dc1d564b376ab5b829320b6e.
+No failed CI or softened digest assertion accompanied that source correction.
+
+Current-source fixture modes-build122735225198 is green26s (compilation and
+packaging only); host/framework/API3 producers and all actual runtime/boot/
+whole-image checks remain pending. Binder current boot consumes two and each
+runtime job five strict current archives, with its own Windows helper negatives,
+source/run/attempt/job/time checks, complete host manifest/compiler proof and
+no allowed assembly collision replacements. No source/fixture/component/full
+acceptance follows from the early prerequisite or compile producer.
+
+Primary code still equals30db with inventory55e03c68 unchanged. Reader921418,
+Binder successor, Surface, Native87 and every other excluded/hardware/all-gap/
+release gate remain separate. No primary code/main/PR/tag/release operation.
