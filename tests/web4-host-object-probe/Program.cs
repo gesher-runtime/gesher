@@ -153,7 +153,10 @@ sealed class ProbeForm : Form
             if (rootCalls.Length != 1 || rootCalls[0].ObjectId != topObject.Id || rootCalls[0].Retired)
                 throw new Exception("top-level unscoped host-object control missing");
             Console.WriteLine($"TOP_CROSS_UNSCOPED object={topObject.Id} origin=http://localhost:{port}");
-            if (failure) throw new Exception("frame registration or page observation failed");
+            Task[] setup = sessionSetup.Values.ToArray();
+            await Task.WhenAll(setup).WaitAsync(TimeSpan.FromSeconds(3), limit.Token);
+            if (setup.Length != sessionSetup.Count || sessionSetup.Values.Any(task => !task.IsCompletedSuccessfully) || eventFailure || failure)
+                throw new Exception("frame registration, page observation, or CDP session failed or remained pending");
             Console.WriteLine("HOST_OBJECT_PROBE_PASS selected exact-origin frame calls, denied attempts, held proxy retirement and unscoped top-level control; broader rules and production unproven");
             Result = 0;
         }
