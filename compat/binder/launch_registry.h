@@ -41,6 +41,8 @@ struct Record {
 class Registry {
  public:
   using Lease = std::shared_ptr<Record>;
+  using Wait = DWORD (WINAPI*)(HANDLE, DWORD);
+  explicit Registry(Wait wait = WaitForSingleObject) : wait_(wait) {}
   // Takes ownership even on rejection. Package install must already have been
   // authorized by the trusted PM writer under its publication/revocation gate.
   bool Publish(HANDLE owned_process, const Install& install) {
@@ -60,7 +62,8 @@ class Registry {
     auto record = std::make_shared<Record>(owned_process, pid, birth, install);
     std::lock_guard<std::mutex> guard(lock_);
     auto old = records_.find(pid);
-    if (old != records_.end() && !LiveLocked(old->second)) {
+    // Unknown wait results deny admission but do not establish process death.
+    if (old != records_.end() && wait_(old->second->process, 0) == WAIT_OBJECT_0) {
       old->second->revoked = true;
       records_.erase(old);
     }
@@ -126,7 +129,7 @@ class Registry {
   void PruneDead() {
     std::lock_guard<std::mutex> guard(lock_);
     for (auto it = records_.begin(); it != records_.end();) {
-      if (WaitForSingleObject(it->second->process, 0) == WAIT_OBJECT_0) {
+      if (wait_(it->second->process, 0) == WAIT_OBJECT_0) {
         it->second->revoked = true;
         it = records_.erase(it);
       } else ++it;
@@ -172,8 +175,9 @@ class Registry {
  private:
   bool LiveLocked(const Lease& record) {
     return authority_alive_ && record && !record->revoked &&
-        WaitForSingleObject(record->process, 0) == WAIT_TIMEOUT;
+        wait_(record->process, 0) == WAIT_TIMEOUT;
   }
+  Wait wait_;
   std::mutex lock_;
   bool authority_alive_ = true;
   std::map<DWORD, Lease> records_;

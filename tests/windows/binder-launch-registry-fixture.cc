@@ -7,6 +7,10 @@
 
 using namespace gesher::binder_launch;
 void Check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+HANDLE failed_wait_handle = nullptr;
+DWORD WINAPI ControlledWait(HANDLE handle, DWORD timeout) {
+  return handle == failed_wait_handle ? WAIT_FAILED : WaitForSingleObject(handle, timeout);
+}
 struct Child {
   HANDLE process, input, output;
   DWORD pid;
@@ -67,7 +71,7 @@ int main(int argc, char**) {
   Check(GetProcessTimes(pi.hProcess, &created, &a, &b, &c), "actual birth");
   Child child{pi.hProcess, input, output, pi.dwProcessId,
       (uint64_t(created.dwHighDateTime) << 32) | created.dwLowDateTime};
-  Registry registry;
+  Registry registry(ControlledWait);
   Install install{"fixture.a", {1}, 10000};
   HANDLE retained = nullptr;
   Check(DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(),
@@ -75,6 +79,16 @@ int main(int argc, char**) {
   Check(registry.Publish(retained, install), "authorized publication before resume");
   auto lease = registry.Find(child.pid, child.birth, install.uid);
   Check(bool(lease), "honest registered control");
+  failed_wait_handle = lease->process;
+  HANDLE replacement = nullptr;
+  Check(DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(),
+        &replacement, 0, FALSE, DUPLICATE_SAME_ACCESS), "replacement duplicate");
+  Check(!registry.Publish(replacement, install), "unknown wait refuses replacement");
+  registry.PruneDead();
+  Check(!registry.Find(child.pid, child.birth, install.uid), "unknown wait denies lookup");
+  failed_wait_handle = nullptr;
+  Check(registry.Find(child.pid, child.birth, install.uid) == lease,
+        "unknown wait retained original record through publish and prune");
   Check(!registry.Find(child.pid, child.birth, 1000), "forged own PID/system UID");
   Check(!registry.Find(child.pid, child.birth, 10001), "forged other package UID");
   Check(!registry.Find(child.pid, child.birth + 1, 10000), "wrong birth");
