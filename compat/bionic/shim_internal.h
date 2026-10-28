@@ -152,6 +152,8 @@ void DeliverPendingSignals();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();
+int PthreadCpuClock(uint64_t thread, int* clock_id);
+int ReadPthreadCpuClock(int clock_id, int64_t* nanos);
 
 // IEEE binary128 (bionic's x86-64 long double) from a double, as 16 bytes.
 void DoubleToBinary128(double d, void* out);

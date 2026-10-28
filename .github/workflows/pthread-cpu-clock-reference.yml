@@ -1,0 +1,21 @@
+name: pthread CPU clock Linux reference
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/pthread-foreign-cpu-clock]
+    paths:
+      - '.github/workflows/pthread-cpu-clock-reference.yml'
+      - 'tests/native/pthread_cpu_clock_linux_reference.c'
+permissions:
+  contents: read
+jobs:
+  linux-reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and observe actual Linux lifetime semantics
+        run: |
+          printf 'source=%s attempt=%s run=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ATTEMPT" "$GITHUB_RUN_ID"
+          cc --version
+          cc -std=c11 -O2 -Wall -Wextra -Werror -pthread tests/native/pthread_cpu_clock_linux_reference.c -o /tmp/pthread-cpu-clock-reference
+          /tmp/pthread-cpu-clock-reference

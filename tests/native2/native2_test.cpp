@@ -697,6 +697,7 @@ std::vector<std::string> Symbols(const std::string& path) {
 
 #include "native3_unicode.inc"
 #include "native3_wide.inc"
+#include "pthread_cpu_clock.inc"
 
 #if defined(__aarch64__)
 Part ArmFpcr() {
@@ -728,7 +729,8 @@ std::string Run(const std::string& dir, const std::string& symbols) {
   Part varargs_part{"varargs"};
   varargs_part.failures = varargs.failures;
   varargs_part.notes.push_back(varargs.Summary());
-  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir), interface_part, varargs_part};
+  std::vector<Part> parts = {Extras(dir), Unicode(), Wide(), Dlopen(), Files(dir), interface_part, varargs_part,
+                             PthreadCpuClocks()};
 #if defined(__aarch64__)
   parts.push_back(ArmFpcr());
   parts.push_back(ArmFpsr());
