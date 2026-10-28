@@ -19,8 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
+          python3 tools/native3-locks/current_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
@@ -52,6 +55,8 @@ jobs:
           ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
           ninja -C out media_muxer_verify
           ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
+          # Validate changed after-app shared-library matching before the full graph.
+          ninja -C out CMakeFiles/art_runtime.dir/third_party/aosp/art/runtime/class_loader_context.cc.obj
           # Compile the new bridge before the full runtime to expose its
           # header/ABI errors without waiting for every AOSP object.
           ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
@@ -68,6 +73,18 @@ jobs:
           mv out/binder_sg_actor.exe dist-binder-sg-host/
           test ! -e out/binder_sg_wire_peer.exe
           printf '%s\n' "$GITHUB_SHA" > dist-binder-sg-host/binder-sg-runtime-source.txt
+
+      - name: Build and isolate bounded Native lock fixtures under production OFF
+        run: |
+          ninja -C out native3_lock_command_worker native3_lock_duplicate_test
+          mkdir dist-native3-locks
+          mv out/native3_lock_command_worker.exe out/native3_lock_duplicate_test.exe dist-native3-locks/
+          cp out/binderd.exe dist-native3-locks/
+          for target in native3_lock_command_worker native3_lock_duplicate_test binderd; do
+            "$HOME/toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj" --coff-imports "dist-native3-locks/$target.exe" > "dist-native3-locks/$target.imports.txt"
+          done
+          test ! -e out/native3_lock_command_worker.exe
+          test ! -e out/native3_lock_duplicate_test.exe
 
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
@@ -140,6 +157,9 @@ jobs:
           assert not Path('dist/binder_sg_actor.exe').exists() and not Path('dist/binder_sg_wire_peer.exe').exists()
           PYCODE
 
+      - name: Bind isolated Native fixtures to the actual current production compiler and source
+        run: python3 tools/native3-locks/current_payload.py host
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -149,6 +169,12 @@ jobs:
         with:
           name: binder2-sg-host
           path: dist-binder-sg-host/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native3-locks-host
+          path: dist-native3-locks/
+          if-no-files-found: error
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
@@ -160,6 +186,67 @@ jobs:
           name: web3-query-hook
           path: dist-web3-query/
           if-no-files-found: error
+
+  native3-locks-reference:
+    needs: [artifact-preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual Linux161 reference from the identical current worker/controller
+        run: python3 tools/native3-locks/current_payload.py reference
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native3-locks-reference
+          path: native3-reference/
+          if-no-files-found: error
+
+  native3-locks-regression:
+    needs: [build, native3-locks-reference]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict current Native host and independent Linux reference suppliers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name native3-locks-host --producer build --destination ci-suppliers/native3_host
+          if ($LASTEXITCODE -ne 0) { throw 'Current typed Native host archive failed' }
+          python tools/ci/artifact_receipt.py --name native3-locks-reference --producer native3-locks-reference --destination ci-suppliers/native3_reference
+          if ($LASTEXITCODE -ne 0) { throw 'Current Linux reference archive failed' }
+      - name: Actual Native whole-member source and role rejection controls
+        shell: pwsh
+        run: |
+          python tools/native3-locks/current_payload.py controls --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+          if ($LASTEXITCODE -ne 0) { throw 'Current Native supplier controls failed' }
+      - name: Verify and assemble exact current Native production-compiler fixture roles
+        shell: pwsh
+        run: |
+          python tools/native3-locks/current_payload.py verify --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+          if ($LASTEXITCODE -ne 0) { throw 'Current Native payload/source/compiler manifest failed' }
+      - name: Mandatory161 strict rows all4 actual evidence routes and13 resource modes
+        shell: pwsh
+        run: tests/windows/run-native3-locks-current.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native3-locks-full-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/commands.stdout.txt
+            ${{ runner.temp }}/commands.stderr.txt
+            command-fixture/windows-actual.json
+            command-fixture/windows-duplicates.json
+            command-fixture/stdio-evidence.json
+            ci-suppliers/native3_host/provenance.json
+            ci-suppliers/native3_reference/provenance.json
+          if-no-files-found: warn
 
   # framework.jar's pipeline (host tools, coremod, framework-res, then
   # tools/framework/build.py): .github/workflows/framework.yml, which also

@@ -69,6 +69,9 @@
 #define F_SETLKW64      F_SETLKW
 #define F_SETOWN        8
 #define F_GETOWN        9
+#define F_OFD_GETLK     36
+#define F_OFD_SETLK     37
+#define F_OFD_SETLKW    38
 #define F_DUPFD_CLOEXEC 1030
 #define F_ADD_SEALS     1033
 #define F_GET_SEALS     1034

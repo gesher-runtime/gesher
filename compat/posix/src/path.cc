@@ -27,6 +27,7 @@
 
 #include "binder_internal.h"
 #include "internal.h"
+#include "record_lock_descriptors.h"
 
 namespace gesher {
 namespace {
@@ -123,6 +124,7 @@ DWORD Access(int flags) {
 
 // The CRT fd for a new handle; closes the handle if there is none.
 int FdFromHandle(HANDLE h, int flags) {
+  record_locks::DescriptorGuard descriptor_guard;
   int crt_flags = _O_BINARY | ((flags & O_APPEND) != 0 ? _O_APPEND : 0) |
                   ((flags & O_ACCMODE) == O_RDONLY ? _O_RDONLY : 0) |
                   ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
