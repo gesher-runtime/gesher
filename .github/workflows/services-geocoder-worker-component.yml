@@ -1,6 +1,9 @@
 name: Services geocoder worker component
 on:
   workflow_dispatch:
+  push:
+    branches: [wip/services3-cancel-current]
+    paths: [.github/workflows/services-geocoder-worker-component.yml]
 jobs:
   controlled-worker:
     strategy:
