@@ -1,0 +1,105 @@
+name: binder2-sg-modes-build
+
+# Fixture/source compilation and APK byte provenance only, no execution.
+on:
+  push:
+    branches: ['wip/binder2-sg-mode-wiring']
+    paths: ['.github/workflows/binder2-sg-modes-build.yml']
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  NDK_VERSION: "27.2.12479018"
+  NDK_ZIP: android-ndk-r27c-linux.zip
+  NDK_DIR: android-ndk-r27c
+  R8_VERSION: "9.5.26"
+
+concurrency:
+  group: binder2-sg-modes-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  host-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build actual selected client, broker and host actor sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          ninja -C out CMakeFiles/gesher_posix.dir/compat/posix/src/binder.cc.obj
+          ninja -C out binderd binder_sg_actor binder_sg_wire_peer
+          echo 'Build-only: selected coherent prerequisite source, no host/native/ART/APK execution.'
+  modes-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/cache@v4
+        id: ndk
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: ndk-${{ env.NDK_VERSION }}
+      - name: Fetch pinned Android NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/$NDK_ZIP"
+          unzip -q ndk.zip
+          test -d "$NDK_DIR"
+      - uses: actions/cache@v4
+        id: r8
+        with:
+          path: r8.jar
+          key: r8-${{ env.R8_VERSION }}
+      - name: Fetch d8
+        if: steps.r8.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o r8.jar "https://dl.google.com/android/maven2/com/android/tools/r8/$R8_VERSION/r8-$R8_VERSION.jar"
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: sdk
+          key: sdk-build-tools-36.1-platform-36_r02
+      - name: Fetch build tools and public Android API
+        if: steps.sdk.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p sdk tmp-bt tmp-pf
+          curl -fsSL -o bt.zip https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+          unzip -q bt.zip -d tmp-bt
+          mv tmp-bt/* sdk/build-tools
+          curl -fsSL -o pf.zip https://dl.google.com/android/repository/platform-36_r02.zip
+          unzip -q pf.zip -d tmp-pf
+          cp "$(find tmp-pf -name android.jar | head -1)" sdk/android.jar
+      - name: Compile both JNI/ELF ABIs, ART entry and independent APK roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          bash -n tests/binder/build-modes.sh
+          chmod +x sdk/build-tools/aapt2 sdk/build-tools/zipalign
+          bash tests/binder/build-modes.sh --out "$PWD/dist-binder-sg" \
+            --ndk "$PWD/$NDK_DIR" --android-jar "$PWD/sdk/android.jar" \
+            --build-tools "$PWD/sdk/build-tools" --r8 "$PWD/r8.jar"
+          echo 'Build-only: packaged byte identity is provenance, no semantic runtime acceptance.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binder2-sg-modes
+          path: dist-binder-sg/
