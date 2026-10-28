@@ -2,7 +2,7 @@ name: web4-realm-platform-probe
 on:
   push:
     branches: ['wip/web4-childframes']
-    paths: ['.github/workflows/web4-realm-probe.yml']
+    paths: ['.github/workflows/web4-realm-probe.yml', 'tests/web4-realm-probe/**']
   workflow_dispatch:
 permissions:
   contents: read
