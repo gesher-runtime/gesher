@@ -15,7 +15,11 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  exec-trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/exec-full-preflight.yml@ca955debcca84d466a621a5dbcc0f66f9ad1fdb3
+
   artifact-preflight:
+    needs: [exec-trusted-source]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +27,6 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          python3 tools/native3-locks/current_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
@@ -745,9 +748,9 @@ jobs:
   # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
   # read back, given input and closed: tests/e2e/run-e2e.ps1.
   e2e:
-    needs: [package]
+    needs: [exec-trusted-source, package]
     # The package job uploads the installer before its own checks.
-    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.exec-trusted-source.result == 'success' && needs.package.result != 'skipped' }}
     strategy:
       fail-fast: false
       matrix:
