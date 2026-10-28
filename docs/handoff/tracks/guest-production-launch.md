@@ -2,7 +2,10 @@
 
 Worktree `C:/work/gesher-guest-production-launch`, branch
 `wip/guest-production-launch`, base `f1550540186b4ae3f17a5e501a886ec1c4d5d613`.
-Source-only pending corrected independent source peer and exact-source CI.
+Exact source `2496db0d64a527649d67f833955f7b85dc2bd15b` passed the sole
+integrator's corrected source and workflow/receipt peer before push. Component
+`40787855371`, attempt 1, is active; runtime remains unverified. The integrator
+owns the sole interval-120 watcher and actual terminal log/receipt audit.
 
 Integration explicitly assigned this bounded additive API and migrated fixture,
 without editing the independently active Binder branch. This is not production
@@ -92,3 +95,13 @@ keeps exact handles. The fixture fills reservations and proves rejection, makes
 C++ allocations fatal during actual failed-cleanup destruction, and simulates a
 busy retry owner to require explicit unknown evidence while retaining ownership.
 These are source-only controls pending compilation and actual CI.
+
+The narrow source-path push started only component40787855371, after an immediate
+palmoni5 identity check and gh-authenticated HTTPS transport; no duplicate dispatch
+or local native fixture occurred. Required runtime rows include bounded admission,
+allocation-free failed-cleanup handoff, busy unknown ownership, exact original
+resume/termination/wait errors and restored real stop/quarantine retry, omitted
+inheritable event, every original disposable denial/resource/IPC/cleanup row and
+strict producer/source/header/compiler/executable receipts on both Windows. A
+successful component would qualify only this shared API prerequisite, not actual
+SpawnOwned adoption or the remaining production boundary.
