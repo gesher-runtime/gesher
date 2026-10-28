@@ -24,6 +24,23 @@ void Remove(RegistryState* state, const WaitingRequest& request) {
     if (!Same(state->waits[i], request)) state->waits[kept++] = state->waits[i];
   state->wait_count = static_cast<uint32_t>(kept);
 }
+// A published request owns its uniquely named event until the call returns.
+// Only confirmed absence permits reclamation: access errors are not evidence
+// of expiration. An observer holding an event handle can delay reclamation.
+void PruneExpiredEvents(RegistryState* state) {
+  size_t kept = 0;
+  for (size_t i = 0; i < state->wait_count; ++i) {
+    wchar_t name[128]; Name(state->waits[i], name);
+    HANDLE event = OpenEventW(SYNCHRONIZE, FALSE, name);
+    if (event) {
+      CloseHandle(event);
+      state->waits[kept++] = state->waits[i];
+    } else if (GetLastError() != ERROR_FILE_NOT_FOUND) {
+      state->waits[kept++] = state->waits[i];
+    }
+  }
+  state->wait_count = static_cast<uint32_t>(kept);
+}
 struct Event {
   HANDLE value = nullptr;
   ~Event() { if (value) CloseHandle(value); }
@@ -74,6 +91,7 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
     if (error) break;
     Pruned pruned{};
     PruneDeadOwners(state, &pruned);  // unknown owners remain conflicts
+    PruneExpiredEvents(state);
     Remove(state, request);
     DWORD canceled = WaitForSingleObject(cancel, 0);
     bool acquired = false;
@@ -107,8 +125,8 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
   }
   if (registered) {
     // Cleanup stays within the original deadline, even for cancellation.
-    // If registry access fails, stale request is harmless metadata (no lock);
-    // thread death pruning removes it. Never extend the deadline to clean up.
+    // If registry access fails, a later waiter reclaims this metadata once
+    // the event closes. Never extend the deadline to clean up.
     RegistryState* state = nullptr;
     int cleanup = registry.Begin(&state, Remaining(deadline));
     if (!cleanup) { Remove(state, request); cleanup = registry.Commit(); registry.Unlock(); }
