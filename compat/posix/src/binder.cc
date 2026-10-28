@@ -29,6 +29,7 @@
 #include <linux/android/binder.h>
 
 #include "binder_internal.h"
+#include "binder_sg.h"
 #include "binder_wire.h"
 #include "internal.h"
 
@@ -66,6 +67,7 @@ bool WriteExact(HANDLE pipe, const void* buf, size_t n) {
 struct Message {
   std::vector<uint8_t> bytes = std::vector<uint8_t>(4);  // the length, filled in by Send
   void Write(const void* data, size_t n) {
+    if (n == 0) return;
     const uint8_t* b = static_cast<const uint8_t*>(data);
     bytes.insert(bytes.end(), b, b + n);
   }
@@ -154,7 +156,7 @@ struct BinderFile {
 
   // A block for a transaction the broker delivers: in the mapping when it
   // fits (as the kernel allocates it), else on the heap.
-  uint8_t* Allocate(size_t size, uint64_t id) {
+  uint8_t* Allocate(size_t size, uint64_t id, bool require_mapping = false) {
     size = (size + 7) & ~size_t{7};
     if (size == 0) size = 8;
     std::lock_guard<std::mutex> lock(mutex);
@@ -168,6 +170,9 @@ struct BinderFile {
       allocations[reinterpret_cast<uintptr_t>(p)] = {id, offset, size};
       return p;
     }
+    // New PTR payloads obey the actual receiver mapping capacity. Legacy
+    // plain transactions retain their existing heap fallback as open scope.
+    if (require_mapping) return nullptr;
     uint8_t* p = static_cast<uint8_t*>(malloc(size));
     if (p != nullptr) allocations[reinterpret_cast<uintptr_t>(p)] = {id, kMalloced, size};
     return p;
@@ -304,7 +309,8 @@ void CloseThreadPipe(BinderFile* file) {
 // new fd for the same open file in the receiver. Here the sender puts the
 // fd's Windows handle in the object (its 64-bit pad_binder, which shares the
 // fd's union), binderd duplicates it into the receiving process
-// (DuplicateHandle), and the receiver wraps the duplicate in a new fd. Only
+// (DuplicateHandle). That staging handle remains broker-owned; the receiver
+// duplicates it again and adopts only its distinct local copy. Only
 // fds backed by a Windows handle (files, memfds, pipes) travel; any other
 // goes as handle 0, which binderd refuses (BR_FAILED_REPLY).
 template <typename F>
@@ -330,13 +336,28 @@ void SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
   });
 }
 
-void ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
-  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
-    HANDLE h = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
-    int fd = _open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_BINARY);
-    if (fd < 0) CloseHandle(h);
+bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
+  bool ok = true;
+  ForEachFdObject(data, data_size, offsets, offsets_size, [&](binder_fd_object& obj) {
+    HANDLE staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(obj.pad_binder));
+    HANDLE owned = nullptr;
+    int fd = -1;
+    if (DuplicateHandle(GetCurrentProcess(), staging, GetCurrentProcess(), &owned,
+                        0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned), _O_RDWR | _O_BINARY);
+      if (fd < 0) CloseHandle(owned);
+    }
+    if (fd < 0) ok = false;
     obj.pad_binder = 0;
     obj.fd = static_cast<__u32>(fd);
+  });
+  return ok;
+}
+
+void CloseReceivedFds(uint8_t* data, size_t data_size, const void* offsets, size_t offsets_size) {
+  ForEachFdObject(data, data_size, offsets, offsets_size, [](binder_fd_object& obj) {
+    if (obj.fd != static_cast<__u32>(-1)) close(static_cast<int>(obj.fd));
+    obj.fd = static_cast<__u32>(-1);
   });
 }
 
@@ -356,6 +377,50 @@ bool IsTransactionCommand(uint32_t cmd) {
          cmd == BC_REPLY_SG;
 }
 
+// Equivalent to a guarded user copy: bad/unmapped/changing caller pointers
+// become transaction failures instead of faults in the shim or broker.
+bool CopyUser(void* destination, const void* source, size_t size) {
+  if (size == 0) return true;
+  SIZE_T copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), source, destination, size, &copied) && copied == size;
+}
+
+bool CopyToUser(void* destination, const void* source, size_t size) {
+  if (size == 0) return true;
+  // WriteProcessMemory can temporarily make read-only pages writable. Reject
+  // stable nonwritable output before using that API; this is not a guarantee
+  // against concurrent protection changes/unmapping or partial-copy races.
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(destination);
+  if (begin == 0 || size > UINTPTR_MAX - begin) return false;
+  const uintptr_t end = begin + size;
+  for (uintptr_t at = begin; at < end;) {
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<const void*>(at), &region, sizeof(region)) != sizeof(region) ||
+        region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0) return false;
+    const DWORD protection = region.Protect & 0xff;
+    if (protection != PAGE_READWRITE && protection != PAGE_WRITECOPY &&
+        protection != PAGE_EXECUTE_READWRITE && protection != PAGE_EXECUTE_WRITECOPY) return false;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
+    if (base > at || region.RegionSize > UINTPTR_MAX - base) return false;
+    const uintptr_t next = base + region.RegionSize;
+    if (next <= at) return false;
+    at = next;
+  }
+  SIZE_T copied = 0;
+  return WriteProcessMemory(GetCurrentProcess(), destination, source, size, &copied) && copied == size;
+}
+
+bool BufferResult(HANDLE pipe, uint32_t operation, uint64_t id, bool accepted = false) {
+  Message message;
+  message.Put<uint32_t>(operation);
+  message.Put(id);
+  if (operation == wire::kFinishBuffer) message.Put<uint32_t>(accepted ? 1 : 0);
+  std::vector<uint8_t> reply;
+  int32_t status = -EBADF;
+  return Send(pipe, message) && Receive(pipe, &reply) && reply.size() == sizeof(status) &&
+      (memcpy(&status, reply.data(), sizeof(status)), status == 0);
+}
+
 int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
   HANDLE pipe = ThreadPipe(file);
   if (pipe == INVALID_HANDLE_VALUE) return -1;
@@ -369,7 +434,15 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
 
   // The command stream, with the data each transaction points to.
   std::vector<size_t> starts;  // each command's offset in the write buffer
-  const uint8_t* wbase = reinterpret_cast<const uint8_t*>(bwr->write_buffer);
+  if (bwr->write_consumed > bwr->write_size || bwr->write_size > binder_sg::kMaxBytes ||
+      bwr->read_consumed > bwr->read_size || bwr->read_size > binder_sg::kMaxBytes) {
+    return errno = EINVAL, -1;
+  }
+  std::vector<uint8_t> command_bytes(static_cast<size_t>(bwr->write_size));
+  if (!CopyUser(command_bytes.data(), reinterpret_cast<const void*>(bwr->write_buffer), command_bytes.size())) {
+    return errno = EFAULT, -1;
+  }
+  const uint8_t* wbase = command_bytes.data();
   size_t wpos = bwr->write_consumed;
   while (wpos < bwr->write_size) {
     if (bwr->write_size - wpos < 4) return errno = EINVAL, -1;
@@ -379,22 +452,59 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
     size_t size = _IOC_SIZE(cmd);
     if (bwr->write_size - wpos - 4 < size) return errno = EINVAL, -1;
     const uint8_t* arg = wbase + wpos + 4;
+    if (!binder_sg::Range(m.bytes.size() - 4, 4 + size +
+        (IsTransactionCommand(cmd) ? sizeof(int32_t) : 0), binder_sg::kMaxBytes)) return errno = EINVAL, -1;
     m.Put(cmd);
     if (IsTransactionCommand(cmd)) {
       binder_transaction_data tr;
       memcpy(&tr, arg, sizeof(tr));
       const void* data = reinterpret_cast<const void*>(tr.data.ptr.buffer);
       const void* offsets = reinterpret_cast<const void*>(tr.data.ptr.offsets);
+      uint64_t extra_size = 0;
+      if (cmd == BC_TRANSACTION_SG || cmd == BC_REPLY_SG) {
+        memcpy(&extra_size, arg + sizeof(tr), sizeof(extra_size));
+      }
+      std::vector<uint8_t> snapshot;
+      std::vector<uint64_t> snapshot_offsets;
+      std::vector<uint8_t> extra;
+      int32_t copy_error = 0;
+      if (!binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
+        copy_error = EINVAL;
+      } else {
+        const uint64_t header_end = m.bytes.size() - 4 + size + sizeof(int32_t);
+        const uint64_t body_size = tr.data_size + tr.offsets_size + extra_size;
+        // Aggregate wire budget is checked before snapshots/extra allocations,
+        // including every prior command in this same ioctl message.
+        if (!binder_sg::Range(header_end, body_size, binder_sg::kMaxBytes)) {
+          copy_error = EINVAL;
+        } else {
+        snapshot.resize(static_cast<size_t>(tr.data_size));
+        snapshot_offsets.resize(static_cast<size_t>(tr.offsets_size / sizeof(uint64_t)));
+        if (!CopyUser(snapshot.data(), data, snapshot.size()) ||
+            !CopyUser(snapshot_offsets.data(), offsets, static_cast<size_t>(tr.offsets_size))) {
+          copy_error = EFAULT;
+        } else {
+          bool user_fault = false;
+          if (!binder_sg::Capture(&snapshot, snapshot_offsets, static_cast<size_t>(extra_size), &extra,
+              [&](void* to, const void* from, size_t bytes) {
+                if (CopyUser(to, from, bytes)) return true;
+                user_fault = true;
+                return false;
+              })) copy_error = user_fault ? EFAULT : EINVAL;
+        }
+        }
+      }
       tr.data.ptr.buffer = 0;
       tr.data.ptr.offsets = 0;
       m.Put(tr);
       if (size > sizeof(tr)) m.Write(arg + sizeof(tr), size - sizeof(tr));  // buffers_size
-      if (tr.data_size > 0) {
-        size_t at = m.bytes.size();
-        m.Write(data, tr.data_size);
-        SendFds(m.bytes.data() + at, tr.data_size, offsets, tr.offsets_size);
+      m.Put(copy_error);
+      if (copy_error == 0) {
+        SendFds(snapshot.data(), snapshot.size(), snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        m.Write(snapshot.data(), snapshot.size());
+        m.Write(snapshot_offsets.data(), snapshot_offsets.size() * sizeof(uint64_t));
+        m.Write(extra.data(), extra.size());
       }
-      if (tr.offsets_size > 0) m.Write(offsets, tr.offsets_size);
     } else if (cmd == BC_FREE_BUFFER) {
       binder_uintptr_t ptr;
       memcpy(&ptr, arg, sizeof(ptr));
@@ -404,6 +514,8 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
     }
     wpos += 4 + size;
   }
+
+  if (m.bytes.size() - 4 > binder_sg::kMaxBytes) return errno = EINVAL, -1;
 
   std::vector<uint8_t> reply;
   if (!Send(pipe, m) || !Receive(pipe, &reply)) return errno = EBADF, -1;
@@ -418,33 +530,88 @@ int WriteRead(const std::shared_ptr<BinderFile>& file, binder_write_read* bwr) {
   }
 
   // The return stream, each transaction's data copied into the mapping.
-  uint8_t* rbase = reinterpret_cast<uint8_t*>(bwr->read_buffer);
   size_t rpos = bwr->read_consumed;
+  auto publish = [&](const void* bytes, size_t length) {
+    if (!binder_sg::Range(rpos, length, bwr->read_size) ||
+        bwr->read_buffer > UINTPTR_MAX - rpos) return false;
+    return CopyToUser(reinterpret_cast<void*>(static_cast<uintptr_t>(bwr->read_buffer + rpos)), bytes, length);
+  };
   while (r.p < r.end) {
     uint32_t cmd;
-    if (!r.Get(&cmd)) return errno = EBADF, -1;
+    if (!r.Get(&cmd)) { CloseThreadPipe(file.get()); return errno = EBADF, -1; }
     size_t size = _IOC_SIZE(cmd);
-    if (rpos + 4 + size > bwr->read_size) return errno = EFAULT, -1;
-    memcpy(rbase + rpos, &cmd, 4);
+    if (!binder_sg::Range(rpos, 4 + size, bwr->read_size)) {
+      CloseThreadPipe(file.get());  // rolls back any not-yet-claimed delivery
+      return errno = EFAULT, -1;
+    }
+    std::vector<uint8_t> command(4 + size);
+    memcpy(command.data(), &cmd, 4);
     if (cmd == BR_TRANSACTION || cmd == BR_REPLY) {
       binder_transaction_data tr;
       uint64_t id;
-      if (!r.Get(&tr) || !r.Get(&id)) return errno = EBADF, -1;
+      if (!r.Get(&tr) || !r.Get(&id)) { CloseThreadPipe(file.get()); return errno = EBADF, -1; }
+      auto abandon = [&](uint8_t* block, bool claimed, int error) {
+        if (block != nullptr) {
+          if (claimed) CloseReceivedFds(block, static_cast<size_t>(tr.data_size),
+              block + ((tr.data_size + 7) & ~uint64_t{7}), static_cast<size_t>(tr.offsets_size));
+          file->Free(reinterpret_cast<uintptr_t>(block));
+        }
+        if (!BufferResult(pipe, wire::kFinishBuffer, id, false)) CloseThreadPipe(file.get());
+        bwr->read_consumed = rpos;
+        errno = error;
+        return -1;
+      };
+      uint64_t extra_size;
+      if (!r.Get(&extra_size) || !binder_sg::Dimensions(tr.data_size, tr.offsets_size, extra_size)) {
+        return abandon(nullptr, false, EBADF);
+      }
       size_t data_size = static_cast<size_t>(tr.data_size);
       size_t aligned = (data_size + 7) & ~size_t{7};
-      uint8_t* block = file->Allocate(aligned + tr.offsets_size, id);
-      if (block == nullptr) return errno = ENOMEM, -1;
-      if (!r.Read(block, data_size) || !r.Read(block + aligned, tr.offsets_size)) {
-        return errno = EBADF, -1;
+      const size_t offsets_size = static_cast<size_t>(tr.offsets_size);
+      const size_t extra_offset = aligned + offsets_size;
+      const uint64_t wire_bytes = tr.data_size + tr.offsets_size + extra_size;
+      if (wire_bytes > static_cast<uint64_t>(r.end - r.p)) return abandon(nullptr, false, EBADF);
+      std::vector<uint8_t> snapshot(data_size);
+      std::vector<uint64_t> snapshot_offsets(offsets_size / sizeof(uint64_t));
+      std::vector<uint8_t> extra(static_cast<size_t>(extra_size));
+      if (!r.Read(snapshot.data(), snapshot.size()) ||
+          !r.Read(snapshot_offsets.data(), offsets_size) || !r.Read(extra.data(), extra.size())) {
+        return abandon(nullptr, false, EBADF);
       }
-      ReceiveFds(block, data_size, block + aligned, tr.offsets_size);
+      binder_sg::Layout layout;
+      if (!binder_sg::WireLayout(snapshot, snapshot_offsets, extra.size(), &layout)) return abandon(nullptr, false, EBADF);
+      uint8_t* block = file->Allocate(extra_offset + extra.size(), id, !layout.pointers.empty());
+      if (block == nullptr) return abandon(nullptr, false, ENOMEM);
+      if (data_size != 0) memcpy(block, snapshot.data(), data_size);
+      if (offsets_size != 0) memcpy(block + aligned, snapshot_offsets.data(), offsets_size);
+      if (!extra.empty()) memcpy(block + extra_offset, extra.data(), extra.size());
+      binder_sg::Rebase(block, block + extra_offset, layout);
+      if (!BufferResult(pipe, wire::kClaimBuffer, id)) return abandon(block, false, EBADF);
+      if (!ReceiveFds(block, data_size, block + aligned, tr.offsets_size)) return abandon(block, true, EMFILE);
       tr.data.ptr.buffer = reinterpret_cast<binder_uintptr_t>(block);
       tr.data.ptr.offsets = reinterpret_cast<binder_uintptr_t>(block + aligned);
-      memcpy(rbase + rpos + 4, &tr, sizeof(tr));
-    } else if (!r.Read(rbase + rpos + 4, size)) {
+      memcpy(command.data() + 4, &tr, sizeof(tr));
+      if (!publish(command.data(), command.size())) return abandon(block, true, EFAULT);
+      rpos += command.size();
+      bwr->read_consumed = rpos;  // A published command remains caller-owned.
+      if (!BufferResult(pipe, wire::kFinishBuffer, id, true)) {
+        CloseThreadPipe(file.get());
+        return errno = EBADF, -1;
+      }
+      continue;
+    } else if (!r.Read(command.data() + 4, size)) {
+      CloseThreadPipe(file.get());
       return errno = EBADF, -1;
     }
+    if (!publish(command.data(), command.size())) {
+      // A preceding NOOP/reference command can fault before we parse the
+      // transaction later in this same broker reply. Closing the connection
+      // aborts that pending delivery and wakes its synchronous sender too.
+      CloseThreadPipe(file.get());
+      return errno = EFAULT, -1;
+    }
     rpos += 4 + size;
+    bwr->read_consumed = rpos;
   }
   bwr->read_consumed = rpos;
   return 0;
