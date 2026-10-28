@@ -33,7 +33,7 @@ jobs:
               'ec3d58a85eb398814fdeba53dd75d6834458e569..HEAD'], text=True).splitlines())
           assert changed and changed <= allowed, ('Unreviewed isolated delta', changed - allowed)
           pins = {'CMakeLists.txt': '0a9ccffa649b555240a7051f1894c55bf508331a',
-                  'tests/native3-locks/cloexec_window_probe.cc': 'c2f830f3345c0e515e4635aa8de101864ddd61d8',
+                  'tests/native3-locks/cloexec_window_probe.cc': '0a958eabd183f667a62d4e094235e139465766ec',
                   'tools/native3-locks/artifact/download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
                   'tools/native3-locks/artifact/assemble-artifacts.py': '8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2',
                   'tools/native3-locks/artifact/test-verified-artifact.py': 'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}

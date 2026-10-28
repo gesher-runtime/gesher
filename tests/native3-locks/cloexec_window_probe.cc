@@ -82,9 +82,56 @@ bool SameFileBytes(HANDLE handle, const State& expected) {
       ReadFile(handle, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) &&
       read == bytes.size() && bytes == expected.nonce;
 }
+
+// Diagnostics only: PID-list entries are not an identity or cleanup authority.
+// Open only for query/synchronize, then record the actual handle's birth/image,
+// job membership and zero-time wait. Never signal a process found by PID.
+bool ProcessEvidence(const char* phase, const char* role, HANDLE process, HANDLE job, int expected_member = -1) {
+  FILETIME birth{}, end{}, kernel{}, user{};
+  wchar_t image[32768]{}; DWORD length = 32768, code = 0;
+  BOOL member = FALSE;
+  if (!GetProcessTimes(process, &birth, &end, &kernel, &user) ||
+      !QueryFullProcessImageNameW(process, 0, image, &length) ||
+      !GetExitCodeProcess(process, &code) || !IsProcessInJob(process, job, &member))
+    return ApiFailure("ProcessEvidence");
+  DWORD wait = WaitForSingleObject(process, 0);
+  std::printf("CLOEXEC_PROCESS phase=%s role=%s pid=%lu birth=%lu:%lu member=%d wait=%lu exit=%lu image=%ls\n",
+      phase, role, GetProcessId(process), birth.dwHighDateTime, birth.dwLowDateTime,
+      member, wait, code, image);
+  return (wait == WAIT_OBJECT_0 || wait == WAIT_TIMEOUT) &&
+      (expected_member < 0 || (member != FALSE) == (expected_member != 0));
+}
+bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid) {
+  // Fixed diagnostic capacity. Overflow/query/open errors remain failures, and
+  // no observation loop, extra wait or deadline is introduced.
+  alignas(JOBOBJECT_BASIC_PROCESS_ID_LIST) std::array<unsigned char,
+      sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 7 * sizeof(ULONG_PTR)> storage{};
+  auto* ids = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
+  JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) ||
+      !QueryInformationJobObject(job, JobObjectBasicProcessIdList, ids, static_cast<DWORD>(storage.size()), nullptr))
+    return ApiFailure("JobEvidence");
+  std::printf("CLOEXEC_JOB phase=%s parent-pid=%lu child-pid=%lu total=%lu active=%lu terminated=%lu assigned=%lu listed=%lu\n",
+      phase, GetCurrentProcessId(), child_pid, accounting.TotalProcesses, accounting.ActiveProcesses,
+      accounting.TotalTerminatedProcesses, ids->NumberOfAssignedProcesses, ids->NumberOfProcessIdsInList);
+  if (ids->NumberOfAssignedProcesses != ids->NumberOfProcessIdsInList || ids->NumberOfProcessIdsInList > 8) return false;
+  // Actual positive/negative membership controls, not copied accounting fields.
+  bool complete = ProcessEvidence(phase, "fixture-parent", GetCurrentProcess(), job, false);
+  for (DWORD i = 0; i < ids->NumberOfProcessIdsInList; ++i) {
+    DWORD pid = static_cast<DWORD>(ids->ProcessIdList[i]);
+    Handle member(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
+    if (!member.value) { ApiFailure("OpenJobEvidenceMember"); complete = false; continue; }
+    bool recorded = ProcessEvidence(phase, pid == child_pid ? "created-child" : "unclassified-member", member.value, job, true);
+    complete = member.Close() && recorded && complete;
+  }
+  return complete;
+}
 int Child(int argc, char** argv) {
   if (argc != 8) return 92;
-  if (_setmode(_fileno(stdout), _O_BINARY) < 0) return 94;
+  if (_setmode(_fileno(stdout), _O_BINARY) < 0) {
+    std::fprintf(stderr, "CLOEXEC_CHILD_FAILURE phase=stdout-binary errno=%d pid=%lu\n", errno, GetCurrentProcessId());
+    return 94;
+  }
   uint64_t candidate = 0, positive = 0, negative = 0, volume = 0;
   State expected;
   if (!Number(argv[2], &candidate) || !Number(argv[3], &positive) || !Number(argv[4], &negative) ||
@@ -148,14 +195,26 @@ bool ObserveChild(HANDLE candidate) {
   DeleteProcThreadAttributeList(attributes);
   if (!created) { SetLastError(create_error); return ApiFailure("CreateOwnedSuspendedChild"); }
   Handle child(process.hProcess), thread(process.hThread);
+  FILETIME thread_birth{}, thread_end{}, thread_kernel{}, thread_user{};
+  bool thread_known = GetThreadTimes(thread.value, &thread_birth, &thread_end, &thread_kernel, &thread_user) &&
+      GetThreadId(thread.value) == process.dwThreadId && GetProcessIdOfThread(thread.value) == process.dwProcessId;
+  std::printf("CLOEXEC_CREATED parent-pid=%lu child-pid=%lu child-tid=%lu process-handle=%p thread-handle=%p thread-birth-known=%d thread-birth=%lu:%lu creation-flags=suspended,no-window,extended-startup broad-inherit=true\n",
+      GetCurrentProcessId(), process.dwProcessId, process.dwThreadId, child.value, thread.value,
+      thread_known, thread_birth.dwHighDateTime, thread_birth.dwLowDateTime);
+  bool evidence = ProcessEvidence("suspended", "created-child", child.value, job.value, true);
+  evidence = JobEvidence("suspended", job.value, process.dwProcessId) && evidence && thread_known;
   BOOL in_job = FALSE;
   bool owned = IsProcessInJob(child.value, job.value, &in_job) && in_job;
   bool closed_writer = writer.Close();
-  bool resumed = owned && closed_writer && ResumeThread(thread.value) == 1;
+  DWORD previous_suspend = owned && closed_writer && evidence ? ResumeThread(thread.value) : static_cast<DWORD>(-1);
+  bool resumed = previous_suspend == 1;
   ULONGLONG now = GetTickCount64();
   DWORD remaining = now < state->deadline ? static_cast<DWORD>(state->deadline - now) : 0;
   if (remaining > 5000) remaining = 5000;
-  bool exited = resumed && remaining && WaitForSingleObject(child.value, remaining) == WAIT_OBJECT_0;
+  DWORD wait_result = resumed && remaining ? WaitForSingleObject(child.value, remaining) : WAIT_FAILED;
+  bool exited = wait_result == WAIT_OBJECT_0;
+  std::printf("CLOEXEC_RESUME child-pid=%lu previous-suspend=%lu wait=%lu wait-budget-ms=%lu\n",
+      process.dwProcessId, previous_suspend, wait_result, remaining);
   if (!exited) {
     // Cleanup never converts a failed launch, resume or semantic deadline into
     // acceptance. Exact handles, not a PID lookup or global runner process kill.
@@ -170,11 +229,12 @@ bool ObserveChild(HANDLE candidate) {
   if (!GetExitCodeProcess(child.value, &code) ||
       !QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr))
     return ApiFailure("CompletedJobAudit");
-  if (accounting.TotalProcesses != 1 || accounting.ActiveProcesses != 0) {
-    std::fprintf(stderr, "CLOEXEC_CHILD_FAILURE processes=%lu active=%lu expected-one-exited-child=true\n",
-        accounting.TotalProcesses, accounting.ActiveProcesses);
-    return false;
-  }
+  // Retain the exact owned child's code and pipe contents even when the job
+  // contains another process. These records previously vanished at the audit.
+  std::printf("CLOEXEC_WAIT child-pid=%lu signaled=true actual-exit=%lu owned=%d resumed=%d\n",
+      process.dwProcessId, code, owned, resumed);
+  evidence = ProcessEvidence("child-signaled", "created-child", child.value, job.value) && evidence;
+  evidence = JobEvidence("child-signaled", job.value, process.dwProcessId) && evidence;
   std::string output;
   for (;;) {
     DWORD available = 0;
@@ -182,7 +242,7 @@ bool ObserveChild(HANDLE candidate) {
       if (GetLastError() == ERROR_BROKEN_PIPE) break;
       return ApiFailure("PeekChildOutput");
     }
-    if (!available) break;  // Exact child has exited; no other owned writer exists.
+    if (!available) break;  // Diagnostic drain is nonblocking even with an extra member.
     char bytes[512]; DWORD read = 0;
     if (available > sizeof(bytes)) available = sizeof(bytes);
     if (!ReadFile(reader.value, bytes, available, &read, nullptr) || !read) return ApiFailure("ReadChildOutput");
@@ -190,12 +250,20 @@ bool ObserveChild(HANDLE candidate) {
     if (output.size() > 2048 || GetTickCount64() >= state->deadline) return false;
   }
   std::fputs(output.c_str(), stdout);
+  std::printf("CLOEXEC_CHILD_OUTPUT bytes=%zu actual-exit=%lu\n", output.size(), code);
+  if (accounting.TotalProcesses != 1 || accounting.ActiveProcesses != 0) {
+    std::fprintf(stderr, "CLOEXEC_CHILD_FAILURE processes=%lu active=%lu expected-one-exited-child=true\n",
+        accounting.TotalProcesses, accounting.ActiveProcesses);
+    bool job_closed = job.Close();
+    std::fprintf(stderr, "CLOEXEC_JOB_CLEANUP kill-on-close-handle-closed=%d extra-member-reap=unproven verdict=failure\n", job_closed);
+    return false;
+  }
   const std::string prefix = "CLOEXEC_CHILD intended-inherited=1 intended-noninherited-excluded=1 candidate-visible=";
   const std::string expected = prefix + (code == 23 ? "1" : "0") + " exact-file-id-and-nonce=true\n";
   bool resources_closed = thread.Close(); resources_closed = child.Close() && resources_closed;
   resources_closed = reader.Close() && resources_closed;
   resources_closed = input.Close() && resources_closed; resources_closed = job.Close() && resources_closed;
-  if ((code != 0 && code != 23) || output != expected || !resources_closed || GetTickCount64() >= state->deadline) return false;
+  if ((code != 0 && code != 23) || output != expected || !evidence || !resources_closed || GetTickCount64() >= state->deadline) return false;
   if ((code == 23) != ((state->before_flags & HANDLE_FLAG_INHERIT) != 0)) {
     std::fprintf(stderr, "CLOEXEC_CHILD_FAILURE native-flag-and-accessibility-disagree=true\n");
     return false;
@@ -209,6 +277,10 @@ int AtFinalFlags(int, void* native, bool inherit) {
   HANDLE candidate = static_cast<HANDLE>(native);
   if (inherit) return EIO;
   if (!GetHandleInformation(candidate, &state->before_flags)) { ApiFailure("GetCandidateFlags"); return EIO; }
+  std::printf("CLOEXEC_IDENTITY candidate=%p positive=%p negative=%p flags=%lu volume=%llu file-id=%s nonce=%s\n",
+      candidate, state->positive, state->negative, state->before_flags,
+      static_cast<unsigned long long>(state->file.VolumeSerialNumber),
+      Hex(state->file.FileId.Identifier, 16).c_str(), Hex(state->nonce.data(), state->nonce.size()).c_str());
   bool observed = ObserveChild(candidate);
   bool cleared = SetHandleInformation(candidate, HANDLE_FLAG_INHERIT, 0) != FALSE;
   if (!cleared) ApiFailure("ClearFinalInheritFlag");

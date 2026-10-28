@@ -1179,3 +1179,62 @@ reds remain red. Immutable156/ec3 remains the sole accepted bounded supplier;
 the isolated raw-inheritance contract is still unobserved and open. Local
 cleanup recovery data and all qualified production/Exec/controller bytes are
 unchanged; no local build or artifact download occurred.
+
+### Attempt2 invalid child/job control: source-only evidence checkpoint
+
+The coordinator reconciled the recognized external Azure busy failure and
+authorized exactly one whole-attempt retry. Actual40730886908/attempt2 at
+4457279ba0904cc450ba773cb15329ece2deb108 completed FAILURE. Preflight and fresh
+compile/provenance/upload passed; successful producer123004667030 supplied
+artifact12839443140, ZIP SHA256
+ca379e979537c474c716c54e4bcb1fc3b8815390049c31360321714f89fecca7.
+Both Windows verified that exact producer/source/run/attempt/artifact before
+execution. Saved native3-40730886908-attempt2.log, -jobs.json and -artifacts.json
+in ci-review are the evidence; no local artifact download was performed.
+
+Both hosts actually return95 with observed=0, transient-native-inherit=1,
+candidate-leaked=0, final-cloexec=0, cleanup=1. Both report TotalProcesses=2,
+ActiveProcesses=1 at the strict expected-one-exited-child assertion. This
+assertion is reached only after the exact created process handle signaled and
+GetExitCodeProcess/QueryInformationJobObject succeeded. The old source returns
+before printing that exit code or draining child output. Consequently neither
+the second process's identity nor the child's semantic result is established.
+This is invalid fixture control, not evidence for or against atomic CLOEXEC.
+The file/reservation cleanup=1 does not establish that additional process's
+normal exit/reap: the old failure branch merely destructs the kill-on-close
+job handle. New failure diagnostics explicitly log its CloseHandle result and
+retain extra-member-reap=unproven; no successful process cleanup is invented.
+The zero final-cloexec field also follows DuplicateAtLeast rollback after the
+observer returns EIO; it is not proof that final flag clearing failed.
+
+The new isolated source preserves evidence before the same strict assertion:
+actual created PID/TID/handles/thread birth, process birth/image/membership and
+zero-time signaled status, job accounting/PID list while suspended and after
+the child signals, exact ResumeThread previous count/wait result, actual child
+exit/output and candidate/control handles plus file ID/nonce/native flags.
+The fixture parent must be outside its new job and the created child inside it;
+these actual membership controls complement the inherited/noninherited file
+controls. Additional job PIDs are opened only for query/synchronize, with
+birth/image/membership recorded; they never authorize PID-based termination.
+Incomplete/overflow/denied observations fail and cannot qualify a result.
+
+Concrete next hypothesis: an additional process is associated with the owned
+job either during CreateProcess before ResumeThread, or during child startup/
+exit. The two phase snapshots distinguish those cases and identify any live
+additional member. A console helper or a descendant is only a possibility,
+not an established cause. A stdout-mode failure now records errno/PID rather
+than silently returning94. No launch flags, accepted process count, child code,
+raw broad inheritance, exact output/control requirements, leak verdict or time
+bounds are relaxed. All extra diagnostic waits are zero-time; no polling,
+sleep, extended deadline, production change or generic handle bypass is added.
+
+This checkpoint is instrumentation, not a behavioral fix. Local checks are
+source/diff inspection, workflow YAML/embedded Python/PowerShell parsing and
+pin/delta checks only. No native/JVM/C# build or fixture execution, push or CI
+dispatch is authorized in this bounded task. Fresh independent source/lifetime/
+automation peer and a separately authorized fresh CI producer/two-Windows run
+must establish actual process roles, child semantic exit and complete cleanup
+before choosing a causal fix. Keep the strict one-child assertion until that
+evidence supports a reviewed change; no unchanged retry remains authorized.
+Immutable156/407149 and the current canonical integration/full candidate remain
+separate and unchanged. Atomic CLOEXEC/spawn remains open.
