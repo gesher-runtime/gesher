@@ -32,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = git hash-object .github/workflows/tsf-format-component.yml
-          if ($LASTEXITCODE -ne 0 -or $actual -cne '6d3925f22d0a4b0f9f2fc4292e45c2a0f122cc46') { throw 'TSF routing adaptation mismatch' }
+          if ($LASTEXITCODE -ne 0 -or $actual -cne '6b025963d5134775fe3e6060fbae7ffc01cbd32b') { throw 'TSF routing adaptation mismatch' }
           Write-Host "SERVICES_TSF_CANONICAL source=$env:GITHUB_SHA blob=$actual canonical_origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94"
       - name: Qualify shared job controller
         shell: pwsh

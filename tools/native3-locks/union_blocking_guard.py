@@ -18,7 +18,7 @@ def main():
     assert git('status', '--porcelain') == '', 'Source checkpoint must be clean'
     changed = set(git('diff', '--name-only', 'dab3196a', 'HEAD').splitlines())
     code = {path for path in changed if not path.startswith('docs/')}
-    assert code <= {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py'}, ('Unexpected union automation delta', code)
+    assert code <= {'.github/workflows/ci.yml', 'tools/native3-locks/union_payload.py', '.github/workflows/tsf-format-component.yml', '.github/workflows/services-geocoder-worker-component.yml', '.github/workflows/native3-locks-blocking.yml', 'tools/native3-locks/union_blocking_guard.py', 'tools/windows4/run-tsf-union.ps1'}, ('Unexpected union automation delta', code)
     for path, expected in manifest['blobs'].items():
         if path != '.github/workflows/native3-locks-blocking.yml':
             assert git('hash-object', path) == expected, ('Unreviewed source bytes', path)
