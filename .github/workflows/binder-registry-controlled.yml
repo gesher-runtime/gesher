@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: binder-registry-controlled-${{ github.ref }}
   cancel-in-progress: false
@@ -26,7 +27,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          ninja -C out binder_launch_registry_fixture
+          ninja -C out -t commands binder_launch_registry_fixture
+          ninja -C out -v binder_launch_registry_fixture
+          grep -E "^CMAKE_CXX_COMPILER:[^=]+=" out/CMakeCache.txt
+          "$(sed -n 's/^CMAKE_CXX_COMPILER:[^=]*=//p' out/CMakeCache.txt)" --version
           mkdir registry-artifact
           cp out/binder_launch_registry_fixture.exe registry-artifact/
           printf '%s\n' "$GITHUB_SHA" > registry-artifact/source.sha
@@ -47,10 +51,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: binder-registry-${{ github.sha }}
-          path: registry-artifact
+      - name: Verify current-run producer and archive receipt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/artifact_receipt.py --name "binder-registry-${{ github.sha }}" --producer build --destination registry-artifact
+          if ($LASTEXITCODE -ne 0) { throw "artifact receipt failed" }
+          $names = @(Get-ChildItem registry-artifact -Recurse -File | ForEach-Object { $_.FullName.Substring((Resolve-Path registry-artifact).Path.Length + 1).Replace("\", "/") } | Sort-Object)
+          if (($names -join ",") -cne "binder_launch_registry_fixture.exe,executable.sha256,source.sha") { throw "unexpected artifact members: $names" }
       - name: Verify source and executable identity, run bounded real-process controls
         shell: pwsh
         run: |
@@ -61,15 +70,17 @@ jobs:
           $exe = (Resolve-Path registry-artifact/binder_launch_registry_fixture.exe).Path
           if ((Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw 'executable digest mismatch' }
           Write-Host "REGISTRY_SOURCE $env:GITHUB_SHA EXE_SHA256 $expected"
-          $stdout = Join-Path $env:RUNNER_TEMP 'registry.out'
-          $stderr = Join-Path $env:RUNNER_TEMP 'registry.err'
-          $p = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          if (-not $p.WaitForExit(60000)) {
-            & taskkill.exe /PID $p.Id /T /F
-            throw 'registry fixture exceeded 60 second watchdog'
-          }
-          Get-Content $stdout
-          Get-Content $stderr
-          if ($p.ExitCode -ne 0) { throw "registry fixture exited $($p.ExitCode)" }
-          if (-not (Select-String -Quiet -SimpleMatch 'PASS registry real-child, failed-wait retention, revoke and authority death' $stdout)) { throw 'missing fixture success marker' }
+          . "$pwd/tests/windows/helpers/CloseProcessReaders.ps1"
+          $tokens = $null; $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile("$pwd/tests/windows/tracks/50-services.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw $errors[0] }
+          $definition = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | Where-Object Name -eq 'RunTimed')
+          if ($definition.Count -ne 1) { throw 'missing qualified RunTimed' }
+          . ([scriptblock]::Create($definition[0].Extent.Text))
+          $output = RunTimed $exe @() 60
+          $code = $LASTEXITCODE
+          Write-Host $output
+          if ($code -ne 0) { throw "registry fixture failed or timed out: $code" }
+          if ($output -notmatch 'PASS registry real-child, failed-wait retention, revoke and authority death') { throw 'missing fixture success marker' }
           Write-Host 'Registry fixture only; no legacy bootstrap or Binder runtime qualification.'
+

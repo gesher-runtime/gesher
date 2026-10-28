@@ -66,6 +66,15 @@ int main(int argc, char**) {
   Check(CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
         CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
         &startup.StartupInfo, &pi), "actual suspended child");
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+        &limits, sizeof(limits)) || !AssignProcessToJobObject(job, pi.hProcess)) {
+    TerminateProcess(pi.hProcess, 137);
+    WaitForSingleObject(pi.hProcess, 5000);
+    throw std::runtime_error("owned child job assignment");
+  }
   DeleteProcThreadAttributeList(attributes);
   CloseHandle(child_input); CloseHandle(child_output);
   FILETIME created{}, a{}, b{}, c{};
@@ -137,6 +146,7 @@ int main(int argc, char**) {
         "terminated instance rejected");
   registry.AuthorityDied();
   Check(!registry.Live(fresh), "authority death revokes all leases");
+  CloseHandle(job);
   puts("PASS registry real-child, failed-wait retention, revoke and authority death");
   return 0;
 }
