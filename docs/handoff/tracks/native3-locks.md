@@ -572,3 +572,49 @@ alias. Do not claim universal ZIP alias validation from this component or
 silently replace the pinned helper blobs without a new source/peer record.
 All prior failed runs, partial observations and mandatory open runtime/full
 requirements remain preserved above. No inventory checkbox changed.
+
+### Actual f6b1fbfa component audit: both resource suites pass; Windows2025 WCT remains red
+
+Run40667374462 is terminal FAILURE, required watch exit1. Actual metadata
+and all four plain logs plus an independent parsed audit JSON are retained
+under C:\work\gesher-ci-review\native3-commands-40667374462-*.
+Preflight122745173486 succeeded with all three canonical214 helper blobs
+and nine actual negative controls. Producer122745251955 succeeded with actual
+Linux161 rows/mismatches0 and fresh consumers/broker/import gates.
+Both Windows verified actual raw artifact12805869341 ZIPsha256
+ce7c9f179f4f50998636eb40040162c4dacc1abfae787986071205f27478015c
+before extraction, then source/run/attempt/seven output hashes. Actual worker
+SHA256713d79cdc46204bf1c6dcfd42f21af0812508152786db07a07721b52e60d75ff
+and Linux reference SHA2563080bbfab5e57a197194217e8900527c6bef527fa30da39f2366d1b9e58ad0f1
+were logged identically on both hosts. No artifact was downloaded locally.
+
+Windows2022 job122745893505 succeeded: all161 actual rows match Linux and
+four actual WCT chains have count3, blocked closer->owned critical section->
+running owner, with completed-before-unlock0. Windows2025 job122745893366
+failed the original strict command assertion after135 matching prefix rows.
+Its final WCT query after341 samples succeeded/error0 but returned count1,
+only type8 Thread/status3 Blocked for closer7404; owner3628 and actual FILE/
+fd/HANDLE were recorded, completed-before-unlock0. Independent close, unlock
+and closer completion returned0. The provider did not expose a critical
+section/owner. These facts neither prove the required chain nor establish
+a production close bug or its PC/stack. Actual closer stack/PC/CRT module
+version is the meaningful next diagnostic; unchanged reruns or a weakened
+wait-chain predicate are not authorized by this result.
+
+Both hosts nevertheless completed the independently attempted actual13-mode
+duplicate suite with0 failures. Exact assertion counts in mode order
+regular/device/event/socket/binder/retained-nul/quarantine-regular/device/
+event/socket/binder/raw-race/capacity are
+23/17/17/21/17/15/16/16/17/17/17/9/8197 (8399 each host).
+Both require real FD reuse/resource checks/quarantine and actual8192-slot
+EMFILE/capacity cleanup. Each completed1000 duplicate operations/errors0;
+actual simultaneous raw publications were2574 (2022) and3550 (2025).
+Both actual isolated brokers recorded exactly two opens matching the two
+known Binder fixture PIDs, thirteen normal client exits0, intentional checked
+broker termination/exit211 and fourteen job children reaped. Required case
+IDs and actual control completion lines were independently parsed from plain
+logs; this is bounded resource-control evidence, not real OS denial or all
+fcntl/spawn acceptance. The overall component remains UNQUALIFIED because
+Windows2025's required actual chain is missing; no inventory gap is closed.
+All inherited-OFD/atomic-spawn/blocking/signal/ABI/ART/copy-race/full/package/
+e2e requirements and the214 helper's known reserved-alias limit remain open.
