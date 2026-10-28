@@ -383,3 +383,32 @@ permission/close denial. Same-source Linux/Windows command rows are compared
 exactly using genuine independent processes. Controller bounds are60s/mode,
 10s/command,5s owned cleanup,180s Windows suite/process-tree bound. Every
 mandatory gate and copy-limit caveat listed above remains open.
+
+### Independent peer complete; controlled runtime gate prepared
+
+Sole integrator completed the final selected pointer/layout/lifetime review
+at exact7b61deab, independently matching14 Git blobs and SHA256. No new
+definite blocker was found in the bounded source paths. Review and hashes:
+C:\work\gesher-ci-review\native3-final-pointer-lifetime-peer-7b61deab-2026-10-28.md
+and companion -hashes.json. This satisfies the ADR0080 source-peer gate only.
+All source/runtime limitations above remain explicit.
+
+A subsequent bounded Python/YAML delta peer matched controller blob
+5c7a976217303dc80a782df9e3b9cb1e96912050 and workflow blob
+1f749b1186c2818cf1b0d83639759ad5d2fa5e6c. The controller now requires unique
+actual PASS labels for mandatory mode-specific case IDs, including actual
+FD reuse, quarantine/live virtual resources, genuine8192-slot EMFILE and
+cleanup; positive assertion counts alone cannot qualify a missing case.
+Naturally reused versus explicitly staged reuse both exercise the actual
+same target fd, and the preserved real sentinel read must pass. The raw
+publisher still requires1000 duplicates, positive publications and zero
+errors. The Windows180s external deadline does not reset for each60s mode.
+
+Only the command workflow's own branch/file push trigger is re-enabled for
+this controlled component; it builds fresh Linux and Windows executables,
+executes the actual Linux reference, pins the new exact source/run/attempt
+and five output hashes, and requires actual execution on both Windows.
+No compile-only artifact is reused as runtime proof. The native C/C++ files
+remain identical to reviewed/compiled7b61deab. Component results must still
+be audited from actual final plain logs before any bounded qualification.
+No blocker/source requirement is waived and no inventory gap is closed.
