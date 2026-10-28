@@ -182,11 +182,39 @@ function Assert-ActorCompletion($Child, [string]$Mode, [string]$Abi, [string]$Sc
     Assert-Mode (-not $stillRunning) "$Mode/$Abi/$Scenario $Role actual actor PID exited"
     $Child.Validated = $true
 }
+function Observe-OutputPage([string]$Prefix, $Server, [string]$Mode, [string]$Abi, [string]$Scenario) {
+    if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native/C# observation is CI-only' }
+    if (-not ('BinderOutputPageObserver' -as [type])) {
+        Write-Host "ACTUAL_BINDER_OUTPUT_OBSERVER source=$Source sha256=$((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'OutputPageObserver.cs') -Algorithm SHA256).Hash)"
+        Add-Type -Path (Join-Path $PSScriptRoot 'OutputPageObserver.cs')
+    }
+    Wait-ModeFile "$Prefix.output-ready" $Server
+    $fields = [IO.File]::ReadAllText("$Prefix.output-page").Trim().Split(' ')
+    if ($fields.Count -ne 4) { throw 'Malformed actual page description' }
+    $actor = [uint32]::Parse($fields[0]); $address = [uint64]::Parse($fields[1])
+    $size = [int]::Parse($fields[2]); $protection = [uint32]::Parse($fields[3])
+    $expected = if ($Scenario -eq 'readonly') { 2 } else { 4 }
+    if ($protection -ne $expected) { throw 'Wrong actual page scenario' }
+    $Server.OutputActorPid = $actor
+    $observer = [BinderOutputPageObserver]::new($actor)
+    try {
+        $before = $observer.Inspect($address, $size, $protection, $true)
+        Write-Host "ACTUAL_BINDER_OUTPUT_PAGE stage=before mode=$Mode abi=$Abi scenario=$Scenario pid=$actor address=$address bytes=$size protection=$protection sha256=$before"
+        [IO.File]::WriteAllText("$Prefix.output-inspected", 'observed')
+        Wait-ModeFile "$Prefix.output-complete" $Server
+        $after = $observer.Inspect($address, $size, $protection, ($Scenario -eq 'readonly'))
+        Assert-Mode $(if ($Scenario -eq 'readonly') { $after -ceq $before } else { $after -cne $before }) `
+            "$Mode/$Abi/$Scenario actual whole-page bytes and unchanged protection observed independently"
+        Write-Host "ACTUAL_BINDER_OUTPUT_PAGE stage=after mode=$Mode abi=$Abi scenario=$Scenario pid=$actor address=$address bytes=$size protection=$protection sha256=$after"
+        [IO.File]::WriteAllText("$Prefix.output-observed", 'observed')
+    } finally { $observer.Dispose() }
+}
+
 try {
     foreach ($mode in $Modes) {
         $abis = if ($mode -eq 'host') { @('host') } else { @('x86_64','arm64-v8a') }
         foreach ($abi in $abis) {
-            foreach ($scenario in 'normal','malformed','oneway','smallmap','badread','prefixfault','adoptfail') {
+            foreach ($scenario in 'normal','malformed','oneway','smallmap','badread','prefixfault','adoptfail','readwrite','readonly') {
                 $caseRoot = Join-Path $runRoot "$mode-$abi-$scenario"
                 [void][IO.Directory]::CreateDirectory($caseRoot)
                 [void][IO.Directory]::CreateDirectory("$caseRoot/data")
@@ -217,9 +245,15 @@ try {
                         Assert-Mode $client.Validated "$mode/$abi/$scenario actual sender normal exit0 verified before receiver delivery"
                     }
                     [IO.File]::WriteAllText("$prefix.release", 'deliver')
+                    if ($scenario -in 'readwrite','readonly') {
+                        Observe-OutputPage $prefix $server $mode $abi $scenario
+                    }
                     Stop-Mode $client
                     Stop-Mode $server
                     Assert-ActorCompletion $server $mode $abi $scenario 'server'
+                    if ($scenario -in 'readwrite','readonly') {
+                        Assert-Mode ($server.OutputActorPid -eq $server.ActorPid) "$mode/$abi/$scenario observer actual PID matches completed actor PID"
+                    }
                     Assert-ActorCompletion $client $mode $abi $scenario 'client'
                     Assert-Mode ($server.ActorPid -gt 0 -and $client.ActorPid -gt 0 -and
                         $server.ActorPid -ne $client.ActorPid -and $server.ActorPid -ne $broker.Pid -and $client.ActorPid -ne $broker.Pid) `
