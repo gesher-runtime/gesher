@@ -67,7 +67,10 @@ Source candidate `1e90373f2f7f3e785454d823bc053ade83163ccf` adds WRITE_DAC
 only on the owned host handle and captures separate raw disconnect result,
 SetSecurityInfo returned Win32 status, and descriptor assertion phase/result.
 Guest access, ACLs, mandatory label and exact error-5 gate are unchanged. Source
-peer and fresh CI are pending; no local compilation or fixture was performed.
+peer passed before push. Fresh run `40785726716`, attempt 1, exact
+`d549283d32aec04b0fed0ec56bfebc966f1e2120` is pending actual runtime and
+receipt audit. The sole integrator owns its only watcher. No local compilation
+or fixture was performed.
 Previous same-ref runs were terminal before each account-gated gh-credential
 HTTPS push. No duplicate dispatch was used.
 Watch uses `gh run watch --exit-status --interval 120`. No unchanged red retry
