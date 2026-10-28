@@ -1238,3 +1238,71 @@ before choosing a causal fix. Keep the strict one-child assertion until that
 evidence supports a reviewed change; no unchanged retry remains authorized.
 Immutable156/407149 and the current canonical integration/full candidate remain
 separate and unchanged. Atomic CLOEXEC/spawn remains open.
+
+### Changed diagnostic40745358560: lifetime history and current snapshots diverge
+
+Actual40745358560/attempt1/source dce639018dc1ff122ce7501923061cd19f9161e8
+is red: both Windows fixtures exit95. Producer/upload/strict provenance passed;
+artifact12840903093 ZIP SHA256
+e0214439cb88a0166e8f782cc8bd5aa3b1a871a93d83b101e88e0cc5b69f8acd
+is diagnostic evidence only. Completed plain logs were saved (without artifact
+download) to ci-review/native3-cloexec-40745358560-attempt1-plain.log.
+
+Both hosts have suspended total1/active1/assigned1/listed1, with the parent
+outside the job and the created child inside. ResumeThread reports previous
+count1; the exact created handle signals with exit23. The first accounting
+query after that wait reports total2/active1 (the failure assertion's stored
+snapshot). The later JobEvidence query reports total2/active0/assigned0/listed0.
+Those sequential observations are not contradictory or an atomic history.
+They establish that the lifetime total changed after the suspended snapshot;
+they do not identify a second process, its creation time or executable. Neither
+retaining the exact child handle nor a later active0 explains away total2.
+
+Raw child output reports inherited1/excluded1/candidate-visible1 with exact
+file ID/nonce and117 bytes, but strict process evidence fails. These bytes and
+exit23 do not qualify an inheritance result. ProcessEvidence error31 is from
+the combined GetProcessTimes / QueryFullProcessImageNameW / GetExitCodeProcess /
+IsProcessInJob condition on the signaled created handle; short circuiting hid
+which API failed and prevented subsequent calls and the zero-time wait record.
+Image-query or membership behavior after exit is a hypothesis, not an actual
+cause established by that collapsed message. Kill-on-close CloseHandle succeeds;
+extra-member-reap remains unproven. observed0/final-cloexec0 follow rejection
+and duplicate rollback; cleanup1 only covers file/reservation controls.
+
+The new source is a focused diagnostic correction, not a lifetime behavior
+fix. Each process API now captures its own immediate error with phase, role
+and exact handle, continues collecting the other independent observations,
+and prints explicit validity bits even on failure. Unknown zero-initialized
+fields cannot qualify evidence. All original required API successes remain
+required; GetProcessId success is now additionally required. The first
+acceptance accounting snapshot is printed explicitly before later observations,
+and the two job-query failures have distinct operation names. No cached live
+image/membership, accepted count, delay, retry, larger timeout, launch flag or
+output/exit/leak relaxation is introduced. Only the isolated workflow probe
+source pin changes along with this handoff.
+
+Microsoft's primary API contracts distinguish lifetime TotalProcesses,
+current accounting and current PID-list observations; IsProcessInJob tests
+current membership. An owned signaled process object remains valid while its
+handle is retained, but this does not promise every process query succeeds.
+Sources: https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information,
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list,
+https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob,
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew,
+https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process.
+
+Freeze and obtain independent source/lifetime/automation peer before any fresh
+authorized producer/two-Windows run. That run can localize error31; it cannot
+guarantee identity of a transient process missing from both PID snapshots.
+If history remains unexplained, separately review bounded event capture before
+launch. Job completion-port notifications can supply historical PIDs, but are
+not guaranteed delivery and PID reuse still requires handle identity; they
+cannot replace strict onechild/active0/exit/output/leak/bounds or authorize
+PID-based termination. No such event machinery is added in this checkpoint.
+Official notification caveats:
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_associate_completion_port.
+No conhost identification, allowed extra process, full cleanup proof or causal
+runtime fix is asserted. No local native/JVM/C# build, fixture, artifact download,
+push or CI dispatch occurred. Qualified156/ec3, production/Exec/controller and
+candidate81fd/full407319 remain unchanged; global Native/atomic spawn/OFD
+closure remains unqualified.

@@ -90,15 +90,32 @@ bool ProcessEvidence(const char* phase, const char* role, HANDLE process, HANDLE
   FILETIME birth{}, end{}, kernel{}, user{};
   wchar_t image[32768]{}; DWORD length = 32768, code = 0;
   BOOL member = FALSE;
-  if (!GetProcessTimes(process, &birth, &end, &kernel, &user) ||
-      !QueryFullProcessImageNameW(process, 0, image, &length) ||
-      !GetExitCodeProcess(process, &code) || !IsProcessInJob(process, job, &member))
-    return ApiFailure("ProcessEvidence");
+  // A signaled owned handle remains our identity, but individual live-process
+  // queries can fail after exit. Capture each error immediately; never replace
+  // missing current evidence with a cached image/membership or suppress failure.
+  auto checked = [&](bool ok, const char* operation) {
+    const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    if (!ok) std::fprintf(stderr,
+        "CLOEXEC_PROCESS_API_FAILURE phase=%s role=%s handle=%p operation=%s error=%lu\n",
+        phase, role, process, operation, error);
+    return ok;
+  };
+  DWORD pid = GetProcessId(process);
+  bool pid_known = checked(pid != 0, "GetProcessId");
+  bool times_known = checked(GetProcessTimes(process, &birth, &end, &kernel, &user) != FALSE, "GetProcessTimes");
+  bool image_known = checked(QueryFullProcessImageNameW(process, 0, image, &length) != FALSE, "QueryFullProcessImageNameW");
+  bool code_known = checked(GetExitCodeProcess(process, &code) != FALSE, "GetExitCodeProcess");
+  bool member_known = checked(IsProcessInJob(process, job, &member) != FALSE, "IsProcessInJob");
   DWORD wait = WaitForSingleObject(process, 0);
-  std::printf("CLOEXEC_PROCESS phase=%s role=%s pid=%lu birth=%lu:%lu member=%d wait=%lu exit=%lu image=%ls\n",
-      phase, role, GetProcessId(process), birth.dwHighDateTime, birth.dwLowDateTime,
-      member, wait, code, image);
-  return (wait == WAIT_OBJECT_0 || wait == WAIT_TIMEOUT) &&
+  bool wait_known = checked(wait != WAIT_FAILED, "WaitForSingleObject");
+  // Unknown fields carry explicit validity bits; their zero initialization is
+  // never evidence for exit, nonmembership or an empty executable path.
+  std::printf("CLOEXEC_PROCESS phase=%s role=%s handle=%p pid=%lu pid-known=%d birth=%lu:%lu times-known=%d member=%d member-known=%d wait=%lu wait-known=%d exit=%lu exit-known=%d image-known=%d image=%ls\n",
+      phase, role, process, pid, pid_known, birth.dwHighDateTime, birth.dwLowDateTime,
+      times_known, member, member_known, wait, wait_known, code, code_known,
+      image_known, image_known ? image : L"<unavailable>");
+  return pid_known && times_known && image_known && code_known && member_known && wait_known &&
+      (wait == WAIT_OBJECT_0 || wait == WAIT_TIMEOUT) &&
       (expected_member < 0 || (member != FALSE) == (expected_member != 0));
 }
 bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid) {
@@ -108,9 +125,11 @@ bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid) {
       sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 7 * sizeof(ULONG_PTR)> storage{};
   auto* ids = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) ||
-      !QueryInformationJobObject(job, JobObjectBasicProcessIdList, ids, static_cast<DWORD>(storage.size()), nullptr))
-    return ApiFailure("JobEvidence");
+  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr))
+    return ApiFailure("JobEvidenceAccounting");
+  // These two queries are sequential snapshots, not one atomic history record.
+  if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, ids, static_cast<DWORD>(storage.size()), nullptr))
+    return ApiFailure("JobEvidenceProcessIdList");
   std::printf("CLOEXEC_JOB phase=%s parent-pid=%lu child-pid=%lu total=%lu active=%lu terminated=%lu assigned=%lu listed=%lu\n",
       phase, GetCurrentProcessId(), child_pid, accounting.TotalProcesses, accounting.ActiveProcesses,
       accounting.TotalTerminatedProcesses, ids->NumberOfAssignedProcesses, ids->NumberOfProcessIdsInList);
@@ -233,6 +252,11 @@ bool ObserveChild(HANDLE candidate) {
   // contains another process. These records previously vanished at the audit.
   std::printf("CLOEXEC_WAIT child-pid=%lu signaled=true actual-exit=%lu owned=%d resumed=%d\n",
       process.dwProcessId, code, owned, resumed);
+  // This is the exact earlier snapshot used by the strict acceptance gate.
+  // Later JobEvidence queries may see a different active count, but cannot
+  // overwrite this audit or erase TotalProcesses' lifetime history.
+  std::printf("CLOEXEC_JOB_AUDIT phase=first-post-wait child-pid=%lu total=%lu active=%lu terminated=%lu source=acceptance-snapshot\n",
+      process.dwProcessId, accounting.TotalProcesses, accounting.ActiveProcesses, accounting.TotalTerminatedProcesses);
   evidence = ProcessEvidence("child-signaled", "created-child", child.value, job.value) && evidence;
   evidence = JobEvidence("child-signaled", job.value, process.dwProcessId) && evidence;
   std::string output;
