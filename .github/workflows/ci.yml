@@ -310,7 +310,8 @@ jobs:
 
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
-      - uses: actions/upload-artifact@v4
+      - name: Upload tested installer artifact
+        uses: actions/upload-artifact@v4
         with:
           name: gesher-setup
           path: installer/*.exe

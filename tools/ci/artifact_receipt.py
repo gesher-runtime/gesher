@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from receipt_identity import exact_run, failed_installer_allowed, installer_uploaded
 
 p = argparse.ArgumentParser()
 p.add_argument('--name', required=True)
@@ -16,6 +17,8 @@ p.add_argument('--allow-failed-producer', action='store_true')
 a = p.parse_args()
 if os.environ.get('GITHUB_ACTIONS') != 'true':
     raise RuntimeError('CI only')
+if a.allow_failed_producer and not failed_installer_allowed(os.environ.get('GITHUB_WORKFLOW'), os.environ.get('GITHUB_JOB'), a.producer, a.name, a.producer_suffix):
+    raise RuntimeError('Failed producer exception is restricted to canonical e2e installer')
 repo, run_id, attempt = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
 repo_id, checkout = os.environ['GITHUB_REPOSITORY_ID'], os.environ['GITHUB_SHA']
 if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != checkout:
@@ -29,7 +32,6 @@ if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
 def api(path):
     return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/{path}']))
 
-from receipt_identity import exact_run
 run = api(f'actions/runs/{run_id}')
 if not exact_run(run, run_id, attempt, head, repo_id, head_repo, repo, os.environ['GITHUB_WORKFLOW']):
     raise RuntimeError('Current run/source/attempt/repository mismatch')
@@ -43,6 +45,9 @@ job = rows[0]
 allowed = {'success', 'failure'} if a.allow_failed_producer else {'success'}
 if job['conclusion'] not in allowed or job['head_sha'] != head or str(job['run_id']) != run_id or str(job['run_attempt']) != attempt:
     raise RuntimeError('Producer source/attempt/conclusion mismatch')
+if a.allow_failed_producer:
+    if not installer_uploaded(job):
+        raise RuntimeError('Installer upload did not complete successfully')
 inventory = api(f'actions/runs/{run_id}/artifacts?per_page=100')
 if inventory['total_count'] > 100:
     raise RuntimeError('Incomplete artifact inventory')
