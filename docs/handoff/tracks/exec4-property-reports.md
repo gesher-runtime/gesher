@@ -42,4 +42,13 @@ Base f1550540186b4ae3f17a5e501a886ec1c4d5d613, branch
 wip/exec-property-policy. Integration peer approved the architecture before
 editing. Local checks are source inspection, diff whitespace and PowerShell
 parsing only; all Java/native compilation and fixtures remain CI-only.
-Full CI is pending; no runtime acceptance is claimed.
+Independent guest_ipc_diagnosis source peer reviewed exact source
+a1e06af6c14d026c02995c1ecf0dfdb84b6090c3 and passed the bounded assertions.
+Canonical full CI40784262363/attempt1 was dispatched at that source. It remains
+pending; no runtime acceptance is claimed. Watch output is retained at
+C:\work\gesher-ci-review\exec4-property-reports-watch-40784262363.log.
+Root requested central watch ownership: only local gh watch process8008
+(session16637) was stopped; the remote CI was not cancelled. Integration must
+reattach with interval120, audit actual compile/archive receipts and both
+Windows raw report-state records, original whole-suite verdicts, package and
+both e2e logs. Current head after this source differs only by documentation.
