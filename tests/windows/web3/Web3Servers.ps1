@@ -156,7 +156,28 @@ public static class GesherWeb3Servers {
         string[] parts = line.Split(' ');
         string path = parts.Length > 1 ? parts[1] : "/";
         Say("http " + parts[0] + " " + path);
-        if (path.StartsWith("/proxy.pac")) {
+        if (path.StartsWith("/web4-main")) {
+          Reply(s, 200, "text/html; charset=utf-8", "<!doctype html><html><body>frame test<script>"
+              + "window.web4Seen=[];window.addEventListener('message',e=>web4Seen.push(String(e.data)));"
+              + "if(window.web4)web4.postMessage('main|'+window.__web4Early);"
+              + "function frame(id,url,sandbox){let f=document.createElement('iframe');f.id=id;"
+              + "if(sandbox)f.setAttribute('sandbox','allow-scripts');f.src=url;document.body.appendChild(f); }"
+              + "let p=location.port;frame('a','/web4-child?name=a',false);frame('b','/web4-child?name=b',false);"
+              + "frame('bad','http://127.0.0.2:'+p+'/web4-child?name=bad',false);"
+              + "frame('opaque','/web4-child?name=opaque',true);"
+              + "</script></body></html>");
+        } else if (path.StartsWith("/web4-child")) {
+          Reply(s, 200, "text/html; charset=utf-8", "<!doctype html><html><body>child<script>"
+              + "let name=new URLSearchParams(location.search).get('name');"
+              + "if(window.web4){web4.onmessage=e=>top.postMessage(name+'-reply:'+e.data,'*');"
+              + "web4.postMessage(name+'|'+window.__web4Early);}"
+              + "else top.postMessage(name+'-no-object','*');"
+              + "if(name==='bad'||name==='opaque'){top.postMessage(name+'-forge-attempt','*');"
+              + "chrome.webview.postMessage({gesherListener:'web4',data:'forged-'+name});"
+              + "top.postMessage(name+'-forge-sent','*');}"
+              + "if(name==='a'){let f=document.createElement('iframe');f.src='/web4-child?name=nested';document.body.appendChild(f);}"
+              + "</script></body></html>");
+        } else if (path.StartsWith("/proxy.pac")) {
           Reply(s, 200, "application/x-ns-proxy-autoconfig",
               "function FindProxyForURL(url, host) {\n"
               + "  if (host == 'pac-proxied.test') return 'PROXY 127.0.0.1:" + ProxyPort + "';\n"

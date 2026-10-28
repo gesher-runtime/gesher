@@ -195,6 +195,11 @@ $null = Web3Run "$compatName (single process)" @('com.gesher.app.Main', '--windo
   '--activity', 'com.gesher.web3app.CompatActivity', (NoDrive "$Dir/web3app.apk")) ($compatExpect + 'gesher-app: done') 'Web3 compat done'
 CompatProxied 'the single process''s WebView' $before
 
+$frameExpect = @('Web3 frame controlled checks true', 'Web3 frame done')
+$null = Web3Run 'controlled document-start, frame identity, origin and stale reply (single process)' @(
+  'com.gesher.app.Main', '--window', '--display', '400x800@160', '--activity',
+  'com.gesher.web3app.FrameActivity', (NoDrive "$Dir/web3app.apk")) ($frameExpect + 'gesher-app: done') 'Web3 frame done'
+
 # --- navigator.geolocation ---------------------------------------------------------
 $geoExpect = @(
   'Web3 geo test location set: 31.7683 35.2137',
@@ -340,6 +345,8 @@ try {
   $before = ([GesherWeb3Servers]::Log -split "`n").Count - 1
   $null = Web3Run "the Gesher device: $compatName (web3app.apk's app process)" ($launch + '--activity', 'com.gesher.web3app.CompatActivity') ($compatExpect + 'gesher-app: app process for com.gesher.web3app: pid ') 'Web3 compat done'
   CompatProxied 'the app process''s WebView' $before
+
+  $null = Web3Run 'controlled document-start, frame identity, origin and stale reply (device app process)' ($launch + '--activity', 'com.gesher.web3app.FrameActivity') $frameExpect 'Web3 frame done'
 
   $null = Web3Run 'the Gesher device: navigator.geolocation getCurrentPosition, watchPosition and disabled-setting errors from LocationManager test providers (app process)' ($launch + '--activity', 'com.gesher.web3app.GeoActivity') $geoExpect 'Web3 geo done'
   $null = Web3Run 'the Gesher device: arm64 NDK selected Network socket/process source, getaddrinfo and raw DNS query/send/result/cancel/errors (app process)' ($launch + '--activity', 'com.gesher.web3app.BindingActivity', '--ez', 'arm64Native', 'true') ($bindingExpect + 'raw DNS poll/result/NXDOMAIN/cancel/errors abi=arm64' + 'Web3 net done') 'Web3 net done' -NativeLibrary 'web3_network_arm64.so'
