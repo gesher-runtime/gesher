@@ -29,8 +29,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           ninja -C out -t commands binder_launch_registry_fixture
           ninja -C out -v binder_launch_registry_fixture
-          grep -E "^CMAKE_CXX_COMPILER:[^=]+=" out/CMakeCache.txt
-          "$(sed -n 's/^CMAKE_CXX_COMPILER:[^=]*=//p' out/CMakeCache.txt)" --version
+          compiler="$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++"
+          test -x "$compiler"
+          python3 -c 'import os,shlex,subprocess; c=os.environ["HOME"]+"/toolchain/"+os.environ["LLVM_MINGW_NAME"]+"/bin/x86_64-w64-mingw32-clang++"; rows=subprocess.check_output(["ninja","-C","out","-t","commands","binder_launch_registry_fixture"],text=True).splitlines(); matches=[shlex.split(r) for r in rows if "binder-launch-registry-fixture.cc" in r and " -c " in r]; assert len(matches)==1 and c in matches[0], "fixture compiler mismatch"; print("ACTUAL_FIXTURE_COMPILER",c,flush=True)'
+          sha256sum "$compiler"
+          "$compiler" --version
           mkdir registry-artifact
           cp out/binder_launch_registry_fixture.exe registry-artifact/
           printf '%s\n' "$GITHUB_SHA" > registry-artifact/source.sha
