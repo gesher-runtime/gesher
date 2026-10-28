@@ -156,6 +156,7 @@ sealed class ProbeForm : Form
             }
             else if (name == "Runtime.bindingCalled")
             {
+                if (root.GetProperty("name").GetString() != "realmProbe") return;
                 int id = root.GetProperty("executionContextId").GetInt32();
                 string label = root.GetProperty("payload").GetString() ?? "";
                 if (contexts.TryGetValue((session, id), out var c))
