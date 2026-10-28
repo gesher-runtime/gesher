@@ -87,3 +87,28 @@ fixture or CI artifact was executed/downloaded locally. Full is NOT dispatched.
 The finalc544 constructor-patch/source-pin refresh still needs its tiny
 automation recheck; it adds the44th pin/47th allowed path, with no new
 controller or canonical DAG/role/receipt change.
+
+## Component qualification and exact final source peers
+
+AOT40727982352 attempt1/sourcec544 is now independently accepted:10 expanded
+jobs,9success/1 intended skip, both Windows0 failures. Each host passes four
+policies24/24/25/25 scoped checks and32 actual Main/device states, including
+all12 after matching positives and four after stale-rejection cases. The15
+original graph controls repeat four times, not60new controls. Five current
+raw-ZIP receipts, whole-host/source/compiler/negative controls, five jars,
+fifteen copied images and all exact resource restores pass. Both old red runs
+remain red. AOT docs-only freeze88cdbd3d26e753ed7326c2f523396ac8e82d539a
+has exactly the verifiedc544 non-documentation tree. Independent actual audit:
+C:/work/gesher-ci-review/aot3-resource-40727982352-independent-actual-audit.json.
+
+Terra's final tiny automation recheck PASS applies to exact2a90bd238e368b1e
+768ad39136caaa712fc5afab: only constructor patch, source/allow entries, three
+refreshed pins plus patch pin and pending docs changed above78f21faa. All44
+pins match; canonical DAG, receipts and controllers are unchanged. Saved
+coherent-2a90-automation-peer.json SHA256
+48b2fb14883f8cfe6a521675471f1e6208b14e6c7825331b64c7971b7ddb9a56.
+Earlier pending/source-only statements above are chronological history, now
+superseded for these exact component and peer gates. The candidate code stays
+exact2a90; fresh canonical full is the remaining integration qualification.
+Native raw-CLOEXEC diagnostic774/445 and Web4 experiments are excluded.
+Primary remains6cfa/non-doc7bb until an accepted full and exact-tree merge.
