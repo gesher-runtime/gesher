@@ -895,3 +895,52 @@ all required evidence. Linux reference failures also remain failures. The13
 actual duplicate modes, broker/job cleanup, raw publisher/capacity gates and
 10s/180s bounds remain. No acceptance predicate/conjunction is adopted yet.
 Production stays1dc2e245; all previous red runs and wider gaps remain open.
+
+### Actual mandatory witness run40711407869: all groups observed, WCT-only failure preserved
+
+Exact source65c83f7e86d384e372b7a652c390144f7c8d9f35 was pushed through a
+per-command gh credential helper after immediate palmoni5 identity verification.
+No global credential configuration, other stored identity or SSH was used.
+The redundant own compile40711407824 was cancelled after the same account check;
+the actual component freshly built its consumers. Run40711407869 is terminal
+FAILURE (120s watch exit1): preflight122897374770/compile122897460747/Windows2022
+122898293547 succeeded, Windows2025 122898294341 failed. All plain logs, final
+metadata and independent raw-log audit JSON are saved at
+C:/work/gesher-ci-review/native3-commands-40711407869-*; no local artifact.
+
+Both hosts actually completed four mandatory evidence groups, with exact named
+EnterCriticalSection RUNTIME_FUNCTION-bound frames, matching _lock_file return
+instruction/IAT/restored FILE argument, decoded live CS/ownerTID/birth/recursion,
+held same-owner sibling FILE, six real-resource/identity rejection controls,
+explicitly labeled copied-WCT metadata negatives, independentclose0/preunlock
+noncompletion, real unlock/fclose0 and kernel-signaled thread exit/join. All
+seven phase timestamps used one original5000ms deadline per cycle. Actual total
+cycle milliseconds:2022 1172/1000/1016/953;2025 641/375/375/375. Both independent
+CI validators completed cycles4/runtime_acceptance=false. No OS deadlock/cycle
+or real unsupported system-code modification is claimed by copied negatives.
+
+The actual Linux reference has161 rows. Windows2022 matches all161 with four
+full WCT chains. Windows2025 now saves all161 rows and differs ONLY at indices
+135/140/145/150: contended=false because the unchanged original WCT-only rule
+still sees one actual Blocked closer node rather than its owner's full chain.
+All actual close and stream results are0; every other row matches the actual
+Linux result. The strict controller prints four contention failures/four row
+mismatches and exits nonzero. No missing-chain acceptance predicate was adopted.
+
+Both independently attempted duplicate suites completed13 actual modes/8399
+assertions/0 failures; actual1000 duplicate operations/errors0 with concurrent
+raw publications2604 (2022)/5494 (2025). Checked actual broker/client211-stop/job
+cleanup remains passing within its bounded resource-control scope. Producer
+artifact12825768421 ZIPsha256f06b9fd243b5afb71f96f7dd729606bee5ecfbd598a3ddff45401ed6d6ae5de3;
+actual workerSHA256a135a930826dd504133ddb3e0ce917c5dd900957289a985076585e6cbc5812ac.
+Current source/producer/attempt/rawZIP/wholemanifest/sevenoutputs and all15 helper
+negative controls passed. Exact65 source peer is saved separately as
+native3-65c83f7e-selected-source-peer.md and hashes JSON.
+
+Independent review of this actual evidence and the ADR test-intent proposal is
+requested BEFORE any acceptance predicate change. Actual all-four-cycle evidence
+is now available for that review, but this failed run is not retroactively green.
+Production remains1dc2e245 and all inheritedOFD/atomicspawn/blocking/signals/ABI/
+bionic/ART/copy-race/full/package/e2e and physical context gaps remain open.
+Cleanup recovery manifests/files are preserved; removed historical clones and
+runtime duplicates were neither recreated nor used by this fresh CI run.
