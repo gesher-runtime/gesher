@@ -1,5 +1,9 @@
 name: media4-surface-component
 on:
+  push:
+    branches: [wip/surface-current-visual]
+    paths:
+      - .github/workflows/media4-surface-component.yml
   workflow_dispatch:
 
 permissions:
