@@ -112,3 +112,12 @@ superseded for these exact component and peer gates. The candidate code stays
 exact2a90; fresh canonical full is the remaining integration qualification.
 Native raw-CLOEXEC diagnostic774/445 and Web4 experiments are excluded.
 Primary remains6cfa/non-doc7bb until an accepted full and exact-tree merge.
+
+## Canonical full actual acceptance
+
+Full40731915058 attempt1 at exact81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a
+is independently accepted:38expanded jobs32success/6intentional skips, both
+normal whole0, all new AOT/Native and old Binder/Surface/reader/role/package/
+two-e2e gates audited. Read coherent-aot-native-40731915058-accepted.md for
+precise scoped counts, provenance, open limits and latest owner preferences.
+This supersedes earlier pending/full-not-dispatched statements above.
