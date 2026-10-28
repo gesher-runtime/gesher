@@ -30,3 +30,7 @@ Current checks are source/PowerShell/YAML parsing only; no local C#/native
 compiler or executable fixture. Native peer and changed-source both-host CI
 remain required. No full/libcore/ART/media semantic closure or arbitrary
 kill-denial/job-containment proof follows from this source preparation.
+
+## Qualified component, 2026-10-28
+
+Push run 40655610161 attempt 1 tested source f5f8fe91af5376dc454db40e4600b291b837e6c3. Both actual Windows jobs passed: 122705781812 (2022, PowerShell 7.6.8) and 122705782131 (2025, PowerShell 7.6.7), both .NET 10.0.13. Each reports 43 existing PASS controls and zero test failures, plus eight actual reader cleanup observations: four RunTimed and four InvokeOpenSl (normal, exit 23, timeout, retained writer). Each observation requires both tasks stopped, both owned readers disposed with their exact captured pipe handles immediately invalid, process handle closed, and independent native invalid-handle probes. The retained writer remains alive after the helper while the original EOF deadline remains failure and status -1; owned child cleanup follows. Expected gtest failure lines exercise negative controls, not suite failures. Plain logs and metadata are saved under C:/work/gesher-ci-review/ci-reader-helpers-40655610161-*. No full integration, canceled-read partial-prefix, arbitrary kill-denial, or unrelated helper resource scope is established by this component.
