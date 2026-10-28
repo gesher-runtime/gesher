@@ -47,10 +47,13 @@
 #include <utils/LightRefBase.h>
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
 
+#include "frame_invalidation.h"
 #include "queue_surface.h"
 
 #define SYSV __attribute__((sysv_abi))
@@ -64,6 +67,7 @@ SYSV void gesher_device_Blast_update(JNIEnv* env, jobject, jlong ptr, jlong surf
 
 using gesher::media::QueueSurface;
 using gesher::media::SurfaceFrame;
+using gesher::media::FrameInvalidation;
 
 namespace {
 
@@ -454,8 +458,52 @@ struct ViewSurface {
   FrameImages images;
   // Surfaces track: an invalidation is on its way (cleared when the view records its
   // frame), so a fast producer (EGL at 60 Hz) does not flood the UI thread with them.
-  std::atomic<bool> invalidate_pending{false};
+  FrameInvalidation invalidation;
+  std::atomic<unsigned> requests{0}, failures{0}, draws{0}, consumes{0};
+  std::atomic<bool> traced_nonblack{false};
 };
+
+bool TraceInvalidation() {
+  static const bool enabled = std::getenv("GESHER_SURFACE_TRACE_INVALIDATION") != nullptr;
+  return enabled;
+}
+
+const char* InvalidationResult(FrameInvalidation::Result result) {
+  switch (result) {
+    case FrameInvalidation::Result::kPosted: return "posted";
+    case FrameInvalidation::Result::kCoalesced: return "coalesced";
+    case FrameInvalidation::Result::kNoEnv: return "no-env";
+    case FrameInvalidation::Result::kNoView: return "no-view";
+    case FrameInvalidation::Result::kJavaFailure: return "java-failure";
+  }
+  return "unknown";
+}
+
+void TraceRequest(ViewSurface* vs, FrameInvalidation::Result result) {
+  if (!TraceInvalidation()) return;
+  const unsigned request = vs->requests.fetch_add(1, std::memory_order_relaxed) + 1;
+  const bool failed = result != FrameInvalidation::Result::kPosted &&
+                      result != FrameInvalidation::Result::kCoalesced;
+  const unsigned failure = failed ? vs->failures.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+  const auto frame = vs->surface->Latest();
+  size_t nonblack = 0;
+  bool first_nonblack = false;
+  const bool sampled = frame != nullptr && (request <= 8 ||
+      (request <= 64 && !vs->traced_nonblack.load(std::memory_order_relaxed)));
+  if (sampled) {
+    for (uint32_t pixel : frame->pixels) nonblack += (pixel & 0xffffffu) != 0;
+    if (nonblack != 0) first_nonblack = !vs->traced_nonblack.exchange(true, std::memory_order_relaxed);
+  }
+  if (request <= 8 || (failed && failure <= 16) || first_nonblack) {
+    std::fprintf(stderr, "GesherSurface invalidation: surface %p request %u latest-frame %llu %s; "
+                         "size %dx%d sampled %d nonblack %zu first-nonblack %d failures %u\n",
+                 static_cast<void*>(vs), request,
+                 static_cast<unsigned long long>(frame != nullptr ? frame->number : 0),
+                 InvalidationResult(result), frame != nullptr ? frame->width : 0,
+                 frame != nullptr ? frame->height : 0, sampled, nonblack, first_nonblack,
+                 vs->failures.load(std::memory_order_relaxed));
+  }
+}
 
 std::mutex gViewMutex;
 std::map<jlong, std::shared_ptr<ViewSurface>> gViewSurfaces;  // by BLASTBufferQueue handle
@@ -474,18 +522,28 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
   vs->surface->SetListener([weak] {
     std::shared_ptr<ViewSurface> v = weak.lock();
     if (v == nullptr) return;
-    if (v->invalidate_pending.exchange(true)) return;
-    JNIEnv* env = Env();
-    if (env == nullptr) return;
-    jobject view;
-    {
-      std::lock_guard<std::mutex> lock(gViewMutex);
-      view = v->view != nullptr ? env->NewLocalRef(v->view) : nullptr;
-    }
-    if (view == nullptr) return;
-    env->CallVoidMethod(view, gST.post_invalidate);
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    env->DeleteLocalRef(view);
+    const auto result = v->invalidation.Request([&] {
+      JNIEnv* env = Env();
+      if (env == nullptr) return FrameInvalidation::Result::kNoEnv;
+      jobject view;
+      {
+        std::lock_guard<std::mutex> lock(gViewMutex);
+        view = v->view != nullptr ? env->NewLocalRef(v->view) : nullptr;
+      }
+      if (view == nullptr) {
+        if (env->ExceptionCheck()) {
+          env->ExceptionClear();
+          return FrameInvalidation::Result::kJavaFailure;
+        }
+        return FrameInvalidation::Result::kNoView;
+      }
+      env->CallVoidMethod(view, gST.post_invalidate);
+      const bool posted = !env->ExceptionCheck();
+      if (!posted) env->ExceptionClear();
+      env->DeleteLocalRef(view);
+      return posted ? FrameInvalidation::Result::kPosted : FrameInvalidation::Result::kJavaFailure;
+    });
+    TraceRequest(v.get(), result);
   });
   gViewSurfaces[blast] = vs;
   return vs;
@@ -500,7 +558,17 @@ class ViewSurfaceDrawable : public SkDrawable {
   SkRect onGetBounds() override { return SkRect::MakeIWH(w_, h_); }
 
   void onDraw(SkCanvas* canvas) override {
-    sk_sp<SkImage> image = vs_->images.Get(vs_->surface->Latest());
+    const auto frame = vs_->surface->Latest();
+    sk_sp<SkImage> image = vs_->images.Get(frame);
+    if (TraceInvalidation()) {
+      const unsigned consume = vs_->consumes.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (consume <= 16) {
+        std::fprintf(stderr, "GesherSurface invalidation: surface %p consume %u frame %llu "
+                             "image %d view %dx%d\n", static_cast<void*>(vs_.get()), consume,
+                     static_cast<unsigned long long>(frame != nullptr ? frame->number : 0),
+                     image != nullptr, w_, h_);
+      }
+    }
     if (image == nullptr) return;
     SkPaint paint;
     paint.setAlphaf(alpha_);
@@ -528,12 +596,20 @@ void JNICALL SV_drawSurface(JNIEnv* env, jclass, jlong canvas_ptr, jlong blast, 
   auto* canvas = reinterpret_cast<android::Canvas*>(canvas_ptr);
   std::shared_ptr<ViewSurface> vs = ViewSurfaceFor(blast, false);
   if (canvas == nullptr || vs == nullptr) return;
-  vs->invalidate_pending.store(false);  // the next frame invalidates the view again
-  {
+  vs->invalidation.Acknowledge([&] {
     std::lock_guard<std::mutex> lock(gViewMutex);
     if (vs->view == nullptr || !env->IsSameObject(vs->view, view)) {
       if (vs->view != nullptr) env->DeleteWeakGlobalRef(vs->view);
       vs->view = env->NewWeakGlobalRef(view);
+    }
+  });
+  if (env->ExceptionCheck()) return;
+  if (TraceInvalidation()) {
+    const unsigned draw = vs->draws.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (draw <= 16) {
+      std::fprintf(stderr, "GesherSurface invalidation: surface %p draw %u binding-before-ack "
+                           "frame %llu view %dx%d\n", static_cast<void*>(vs.get()), draw,
+                   static_cast<unsigned long long>(vs->surface->frames()), width, height);
     }
   }
   sk_sp<SkDrawable> drawable(new ViewSurfaceDrawable(vs, width, height, radius, alpha));

@@ -1,0 +1,227 @@
+name: media4-surface-component
+on:
+  push:
+    branches: [wip/surface-current-visual]
+    paths:
+      - .github/workflows/media4-surface-component.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  framework:
+    uses: ./.github/workflows/framework.yml
+  surfaces:
+    uses: ./.github/workflows/surfaces.yml
+  ndk:
+    uses: ./.github/workflows/native2.yml
+  translator:
+    uses: ./.github/workflows/arm64.yml
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Build current API3 runtime, launcher, compiler and boot jars
+        run: |
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGESHER_WEB3_QUERY_TESTS=OFF
+          ninja -C out dalvikvm dex2oat profman dexdump gesher-exec arm64_elf_test surface_invalidation_test
+          tools/build-boot-jars.sh out/boot-jars
+          tests/build-test-apps.sh out/test-apps
+          mkdir -p dist-component
+          cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe out/arm64_elf_test.exe out/surface_invalidation_test.exe dist-component/
+          cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
+          python3 - <<'PYCODE'
+          import hashlib, json, os, re, shlex, shutil, subprocess
+          from pathlib import Path
+          root = Path('dist-component')
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}
+          database = json.loads(Path('out/compile_commands.json').read_text())
+          compilers = {}
+          for language, suffix in [('C','tests/apps/surfacegl/jni/surfacegl.c'), ('CXX','compat/media/surface/surface_jni.cc')]:
+              records = list(Path('out/CMakeFiles').glob('*/CMake' + language + 'Compiler.cmake'))
+              assert len(records) == 1, (language, records)
+              record = records[0]
+              matches = re.findall(r'^\s*set\(CMAKE_' + language + r'_COMPILER\s+"([^"]+)"\)\s*$', record.read_text(), re.MULTILINE)
+              assert len(matches) == 1 and Path(matches[0]).is_absolute(), (language, matches)
+              driver = Path(matches[0]).resolve(strict=True)
+              # surfacegl.c is NDK-built separately, so validate an actual C command from this host graph.
+              commands = [row for row in database if (row['file'].endswith(suffix) if language == 'CXX' else row['file'].endswith('.c'))]
+              assert commands, (language, 'missing actual compile command')
+              argv = shlex.split(commands[0]['command'])
+              assert matches[0] in argv[:2], (language, argv[:2], matches[0])
+              launcher = Path(shutil.which(argv[0])).resolve(strict=True) if argv[0] != matches[0] else None
+              version = subprocess.run([matches[0], '--version'], check=True, text=True, capture_output=True).stdout.strip()
+              assert version, language
+              compilers[language] = dict(configured=matches[0], resolved=str(driver), sha256=hashlib.sha256(driver.read_bytes()).hexdigest(), metadata_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), version=version, actual_source=commands[0]['file'], launcher=str(launcher) if launcher else None, launcher_sha256=hashlib.sha256(launcher.read_bytes()).hexdigest() if launcher else None)
+          (root / 'surface-component-manifest.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], compilers=compilers, files=files), sort_keys=True))
+          PYCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media4-surface-component-host
+          path: dist-component/
+  test:
+    needs: [framework, ndk, translator, host, surfaces]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exercise archive verification negative cases
+        shell: pwsh
+        run: python tools/surface/test-verified-artifact.py
+      - name: Verify qualified full and exact component producer identities
+        id: suppliers
+        shell: pwsh
+        run: tools/surface/verify-component-suppliers.ps1
+      - name: Verify and extract base_windows_x64 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_windows_x64 }}" --digest "${{ steps.suppliers.outputs.base_windows_x64_digest }}" --destination "suppliers/base_windows_x64"
+      - name: Verify and extract base_framework archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_framework }}" --digest "${{ steps.suppliers.outputs.base_framework_digest }}" --destination "suppliers/base_framework"
+      - name: Verify and extract base_graphics archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_graphics }}" --digest "${{ steps.suppliers.outputs.base_graphics_digest }}" --destination "suppliers/base_graphics"
+      - name: Verify and extract base_angle archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_angle }}" --digest "${{ steps.suppliers.outputs.base_angle_digest }}" --destination "suppliers/base_angle"
+      - name: Verify and extract base_media archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_media }}" --digest "${{ steps.suppliers.outputs.base_media_digest }}" --destination "suppliers/base_media"
+      - name: Verify and extract base_webview archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_webview }}" --digest "${{ steps.suppliers.outputs.base_webview_digest }}" --destination "suppliers/base_webview"
+      - name: Verify and extract base_exec archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_exec }}" --digest "${{ steps.suppliers.outputs.base_exec_digest }}" --destination "suppliers/base_exec"
+      - name: Verify and extract base_boot_image archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_boot_image }}" --digest "${{ steps.suppliers.outputs.base_boot_image_digest }}" --destination "suppliers/base_boot_image"
+      - name: Assemble qualified baseline in original supplier order
+        shell: pwsh
+        run: |
+          foreach ($key in 'base_windows_x64','base_framework','base_graphics','base_angle','base_media','base_webview','base_exec','base_boot_image') {
+            python tools/surface/assemble-artifacts.py --source "suppliers/$key" --destination dist --ledger surface-owners.json --owner $key
+            if ($LASTEXITCODE -ne 0) { throw "Baseline assembly failed: $key" }
+          }
+      - name: Preserve baseline jars for comparison
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force old-jars | Out-Null
+          foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            Copy-Item -LiteralPath "dist/$name.jar" -Destination "old-jars/$name.jar"
+          }
+      - name: Verify and extract current_framework archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_framework }}" --digest "${{ steps.suppliers.outputs.current_framework_digest }}" --destination "suppliers/current_framework"
+      - name: Verify and extract current_media4_surface_component_host archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_media4_surface_component_host }}" --digest "${{ steps.suppliers.outputs.current_media4_surface_component_host_digest }}" --destination "current-host"
+      - name: Verify and extract current_arm64 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_arm64 }}" --digest "${{ steps.suppliers.outputs.current_arm64_digest }}" --destination "suppliers/current_arm64"
+      - name: Verify and extract current_native2 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_native2 }}" --digest "${{ steps.suppliers.outputs.current_native2_digest }}" --destination "suppliers/current_native2"
+      - name: Verify and extract current_surfaces archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_surfaces }}" --digest "${{ steps.suppliers.outputs.current_surfaces_digest }}" --destination "suppliers/current_surfaces"
+      - name: Assemble exact current non-host suppliers
+        shell: pwsh
+        run: |
+          foreach ($key in 'current_framework','current_arm64','current_surfaces') {
+            python tools/surface/assemble-artifacts.py --source "suppliers/$key" --destination dist --ledger surface-owners.json --owner $key
+            if ($LASTEXITCODE -ne 0) { throw "Current supplier assembly failed: $key" }
+          }
+          python tools/surface/assemble-artifacts.py --source suppliers/current_native2 --destination dist --ledger surface-owners.json --owner current_native2 --prefix native2
+          if ($LASTEXITCODE -ne 0) { throw 'Current native2 assembly failed' }
+      - name: Verify current host members and rebuild boot image from current five jars
+        shell: pwsh
+        run: |
+          function Exact-HostMembers([string[]] $expected, [string[]] $actual) {
+            return $expected.Count -gt 0 -and @($expected | Select-Object -Unique).Count -eq $expected.Count -and @(Compare-Object $expected $actual -CaseSensitive).Count -eq 0
+          }
+          if (-not (Exact-HostMembers @('a','b') @('a','b')) -or
+              (Exact-HostMembers @('a','b') @('a')) -or
+              (Exact-HostMembers @('a','b') @('a','b','extra'))) { throw 'Host missing/extra member negative controls failed' }
+          Write-Host 'SURFACE_HOST_NEGATIVES missing/extra=rejected'
+          $manifest = Get-Content current-host/surface-component-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.source -cne $env:GITHUB_SHA -or "$($manifest.run)" -cne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -cne $env:GITHUB_RUN_ATTEMPT) { throw 'Current host manifest identity mismatch' }
+          foreach ($language in 'C','CXX') {
+            $compiler = $manifest.compilers.$language
+            if (-not $compiler.configured -or -not $compiler.version -or $compiler.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $compiler.metadata_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $compiler.actual_source) { throw "Missing configured compiler evidence: $language" }
+            if ($compiler.launcher -and $compiler.launcher_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Missing actual compiler launcher hash: $language" }
+            Write-Host "SURFACE_COMPILER language=$language driver=$($compiler.configured) sha256=$($compiler.sha256) metadata=$($compiler.metadata_sha256) launcher=$($compiler.launcher) launcher_sha256=$($compiler.launcher_sha256) source=$($compiler.actual_source) version=$($compiler.version)"
+          }
+          $manifestNames = @($manifest.files.PSObject.Properties.Name)
+          $actualNames = @(Get-ChildItem -LiteralPath current-host -Force | ForEach-Object { if ($_.PSIsContainer) { throw 'Unexpected host subdirectory' }; $_.Name } | Where-Object { $_ -cne 'surface-component-manifest.json' })
+          if (-not (Exact-HostMembers $manifestNames $actualNames)) { throw 'Empty, duplicate, missing or extra host payload member' }
+          foreach ($name in $manifestNames) {
+            if ([IO.Path]::GetFileName($name) -cne $name -or $name -in @('.','..','surface-component-manifest.json')) { throw "Invalid host member path: $name" }
+            $expected = $manifest.files.$name
+            if ($expected -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash -LiteralPath "current-host/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }
+          }
+          python tools/surface/assemble-artifacts.py --source current-host --destination dist --ledger surface-owners.json --owner current_host --exclude surface-component-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Current host assembly failed' }
+          foreach ($name in 'dalvikvm.exe','dex2oat.exe','profman.exe','dexdump.exe','gesher-exec.exe','arm64_elf_test.exe','surface_invalidation_test.exe','core-oj.jar','core-libart.jar','core-icu4j.jar') {
+            $expected = $manifest.files.$name
+            if (-not $expected -or (Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }
+          }
+          foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            $old = (Get-FileHash -LiteralPath "old-jars/$name.jar" -Algorithm SHA256).Hash
+            $new = (Get-FileHash -LiteralPath "dist/$name.jar" -Algorithm SHA256).Hash
+            Write-Host "SURFACE_JAR name=$name baseline=$old current=$new"
+          }
+          foreach ($name in 'gesher_arm64.dll','arm64_smoke_test.exe','arm64_varargs_baseline.so','x86_64/arm64_varargs_test','arm64-v8a/arm64_varargs_test','surfacegl.apk','surfacegl-arm64.apk') {
+            Write-Host "SURFACE_CURRENT_MEMBER name=$name sha256=$((Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+          }
+          tools/boot-image/fetch-profiles.ps1 -Out rebuilt-boot/profiles
+          # compile.ps1 changes the caller's location to dist. Restore it even
+          # on error before resolving the rebuilt image and component driver.
+          $componentRoot = (Get-Location).Path
+          Push-Location
+          try {
+            tools/boot-image/compile.ps1 -Dist dist -Out rebuilt-boot -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles rebuilt-boot/profiles/art-boot-image-profile.txt,rebuilt-boot/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt -TimeoutMinutes 15
+          } finally { Pop-Location }
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($ext in 'art','oat','vdex') {
+              $from = Join-Path $componentRoot "rebuilt-boot/framework/x86_64/$image.$ext"
+              $to = Join-Path $componentRoot "dist/framework/x86_64/$image.$ext"
+              $hash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
+              Copy-Item -LiteralPath $from -Destination $to -Force
+              if ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -cne $hash) { throw "Image copy mismatch $image.$ext" }
+              Write-Host "SURFACE_IMAGE name=$image.$ext sha256=$hash source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+            }
+          }
+      - name: Actual both-ABI Surface phases and unchanged variadic contracts
+        shell: pwsh
+        run: tests/windows/run-surface-invalidation-component.ps1 -Dir "$PWD/dist"
+      - name: Component process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media4-surface-component-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/gesher-surface-component-*/**/*.log
+            ${{ runner.temp }}/surfaces-invalidation-*.log
+          if-no-files-found: ignore
