@@ -164,18 +164,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Raw ZIP SHA/pre-extract member validation failed' }
           $members = @(Get-ChildItem -LiteralPath cloexec-fixture -Recurse -Force)
           $expected = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt','provenance.json')
-          if (@($members | Where-Object PSIsContainer).Count -or @(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $expected @($members.Name)).Count) { throw 'Whole payload inventory differs' }
+          if (@($members | Where-Object PSIsContainer).Count -or @(Compare-Object -CaseSensitive $expected @($members.Name)).Count) { throw 'Whole payload inventory differs' }
           $manifest = Get-Content -LiteralPath cloexec-fixture/provenance.json -Raw | ConvertFrom-Json
           if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
               "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $manifest.source -cne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -cne $env:LLVM_MINGW_SHA256) { throw 'Manifest identity mismatch' }
-          $tracked = @(git ls-files)
-          if ($LASTEXITCODE -ne 0 -or @(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $tracked @($manifest.files.PSObject.Properties.Name)).Count) { throw 'Whole source inventory differs' }
+          $tracked = @(git -c core.quotepath=false ls-files)
+          if ($LASTEXITCODE -ne 0 -or @(Compare-Object -CaseSensitive $tracked @($manifest.files.PSObject.Properties.Name)).Count) { throw 'Whole source inventory differs' }
           foreach ($file in $manifest.files.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
           }
           $outputs = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt')
-          if (@(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $outputs @($manifest.outputs.PSObject.Properties.Name)).Count) { throw 'Output inventory differs' }
+          if (@(Compare-Object -CaseSensitive $outputs @($manifest.outputs.PSObject.Properties.Name)).Count) { throw 'Output inventory differs' }
           foreach ($file in $manifest.outputs.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath (Join-Path cloexec-fixture $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Output byte mismatch: $($file.Name)" }
             Write-Host "CLOEXEC_VERIFIED_OUTPUT name=$($file.Name) sha256=$($file.Value)"

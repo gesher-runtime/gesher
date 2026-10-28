@@ -1105,3 +1105,11 @@ YAML/embedded Python and PowerShell AST parsing and diff checks pass locally;
 no fixture or compilation ran. Workflow/provenance/watchdog peer is required
 before authenticated guarded push/CI. This isolated diagnostic is NOT a new
 supplier for the in-flight canonical candidate, which stays pinned to156.
+
+The first workflow peer found three repeated CaseSensitive switches from a
+shell-expanded edit; AST syntax parsing alone had not detected parameter
+binding failure. The correction uses one switch per inventory comparison
+and disables Git path quoting for the whole source-name comparison. Additional
+AST duplicate-parameter scanning and a simple Compare-Object binding check
+pass; no native fixture ran. Corrected exact workflow peer is still required
+before push. Rejected3153 workflow was never published or dispatched.
