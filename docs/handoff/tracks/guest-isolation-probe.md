@@ -67,10 +67,39 @@ Source candidate `1e90373f2f7f3e785454d823bc053ade83163ccf` adds WRITE_DAC
 only on the owned host handle and captures separate raw disconnect result,
 SetSecurityInfo returned Win32 status, and descriptor assertion phase/result.
 Guest access, ACLs, mandatory label and exact error-5 gate are unchanged. Source
-peer passed before push. Fresh run `40785726716`, attempt 1, exact
-`d549283d32aec04b0fed0ec56bfebc966f1e2120` is pending actual runtime and
-receipt audit. The sole integrator owns its only watcher. No local compilation
-or fixture was performed.
+peer passed before push. Run `40785726716`, attempt 1, exact
+`d549283d32aec04b0fed0ec56bfebc966f1e2120` completed green: all three jobs
+succeeded. This worker independently read the saved terminal metadata, actual
+build log and both Windows runtime logs. No local compilation or fixture was
+performed.
+
+Both actual runners proved an isolated positive read/write connection to the
+same host server PID and exact challenge, successful disconnect, SetSecurityInfo
+status 0, protected OW-only DACL with low mandatory label and successful actual
+descriptor assertion. After fresh host access and relistening, the child raw
+handle was INVALID_HANDLE_VALUE with exact error 5. All ten child success rows,
+unchanged trusted files, child exit 0, owned child/files/profile cleanup and
+RunTimed reader retirement were present. Actual key rows include:
+
+```
+PASS parent same-endpoint-isolated-positive-challenge fresh-host-positive protected-dacl
+DIAG child host-ipc-open handle=FFFFFFFFFFFFFFFF invalid=1 error=5 requested=0xc0000000 expected-error=5
+PASS child host-ipc-denied error=5
+PASS parent trusted-files-unchanged host-ipc-positive=1 child-exit=0
+PASS parent owned-child-handles-files-profile-cleanup
+```
+
+Pinned archive verification and actual clang 23.1.3 llvm-mingw -Werror compilation
+passed. Producer build job `123158301517`, archive `12859516194`, digest
+`sha256:dc84857eb8fef9c1b71c172769ab8e658e8bd2ad1ba5ab2f70f411090d7d2e38`
+were identical in both exact-source/run/attempt archive receipts; both also
+passed all 16 strict compiler receipt mutation controls. Runtime jobs are
+`123158393883` (2025) and `123158393928` (2022). Plain logs and terminal JSON
+are saved as `guest-40785726716-*` under `C:/work/gesher-ci-review`.
+
+This closes only the disposable fixture's strict denial diagnostic. No production
+launch migration, authenticated Binder admission, secondary AOT, full-suite,
+package, integration, main or release qualification follows from this component.
 Previous same-ref runs were terminal before each account-gated gh-credential
 HTTPS push. No duplicate dispatch was used.
 Watch uses `gh run watch --exit-status --interval 120`. No unchanged red retry
