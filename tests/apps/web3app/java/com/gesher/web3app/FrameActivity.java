@@ -20,6 +20,7 @@ public class FrameActivity extends Activity {
     private boolean invalid;
     private boolean navigating;
     private String origin;
+    private JavaScriptReplyProxy pendingNavigationReply;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -36,6 +37,11 @@ public class FrameActivity extends Activity {
                         return;
                     }
                     String name = data.substring(0, data.indexOf('|'));
+                    if (name.equals("during")) {
+                        invalid = true;
+                        pendingNavigationReply = reply;
+                        return;
+                    }
                     if (!(name.equals("main") || name.equals("a") || name.equals("b")
                             || name.equals("nested") || name.equals("a2"))
                             || main != name.equals("main") || replies.containsKey(name)) {
@@ -63,6 +69,7 @@ public class FrameActivity extends Activity {
                     }
                     if (name.equals("a2")) {
                         replies.get("a").postMessage("STALE");
+                        if (pendingNavigationReply != null) pendingNavigationReply.postMessage("RACE");
                         new Handler().postDelayed(this::check, 3000);
                     }
                 });
@@ -81,7 +88,7 @@ public class FrameActivity extends Activity {
                     && value.contains("a2-reply:reply-a2") && value.contains("bad-forge-attempt")
                     && value.contains("opaque-forge-attempt") && value.contains("bad-forge-sent")
                     && value.contains("opaque-forge-sent") && value.contains("during-sent")
-                    && !value.contains("STALE");
+                    && !value.contains("STALE") && !value.contains("RACE");
             Web3.log("frame observed " + value);
             Web3.log("frame controlled checks " + (observed && !invalid && replies.size() == 5));
             Web3.log("frame done");
