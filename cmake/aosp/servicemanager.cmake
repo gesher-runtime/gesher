@@ -18,6 +18,10 @@ add_executable(binder_private_admission_fixture EXCLUDE_FROM_ALL
 target_compile_options(binder_private_admission_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
 target_link_options(binder_private_admission_fixture PRIVATE -municode)
 
+add_executable(binder_launch_registry_fixture EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/windows/binder-launch-registry-fixture.cc)
+target_compile_options(binder_launch_registry_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
+
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its
 # own (compat/binder/servicemanager_main.cc).
