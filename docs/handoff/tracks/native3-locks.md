@@ -1374,3 +1374,105 @@ were checked locally. No local C++/Java/C# compile, fixture, artifact download,
 clone/cleanup, push or CI dispatch occurred. Production, Exec, controller,
 common156 and canonical81fd remain untouched. Global Native/atomic spawn/OFD
 closure remains unqualified.
+
+
+### Raw HANDLE oracle isolation after actual 40749991233 / source 8816bf89
+
+Source-only checkpoint, based on the exact audit/plain log in
+C:/work/gesher-ci-review/native3-8816-actual-{audit.md,audit.json,plain.log}.
+The actual run is 40749991233 attempt1, not a successful inheritance verdict.
+Both hosts retain candidate-visible1 with identity/nonce and actual child23;
+probe95 rejects first total2/active1. Later active0 does not replace that gate.
+Extra PIDs6488 (2022) and7048 (2025) have distinct queried births and actual
+member1 on opened query/synchronize handles. Image error5 leaves origin and
+complete extra-member reaping UNKNOWN. These are not PID4/System.
+
+Established source facts and excluded explanations:
+- JobEvidence uses the SDK JOBOBJECT_BASIC_PROCESS_ID_LIST, ULONG_PTR elements,
+  array indices0..NumberOfProcessIdsInList-1, and storage for eight entries.
+  This matches Microsoft's ABI; there is no demonstrated PID parser bug.
+- TotalProcesses records lifetime associations, including some failed
+  associations; it is not a distinct-PID counter. ActiveProcesses and the
+  separate PID-list query are current sequential observations. The opened
+  distinct extra PID/birth/member evidence independently demonstrates another
+  member here. No total2 allowance or accounting reinterpretation is added.
+- The old child is a self-reexec of the common-linked probe. posix.cmake forces
+  crash and signal anchors into every linked executable. crash.cc's Installer
+  and process.cc's g_mailbox_ready execute before main's --child branch.
+  Therefore --child does not isolate the raw oracle from common startup.
+  The inspected POSIX constructors do not explicitly CreateProcess; no source
+  evidence identifies their work as the creator of the observed extra member.
+  A bionic/sharedKernel bootstrap is not established by these target sources.
+
+The new EXCLUDE_FROM_ALL cloexec_raw_child.cc has a custom raw PE entry and
+-nostdlib, no CRT/Gesher libraries, no shadow includes, no dynamic static
+initializers, no descriptor conversion, no process creation and no console
+allocation/attachment calls. LINK_LIBRARIES and INCLUDE_DIRECTORIES explicitly
+reset posix.cmake's directory-wide defaults. It uses Windows GUI subsystem:
+Microsoft documents GUI processes have no console attachment at creation.
+CREATE_NO_WINDOW remains in the parent flags and is ignored for GUI images;
+the no-console property comes from the actual PE subsystem and child source,
+not an assumption that the old extra process was conhost. GUI programs may
+use inherited redirected standard handles; only WriteFile on the explicitly
+supplied STARTF_USESTDHANDLES output pipe is used. It opens no pathname.
+
+The parent selects the exact sibling image via lpApplicationName, quotes its
+command path, and checks suspended owned-handle image against that path. The
+child strictly parses three numeric HANDLE values, nonce, volume and file ID,
+checks actual GetFileInformationByHandleEx identity and ReadFile nonce on the
+positive, excluded-negative and candidate HANDLEs, and emits the same exact
+record. It exits23 for a visible candidate,0 for absent,94 for failed controls
+or output,92 for malformed input. A GUI image is not a visible UI here.
+
+The raw CreateProcess TRUE inheritance call remains inside AtFinalFlags,
+BEFORE actual final HANDLE_FLAG_INHERIT clearing. No HANDLE_LIST, delayed
+observation, fake transaction ACK, public blocking relay, production change,
+extra-process exception, ignored denied query, or relaxed timeout exists.
+Owned suspended PID/birth/image/member pin, thread identity, checked resume,
+first post-wait total1/active0, exact child output/exit/native-flag agreement,
+retained handle wait/reap, cleanup and leak1 failure remain required. Unknown
+history still fails closed; successful GUI isolation has not yet been run.
+
+Workflow adds the child EXE, actual imports/PE headers and Ninja commands to
+the exact output inventory and hashes. It requires actual GUI subsystem,
+only kernel32.dll with exactly ExitProcess/GetCommandLineW/
+GetFileInformationByHandleEx/SetFilePointerEx/ReadFile/WriteFile/GetStdHandle,
+raw entry/-nostdlib link flags, and the same verified configured compiler
+for the isolated child compile command with no compat/AOSP includes. Whole
+tracked source, producer run/attempt/job/upload interval, exact raw ZIP digest
+and pre-extraction member guards are retained. Source pins include the child.
+
+Next controlled fixture, only after separate peer/runtime authorization:
+use the frozen source's real producer and both Windows consumers, no local
+native build or surrogate. Require actual child-only compiler/link/import/GUI
+proof and the suspended image/path/pid/birth pin. The intended positive and
+negative controls must pass on the actual HANDLEs. Require first total1/
+active0 and one owned unique child's lifetime, actual wait/reap and exact
+output before accepting any raw observation. Candidate23 must yield probe1
+and a red workflow; candidate0 requires final-cleared flag/clean resources
+before probe0. If total2/unknown helper persists, retain strict rejection and
+all actual evidence; isolation alone cannot name/reap the historical helper.
+
+Peer questions: Does target property reset truly exclude all directory link
+and include contamination in actual commands? Do actual PE entry/imports prove
+no CRT or console/process-startup path? Are custom argument bounds and raw
+WriteFile bytes exact? Are suspended path/owned HANDLE identity, first snapshot
+and strict reap/leak gates unchanged? Do the new payload members retain every
+producer/source/archive guard? Which evidence could identify an extra live
+member before exit without granting PID-based termination authority?
+
+Primary contracts:
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information
+https://learn.microsoft.com/en-us/windows/console/creation-of-a-console
+https://learn.microsoft.com/en-us/windows/console/getstdhandle
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfow
+https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+
+Validation is source/diff, YAML and embedded Python/PowerShell parsing and
+source pins only. No local C/C++/Java/C# compile, configure, runtime fixture,
+artifact, clone/cleanup, GitHub write, push or CI dispatch. Common156,
+production/Exec/controller/AOT and all other trees unchanged. Exact extra
+process origin, controlled runtime result and global Native/atomic spawn/OFD
+closure remain unqualified. This change removes proven oracle startup
+contamination; it is not a demonstrated causal fix for the unknown member.

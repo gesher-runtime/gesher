@@ -53,36 +53,6 @@ std::string Hex(const unsigned char* bytes, size_t count) {
   }
   return out;
 }
-bool Unhex(const char* text, unsigned char* bytes, size_t count) {
-  if (std::strlen(text) != 2 * count) return false;
-  auto digit = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; };
-  for (size_t i = 0; i < count; ++i) {
-    int high = digit(text[2 * i]), low = digit(text[2 * i + 1]);
-    if (high < 0 || low < 0) return false;
-    bytes[i] = static_cast<unsigned char>((high << 4) | low);
-  }
-  return true;
-}
-bool Number(const char* text, uint64_t* value) {
-  if (!*text || *text == '-') return false;
-  char* end = nullptr; errno = 0;
-  auto result = std::strtoull(text, &end, 10);
-  if (errno || !end || *end) return false;
-  *value = result; return true;
-}
-bool SameFileBytes(HANDLE handle, const State& expected) {
-  FILE_ID_INFO actual{};
-  if (!GetFileInformationByHandleEx(handle, FileIdInfo, &actual, sizeof(actual)) ||
-      actual.VolumeSerialNumber != expected.file.VolumeSerialNumber ||
-      std::memcmp(actual.FileId.Identifier, expected.file.FileId.Identifier, 16)) return false;
-  LARGE_INTEGER zero{};
-  std::array<unsigned char, 16> bytes{};
-  DWORD read = 0;
-  return SetFilePointerEx(handle, zero, nullptr, FILE_BEGIN) &&
-      ReadFile(handle, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) &&
-      read == bytes.size() && bytes == expected.nonce;
-}
-
 // Diagnostics only: PID-list entries are not an identity or cleanup authority.
 // Open only for query/synchronize, then record the actual handle's birth/image,
 // job membership and zero-time wait. Never signal a process found by PID.
@@ -200,28 +170,6 @@ bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid, HANDLE child,
   complete = ProcessEvidence(phase, "fixture-parent", GetCurrentProcess(), job, false, GetCurrentProcessId()) && complete;
   return complete;
 }
-int Child(int argc, char** argv) {
-  if (argc != 8) return 92;
-  if (_setmode(_fileno(stdout), _O_BINARY) < 0) {
-    std::fprintf(stderr, "CLOEXEC_CHILD_FAILURE phase=stdout-binary errno=%d pid=%lu\n", errno, GetCurrentProcessId());
-    return 94;
-  }
-  uint64_t candidate = 0, positive = 0, negative = 0, volume = 0;
-  State expected;
-  if (!Number(argv[2], &candidate) || !Number(argv[3], &positive) || !Number(argv[4], &negative) ||
-      !Unhex(argv[5], expected.nonce.data(), expected.nonce.size()) || !Number(argv[6], &volume) ||
-      !Unhex(argv[7], expected.file.FileId.Identifier, 16)) return 92;
-  expected.file.VolumeSerialNumber = volume;
-  bool inherited = SameFileBytes(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(positive)), expected);
-  bool excluded = !SameFileBytes(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(negative)), expected);
-  bool leaked = SameFileBytes(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(candidate)), expected);
-  std::printf("CLOEXEC_CHILD intended-inherited=%d intended-noninherited-excluded=%d candidate-visible=%d exact-file-id-and-nonce=true\n",
-      inherited, excluded, leaked);
-  std::fflush(stdout);
-  if (!inherited || !excluded) return 94;
-  return leaked ? 23 : 0;  // An actual accessible candidate is a diagnostic failure.
-}
-
 bool ObserveChild(HANDLE candidate) {
   Handle job(CreateJobObjectW(nullptr, nullptr));
   if (!job.value) return ApiFailure("CreateJobObject");
@@ -238,7 +186,14 @@ bool ObserveChild(HANDLE candidate) {
   wchar_t executable[32768]{};
   DWORD length = GetModuleFileNameW(nullptr, executable, 32768);
   if (!length || length >= 32768) return ApiFailure("GetOwnExecutable");
-  std::wstring command = L"\"" + std::wstring(executable, length) + L"\" --child";
+  // Use an independent raw Win32 image: self-reexec runs forced Gesher
+  // constructors before main can route --child (posix.cmake anchors).
+  std::wstring child_path(executable, length);
+  const auto separator = child_path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) return false;
+  child_path.resize(separator + 1);
+  child_path += L"native3_cloexec_raw_child.exe";
+  std::wstring command = L"\"" + child_path + L"\"";
   for (HANDLE h : {candidate, state->positive, state->negative})
     command += L" " + std::to_wstring(reinterpret_cast<uintptr_t>(h));
   const auto nonce = Hex(state->nonce.data(), state->nonce.size());
@@ -262,7 +217,7 @@ bool ObserveChild(HANDLE candidate) {
   PROCESS_INFORMATION process{};
   // Deliberate raw broad-inheritance boundary. No HANDLE_LIST can hide a
   // transient inheritable alias. The child runs only after owned-job assignment.
-  const bool created = CreateProcessW(executable, command.data(), nullptr, nullptr, TRUE,
+  const bool created = CreateProcessW(child_path.c_str(), command.data(), nullptr, nullptr, TRUE,
       CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
       nullptr, nullptr, &startup.StartupInfo, &process) != FALSE;
   const DWORD create_error = created ? ERROR_SUCCESS : GetLastError();
@@ -277,6 +232,8 @@ bool ObserveChild(HANDLE candidate) {
       thread_known, thread_birth.dwHighDateTime, thread_birth.dwLowDateTime);
   ProcessIdentity child_identity;
   bool evidence = ProcessEvidence("suspended", "created-child", child.value, job.value, true, process.dwProcessId, &child_identity);
+  evidence = child_identity.valid &&
+      CompareStringOrdinal(child_identity.image.c_str(), -1, child_path.c_str(), -1, TRUE) == CSTR_EQUAL && evidence;
   evidence = JobEvidence("suspended", job.value, process.dwProcessId, child.value) && evidence && thread_known;
   BOOL in_job = FALSE;
   bool owned = IsProcessInJob(child.value, job.value, &in_job) && in_job;
@@ -371,9 +328,8 @@ int AtFinalFlags(int, void* native, bool inherit) {
 }
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char**) {
   if (!std::getenv("GITHUB_ACTIONS") || std::strcmp(std::getenv("GITHUB_ACTIONS"), "true")) return 90;
-  if (argc > 1 && !std::strcmp(argv[1], "--child")) return Child(argc, argv);
   if (argc != 1) return 92;
   State observation; state = &observation;
   observation.deadline = GetTickCount64() + 10000;

@@ -27,13 +27,14 @@ jobs:
           import os, subprocess
           assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == os.environ['GITHUB_SHA']
-          allowed = {'CMakeLists.txt', 'tests/native3-locks/cloexec_window_probe.cc',
+          allowed = {'CMakeLists.txt', 'tests/native3-locks/cloexec_window_probe.cc', 'tests/native3-locks/cloexec_raw_child.cc',
                      '.github/workflows/native3-cloexec-window.yml', 'docs/handoff/tracks/native3-locks.md'}
           changed = set(subprocess.check_output(['git', 'diff', '--name-only',
               'ec3d58a85eb398814fdeba53dd75d6834458e569..HEAD'], text=True).splitlines())
           assert changed and changed <= allowed, ('Unreviewed isolated delta', changed - allowed)
-          pins = {'CMakeLists.txt': '0a9ccffa649b555240a7051f1894c55bf508331a',
-                  'tests/native3-locks/cloexec_window_probe.cc': '773f5f6df5d7acf6a4931d06e8aedf8559571635',
+          pins = {'CMakeLists.txt': '2e9b6e2bab7be798911bcffdfe6676d9312c9d6f',
+                  'tests/native3-locks/cloexec_window_probe.cc': 'cc33d5e516a08b5a35ab3ee8b7e28300e570e4ae',
+                  'tests/native3-locks/cloexec_raw_child.cc': '0cd1fc4f8d308f7af8db5fcbf0bc28af7e83a079',
                   'tools/native3-locks/artifact/download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
                   'tools/native3-locks/artifact/assemble-artifacts.py': '8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2',
                   'tools/native3-locks/artifact/test-verified-artifact.py': 'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}
@@ -71,8 +72,10 @@ jobs:
             -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
           ninja -C out -v native3_cloexec_window_probe
           mkdir fixture
-          cp out/native3_cloexec_window_probe.exe fixture/
+          cp out/native3_cloexec_window_probe.exe out/native3_cloexec_raw_child.exe fixture/
           toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/native3_cloexec_window_probe.exe > fixture/native3_cloexec_window_probe.imports.txt
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --file-headers --coff-imports fixture/native3_cloexec_raw_child.exe > fixture/native3_cloexec_raw_child.imports.txt
+          ninja -C out -t commands native3_cloexec_raw_child > fixture/native3_cloexec_raw_child.commands.txt
       - name: Bind exact source, compiler, target command and output bytes
         shell: python
         run: |
@@ -89,6 +92,18 @@ jobs:
           names = re.findall(r'^\s*Name:\s*(\S+)', Path('fixture/native3_cloexec_window_probe.imports.txt').read_text(), re.MULTILINE)
           assert names and not (set(name.casefold() for name in names) - allowed), names
           print('CLOEXEC_ACTUAL_IMPORTS ' + ', '.join(names))
+          child_imports = Path('fixture/native3_cloexec_raw_child.imports.txt').read_text()
+          assert re.search(r'^\s*Subsystem:\s+IMAGE_SUBSYSTEM_WINDOWS_GUI\s+\(0x2\)\s*$', child_imports, re.MULTILINE), 'Raw child must have actual GUI PE subsystem'
+          child_names = re.findall(r'^\s*Name:\s*(\S+)', child_imports, re.MULTILINE)
+          assert [name.casefold() for name in child_names] == ['kernel32.dll'], child_names
+          child_symbols = re.findall(r'^\s*Symbol:\s*(\S+)', child_imports, re.MULTILINE)
+          expected_symbols = {'ExitProcess', 'GetCommandLineW', 'GetFileInformationByHandleEx',
+                              'SetFilePointerEx', 'ReadFile', 'WriteFile', 'GetStdHandle'}
+          assert set(child_symbols) == expected_symbols and len(child_symbols) == len(expected_symbols), child_symbols
+          child_commands = Path('fixture/native3_cloexec_raw_child.commands.txt').read_text()
+          assert 'gesher' not in child_commands.replace(str(Path.cwd()), '')
+          assert all(flag in child_commands for flag in ('-nostdlib', '--entry,cloexec_child_entry', '--subsystem,windows'))
+          print('CLOEXEC_RAW_CHILD_IMPORTS ' + ', '.join(child_names) + ' symbols=' + ','.join(sorted(child_symbols)))
           records = list(Path('out/CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
           assert len(records) == 1, ('Expected one configured compiler record', records)
           configured = re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"\n]+)"\)\s*$', records[0].read_text(encoding='utf-8'), re.MULTILINE)
@@ -108,15 +123,22 @@ jobs:
           argv = shlex.split(selected[0]['command'])
           assert Path(argv[0]).resolve() == Path(compiler).resolve()
           assert {'-Wall', '-Wextra', '-Werror'} <= set(argv)
+          child_selected = [row for row in commands if Path(row['file']).name == 'cloexec_raw_child.cc']
+          assert len(child_selected) == 1
+          child_argv = shlex.split(child_selected[0]['command'])
+          assert Path(child_argv[0]).resolve() == Path(compiler).resolve()
+          assert {'-Wall', '-Wextra', '-Werror', '-fno-builtin', '-fno-stack-protector'} <= set(child_argv)
+          assert not any('compat/' in arg or 'third_party/' in arg for arg in child_argv), child_argv
           compiler_info = dict(path=compiler, sha256=digest(Path(compiler).resolve()),
               clang_sha256=digest(toolchain / 'bin/clang'),
               configured_record=str(records[0]), configured_record_sha256=digest(records[0]), launcher='',
               cache_sha256=digest('out/CMakeCache.txt'),
-              version=subprocess.check_output([compiler, '--version'], text=True), command=selected[0])
+              version=subprocess.check_output([compiler, '--version'], text=True), command=selected[0], child_command=child_selected[0])
           paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
           files = {path: digest(path) for path in paths if path}
           outputs = {path.name: digest(path) for path in Path('fixture').iterdir() if path.is_file()}
-          assert set(outputs) == {'native3_cloexec_window_probe.exe', 'native3_cloexec_window_probe.imports.txt'}
+          assert set(outputs) == {'native3_cloexec_window_probe.exe', 'native3_cloexec_window_probe.imports.txt',
+                                  'native3_cloexec_raw_child.exe', 'native3_cloexec_raw_child.imports.txt', 'native3_cloexec_raw_child.commands.txt'}
           metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
               source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
               toolchain_sha256=os.environ['LLVM_MINGW_SHA256'], compiler=compiler_info, files=files, outputs=outputs,
@@ -175,7 +197,7 @@ jobs:
           python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination cloexec-fixture
           if ($LASTEXITCODE -ne 0) { throw 'Raw ZIP SHA/pre-extract member validation failed' }
           $members = @(Get-ChildItem -LiteralPath cloexec-fixture -Recurse -Force)
-          $expected = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt','provenance.json')
+          $expected = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt','native3_cloexec_raw_child.exe','native3_cloexec_raw_child.imports.txt','native3_cloexec_raw_child.commands.txt','provenance.json')
           if (@($members | Where-Object PSIsContainer).Count -or @(Compare-Object -CaseSensitive $expected @($members.Name)).Count) { throw 'Whole payload inventory differs' }
           $manifest = Get-Content -LiteralPath cloexec-fixture/provenance.json -Raw | ConvertFrom-Json
           if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
@@ -186,7 +208,7 @@ jobs:
           foreach ($file in $manifest.files.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
           }
-          $outputs = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt')
+          $outputs = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt','native3_cloexec_raw_child.exe','native3_cloexec_raw_child.imports.txt','native3_cloexec_raw_child.commands.txt')
           if (@(Compare-Object -CaseSensitive $outputs @($manifest.outputs.PSObject.Properties.Name)).Count) { throw 'Output inventory differs' }
           foreach ($file in $manifest.outputs.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath (Join-Path cloexec-fixture $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Output byte mismatch: $($file.Name)" }

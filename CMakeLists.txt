@@ -151,6 +151,16 @@ add_executable(native3_cloexec_window_probe EXCLUDE_FROM_ALL tests/native3-locks
 target_compile_options(native3_cloexec_window_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_cloexec_window_probe PRIVATE gesher_posix)
 
+# Independent kernel-HANDLE oracle. The directory globally adds gesher_posix
+# and its shadow headers; explicitly remove both for this CRT-free child.
+add_executable(native3_cloexec_raw_child EXCLUDE_FROM_ALL tests/native3-locks/cloexec_raw_child.cc)
+set_property(TARGET native3_cloexec_raw_child PROPERTY LINK_LIBRARIES "")
+set_property(TARGET native3_cloexec_raw_child PROPERTY INCLUDE_DIRECTORIES "")
+target_compile_options(native3_cloexec_raw_child PRIVATE -Wall -Wextra -Werror -fno-builtin -fno-stack-protector)
+target_link_options(native3_cloexec_raw_child PRIVATE -nostdlib -Wl,--entry,cloexec_child_entry -Wl,--subsystem,windows)
+target_link_libraries(native3_cloexec_raw_child PRIVATE kernel32)
+add_dependencies(native3_cloexec_window_probe native3_cloexec_raw_child)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
