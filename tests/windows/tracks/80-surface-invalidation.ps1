@@ -125,7 +125,8 @@ try {
               $handle = $child.Handle # Pin this actual process, even if its PID is later reused.
               $born = $child.StartTime.ToUniversalTime()
               if ($born -lt $started -or $child.Path -ine $expectedExe) { throw 'Unexpected app process birth or executable' }
-              if (-not $child.WaitForExit(620000)) { throw 'Actual app process did not exit within observer bound' }
+              while (-not $child.WaitForExit(250) -and [DateTime]::UtcNow -lt $until) { }
+              if (-not $child.HasExited) { throw 'Actual app process did not exit within observer bound' }
               return @{ Pid = $child.Id; Birth = $born; Exit = $child.ExitCode; End = $child.ExitTime.ToUniversalTime(); Handle = "$handle" }
             } finally { $child.Dispose() }
           }
