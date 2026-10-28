@@ -21,6 +21,7 @@ SOURCES = (
     'tests/windows/run-aot3-resource-component.ps1', 'tests/windows/tracks/73-aot3-shared-libraries.ps1',
     'tests/windows/run-tests.ps1',
     'tests/windows/tracks/61-aot2.ps1', 'tests/windows/tracks/63-aot3-cloud.ps1',
+    'patches/art/0730-aot3-validate-after-shared-library-context.patch',
 )
 REQUIRED = {'dalvikvm.exe', 'dex2oat.exe', 'profman.exe', 'dexdump.exe', 'oatdump.exe',
             'gesher-exec.exe', 'web3-production-role.json', 'core-oj.jar',

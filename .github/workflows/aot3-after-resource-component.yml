@@ -49,6 +49,8 @@ jobs:
           ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
           ninja -C out media_muxer_verify
           ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
+          # Compile the actual after-app dependency validation before the full graph.
+          ninja -C out CMakeFiles/art_runtime.dir/third_party/aosp/art/runtime/class_loader_context.cc.obj
           # Compile the new bridge before the full runtime to expose its
           # header/ABI errors without waiting for every AOSP object.
           ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
