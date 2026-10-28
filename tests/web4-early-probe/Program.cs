@@ -316,6 +316,13 @@ sealed class ProbeForm : Form
         Task<string> call = session.Length == 0
             ? web.CoreWebView2.CallDevToolsProtocolMethodAsync(method, parameters)
             : web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(session, method, parameters);
+        if (method == "Debugger.evaluateOnCallFrame")
+        {
+            long started = Environment.TickCount64;
+            Console.WriteLine($"EARLY_EVAL_BEGIN session={session} tick={started} parameters={parameters}");
+            _ = call.ContinueWith(done => Console.WriteLine($"EARLY_EVAL_BACKEND session={session} tick={Environment.TickCount64} elapsed={Environment.TickCount64 - started} status={done.Status}"),
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
         return await call.WaitAsync(TimeSpan.FromSeconds(3));
     }
 
@@ -361,7 +368,7 @@ sealed class ProbeForm : Form
             if (initialized.TryAdd(context.Unique, true))
             {
                 bool allowed = context.Origin == $"http://127.0.0.1:{port}";
-                Console.WriteLine($"EARLY_PAUSE session={session} context={context.Unique} frame={context.Frame} origin={context.Origin} allowed={allowed}");
+                Console.WriteLine($"EARLY_PAUSE session={session} context={context.Unique} frame={context.Frame} script={script} callFrame={callFrame} origin={context.Origin} allowed={allowed} tick={Environment.TickCount64}");
                 if (allowed)
                 {
                     string expression = "(()=>{let o={postMessage:function(x){realmProbe('object-call:'+x)}};Object.defineProperty(window,'__web4EarlyObject',{value:o,configurable:true});return o})()";
@@ -377,7 +384,7 @@ sealed class ProbeForm : Form
             }
             deadline.Token.ThrowIfCancellationRequested();
         }
-        catch (Exception e) { eventFailure = true; Console.WriteLine("EARLY_PAUSE_FAILURE " + e); }
+        catch (Exception e) { eventFailure = true; Console.WriteLine($"EARLY_PAUSE_FAILURE elapsed={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0}ms " + e); }
         finally
         {
             try
