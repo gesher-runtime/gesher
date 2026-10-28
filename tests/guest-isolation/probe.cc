@@ -272,7 +272,7 @@ static int exercise(Fixture& f) {
   const std::wstring acl = L"D:P(A;OICI;FA;;;OW)(A;OICI;GRGX;;;" + sid_text + L")";
   if (!set_acl(f.root, acl, SE_FILE_OBJECT) || !CopyFileW(exe, f.executable.c_str(), TRUE) ||
       !marker(f.code) || !marker(f.config)) return 24;
-  // Unpackaged Win32 host endpoint. LOCAL was rewritten in the AppContainer:
+  // Unpackaged Win32 host endpoint. LOCAL was unreachable in the AppContainer:
   // actual c2d667ea CI40783823671 returned FILE_NOT_FOUND on both runners.
   const std::wstring pipe_name = L"\\\\.\\pipe\\" + f.profile;
   PSECURITY_DESCRIPTOR host_sd = nullptr;
