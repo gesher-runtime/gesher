@@ -174,6 +174,8 @@ def run(worker, broker):
                         service.terminate()
                         killed = True
                     service.wait(timeout=5)
+                    if qualified and not killed:
+                        raise AssertionError('Healthy owned broker exited before its controlled stop')
             finally:
                 broker_output.close()
                 print(broker_log.read_text(errors='replace'), end='', flush=True)

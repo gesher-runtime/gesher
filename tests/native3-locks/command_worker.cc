@@ -299,7 +299,8 @@ int main(int argc, char** argv) {
 #endif
       errno = 123;
       int close_result = close(close_fd), close_error = errno;
-      std::fprintf(stderr, "ACTUAL_STDIO_PHASE independent-fd-closed result=%d\n", close_result);
+      std::fprintf(stderr, "ACTUAL_STDIO_PHASE independent-fd-closed result=%d closer-completed-before-unlock=%d\n",
+          close_result, completed.load(std::memory_order_acquire));
       UnlockStream(stream);
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-unlocked\n");
       while (!completed.load(std::memory_order_acquire)) {
