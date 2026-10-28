@@ -60,3 +60,28 @@ Primary Microsoft references (reviewed2026-10-29):
   documents QPC clock, THREAD/CSWITCH flags and loss counters.
 - https://learn.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_logfilew
   documents raw timestamps and consumer loss reporting.
+
+
+## Source peer and actual component handoff (2026-10-29)
+
+Exact source: ebbe55ccbae420ca0233dd6ac28e0916aa3b2f93. Independent
+Binder source peer reviewed the phase/TDH/identity model and found a real
+controller cleanup blocker in da308e21. The ebbe55cc fix independently attempts
+process, exact trace and holder retirement, verifies trace absence through
+ControlTrace, aggregates cleanup errors and preserves the original failure.
+Both Binder and integration read-only cleanup peers accepted this bounded
+source checkpoint; this is not runtime qualification.
+
+CI40788523899/attempt1 was triggered by the narrow push workflow at exactly
+ebbe55cc, after immediate gh account=palmoni5 and gh-authenticated HTTPS push.
+At handoff only preflight/source8/strict helper adversarial controls and actual
+Linux command/blocking references were observed passing. Compilation and both
+Windows actual ETW/cleanup/runtime results are PENDING. No local C/C++, Java
+or C# build or native fixture ran. No native inventory or public-blocking
+closure, coherent full, main or release claim is made.
+
+At the manager's request, the local gh watcher PID16340/session80247 was
+stopped without canceling CI. Integration owns the sole subsequent watch and
+actual log audit for40788523899. The tree's source remains frozen; this final
+checkpoint adds documentation only. If compilation/runtime fails, retain this
+run red and repair source with a new independently reviewed checkpoint.
