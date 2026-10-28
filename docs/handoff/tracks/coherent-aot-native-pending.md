@@ -73,6 +73,9 @@ Native selected-port peer passed exact7c4ef6dc. Terra automation/provenance
 peer passed exact7dba37da for the four canonical wiring files: graph, preserved
 jobs, typed OFF fixture/compiler/source roles, strict supplier controls and
 unchanged runtime body. Final tiny2c patch/source-pin/early-compile refresh
-still needs its focused automation recheck. Static Python/YAML/PowerShell
+passed Terra's focused recheck at4c9e54f79c8d6ad826ac2c1e47b47ff30d073da9;
+all43 pins match, with no new DAG/role/receipt/controller change. Saved proof:
+C:/work/gesher-ci-review/coherent-7dba-4c9e-automation-peer.md and companion
+JSON with exact delta blob hashes. Static Python/YAML/PowerShell
 parsing and graph/source/body comparisons are source checks only. No compiler,
 fixture or CI artifact was executed/downloaded locally. Full is NOT dispatched.
