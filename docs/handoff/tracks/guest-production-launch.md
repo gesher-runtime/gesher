@@ -4,8 +4,18 @@ Worktree `C:/work/gesher-guest-production-launch`, branch
 `wip/guest-production-launch`, base `f1550540186b4ae3f17a5e501a886ec1c4d5d613`.
 Exact source `2496db0d64a527649d67f833955f7b85dc2bd15b` passed the sole
 integrator's corrected source and workflow/receipt peer before push. Component
-`40787855371`, attempt 1, is active; runtime remains unverified. The integrator
-owns the sole interval-120 watcher and actual terminal log/receipt audit.
+`40787855371`, attempt 1, failed both Windows runners at stage 59, before the
+positive child IPC observation. Build and strict receipts passed. Actual bounded
+admission, failure/retirement and suspended rollback rows passed, but subsequent
+isolated execution/denial/resource rows did not complete and are not accepted.
+
+The manager temporarily reassigned this tree for diagnosis. A diagnostic-only
+follow-up records missing-observation Peek/read/wait errors, exact child exit code
+before retirement, and confirmed Stop/termination/wait/exit evidence. It preserves
+the shared API, ACLs, all launch checks, deadlines, child protocol and assertions.
+The original logs omit child exit at stage 59, so no underlying cause is claimed
+and no speculative permission or inheritance relaxation is made. Source peer
+must precede a changed-source CI push. No local native compilation/execution.
 
 Integration explicitly assigned this bounded additive API and migrated fixture,
 without editing the independently active Binder branch. This is not production

@@ -174,12 +174,28 @@ static bool pipe_evidence(HANDLE pipe, PSID allowed) {
 }
 static bool read_observation(HANDLE input, HANDLE process, IpcObservation* value) {
   const ULONGLONG deadline = GetTickCount64() + 5000;
+  DWORD available = 0, peek_error = ERROR_SUCCESS, state = WAIT_TIMEOUT;
   do {
-    DWORD available = 0, read = 0;
-    if (PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) && available >= sizeof(*value))
-      return ReadFile(input, value, sizeof(*value), &read, nullptr) && read == sizeof(*value);
-    if (WaitForSingleObject(process, 5) != WAIT_TIMEOUT) return false;
+    DWORD read = 0;
+    const BOOL peeked = PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr);
+    peek_error = peeked ? ERROR_SUCCESS : GetLastError();
+    if (peeked && available >= sizeof(*value)) {
+      const BOOL read_ok = ReadFile(input, value, sizeof(*value), &read, nullptr);
+      const DWORD read_error = read_ok ? ERROR_SUCCESS : GetLastError();
+      if (read_ok && read == sizeof(*value)) return true;
+      printf("DIAG observation read-success=%d read-error=%lu bytes=%lu expected=%zu\n",
+          read_ok, read_error, read, sizeof(*value));
+      break;
+    }
+    state = WaitForSingleObject(process, 5);
+    if (state != WAIT_TIMEOUT) break;
   } while (GetTickCount64() < deadline);
+  const DWORD wait_error = state == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+  DWORD exit_code = 0;
+  const BOOL queried = GetExitCodeProcess(process, &exit_code);
+  const DWORD exit_error = queried ? ERROR_SUCCESS : GetLastError();
+  printf("DIAG observation missing available=%lu peek-error=%lu wait=%lu wait-error=%lu exit-query=%d exit=%lu exit-error=%lu\n",
+      available, peek_error, state, wait_error, queried, exit_code, exit_error);
   return false;
 }
 static bool protect_pipe(HANDLE pipe) {
@@ -434,7 +450,13 @@ static int exercise(Fixture& f) {
   struct OwnedChild {
     gesher::guest::RestrictedLaunch& launch; bool& stopped;
     ~OwnedChild() {
-      stopped = launch.Stop().confirmed;
+      const auto retired = launch.Stop();
+      stopped = retired.confirmed;
+      DWORD code = 0;
+      const BOOL queried = GetExitCodeProcess(launch.process(), &code);
+      const DWORD error = queried ? ERROR_SUCCESS : GetLastError();
+      printf("DIAG owned-child retirement confirmed=%d terminate-error=%lu wait-error=%lu exit-query=%d exit=%lu exit-error=%lu\n",
+          stopped, retired.terminate_error, retired.wait_error, queried, code, error);
       if (!stopped) fprintf(stderr, "owned process not signaled after cleanup deadline\n");
     }
   } owned{launch, f.child_stopped};
