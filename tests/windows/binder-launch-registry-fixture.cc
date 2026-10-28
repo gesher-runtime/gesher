@@ -40,7 +40,7 @@ int main(int argc, char**) {
     return 1;
   }
   SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
-  HANDLE child_input, child_output, input, output;
+  HANDLE child_input = nullptr, child_output = nullptr, input = nullptr, output = nullptr;
   Check(CreatePipe(&child_input, &input, &inherit, 0) &&
         CreatePipe(&output, &child_output, &inherit, 0), "owned pipes");
   SetHandleInformation(input, HANDLE_FLAG_INHERIT, 0);
