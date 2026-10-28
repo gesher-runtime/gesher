@@ -32,6 +32,9 @@ int main(void) {
   int res_errno = errno;
   printf("Linux retained pthread CPU clock after join: gettime=%d errno=%d getres=%d errno=%d\n",
          time_result, time_errno, res_result, res_errno);
-  // Record exact Linux behavior before selecting the compatibility contract.
+  // Observed on Linux reference run40790238879/source9f748617, then
+  // promoted into an asserted oracle for subsequent exact-source runs.
+  if (time_result != -1 || time_errno != EINVAL || res_result != -1 || res_errno != EINVAL) return 5;
+  puts("PASS Linux retained pthread CPU clock: dead gettime/getres both EINVAL");
   return 0;
 }

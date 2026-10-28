@@ -4,8 +4,11 @@ Base: accepted integration f1550540186b4ae3f17a5e501a886ec1c4d5d613.
 Exclusive tree C:/work/gesher-pthread-foreign-cpu-clock, branch
 wip/pthread-foreign-cpu-clock. Existing ADR0075; test90 is reserved.
 No local native/Java/C# compilation or execution. Narrow Linux observation
-run 40790238879 at 9f748617e951aaccad3608ddd8b630ce06e1448e is pending; it
-does not compile or exercise the Windows source.
+run 40790238879 at 9f748617e951aaccad3608ddd8b630ce06e1448e succeeded;
+its actual job log reports post-join gettime=-1 errno22, getres=-1 errno22.
+It does not compile or exercise the Windows source. The observed EINVAL
+results are now asserted in subsequent Linux source and guest resolution
+controls; those new assertions have not run yet.
 
 ## Bounded source change
 
@@ -35,8 +38,8 @@ The original Windows/package/e2e assertions remain in force.
 
 ## Open work and proof limits
 
-Linux reference CI records actual post-join gettime/getres errors before the
-compatibility decision is accepted. Its observation is not a Windows proof.
+Linux reference CI recorded actual post-join gettime/getres EINVAL. Its
+observation is not a Windows proof.
 Dedicated test90 now has source-only independent brackets against owned Win32
 thread handles, 257 real concurrent external self identities, 256-slot capacity
 and EAGAIN/output controls, invalid IDs, 1024 acquisitions with no handle-count
