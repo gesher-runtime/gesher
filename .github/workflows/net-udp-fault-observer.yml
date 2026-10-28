@@ -1,0 +1,24 @@
+name: UDP Linux fault observation
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/net-udp-trunc]
+    paths:
+      - '.github/workflows/net-udp-fault-observer.yml'
+      - 'tests/native2/net_udp_fault_observer.c'
+permissions:
+  contents: read
+jobs:
+  linux-observer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual Linux libc fault and packet-queue observations
+        run: |
+          set -euo pipefail
+          printf 'source=%s run=%s attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          cc --version
+          sha256sum tests/native2/net_udp_fault_observer.c
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/native2/net_udp_fault_observer.c -o /tmp/net-udp-fault-observer
+          /tmp/net-udp-fault-observer
