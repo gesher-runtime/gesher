@@ -185,3 +185,22 @@ whitespace checks only. Independent source peer is required before any push
 or CI. No local native/JVM/C# compile or fixture ran. No run ID exists for
 this source. Event-wait kernel witness, public7/38, signals, OFD/inheritance,
 full integration and release remain open; WCT is not an event-wait witness.
+
+
+### Peer-reviewed source and pending component
+
+Exact source1037c8f103a341b5b733a78c064efd1db2b54e72 passed the independent
+integration worker's bounded source review on2026-10-29. A follow-up review
+confirmed the checked noninitial result's release/acquire establishes C++
+happens-before before the main thread reads hook counters; the Win32 event
+is only the bounded wakeup. The actual fixture object is inspected before
+normal executable stripping, while the production archive must lack hooks.
+Read-only local guard passes12 blobs and public_blocking_closed=false;
+Python AST and Git whitespace checks pass. No local compiled fixture ran.
+
+After checking no active same-ref run and checking gh's immediate account
+was palmoni5, gh-authenticated HTTPS pushed the branch. The narrow workflow
+push started component40782744623 on exact1037c8f1. Integration owns the
+120-second-interval watch; its result is pending. This docs-only checkpoint
+does not change the source under test. There is no runtime qualification,
+full acceptance, main/PR/tag/release or gap-checkbox change in this handoff.
