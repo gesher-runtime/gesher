@@ -188,7 +188,9 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
 $geoScript = Join-Path $root 'devices-geocode.ps1'
 Set-Content -Path $geoScript -Encoding UTF8 -Value @'
+param([string] $HelperPath)
 $ErrorActionPreference = 'Stop'
+. $HelperPath
 # Environment.Exit still runs CLR/WinRT shutdown and can deadlock after the
 # completed answer. This isolated probe owns only its current process.
 Add-Type -TypeDefinition @"
@@ -209,9 +211,17 @@ Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 [Windows.Services.Maps.MapLocationFinder, Windows.Services.Maps, ContentType = WindowsRuntime] | Out-Null
 try {
-  $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @([Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)))
-  if (-not $t.Wait(30000)) { throw 'MapLocationFinder did not complete within 30 seconds' }
-  [Console]::Out.WriteLine('status: ' + $t.Result.Status)
+  $operation = [Windows.Services.Maps.MapLocationFinder]::FindLocationsAsync('Jerusalem', $null)
+  $t = $asTask.MakeGenericMethod([Windows.Services.Maps.MapLocationFinderResult]).Invoke($null, @($operation))
+  $adapter = @{
+    Wait = { param($ms) ([System.IAsyncResult]$t).AsyncWaitHandle.WaitOne($ms) }
+    Cancel = { $operation.Cancel() }
+    Status = { $operation.Status }
+    Close = { $operation.Close() }
+    Result = { $t.GetAwaiter().GetResult() }
+  }
+  $result = Invoke-GeocoderOperation $adapter 30000 5000
+  [Console]::Out.WriteLine('status: ' + $result.Status)
   [Console]::Out.Flush()
   # WinRT/COM teardown can keep PowerShell alive after the genuine answer.
   [GesherGeocoderProbeExit]::Exit(0)
@@ -223,7 +233,7 @@ try {
 '@
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
-$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript) 45).Trim()
+$geo = (DevRun 'powershell.exe' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $geoScript, (Join-Path $PSScriptRoot 'geocoder-operation.ps1')) 45).Trim()
 if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   Write-Host "PASS  devices: geocoder: Windows.Services.Maps without a map service key answers $($Matches[1]) (Geocoder stays absent: isPresent false, IOException)"
 } else {
