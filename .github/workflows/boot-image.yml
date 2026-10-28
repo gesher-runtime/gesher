@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   compile:
@@ -21,18 +22,28 @@ jobs:
         with:
           sparse-checkout: |
             tools/boot-image
+            tools/ci
+            tools/surface
             tools/symbolize.py
             aosp.lock
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-x64
-          path: dist
+      - name: Strict current windows-x64 artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger ci-owners-dist.json --owner windows_x64
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework
-          path: dist
+      - name: Strict current framework artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name framework --producer "framework" --producer-suffix --destination ci-suppliers/framework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger ci-owners-dist.json --owner framework
 
       # AOSP's boot image profiles, at aosp.lock's tag (ADR 0054).
       - name: Fetch the boot image profiles

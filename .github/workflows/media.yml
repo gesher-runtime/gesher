@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   media:
@@ -19,21 +20,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
+            tools/ci
+            tools/surface
             tests/apps
             tests/media/ndk-format
             tests/media/opensl-contracts
             tests/media/ndk-muxer
             compat/media/sounds
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework-classes
-          path: work
+      - name: Strict current framework-classes artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name framework-classes --producer "framework" --producer-suffix --destination ci-suppliers/framework_classes
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/framework_classes --destination work --ledger ci-owners-work.json --owner framework_classes
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework
-          path: work/framework
+      - name: Strict current framework artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name framework --producer "framework" --producer-suffix --destination ci-suppliers/framework
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination work/framework --ledger ci-owners-work_framework.json --owner framework
 
       - uses: actions/setup-java@v4
         with:

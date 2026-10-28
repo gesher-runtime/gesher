@@ -15,16 +15,21 @@
 #include <jni.h>
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static pthread_t g_thread;
-static volatile int g_running;
+static _Atomic int g_running;
+static int g_invalidation_phases;
 static ANativeWindow* g_window;
 
-__attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
+// Retain the original ordinary va_list/stdout path as an independent cold
+// regression. A single-write logger must not hide a broken ARM conversion.
+__attribute__((noinline, format(printf, 1, 2))) static void legacy_say(const char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   printf("surfacegl: ");
@@ -32,6 +37,26 @@ __attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
   printf("\n");
   fflush(stdout);
   va_end(ap);
+}
+
+__attribute__((format(printf, 1, 2))) static void say(const char* fmt, ...) {
+  char text[512] = "surfacegl: ";
+  const size_t prefix = sizeof("surfacegl: ") - 1;
+  const size_t available = sizeof(text) - prefix - 1;
+  va_list ap;
+  va_start(ap, fmt);
+  const int size = vsnprintf(text + prefix, available, fmt, ap);
+  va_end(ap);
+  if (size < 0 || (size_t)size >= available) {
+    static const char error[] = "surfacegl: log formatting failed\n";
+    (void)write(STDOUT_FILENO, error, sizeof(error) - 1);
+    return;
+  }
+  const size_t length = prefix + (size_t)size;
+  text[length] = '\n';
+  // stdout and stderr have separate stdio locks. One complete write keeps
+  // the phase marker intact when native rendering traces share the log.
+  (void)write(STDOUT_FILENO, text, length + 1);
 }
 
 static void* loop(void* arg) {
@@ -69,8 +94,15 @@ static void* loop(void* arg) {
     say("context failed 0x%x", eglGetError());
     return NULL;
   }
-  int frames = 0, last_w = -1, last_h = -1;
+  struct timespec began;
+  clock_gettime(CLOCK_MONOTONIC, &began);
+  int frames = 0, last_w = -1, last_h = -1, announced = 0;
   while (g_running) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const double elapsed = (double)(now.tv_sec - began.tv_sec) +
+                           (double)(now.tv_nsec - began.tv_nsec) / 1000000000.0;
+    const int phase = g_invalidation_phases && elapsed >= 12.0 ? 2 : 1;
     EGLint w = 0, h = 0;
     eglQuerySurface(d, s, EGL_WIDTH, &w);
     eglQuerySurface(d, s, EGL_HEIGHT, &h);
@@ -82,10 +114,10 @@ static void* loop(void* arg) {
     glViewport(0, 0, w, h);
     glEnable(GL_SCISSOR_TEST);
     glScissor(0, 0, w / 2, h);
-    glClearColor(1, 0, 0, 1);
+    glClearColor(phase == 1 ? 1 : 0, 0, phase == 1 ? 0 : 1, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glScissor(w / 2, 0, w - w / 2, h);
-    glClearColor(0, 1, 0, 1);
+    glClearColor(phase == 1 ? 0 : 1, 1, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
     if (!eglSwapBuffers(d, s)) {
@@ -93,6 +125,11 @@ static void* loop(void* arg) {
       break;
     }
     if (++frames == 30) say("%d frames swapped (GL error 0x%x)", frames, glGetError());
+    if (g_invalidation_phases && announced != phase) {
+      announced = phase;
+      say("invalidation: phase %d ready", phase);
+      say("invalidation: phase %d frame %d, producer-only colors, GL error 0x%x", phase, frames, glGetError());
+    }
   }
   eglMakeCurrent(d, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   eglDestroyContext(d, c);
@@ -101,17 +138,44 @@ static void* loop(void* arg) {
   return NULL;
 }
 
-JNIEXPORT void JNICALL Java_com_gesher_surfacegl_GlActivity_start(JNIEnv* env, jclass clazz,
-                                                                  jobject surface) {
-  (void)clazz;
+static void start(JNIEnv* env, jobject surface, int phases) {
   if (g_running) return;
   g_window = ANativeWindow_fromSurface(env, surface);
   if (g_window == NULL) {
     say("ANativeWindow_fromSurface answered null");
     return;
   }
+  g_invalidation_phases = phases;
+  if (phases) {
+    legacy_say("invalidation: legacy variadic literal");
+    legacy_say("invalidation: legacy integers %d,%d,%d,%d,%d,%d,%d,%d", 1, 2, 3, 4, 5, 6, 7, 8);
+    say("invalidation: legacy variadic probe returned");
+#if defined(__aarch64__)
+    say("invalidation: abi arm64-v8a");
+#else
+    say("invalidation: abi x86_64");
+#endif
+  }
   g_running = 1;
-  pthread_create(&g_thread, NULL, loop, NULL);
+  const int error = pthread_create(&g_thread, NULL, loop, NULL);
+  if (error != 0) {
+    g_running = 0;
+    ANativeWindow_release(g_window);
+    g_window = NULL;
+    say("pthread_create failed %d", error);
+  }
+}
+
+JNIEXPORT void JNICALL Java_com_gesher_surfacegl_GlActivity_start(JNIEnv* env, jclass clazz,
+                                                                  jobject surface) {
+  (void)clazz;
+  start(env, surface, 0);
+}
+
+JNIEXPORT void JNICALL Java_com_gesher_surfacegl_GlActivity_startPhases(JNIEnv* env, jclass clazz,
+                                                                       jobject surface) {
+  (void)clazz;
+  start(env, surface, 1);
 }
 
 JNIEXPORT void JNICALL Java_com_gesher_surfacegl_GlActivity_stop(JNIEnv* env, jclass clazz) {

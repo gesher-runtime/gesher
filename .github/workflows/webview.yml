@@ -33,6 +33,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   LLVM_MINGW_TAG: "20261006"
@@ -98,17 +99,25 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: actions/download-artifact@v4
+      - name: Strict current framework-classes artifact
         if: inputs.apk
-        with:
-          name: framework-classes
-          path: fw-classes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name framework-classes --producer "framework" --producer-suffix --destination ci-suppliers/framework_classes
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/framework_classes --destination fw-classes --ledger ci-owners-fw-classes.json --owner framework_classes
 
-      - uses: actions/download-artifact@v4
+      - name: Strict current framework artifact
         if: inputs.apk
-        with:
-          name: framework
-          path: fw
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name framework --producer "framework" --producer-suffix --destination ci-suppliers/framework
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination fw --ledger ci-owners-fw.json --owner framework
 
       - name: Build webapp.apk
         if: inputs.apk

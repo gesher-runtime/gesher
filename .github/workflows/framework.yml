@@ -68,35 +68,18 @@ jobs:
           echo "$lines"
           lock=$(echo "$lines" | sha256sum | cut -c1-16)
           # v: the build recipe below (compiler, flags); bump it when it changes.
-          echo "key=host-tools-v1-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**') }}" >> "$GITHUB_OUTPUT"
+          key="host-tools-v1-$lock-${{ hashFiles('tools/host/**', 'tools/host-tools-ci.cmake', 'tools/framework/blueprint.py', 'tools/framework/tree.py', 'patches/system/libbase/**', 'patches/system/logging/**') }}"
+          key="$key-run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Cache host tools
-        id: tools
-        uses: actions/cache@v4
-        with:
-          path: dist-host
-          key: ${{ steps.key.outputs.key }}
-
-      # Caches are per branch; artifacts are not. A build of the same key
-      # on any branch is reused (each build uploads one, named by its key).
-      - name: Reuse another branch's build
+      - name: Select fresh current-run host tools build
         id: reuse
-        if: steps.tools.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           KEY: ${{ steps.key.outputs.key }}
         run: |
-          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$KEY&per_page=10" \
-            --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty' || true)
-          if [[ -n $run ]] && gh run download "$run" -R "$GITHUB_REPOSITORY" -n "$KEY" -D dist-host; then
-            find dist-host -type f -exec chmod +x {} +
-            echo "reused the host tools of run $run"
-            ls -la dist-host dist-host/protobuf
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          else
-            rm -rf dist-host
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo 'Build fresh host tools for this exact run and attempt'
 
       - name: Cache AOSP sources
         if: steps.reuse.outputs.build == 'true'
@@ -178,12 +161,15 @@ jobs:
       - name: Cache keys
         run: echo "AOSP_KEY=aosp-framework-${{ hashFiles('aosp.lock', 'patches/**') }}" >> "$GITHUB_ENV"
 
-      - name: Restore host tools
-        uses: actions/cache/restore@v4
-        with:
-          path: dist-host
-          key: ${{ needs.host-tools.outputs.key }}
-          fail-on-cache-miss: true
+      - name: Verify fresh current-run host tools archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOST_TOOLS_NAME: ${{ needs.host-tools.outputs.key }}
+        run: |
+          set -euo pipefail
+          python3 tools/ci/artifact_receipt.py --name "$HOST_TOOLS_NAME" --producer 'host-tools' --producer-suffix --destination ci-suppliers/host-tools
+          python3 tools/surface/assemble-artifacts.py --source ci-suppliers/host-tools --destination dist-host --ledger ci-owners-host-tools.json --owner host_tools
+          find dist-host -type f -exec chmod +x {} +
 
       # The tools are linked against libc++, as Soong links them.
       - name: Install the host tools' runtime

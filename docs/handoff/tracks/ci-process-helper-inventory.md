@@ -40,6 +40,23 @@ are added to84. Those two source sites are no longer unbounded, but their
 changed-source CI and all later full gates remain pending. The table above
 retains the pinned6dd5 inventory rather than silently deleting its history.
 
+2026-10-28 separate wip/ci-gtest-processes sourcec1b6ec94 adds finite shared
+Invoke-GtestProcess for actual20/Invoke-CoreLibsTest and21/Invoke-ArtGtest.
+Original parser/exclusions and900s/600s ordinary calls remain;5s post-kill and
+10s paired stream completion replace their unbounded wait. Test84 source has
+real absolute/relative cwd+argv, native exit23 with PASS, failed/zero/missing
+summary, timeout and exited-parent/retained-both-pipes/disposal controls.
+Native peer and actual changed-source both-Windows CI remain pending. These
+rows remain open at aggregate/full scope, and add no libcore/ART semantic proof.
+
+The later source df61f061/component40600988297 now has actual both-Windows
+43controls/0fail, exact25earlier records retained plus18gtest-helper controls.
+Both actual .NET10.0.13 runtimes proved tasks complete, process-handle disposal
+and paired native pipe invalidity, including a still-live retained writer;
+the original10s EOF failure remains failure after cancellation/cleanup.
+See ci-gtest-processes.md for exact jobs/logs/versions/limits. These two source
+sites have bounded component proof; aggregate/full/other-helper scopes stay open.
+
 Split40554769899 now proves both split helpers in actual CI. The following
 N2Run/test44 source removes its two unbounded waits/unfinished-reader reads
 and adds real working-directory/environment/status124/disposal controls.

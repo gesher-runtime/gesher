@@ -29,6 +29,159 @@ accepting a command without implementing its effect.
 
 ## Status and next steps
 
+Manager-assigned SG PTR leaf on2026-10-27: dedicated
+C:/work/gesher-binder2-sg, wip/binder2-sg from acceptedb323a42c; existing
+ADR0068 and test88. Native owns record-lock fd/stdio/spawn hooks and confirms
+no concurrent binder.cc/wire/broker/epoll edits. Source candidate adds guarded
+snapshot/relative owned payload/independent shape checks/receiver rebasing
+and wireversion2, requiring fresh host+broker together. No fixture, compile,
+runtime or full proof exists yet. Read ADR0068 for source identity/invariants.
+Next: bounded source peer, actual cross-process malformed/lifetime/ABI
+fixtures, CI only, then current accepted Libcore union and full gates. Existing
+FD/Bitmap/InputChannel behavior must remain; FDA/security/freeze/priority/
+readiness stay open. The older reservation below is historical.
+
 Reserved on 2026-10-26 during the post-aot2 gap audit. Unstarted. Existing
 descriptor support is verified only in its cited contexts; the remaining
 contracts above are open, pending source audit and executable evidence.
+
+Peer review of76a121e8 identified real pre-CI blockers: aggregate wire budget
+was checked too late, aligned receiver bytes were not included in the cap,
+malicious wire body lengths could allocate before remaining-byte validation,
+and receiver copy/allocation/FD failure needed explicit ownership rollback.
+The correction is still unverified source: preflight every append/snapshot,
+check aligned dimensions and actual remaining frame, guard zero-byte writes,
+and use pending delivery claim/finish with guarded caller output copies.
+Unpublished delivery failure closes local FDs/allocation, unwinds the real
+synchronous caller and broker/oneway buffer; already published commands keep
+their read_consumed prefix. PTR allocations obey real mapped capacity without
+heap fallback, enabling genuine small-map ENOMEM fixtures. Plain transaction
+heap fallback remains separately open. New protocol boundary/death/cancel/
+exactly-once/partial-consumption fixtures and second peer remain mandatory.
+No CI is dispatched from this checkpoint.
+
+Second peer of3a2efbc3 found a genuine claim-ACK ownership ambiguity and a
+preceding plain read-command publication failure that could strand a pending
+transaction. Current correction keeps broker-owned staging handles, adopts
+separate receiver copies, closes/zeros staging on finish/abort and closes the
+thread pipe for every read-stream failure. Common POSIX independent-process
+actors and a finite host parent are now source only. Remaining before CI:
+raw-wire lost-ACK/disconnect/death/FD-reuse and queue-progress controls,
+both ABI/ART/APK wiring, final peer/static checks. No source/runtime closure.
+
+## Ordinary ART/APK mode source (separate continuation)
+
+Active mode wiring branches from compiled7e9549, independently of preserved
+interrupted WIPb52. It adds the same common POSIX actor body to both NDK ABI
+ELFs/JNI libraries, standalone ART entry and separate server/client APK IDs.
+The existing public GESHER_BINDER selection is changed only around the new
+actor descriptor's open and restored immediately before mapping/ioctl/wait.
+The test descriptor captures its own pipe; established application Binder
+objects remain separate. APK code observes the existing package Binder's
+identity/descriptor/ping concurrently and checks endpoint restoration. CI
+must also audit the SG broker's actual per-APK PID open count for unexpected
+concurrent opens; no absence of misrouting is claimed from source alone.
+The package builder checks exact APK/native library/dex byte identity.
+
+No new production switch or API is introduced. These source files have not
+compiled or executed; build/runtime orchestration and peer remain pending.
+Before ARM/ART/APK runtime, select exact verified Native942/Envb497/frozen5587
+and current accepted Libcore integration, rebuild host/DLL/jars/images together
+and retain original FD/Bitmap/InputChannel/full/package/e2e gates. Complete
+public transaction-prefix transport-failure proof remains open on preserved
+unverified interrupted WIP; ordinary mode coverage does not substitute.
+
+Mode candidate now includes accepted645 plus exact verified Native942 and
+Envb497/frozen5587 (candidate mergecf416). This selects the coherent prerequisite
+before any ARM runtime; it is not combined runtime proof. Both real successful
+and unavailable-endpoint open paths will check exact environment restoration.
+JNI registration now fails cleanly on registration error/pending exception.
+A dedicated two-job build-only workflow compiles the selected host sources,
+actual JNI/ELF actors, Java entry and both role APKs with source/hash metadata;
+no runtime/ART/APK execution or acceptance is part of that workflow.
+
+Bounded source peer found no concrete build blocker in immediate restoration,
+JNI shape or packaged-byte checks. The fixture mutex covers fixture opens only:
+a concurrent new framework open/getenv could observe the temporary global
+selection. Existing-framework ping identity alone cannot prove general absence
+of misrouting. Runtime PID/open-count audit and concurrent-new-open requirement
+remain open; no broader session/isolation closure is claimed by build evidence.
+
+## Successor continuation: ordinary mode build and pending runtime
+
+Build-only40577028890 at exactd280bce02e06dd5a2fb77e8bf09dd1387be8cf3f is
+terminal green, two successful jobs. Actual host122446098275 compiles the
+selected binder.cc object and links binderd plus both actors under Werror;
+actual modes122446097882 builds both NDK ELF/JNI ABIs, Java/dex and four
+separate-role APKs, executing the exact packaged library/dex byte comparisons.
+Metadata and both plain logs are retained as binder2-sg-modes-build-40577028890-*
+under C:/work/gesher-ci-review. This is compilation/packaging evidence only;
+none of those binaries/APKs has executed. Native's exactd280 bounded peer
+found no concrete build blocker, including JNI registration failure cleanup.
+
+New run-modes.ps1 is unexecuted source, pending peer and coherent runtime CI.
+It orchestrates ordinary host/two-ABI ELF/ART/single APK/device APK actors with
+fresh separate broker/server/client processes, finite waits/drains and genuine
+sender exit before one-way delivery. It consumes exact fixture hashes/current
+runtime source, retains full actor logs, checks actual APK identities and
+process exit, and audits actual traced SG broker opens against only those two
+actor PIDs. Exactly two successful SG opens are required for each observed run;
+unexpected opens fail. Existing framework IPC and exact endpoint restoration
+remain distinct checks. This bounded observed-run audit does not claim global
+serialization of arbitrary concurrent future framework opens, nor introduce a
+production selector. Coherent workflow/current host-DLL-jars-images provenance,
+actual runtime and original FD/Bitmap/InputChannel/full gates remain pending.
+The public transaction-prefix transport-loss proof remains explicitly open on
+preserved interruptedb52; this ordinary source does not resume or replace it.
+
+The pending binder2-sg-modes-component workflow builds fresh current host and
+broker, current framework/core jars, current API3 translator and fixtures, and
+rebuilds the boot image from those exact producers. Both Windows consumers
+check all five current-run artifact identities/digests, fixture source/run/
+attempt and eleven payload hashes, all five jar hashes and fifteen exact
+image-copy hashes. It calls the ordinary runner only. This is unexecuted
+workflow source pending the same bounded peer; no component has been dispatched.
+
+Runtime peer found two concrete acceptance gaps, now corrected in source:
+device completion additionally requires the actual package's normal exit-code0
+marker and its app-process PID matching the native actor PID; one-way delivery
+is released only after that actual sender completion is validated. The consumer
+also checks every actual supplier job's successful source/run/attempt, including
+the translator reference and both framework/fixture suppliers, before consuming
+current-run artifacts. These corrections have not executed and require final peer.
+
+The successful-open audit is supported by the current production source:
+OpenBinder eagerly connects and completes HelloProc before ReserveFd/publication;
+ServeProc's trace precedes its hello reply. Therefore even an unused successful
+FD captured for the SG endpoint has a counted process-open trace. Only each
+thread's ioctl pipe is lazy. Exact trace totals plus actual intended actor opens
+bound all successful SG opens in that observed case. Failed handshakes and a
+general claim excluding arbitrary concurrent future attempts remain outside this
+bounded evidence; no such claim is required or inferred.
+
+Final bounded Native peer of correcteded741c99367d61df2bb2c07ae4d01753d9a03c06
+found no additional definite source/wiring blocker. Narrow push registered and
+started ordinary component40579429217 on that exact source, after confirming no
+live same-ref run. Required watch uses interval120 and writes the corresponding
+binder2-sg-modes-component-40579429217-watch.log in the review directory. Runtime
+is pending, with no acceptance inferred from the earlier green build-only run.
+No integration code/main/PR/tag/release operation occurred.
+
+Ordinary component40579429217/exacted741 is now terminal green12jobs,
+11success/one intentional smoke skip. Both actual Windows have63 independent
+cases in nine ABI/mode contexts,126 zero-failure actor reports totaling1440
+actual C++ checks,723 parent checks,63 exact observed successful-open audits,
+nine verified sender-death-before-delivery controls and28 actual normal0
+device-app completions. Nine supplier identities/five artifact packages,
+eleven fixture hashes/five jars/fifteen fresh image copies are checked. Read
+[the precise bounded proof](binder2-sg-ordinary-component-proof.md). SG remains
+outside the primary union; raw protocol/public-prefix/full and wider Binder2
+gates remain open. No new work on preserved filteredb52 occurred.
+
+Additional read-only source inventory: ordinary CopyToUser calls
+WriteProcessMemory without an explicit writable-page check. Existing PROT_NONE
+prefixfault evidence does not prove stable read-only-output rejection. Preserve
+the actual component scope and require separate EFAULT/unchanged bytes and
+protection/ownership-cleanup controls; concurrent protection races also remain
+open. See the precise proof's remaining-gates section. This note changes no
+production or fixture source and does not resume the filtered transport task.
