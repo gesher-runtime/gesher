@@ -1,5 +1,16 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Latest bounded integration acceptance, 2026-10-28:** canonical full40596167427
+attempt1 at exact30db7709838839d28be68d8b467a57b26a3ac667 is accepted:
+31jobs25success/6intentional reusable probes skipped, both actual Windows
+whole0, package23 and both complete ten-app e2e0. Frozen6a057ccc adds docs only;
+phase4 mergefb0a4fe24286ccf2d69ed4fe987989fddc7db1b9 has an independently
+verified empty entire non-doc diff to30db. Inventory55e03c68/all1157 is unchanged.
+Read [the exact bounded report](tracks/coherent-union-40596167427-accepted.md)
+and the newest resumed-progress entry. Surface/new notice, SG, after-resource,
+Native87/54/callbacks, later process ownership work, hardware and aggregate
+main/release requirements remain open. No main/PR/tag/release was performed.
+
 **Latest resumed continuation,2026-10-27:** read
 [the resumed progress checkpoint](session-2026-10-27-resumed-progress.md)
 for accepted Libcore/resolver, active exact sources/runs, newly captured

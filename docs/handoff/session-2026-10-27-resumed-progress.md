@@ -568,3 +568,51 @@ whole0, original14 productionOFF Web3, all Native/Env/Media/AOT/Libcore/resolver
 twenty-five process and eight Exec controls, final all-job conclusions and
 post-candidate equality remain required before the authorized phase4 merge.
 No extra dispatch, primary source edit, code merge/main/PR/tag/release occurred.
+
+## Canonical union accepted and merged, 2026-10-28
+
+Recovery used the prescribed watch on existing40596167427, which had completed
+success. Terminal attempt1/source30db7709838839d28be68d8b467a57b26a3ac667
+records31jobs25success/6intentional reusable probes skipped, with no skipped
+acceptance consumer. Both full normal Windows actual logs were newly read,
+hashed and independently counted: whole0 each, Process25, genuine Exec absolute/
+relative8, productionOFF Web3 original14, Libcore15+verdict, resolver18,
+AOT21PCL+21DLC (actual15 real-jar/registry controls for each), Env4x256,
+FPCR/FPSR5+5 and retained Native/Media controls. Each of eight muxer contexts
+has actual18parts/12FD/10outputs/10 independent decodes. Windows wall times
+36m31s/39m35s retain original60min. Saved normal-actual-review.json records
+actual lines and complete log SHA256s under the existing run prefix.
+
+Previously audited actual build/boot/framework/media suppliers, strict sealed
+OFF production and separately named ON hook modules, compiler/source hashes,
+five jars/fifteen image identities, both real hook regressions, package23 and
+both ten-app/four-transport/association/shortcut e2e0 qualify together on this
+same exact source/run/attempt. Installer artifact12779320697/digest8815eb8c
+is ordinary0.1.543 CI and does not establish new installed-notice/release0.1.0.
+No CI artifact was downloaded and no local compilation/fixture execution ran.
+
+Frozen6a057cccbb381b6b43ea1dd5b70915d9545b8505 adds only the bounded acceptance
+report. Sole integrator performed authorized --no-ff phase4 merge
+fb0a4fe24286ccf2d69ed4fe987989fddc7db1b9 without conflicts. Both staged and
+post-commit entire non-doc trees independently equal verified30db. Inventory
+blob55e03c68ed061ecbfa718cfa02ca64516b9d9233/all1157 rows/fields/history is
+unchanged. No rule-g extra full is required for identical code. Any later
+changed-code merge requires its own coherent full before further acceptance.
+Exact report: tracks/coherent-union-40596167427-accepted.md.
+
+Next critical bounded task is Surface80/86 producer/visual-gate refresh from
+this qualified source, under explicit separate worktree ownership coordination,
+preserving every original logger/pixel/phase and untraced+traced TIC assertion.
+Surface5c/loggerfd327, SG ordinary component/raw/public-prefix, Binder stable
+read-only copyout, AOT after-resource, Native87/54/reserved callbacks and later
+Terra process ownership f5 remain excluded. Process25 establishes bounded
+wait/status/output/native handles, not reader/task/pipe disposal or canceled
+partial-prefix ownership. Every roadmap/ADR/handoff gap and all ten hardware
+groups remain required. No main/PR/tag/release or aggregate completion.
+
+Owner's new model preference, 2026-10-28: use GPT-6.1 Terra for UI, automation,
+visual tests and other work not requiring Sol. The manager remains manager-only,
+at most three concurrent workers; there is exactly one integrator for
+integration/main/PR/tag/release. Current workers are integration_resume,
+native_resume and windows_terra; primary/media4-muxer ownership remains with
+the integrator. No model cost/speed claim is inferred from this preference.
