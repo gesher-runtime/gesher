@@ -61,6 +61,14 @@ jobs:
           ninja -C out native3_cpu_clock_test
           ninja -C out
 
+      - name: Build and isolate ordinary Binder host actor under production OFF
+        run: |
+          ninja -C out binder_sg_actor
+          mkdir -p dist-binder-sg-host
+          mv out/binder_sg_actor.exe dist-binder-sg-host/
+          test ! -e out/binder_sg_wire_peer.exe
+          printf '%s\n' "$GITHUB_SHA" > dist-binder-sg-host/binder-sg-runtime-source.txt
+
       - name: Check assembly boundaries use the System V ABI
         run: python3 tools/abi-check.py out third_party/aosp
 
@@ -96,10 +104,37 @@ jobs:
       - name: Freeze default-OFF production role and unchanged shared-code boundary
         run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
 
+      - name: Bind isolated ordinary Binder actor to exact production compiler and source
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib,json,sys
+          from pathlib import Path
+          sys.path.insert(0,str(Path('tools/web3').resolve()))
+          import host_roles
+          root=Path('dist-binder-sg-host')
+          production=json.loads(Path('dist/web3-production-role.json').read_text())
+          manifest=host_roles.context()
+          assert host_roles.cache(Path('out'))['GESHER_WEB3_QUERY_TESTS']=='OFF'
+          assert production['role']=='production' and production['test_hook_compiled'] is False
+          manifest.update(role='binder-ordinary-actor', compiler=production['compiler'],
+                          production_runtime_sha256=production['executable_sha256'])
+          manifest['files']={p.name:host_roles.sha(p) for p in root.iterdir() if p.is_file()}
+          manifest['sources']={p:host_roles.sha(p) for p in (
+              'compat/posix/src/binder.cc','compat/posix/src/binder_sg.h','compat/posix/src/binder_wire.h',
+              'compat/binder/binderd.cc','tests/binder/sg-actor.h','tests/binder/run-modes.ps1','tests/binder/OutputPageObserver.cs')}
+          (root/'binder-host-source.json').write_text(json.dumps(manifest,sort_keys=True))
+          assert not Path('dist/binder_sg_actor.exe').exists() and not Path('dist/binder_sg_wire_peer.exe').exists()
+          PYCODE
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
           path: dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binder2-sg-host
+          path: dist-binder-sg-host/
 
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
@@ -941,4 +976,74 @@ jobs:
           path: |
             web3-query-results.txt
             ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+          if-no-files-found: warn
+
+  # Ordinary Binder scope is mandatory and separate from production installer
+  # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
+  binder2-sg-fixtures:
+    needs: [artifact-preflight]
+    uses: ./.github/workflows/binder2-sg-full-fixtures.yml
+
+  binder2-sg-regression:
+    needs: [build, framework, arm64, boot-image, binder2-sg-fixtures]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and assemble windows-x64 for ordinary Binder regression
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name windows-x64 --producer "build" --destination ci-suppliers/windows_x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/windows_x64 --destination dist --ledger binder-full-owners.json --owner windows_x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify and assemble framework for ordinary Binder regression
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name framework --producer "framework / framework" --destination ci-suppliers/framework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/framework --destination dist --ledger binder-full-owners.json --owner framework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify and assemble arm64 for ordinary Binder regression
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name arm64 --producer "arm64 / build" --destination ci-suppliers/arm64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/arm64 --destination dist --ledger binder-full-owners.json --owner arm64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify isolated binder2-sg-host ordinary supplier
+        shell: pwsh
+        run: python tools/ci/artifact_receipt.py --name binder2-sg-host --producer "build" --destination ci-suppliers/binder2_sg_host
+      - name: Verify isolated binder2-sg-modes ordinary supplier
+        shell: pwsh
+        run: python tools/ci/artifact_receipt.py --name binder2-sg-modes --producer "binder2-sg-fixtures / modes-build" --destination fixtures
+      - name: Verify isolated boot-image ordinary supplier
+        shell: pwsh
+        run: python tools/ci/artifact_receipt.py --name boot-image --producer "boot-image / compile" --destination boot-image
+      - name: Verify isolated ordinary actor role and current production binding
+        shell: pwsh
+        run: |
+          python tools/binder/verify-full-host.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/binder2_sg_host --destination dist --ledger binder-full-owners.json --owner binder2_sg_host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual all9 contexts and81 ordinary cases with independent page and FD controls
+        shell: pwsh
+        run: tests/windows/run-binder-full.ps1
+      - name: Preserve actual ordinary Binder full evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binder2-sg-full-logs-${{ matrix.os }}
+          path: |
+            binder-full-output.txt
+            ${{ runner.temp }}/gesher-sg-modes-*/**
           if-no-files-found: warn

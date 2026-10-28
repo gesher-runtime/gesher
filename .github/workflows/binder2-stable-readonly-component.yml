@@ -321,4 +321,3 @@ jobs:
           name: binder2-sg-mode-logs-${{ matrix.os }}
           path: ${{ runner.temp }}/gesher-sg-modes-*/**
           if-no-files-found: warn
-
