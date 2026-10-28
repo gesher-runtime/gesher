@@ -1,6 +1,27 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
-**Latest bounded integration acceptance, 2026-10-28:** canonical full40596167427
+**Resume after cleanup, 2026-10-28:** read
+[the retained-worktree/account checkpoint](session-2026-10-28-after-cleanup.md)
+before using any historical checkout path. Only canonical Git, integration,
+AOTresource-current, Native3-locks and Web4-frames remain. Fifty retired
+worktrees are recoverable from preserved branches/cleanup refs; do not recreate
+obsolete trees. Qualified primary code still equals7bb/full40678371420.
+Native65 is diagnostic-only, AOT5d3 source-only and Web4e3abd unrun; all actual
+qualification and remaining gaps persist. The current GitHub account gate is
+palmoni5 immediately before each write, with gh-authenticated transport.
+
+**Newest integration acceptance, 2026-10-28:** canonical full40678371420/attempt1
+at exact7bbccfcddbac826f50b78175f4d23f8702fd7741 is accepted:35jobs29success/
+six original intentional probes skipped, both actual normal Windows whole0,
+mandatory Binder/Surface/reader and strict80-archive supplier paths, installed
+package23 and both ten-app e2e0. Frozen2634c778 adds docs only; --no-ff phase4
+merge695ef6b81ac31662f3a51fa3195ace11923058e2 has an independently verified
+empty entire non-doc diff to7bb before and after commit. Inventory55e03/all1157
+is unchanged. Read [the exact bounded report](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md)
+and newest resumed-progress entry. Failed Native3, source/diagnostic Web4,
+AOT after-resource and all remaining roadmap/hardware/release gates stay open.
+
+**Prior bounded integration acceptance, 2026-10-28:** canonical full40596167427
 attempt1 at exact30db7709838839d28be68d8b467a57b26a3ac667 is accepted:
 31jobs25success/6intentional reusable probes skipped, both actual Windows
 whole0, package23 and both complete ten-app e2e0. Frozen6a057ccc adds docs only;

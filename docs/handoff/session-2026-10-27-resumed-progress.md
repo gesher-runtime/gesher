@@ -720,3 +720,138 @@ acceptance follows from the early prerequisite or compile producer.
 Primary code still equals30db with inventory55e03c68 unchanged. Reader921418,
 Binder successor, Surface, Native87 and every other excluded/hardware/all-gap/
 release gate remain separate. No primary code/main/PR/tag/release operation.
+
+## Coherent candidate full launched, 2026-10-28
+
+This entry supersedes older pending component states above. Primary before
+this docs-only checkpoint is bab651b384f0747cd84dd23a8d55b49959dffcfa;
+its entire non-doc tree remains qualified30db7709838839d28be68d8b467a57b26a3ac667.
+Inventory blob55e03c68/all1157 fields and proof history remain unchanged.
+
+The integrator's clean pushed candidate in C:/work/gesher-media4-muxer,
+wip/coherent-surface-reader-binder-integrity, is exact
+7bbccfcddbac826f50b78175f4d23f8702fd7741. Full40678371420/attempt1 was
+dispatched once after the same-ref guard found no runs. Prescribed watch120
+session3966 writes coherent-surface-reader-binder-integrity-40678371420-watch.log
+under C:/work/gesher-ci-review. Initial preflight job122782470754 started;
+all actual expanded job counts and runtime conclusions remain pending.
+
+- Surface sourcea94a77cb/component40664447274 is bounded green on both
+  Windows: seven controls, four actual ABI/mode pixel/phase/cold-logger contexts,
+  fresh pinned native child0, original86, strict archives and5jars/15images.
+  Frozen16102cd5acc958695a4d42374659f494b5236b24 adds docs only.
+- Reader sourcef5f8fe91/component40655610161 is bounded green on both Windows:
+  43 controls include the original25; eight separate reader observations are
+  not extra control counts. Frozen921418533f4fb35d52e988bc644db8d590207ee3
+  adds docs only. Full still must exercise the actual shared consumers.
+- Canonical integrity source1ac73c5e/preflight40670202635 is green on both
+  Windows:15 adversarial archive cases, positive and identity/upload-policy
+  controls, and a real authenticated accepted boot ZIP. Frozen
+  b80e4e8d615b969237618e0db1fe68c04124354a adds docs only. Fresh framework
+  tools and canonical producer/consumer receipts still require actual full.
+- Binder source6375ce97f5febfbd88fd210aaa31d3c315177535/component40664399508
+  is bounded green:12jobs11success/one intentional translator standalone skip.
+  Each actual Windows log has9contexts x9scenarios=81 cases,1944 actor checks,
+  963 parent checks0, nine RW/nine RO,36 independent full-page observations,
+  actual protection/content/FD rollback and162 dead actor PIDs;36 actual app
+  normal0 and nine sender normal0 before delivery. Frozen
+  7c72a3af6e41ca184b385697ae8e2979414181de adds docs only. Component archive
+  controls used the historical nine-case helper; canonical candidate uses
+  the newer15-case reserved-alias validator. Stable protection only is proved;
+  concurrent protection/unmap/partial-copy and wider Binder contracts stay open.
+- Native sourcef6b1fbfa/component40667374462 remains OVERALL RED:13 duplicate modes
+  and Windows2022 passed bounded assertions, but Windows2025 WCT has no actual
+  CRT owner proof. Its production leaf is excluded. Diagnostic4f8ad228 actually
+  ran40674284726 and is terminal FAIL: Windows2025's owned closer has nine real
+  PCs through RtlEnterCriticalSection+0xf2 and worker+0x9836/+0x3a02, checked
+  suspend/resume0-to1 and actual System32 version/hash observations. WCT still
+  returns one blocked node/no owner after324 queries, so its original criterion
+  fails. Linux161, Windows2022161+four WCT and both thirteen duplicate modes
+  with8399 assertions passed again; the overall Native leaf remains UNQUALIFIED.
+  Mapping actual RVA/lock identity is next; no alternate-PC acceptance or reset
+  of original WCT criterion/deadline. Blocking/OFD/spawn/signals/ART and
+  other Native/hardware gaps stay open.
+- Terra owns separate Web4 C:/work/gesher-web4-frames from immutable30db,
+  wip/web4-childframes; early child-frame identity work is source-only and
+  excluded. Terra preference/max-three-workers/sole-integrator rules above
+  remain in force.
+
+Candidate merge conflict resolution retains exact b80 canonical15-case helper
+blobs; qualified component code/source equalities were independently checked.
+The new full has22 top-level YAML jobs (expanded actual count pending), all
+original job conditions/matrices/timeouts and six intentional probes preserved.
+Actor and raw wire peer are EXCLUDE_FROM_ALL; only the ordinary actor is
+explicitly built and moved outside production collection before sealing OFF.
+Its typed compiler/source/whole-payload artifact is consumed only by mandatory
+separate Binder regression, never installer/normal/hook payload roles. The
+actual actor .cc and CMake hashes plus unique production driver/launcher compile
+entry are checked. Independent Terra source peer passed exact7bbccfcd.
+
+The nine ordinary scenarios include the retained PROT_NONE prefixfault;
+filteredb52 public transaction-prefix/ACK-loss was NOT resumed or executed.
+No raw wire peer is built/run by this full. Mandatory full Binder preserves
+all9x9, page/protection/content, FD, actual PID and normal-completion gates.
+Original normal/Web3-defaultOFF, Surface+original/traced TIC, AOT/Libcore/Env/
+Media/Process/Exec, production/hook chronology, installed package and both e2e
+gates remain required. No component/source peer substitutes for actual full.
+No primary code merge/main/PR/tag/release or aggregate completion is claimed.
+
+## Full40678371420 accepted and integrated, 2026-10-28
+
+This entry supersedes the pending candidate state above. Exact source
+7bbccfcddbac826f50b78175f4d23f8702fd7741/attempt1 is terminal SUCCESS:
+35 actual jobs29success/six original intentional standalone probes skipped.
+Both normal122801461100/windows2022 and122801461113/windows2025 have whole0
+after42m49s. All29 successful plain logs, final metadata/artifact inventory and
+normal/roles/e2e actual-review JSON are saved under
+C:/work/gesher-ci-review/coherent-40678371420-*.
+
+Actual audit requires original14defaultOFF Web3, eight Exec, Process43 including
+the original25 plus eight separate reader observations,15 Libcore child groups
+plus verdict,18resolver,21PCL+21DLC rows with the same15 actual graph controls
+repeated per loader, four environment contexts x256, Native2/FPCR/FPSR/JNI/
+variadic and all eight18/12/10/10 muxer contexts. Surface has seven actual
+scheduling controls, four ABI/mode cold-logger/phase/pixel contexts (16 captures
+each68400/68400), two pinned fresh app native0 and original86. Counts stay
+bounded semantic evidence, not export inventory or whole-roadmap closure.
+
+Both mandatory Binder jobs have all9x9 ordinary cases,1944actor/963parent0,
+36 independent page observations, RW9/RO9, actual FD rollback/reuse, PID/open/
+normal-completion proof and current5jars/15copied images. Package has23 actual
+installed UI/input/uninstall passes. Both e2e have ten actual apps, four APK
+transport/cache controls, association/shortcut and0unexpected; TIC default
+flags-unset PASS is preserved before a separate fresh traced PASS. Both actual
+hook jobs retain47 boundary assertions and four real joins within3500ms.
+
+All80 current receipts independently match raw ZIP SHA-before-extraction and
+API exact ID/name/digest/source/run/attempt/producer/time. Fresh framework tools
+and actual current jars/images are qualified for these canonical consumer
+paths. Historical full405961's missing rawZIP gate is not retroactively closed;
+future release/standalone consumers need their own guards/qualification.
+Production5894c8e2 is sealed before hooke0e4e189; the ordinary actor stays in a
+separate typed artifact outside installer/normal/hook roles. Twelve shared and
+nine actor source hashes independently match canonical Git blobs/compiler.
+
+Frozen2634c778ed49d2c0f948fbf910566f718e12abd5 adds exactly two docs files above
+verified7bb. Integration --no-ff merge
+695ef6b81ac31662f3a51fa3195ace11923058e2 was pushed clean after both staged and
+postcommit entire non-doc diffs to7bb were EMPTY. Inventory remains exact
+55e03c68ed061ecbfa718cfa02ca64516b9d9233/all1157 fields/proof history. No extra
+rule-g full is required for identical code. The next changed candidate needs
+its own full before any further primary code merge.
+
+Native3 remains excluded/unqualified despite later actual IAT/CRT diagnostics;
+Windows2025's original WCT criterion is still required. Web4 standalone realm/
+early-injection experiments remain separate. Filteredb52 public-prefix/ACK-loss
+was not resumed/run; raw peer is not built/run. Stable Binder protection only
+is proved, with concurrent protection/unmap/partial-copy and wider Binder2 open.
+All other explicit roadmap/ADR/hardware/main/release requirements remain.
+
+Next integrator task: dedicated fresh AOT after-resource source from newly
+qualified primary. Prepared7aff867b/f8f33c0f lives in
+C:/work/gesher-aot3-after-union, wip/aot3-after-union, not historical
+gesher-aot3-after-resource/958bea20. Port only its six-file producer/resource/
+Java/track73 delta onto current strict canonical source, preserve every
+original gate, require actual before/after resource lookups and exact restoration/
+owned child exits, current fresh host/DLL/5jars/15images and independent peer
+before CI. Never run old prepared source as though it qualified this prerequisite.

@@ -1,5 +1,9 @@
 # Coherent Surface/reader/Binder/integrity candidate: pending full
 
+Historical preparation below is superseded by actual full40678371420 success
+at exact7bbccfcddbac826f50b78175f4d23f8702fd7741. Read
+[the bounded accepted report](coherent-surface-reader-binder-integrity-40678371420-accepted.md).
+
 This isolated candidate is owned solely by the integrator in
 C:/work/gesher-media4-muxer, branchwip/coherent-surface-reader-binder-integrity.
 Primary phase4 remains code-identical to verified30db/full405961. No new
