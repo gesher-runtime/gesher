@@ -2,6 +2,7 @@
 // private bootstrap or Binder transport fixture. Build/run only in future CI.
 #include "../../compat/binder/launch_registry.h"
 #include <stdexcept>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -136,5 +137,6 @@ int main(int argc, char**) {
         "terminated instance rejected");
   registry.AuthorityDied();
   Check(!registry.Live(fresh), "authority death revokes all leases");
+  puts("PASS registry real-child, failed-wait retention, revoke and authority death");
   return 0;
 }
