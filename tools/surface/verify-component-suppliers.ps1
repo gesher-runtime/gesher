@@ -3,6 +3,18 @@ $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'CI only' }
 $baseId = '40596167427'
 $baseSha = '30db7709838839d28be68d8b467a57b26a3ac667'
+function Test-RunIdentity($run, [string] $id, [string] $sha, [int] $attempt, [string] $repository) {
+  return "$($run.id)" -ceq $id -and $run.head_sha -ceq $sha -and $run.run_attempt -eq $attempt -and
+    "$($run.repository.id)" -ceq $repository -and "$($run.head_repository.id)" -ceq $repository
+}
+# Exercise the same identity gate on synthetic mismatches, before using real metadata.
+$sample = [pscustomobject]@{ id='7'; head_sha='source'; run_attempt=2; repository=@{id='8'}; head_repository=@{id='8'} }
+if (-not (Test-RunIdentity $sample '7' 'source' 2 '8') -or
+    (Test-RunIdentity $sample '7' 'wrong-source' 2 '8') -or
+    (Test-RunIdentity $sample '7' 'source' 3 '8') -or
+    (Test-RunIdentity $sample '9' 'source' 2 '8') -or
+    (Test-RunIdentity $sample '7' 'source' 2 '9')) { throw 'Run identity negative controls failed' }
+Write-Host 'SURFACE_IDENTITY_NEGATIVES wrong-source/attempt/run/repository=rejected'
 if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Checkout mismatch' }
 $allowed = @('.github/workflows/ci.yml','.github/workflows/media4-surface-build.yml',
   '.github/workflows/media4-surface-component.yml','cmake/aosp/media.cmake',
@@ -12,14 +24,14 @@ $allowed = @('.github/workflows/ci.yml','.github/workflows/media4-surface-build.
   'tests/apps/surfacegl/java/com/gesher/surfacegl/InvalidationActivity.java',
   'tests/apps/surfacegl/jni/surfacegl.c','tests/e2e/apps.json','tests/e2e/run-e2e.ps1',
   'tests/surfaces/invalidation_test.cc','tests/windows/run-surface-invalidation-component.ps1',
-  'tests/windows/tracks/80-surface-invalidation.ps1','tools/surface/verify-component-suppliers.ps1','tools/surface/download-verified-artifact.py')
+  'tests/windows/tracks/80-surface-invalidation.ps1','tools/surface/verify-component-suppliers.ps1','tools/surface/download-verified-artifact.py','tools/surface/test-verified-artifact.py')
 $changed = @(git diff --name-only $baseSha HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect source delta' }
 foreach ($path in $changed) { if (-not $path.StartsWith('docs/') -and $path -cnotin $allowed) { throw "Unreviewed scaffold source delta: $path" } }
 $base = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$baseId" | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or "$($base.id)" -cne $baseId -or $base.head_sha -cne $baseSha -or $base.name -cne 'ci' -or $base.conclusion -cne 'success' -or $base.run_attempt -ne 1 -or "$($base.repository.id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($base.head_repository.id)" -cne $env:GITHUB_REPOSITORY_ID) { throw 'Qualified full identity mismatch' }
+if ($LASTEXITCODE -ne 0 -or -not (Test-RunIdentity $base $baseId $baseSha 1 $env:GITHUB_REPOSITORY_ID) -or $base.name -cne 'ci' -or $base.conclusion -cne 'success') { throw 'Qualified full identity mismatch' }
 $current = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or $current.head_sha -cne $env:GITHUB_SHA -or $current.run_attempt -ne $env:GITHUB_RUN_ATTEMPT -or "$($current.repository.id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($current.head_repository.id)" -cne $env:GITHUB_REPOSITORY_ID) { throw 'Component run identity mismatch' }
+if ($LASTEXITCODE -ne 0 -or -not (Test-RunIdentity $current $env:GITHUB_RUN_ID $env:GITHUB_SHA $env:GITHUB_RUN_ATTEMPT $env:GITHUB_REPOSITORY_ID)) { throw 'Component run identity mismatch' }
 $currentJobs = @{}
 foreach ($entry in @(@($baseId,1,$baseSha,@('build','framework / framework','graphics / build','angle / build','media / media','webview / build','exec / exec','boot-image / compile')), @($env:GITHUB_RUN_ID,$env:GITHUB_RUN_ATTEMPT,$env:GITHUB_SHA,@('framework / framework','surfaces / apps','ndk / native2','translator / build','host')))) {
   $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($entry[0])/attempts/$($entry[1])/jobs?per_page=100" | ConvertFrom-Json
