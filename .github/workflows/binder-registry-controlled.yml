@@ -83,4 +83,3 @@ jobs:
           if ($code -ne 0) { throw "registry fixture failed or timed out: $code" }
           if ($output -notmatch 'PASS registry real-child, failed-wait retention, revoke and authority death') { throw 'missing fixture success marker' }
           Write-Host 'Registry fixture only; no legacy bootstrap or Binder runtime qualification.'
-
