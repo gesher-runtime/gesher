@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import tempfile
 
 
 def main():
@@ -82,9 +83,14 @@ def main():
         print(json.dumps(dict(kind='ACTUAL_CRT_NAMED_EXPORT', name=name, module_base=hex(module.value),
                               address=hex(address), rva=hex(rva), original_bytes=original.hex(),
                               loaded_bytes_equal=True)), flush=True)
-        subprocess.run([str(args.objdump), '--disassemble', '--no-show-raw-insn',
-                        '--start-address=' + hex(image_base + rva),
-                        '--stop-address=' + hex(image_base + rva + len(original)), str(path)], check=True)
+        with tempfile.TemporaryDirectory(prefix='native3-crt-code-') as temporary:
+            snapshot = Path(temporary) / 'ucrtbase.dll'
+            snapshot.write_bytes(data)
+            assert hashlib.sha256(snapshot.read_bytes()).digest() == hashlib.sha256(data).digest()
+            print('ACTUAL_CRT_DISASSEMBLY_SNAPSHOT sha256=' + hashlib.sha256(data).hexdigest(), flush=True)
+            subprocess.run([str(args.objdump), '--disassemble', '--no-show-raw-insn',
+                            '--start-address=' + hex(image_base + rva),
+                            '--stop-address=' + hex(image_base + rva + len(original)), str(snapshot)], check=True)
     print('ACTUAL_CRT_IMPLEMENTATION_COMPLETE exports=2 private_layout_assumed=false lock_owner_proof=false runtime_acceptance=false', flush=True)
 
 
