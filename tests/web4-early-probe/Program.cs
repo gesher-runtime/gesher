@@ -322,10 +322,11 @@ sealed class ProbeForm : Form
         return await call.WaitAsync(TimeSpan.FromSeconds(3));
     }
 
-    static async Task<string> ObserveBackend(Task<string> backend, string tag, long started, long deadlineTick, CancellationToken deadline)
+    static async Task<string> ObserveBackend(Task<string> backend, string tag, long started, long deadlineTick, CancellationToken deadline, Task? observerRelease = null)
     {
         var observed = new TaskCompletionSource<BackendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = backend.ContinueWith(done => {
+        _ = backend.ContinueWith(async done => {
+            if (observerRelease != null) await observerRelease.ConfigureAwait(false);
             long tick = Environment.TickCount64;
             Exception? error = done.IsFaulted ? done.Exception : null;
             string? result = done.IsCompletedSuccessfully ? done.Result : null;
@@ -338,12 +339,23 @@ sealed class ProbeForm : Form
                     Console.WriteLine($"{tag}_FAULT type={current.GetType().FullName} hresult=0x{current.HResult:X8} message={current.Message}");
                 Console.WriteLine($"{tag}_FAULT_CHAIN {error}");
             }
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
         BackendOutcome outcome;
         try { outcome = await observed.Task.WaitAsync(deadline); }
         catch (OperationCanceledException)
         {
-            if (!observed.Task.IsCompletedSuccessfully || observed.Task.Result.Tick >= deadlineTick) throw;
+            if (!observed.Task.IsCompletedSuccessfully)
+            {
+                if (backend.IsFaulted && backend.Exception != null)
+                {
+                    Exception original = backend.Exception.InnerExceptions.Count == 1
+                        ? backend.Exception.InnerExceptions[0] : backend.Exception;
+                    Console.WriteLine($"{tag}_FAULT_ORDERING_UNOBSERVED type={original.GetType().FullName} hresult=0x{original.HResult:X8} chain={backend.Exception}");
+                    ExceptionDispatchInfo.Capture(original).Throw();
+                }
+                throw;
+            }
+            if (observed.Task.Result.Tick >= deadlineTick) throw;
             outcome = observed.Task.Result;
         }
         Console.WriteLine($"{tag}_DECISION tick={outcome.Tick} deadline={deadlineTick} canceled={outcome.Canceled}");
@@ -378,6 +390,19 @@ sealed class ProbeForm : Form
         catch (InvalidOperationException e) when (e.Message == "immediate-fault-control") { seen = true; }
         if (!seen) throw new Exception("immediate fault was lost to cancellation");
         Console.WriteLine("EARLY_IMMEDIATE_FAULT_CONTROL_PASS");
+        var delayedBackend = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseObserver = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        delayedBackend.SetException(new InvalidOperationException("delayed-observer-control"));
+        bool delayedSeen = false;
+        try
+        {
+            await ObserveBackend(delayedBackend.Task, "EARLY_DELAYED_OBSERVER_CONTROL", started, started + 3000,
+                canceled.Token, releaseObserver.Task);
+        }
+        catch (InvalidOperationException e) when (e.Message == "delayed-observer-control") { delayedSeen = true; }
+        finally { releaseObserver.TrySetResult(); }
+        if (!delayedSeen) throw new Exception("fault was lost while its observer was delayed");
+        Console.WriteLine("EARLY_DELAYED_OBSERVER_CONTROL_PASS ordering=unobserved");
         var late = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         long lateStart = Environment.TickCount64;
         using var lateDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
