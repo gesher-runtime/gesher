@@ -81,5 +81,7 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host $output
           if ($code -ne 0) { throw "registry fixture failed or timed out: $code" }
+          if ($output -notmatch 'REGISTRY_WAIT_FAILED replacement=0 lookup=0 recovered_same_lease=1') { throw 'missing failed-wait observations' }
+          if ($output -notmatch 'REGISTRY_CHILD termination=signaled owned_job=atomic') { throw 'missing owned child termination' }
           if ($output -notmatch 'PASS registry real-child, failed-wait retention, revoke and authority death') { throw 'missing fixture success marker' }
           Write-Host 'Registry fixture only; no legacy bootstrap or Binder runtime qualification.'

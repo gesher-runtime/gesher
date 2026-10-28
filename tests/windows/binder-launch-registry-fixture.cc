@@ -45,14 +45,21 @@ int main(int argc, char**) {
         CreatePipe(&output, &child_output, &inherit, 0), "owned pipes");
   SetHandleInformation(input, HANDLE_FLAG_INHERIT, 0);
   SetHandleInformation(output, HANDLE_FLAG_INHERIT, 0);
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  Check(job && SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+        &limits, sizeof(limits)), "owned child job setup");
   SIZE_T bytes = 0;
-  InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes);
+  InitializeProcThreadAttributeList(nullptr, 2, 0, &bytes);
   std::vector<unsigned char> storage(bytes);
   auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-  Check(InitializeProcThreadAttributeList(attributes, 1, 0, &bytes), "attribute list");
+  Check(InitializeProcThreadAttributeList(attributes, 2, 0, &bytes), "attribute list");
   HANDLE allow[]{child_input, child_output};
   Check(UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
         allow, sizeof(allow), nullptr, nullptr), "restricted inheritance");
+  Check(UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+        &job, sizeof(job), nullptr, nullptr), "atomic owned child job");
   wchar_t exe[32768];
   Check(GetModuleFileNameW(nullptr, exe, 32768), "fixture executable");
   std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --child";
@@ -66,15 +73,6 @@ int main(int argc, char**) {
   Check(CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
         CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
         &startup.StartupInfo, &pi), "actual suspended child");
-  HANDLE job = CreateJobObjectW(nullptr, nullptr);
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-  if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
-        &limits, sizeof(limits)) || !AssignProcessToJobObject(job, pi.hProcess)) {
-    TerminateProcess(pi.hProcess, 137);
-    WaitForSingleObject(pi.hProcess, 5000);
-    throw std::runtime_error("owned child job assignment");
-  }
   DeleteProcThreadAttributeList(attributes);
   CloseHandle(child_input); CloseHandle(child_output);
   FILETIME created{}, a{}, b{}, c{};
@@ -93,12 +91,17 @@ int main(int argc, char**) {
   HANDLE replacement = nullptr;
   Check(DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(),
         &replacement, 0, FALSE, DUPLICATE_SAME_ACCESS), "replacement duplicate");
-  Check(!registry.Publish(replacement, install), "unknown wait refuses replacement");
+  bool replacement_ok = registry.Publish(replacement, install);
+  Check(!replacement_ok, "unknown wait refuses replacement");
   registry.PruneDead();
-  Check(!registry.Find(child.pid, child.birth, install.uid), "unknown wait denies lookup");
+  bool failed_lookup = bool(registry.Find(child.pid, child.birth, install.uid));
+  Check(!failed_lookup, "unknown wait denies lookup");
   failed_wait_handle = nullptr;
-  Check(registry.Find(child.pid, child.birth, install.uid) == lease,
+  bool recovered = registry.Find(child.pid, child.birth, install.uid) == lease;
+  Check(recovered,
         "unknown wait retained original record through publish and prune");
+  printf("REGISTRY_WAIT_FAILED replacement=%d lookup=%d recovered_same_lease=%d\n",
+         int(replacement_ok), int(failed_lookup), int(recovered));
   Check(!registry.Find(child.pid, child.birth, 1000), "forged own PID/system UID");
   Check(!registry.Find(child.pid, child.birth, 10001), "forged other package UID");
   Check(!registry.Find(child.pid, child.birth + 1, 10000), "wrong birth");
@@ -141,6 +144,7 @@ int main(int argc, char**) {
   Check(!authority_registry.Live(authority_lease), "authority death revokes live instance");
   Check(TerminateProcess(child.process, 0) &&
         WaitForSingleObject(child.process, 5000) == WAIT_OBJECT_0, "terminated real child");
+  puts("REGISTRY_CHILD termination=signaled owned_job=atomic");
   Check(!death_registry.Live(death_lease) &&
         !death_registry.Find(child.pid, child.birth, 10000),
         "terminated instance rejected");
