@@ -110,11 +110,17 @@ sealed class ProbeForm : Form
             while (!observations.ContainsKey("during-held"))
             { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
             if (observations["during-held"].Unique != old.Unique) throw new Exception("held message attributed to another context");
+            Console.WriteLine($"OBS during-held session={old.Session} id={old.Id} unique={old.Unique} origin={old.Origin} frame={old.Frame}");
             holdRelease.TrySetResult();
             while (!observations.ContainsKey("a2") || !destroyed.ContainsKey(old.Unique))
             {
                 timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token);
             }
+            Context replacement = observations["a2"];
+            if (!replacement.Default || replacement.Unique.Length == 0 || replacement.Frame.Length == 0 ||
+                replacement.Unique == old.Unique || replacement.Frame != old.Frame)
+                throw new Exception("replacement context identity does not establish same-frame new document");
+            Console.WriteLine($"OBS a2 session={replacement.Session} id={replacement.Id} unique={replacement.Unique} origin={replacement.Origin} frame={replacement.Frame}");
             bool staleRejected = false;
             try { await Evaluate(old, "realmProbe('stale-reply')"); }
             catch (Exception e) when (e.Message.Contains("context", StringComparison.OrdinalIgnoreCase))
