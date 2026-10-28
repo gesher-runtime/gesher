@@ -1,0 +1,238 @@
+name: binder2-stable-readonly-component
+
+# Ordinary modes only. Full/package/e2e and the preserved transport-prefix
+# failure fixture remain separate required gates.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: binder2-stable-readonly-component-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  prerequisite:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require exact selected prerequisite and actual mode build proof
+        shell: pwsh
+        run: |
+          $qualified = '30db7709838839d28be68d8b467a57b26a3ac667'
+          $baseline = 'a474aefaa553f53f3fdf14345c199b0a4ae3683c'
+          $proof = gh api repos/${{ github.repository }}/actions/runs/40596167427 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $proof.head_sha -cne $qualified -or
+              $proof.name -cne 'ci' -or $proof.run_attempt -ne 1 -or $proof.conclusion -cne 'success' -or
+              $proof.repository.full_name -cne '${{ github.repository }}' -or
+              $proof.head_repository.id -ne $proof.repository.id) { throw 'Qualified coherent union identity mismatch' }
+          foreach ($ancestor in $qualified, $baseline, 'ed741c99367d61df2bb2c07ae4d01753d9a03c06') {
+            git merge-base --is-ancestor $ancestor HEAD
+            if ($LASTEXITCODE -ne 0) { throw "Missing exact selected prerequisite $ancestor" }
+          }
+          $allowed = @('compat/posix/src/binder.cc','tests/binder/sg-actor.h','tests/binder/run-modes.ps1',
+            'tests/binder/OutputPageObserver.cs','.github/workflows/binder2-stable-readonly-component.yml')
+          $changed = @(git diff --name-only $baseline HEAD -- . ':!docs/**')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect exact successor source delta' }
+          foreach ($path in $changed) { if ($path -cnotin $allowed) { throw "Unreviewed Binder successor source delta: $path" } }
+          Write-Host "ACTUAL_BINDER_READONLY_BASE source=$baseline union=$qualified full=40596167427 attempt=1 ordinary=ed741c99367d61df2bb2c07ae4d01753d9a03c06 current=${{ github.sha }}"
+  fixtures:
+    needs: prerequisite
+    uses: ./.github/workflows/binder2-sg-modes-build.yml
+  framework:
+    needs: prerequisite
+    uses: ./.github/workflows/framework.yml
+  translator:
+    needs: prerequisite
+    uses: ./.github/workflows/arm64.yml
+  host:
+    needs: prerequisite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Build current host, broker, launcher, compiler and core jars together
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGESHER_WEB3_QUERY_TESTS=OFF
+          ninja -C out dalvikvm dex2oat profman dexdump gesher-exec binderd servicemanager binder_sg_actor
+          tools/build-boot-jars.sh out/boot-jars
+          tests/build-test-apps.sh out/test-apps
+          mkdir -p dist
+          cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe \
+            out/binderd.exe out/servicemanager.exe out/binder_sg_actor.exe out/dalvikvm.map out/dex2oat.map \
+            out/boot-jars/*.jar out/test-apps/hello.dex dist/
+          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
+          tools/fonts/collect-fonts.sh third_party/aosp dist
+          compat/libcore/collect-tzdata.sh third_party/aosp dist
+          printf '%s\n' "$GITHUB_SHA" > dist/binder-sg-runtime-source.txt
+          python3 - <<'PYCODE'
+          import hashlib, json, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('tools/web3').resolve()))
+          import host_roles
+          identity = host_roles.context()
+          assert host_roles.cache(Path('out'))['GESHER_WEB3_QUERY_TESTS'] == 'OFF'
+          identity['compiler'] = host_roles.compiler(Path('out'))
+          root = Path('dist')
+          identity['files'] = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in root.rglob('*') if p.is_file()}
+          (root / 'binder-output-host-manifest.json').write_text(json.dumps(identity, sort_keys=True))
+          PYCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/
+  boot-image:
+    needs: [host, framework]
+    uses: ./.github/workflows/boot-image.yml
+  test:
+    needs: [fixtures, framework, translator, host, boot-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require exact current-run artifact identities
+        shell: pwsh
+        run: |
+          $run = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '${{ github.sha }}' -or
+              $run.run_attempt -ne ${{ github.run_attempt }} -or $run.repository.full_name -cne '${{ github.repository }}') {
+            throw 'SG component current run/source identity mismatch'
+          }
+          $jobs = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs --paginate | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual SG supplier job attempts' }
+          foreach ($name in 'prerequisite','host','framework / host-tools','framework / framework',
+              'translator / fpsr-reference / reference','translator / build','fixtures / host-compile','fixtures / modes-build','boot-image / compile') {
+            $job = @($jobs.jobs | Where-Object name -CEQ $name)
+            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].head_sha -cne $run.head_sha -or
+                $job[0].run_id -ne $run.id -or $job[0].run_attempt -ne $run.run_attempt) {
+              throw "Unproved SG supplier job/source/run/attempt $name"
+            }
+            Write-Host "ACTUAL_SG_SUPPLIER job=$name id=$($job[0].id) source=$($job[0].head_sha) run=$($job[0].run_id) attempt=$($job[0].run_attempt) conclusion=$($job[0].conclusion)"
+          }
+          $inventory = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect SG current artifact inventory' }
+          foreach ($name in 'windows-x64','framework','arm64','boot-image','binder2-sg-modes') {
+            $artifact = @($inventory.artifacts | Where-Object name -CEQ $name)
+            if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].id -le 0 -or $artifact[0].size_in_bytes -le 0 -or
+                $artifact[0].workflow_run.id -ne $run.id -or $artifact[0].workflow_run.head_sha -cne $run.head_sha -or
+                $artifact[0].workflow_run.repository_id -ne $run.repository.id -or
+                $artifact[0].workflow_run.head_repository_id -ne $run.repository.id -or
+                $artifact[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "SG artifact identity mismatch $name" }
+            $producer = @{ 'windows-x64'='host'; framework='framework / framework'; arm64='translator / build'; 'boot-image'='boot-image / compile'; 'binder2-sg-modes'='fixtures / modes-build' }[$name]
+            $job = @($jobs.jobs | Where-Object name -CEQ $producer)[0]
+            if ([datetime]$artifact[0].created_at -lt [datetime]$job.started_at -or
+                [datetime]$artifact[0].created_at -gt [datetime]$job.completed_at) { throw "Artifact is outside its current producer attempt: $name" }
+            Write-Host "ACTUAL_SG_ARTIFACT name=$name id=$($artifact[0].id) digest=$($artifact[0].digest) source=$($run.head_sha) run=$($run.id) attempt=$($run.run_attempt) repository=$($run.repository.id)"
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: current-host
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: arm64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: boot-image
+          path: boot-image
+      - uses: actions/download-artifact@v4
+        with:
+          name: binder2-sg-modes
+          path: fixtures
+      - name: Verify whole current host payload and actual configured compiler
+        shell: pwsh
+        run: |
+          $manifest = Get-Content current-host/binder-output-host-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.source -cne $env:GITHUB_SHA -or $manifest.run -cne $env:GITHUB_RUN_ID -or
+              $manifest.attempt -cne $env:GITHUB_RUN_ATTEMPT -or $manifest.repository -cne $env:GITHUB_REPOSITORY -or
+              $manifest.repository_id -cne $env:GITHUB_REPOSITORY_ID -or $manifest.head_repository_id -cne $env:GITHUB_REPOSITORY_ID) { throw 'Current host manifest identity mismatch' }
+          if ($manifest.compiler.sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+              $manifest.compiler.metadata_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $manifest.compiler.configured_driver) { throw 'Missing actual configured compiler evidence' }
+          Write-Host "ACTUAL_BINDER_OUTPUT_COMPILER $($manifest.compiler | ConvertTo-Json -Compress)"
+          $hostRoot = [IO.Path]::GetFullPath('current-host') + [IO.Path]::DirectorySeparatorChar
+          $expected = @($manifest.files.PSObject.Properties.Name)
+          $actual = @(Get-ChildItem -LiteralPath current-host -Recurse -File | ForEach-Object { $_.FullName.Substring($hostRoot.Length).Replace('\','/') } | Where-Object { $_ -cne 'binder-output-host-manifest.json' })
+          if ($expected.Count -eq 0 -or @(Compare-Object $expected $actual -CaseSensitive).Count) { throw 'Current host payload missing or extra files' }
+          foreach ($entry in $manifest.files.PSObject.Properties) {
+            $path = [IO.Path]::GetFullPath((Join-Path $hostRoot $entry.Name))
+            if (-not $path.StartsWith($hostRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                $entry.Value -cnotmatch '^[0-9a-f]{64}$' -or
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.Value) { throw "Current host payload mismatch $($entry.Name)" }
+            Write-Host "ACTUAL_BINDER_OUTPUT_HOST_MEMBER name=$($entry.Name) sha256=$($entry.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+          }
+          Copy-Item -Path current-host/* -Destination dist -Recurse -Force
+      - name: Stage actual same-source root and check every consumed image copy
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'gesher-sg-runtime'
+          foreach ($folder in 'system/framework/x86_64','system/fonts','system/etc','art','data','i18n/etc/icu','tzdata') {
+            New-Item -ItemType Directory -Force (Join-Path $root $folder) | Out-Null
+          }
+          Copy-Item dist/icudt*l.dat (Join-Path $root 'i18n/etc/icu')
+          Copy-Item dist/framework-res.apk (Join-Path $root 'system/framework')
+          Copy-Item dist/build.prop (Join-Path $root 'system')
+          Copy-Item dist/fonts/*.ttf (Join-Path $root 'system/fonts')
+          Copy-Item dist/fonts/fonts.xml (Join-Path $root 'system/etc')
+          Copy-Item -Recurse -Force dist/tzdata/* (Join-Path $root 'tzdata')
+          Copy-Item boot-image/framework/x86_64/* (Join-Path $root 'system/framework/x86_64')
+          foreach ($jar in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
+            Write-Host "ACTUAL_SG_JAR member=$jar.jar sha256=$((Get-FileHash "dist/$jar.jar" -Algorithm SHA256).Hash) source=${{ github.sha }}"
+          }
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($extension in 'art','oat','vdex') {
+              $member = "$image.$extension"
+              $produced = (Get-FileHash "boot-image/framework/x86_64/$member" -Algorithm SHA256).Hash
+              $consumed = (Get-FileHash "$root/system/framework/x86_64/$member" -Algorithm SHA256).Hash
+              if ($produced -cne $consumed) { throw "SG image copy identity mismatch $member" }
+              Write-Host "ACTUAL_SG_IMAGE member=$member sha256=$consumed current-source-rebuilt-copy-identical=True"
+            }
+          }
+          if ((Get-Content dist/binder-sg-runtime-source.txt -Raw).Trim() -cne '${{ github.sha }}') {
+            throw 'SG selected runtime source marker mismatch'
+          }
+          Write-Host "ACTUAL_SG_TRANSLATOR sha256=$((Get-FileHash dist/gesher_arm64.dll -Algorithm SHA256).Hash) source=${{ github.sha }}"
+      - name: Actual independent ordinary host, both ELF/ART and single/device APK modes
+        shell: pwsh
+        run: |
+          & tests/binder/run-modes.ps1 -Dir "$PWD/dist" -Fixtures "$PWD/fixtures" `
+            -RuntimeRoot "$env:RUNNER_TEMP/gesher-sg-runtime" -Source '${{ github.sha }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve actual mode and device logs inside CI
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binder2-sg-mode-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/gesher-sg-modes-*/**
+          if-no-files-found: warn
+

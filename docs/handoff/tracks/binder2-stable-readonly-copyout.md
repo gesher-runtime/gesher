@@ -61,8 +61,6 @@ actors and matching images, verify all source/run/attempt/artifact/member hashes
 read both actual Windows logs. Do not dispatch obsolete wiring or rerun red
 source unchanged. Scoped proof must precede a later canonical full/package/e2e.
 
-## Explicit exclusions
-
 ## Fixture source checkpoint (not compiled or run)
 
 Prepared two additive scenarios `readwrite`/`readonly` in the existing shared
@@ -87,6 +85,33 @@ fresh producers and actual both-Windows runtime. Do not push historical
 component workflow wiring as a qualifying run.
 
 ## Explicit exclusions (continued)
+
+## Independent fixture peer and strict archive dependency
+
+Independent Native review at552c548808c45ae03e1ed62cd7ab86f9907d88ca found
+no additional definite stable-pointer/actor/owned-FD/page-observer blocker
+after the missing PSCustomObject OutputActorPid predeclaration was corrected.
+Exact peer and four blob/SHA256 records are saved in
+C:/work/gesher-ci-review/binder-stable-readonly-peer-552c5488.md and
+its -hashes.json companion. This is source peer only, not compile/runtime proof.
+
+A new binder2-stable-readonly-component.yml draft refreshes exact qualified
+30db/full405961 ancestry plus ordinaryed741/a474, narrow allowed delta, fresh
+host/broker/API3/framework/actors/boot suppliers, current artifact attempt
+timestamps, whole host payload manifest and the already reviewed authoritative
+compiler metadata helper. Its push trigger is deliberately absent until the
+new strict archive dependency is integrated/reviewed. It is not dispatched.
+
+Whole-archive raw SHA256-before-extraction and isolated assembly collision
+rejection are now explicit component/canonical/release requirements. Terra
+owns new CI-only download/extract/assembly helpers under tools/surface; reuse
+exact independently reviewed helper bytes and execute their actual negative
+controls in this component, then inspect real verified archive observations.
+This helper proof can be independent of unrelated Surface visual acceptance.
+Do not run draft metadata-plus-download-artifact wiring as qualifying proof.
+No local artifact download, C# compilation, fixture run or primary code merge.
+
+## Explicit exclusions
 
 Existing prefixfault/adoptfail/invalid/mapped-capacity and normal FD/Bitmap/
 InputChannel regressions remain untouched. This work does not resume filtered
