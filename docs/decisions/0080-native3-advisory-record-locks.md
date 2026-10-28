@@ -202,3 +202,16 @@ Fresh exact-source peer and fresh two-Windows CI remain required. Windows2025
 full WCT owner reporting itself remains unavailable in the recorded run; this
 route addresses only the controlled stdio lock-order evidence contract. Every
 previous red run and the broader gaps above remain open.
+
+Fresh exact-source peer accepted15640777 for CI, and actual component40714975474
+then completed SUCCESS on both Windows. All161 Linux reference rows match
+strictly; all four complete strong witnesses/negative groups per host are
+observed within the original5s.2022 uses full-wct;2025 uses decoded-crt-lock,
+with its actual one-node WCT limitation retained in raw evidence. Both13-mode
+real-resource suites complete8399 assertions/0 failures and actual broker/job
+cleanup. Plain logs, source peer and independent audit are recorded in the
+track handoff. This validates the selected test evidence route on these hosts;
+it does not provide full-WCT owner reporting, retroactively accept old red
+runs or qualify the broader unimplemented ABI/blocking/spawn/signal contracts.
+Independent actual/port review and fresh coherent full/package/two-e2e remain
+required before any primary integration.

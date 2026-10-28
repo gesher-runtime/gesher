@@ -971,3 +971,68 @@ strict suppliers and10s/180s bounds are unchanged. No local native/JVM/C# compil
 or fixture execution, no artifact download and no cleanup-state mutation.
 Source/ADR peer and actual two-host runtime remain pending; no Native3/global
 acceptance, full-WCT-provider claim or primary integration is implied.
+
+### Actual route component40714975474: both hosts complete, selected-port review pending
+
+Exact15640777a5aa3065b514fd9998d8f0bc9c955819 received independent narrow
+source/ADR peer (native3-15640777-route-source-peer.md plus hashes) before the
+own branch push. Fresh active-ref guard was clear; immediate gh palmoni5
+identity check preceded Git transport through the per-command gh helper.
+Redundant own compile40714975508 was cancelled with a separate identity check.
+Actual component40714975474/attempt1 is terminal SUCCESS: preflight122910070549,
+fresh producer122910135005, Windows2022 122911152343 and Windows2025 122911152246.
+Required120s watch session26391 ended exit0. No local compile/native execution,
+artifact download or regeneration of removed cleanup caches was used.
+
+Saved plain logs and final API metadata are native3-commands-40714975474-* in
+C:/work/gesher-ci-review. The independent saved plain-log parser/report are
+native3-40714975474-native-independent-audit.py/.json. Actual Linux161 rows
+match ALL161 actual rows on BOTH Windows without normalization or mismatch.
+Both hosts observed every strong FILE/CS/ownerbirth/call/named-Enter witness,
+all six real-resource/identity negatives and labeled WCT/route metadata-copy
+negatives in ALL four cycles. Actual2022 chooses full-wct with three nodes in
+all four cycles;2025 chooses decoded-crt-lock with the exact one Blocked node
+AND complete strong conjunction in all four. Actual cycle totals2022 are
+578/406/422/422ms;2025 1188/1032/985/1032ms under each original absolute5000ms.
+Windows2025 full-WCT owner reporting remains unobserved, not retroactively
+supplied by the alternative evidence. All previous failed runs remain RED.
+
+Both hosts independently complete13 modes/8399 assertions/0 failures, including
+required actual retained-fd reuse/foreign-sentinel survival, all quarantine
+cases, true8192 occupied slots/EMFILE cleanup and1000 raw-race duplicates with
+0 errors. Concurrent raw publications3305/3441. Real isolated broker audit
+records13 normal client exits/two actual opens; checked intentional owned
+broker stop211 and actual job14-child reap complete. All15 canonical helper
+negative controls and strict current-producer/API/source/attempt/timestamp,
+rawZIP-before-extract, whole source manifest and seven output checks pass.
+
+Producer artifact12828630529 ZIPsha256
+118db34af03365057232b2769cc2eca91d105804f1e9dab57f40788490117949.
+Both hosts verify the exact seven produced outputs:
+
+```
+native3_lock_command_worker.exe d4210858ac20e74159168c703682f864aaa328c85af6e08f5e6bc4c4b141913b
+native3_lock_duplicate_test.exe 83d6bebb0d1c9528419d6be3970dbfe6d4341e0e609f3702a47e891c8b70444e
+binderd.exe ba71e55f4ed1974930562f7a7bf576005c397beafc1d47c65bd0c0a0c8ad07a3
+linux-reference.json 3080bbfab5e57a197194217e8900527c6bef527fa30da39f2366d1b9e58ad0f1
+native3_lock_command_worker.imports.txt 7311f60b6733bf3f96cc146887b31970400683c9ee2e40d6c4586c80dc8ab611
+native3_lock_duplicate_test.imports.txt c2e3d8516034c6f18558cb2a01a9fe9e517c76e893d3a7886a285604403eb4a7
+binderd.imports.txt e9c93ca16e9f5221639ac6d6d7e38b9ce97a237ee97b0b7383b33ac111db4598
+```
+
+Independent integrator actual-evidence audit is requested before any selected
+port. Source/patch boundaries are saved externally as
+native3-15640777-selected-port-manifest.json and selected-production.patch.
+True fork is c455f432, not current qualified7bb. Never replace the whole leaf:
+accepted Media/Binder/reader differences must remain, including qualified
+posix_bionic Chdir->chdir. The exact candidate explicitly includes internal
+DuplicateOperations callbacks from54 lineage for real-resource unit failures;
+they are not selected by guest/environment/public fcntl. Do not claim those
+bytes excluded while porting their exact helper/test dependency.
+
+This is bounded common-layer/stdio/resource evidence. Production is still1dc,
+and inheritedOFD, atomic CLOEXEC/spawn, blocking7/38, targeted signals,
+bionic/ABI/ART, protection/copy races and physical contexts remain open. Any
+selected integration requires independent port review and fresh coherent
+canonical full/package/two-e2e with these exact161/four-route/13-mode gates and
+strict supplier checks. No primary merge follows from this component alone.
