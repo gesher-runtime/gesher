@@ -98,3 +98,17 @@ Next bounded critical task: refresh Surface80/86 against this qualified exact
 source/current suppliers, preserve every original logger/pixel/phase and
 untraced+traced TIC assertion, then obtain actual component proof before a
 later changed-source full. Coordinate Surface worktree ownership separately.
+
+## Later archive-integrity boundary audit, 2026-10-28
+
+The actual runtime/source/role checks above remain bounded proof. Artifact
+digest records are API metadata; this full has no independent fail-closed raw
+ZIP SHA256-before-extraction gate for every archive. Its hook ID downloads do
+already request merge-multiple:true. Actual exe/map/role guards fail closed,
+but jar/image hash observations and copy checks must not be generalized to
+all archive bytes. No reviewed normal/hook/package log reported a digest
+mismatch; absence of that warning does not prove a rejection gate exists.
+The remaining archive-integrity contract and Terra helper/negative-control
+ownership are indexed in gap-ledger-2026-10-27.md. Preserve runtime31/0 and
+exact-code-tree evidence without a retrospective whole-archive cryptographic
+claim. Future component/canonical/release gates need actual strict CI proof.
