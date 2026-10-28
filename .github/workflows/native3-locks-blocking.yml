@@ -149,7 +149,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
-          $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'compile')
+          $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'union-native-blocking / compile')
           if ($jobs.Count -ne 1 -or $jobs[0].conclusion -ne 'success' -or
               "$($jobs[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $jobs[0].head_sha -ne $env:GITHUB_SHA) { throw 'Producer source/run/attempt mismatch' }
