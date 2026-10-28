@@ -25,6 +25,7 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<(string, int), Context> contexts = new();
     readonly ConcurrentDictionary<string, Context> observations = new();
     readonly ConcurrentDictionary<string, bool> destroyed = new();
+    readonly ConcurrentDictionary<string, string> parents = new();
     readonly ConcurrentDictionary<string, Task> sessionSetup = new();
     readonly List<CoreWebView2DevToolsProtocolEventReceiver> receivers = new();
     readonly TcpListener server = new(IPAddress.Any, 0);
@@ -55,17 +56,18 @@ sealed class ProbeForm : Form
             await web.EnsureCoreWebView2Async(env);
             var core = web.CoreWebView2;
             Console.WriteLine("RUNTIME " + env.BrowserVersionString);
-            foreach (string name in new[] { "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Runtime.bindingCalled", "Target.attachedToTarget", "Target.detachedFromTarget" })
+            foreach (string name in new[] { "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Runtime.bindingCalled", "Page.frameAttached", "Target.attachedToTarget", "Target.detachedFromTarget" })
             {
                 var receiver = core.GetDevToolsProtocolEventReceiver(name);
                 receiver.DevToolsProtocolEventReceived += (_, e) => Event(name, e.SessionId ?? "", e.ParameterObjectAsJson);
                 receivers.Add(receiver);
             }
             await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
+            await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
             await core.CallDevToolsProtocolMethodAsync("Runtime.addBinding", "{\"name\":\"realmProbe\"}");
             await core.CallDevToolsProtocolMethodAsync("Target.setAutoAttach", "{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}");
             web.Source = new Uri($"http://127.0.0.1:{port}/main");
-            string[] expected = { "main", "a", "b", "nested", "cross", "sandbox", "blank", "srcdoc" };
+            string[] expected = { "main", "a", "b", "nested", "cross", "nestedCross", "sandbox", "blank", "srcdoc" };
             while (!expected.All(observations.ContainsKey))
             {
                 timeout.Token.ThrowIfCancellationRequested();
@@ -80,6 +82,11 @@ sealed class ProbeForm : Form
             if (observations["a"].Unique == observations["b"].Unique || observations["a"].Frame == observations["b"].Frame)
                 throw new Exception("sibling contexts or frames are not distinct");
             if (observations["cross"].Session.Length == 0) throw new Exception("cross-origin target session was not observed");
+            if (observations["nestedCross"].Session.Length == 0 || observations["nestedCross"].Frame == observations["cross"].Frame)
+                throw new Exception("distinct nested cross-origin target was not observed");
+            if (!parents.TryGetValue(observations["nested"].Frame, out var nestedParent) || nestedParent != observations["a"].Frame ||
+                !parents.TryGetValue(observations["nestedCross"].Frame, out var crossParent) || crossParent != observations["a"].Frame)
+                throw new Exception("engine frame attachment did not establish nested parentage");
             if (observations["main"].Origin != $"http://127.0.0.1:{port}" ||
                 observations["cross"].Origin != $"http://localhost:{port}")
                 throw new Exception("network context origins differ from controlled origins");
@@ -129,7 +136,9 @@ sealed class ProbeForm : Form
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (name == "Target.attachedToTarget")
+            if (name == "Page.frameAttached")
+                parents[root.GetProperty("frameId").GetString() ?? ""] = root.GetProperty("parentFrameId").GetString() ?? "";
+            else if (name == "Target.attachedToTarget")
             {
                 string child = root.GetProperty("sessionId").GetString() ?? "";
                 sessionSetup[child] = SetupSession(child);
@@ -172,7 +181,9 @@ sealed class ProbeForm : Form
         {
             var core = web.CoreWebView2;
             await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.enable", "{}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Page.enable", "{}");
             await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.addBinding", "{\"name\":\"realmProbe\"}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Target.setAutoAttach", "{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}");
             await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.runIfWaitingForDebugger", "{}");
         }
         catch (Exception e) { eventFailure = true; Console.WriteLine("SESSION_SETUP_FAILURE " + session + " " + e); }
@@ -215,7 +226,7 @@ sealed class ProbeForm : Form
                 ? script + $"<iframe id='a' src='/child?name=a'></iframe><iframe src='/child?name=b'></iframe><iframe src='http://localhost:{port}/child?name=cross'></iframe><iframe sandbox='allow-scripts' src='/child?name=sandbox'></iframe>" +
                   "<iframe id='blank'></iframe><iframe srcdoc=\"<script>if(window.realmProbe)realmProbe('srcdoc')</script>\"></iframe>" +
                   "<script>let w=document.getElementById('blank').contentWindow;if(w.realmProbe)w.realmProbe('blank')</script>"
-                : script + (path.EndsWith("name=a") ? "<iframe src='/child?name=nested'></iframe>" : "");
+                : script + (path.EndsWith("name=a") ? $"<iframe src='/child?name=nested'></iframe><iframe src='http://localhost:{port}/child?name=nestedCross'></iframe>" : "");
             byte[] body = Encoding.UTF8.GetBytes("<!doctype html>" + html);
             byte[] head = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n");
             await stream.WriteAsync(head); await stream.WriteAsync(body);
