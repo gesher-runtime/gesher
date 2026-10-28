@@ -17,11 +17,15 @@ namespace zygote {
 // process's with `set` (NAME=value) applied and `unset` (NAME) removed.
 // `breakaway` asks to leave this process's jobs, so that it outlives a
 // console or job the starter belongs to. Returns the pid, or -(Win32 error).
+// The child starts suspended; its actual process handle and birth are retained
+// before resuming. This local bookkeeping grants no Binder registration authority.
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway);
 
 // The process's creation time (a FILETIME), or 0 when no such process runs.
+// Owned children use the retained CreateProcess instance. Unknown/adopted PIDs
+// still use OpenProcess and must not be treated as authenticated launch records.
 int64_t StartTime(int pid);
 
 // A spawned process's exit code: 259 (STILL_ACTIVE) while it runs, -1 when

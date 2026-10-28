@@ -248,16 +248,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** Starts a process for a package and returns its pid (ProcessList's zygote request). */
     interface ProcessStarter {
-        int start(String packageName, long startSeq, int targetSdkVersion) throws Exception;
+        int start(PackageIdentity identity, long startSeq, int targetSdkVersion) throws Exception;
     }
 
     private static final class PendingProcess {
         final String packageName;
         final String reason;
+        final PackageIdentity identity;
         int pid;
 
-        PendingProcess(String packageName, String reason) {
-            this.packageName = packageName;
+        PendingProcess(PackageIdentity identity, String reason) {
+            this.packageName = identity.packageName;
+            this.identity = identity;
             this.reason = reason;
         }
     }
@@ -651,16 +653,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         PendingProcess pending;
         synchronized (this) {
             if (processFor(packageName) != null || starting(packageName)) return;
+            PackageIdentity identity = mPm.launchIdentity(packageName);
             seq = mNextStartSeq++;
             mExitStatus.started(packageName, seq);
-            pending = new PendingProcess(packageName, reason);
+            pending = new PendingProcess(identity, reason);
             mStarting.put(seq, pending);
             updateIdle();
         }
         ApplicationInfo ai = mPm.getApplicationInfo(packageName, 0, 0);
         int pid;
         try {
-            pid = starter.start(packageName, seq, ai != null ? ai.targetSdkVersion : 0);
+            pid = starter.start(pending.identity, seq, ai != null ? ai.targetSdkVersion : 0);
         } catch (Throwable t) {
             SystemServer.log("starting a process for " + packageName + " (" + reason
                     + ") failed: " + t);

@@ -194,10 +194,14 @@ public final class SystemServer {
             return;
         }
         final String binder = System.getenv("GESHER_BINDER");
-        atm.setProcessStarter((packageName, startSeq, targetSdk) -> {
+        atm.setProcessStarter((identity, startSeq, targetSdk) -> {
+            String packageName = identity.packageName;
             File logFile = Device.packageLog(packageName);
             logFile.getParentFile().mkdirs();
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
+                    // Honest shim compatibility only. This is NOT broker authority;
+                    // private launch registration must replace trust in this field.
+                    "GESHER_BINDER_UID=" + identity.uid,
                     "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="

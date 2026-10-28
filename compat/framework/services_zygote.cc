@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <climits>
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -24,7 +25,11 @@ namespace zygote {
 namespace {
 
 std::mutex g_lock;
-std::map<int, HANDLE> g_children;  // processes this one started, for their exit codes
+struct Child {
+  HANDLE process;
+  int64_t birth;
+};
+std::map<int, Child> g_children;  // exact retained instances, never reopened for owned queries
 HANDLE g_job = nullptr;
 
 const wchar_t* W(const std::u16string& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
@@ -130,7 +135,7 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     std::u16string env = EnvironmentBlock(set, unset);
     std::u16string cmd = command_line;  // CreateProcessW may write to it
     DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT |
-                  EXTENDED_STARTUPINFO_PRESENT;
+                  EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
     PROCESS_INFORMATION pi = {};
     BOOL ok = FALSE;
     if (breakaway) {
@@ -146,10 +151,33 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
                           &si.StartupInfo, &pi);
     }
     if (ok) {
+      FILETIME created{}, exited{}, kernel{}, user{};
+      if (pi.dwProcessId == 0 || pi.dwProcessId > INT_MAX ||
+          !GetProcessTimes(pi.hProcess, &created, &exited, &kernel, &user)) {
+        result = -static_cast<int>(ERROR_INVALID_DATA);
+      } else {
+        int64_t birth = (static_cast<int64_t>(created.dwHighDateTime) << 32) |
+                        created.dwLowDateTime;
+        std::lock_guard<std::mutex> guard(g_lock);
+        int pid = static_cast<int>(pi.dwProcessId);
+        // Retain the actual CreateProcess instance before any child instruction.
+        // This local child map is not yet the broker's authorized launch registry.
+        auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth});
+        if (!birth || !inserted.second) {
+          if (inserted.second) g_children.erase(inserted.first);
+          result = -static_cast<int>(ERROR_INVALID_DATA);
+        } else if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
+          result = -static_cast<int>(GetLastError());
+          g_children.erase(inserted.first);
+        } else {
+          result = pid;
+        }
+      }
+      if (result <= 0) {
+        TerminateProcess(pi.hProcess, 137);
+        CloseHandle(pi.hProcess);
+      }
       CloseHandle(pi.hThread);
-      result = static_cast<int>(pi.dwProcessId);
-      std::lock_guard<std::mutex> guard(g_lock);
-      g_children[result] = pi.hProcess;
     } else {
       result = -static_cast<int>(GetLastError());
     }
@@ -161,6 +189,14 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
 }
 
 int64_t StartTime(int pid) {
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    auto child = g_children.find(pid);
+    if (child != g_children.end()) {
+      return WaitForSingleObject(child->second.process, 0) == WAIT_TIMEOUT
+                 ? child->second.birth : 0;
+    }
+  }
   HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
                          static_cast<DWORD>(pid));
   if (h == nullptr) return 0;
@@ -179,15 +215,22 @@ int ExitCode(int pid) {
   auto it = g_children.find(pid);
   if (it == g_children.end()) return -1;
   DWORD code = 0;
-  if (!GetExitCodeProcess(it->second, &code)) return -1;
+  if (!GetExitCodeProcess(it->second.process, &code)) return -1;
   if (code != STILL_ACTIVE) {
-    CloseHandle(it->second);
+    CloseHandle(it->second.process);
     g_children.erase(it);
   }
   return static_cast<int>(code);
 }
 
 bool Kill(int pid) {
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    auto child = g_children.find(pid);
+    if (child != g_children.end()) {
+      return TerminateProcess(child->second.process, 137) != FALSE;
+    }
+  }
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
   if (h == nullptr) return false;
   BOOL ok = TerminateProcess(h, 137);

@@ -32,7 +32,8 @@ import java.util.Map;
  * extracted next to it ({@code lib/x86_64}, the package's nativeLibraryDir), its data
  * directory is {@code $ANDROID_DATA/data/<package>}, and {@code
  * $ANDROID_DATA/system/packages.list} lists them (package, code path, first install and
- * last update times, tab-separated), which the system server reads at start, as
+ * last update times, uid and install instance, tab-separated), which the system server
+ * reads at start, as
  * PackageManagerService reads packages.xml. An update (a different APK for an installed
  * package) gets a new {@code <n>}, after the package's processes are stopped; the same APK
  * again changes nothing. Uninstalling removes the code, the data and the entry.
@@ -46,13 +47,15 @@ final class Installer {
         final String codePath;
         final long firstInstallTime;
         final long lastUpdateTime;
+        final PackageIdentity identity;
 
         Entry(String packageName, String codePath, long firstInstallTime,
-                long lastUpdateTime) {
+                long lastUpdateTime, PackageIdentity identity) {
             this.packageName = packageName;
             this.codePath = codePath;
             this.firstInstallTime = firstInstallTime;
             this.lastUpdateTime = lastUpdateTime;
+            this.identity = identity;
         }
     }
 
@@ -75,40 +78,73 @@ final class Installer {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
         if (!f.isFile()) return entries;
+        List<String[]> legacy = new ArrayList<>();
+        java.util.Set<Integer> uids = new java.util.HashSet<>();
         for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
-            String[] fields = line.split("\t");
-            if (fields.length < 4 || line.startsWith("#")) continue;
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            String[] fields = line.split("\t", -1);
+            if (fields.length == 4) {
+                legacy.add(fields);
+                continue;
+            }
+            if (fields.length != 6) throw new IOException("invalid packages.list record");
             try {
+                PackageIdentity identity = new PackageIdentity(fields[0],
+                        Integer.parseInt(fields[4]), fields[5]);
+                if (!uids.add(identity.uid) || entries.containsKey(fields[0])) {
+                    throw new IllegalArgumentException("duplicate package identity");
+                }
                 entries.put(fields[0], new Entry(fields[0], fields[1],
-                        Long.parseLong(fields[2]), Long.parseLong(fields[3])));
-            } catch (NumberFormatException e) {
-                SystemServer.log("packages.list: ignoring the line " + line);
+                        Long.parseLong(fields[2]), Long.parseLong(fields[3]), identity));
+            } catch (IllegalArgumentException e) {
+                throw new IOException("invalid packages.list identity", e);
             }
         }
+        // One-time migration: reserve all existing six-column identities first.
+        // Publish the upgraded registry before exposing any migrated package.
+        for (String[] fields : legacy) {
+            try {
+                if (entries.containsKey(fields[0])) throw new IllegalArgumentException("duplicate package");
+                List<PackageIdentity> identities = new ArrayList<>();
+                for (Entry e : entries.values()) identities.add(e.identity);
+                PackageIdentity identity = PackageIdentity.allocate(fields[0], identities);
+                entries.put(fields[0], new Entry(fields[0], fields[1],
+                        Long.parseLong(fields[2]), Long.parseLong(fields[3]), identity));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                throw new IOException("cannot migrate packages.list", e);
+            }
+        }
+        if (!legacy.isEmpty()) writeRegistry(entries);
         return entries;
     }
 
     private void writeRegistry() throws IOException {
+        writeRegistry(mEntries);
+    }
+
+    private static void writeRegistry(Map<String, Entry> entries) throws IOException {
         File f = registry();
         f.getParentFile().mkdirs();
         File tmp = new File(f.getPath() + ".tmp");
         try (Writer w = new OutputStreamWriter(new FileOutputStream(tmp),
                 StandardCharsets.UTF_8)) {
-            w.write("# package\tcode path\tfirst install\tlast update (Gesher, ADR 0026)\n");
-            for (Entry e : mEntries.values()) {
+            w.write("# package\tcode path\tfirst install\tlast update\tuid\tinstall instance\n");
+            for (Entry e : entries.values()) {
                 w.write(e.packageName + "\t" + e.codePath + "\t" + e.firstInstallTime + "\t"
-                        + e.lastUpdateTime + "\n");
+                        + e.lastUpdateTime + "\t" + e.identity.uid + "\t"
+                        + e.identity.installInstance + "\n");
             }
         }
-        if (!tmp.renameTo(f)) {
-            f.delete();
-            if (!tmp.renameTo(f)) throw new IOException("cannot write " + f);
-        }
+        // Losing the old identity file on a failed replace would reassign live uids.
+        // Fail closed on a provider without atomic replace; never delete the old file.
+        Files.move(tmp.toPath(), f.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
 
     /**
      * The installed packages, parsed from their code paths, as PackageManagerService scans
-     * them at boot. A package that does not parse any more is left out (and logged).
+     * them at boot. An unreadable package aborts startup: silently dropping its reserved
+     * uid could allocate it to a different package while its install record survives.
      */
     static List<ApkPackage> loadInstalled() throws IOException {
         List<ApkPackage> result = new ArrayList<>();
@@ -130,8 +166,8 @@ final class Installer {
             try {
                 result.add(open(e));
             } catch (Exception ex) {
-                SystemServer.log("installed package " + e.packageName + " at " + e.codePath
-                        + " does not parse: " + ex);
+                throw new IOException("installed package " + e.packageName + " at "
+                        + e.codePath + " does not parse", ex);
             }
         }
         return result;
@@ -164,6 +200,7 @@ final class Installer {
         p.setNativeLibraryDir(e.codePath + "/lib/" + NativeLibs.instructionSetDir(abi));
         p.setPrimaryCpuAbi(NativeLibs.abiFor(e.codePath + "/base.apk"));
         p.setInstallTimes(e.firstInstallTime, e.lastUpdateTime);
+        p.setIdentity(e.identity);
         new File(p.dataDir()).mkdirs();
         return p;
     }
@@ -228,10 +265,16 @@ final class Installer {
         Dexopt.onInstall(pkg, code.getPath(), parsed.sharedLibraries);
         long now = System.currentTimeMillis();
         Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
-                now);
+                now, old != null ? old.identity : mPm.installIdentity(pkg));
         ApkPackage installed = open(entry);
         mEntries.put(pkg, entry);
-        writeRegistry();
+        try {
+            writeRegistry();
+        } catch (IOException e) {
+            if (old == null) mEntries.remove(pkg);
+            else mEntries.put(pkg, old);
+            throw e;
+        }
         mPm.add(installed);
         if (old != null && !old.codePath.equals(entry.codePath)) {
             delete(new File(old.codePath));
@@ -248,9 +291,14 @@ final class Installer {
         Entry e = mEntries.get(packageName);
         if (e == null) return false;
         mAtm.forceStopPackage(packageName);
-        mPm.remove(packageName);
         mEntries.remove(packageName);
-        writeRegistry();
+        try {
+            writeRegistry();
+        } catch (IOException failure) {
+            mEntries.put(packageName, e);
+            throw failure;
+        }
+        mPm.remove(packageName);
         delete(new File(e.codePath));
         delete(new File(Device.dataDir(), "data/" + packageName));
         Dexopt.deleteProfiles(packageName);

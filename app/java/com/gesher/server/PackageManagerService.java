@@ -25,7 +25,8 @@ import java.util.Map;
 /**
  * {@code package}: PackageManagerService, knowing the APKs it was given and the installed
  * packages ({@link Installer}; parsed with PackageParser2, {@link ApkPackage}). All of them
- * run as the same uid. Packages come and go while it serves (install, uninstall): readers
+ * have separate server-assigned install identities. Packages come and go while it serves
+ * (install, uninstall): readers
  * see one version of the map, replaced as a whole.
  */
 public final class PackageManagerService extends IPackageManager.Default {
@@ -33,7 +34,27 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     public PackageManagerService(Collection<ApkPackage> packages) {
         Map<String, ApkPackage> map = new LinkedHashMap<>();
+        // Reserve persisted identities before allocating identities for command-line APKs.
         for (ApkPackage p : packages) {
+            if (p.identity() != null) {
+                if (map.containsKey(p.packageName)) {
+                    throw new IllegalStateException("duplicate installed package");
+                }
+                for (ApkPackage old : map.values()) {
+                    if (old.identity().uid == p.identity().uid
+                            && !old.packageName.equals(p.packageName)) {
+                        throw new IllegalStateException("duplicate installed uid");
+                    }
+                }
+                map.put(p.packageName, p);
+            }
+        }
+        for (ApkPackage p : packages) {
+            if (p.identity() == null) {
+                ApkPackage old = map.get(p.packageName);
+                p.setIdentity(old != null ? old.identity()
+                        : allocateIdentity(p.packageName, map));
+            }
             map.put(p.packageName, p);
         }
         mPackages = map;
@@ -41,6 +62,12 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** Adds or replaces a package (an install or an update). */
     synchronized void add(ApkPackage p) {
+        if (p.identity() == null) throw new IllegalStateException("unassigned install identity");
+        for (ApkPackage old : mPackages.values()) {
+            if (!old.packageName.equals(p.packageName) && old.identity().uid == p.identity().uid) {
+                throw new IllegalStateException("duplicate installed uid");
+            }
+        }
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         mPackages = map;
@@ -63,19 +90,52 @@ public final class PackageManagerService extends IPackageManager.Default {
         return packageName == null ? null : mPackages.get(packageName);
     }
 
+    private static PackageIdentity allocateIdentity(String name, Map<String, ApkPackage> packages) {
+        List<PackageIdentity> identities = new ArrayList<>();
+        for (ApkPackage p : packages.values()) identities.add(p.identity());
+        return PackageIdentity.allocate(name, identities);
+    }
+
+    synchronized PackageIdentity installIdentity(String name) {
+        ApkPackage old = get(name);
+        return old != null ? old.identity() : allocateIdentity(name, mPackages);
+    }
+
+    PackageIdentity launchIdentity(String name) {
+        ApkPackage p = get(name);
+        if (p == null || p.identity() == null) {
+            throw new IllegalStateException("package is not installed: " + name);
+        }
+        return p.identity();
+    }
+
+    private static void requireUser(int userId) {
+        if (userId != 0) throw new IllegalArgumentException("only user 0 is supported");
+    }
+
+    @Override
+    public int getPackageUid(String packageName, long flags, int userId) {
+        requireUser(userId);
+        ApkPackage p = get(packageName);
+        return p == null ? -1 : p.identity().uid;
+    }
+
     @Override
     public boolean isPackageAvailable(String packageName, int userId) {
+        requireUser(userId);
         return get(packageName) != null;
     }
 
     @Override
     public PackageInfo getPackageInfo(String packageName, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(packageName);
         return p == null ? null : p.packageInfo(flags);
     }
 
     @Override
     public ApplicationInfo getApplicationInfo(String packageName, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(packageName);
         return p == null ? null : p.applicationInfo(flags);
     }
@@ -88,6 +148,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(className.getPackageName());
         return p == null ? null : p.activityInfo(className.getClassName(), flags);
     }
@@ -95,6 +156,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ResolveInfo resolveIntent(Intent intent, String resolvedType, long flags,
             int userId) {
+        requireUser(userId);
         List<ResolveInfo> all = query(intent, resolvedType, flags);
         return all.isEmpty() ? null : all.get(0);
     }
@@ -102,6 +164,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ParceledListSlice queryIntentActivities(Intent intent, String resolvedType,
             long flags, int userId) {
+        requireUser(userId);
         return new ParceledListSlice<>(query(intent, resolvedType, flags));
     }
 
@@ -147,6 +210,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ResolveInfo resolveService(Intent intent, String resolvedType, long flags,
             int userId) {
+        requireUser(userId);
         List<ResolveInfo> all = services(intent, resolvedType, flags);
         return all.isEmpty() ? null : all.get(0);
     }
@@ -154,34 +218,40 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ParceledListSlice queryIntentServices(Intent intent, String resolvedType,
             long flags, int userId) {
+        requireUser(userId);
         return new ParceledListSlice<>(services(intent, resolvedType, flags));
     }
 
     @Override
     public ParceledListSlice queryIntentReceivers(Intent intent, String resolvedType,
             long flags, int userId) {
+        requireUser(userId);
         return new ParceledListSlice<>(receivers(intent, resolvedType, flags));
     }
 
     @Override
     public ServiceInfo getServiceInfo(ComponentName className, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(className.getPackageName());
         return p == null ? null : p.serviceInfo(className.getClassName(), flags);
     }
 
     @Override
     public ActivityInfo getReceiverInfo(ComponentName className, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(className.getPackageName());
         return p == null ? null : p.receiverInfo(className.getClassName(), flags);
     }
 
     @Override
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
+        requireUser(userId);
         return provider(name, flags);
     }
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        requireUser(userId);
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
         for (ProviderInfo info : p.providers(flags)) {
@@ -192,6 +262,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice getInstalledPackages(long flags, int userId) {
+        requireUser(userId);
         List<PackageInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             result.add(p.packageInfo(flags));
@@ -201,6 +272,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice getInstalledApplications(long flags, int userId) {
+        requireUser(userId);
         List<ApplicationInfo> result = new ArrayList<>();
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
@@ -210,11 +282,13 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public int getComponentEnabledSetting(ComponentName componentName, int userId) {
+        requireUser(userId);
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
     }
 
     @Override
     public int getApplicationEnabledSetting(String packageName, int userId) {
+        requireUser(userId);
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
     }
 
@@ -250,13 +324,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        Map<String, ApkPackage> packages = mPackages;
-        return packages.isEmpty() ? null : packages.keySet().iterator().next();
+        for (ApkPackage p : mPackages.values()) {
+            if (p.identity().uid == uid) return p.packageName;
+        }
+        return null;
     }
 
     @Override
     public String[] getPackagesForUid(int uid) {
-        return mPackages.keySet().toArray(new String[0]);
+        String name = getNameForUid(uid);
+        return name == null ? null : new String[] {name};
     }
 
     @Override

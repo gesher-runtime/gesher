@@ -63,11 +63,15 @@ public final class ApkPackage {
     private String mNativeLibraryDir;  // null: <data dir>/lib
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
+    private PackageIdentity mIdentity;
 
     private ApkPackage(String apkPath, ParsedPackage parsed) throws IOException {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
+        if (parsed.getSharedUserId() != null) {
+            throw new IllegalArgumentException("sharedUserId is unsupported: " + packageName);
+        }
         // Resolve the newly parsed APK, including before an install replaces the old one.
         sharedLibraries = SharedLibraryRegistry.resolve(parsed);
         mHasCode = parsed.isDeclaredHavingCode() && hasDex(apkPath);
@@ -142,6 +146,20 @@ public final class ApkPackage {
 
     public String dataDir() {
         return mDataDir;
+    }
+
+    PackageIdentity identity() {
+        return mIdentity;
+    }
+
+    void setIdentity(PackageIdentity identity) {
+        if (!packageName.equals(identity.packageName)) {
+            throw new IllegalArgumentException("identity belongs to another package");
+        }
+        if (mIdentity != null && mIdentity != identity) {
+            throw new IllegalStateException("package identity already assigned");
+        }
+        mIdentity = identity;
     }
 
     /**
@@ -416,7 +434,9 @@ public final class ApkPackage {
         if (ai.processName == null) {
             ai.processName = packageName;
         }
-        ai.uid = Process.myUid();  // every gesher process has the same uid
+        // Standalone parsing/one-VM execution retains its historical compatibility
+        // uid. Only the PM assigns an install identity; this fallback is no authority.
+        ai.uid = mIdentity != null ? mIdentity.uid : Process.myUid();
         ai.enabled = true;
         ai.flags |= ApplicationInfo.FLAG_INSTALLED;
         if (mHasCode) {
