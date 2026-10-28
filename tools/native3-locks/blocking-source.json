@@ -9,7 +9,7 @@
     "compat/posix/src/record_lock_registry.h": "86e81b23b6573073cc95e037f32380826763961b",
     "compat/posix/src/record_lock_wait.cc": "51c76f37d99237688eee086746da513cb235cc62",
     "compat/posix/src/record_lock_wait.h": "49332f98a69f2d8d3f94c35f1a561bbced65429e",
-    "tests/native3-locks/blocking_oracle.py": "6705307c174bf60884e6a3f86eafa11f024d15b8",
+    "tests/native3-locks/blocking_oracle.py": "7a40ca71cc7a347df2d7493c50ec4ef506a4a54d",
     "tests/native3-locks/blocking_worker.cc": "db6bb4288586239c53874b5f382e2e941bd1519c",
     "tools/native3-locks/blocking_source_guard.py": "a255b8105d9a3f58e904e9a7797f492676a6481d"
   }

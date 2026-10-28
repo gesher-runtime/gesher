@@ -172,7 +172,9 @@ def run(executable, windows):
                 finally:
                     if control.process.poll() is None:
                         control.finish(killed=True)
-                rows.append(dict(public_command=command, outcome='common-EINVAL-open'))
+                row = dict(public_command=command, result=-1, einval=1, outcome='common-EINVAL-open')
+                rows.append(row)
+                print('BLOCKING_PUBLIC_ROW ' + json.dumps(row, sort_keys=True), flush=True)
     return rows
 
 
