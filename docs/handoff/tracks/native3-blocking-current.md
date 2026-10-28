@@ -123,3 +123,29 @@ This final documentation-only commit records that checkpoint; its parent
 remains the exact code identity. Independent peer and fresh actual component
 evidence are prerequisites for qualification, not permission to merge this
 unverified source into primary or main/release.
+
+## Unverified stale-event checkpoint and witness research
+
+Source checkpoint dc8d2ac7 preserves the inherited event-absence reclamation
+change. No failure injection, source peer, runtime test or updated exact-blob
+pin accompanies it; the guard deliberately rejects the changed source until
+review and requalification. It is not integration-ready. Reclamation relies on
+an event remaining open throughout request publication, and removes a slot
+only on ERROR_FILE_NOT_FOUND; all other OpenEvent errors retain it. A live
+observer handle may delay reclamation. Test cleanup Begin and Commit failures
+under both cancellation and original timeout, preserve the original result,
+then prove a later waiter reclaims the abandoned slot while the original
+thread remains alive; also exercise unknown/access-denied behavior.
+
+Microsoft's WCT documentation does not list event waits as supported, and
+GetThreadWaitChain explicitly says a single node means either not blocked or
+blocked on an unsupported element. It cannot prove this event wait. Documented
+PerfProc thread state reports Wait and User request, but it is a sampled state,
+not the identity of the waited object. A credible fixture must correlate the
+actual waiting thread and its creation identity with a tightly synchronized
+wait phase and prove the observed state belongs to the event-wait path; account
+for registry mutex waits, stale samples, 100ms periodic wakes and bounded
+failure. See https://learn.microsoft.com/en-us/windows/win32/debug/wait-chain-traversal
+and https://learn.microsoft.com/en-us/windows/win32/api/wct/nf-wct-getthreadwaitchain
+and https://learn.microsoft.com/en-us/previous-versions/aa394279(v=vs.85).
+No such witness is implemented or claimed in this checkpoint.
