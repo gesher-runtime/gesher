@@ -36,7 +36,7 @@ def extract_verified(archive, expected, root, digest):
             name = member.filename
             path = PurePosixPath(name)
             raw_parts = name.rstrip('/').split('/')
-            if not name or '\\' in name or path.is_absolute() or any(part in ('', '.', '..') or re.search(r'[\x00-\x1f<>:"|?*]', part) or part.endswith((' ', '.')) or re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?', part) for part in raw_parts):
+            if not name or '\\' in name or path.is_absolute() or any(part in ('', '.', '..') or re.search(r'[\x00-\x1f<>:"|?*]', part) or part.endswith((' ', '.')) or re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(\..*)?', part) for part in raw_parts):
                 raise RuntimeError('Unsafe artifact member path')
             if stat.S_ISLNK(member.external_attr >> 16):
                 raise RuntimeError('Artifact contains a link')
