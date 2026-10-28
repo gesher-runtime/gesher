@@ -1,0 +1,36 @@
+name: coherent-union-trusted-source
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify reviewed union and reject guard replacement
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tempfile
+          base = '8ab7a1b0035eec3446597451b624e456ddf006ca'
+          allowed = {'.github/workflows/ci.yml', '.github/workflows/coherent-union-trusted-source.yml'}
+          def git(*args): return subprocess.check_output(['git', *args], text=True).strip()
+          sha = os.environ['GITHUB_SHA']
+          assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
+          assert git('rev-parse', 'HEAD') == sha
+          subprocess.run(['git', 'merge-base', '--is-ancestor', base, sha], check=True)
+          subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], check=True)
+          changed = set(git('diff', '--name-only', base, sha, '--', '.', ':(exclude)docs/**').splitlines())
+          assert changed == allowed, ('Unexpected automation delta', changed)
+          for path in ('tools/native3-locks/union_payload.py', 'tools/native3-locks/union_blocking_guard.py', 'tools/native3-locks/blocking-source.json'):
+              expected = subprocess.check_output(['git', 'show', f'{base}:{path}'])
+              assert pathlib.Path(path).read_bytes() == expected, path
+              with tempfile.TemporaryDirectory() as tmp:
+                  mutant = pathlib.Path(tmp) / 'mutant'
+                  mutant.write_text('pass\n')
+                  assert mutant.read_bytes() != expected, 'No-op guard accepted'
+              print(f'UNION_TRUSTED_PIN path={path} blob={git("rev-parse", base + ":" + path)}', flush=True)
+          print(f'UNION_TRUSTED_SOURCE base={base} source={sha} noop_guard=rejected', flush=True)
+          PY
