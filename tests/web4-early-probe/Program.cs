@@ -313,13 +313,14 @@ sealed class ProbeForm : Form
 
     async Task<string> Call(string session, string method, string parameters)
     {
+        bool traceEval = method == "Debugger.evaluateOnCallFrame";
+        long started = Environment.TickCount64;
+        if (traceEval) Console.WriteLine($"EARLY_EVAL_BEGIN session={session} tick={started} parameters={parameters}");
         Task<string> call = session.Length == 0
             ? web.CoreWebView2.CallDevToolsProtocolMethodAsync(method, parameters)
             : web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(session, method, parameters);
-        if (method == "Debugger.evaluateOnCallFrame")
+        if (traceEval)
         {
-            long started = Environment.TickCount64;
-            Console.WriteLine($"EARLY_EVAL_BEGIN session={session} tick={started} parameters={parameters}");
             _ = call.ContinueWith(done => Console.WriteLine($"EARLY_EVAL_BACKEND session={session} tick={Environment.TickCount64} elapsed={Environment.TickCount64 - started} status={done.Status}"),
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
