@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <climits>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
@@ -94,6 +95,83 @@ int main() {
 
   TextDocument original; original.available = true; original.epoch = 1;
   original.text = u"before \u05e9\u05dc\u05d5\u05dd"; original.start = 7; original.end = 11;
+  store->Update(original);
+  // Independent immutable object and medium ownership, exercised through the real ACP lock callback.
+  TextDocument formatted; formatted.available = true; formatted.epoch = 1;
+  formatted.text = u"A\u00e9\U0001f600B";
+  store->Update(formatted);
+  IDataObject* snapshot = nullptr;
+  Check(store->GetFormattedText(0, 1, &snapshot) == TS_E_NOLOCK && !snapshot, "formatted text requires lock");
+  sink->action = [&](DWORD) -> HRESULT {
+    Check(store->GetFormattedText(0, 1, &snapshot) == TS_E_NOLOCK && !snapshot, "read lock is insufficient for formatted text");
+    return S_OK;
+  };
+  sink->Lock(store, TS_LF_SYNC | TS_LF_READ);
+  sink->action = [&](DWORD) -> HRESULT {
+    IDataObject* one = nullptr; IDataObject* empty = nullptr;
+    Check(store->GetFormattedText(0, 1, &one) == S_OK && one, "end one selects exactly one unit");
+    Check(store->GetFormattedText(2, 2, &empty) == S_OK && empty, "empty range accepted");
+    FORMATETC f = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    if (one && empty) {
+      STGMEDIUM m1 = {}, m2 = {};
+      bool ok1 = one->GetData(&f, &m1) == S_OK;
+      bool ok2 = empty->GetData(&f, &m2) == S_OK;
+      const char16_t* t1 = ok1 ? static_cast<const char16_t*>(GlobalLock(m1.hGlobal)) : nullptr;
+      const char16_t* t2 = ok2 ? static_cast<const char16_t*>(GlobalLock(m2.hGlobal)) : nullptr;
+      Check(t1 && t2 && t1[0] == u'A' && t1[1] == 0 && t2[0] == 0, "one unit and empty exact terminators");
+      if (t1) GlobalUnlock(m1.hGlobal);
+      if (t2) GlobalUnlock(m2.hGlobal);
+      if (ok1) ReleaseStgMedium(&m1);
+      if (ok2) ReleaseStgMedium(&m2);
+    }
+    if (one) one->Release();
+    if (empty) empty->Release();
+    Check(store->GetFormattedText(3, 2, &snapshot) == TS_E_INVALIDPOS && !snapshot, "invalid range rejected");
+    return store->GetFormattedText(1, -1, &snapshot);
+  };
+  Check(sink->Lock(store) == S_OK && snapshot, "partial snapshot created under write lock");
+  sink->action = nullptr;
+  if (snapshot) {
+    FORMATETC format = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    Check(snapshot->QueryGetData(&format) == S_OK, "unicode text advertised");
+    FORMATETC bad = format; bad.cfFormat = CF_TEXT;
+    Check(snapshot->QueryGetData(&bad) == DV_E_FORMATETC, "unsupported format rejected");
+    bad = format; bad.lindex = 0; Check(snapshot->QueryGetData(&bad) == DV_E_LINDEX, "index rejected");
+    bad = format; bad.dwAspect = DVASPECT_ICON; Check(snapshot->QueryGetData(&bad) == DV_E_DVASPECT, "aspect rejected");
+    bad = format; bad.tymed = TYMED_ISTREAM; Check(snapshot->QueryGetData(&bad) == DV_E_TYMED, "medium rejected");
+    DVTARGETDEVICE device = {}; bad = format; bad.ptd = &device;
+    Check(snapshot->QueryGetData(&bad) == DV_E_FORMATETC, "target device rejected");
+    STGMEDIUM a = {}, b = {}; IEnumFORMATETC* enumeration = nullptr; IEnumFORMATETC* clone = nullptr;
+    Check(snapshot->GetDataHere(&format, &a) == E_NOTIMPL, "GetDataHere unsupported");
+    Check(snapshot->EnumFormatEtc(DATADIR_GET, &enumeration) == S_OK && enumeration, "format enumerator");
+    if (enumeration) {
+      FORMATETC found = {}; ULONG fetched = 0;
+      Check(enumeration->Clone(&clone) == S_OK && clone, "independent enumerator clone");
+      Check(enumeration->Next(1, &found, &fetched) == S_OK && fetched == 1 && found.cfFormat == CF_UNICODETEXT, "enumerates text");
+      Check(enumeration->Next(1, &found, &fetched) == S_FALSE && fetched == 0, "enumeration ends");
+      if (clone) { Check(clone->Next(1, &found, &fetched) == S_OK, "clone cursor independent"); clone->Release(); }
+      enumeration->Release();
+    }
+    Check(snapshot->GetData(&format, &a) == S_OK, "first consumer medium");
+    store->Disconnect();
+    Check(snapshot->GetData(&format, &b) == S_OK && a.hGlobal != b.hGlobal, "independent medium after source teardown");
+    snapshot->AddRef(); snapshot->Release(); snapshot->Release(); snapshot = nullptr;
+    const char16_t expected[] = u"\u00e9\U0001f600B";
+    if (a.hGlobal && b.hGlobal) {
+      const void* first = GlobalLock(a.hGlobal); const void* second = GlobalLock(b.hGlobal);
+      Check(first && second && GlobalSize(a.hGlobal) >= sizeof(expected) && GlobalSize(b.hGlobal) >= sizeof(expected)
+          && std::memcmp(first, expected, sizeof(expected)) == 0 && std::memcmp(second, expected, sizeof(expected)) == 0,
+          "exact UTF-16 and terminator survive source teardown");
+      if (first) GlobalUnlock(a.hGlobal);
+      if (second) GlobalUnlock(b.hGlobal);
+    }
+    if (a.tymed != TYMED_NULL) ReleaseStgMedium(&a);
+    if (b.tymed != TYMED_NULL) ReleaseStgMedium(&b);
+  }
+  // Restore a fresh store after testing teardown; keep the rest of the existing fixture intact.
+  store->Release();
+  store = new TextStore(window, [&](DocumentEdit edit) { edits.push_back(edit); if (host_feedback) host_feedback(edit); }, [&] { ++scheduled; });
+  Check(SUCCEEDED(store->AdviseSink(IID_ITextStoreACPSink, sink, TS_AS_ALL_SINKS)), "subscribe after snapshot teardown");
   store->Update(original);
   LONG end = 0;
   Check(store->GetEndACP(&end) == TS_E_NOLOCK && Text(store, sink) == original.text,

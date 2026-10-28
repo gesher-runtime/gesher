@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <climits>
 #include <utility>
+#include <new>
+#include <cstring>
 
 namespace gesher::input {
 TextStore::TextStore(HWND window, Emit emit, Schedule schedule)
@@ -35,6 +37,90 @@ ULONG TextStore::Release() {
   return static_cast<ULONG>(count);
 }
 namespace {
+// The enumerator owns its cursor independently of the data object.
+class TextFormatEnum final : public IEnumFORMATETC {
+ public:
+  explicit TextFormatEnum(ULONG cursor = 0) : cursor_(cursor) {}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (!IsEqualIID(iid, IID_IUnknown) && !IsEqualIID(iid, IID_IEnumFORMATETC)) return E_NOINTERFACE;
+    *out = static_cast<IEnumFORMATETC*>(this); AddRef(); return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refs_); }
+  ULONG STDMETHODCALLTYPE Release() override { LONG n = InterlockedDecrement(&refs_); if (!n) delete this; return n; }
+  HRESULT STDMETHODCALLTYPE Next(ULONG count, FORMATETC* formats, ULONG* fetched) override {
+    if (fetched) *fetched = 0;
+    if (!formats || (count != 1 && !fetched)) return E_POINTER;
+    ULONG n = 0;
+    if (count && !cursor_) { formats[0] = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}; cursor_ = 1; n = 1; }
+    if (fetched) *fetched = n;
+    return n == count ? S_OK : S_FALSE;
+  }
+  HRESULT STDMETHODCALLTYPE Skip(ULONG count) override {
+    ULONG available = 1 - cursor_; ULONG n = (std::min)(count, available); cursor_ += n;
+    return n == count ? S_OK : S_FALSE;
+  }
+  HRESULT STDMETHODCALLTYPE Reset() override { cursor_ = 0; return S_OK; }
+  HRESULT STDMETHODCALLTYPE Clone(IEnumFORMATETC** out) override {
+    if (!out) return E_POINTER;
+    *out = new (std::nothrow) TextFormatEnum(cursor_);
+    return *out ? S_OK : E_OUTOFMEMORY;
+  }
+ private: LONG refs_ = 1; ULONG cursor_ = 0;
+};
+class TextDataObject final : public IDataObject {
+ public:
+  TextDataObject(char16_t* text, size_t length) : text_(text), length_(length) {}
+  ~TextDataObject() { delete[] text_; }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (!IsEqualIID(iid, IID_IUnknown) && !IsEqualIID(iid, IID_IDataObject)) return E_NOINTERFACE;
+    *out = static_cast<IDataObject*>(this); AddRef(); return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&refs_); }
+  ULONG STDMETHODCALLTYPE Release() override { LONG n = InterlockedDecrement(&refs_); if (!n) delete this; return n; }
+  HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* f) override {
+    if (!f) return E_POINTER;
+    if (f->cfFormat != CF_UNICODETEXT || f->ptd) return DV_E_FORMATETC;
+    if (f->dwAspect != DVASPECT_CONTENT) return DV_E_DVASPECT;
+    if (f->lindex != -1) return DV_E_LINDEX;
+    if (!(f->tymed & TYMED_HGLOBAL)) return DV_E_TYMED;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetData(FORMATETC* f, STGMEDIUM* medium) override {
+    if (!medium) return E_POINTER;
+    *medium = {};
+    HRESULT hr = QueryGetData(f); if (FAILED(hr)) return hr;
+    if (length_ > (SIZE_MAX / sizeof(char16_t)) - 1) return STG_E_MEDIUMFULL;
+    SIZE_T bytes = (length_ + 1) * sizeof(char16_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes); if (!memory) return STG_E_MEDIUMFULL;
+    void* data = GlobalLock(memory); if (!data) { GlobalFree(memory); return STG_E_MEDIUMFULL; }
+    std::memcpy(data, text_, bytes); GlobalUnlock(memory);
+    medium->tymed = TYMED_HGLOBAL; medium->hGlobal = memory; medium->pUnkForRelease = nullptr;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override {
+    if (!out) return E_POINTER;
+    out->ptd = nullptr; return E_NOTIMPL;
+  }
+  HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD direction, IEnumFORMATETC** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr;
+    if (direction != DATADIR_GET) return direction == DATADIR_SET ? E_NOTIMPL : E_INVALIDARG;
+    *out = new (std::nothrow) TextFormatEnum; return *out ? S_OK : E_OUTOFMEMORY;
+  }
+  HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA** out) override {
+    if (!out) return E_POINTER;
+    *out = nullptr; return OLE_E_ADVISENOTSUPPORTED;
+  }
+ private: LONG refs_ = 1; char16_t* const text_; const size_t length_;
+};
 bool SameIdentity(IUnknown* left, IUnknown* right) {
   IUnknown* a = nullptr; IUnknown* b = nullptr;
   if (left != nullptr) left->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&a));
@@ -275,7 +361,22 @@ HRESULT TextStore::InsertTextAtSelection(DWORD flags, const WCHAR* text, ULONG c
   if ((flags & TS_IAS_QUERYONLY) != 0) return S_OK;
   return SetText(0, document_.start, document_.end, text, count, change);
 }
-HRESULT TextStore::GetFormattedText(LONG, LONG, IDataObject** out) { if (out) *out = nullptr; return E_NOTIMPL; }
+HRESULT TextStore::GetFormattedText(LONG start, LONG end, IDataObject** out) {
+  if (!out) return E_POINTER;
+  *out = nullptr;
+  if (!WriteLock()) return TS_E_NOLOCK;
+  if (end == -1) end = static_cast<LONG>(document_.text.size());
+  if (!Range(start, end)) return TS_E_INVALIDPOS;
+  size_t length = static_cast<size_t>(end - start);
+  if (length > (SIZE_MAX / sizeof(char16_t)) - 1) return E_OUTOFMEMORY;
+  auto* copy = new (std::nothrow) char16_t[length + 1];
+  if (!copy) return E_OUTOFMEMORY;
+  std::copy_n(document_.text.data() + start, length, copy);
+  copy[length] = 0;
+  auto* object = new (std::nothrow) TextDataObject(copy, length);
+  if (!object) { delete[] copy; return E_OUTOFMEMORY; }
+  *out = object; return S_OK;
+}
 HRESULT TextStore::GetEmbedded(LONG, REFGUID, REFIID, IUnknown** out) { if (out) *out = nullptr; return E_NOTIMPL; }
 HRESULT TextStore::QueryInsertEmbedded(const GUID*, const FORMATETC*, BOOL* okay) { if (!okay) return E_POINTER; *okay = FALSE; return S_OK; }
 HRESULT TextStore::InsertEmbedded(DWORD, LONG, LONG, IDataObject*, TS_TEXTCHANGE*) { return E_NOTIMPL; }
