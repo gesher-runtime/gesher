@@ -2,22 +2,30 @@
 # process deadline contains a blocked adapter call; it cannot stop a provider.
 function Invoke-GeocoderOperation($Adapter, [int] $WaitMs, [int] $GraceMs) {
   $terminal = @('Completed', 'Canceled', 'Error')
+  $taskFinished = $false
   try {
     # Waiting on the task handle avoids Wait() throwing on a fault or cancellation.
-    $completedInTime = $Adapter.Wait.Invoke($WaitMs)
+    $completedInTime = & $Adapter.Wait $WaitMs
+    $taskFinished = $completedInTime
     if (-not $completedInTime) {
-      $Adapter.Cancel.Invoke()
-      $null = $Adapter.Wait.Invoke($GraceMs)
-      $status = [string]$Adapter.Status.Invoke()
+      $null = & $Adapter.Cancel
+      $taskFinished = & $Adapter.Wait $GraceMs
+      $status = [string](& $Adapter.Status)
       throw "MapLocationFinder did not complete within 30 seconds (status after cancel: $status)"
     }
-    $status = [string]$Adapter.Status.Invoke()
-    if ($status -ne 'Completed') { throw "MapLocationFinder ended with status $status" }
-    return $Adapter.Result.Invoke()
+    $status = [string](& $Adapter.Status)
+    if ($status -ne 'Completed') {
+      $detail = if ($Adapter.Error) { & $Adapter.Error } else { '' }
+      throw "MapLocationFinder ended with status ${status}: $detail"
+    }
+    return (& $Adapter.Result)
   } finally {
-    # Never close an operation still reported Started. If Cancel/Status/Close
-    # blocks, the outer process deadline remains the containment boundary.
-    $statusForClose = [string]$Adapter.Status.Invoke()
-    if ($terminal -contains $statusForClose) { $Adapter.Close.Invoke() }
+    # The AsTask completion machinery may still use the operation even after
+    # WinRT reports a terminal status. Fail closed until both are terminal.
+    # A blocked call remains contained by the outer process deadline.
+    if ($taskFinished) {
+      $statusForClose = [string](& $Adapter.Status)
+      if ($terminal -contains $statusForClose) { $null = & $Adapter.Close }
+    }
   }
 }

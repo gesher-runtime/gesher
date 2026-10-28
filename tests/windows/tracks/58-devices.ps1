@@ -217,7 +217,11 @@ try {
     Wait = { param($ms) ([System.IAsyncResult]$t).AsyncWaitHandle.WaitOne($ms) }
     Cancel = { $operation.Cancel() }
     Status = { $operation.Status }
-    Close = { $operation.Close() }
+    Error = { if ($t.Exception) { $t.Exception.ToString() } }
+    # AsTask completion does not document that its bridge callback has returned.
+    # Do not race Close against that callback; the isolated process owns the
+    # projection until termination. This is not proof of provider shutdown.
+    Close = { }
     Result = { $t.GetAwaiter().GetResult() }
   }
   $result = Invoke-GeocoderOperation $adapter 30000 5000

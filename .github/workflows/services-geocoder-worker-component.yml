@@ -1,0 +1,15 @@
+name: Services geocoder worker component
+on:
+  workflow_dispatch:
+jobs:
+  controlled-worker:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise owned worker and child containment
+        shell: pwsh
+        run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
