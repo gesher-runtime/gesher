@@ -26,6 +26,7 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<string, Context> observations = new();
     readonly ConcurrentDictionary<string, bool> destroyed = new();
     readonly ConcurrentDictionary<string, Task> sessionSetup = new();
+    readonly List<CoreWebView2DevToolsProtocolEventReceiver> receivers = new();
     readonly TcpListener server = new(IPAddress.Any, 0);
     readonly TaskCompletionSource holdEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly TaskCompletionSource holdRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -58,6 +59,7 @@ sealed class ProbeForm : Form
             {
                 var receiver = core.GetDevToolsProtocolEventReceiver(name);
                 receiver.DevToolsProtocolEventReceived += (_, e) => Event(name, e.SessionId ?? "", e.ParameterObjectAsJson);
+                receivers.Add(receiver);
             }
             await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
             await core.CallDevToolsProtocolMethodAsync("Runtime.addBinding", "{\"name\":\"realmProbe\"}");
