@@ -44,8 +44,10 @@ jobs:
           $stdout = Join-Path $env:RUNNER_TEMP 'web4-realm-stdout.log'
           $stderr = Join-Path $env:RUNNER_TEMP 'web4-realm-stderr.log'
           $p = Start-Process -FilePath $exe -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
-          if (-not $p.WaitForExit(100000)) { $p.Kill($true); $p.WaitForExit(); throw 'platform probe exceeded 100 seconds' }
+          $timedOut = -not $p.WaitForExit(100000)
+          if ($timedOut) { $p.Kill($true); $p.WaitForExit() }
           Get-Content -LiteralPath $stdout
           Get-Content -LiteralPath $stderr
+          if ($timedOut) { throw 'platform probe exceeded 100 seconds' }
           if ($p.ExitCode -ne 0) { throw "platform probe exited $($p.ExitCode)" }
           if (-not (Select-String -LiteralPath $stdout -SimpleMatch 'PLATFORM_PROBE_PASS' -Quiet)) { throw 'missing platform probe verdict' }
