@@ -63,7 +63,7 @@ function Start-Mode([string]$Exe, [string[]]$Arguments, [hashtable]$Environment,
     foreach ($key in $Environment.Keys) { $info.Environment[$key] = $Environment[$key] }
     $child = [pscustomobject]@{
         Process = [Diagnostics.Process]::new(); Out = $null; Err = $null
-        Log = $Log; Pid = 0; Text = ''; Exit = -1; Stopped = $false; Validated = $false
+        Log = $Log; Pid = 0; Text = ''; Exit = -1; Stopped = $false; Validated = $false; OutputActorPid = 0
     }
     $child.Process.StartInfo = $info
     try {
