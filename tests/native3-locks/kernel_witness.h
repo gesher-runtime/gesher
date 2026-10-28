@@ -61,9 +61,18 @@ template<class T> inline bool Property(EVENT_RECORD* record, const wchar_t* name
   property.PropertyName = reinterpret_cast<ULONGLONG>(name);
   property.ArrayIndex = ULONG_MAX;
   ULONG size = 0;
-  return TdhGetPropertySize(record, 0, nullptr, 1, &property, &size) == ERROR_SUCCESS &&
-    size == sizeof(T) && TdhGetProperty(record, 0, nullptr, 1, &property, size,
-                                      reinterpret_cast<PBYTE>(value)) == ERROR_SUCCESS;
+  const ULONG size_status = TdhGetPropertySize(record, 0, nullptr, 1, &property, &size);
+  ULONG read_status = ERROR_SUCCESS;
+  if (size_status == ERROR_SUCCESS && size == sizeof(T))
+    read_status = TdhGetProperty(record, 0, nullptr, 1, &property, size, reinterpret_cast<PBYTE>(value));
+  const bool ok = size_status == ERROR_SUCCESS && size == sizeof(T) && read_status == ERROR_SUCCESS;
+  static std::atomic<unsigned> reports{0};
+  if (!ok && reports.fetch_add(1) < 8)
+    std::printf("KERNEL_DIAG_PROPERTY opcode=%u version=%u property=%ls size-status=%lu size=%lu expected=%zu read-status=%lu\n",
+      static_cast<unsigned>(record->EventHeader.EventDescriptor.Opcode),
+      static_cast<unsigned>(record->EventHeader.EventDescriptor.Version), name,
+      static_cast<unsigned long>(size_status), static_cast<unsigned long>(size), sizeof(T), static_cast<unsigned long>(read_status));
+  return ok;
 }
 inline void WINAPI Consume(EVENT_RECORD* record) {
   auto& evidence = *static_cast<Evidence*>(record->UserContext);
