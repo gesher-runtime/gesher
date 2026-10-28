@@ -11,12 +11,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <thread>
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <shellapi.h>
 #include <wct.h>
 #include <io.h>
 #else
@@ -123,7 +125,27 @@ bool EnableOwnWaitChainProbe() {
 
 int main(int argc, char** argv) {
   if (!std::getenv("GITHUB_ACTIONS") || std::strcmp(std::getenv("GITHUB_ACTIONS"), "true") != 0) return 90;
-  if (argc != 7) return 92;  // main, separate, hardlink, notdir child, empty, absent device
+  if (argc != 8) return 92;  // main, separate, hardlink, notdir child, empty, absent device/disk
+#ifdef _WIN32
+  // main's narrow argv uses the runner's ANSI code page. The common POSIX
+  // path API takes UTF-8; obtain actual Unicode test paths losslessly from
+  // the original Windows command line instead of testing replaced '?' bytes.
+  std::string utf8_paths[7];
+  int wide_count = 0;
+  wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &wide_count);
+  if (!wide) return Failure("actual wide command line");
+  bool converted = wide_count == argc;
+  for (int index = 1; converted && index < argc; ++index) {
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide[index], -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) { converted = false; break; }
+    utf8_paths[index - 1].resize(static_cast<size_t>(bytes));
+    converted = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide[index], -1,
+        utf8_paths[index - 1].data(), bytes, nullptr, nullptr) == bytes;
+    argv[index] = utf8_paths[index - 1].data();
+  }
+  LocalFree(wide);
+  if (!converted) return Failure("actual UTF-8 fixture paths");
+#endif
 #ifndef _WIN32
   struct rlimit limit{8192, 8192};
   if (setrlimit(RLIMIT_NOFILE, &limit)) return Failure("actual Linux fd limit");
@@ -144,7 +166,7 @@ int main(int argc, char** argv) {
     if (std::strcmp(command, "crash") == 0) std::_Exit(23);  // No fd/stdio/registry cleanup.
     int slot = -1, other = -1, flags = 0;
     if (std::strcmp(command, "open") == 0 || std::strcmp(command, "stream") == 0) {
-      if (std::sscanf(line, "%*s %d %d %d", &slot, &other, &flags) != 3 || !Slot(slot) || other < 0 || other > 5 || Descriptor(slot) >= 0) return Failure("open command shape");
+      if (std::sscanf(line, "%*s %d %d %d", &slot, &other, &flags) != 3 || !Slot(slot) || other < 0 || other > 6 || Descriptor(slot) >= 0) return Failure("open command shape");
       errno = 123;
       int result;
       if (command[0] == 's') {
@@ -204,7 +226,7 @@ int main(int argc, char** argv) {
       if (result == 0) Forget(fd);
       Result(result, error);
     } else if (std::strcmp(command, "freopen") == 0) {
-      if (std::sscanf(line, "%*s %d %d", &slot, &other) != 2 || !Slot(slot) || !streams[slot] || other < 0 || other > 5) return Failure("freopen command shape");
+      if (std::sscanf(line, "%*s %d %d", &slot, &other) != 2 || !Slot(slot) || !streams[slot] || other < 0 || other > 6) return Failure("freopen command shape");
       int old = Descriptor(slot);
       errno = 123;
       FILE* stream = std::freopen(argv[other + 1], "r+", streams[slot]);

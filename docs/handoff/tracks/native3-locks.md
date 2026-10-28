@@ -440,3 +440,44 @@ actual phase evidence must determine how far the observer proceeds; the
 previous timeout alone does not establish its root cause.
 
 Focused independent observer peer passed source blob33266879f0d64a4bdbbdb40eee33066c9c095267: actual futex/state evidence, checked NUL-terminated raw read, held-stream order and unchanged deadlines/errno capture preserved. Changed-source retry is justified; no prior timeout root-cause certainty follows.
+
+### Second actual component: Linux completed, two concrete Windows failures
+
+Exact2b244f7fe7424dac35145f2e8abce93e070c211e ran40659198571. Required
+watch exited1; final metadata and all three actual plain logs are preserved
+at C:\work\gesher-ci-review\native3-commands-40659198571-*.
+Producer122717662593 succeeded: actualLinux150 rows/mismatches0 and four
+real closer futex_do_wait observations/raw-observer+close/unlock phases,
+fresh Windows executables, checksum, nonempty allowlisted imports and output
+provenance all completed. This supports the corrected observer proceeding;
+it is not a stack-level proof of the previous timeout's precise cause.
+Artifact12802693004 ZIPsha256
+a8606ceec4971a976f8a21fc081d7690327a5fb18bcb9f5a9cdbb682d677f006
+was verified/consumed within CI, never downloaded locally.
+
+Windows2025 job122718193447 passed provenance then failed before process
+start: Get-Command python returned multiple applications, so Source was an
+Object[] rejected by Start-Process FilePath. Windows2022 job122718193550
+actually executed150 rows and four successful actual WCT contention cycles.
+Independent local parsing of the two actual plain logs finds exactly one
+row difference, index109 freopen0/3: Linux ENOTDIR20 versus Windows ENOENT2
+for a child below an existing regular file. The strict comparator failed.
+Neither Windows reached the13 duplicate modes and the component is failed;
+there is no bounded Windows semantic qualification or full acceptance.
+
+Prepared production fix is deliberately narrow: only after a real failed
+_wfreopen with CRT ENOENT, examine the already-mapped UTF-16 ancestors. A
+confirmed existing non-directory ancestor maps to ENOTDIR; an existing
+directory or failure to establish such an ancestor leaves ENOENT intact.
+The actual CRT reopen, original stream close and transaction.Finish ordering
+are unchanged. Added reference controls cover an absent disk parent retaining
+ENOENT and an actual successful Unicode same-path reopen/any-close. Main file
+has Hebrew/CJK characters; the Windows fixture obtains its true wide command
+line and converts paths to UTF-8 instead of trusting ANSI argv replacement.
+The workflow selects one actual Python Application, validates string/.exe/
+leaf and runs its version check before Start-Process. Existing deadlines,
+all previous actual rows and13-mode requirements remain unchanged. This new
+production/fixture/workflow delta needs its own focused independent source
+peer before any changed-source CI; the earlier7b61 peer does not cover it.
+The auto compile-only40658999459 was explicitly cancelled as superseded by
+the fresh actual component producer; it is not qualification evidence.

@@ -39,6 +39,21 @@ class StreamLock {
   FILE* stream_;
 };
 
+// The CRT reports ENOENT for a child below an existing regular file. After
+// an actual failed reopen, distinguish that stable ENOTDIR case from a
+// genuinely absent destination. Use the already-mapped UTF-16 path, and
+// retain ENOENT when no non-directory ancestor can actually be established.
+bool HasNonDirectoryParent(const std::wstring& path) {
+  size_t separator = path.find_last_of(L"\\/");
+  while (separator != std::wstring::npos && separator != 0) {
+    const std::wstring parent = path.substr(0, separator);
+    DWORD attributes = GetFileAttributesW(parent.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES) return (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+    separator = path.find_last_of(L"\\/", separator - 1);
+  }
+  return false;
+}
+
 // The handle's file identity: two names of one file compare equal.
 bool SameFile(HANDLE a, const std::wstring& b_path) {
   HANDLE b = CreateFileW(b_path.c_str(), FILE_READ_ATTRIBUTES,
@@ -635,6 +650,7 @@ FILE* freopen(const char* path, const char* mode, FILE* stream) {
   std::wstring wmode(crt_mode, crt_mode + strlen(crt_mode));
   FILE* result = _wfreopen(windows.c_str(), wmode.c_str(), stream);
   int saved = result == nullptr ? gesher_errno_from_crt(errno) : errno;
+  if (result == nullptr && saved == ENOENT && HasNonDirectoryParent(windows)) saved = ENOTDIR;
   int error = transaction.Finish(result != nullptr);
   if (error) return errno = error, nullptr;
   errno = saved;

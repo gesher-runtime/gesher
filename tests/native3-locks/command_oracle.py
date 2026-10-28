@@ -84,12 +84,12 @@ def run(executable):
     rows, clients = [], []
     with tempfile.TemporaryDirectory(prefix='gesher-lock-command-') as directory:
         root = Path(directory)
-        main, separate, hardlink = (root / name for name in ('main', 'separate', 'hardlink'))
+        main, separate, hardlink = (root / name for name in ('main-\u05ea\u05d9\u05e7-\u6587\u4ef6', 'separate', 'hardlink'))
         main.write_bytes(b'x' * 1024)
         separate.write_bytes(b'y' * 1024)
         os.link(main, hardlink)
         paths = [str(main), str(separate), str(hardlink), str(main / 'child'), '',
-                 '/dev/gesher-record-lock-absent']
+                 '/dev/gesher-record-lock-absent', str(root / 'missing-directory' / 'child')]
         try:
             for unused in range(2):
                 clients.append(Client(executable, paths))
@@ -237,7 +237,15 @@ def run(executable):
 
             # Actual failed freopen closes the original regular stream, even
             # when an empty/unsupported destination fails before a CRT reopen.
-            for destination in (3, 4, 5):
+            # An actual successful Unicode reopen retains the mapped path and
+            # performs POSIX any-close cleanup before a fresh stream is used.
+            command(0, 'stream 0 0 2')
+            lock(0)
+            query(True)
+            command(0, 'freopen 0 0')
+            query(False)
+            command(0, 'fclose 0')
+            for destination in (3, 4, 5, 6):
                 command(0, 'stream 0 0 2')
                 lock(0)
                 query(True)
