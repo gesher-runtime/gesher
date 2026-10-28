@@ -12,6 +12,7 @@ ALLOWED = {
     'tests/windows/tracks/73-aot3-shared-libraries.ps1', 'tools/build-framework-res.sh',
     '.github/workflows/aot3-after-resource-component.yml', 'tools/aot3/preflight.py',
     'tools/aot3/host_payload.py', 'tests/windows/run-aot3-resource-component.ps1',
+    'patches/art/0730-aot3-validate-after-shared-library-context.patch',
 }
 HELPERS = {
     'download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
