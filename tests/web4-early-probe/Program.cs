@@ -33,6 +33,7 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<string, string> targetTypes = new();
     readonly ConcurrentDictionary<(string, string), int> scriptContexts = new();
     readonly ConcurrentDictionary<string, bool> initialized = new();
+    readonly ConcurrentDictionary<string, string> remoteObjects = new();
     readonly ConcurrentDictionary<string, string> exposures = new();
     readonly ConcurrentDictionary<string, bool> rejectedForgeries = new();
     readonly ConcurrentBag<Task> pauseTasks = new();
@@ -84,7 +85,7 @@ sealed class ProbeForm : Form
             string[] denied = { "cross", "nestedCross", "sandbox" };
             while (!expected.All(label => observations.ContainsKey(label) && observations.ContainsKey("EXPOSURE:" + label)) ||
                    !allowed.All(label => observations.ContainsKey("object-call:" + label)) ||
-                   !denied.All(rejectedForgeries.ContainsKey))
+                   !denied.All(rejectedForgeries.ContainsKey) || !observations.ContainsKey("replaced-b"))
             {
                 timeout.Token.ThrowIfCancellationRequested();
                 await Task.Delay(50, timeout.Token);
@@ -103,6 +104,19 @@ sealed class ProbeForm : Form
                     throw new Exception("allowed object absent or wrong realm before page script: " + label);
             foreach (string label in denied)
                 if (!exposures.TryGetValue(label, out var value) || value != "undefined") throw new Exception("unallowed object exposed before page script: " + label);
+            if (observations["replaced-b"].Unique != observations["b"].Unique) throw new Exception("replacement control came from wrong realm");
+            foreach (string label in allowed)
+            {
+                Context c = observations[label];
+                if (!remoteObjects.TryGetValue(c.Unique, out var objectId)) throw new Exception("missing original injected object: " + label);
+                await CallOriginal(c, objectId, "probe");
+            }
+            while (!allowed.All(label => observations.ContainsKey("early-reply:" + label + ":probe")))
+            { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
+            foreach (string label in allowed)
+                if (observations["early-reply:" + label + ":probe"].Unique != observations[label].Unique)
+                    throw new Exception("original-object reply reached wrong context: " + label);
+            if (observations.ContainsKey("wrong-object")) throw new Exception("reply used the page's replacement object");
             if (observations["a"].Unique == observations["b"].Unique || observations["a"].Frame == observations["b"].Frame)
                 throw new Exception("sibling contexts or frames are not distinct");
             if (!targetTypes.TryGetValue(observations["cross"].Session, out var crossType) || crossType != "iframe")
@@ -148,6 +162,20 @@ sealed class ProbeForm : Form
                 replacement.Unique == old.Unique || replacement.Frame != old.Frame || replacement.Session != old.Session)
                 throw new Exception("replacement context identity does not establish same-frame new document");
             Console.WriteLine($"OBS a2 session={replacement.Session} id={replacement.Id} unique={replacement.Unique} origin={replacement.Origin} frame={replacement.Frame}");
+            while (!remoteObjects.ContainsKey(replacement.Unique) || !observations.ContainsKey("object-call:a2"))
+            { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
+            if (observations["object-call:a2"].Unique != replacement.Unique || !remoteObjects.TryGetValue(old.Unique, out var oldObject))
+                throw new Exception("replacement or old injected-object identity missing");
+            await CallOriginal(replacement, remoteObjects[replacement.Unique], "same");
+            while (!observations.ContainsKey("early-reply:a2:same"))
+            { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
+            if (observations["early-reply:a2:same"].Unique != replacement.Unique ||
+                !observations.TryRemove("early-reply:a2:same", out _)) throw new Exception("live original-object control ambiguous");
+            bool oldObjectRejected = false;
+            try { await CallOriginal(old, oldObject, "same"); }
+            catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException) && e.HResult == unchecked((int)0x80070057))
+            { Console.WriteLine($"OLD_OBJECT_REJECTED type={e.GetType().FullName} hresult=0x{e.HResult:X8}"); oldObjectRejected = true; }
+            if (!oldObjectRejected) throw new Exception("old object operation was not rejected by the observed control");
             bool scriptExceptionObserved = false;
             try { await Evaluate(replacement, "throw new Error('context')"); }
             catch (ContextGoneException) { throw new Exception("live script exception misclassified as context removal"); }
@@ -171,7 +199,8 @@ sealed class ProbeForm : Form
             if (oldError.GetType() != missingError.GetType() || oldError.HResult != missingError.HResult)
                 throw new Exception("destroyed and unobserved controls had different rejection types or codes");
             await Task.Delay(500, timeout.Token);
-            if (observations.ContainsKey("reply-comparison")) throw new Exception("rejected evaluation delivered a binding");
+            if (observations.ContainsKey("reply-comparison") || observations.ContainsKey("early-reply:a:same") ||
+                observations.ContainsKey("early-reply:a2:same")) throw new Exception("rejected operation delivered a binding");
             await Task.WhenAll(pauseTasks.ToArray()).WaitAsync(TimeSpan.FromSeconds(3));
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
             Console.WriteLine("EARLY_PLATFORM_PROBE_PASS selected origin-gated exposure and realm observations; OOPIF detach, BFCache, no-script documents and production unproven");
@@ -277,6 +306,15 @@ sealed class ProbeForm : Form
         return await call.WaitAsync(TimeSpan.FromSeconds(3));
     }
 
+    async Task CallOriginal(Context context, string objectId, string value)
+    {
+        string args = JsonSerializer.Serialize(new { objectId, functionDeclaration = "function(v){this.onmessage(v)}", arguments = new[] { new { value } }, returnByValue = true });
+        string result = await Call(context.Session, "Runtime.callFunctionOn", args);
+        using var parsed = JsonDocument.Parse(result);
+        if (parsed.RootElement.TryGetProperty("error", out _) || parsed.RootElement.TryGetProperty("exceptionDetails", out _))
+            throw new Exception("original-object reply failed: " + result);
+    }
+
     async Task HandlePause(string session, JsonElement paused)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -297,12 +335,15 @@ sealed class ProbeForm : Form
                 Console.WriteLine($"EARLY_PAUSE session={session} context={context.Unique} frame={context.Frame} origin={context.Origin} allowed={allowed}");
                 if (allowed)
                 {
-                    string expression = "Object.defineProperty(window,'__web4EarlyObject',{value:{postMessage:function(x){realmProbe('object-call:'+x)}},configurable:true})";
-                    string parameters = JsonSerializer.Serialize(new { callFrameId = callFrame, expression, returnByValue = true });
+                    string expression = "(()=>{let o={postMessage:function(x){realmProbe('object-call:'+x)}};Object.defineProperty(window,'__web4EarlyObject',{value:o,configurable:true});return o})()";
+                    string parameters = JsonSerializer.Serialize(new { callFrameId = callFrame, expression, returnByValue = false });
                     string result = await Call(session, "Debugger.evaluateOnCallFrame", parameters).WaitAsync(deadline.Token);
                     using var parsed = JsonDocument.Parse(result);
                     if (parsed.RootElement.TryGetProperty("error", out _) || parsed.RootElement.TryGetProperty("exceptionDetails", out _))
                         throw new Exception("early injection evaluation failed: " + result);
+                    string objectId = parsed.RootElement.GetProperty("result").GetProperty("objectId").GetString() ?? "";
+                    if (objectId.Length == 0 || !remoteObjects.TryAdd(context.Unique, objectId))
+                        throw new Exception("missing or duplicate injected-object handle");
                 }
             }
             deadline.Token.ThrowIfCancellationRequested();
@@ -374,11 +415,11 @@ sealed class ProbeForm : Form
             string? header;
             while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync())) { }
             if (path.StartsWith("/held")) { holdEntered.TrySetResult(); await holdRelease.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
-            string script = "<script>if(window.realmProbe){let n=new URLSearchParams(location.search).get('name')||'main';realmProbe(n);realmProbe('EXPOSURE:'+n+':'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject)window.__web4EarlyObject.postMessage(n);if(n==='cross'||n==='nestedCross'||n==='sandbox')realmProbe('forged:'+n);}</script>";
+            string script = "<script>if(window.realmProbe){let n=new URLSearchParams(location.search).get('name')||'main';realmProbe(n);realmProbe('EXPOSURE:'+n+':'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject){window.__web4EarlyObject.onmessage=v=>realmProbe('early-reply:'+n+':'+v);window.__web4EarlyObject.postMessage(n);if(n==='b'){Object.defineProperty(window,'__web4EarlyObject',{value:{onmessage:()=>realmProbe('wrong-object')},configurable:true});realmProbe('replaced-b');}}if(n==='cross'||n==='nestedCross'||n==='sandbox')realmProbe('forged:'+n);}</script>";
             string html = path.StartsWith("/main")
                 ? script + $"<iframe id='a' src='/child?name=a'></iframe><iframe src='/child?name=b'></iframe><iframe src='http://localhost:{port}/child?name=cross'></iframe><iframe sandbox='allow-scripts' src='/child?name=sandbox'></iframe>" +
-                  "<iframe id='blank'></iframe><iframe srcdoc=\"<script>if(window.realmProbe){realmProbe('srcdoc');realmProbe('EXPOSURE:srcdoc:'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject)window.__web4EarlyObject.postMessage('srcdoc')}</script>\"></iframe>" +
-                  "<script>let w=document.getElementById('blank').contentWindow;if(w.realmProbe){w.realmProbe('blank');w.eval(\"realmProbe('EXPOSURE:blank:'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject)window.__web4EarlyObject.postMessage('blank')\")}</script>"
+                  "<iframe id='blank'></iframe><iframe srcdoc=\"<script>if(window.realmProbe){realmProbe('srcdoc');realmProbe('EXPOSURE:srcdoc:'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject){window.__web4EarlyObject.onmessage=v=>realmProbe('early-reply:srcdoc:'+v);window.__web4EarlyObject.postMessage('srcdoc')}}</script>\"></iframe>" +
+                  "<script>let w=document.getElementById('blank').contentWindow;if(w.realmProbe){w.realmProbe('blank');w.eval(\"realmProbe('EXPOSURE:blank:'+typeof window.__web4EarlyObject);if(window.__web4EarlyObject){window.__web4EarlyObject.onmessage=v=>realmProbe('early-reply:blank:'+v);window.__web4EarlyObject.postMessage('blank')}\")}</script>"
                 : script + (path.EndsWith("name=a") ? $"<iframe src='/child?name=nested'></iframe><iframe src='http://localhost:{port}/child?name=nestedCross'></iframe>" : "");
             byte[] body = Encoding.UTF8.GetBytes("<!doctype html>" + html);
             byte[] head = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n");
