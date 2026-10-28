@@ -78,9 +78,10 @@ function RunTimed([string] $Exe, [string[]] $Arguments = @(), [int] $Seconds = 1
   return $out
 }
 
-function CheckTimed([string] $Name, [string] $Exe, [string[]] $Arguments, [string[]] $Expect, [int] $Seconds = 120) {
+function CheckTimed([string] $Name, [string] $Exe, [string[]] $Arguments, [string[]] $Expect, [int] $Seconds = 120, [switch] $Publish) {
   $out = RunTimed $Exe $Arguments $Seconds
   $code = $LASTEXITCODE
+  if ($Publish) { Write-Host $out }
   $missing = $Expect | Where-Object { -not $out.Contains($_) }
   if ($code -eq 0 -and -not $missing) {
     Write-Host "PASS  $Name"
@@ -122,7 +123,8 @@ $service = Start-Process "$Dir/dalvikvm.exe" -ArgumentList ($dvm + 'gesher.servi
   -PassThru -NoNewWindow -RedirectStandardOutput "$logs/service.out" -RedirectStandardError "$logs/service.err"
 $failedBefore = $failed
 CheckTimed 'binder: two dalvikvm processes, ServiceManager, a Binder passed back, death' "$Dir/dalvikvm.exe" `
-  ($dvm + 'gesher.services.BinderTest', 'client') @('BinderTest all passed') 240
+  ($dvm + 'gesher.services.BinderTest', 'client') @('BinderTest all passed',
+    'BinderTest PASS remote SYSPROPS reports, live values, local-only explicit report, ordinary-set silence and callback removal') 240 -Publish
 foreach ($p in $service, $servicemanager, $binderd) {
   if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 }

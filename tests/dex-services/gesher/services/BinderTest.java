@@ -16,6 +16,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Binder between two dalvikvm processes, through the framework's own
@@ -37,6 +38,15 @@ public final class BinderTest {
   static final int PING = IBinder.FIRST_CALL_TRANSACTION;
   static final int EXIT = IBinder.FIRST_CALL_TRANSACTION + 1;
   static final int CALLBACK = IBinder.FIRST_CALL_TRANSACTION + 2;
+  static final int REPORT_STATE = IBinder.FIRST_CALL_TRANSACTION + 3;
+  static final int REMOVE_REPORT_CALLBACK = IBinder.FIRST_CALL_TRANSACTION + 4;
+  static final String REPORT_PROPERTY = "debug.exec4.binder.report";
+  static final AtomicInteger reports = new AtomicInteger();
+  static volatile String reportedValue = "unreported";
+  static final Runnable propertyCallback = () -> {
+    reportedValue = SystemProperties.get(REPORT_PROPERTY);
+    reports.incrementAndGet();
+  };
 
   public static void main(String[] args) throws Exception {
     System.loadLibrary("android_runtime");
@@ -61,6 +71,17 @@ public final class BinderTest {
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
         throws RemoteException {
       switch (code) {
+        case REPORT_STATE:
+        case REMOVE_REPORT_CALLBACK:
+          data.enforceInterface(DESCRIPTOR);
+          if (code == REMOVE_REPORT_CALLBACK) {
+            SystemProperties.removeChangeCallback(propertyCallback);
+          }
+          reply.writeNoException();
+          reply.writeInt(reports.get());
+          reply.writeString(reportedValue);
+          reply.writeInt(Process.myPid());
+          return true;
         case PING: {
           data.enforceInterface(DESCRIPTOR);
           IBinder callback = data.readStrongBinder();
@@ -98,6 +119,7 @@ public final class BinderTest {
   }
 
   static void service() {
+    SystemProperties.addChangeCallback(propertyCallback);
     ServiceManager.addService(NAME, new TestService());
     System.out.println("BinderTest service: registered " + NAME + " in pid " + Process.myPid());
     Binder.joinThreadPool();
@@ -166,6 +188,8 @@ public final class BinderTest {
     for (String n : names) listed |= NAME.equals(n);
     check(listed, "listServices names the service");
 
+    propertyReports(service, servicePid);
+
     CountDownLatch died = new CountDownLatch(1);
     service.linkToDeath(died::countDown, 0);
     data = Parcel.obtain();
@@ -187,6 +211,70 @@ public final class BinderTest {
     check(dead, "a call to the dead service throws DeadObjectException");
     System.out.println("BinderTest all passed");
     System.exit(0);
+  }
+
+  static void reportState(IBinder service, int code, int wanted, String value, int servicePid)
+      throws RemoteException {
+    Parcel data = Parcel.obtain();
+    Parcel reply = Parcel.obtain();
+    try {
+      data.writeInterfaceToken(DESCRIPTOR);
+      check(service.transact(code, data, reply, 0), "report state transaction");
+      reply.readException();
+      int actual = reply.readInt();
+      String observed = reply.readString();
+      int pid = reply.readInt();
+      System.out.println("BinderTest report state: count=" + actual + " value=" + observed
+          + " recipient=" + pid + " client=" + Process.myPid());
+      check(pid == servicePid && pid != Process.myPid(), "report state is from remote recipient");
+      check(actual == wanted && value.equals(observed), "remote report count and observed value");
+    } finally {
+      data.recycle();
+      reply.recycle();
+    }
+  }
+
+  static void poke(IBinder service) throws RemoteException {
+    Parcel data = Parcel.obtain();
+    try {
+      // SystemPropPoker sends an empty Parcel and ignores the boolean result.
+      // JavaBBinder always dispatches SYSPROPS through BBinder::onTransact,
+      // even when Java Binder.onTransact returns false for this reserved code.
+      boolean handled = service.transact(IBinder.SYSPROPS_TRANSACTION, data, null, 0);
+      System.out.println("BinderTest actual SYSPROPS_TRANSACTION handled=" + handled);
+    } finally {
+      data.recycle();
+    }
+  }
+
+  static void propertyReports(IBinder service, int servicePid) throws Exception {
+    AtomicInteger localReports = new AtomicInteger();
+    Runnable localCallback = localReports::incrementAndGet;
+    SystemProperties.addChangeCallback(localCallback);
+    try {
+      reportState(service, REPORT_STATE, 0, "unreported", servicePid);
+      SystemProperties.set(REPORT_PROPERTY, "first");
+      reportState(service, REPORT_STATE, 0, "unreported", servicePid);
+      check(localReports.get() == 0, "ordinary property set does not fabricate a local report");
+      SystemProperties.reportSyspropChanged();
+      check(localReports.get() == 1, "explicit report stays local");
+      reportState(service, REPORT_STATE, 0, "unreported", servicePid);
+      poke(service);
+      reportState(service, REPORT_STATE, 1, "first", servicePid);
+      check(localReports.get() == 1, "remote poke does not report in the client");
+      SystemProperties.set(REPORT_PROPERTY, "second");
+      reportState(service, REPORT_STATE, 1, "first", servicePid);
+      poke(service);
+      reportState(service, REPORT_STATE, 2, "second", servicePid);
+      reportState(service, REMOVE_REPORT_CALLBACK, 2, "second", servicePid);
+      SystemProperties.set(REPORT_PROPERTY, "after-removal");
+      poke(service);
+      reportState(service, REPORT_STATE, 2, "second", servicePid);
+      check(localReports.get() == 1, "remote reports leave client callback untouched");
+      System.out.println("BinderTest PASS remote SYSPROPS reports, live values, local-only explicit report, ordinary-set silence and callback removal");
+    } finally {
+      SystemProperties.removeChangeCallback(localCallback);
+    }
   }
 
   /** $ANDROID_ROOT/build.prop into the system properties, as gesher-app's BuildProps. */
