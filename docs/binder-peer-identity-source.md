@@ -1,5 +1,10 @@
 # Binder Windows peer hardening: bounded, unqualified source
 
+Current follow-up: [package/install identity and suspended-child source](binder-package-uid-source.md),
+source `69739417566b932cf0cd580fb6bb6c76ddeda1e3`. The text below records the
+earlier transport foundation at `8404eb00`; its package/launch implementation
+inventory is historical. UID admission remains blocked after the follow-up.
+
 Disposition: SOURCE UNQUALIFIED, UID AUTHORITY STILL BLOCKED. This is a first
 transport-hardening slice, not the complete P1 correction. Do not merge it into
 primary, qualify secondary AOT with it, or infer package isolation from it.
