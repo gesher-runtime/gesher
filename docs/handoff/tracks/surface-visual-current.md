@@ -7,4 +7,3 @@ Initial port was blocked by historical red Locale scaffolding. The supplier prep
 ## Current supplier preparation
 
 The source-only component now replaces the old red Locale scaffold with full 40596167427 attempt 1 at 30db7709838839d28be68d8b467a57b26a3ac667. It pins the baseline artifact IDs and archive digests and checks the exact successful supplier jobs, source/repository/run/attempt. New same-run framework, host, native2, API3 translator and both Surface APK artifacts are independently matched to successful producer jobs and current attempt; their identities/digests are logged. The host producer builds current profman and dexdump and emits a per-file hash manifest. All five current jars are hashed; the image is rebuilt with current tools and all 15 image copies checked by hash. These are source checks only and remain subject to peer review and CI; no component proof exists yet.
-
