@@ -110,3 +110,16 @@ fault/permission/abandonment event tests, capacity/cancel contention, liveness
 failure proofs, bionic/guest/ART layouts and cross-ABI execution, hardware
 contexts, coherent full/package/two-e2e. Old red results remain red; no Native
 coverage inventory closure or hardware waiver is made.
+
+## Saved exact local checkpoint
+
+Code/real-fixture checkpoint4711c5066a10fbb00c4f763b7ba83a620a9e742f
+contains ten pinned changed/new code blobs plus the pin manifest and this
+handoff. Local read-only validation: Python source AST parsing passed for
+the controller and guard; git diff --check passed; exact source guard passed
+at that clean commit with pinned_blobs=10/public_blocking_closed=false. No
+C/C++ compiler/configuration, native/Java/C# fixture or Linux syscall ran.
+This final documentation-only commit records that checkpoint; its parent
+remains the exact code identity. Independent peer and fresh actual component
+evidence are prerequisites for qualification, not permission to merge this
+unverified source into primary or main/release.
