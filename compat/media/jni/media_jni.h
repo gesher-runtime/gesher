@@ -3,6 +3,7 @@
 
 #include <jni.h>
 
+#include "../audio/engine.h"
 #include "jni_util.h"
 
 namespace gesher::media {
@@ -41,10 +42,6 @@ class WeakRef {
 // Throws a new `className`(message).
 void jniThrow(JNIEnv* env, const char* className, const char* message);
 
-// The id of the output device, as AudioDeviceInfo.getId() and routing show it.
-constexpr int kOutputDeviceId = 2;
-// The input device's (media3, ADR 0059).
-constexpr int kInputDeviceId = 3;
 
 // Whether this process's app may record audio: its manifest asks for RECORD_AUDIO
 // (com.gesher.server.AudioService.recordAudioAllowed; audio_record_jni.cc). `env` may be

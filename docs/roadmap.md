@@ -483,7 +483,14 @@ needs: [framework-build.md](framework-build.md).
       match pinned bionic ICU4X over every code point and invalid sentinels;
       NDK handles/errors/boundaries in both ABIs/modes, full ci 40386670586
       at 6f6ac6f (both Windows suites, package and required e2e green).
-      Collation and remaining NDK/POSIX scope stay open.
+      Remaining NDK/POSIX scope stays open.
+- [x] Pinned multibyte/C11 conversion states and bounds, LP64 wide numbers,
+      locale aliases/CHAR_MAX layout, C collation and UTF-32 wide-time
+      wrapper behavior: independent 248-case reference ci 40439801814 and
+      actual x86_64/arm64 dalvikvm/single/device cases in full ci
+      combined 40439802052 at 7302b20, attempt 1, with corrected widths/CPU
+      and startup input; both Windows suites/package/required e2e pass.
+      Binary128, wide stdio/scanf and independent narrow tzcode remain open.
 - [x] Pinned bionic wcwidth/wcswidth: separate signed x86_64 and unsigned
       ARM64 locked ICU4X digests cover all code points/four invalid sentinels;
       actual whole-range NDK calls, 33 boundaries and bounded UTF-32 strings
@@ -568,6 +575,19 @@ See [docs/arm64.md](arm64.md) and [ADR 0047](decisions/0047-arm64-translation.md
       Windows runners; knownFailure removed (ci 40307919084 attempt 2)
 - [x] Translation overhead measured and recorded (docs/arm64.md: ×2–2.3 on a
       compiled C kernel, ×3.7–4.2 on a register-only loop; ci 40217845117)
+- [x] Arm64-2 FPCR rounding slice: real modes 0..3, preserved bits, direct
+      MSR, pthread inheritance/isolation, nested guest/native callbacks and
+      restored host fenv. Full ci 40451978087 attempt 2 at 49ade205, actual
+      JNI/single/device/native-process cases, both zero suites/package/e2e
+      ([0067](decisions/0067-arm64-2-fpcr-rounding.md)).
+- [x] Arm64-2 bounded sticky FPSR slice: five pinned flag operations, actual
+      arithmetic/QC, cold/nested/thread state and host restoration; 10384
+      independent scalar32/64 oracle cases; actual JNI/APK/ELF and full
+      ci 40498782924 at 8ec4bf3c, both suites0/package/both ten-app e2e0
+      ([verified scope and open limits](handoff/tracks/arm64-2-fpsr.md)).
+- [ ] Remaining arm64-2 contracts: full environment/default object, guest JIT pages,
+      signals/ucontext, LSE, HFA/variadic binary128 and cache/stack bounds
+      ([brief](handoff/tracks/arm64-2.md)); host CRT/libm rounding stays open.
 
 ## Phase 8 checklist
 
@@ -605,6 +625,21 @@ Media ([media.md](media.md), ADR 0042):
       input; Surface/Camera2 H.264/AAC recording, independent decoded tones/
       frames, permission denial and terminal callbacks (stage 3,
       ci 40448521754, both runners and APK modes).
+- [x] Native AMediaFormat: 21 real AOSP functions and 152 pointer data
+      objects; typed values, ownership, errors and lifecycle on x86_64 and
+      arm64-v8a through core ART, standalone ELF and single/device APKs
+      (ci 40459815375, both runners; ADR 0064). Other NDK media families
+      remain open in media4.
+- [x] OpenSL canonical UUID pointer objects and copied-ID lookup; typed
+      query/capability/required-interface contracts, signed16 volume and
+      independent core/APK recording grants/denials on both ABIs/runners
+      (ci 40476766790, test76; ADR 0064). Effects/3D implementations and
+      broader configuration/device contracts remain open.
+- [x] Functional OpenSL backend in standalone ELF on both ABIs/runners;
+      real PCM callbacks with independent guest TLS, preserved caller TLS
+      and correct no-identity denial, alongside real allowed/denied APKs
+      (ci 40477536464, test76; ADR 0064). Native-child recording identity
+      propagation remains open.
 - [ ] Physical microphone/loopback, device removal/routes, remaining NDK
       exports, session/recorder/container contracts and protected media
       ([media4](handoff/tracks/media4.md), ADR 0064 reserved).

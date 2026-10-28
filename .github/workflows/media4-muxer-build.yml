@@ -1,0 +1,131 @@
+name: media4-muxer-build
+
+# Fresh producer for the component and compile-first dispatches. Full ci remains mandatory.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: media4-muxer-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-build
+        with:
+          ccache-key: runtime
+      - name: Build matching current hosts and independent reader oracle
+        run: |
+          ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
+          ninja -C out dalvikvm gesher-exec media_muxer_verify
+          mkdir -p current-host
+          cp out/dalvikvm.exe out/gesher-exec.exe out/media_muxer_verify.exe current-host/
+          printf '%s\n' "$GITHUB_SHA" > current-host/muxer-host-source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxer-current-host
+          path: current-host/
+
+  fixtures:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/apps
+            tests/media/ndk-muxer
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Verify the pinned framework artifact source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          framework_source_sha=$(gh api repos/gesher-runtime/gesher/actions/runs/40527788805 --jq '.head_sha')
+          test "$framework_source_sha" = 5d9e24d3df1e9caa77c21dbae360a1f32988b943
+          printf 'Pinned framework source: %s\n' "$framework_source_sha"
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework-classes
+          path: work
+          run-id: 40527788805
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: framework
+          path: work/framework
+          run-id: 40527788805
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore the Android NDK
+        uses: actions/cache@v4
+        with:
+          path: android-ndk-r27c
+          key: ndk-27.2.12479018
+      - name: Fetch the Android NDK if absent
+        run: |
+          if [ ! -d android-ndk-r27c ]; then
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o ndk.zip \
+              https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+            unzip -q ndk.zip
+            rm ndk.zip
+          fi
+      - name: Restore build-tools
+        uses: actions/cache/restore@v4
+        with:
+          path: work/build-tools-36.1
+          key: build-tools-36.1-linux
+      - name: Fetch build-tools if absent
+        run: |
+          if [ ! -f work/build-tools-36.1/aapt2 ]; then
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o work/build-tools.zip \
+              https://dl.google.com/android/repository/build-tools_r36.1_linux.zip
+            mkdir -p work/build-tools.tmp
+            unzip -q work/build-tools.zip -d work/build-tools.tmp
+            mv work/build-tools.tmp/* work/build-tools-36.1
+          fi
+      - name: Generate independent encoded fixtures on CI only
+        timeout-minutes: 10
+        run: |
+          if ! command -v ffmpeg > /dev/null 2>&1; then
+            if [ -f /etc/apt/apt-mirrors.txt ]; then
+              printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+            fi
+            if [ -f /etc/apt/apt-mirrors-security.txt ]; then
+              printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors-security.txt
+            fi
+            timeout --kill-after=5s 90s sudo apt-get -o DPkg::Lock::Timeout=30 -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -q
+            timeout --kill-after=5s 240s sudo apt-get -o DPkg::Lock::Timeout=30 -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
+          timeout --kill-after=5s 180s bash tests/apps/videoapp/gen-media.sh
+          timeout --kill-after=5s 180s python3 tests/media/ndk-muxer/generate-fixtures.py \
+            --out out/media/ndk-muxer/fixtures --video-assets tests/apps/videoapp/assets
+      - name: Compile real NDK callers and both single-ABI APKs
+        run: |
+          bash tests/media/ndk-muxer/build.sh out android-ndk-r27c
+          chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign
+          mkdir -p work/framework-classes work/coremod
+          (cd work/framework-classes && unzip -q ../framework-classes.zip)
+          (cd work/coremod && unzip -q ../coremod.zip)
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/mediamuxerapp/build.sh out \
+            --framework-res work/framework/framework-res.apk \
+            --framework-classes work/framework-classes --core-classes work/coremod
+          printf '%s\n' "$GITHUB_SHA" > out/muxer-fixture-source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muxer-current-fixtures
+          path: |
+            out/mediamuxerapp-*.apk
+            out/media/ndk-muxer/
+            out/muxer-fixture-source.txt

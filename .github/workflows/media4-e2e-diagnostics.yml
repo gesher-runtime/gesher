@@ -1,0 +1,86 @@
+name: media4 e2e log review
+
+on:
+  push:
+    branches: [wip/media4-muxer]
+    paths: [.github/workflows/media4-e2e-diagnostics.yml]
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Run containing the existing e2e results
+        required: true
+        default: '40487303965'
+        type: string
+      expected_sha:
+        description: Exact runtime source SHA to inspect
+        required: true
+        default: afebf1ec28308673bb9b0a7745547753c6123da8
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  logs:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2022, windows-2025]
+    steps:
+      - name: Verify the exact existing source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run || '40487303965' }}
+          EXPECTED_SHA: ${{ inputs.expected_sha || 'afebf1ec28308673bb9b0a7745547753c6123da8' }}
+        run: |
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          actual=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" --jq .head_sha)
+          test "$actual" = "$EXPECTED_SHA"
+          echo "Inspecting existing run $SOURCE_RUN at $actual; no runtime or fixture is executed."
+
+      # The artifact is read only on this disposable CI runner. Only text is
+      # printed to the job log; nothing is downloaded to the local workstation.
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-results-${{ matrix.runner }}
+          path: results
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run || '40487303965' }}
+          github-token: ${{ github.token }}
+
+      - name: Print bounded existing TIC-80 logs
+        env:
+          SOURCE_RUNNER: ${{ matrix.runner }}
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import os
+          from pathlib import Path
+          root = Path('results')
+          files = sorted(path for path in root.rglob('*') if path.is_file())
+          print('Runner:', os.environ['SOURCE_RUNNER'])
+          for path in files:
+              if 'com.nesbox.tic' in path.name:
+                  stat = path.stat()
+                  print('EXISTING FILE', path.relative_to(root), 'bytes', stat.st_size,
+                        'mtime', datetime.datetime.fromtimestamp(stat.st_mtime, datetime.timezone.utc).isoformat())
+          logs = [path for path in files if 'com.nesbox.tic' in path.name
+                  and path.suffix.lower() in ('.log', '.txt')]
+          if not logs:
+              raise SystemExit('No existing TIC-80 text logs found')
+          for path in logs:
+              if path.stat().st_size > 2 * 1024 * 1024:
+                  raise SystemExit('Unexpectedly large app log: ' + str(path))
+              lines = path.read_text(encoding='utf-8-sig', errors='replace').splitlines()
+              print('BEGIN EXISTING LOG', path.relative_to(root), 'total lines', len(lines))
+              if len(lines) <= 2000:
+                  selected = list(enumerate(lines, 1))
+              else:
+                  selected = list(enumerate(lines[:500], 1)) + list(enumerate(lines[-1500:], len(lines) - 1499))
+              for number, line in selected:
+                  print(f'{number:04d} {line}')
+              print('END EXISTING LOG', path.relative_to(root))
+          PY

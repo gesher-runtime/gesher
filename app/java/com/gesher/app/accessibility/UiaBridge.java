@@ -52,7 +52,8 @@ public final class UiaBridge {
 
     static final long ROOT = -1;
 
-    private static Boolean sLoaded;
+    private static volatile Boolean sLoaded;
+    private static volatile boolean sStopping;
     private static final ExecutorService sEvents = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "AccessibilityEvents");
         t.setDaemon(true);
@@ -73,7 +74,7 @@ public final class UiaBridge {
     }
 
     static boolean start() {
-        return load() && nativeStart();
+        return !sStopping && load() && !sStopping && nativeStart();
     }
 
     static boolean screenReader() {
@@ -81,6 +82,43 @@ public final class UiaBridge {
     }
 
     private static native boolean nativeStart();
+    // Registered only by the CI-hook build; normal builds have no fixture hook.
+    private static native boolean nativeRegisterFixture(Class<?> fixture);
+    private static native int nativeRemaining(long token);
+    private static native boolean nativeShutdown();
+
+    /** No VM destruction while native query workers remain attached. */
+    public static boolean shutdown() {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        sStopping = true;
+        sEvents.shutdownNow();
+        boolean stopped = !Boolean.TRUE.equals(sLoaded) || nativeShutdown();
+        try {
+            long left = deadline - System.nanoTime();
+            stopped &= left > 0 && sEvents.awaitTermination(left, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stopped = false;
+        }
+        if (!stopped) AccessibilityService.log("UI Automation: native/event drain FAILED");
+        return stopped;
+    }
+
+    private static final class Request {
+        final long hwnd, token, generation;
+        Request(long hwnd, long token, long generation) {
+            this.hwnd = hwnd; this.token = token; this.generation = generation;
+        }
+        int remaining() { return nativeRemaining(token); }
+        boolean active() { return remaining() > 0; }
+    }
+    private static final ThreadLocal<Request> sRequest = new ThreadLocal<>();
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingUi = new java.util.concurrent.atomic.AtomicInteger();
+    private static final java.util.concurrent.atomic.AtomicInteger sPendingActions = new java.util.concurrent.atomic.AtomicInteger();
+    private static boolean active() {
+        Request q = sRequest.get();
+        return q != null && q.active();
+    }
 
     private static native boolean nativeScreenReader();
 
@@ -91,7 +129,10 @@ public final class UiaBridge {
     private static void raise(long hwnd, long id, int kind, String text) {
         // UIA may query a provider synchronously as an event is raised. Its
         // Android node lookup needs the UI thread, which must remain free.
-        sEvents.execute(() -> nativeRaise(hwnd, id, kind, text));
+        if (!sStopping) {
+            try { sEvents.execute(() -> { if (!sStopping) nativeRaise(hwnd, id, kind, text); }); }
+            catch (java.util.concurrent.RejectedExecutionException ignored) { /* shutting down */ }
+        }
     }
 
     // ---- Windows ----
@@ -102,12 +143,14 @@ public final class UiaBridge {
         final View view;
         final int connectionId;
         final long rootNodeId;
+        final long generation;
 
-        Root(ViewRootImpl viewRoot, View view, int connectionId, long rootNodeId) {
+        Root(ViewRootImpl viewRoot, View view, int connectionId, long rootNodeId, long generation) {
             this.viewRoot = viewRoot;
             this.view = view;
             this.connectionId = connectionId;
             this.rootNodeId = rootNodeId;
+            this.generation = generation;
         }
     }
 
@@ -116,12 +159,17 @@ public final class UiaBridge {
     @SuppressWarnings("unchecked")
     private static List<ViewRootImpl> viewRoots() {
         try {
+            if (!active()) return new ArrayList<>();
             WindowManagerGlobal g = WindowManagerGlobal.getInstance();
+            if (!active()) return new ArrayList<>();
             Field roots = WindowManagerGlobal.class.getDeclaredField("mRoots");
             Field lock = WindowManagerGlobal.class.getDeclaredField("mLock");
             roots.setAccessible(true);
             lock.setAccessible(true);
             synchronized (lock.get(g)) {
+                // Monitor entry is uninterruptible: cancellation must be checked
+                // again AFTER acquiring it, before reading roots or posting UI work.
+                if (!active()) return new ArrayList<>();
                 return new ArrayList<>((List<ViewRootImpl>) roots.get(g));
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
@@ -131,56 +179,88 @@ public final class UiaBridge {
 
     static long hwndOf(IBinder windowToken) {
         WindowSession session = WindowSession.get();
-        return session != null && windowToken != null ? session.hwndOf(windowToken) : 0;
+        long hwnd = session != null && windowToken != null ? session.hwndOf(windowToken) : 0;
+        Request q = sRequest.get();
+        return q == null || q.active() ? hwnd : 0;
     }
 
-    /** Runs {@code task} on the view's UI thread and waits (up to 3 s); null on failure. */
+    /** Shares the native request's original absolute budget; removes canceled work. */
     private static <T> T onUiThread(View view, java.util.concurrent.Callable<T> task) {
+        return onUiThread(view, task, false);
+    }
+    private static <T> T onUiThread(View view, java.util.concurrent.Callable<T> task, boolean action) {
+        Request q = sRequest.get();
+        if (q == null || !q.active()) return null;
         Handler h = view.getHandler();
         if (h == null) return null;
-        if (h.getLooper().isCurrentThread()) {
+        java.util.concurrent.Callable<T> guarded = () -> {
+            Request previous = sRequest.get();
+            sRequest.set(q);
             try {
+                if (!q.active() || !view.isAttachedToWindow()
+                        || hwndOf(view.getWindowToken()) != q.hwnd || !q.active()) return null;
                 return task.call();
-            } catch (Exception e) {
-                return null;
+            } finally {
+                if (previous == null) sRequest.remove(); else sRequest.set(previous);
             }
+        };
+        if (h.getLooper().isCurrentThread()) {
+            try { return guarded.call(); } catch (Exception e) { return null; }
         }
-        FutureTask<T> f = new FutureTask<>(task);
-        h.post(f);
+        FutureTask<T> f = new FutureTask<>(guarded);
+        if (!q.active() || !h.post(f)) return null;
+        sPendingUi.incrementAndGet();
+        if (action) sPendingActions.incrementAndGet();
         try {
-            return f.get(3, TimeUnit.SECONDS);
+            int left = q.remaining();
+            if (left <= 0) return null;
+            T result = f.get(left, TimeUnit.MILLISECONDS);
+            return q.active() ? result : null;
         } catch (Exception e) {
             return null;
+        } finally {
+            // Future.cancel cannot interrupt a monitor acquisition. guarded also
+            // revalidates after that acquisition and before any UI/action work.
+            f.cancel(false);
+            h.removeCallbacks(f);
+            sPendingUi.decrementAndGet();
+            if (action) sPendingActions.decrementAndGet();
         }
     }
 
     private static Root root(long hwnd) {
+        Request q = sRequest.get();
+        if (q == null || !q.active()) return null;
         Root r = sRoots.get(hwnd);
-        if (r != null && r.view.isAttachedToWindow() && hwndOf(r.view.getWindowToken()) == hwnd) {
-            return r;
-        }
-        sRoots.remove(hwnd);
+        if (r != null && r.generation == q.generation && r.view.isAttachedToWindow()
+                && hwndOf(r.view.getWindowToken()) == hwnd && q.active()) return r;
+        if (r != null) sRoots.remove(hwnd, r);
         for (ViewRootImpl vr : viewRoots()) {
+            if (!q.active()) return null;
             View v = vr.getView();
-            if (v == null || !v.isAttachedToWindow() || hwndOf(v.getWindowToken()) != hwnd) continue;
+            if (v == null || !v.isAttachedToWindow() || hwndOf(v.getWindowToken()) != hwnd
+                    || !q.active()) continue;
             Integer id = onUiThread(v, vr::getDirectAccessibilityConnectionId);
-            if (id == null) return null;
-            AccessibilityNodeInfo info = AccessibilityInteractionClient.getInstance()
+            if (id == null || !q.active()) return null;
+            AccessibilityNodeInfo info = onUiThread(v, () -> AccessibilityInteractionClient.getInstance()
                     .findAccessibilityNodeInfoByAccessibilityId(id,
                             AccessibilityWindowInfo.ANY_WINDOW_ID, AccessibilityNodeInfo.ROOT_NODE_ID,
-                            true, 0, null);
-            if (info == null) return null;
-            r = new Root(vr, v, id, info.getSourceNodeId());
+                            true, 0, null));
+            if (info == null || !q.active()) return null;
+            r = new Root(vr, v, id, info.getSourceNodeId(), q.generation);
             sRoots.put(hwnd, r);
+            if (!q.active()) { sRoots.remove(hwnd, r); return null; }
             return r;
         }
         return null;
     }
 
     private static AccessibilityNodeInfo find(Root r, long id) {
-        return AccessibilityInteractionClient.getInstance().findAccessibilityNodeInfoByAccessibilityId(
-                r.connectionId, AccessibilityWindowInfo.ANY_WINDOW_ID,
-                id == ROOT ? AccessibilityNodeInfo.ROOT_NODE_ID : id, true, 0, null);
+        if (!active()) return null;
+        return onUiThread(r.view, () -> AccessibilityInteractionClient.getInstance()
+                .findAccessibilityNodeInfoByAccessibilityId(r.connectionId,
+                        AccessibilityWindowInfo.ANY_WINDOW_ID,
+                        id == ROOT ? AccessibilityNodeInfo.ROOT_NODE_ID : id, true, 0, null));
     }
 
     private static long publicId(Root r, long id) {
@@ -266,12 +346,19 @@ public final class UiaBridge {
 
     // ---- Called by the natives (UI Automation's threads) ----
 
-    static String node(long hwnd, long id) {
+    static String node(long hwnd, long id, long token, long generation) {
+        Request q = new Request(hwnd, token, generation);
+        sRequest.set(q);
+        try { return nodeImpl(hwnd, id); }
+        finally { sRequest.remove(); }
+    }
+
+    private static String nodeImpl(long hwnd, long id) {
         try {
             Root r = root(hwnd);
             if (r == null) return null;
             AccessibilityNodeInfo n = find(r, id);
-            return n != null ? describe(r, n) : null;
+            return n != null && active() ? describe(r, n) : null;
         } catch (RuntimeException e) {
             AccessibilityService.log("node " + id + ": " + e);
             return null;
@@ -279,7 +366,14 @@ public final class UiaBridge {
     }
 
     /** The deepest visible node at a point of the window's client area, or 0. */
-    static long nodeAt(long hwnd, int x, int y) {
+    static long nodeAt(long hwnd, int x, int y, long token, long generation) {
+        Request q = new Request(hwnd, token, generation);
+        sRequest.set(q);
+        try { return nodeAtImpl(hwnd, x, y); }
+        finally { sRequest.remove(); }
+    }
+
+    private static long nodeAtImpl(long hwnd, int x, int y) {
         try {
             Root r = root(hwnd);
             if (r == null) return 0;
@@ -290,7 +384,7 @@ public final class UiaBridge {
             ArrayDeque<Long> queue = new ArrayDeque<>();
             queue.add(ROOT);
             Rect b = new Rect();
-            for (int seen = 0; !queue.isEmpty() && seen < 2000; seen++) {
+            for (int seen = 0; active() && !queue.isEmpty() && seen < 2000; seen++) {
                 long id = queue.poll();
                 AccessibilityNodeInfo n = find(r, id);
                 if (n == null || !n.isVisibleToUser()) continue;
@@ -300,27 +394,41 @@ public final class UiaBridge {
                 if (webViewOf(r, n) != null) continue;
                 for (int i = 0; i < n.getChildCount(); i++) queue.add(n.getChildId(i));
             }
-            return best;
+            return active() ? best : 0;
         } catch (RuntimeException e) {
             return 0;
         }
     }
 
-    static long focused(long hwnd) {
+    static long focused(long hwnd, long token, long generation) {
+        Request q = new Request(hwnd, token, generation);
+        sRequest.set(q);
+        try { return focusedImpl(hwnd); }
+        finally { sRequest.remove(); }
+    }
+
+    private static long focusedImpl(long hwnd) {
         try {
             Root r = root(hwnd);
             if (r == null) return 0;
-            AccessibilityNodeInfo n = AccessibilityInteractionClient.getInstance().findFocus(
+            AccessibilityNodeInfo n = onUiThread(r.view, () -> AccessibilityInteractionClient.getInstance().findFocus(
                     r.connectionId, AccessibilityWindowInfo.ANY_WINDOW_ID,
-                    AccessibilityNodeInfo.ROOT_NODE_ID, AccessibilityNodeInfo.FOCUS_INPUT);
-            return n != null ? publicId(r, n.getSourceNodeId()) : 0;
+                    AccessibilityNodeInfo.ROOT_NODE_ID, AccessibilityNodeInfo.FOCUS_INPUT));
+            return n != null && active() ? publicId(r, n.getSourceNodeId()) : 0;
         } catch (RuntimeException e) {
             return 0;
         }
     }
 
     /** action: 1 click, 2 focus, 3 set the text, 5 show on screen. */
-    static boolean perform(long hwnd, long id, int action, String text) {
+    static boolean perform(long hwnd, long id, int action, String text, long token, long generation) {
+        Request q = new Request(hwnd, token, generation);
+        sRequest.set(q);
+        try { return performImpl(hwnd, id, action, text); }
+        finally { sRequest.remove(); }
+    }
+
+    private static boolean performImpl(long hwnd, long id, int action, String text) {
         try {
             Root r = root(hwnd);
             if (r == null) return false;
@@ -340,9 +448,14 @@ public final class UiaBridge {
                     break;
                 default: return false;
             }
-            boolean ok = AccessibilityInteractionClient.getInstance().performAccessibilityAction(
-                    r.connectionId, AccessibilityWindowInfo.ANY_WINDOW_ID,
-                    id == ROOT ? AccessibilityNodeInfo.ROOT_NODE_ID : id, a, args);
+            final Bundle actionArgs = args;
+            Boolean result = onUiThread(r.view, () -> {
+                if (!active()) return false;
+                return AccessibilityInteractionClient.getInstance().performAccessibilityAction(
+                        r.connectionId, AccessibilityWindowInfo.ANY_WINDOW_ID,
+                        id == ROOT ? AccessibilityNodeInfo.ROOT_NODE_ID : id, a, actionArgs);
+            }, true);
+            boolean ok = Boolean.TRUE.equals(result) && active();
             AccessibilityService.log("UI Automation: action " + action + " on node " + id
                     + (ok ? "" : " (not done)"));
             return ok;

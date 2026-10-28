@@ -212,7 +212,9 @@ and both nine-app e2e0. Its child-zero values still use the older cache.
 Media4's format slice is full-verified atc5962291 in40459815375, attempt1:
 22 success/6 skips, both Windows0 and ten format PASS lines each, package23
 actual passes and both ten-app e2e0. Root read all five critical logs and
-64 semantic detail rows per runner across both ABIs and four execution paths.
+64 semantic detail rows per runner across both ABIs and four execution paths:
+21 actual format functions and152 pointer data objects. Broader Media4 gaps
+remain open in its brief.
 Immutable wip/media4-format-verified=ba3c1c2d adds docs only, including exact
 verification objects for143 old inventory entries (21 functions/122 data).
 Root independently checked that every existing field/row remains unchanged;
@@ -229,6 +231,33 @@ exit controls on each runner. The merged non-doc tree exactly matches160;
 rule-g needs no extra integration CI. Physical keyboard/candidate discovery,
 rich TSF and Web4 limits remain explicit in
 [the frozen evidence report](tracks/windows4-final.md).
+
+Media4 OpenSL follow-up is full-GREEN atd10bea3a in40476766790, attempt1:
+22 success/6 skips, both whole0/14 test76 PASS each. Both ABIs/core JNI and
+real allowed/denied single/device APKs prove53 canonical UUID objects,
+typed queries/copied-ID negotiation/exposure, actual0x0B denial and signed16
+volume values;50 semantic rows/40 volume rows per runner were read. Actual
+package23 and both ten-app/four-transport e2e0 logs pass. Exactly34 additional
+IID verification objects retain all old fields and143 format proofs;136 old
+media entries remain. The AAudio78ee5e12 lossless gate passes44100frames/
+750+1250Hz/capacity44100/lost0/xruns0; controlled small rings actually lose
+frames while configured rings retain all. Old1153.3Hz cause stays unproved.
+Source contains merged freshExit30deb08c and integration db84749b, stays
+frozen with docs-only successors, and does not claim effects/3D/native
+backend completion from that d10 run. Standalone/TLS/callback continuation
+e5693412 is now full-verified in40477536464, attempt1:22 success/six skipped,
+both whole0/16 test76 PASS, all60 semantic/48 volume/12 callback rows per
+runner, actual package23 and both ten-app/four-transport e2e0. Both ABI
+genuine ELF callbacks have independent valid guest TLS and unchanged caller
+TLS. Native without identity denies11/no object; real APK grants/denials
+stay independent. Only docs change above e569; its34 IID proof objects
+remain the exact d10 evidence. Native-child identity and broad OpenSL/media
+contracts remain open. Source-only AAudio test78 (next79) and installer
+notice are prepared separately, unverified and excluded from this run. Full40470959941/
+2b343aa7 stays red for exactly six OpenSL failures per runner; no unchanged
+retry was used. A separate installer OpenSL notice proposal still needs
+application and package CI before release; the Media4 brief records its
+exact patch/hash. Root alone accepts integration/main/release.
 
 Net4 full40462148835/719ae176 failed both Windows tests: its oracle queried
 nine Up NDIS adapters with neither IP protocol bound; Windows2022 also

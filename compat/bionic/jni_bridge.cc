@@ -98,7 +98,6 @@ struct ProxyVm {
 ProxyVm g_vm{g_vm_table};
 std::atomic<JavaVM*> g_real_vm{nullptr};
 thread_local ProxyEnv t_env{g_env_table, nullptr};
-thread_local bool t_thread_ready = false;
 
 // --- guest (arm64) proxy tables (ADR 0047) -----------------------------------
 // A guest .so calls through its JNIEnv/JavaVM function tables with AAPCS64, and
@@ -166,10 +165,7 @@ JavaVM* RealVm() {
 // Loaded code may use initial-exec TLS through %fs:0 (ADR 0014): the thread
 // needs its bionic TLS block before it enters the .so.
 void EnsureThread() {
-  if (!t_thread_ready) {
-    t_thread_ready = true;
-    elf::SetupThreadTls();
-  }
+  gesher::bionic::EnterLoadedCode();
 }
 
 JNIEnv* Wrap(JNIEnv* real) {
@@ -842,6 +838,3 @@ JavaVM* gesher::bionic::ProxyJavaVm(JNIEnv* real) {
   }
   return ProxyVmPtr();
 }
-
-void gesher::bionic::EnterLoadedCode() { EnsureThread(); }
-

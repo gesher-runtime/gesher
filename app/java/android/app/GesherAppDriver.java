@@ -21,7 +21,6 @@ import android.view.Display;
 
 import com.gesher.app.DeviceProfile;
 
-import dalvik.system.PathClassLoader;
 import dalvik.system.VMRuntime;
 
 import java.lang.ref.WeakReference;
@@ -127,35 +126,22 @@ public final class GesherAppDriver {
         thread.mCurDefaultDisplayDpi = config.densityDpi;
         configController.updateDefaultDensity(config.densityDpi);
 
-        // The app's LoadedApk, as getPackageInfo() makes it, with the class loader
-        // installed directly: LoadedApk's own (ApplicationLoaders) also creates a linker
-        // namespace for the app's native libraries (ClassLoaderFactory's native
-        // createClassloaderNamespace), which Gesher does not have yet.
+        // Use LoadedApk's actual dependency loaders, before/after policy and app
+        // loader selection, as ActivityThread does in the device process. A plain
+        // APK-only PathClassLoader loses shared libraries and disagrees with ART's
+        // stored class-loader context. Host native-library loading still uses the
+        // existing ClassLoaderFactory bridge.
         LoadedApk apk = new LoadedApk(thread, appInfo, compat, null /* baseLoader */,
                 false /* securityViolation */, true /* includeCode */,
                 false /* registerPackage */);
-        ClassLoader loader = new PathClassLoader(appInfo.sourceDir, appInfo.nativeLibraryDir,
-                String.class.getClassLoader() /* the boot class loader */);
-        set(LoadedApk.class, apk, "mDefaultClassLoader", loader);
-        set(LoadedApk.class, apk, "mClassLoader", loader);
-        Thread.currentThread().setContextClassLoader(loader);
         synchronized (ResourcesManager.getInstance()) {
             thread.mPackages.put(appInfo.packageName, new WeakReference<>(apk));
         }
         data.info = apk;
         sLoadedApk = apk;
-        // The app's code path for the JIT's profile saver, as LoadedApk's
-        // registerAppInfoToArt registers it when it makes its class loader (ADR 0054).
-        if ((appInfo.flags & ApplicationInfo.FLAG_HAS_CODE) != 0) {
-            int user = android.os.UserHandle.myUserId();
-            dalvik.system.VMRuntime.registerAppInfo(appInfo.packageName,
-                    android.content.pm.dex.ArtManager.getCurrentProfilePath(appInfo.packageName,
-                            user, null),
-                    android.content.pm.dex.ArtManager.getReferenceProfilePath(appInfo.packageName,
-                            user, null),
-                    new String[] {appInfo.sourceDir},
-                    dalvik.system.VMRuntime.CODE_PATH_TYPE_PRIMARY_APK);
-        }
+        // LoadedApk also registers the actual code paths for ART's profile saver.
+        ClassLoader loader = apk.getClassLoader();
+        Thread.currentThread().setContextClassLoader(loader);
 
         // Instrumentation, plain (no instrumentation package): basicInit(thread).
         Instrumentation instrumentation = new Instrumentation();

@@ -84,6 +84,12 @@ std::wstring FindInPath(const std::string& name, const std::string& path);
 int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
                          const std::string& dir, bool search_path, Launch* launch);
 
+// Spawnp searches the calling process's PATH, independently of the replacement
+// envp. A child bootstrap carries that PATH through ordered directory actions.
+int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std::string>& argv,
+                               const std::string& dir, bool search_path, const std::string& path,
+                               Launch* launch);
+
 // Whether `name` (a bare name or /system/bin/<name>, /system/xbin/<name>) is
 // one of the Android programs gesher-exec provides itself (`--tool`):
 // getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox.
