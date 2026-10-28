@@ -129,7 +129,7 @@ sealed class ProbeForm : Form
             try { await Evaluate(replacement, "throw new Error('context')"); }
             catch (ContextGoneException) { throw new Exception("live script exception misclassified as context removal"); }
             catch (Exception e) when (e.Message.StartsWith("evaluation exception:", StringComparison.Ordinal))
-            { scriptExceptionObserved = true; }
+            { Console.WriteLine("LIVE_JS_EXCEPTION_CONTROL " + e.Message); scriptExceptionObserved = true; }
             if (!scriptExceptionObserved) throw new Exception("live-context exception control did not throw");
             bool staleRejected = false;
             try { await Evaluate(old, "realmProbe('stale-reply')"); }
