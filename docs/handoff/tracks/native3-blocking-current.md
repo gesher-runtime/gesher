@@ -149,3 +149,39 @@ failure. See https://learn.microsoft.com/en-us/windows/win32/debug/wait-chain-tr
 and https://learn.microsoft.com/en-us/windows/win32/api/wct/nf-wct-getthreadwaitchain
 and https://learn.microsoft.com/en-us/previous-versions/aa394279(v=vs.85).
 No such witness is implemented or claimed in this checkpoint.
+
+
+## Cleanup failure control source, 2026-10-29 (unverified)
+
+The blocking worker now compiles the real registry/wait translation units
+with GESHER_RECORD_WAIT_TEST; gesher_posix itself has no test definition.
+No wire command or environment variable can activate hooks in a production
+binary. CI checks the actual archive lacks the hook symbol and the fixture
+contains it. Commit injection occurs after the inactive bank CRC, before the
+sole active-bank exchange. Begin injection applies only to final cleanup.
+A published request whose original deadline expired enters final cleanup
+directly, checking cancellation first and retaining the original budget.
+
+Four Windows controls cover cancellation/timeout times final Begin/Commit
+failure. Each observes the actual request, retains its event, checks the
+actual owner thread creation identity, and keeps that thread alive after
+WaitProcessLock returns. An authoritative read must retain the failed-cleanup
+request. Real named events and live thread identities fill all256 slots;
+a later conflicting waiter must fail ENOLCK while the observer retains the
+original event. The observer closes before checking actual FILE_NOT_FOUND.
+Targeted ACCESS_DENIED and INVALID_DATA event-open errors must each retain
+all256 slots and fail ENOLCK. With injection removed, a fresh real finite
+waiter must reclaim exactly the original slot, register, time out, and leave
+255 fixture entries. The actual holder must remain a conflict throughout;
+a separate process checks it after each control. Only then are owned filler
+entries removed,260 explicitly owned handles closed/invalidated, the original
+live owner released and joined, and the original cancellation handle closed.
+These are runtime assertions awaiting CI, not evidence that they passed.
+
+The controller requires four exact CLEANUP_CONTROL rows plus the prior eight
+rows, with BLOCKING_SUMMARY rows=12. Source manifest now pins12 concrete
+blobs. Local verification is source inspection, Python AST parsing and Git
+whitespace checks only. Independent source peer is required before any push
+or CI. No local native/JVM/C# compile or fixture ran. No run ID exists for
+this source. Event-wait kernel witness, public7/38, signals, OFD/inheritance,
+full integration and release remain open; WCT is not an event-wait witness.

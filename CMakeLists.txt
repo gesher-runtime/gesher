@@ -148,6 +148,11 @@ target_link_libraries(native3_lock_duplicate_test PRIVATE gesher_posix)
 
 # Internal finite wait checkpoint: public blocking commands remain unsupported.
 add_executable(native3_lock_blocking_worker EXCLUDE_FROM_ALL tests/native3-locks/blocking_worker.cc)
+# Compile the real transaction/wait sources into this executable only. Static
+# archive counterparts are not extracted; production gesher_posix has no hooks.
+target_sources(native3_lock_blocking_worker PRIVATE
+  compat/posix/src/record_lock_registry.cc compat/posix/src/record_lock_wait.cc)
+target_compile_definitions(native3_lock_blocking_worker PRIVATE GESHER_RECORD_WAIT_TEST=1)
 target_compile_options(native3_lock_blocking_worker PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
 

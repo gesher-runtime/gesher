@@ -13,6 +13,9 @@
 #include "../../compat/posix/src/record_lock_wait.h"
 #include "../../compat/posix/src/internal.h"
 namespace locks = gesher::record_locks;
+#ifdef GESHER_RECORD_WAIT_TEST
+#include "cleanup_controls.h"
+#endif
 #else
 #include <signal.h>
 #include <pthread.h>
@@ -66,6 +69,13 @@ int main(int argc, char** argv) {
   if (locks::PrepareOperation(gesher::HandleFromFd(fd), F_SETLK, &lock, &prepared)) return 89;
   HANDLE cancel = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!cancel) return 90;
+#ifdef GESHER_RECORD_WAIT_TEST
+  if (std::strcmp(argv[1], "cleanup-controls") == 0) {
+    int error = cleanup_controls::Run(prepared, cancel, argv[4]);
+    cleanup_controls::Close(cancel);
+    return close(fd) ? 97 : error;
+  }
+#endif
 #else
   struct sigaction action{}; action.sa_handler = Handler;
   if (std::strcmp(argv[4], "restart") == 0) action.sa_flags = SA_RESTART;

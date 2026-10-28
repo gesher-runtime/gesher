@@ -163,6 +163,42 @@ def run(executable, windows):
                     child.process.stdin.close()
                     child.process.stdout.close()
         if windows:
+            for mode in ('cancel-begin', 'cancel-commit', 'timeout-begin', 'timeout-commit'):
+                children = []
+                try:
+                    holder = Worker(executable, 'holder', path, 7, 'normal')
+                    children.append(holder)
+                    assert holder.receive('held') == [str(holder.process.pid)]
+                    control = Worker(executable, 'cleanup-controls', path, 7, mode)
+                    children.append(control)
+                    fields = dict(item.split('=', 1) for item in control.receive('CLEANUP_CONTROL', timeout=12))
+                    assert fields == dict(mode=mode, result=str(110 if mode.startswith('timeout') else 125),
+                                          begin_failures=str(int(mode.endswith('begin'))),
+                                          commit_failures=str(int(mode.endswith('commit'))),
+                                          live_identity='1', retained_capacity='256', denied_capacity='256',
+                                          unknown_capacity='256', reclaimed_capacity='255', later_timeout='1',
+                                          handles_closed='260'), fields
+                    control.finish()
+                    children.remove(control)
+                    # The real holder continues excluding a different process.
+                    probe = Worker(executable, 'probe', path, 7, 'normal')
+                    children.append(probe)
+                    assert probe.receive('conflict') == ['1']
+                    probe.finish()
+                    children.remove(probe)
+                    holder.finish('exit')
+                    children.remove(holder)
+                    rows.append(dict(cleanup=fields))
+                    print('BLOCKING_CLEANUP_ROW ' + json.dumps(fields, sort_keys=True), flush=True)
+                finally:
+                    for child in children:
+                        if child.process.poll() is None:
+                            child.process.kill()
+                        child.process.wait(timeout=6)
+                        child.reader.join(timeout=2)
+                        assert not child.reader.is_alive()
+                        child.process.stdin.close()
+                        child.process.stdout.close()
             for command in (7, 38):
                 control = Worker(executable, 'public-gaps', path, command, 'normal')
                 try:

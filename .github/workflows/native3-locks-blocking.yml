@@ -74,6 +74,14 @@ jobs:
           cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
             -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
           ninja -C out native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/libgesher_posix.a > fixture/production-symbols.txt
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/native3_lock_blocking_worker.exe > fixture/fixture-symbols.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          assert 'wait_test_hooks' not in Path('fixture/production-symbols.txt').read_text()
+          assert 'wait_test_hooks' in Path('fixture/fixture-symbols.txt').read_text()
+          print('BLOCKING_HOOK_ISOLATION production=absent fixture=present activation=compile-only')
+          PY
           for target in native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd; do
             cp "out/$target.exe" fixture/
             toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports "fixture/$target.exe" > "fixture/$target.imports.txt"
@@ -163,7 +171,7 @@ jobs:
           if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
               "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
-          $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json')
+          $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json', 'production-symbols.txt', 'fixture-symbols.txt')
           if (@($manifest.files.PSObject.Properties).Count -eq 0 -or
               @(Compare-Object $expectedOutputs @($manifest.outputs.PSObject.Properties.Name)).Count -ne 0) { throw 'Incomplete source/output manifest' }
           foreach ($file in $manifest.files.PSObject.Properties) {
@@ -184,7 +192,7 @@ jobs:
             if (-not $worker.WaitForExit(120000)) { throw 'Blocking controller exceeded original120s bound' }
             $worker.Refresh()
             if ($worker.ExitCode -ne 0) { throw "Blocking controller exit=$($worker.ExitCode)" }
-            if (-not (Select-String -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt" -Pattern '^BLOCKING_SUMMARY rows=8 failures=0 public_blocking_closed=false$' -Quiet)) { throw 'Missing exact finite blocking completion' }
+            if (-not (Select-String -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt" -Pattern '^BLOCKING_SUMMARY rows=12 failures=0 public_blocking_closed=false$' -Quiet)) { throw 'Missing exact finite blocking completion' }
           } finally {
             if ($null -ne $worker) {
               if (-not $worker.HasExited) { $worker.Kill($true); if (-not $worker.WaitForExit(5000)) { throw 'Owned blocking process tree failed termination' } }

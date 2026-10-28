@@ -1,5 +1,6 @@
 #include "record_lock_wait.h"
 #include "internal.h"
+#include "record_lock_test_hooks.h"
 #include <bcrypt.h>
 #include <sddl.h>
 #include <cwchar>
@@ -32,6 +33,15 @@ void PruneExpiredEvents(RegistryState* state) {
   for (size_t i = 0; i < state->wait_count; ++i) {
     wchar_t name[128]; Name(state->waits[i], name);
     HANDLE event = OpenEventW(SYNCHRONIZE, FALSE, name);
+#ifdef GESHER_RECORD_WAIT_TEST
+    if (wait_test_hooks && state->waits[i].token_low == wait_test_hooks->token_low &&
+        state->waits[i].token_high == wait_test_hooks->token_high && wait_test_hooks->event_error) {
+      if (event) CloseHandle(event);
+      event = nullptr;
+      SetLastError(wait_test_hooks->event_error);
+      ++wait_test_hooks->event_failures;
+    }
+#endif
     if (event) {
       CloseHandle(event);
       state->waits[kept++] = state->waits[i];
@@ -86,6 +96,14 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
   if (create_error == ERROR_ALREADY_EXISTS) return EEXIST;
   bool registered = false;
   for (;;) {
+    // Once published, expiration goes straight to bounded final cleanup.
+    // A zero-time mutex acquisition must not restart the main transaction.
+    if (registered && !Remaining(deadline)) {
+      DWORD canceled = WaitForSingleObject(cancel, 0);
+      error = canceled == WAIT_OBJECT_0 ? ECANCELED : canceled == WAIT_TIMEOUT ? ETIMEDOUT :
+        canceled == WAIT_FAILED ? WinError() : EINVAL;
+      break;
+    }
     RegistryState* state = nullptr;
     error = registry.Begin(&state, Remaining(deadline), cancel);
     if (error) break;
@@ -128,8 +146,14 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
     // If registry access fails, a later waiter reclaims this metadata once
     // the event closes. Never extend the deadline to clean up.
     RegistryState* state = nullptr;
+#ifdef GESHER_RECORD_WAIT_TEST
+    if (wait_test_hooks) wait_test_hooks->cleanup = true;
+#endif
     int cleanup = registry.Begin(&state, Remaining(deadline));
     if (!cleanup) { Remove(state, request); cleanup = registry.Commit(); registry.Unlock(); }
+#ifdef GESHER_RECORD_WAIT_TEST
+    if (wait_test_hooks) wait_test_hooks->cleanup = false;
+#endif
     if (cleanup && error == 0) error = cleanup;
   }
   return error;

@@ -1,16 +1,18 @@
 {
   "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
-  "status": "LOCAL source only; independent peer and fresh component required",
+  "status": "SOURCE ONLY: cleanup failure controls implemented; independent peer and CI required",
   "blobs": {
-    ".github/workflows/native3-locks-blocking.yml": "b831df20eedf41c6cde3cadc18a58452dc02303d",
-    "CMakeLists.txt": "d0b993c727e71542afbfeb2a770b358127d5cf56",
+    ".github/workflows/native3-locks-blocking.yml": "b657dce65c03d6df38dd6cd5098b397789baac27",
+    "CMakeLists.txt": "8ba137e29a5840600fe7d77fee4e833e6d0bfd73",
     "compat/posix/posix.cmake": "bd7a73bd589c30617b9a4ee29b4d15bba3f20221",
-    "compat/posix/src/record_lock_registry.cc": "bfeb0ece2917df0fae1d56f6a1ac5e19d6a18805",
+    "compat/posix/src/record_lock_registry.cc": "aaa91c010c276cc74a58eca96f44dc5f08ab1925",
     "compat/posix/src/record_lock_registry.h": "86e81b23b6573073cc95e037f32380826763961b",
-    "compat/posix/src/record_lock_wait.cc": "51c76f37d99237688eee086746da513cb235cc62",
+    "compat/posix/src/record_lock_test_hooks.h": "cb56a00a33f9711bfb7332163ed854049a3a2c4b",
+    "compat/posix/src/record_lock_wait.cc": "931caa6d4eeb1cc755db22c3ef16f20a3e1e2764",
     "compat/posix/src/record_lock_wait.h": "49332f98a69f2d8d3f94c35f1a561bbced65429e",
-    "tests/native3-locks/blocking_oracle.py": "7a40ca71cc7a347df2d7493c50ec4ef506a4a54d",
-    "tests/native3-locks/blocking_worker.cc": "db6bb4288586239c53874b5f382e2e941bd1519c",
+    "tests/native3-locks/blocking_oracle.py": "bfd5eb55aec4bbdaf3634d173e0aeae4b908efd9",
+    "tests/native3-locks/blocking_worker.cc": "5356ae4a174ebca86d160a49e4dac0256f4586e5",
+    "tests/native3-locks/cleanup_controls.h": "4b53062fc3f3be3e9f70eff4604771ddae4f5d2d",
     "tools/native3-locks/blocking_source_guard.py": "a255b8105d9a3f58e904e9a7797f492676a6481d"
   }
 }
