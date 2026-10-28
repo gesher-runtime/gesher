@@ -49,6 +49,10 @@ public class Process84 {
       return 0;
     }
     if (args[0] != "retained") return 2;
+    return RetainOutput(args[1]);
+  }
+
+  public static int RetainOutput(string pidFile) {
     IntPtr output, error;
     IntPtr current = GetCurrentProcess();
     if (!DuplicateHandle(current, GetStdHandle(-11), current, out output, 0, true, 2)) return 3;
@@ -66,7 +70,7 @@ public class Process84 {
       string self = Assembly.GetExecutingAssembly().Location;
       if (!CreateProcess(self, new StringBuilder("\"" + self + "\" hold unused"), IntPtr.Zero, IntPtr.Zero,
           true, 0x08000000, IntPtr.Zero, null, ref startup, out child)) return 4;
-      File.WriteAllText(args[1], child.pid.ToString());
+      File.WriteAllText(pidFile, child.pid.ToString());
       CloseHandle(child.thread);
       CloseHandle(child.process);
     } finally { CloseHandle(output); CloseHandle(error); }
