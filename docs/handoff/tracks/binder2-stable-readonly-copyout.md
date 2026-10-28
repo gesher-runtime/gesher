@@ -111,6 +111,45 @@ This helper proof can be independent of unrelated Surface visual acceptance.
 Do not run draft metadata-plus-download-artifact wiring as qualifying proof.
 No local artifact download, C# compilation, fixture run or primary code merge.
 
+## Strict helper proof and reviewed launch wiring
+
+The earlier draft hold is superseded only for the refreshed strict component:
+Terra's independently source-reviewed21441571 helpers have actual bounded
+proof in Surface40662612433/attempt1/source786e9535 (docs-only above214).
+Integrator independently read both saved plain Windows logs: each has nine
+actual adversarial rejections, thirteen authenticated raw-SHA-before-extract
+archive records, isolated owned assembly, identity rejection and whole-host
+missing/extra controls. The later Surface caller-PWD/image-copy failure leaves
+Surface80/86 unexecuted and does not establish Surface qualification.
+
+Binder imports precisely Git blobs c12018f7 downloader,8d01e508 assembler and
+a97840fd negatives. The canonical raw Git blob downloader SHA256 is
+d82ec81f14f879958eeae2489acecc2ec39cc903dc1d564b376ab5b829320b6e;
+the Windows CRLF working-tree SHA8eb9e261 is a different representation and
+is not used as its canonical digest. All three raw Git byte hashes were
+independently recomputed. CI materializes exact Git bytes and validates them
+before using the helpers; no local helper negative or native/C# execution ran.
+
+Independent Terra wiring peer of3ee47cd8 found only that canonical downloader
+digest discrepancy, corrected in770e8ae6. No additional definite source/
+automation/provenance blocker was found. The component's cheap prerequisite
+executes exact helper byte checks, actual nine negatives/positives and one
+authenticated known30db boot archive before any expensive producer. That
+archive is preflight-only and never enters the current runtime assembly.
+
+Current boot and runtime consumers verify every exact current artifact's
+source/run/attempt/repository/job/creation window and raw ZIP digest before
+isolated extraction. All inputs are freshly built; no previous runtime is
+overlaid. Binder owner names allow no collision replacements. Inline boot
+compilation retains the original compile/Hello assertions, invokes pwsh -File
+to isolate caller cwd and consumes two strict current archives. Both runtime
+jobs run the same negatives before five strict current archives, whole-host
+manifest/compiler/image/fixture guards and all old/new ordinary scenarios.
+Source parsing passed for YAML, Python AST and twenty embedded PowerShell
+blocks, without executing the scripts locally. Fresh actual CI remains the
+only compilation/runtime proof. Narrow own-workflow push registration may now
+launch this reviewed source once no active same-ref run exists.
+
 ## Explicit exclusions
 
 Existing prefixfault/adoptfail/invalid/mapped-capacity and normal FD/Bitmap/

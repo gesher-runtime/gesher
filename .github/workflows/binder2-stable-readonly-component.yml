@@ -3,6 +3,9 @@ name: binder2-stable-readonly-component
 # Ordinary modes only. Full/package/e2e and the preserved transport-prefix
 # failure fixture remain separate required gates.
 on:
+  push:
+    branches: ['wip/binder2-stable-readonly']
+    paths: ['.github/workflows/binder2-stable-readonly-component.yml']
   workflow_dispatch:
 
 concurrency:
