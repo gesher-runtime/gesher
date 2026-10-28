@@ -15,6 +15,11 @@ production = json.loads(Path('dist/web3-production-role.json').read_text())
 assert production['role'] == 'production' and production['test_hook_compiled'] is False
 assert manifest['compiler'] == production['compiler']
 assert manifest['production_runtime_sha256'] == production['executable_sha256']
+argv = manifest['actor_compile_command']
+assert isinstance(argv, list) and len(argv) > 1
+configured = production['compiler']['configured_driver']
+assert (argv[0] == configured and manifest['actor_launcher'] is None) or (
+    argv[1] == configured and manifest['actor_launcher'] == production['compiler']['launcher'] and manifest['actor_launcher'])
 assert set(manifest['files']) == {'binder_sg_actor.exe', 'binder-sg-runtime-source.txt'}
 assert {p.name for p in root.iterdir()} == set(manifest['files']) | {'binder-host-source.json'}
 for name, digest in manifest['files'].items():
@@ -22,7 +27,8 @@ for name, digest in manifest['files'].items():
 assert (root / 'binder-sg-runtime-source.txt').read_text().strip() == context['source']
 assert set(manifest['sources']) == {
     'compat/posix/src/binder.cc', 'compat/posix/src/binder_sg.h', 'compat/posix/src/binder_wire.h',
-    'compat/binder/binderd.cc', 'tests/binder/sg-actor.h', 'tests/binder/run-modes.ps1', 'tests/binder/OutputPageObserver.cs'}
+    'compat/binder/binderd.cc', 'cmake/aosp/servicemanager.cmake', 'tests/binder/sg-actor.cc',
+    'tests/binder/sg-actor.h', 'tests/binder/run-modes.ps1', 'tests/binder/OutputPageObserver.cs'}
 for path, digest in manifest['sources'].items():
     assert host_roles.sha(path) == digest, ('Actor/current source mismatch', path)
 print('ACTUAL_BINDER_FULL_HOST ' + json.dumps(manifest, sort_keys=True), flush=True)

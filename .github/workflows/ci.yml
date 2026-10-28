@@ -107,7 +107,7 @@ jobs:
       - name: Bind isolated ordinary Binder actor to exact production compiler and source
         run: |
           python3 - <<'PYCODE'
-          import hashlib,json,sys
+          import hashlib,json,sys,shutil
           from pathlib import Path
           sys.path.insert(0,str(Path('tools/web3').resolve()))
           import host_roles
@@ -118,10 +118,24 @@ jobs:
           assert production['role']=='production' and production['test_hook_compiled'] is False
           manifest.update(role='binder-ordinary-actor', compiler=production['compiler'],
                           production_runtime_sha256=production['executable_sha256'])
+          actor_source=Path('tests/binder/sg-actor.cc').resolve()
+          actor_commands=[argv for key,argv in host_roles.commands(Path('out')).items() if Path(key[1]).resolve()==actor_source]
+          assert len(actor_commands)==1, 'Missing or ambiguous actual actor compile command'
+          argv=actor_commands[0]
+          configured=production['compiler']['configured_driver']
+          actor_launcher=None
+          if argv[0]!=configured:
+              actual_launcher=shutil.which(argv[0])
+              assert len(argv)>1 and argv[1]==configured and actual_launcher and production['compiler']['launcher'], 'Actor compiler differs from production'
+              actor_launcher=str(Path(actual_launcher).resolve())
+              assert actor_launcher==production['compiler']['launcher'], 'Actor launcher differs from production'
+          manifest['actor_compile_command']=argv
+          manifest['actor_launcher']=actor_launcher
           manifest['files']={p.name:host_roles.sha(p) for p in root.iterdir() if p.is_file()}
           manifest['sources']={p:host_roles.sha(p) for p in (
               'compat/posix/src/binder.cc','compat/posix/src/binder_sg.h','compat/posix/src/binder_wire.h',
-              'compat/binder/binderd.cc','tests/binder/sg-actor.h','tests/binder/run-modes.ps1','tests/binder/OutputPageObserver.cs')}
+              'compat/binder/binderd.cc','cmake/aosp/servicemanager.cmake','tests/binder/sg-actor.cc',
+              'tests/binder/sg-actor.h','tests/binder/run-modes.ps1','tests/binder/OutputPageObserver.cs')}
           (root/'binder-host-source.json').write_text(json.dumps(manifest,sort_keys=True))
           assert not Path('dist/binder_sg_actor.exe').exists() and not Path('dist/binder_sg_wire_peer.exe').exists()
           PYCODE
