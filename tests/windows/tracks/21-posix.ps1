@@ -21,6 +21,8 @@ $artHostOut = Join-Path $artTop 'out/host/linux-x86'
 $artBin = Join-Path $artHostOut 'nativetest64/art'
 $artTmp = Join-Path $artTop 'tmp'
 
+. "$PSScriptRoot/../helpers/GtestProcess.ps1"
+
 function Invoke-ArtGtest([string] $Name, [string[]] $Exclude = @(), [int] $TimeoutSec = 900) {
   $exe = Join-Path $artBin "$Name.exe"
   if (-not (Test-Path $exe)) {
@@ -29,30 +31,28 @@ function Invoke-ArtGtest([string] $Name, [string[]] $Exclude = @(), [int] $Timeo
   }
   $arguments = @('--gtest_color=no')
   if ($Exclude) { $arguments += "--gtest_filter=-$($Exclude -join ':')" }
-  $out = New-TemporaryFile
-  $err = New-TemporaryFile
-  $p = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $artBin `
-    -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow -PassThru
-  $null = $p.Handle  # keeps ExitCode readable after the process ends
-  $timedOut = -not $p.WaitForExit($TimeoutSec * 1000)
-  if ($timedOut) { $p | Stop-Process -Force -ErrorAction SilentlyContinue }
-  $p.WaitForExit()
-  $stdout = "$(Get-Content -Raw $out)"
-  $stderr = "$(Get-Content -Raw $err)"
+  $execution = Invoke-GtestProcess -Executable $exe -Arguments $arguments -WorkingDirectory $artBin -TimeoutSec $TimeoutSec
+  if ($env:GESHER_CI_PROCESS_TRACE -eq '1') {
+    Write-Host "INFO  gtest process: complete=$($execution.ProcessComplete) readers=$($execution.ReadersComplete) disposed=$($execution.Disposed) exit=$($execution.Exit) tasksdone=$($execution.ReaderTasksComplete) pipesclosed=$($execution.PipesClosed) pipe-output=$($execution.StdoutHandle) pipe-error=$($execution.StderrHandle)"
+  }
+  $timedOut = $execution.TimedOut
+  $stdout = $execution.Stdout
+  $stderr = $execution.Stderr
   $text = $stdout + $stderr
-  Remove-Item $out, $err -ErrorAction SilentlyContinue
   $passed = if ($text -match '\[  PASSED  \] (\d+) test') { [int] $Matches[1] } else { 0 }
   $failedTests = @($text -split "`r?`n" | Where-Object { $_ -match '^\[  FAILED  \] [^ ]+\.[^ ]+' } |
     ForEach-Object { ($_ -replace '^\[  FAILED  \] ', '') -replace ',.*$', '' } | Sort-Object -Unique)
   $excluded = if ($Exclude) { " ($($Exclude.Count) excluded, docs/posix.md)" } else { '' }
-  if (-not $timedOut -and $p.ExitCode -eq 0 -and $passed -gt 0 -and -not $failedTests) {
+  if (-not $timedOut -and $execution.ProcessComplete -and $execution.ReadersComplete -and
+      $execution.Disposed -and $execution.ReaderTasksComplete -and $execution.PipesClosed -and -not $execution.Problem -and $execution.Exit -eq 0 -and $passed -gt 0 -and -not $failedTests) {
     Write-Host "PASS  $Name`: $passed tests passed$excluded"
     return $true
   }
   # The test a timeout or crash stopped in: the last one started and not ended.
   $last = @($stdout -split "`r?`n" | Where-Object { $_ -match '^\[ RUN      \] ' }) | Select-Object -Last 1
   $ended = $last -and $stdout -match ('\[       OK \] ' + [regex]::Escape(($last -replace '^\[ RUN      \] ', '')) + '|\[  FAILED  \] ' + [regex]::Escape(($last -replace '^\[ RUN      \] ', '')))
-  $why = if ($timedOut) { "timed out after $TimeoutSec s" } else { 'exit 0x{0:X8}' -f $p.ExitCode }
+  $why = if ($timedOut) { "timed out after $TimeoutSec s" } elseif ($null -ne $execution.Exit) { 'exit 0x{0:X8}' -f $execution.Exit } else { 'incomplete process' }
+  if ($execution.Problem) { $why += '; ' + $execution.Problem }
   if ($last -and -not $ended) { $why += " in $($last -replace '^\[ RUN      \] ', '')" }
   Write-Host "FAIL  $Name`: $why, $passed passed, $($failedTests.Count) failed$excluded"
   foreach ($t in $failedTests) { Write-Host "        $t" }
