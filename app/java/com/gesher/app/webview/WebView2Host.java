@@ -39,6 +39,7 @@ public final class WebView2Host {
     public static final int EVENT_SERVER_CERT_ERROR = 26;
     public static final int EVENT_FIND = 27;
     public static final int EVENT_FILE_DIALOG = 28;
+    public static final int EVENT_DOCUMENT_RETIRED = 29;
 
     /** {@link #find} operations, as {@code Host::FindOp}. */
     public static final int FIND_START = 1;
@@ -166,7 +167,7 @@ public final class WebView2Host {
         return mHandle == 0;
     }
 
-    public void destroy() {
+    public synchronized void destroy() {
         long h = mHandle;
         mHandle = 0;
         if (h != 0) nDestroy(h);
@@ -186,6 +187,15 @@ public final class WebView2Host {
     public void postWebMessage(String json) {
         long h = mHandle;
         if (h != 0) nPostWebMessage(h, json);
+    }
+
+    /** A token is native-owned and becomes invalid on navigation or destruction. */
+    public synchronized boolean isDocumentCurrent(long document) {
+        return mHandle != 0 && nIsDocumentCurrent(mHandle, document);
+    }
+
+    public synchronized void postFrameMessage(long document, String json) {
+        if (mHandle != 0) nPostFrameMessage(mHandle, document, json);
     }
 
     /** A DevTools protocol method; the result comes as EVENT_DEVTOOLS_RESULT(callbackId). */
@@ -414,6 +424,8 @@ public final class WebView2Host {
     private static native void nNavigate(long h, String url, String headers, String method,
             byte[] body);
     private static native void nPostWebMessage(long h, String json);
+    private static native boolean nIsDocumentCurrent(long h, long document);
+    private static native void nPostFrameMessage(long h, long document, String json);
     private static native void nCallDevTools(long h, String method, String params,
             long callbackId);
     private static native void nListenDevTools(long h, String event);

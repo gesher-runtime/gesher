@@ -56,6 +56,7 @@ enum Event : int32_t {
   kCapture = 17,       // id: callback id; arg: HRESULT; bytes: PNG
   kParked = 18,        // id: request id (the container is parked)
   kWebMessage = 19,    // a: the message as JSON (chrome.webview.postMessage); b: source
+  kDocumentRetired = 29,  // id: native document token, no longer accepting listener replies
   kDevToolsResult = 20,  // id: callback id; arg: HRESULT; a: the result (JSON)
   kDevToolsEvent = 21,   // a: event name; b: its parameters (JSON); ListenDevTools
   kPermission = 22,    // id: request id (CompletePermission); arg:
@@ -215,6 +216,9 @@ class Host {
 
   // chrome.webview's message event in the page (PostWebMessageAsJson).
   void PostWebMessage(const std::wstring& json);
+  // A reply for one native-owned document token. Stale/destroyed tokens are dropped.
+  void PostFrameMessage(int64_t document, const std::wstring& json);
+  bool IsDocumentCurrent(int64_t document) const;
   // A DevTools protocol method: kDevToolsResult(id) with its result.
   void CallDevTools(const std::wstring& method, const std::wstring& params_json,
                     int64_t callback_id);

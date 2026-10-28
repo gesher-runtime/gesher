@@ -212,6 +212,15 @@ void JNICALL WebView2Host_postWebMessage(JNIEnv* env, jclass, jlong h, jstring j
   Get(h)->PostWebMessage(Str(env, json));
 }
 
+jboolean JNICALL WebView2Host_isDocumentCurrent(JNIEnv*, jclass, jlong h, jlong document) {
+  return Get(h)->IsDocumentCurrent(document) ? JNI_TRUE : JNI_FALSE;
+}
+
+void JNICALL WebView2Host_postFrameMessage(JNIEnv* env, jclass, jlong h, jlong document,
+                                          jstring json) {
+  Get(h)->PostFrameMessage(document, Str(env, json));
+}
+
 void JNICALL WebView2Host_callDevTools(JNIEnv* env, jclass, jlong h, jstring method,
                                        jstring params, jlong cb) {
   Get(h)->CallDevTools(Str(env, method), Str(env, params), cb);
@@ -397,6 +406,8 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_navigate)},
     {"nPostWebMessage", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_postWebMessage)},
+    {"nIsDocumentCurrent", "(JJ)Z", reinterpret_cast<void*>(&WebView2Host_isDocumentCurrent)},
+    {"nPostFrameMessage", "(JJLjava/lang/String;)V", reinterpret_cast<void*>(&WebView2Host_postFrameMessage)},
     {"nCallDevTools", "(JLjava/lang/String;Ljava/lang/String;J)V",
      reinterpret_cast<void*>(&WebView2Host_callDevTools)},
     {"nListenDevTools", "(JLjava/lang/String;)V",

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <utility>
@@ -29,6 +30,8 @@ constexpr wchar_t kParkingClass[] = L"GesherWebViewParking";
 std::once_flag g_thread_once;
 HWND g_task_window = nullptr;  // a message-only window: posted tasks
 HWND g_parking = nullptr;      // a hidden top-level window: parked containers
+std::map<UINT_PTR, std::function<void()>> g_timers;  // WebView STA only
+UINT_PTR g_next_timer = 1;
 
 void ReportGlobal(int32_t type, int64_t id, int32_t arg, const std::wstring& a);
 
@@ -38,6 +41,16 @@ LRESULT CALLBACK TaskProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     (*fn)();
     delete fn;
     return 0;
+  }
+  if (msg == WM_TIMER) {
+    auto it = g_timers.find(static_cast<UINT_PTR>(wparam));
+    if (it != g_timers.end()) {
+      auto fn = std::move(it->second);
+      g_timers.erase(it);
+      KillTimer(hwnd, static_cast<UINT_PTR>(wparam));
+      fn();
+      return 0;
+    }
   }
   return DefWindowProcW(hwnd, msg, wparam, lparam);
 }
@@ -301,6 +314,49 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
 
   std::wstring document_script_id;
   uint64_t document_script_generation = 0;
+  unsigned document_script_inflight = 0;
+  bool document_script_failed = false;
+  UINT_PTR document_script_timer = 0;
+  std::vector<std::function<void(Impl*)>> document_waiting;
+
+  struct Frame {
+    Com<ICoreWebView2Frame> frame;
+    Com<ICoreWebView2Frame2> messages;
+    int64_t document = 0;
+    int64_t parent = 0;
+  };
+  std::map<int64_t, Frame> frames;  // WebView STA only; callbacks capture weak Impl + key.
+  int64_t next_frame = 1;
+  int64_t next_document = 1;
+  int64_t main_document_token = 0;
+  std::mutex document_mutex;
+  std::set<int64_t> current_documents;  // read by Java without waiting on WebView STA.
+  bool documents_closed = false;
+
+  int64_t NewDocument(int64_t old) {
+    int64_t token = 0;
+    {
+      std::lock_guard<std::mutex> guard(document_mutex);
+      current_documents.erase(old);
+      if (!documents_closed && next_document == std::numeric_limits<int64_t>::max()) {
+        documents_closed = true;
+        current_documents.clear();
+      }
+      if (!documents_closed) {
+        token = next_document++;
+        current_documents.insert(token);
+      }
+    }
+    if (old > 0) Report(kDocumentRetired, old);
+    return token;
+  }
+  void RetireDocument(int64_t token) {
+    {
+      std::lock_guard<std::mutex> guard(document_mutex);
+      current_documents.erase(token);
+    }
+    if (token > 0) Report(kDocumentRetired, token);
+  }
 
   struct Request {
     Com<ICoreWebView2WebResourceRequestedEventArgs> args;
@@ -552,6 +608,60 @@ void Do(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
   });
 }
 
+void ClearDocumentTimer(Impl* impl) {
+  if (impl->document_script_timer != 0) {
+    KillTimer(g_task_window, impl->document_script_timer);
+    g_timers.erase(impl->document_script_timer);
+    impl->document_script_timer = 0;
+  }
+}
+
+void DrainDocumentNavigations(Impl* impl) {
+  if (impl->document_script_inflight != 0) return;
+  ClearDocumentTimer(impl);
+  auto waiting = std::move(impl->document_waiting);
+  impl->document_waiting.clear();
+  if (impl->document_script_failed || impl->destroyed) return;
+  for (auto& navigation : waiting) navigation(impl);
+}
+
+void ArmDocumentTimer(const std::shared_ptr<Impl>& impl) {
+  if (impl->document_script_timer != 0) return;
+  if (g_next_timer == 0 || g_next_timer == std::numeric_limits<UINT_PTR>::max()) {
+    impl->document_script_failed = true;
+    impl->document_waiting.clear();
+    impl->Report(kFailed, 0, E_FAIL, L"document script timer exhausted");
+    return;
+  }
+  UINT_PTR id = g_next_timer++;
+  if (SetTimer(g_task_window, id, 3000, nullptr) == 0) {
+    impl->document_script_failed = true;
+    impl->document_waiting.clear();
+    impl->Report(kFailed, 0, E_FAIL, L"document script timer creation failed");
+    return;
+  }
+  impl->document_script_timer = id;
+  std::weak_ptr<Impl> weak = impl;
+  g_timers.emplace(id, [weak, id] {
+    auto host = weak.lock();
+    if (!host || host->destroyed || host->document_script_timer != id) return;
+    host->document_script_timer = 0;
+    host->document_script_failed = true;
+    host->document_waiting.clear();
+    host->Report(kFailed, 0, E_FAIL, L"document script registration exceeded three seconds");
+  });
+}
+
+void RunDocumentNavigation(Impl* impl, std::function<void(Impl*)> navigation) {
+  if (impl->document_script_failed) {
+    impl->Report(kFailed, 0, E_FAIL, L"navigation rejected after document script failure");
+  } else if (impl->document_script_inflight != 0) {
+    impl->document_waiting.push_back(std::move(navigation));
+  } else {
+    navigation(impl);
+  }
+}
+
 std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers) {
   std::wstring out;
   Com<ICoreWebView2HttpHeadersCollectionIterator> it;
@@ -684,12 +794,126 @@ class Bridge final : public IDispatch {
   bool callable_;  // the object "callJava" reads as
 };
 
+// The STA owns frame references; handlers hold only a weak host and a native key.
+void RetireFrameTree(Impl* impl, int64_t parent) {
+  std::vector<int64_t> children;
+  for (const auto& pair : impl->frames) {
+    if (pair.second.parent == parent) children.push_back(pair.first);
+  }
+  for (int64_t key : children) {
+    RetireFrameTree(impl, key);
+    auto it = impl->frames.find(key);
+    if (it != impl->frames.end()) {
+      impl->RetireDocument(it->second.document);
+      Impl::Frame retired = std::move(it->second);
+      impl->frames.erase(it);
+      (void)retired;
+    }
+  }
+}
+
+void RegisterFrame(const std::shared_ptr<Impl>& impl, ICoreWebView2Frame* raw, int64_t parent) {
+  if (!raw || impl->destroyed) return;
+  if (parent != 0 && impl->frames.count(parent) == 0) return;
+  if (impl->next_frame == std::numeric_limits<int64_t>::max()) return;
+  Com<ICoreWebView2Frame> frame(raw);
+  Com<ICoreWebView2Frame2> messages;
+  if (!frame.As(IID_ICoreWebView2Frame2, &messages)) return;
+  const int64_t key = impl->next_frame++;
+  Impl::Frame entry;
+  entry.frame = frame;
+  entry.messages = messages;
+  entry.parent = parent;
+  entry.document = impl->NewDocument(0);
+  impl->frames.emplace(key, std::move(entry));
+  std::weak_ptr<Impl> weak = impl;
+  EventRegistrationToken token;
+  HRESULT hr = frame->add_Destroyed(
+      GESHER_CALLBACK(ICoreWebView2FrameDestroyedEventHandler,
+                      [weak, key](ICoreWebView2Frame*, IUnknown*) -> HRESULT {
+                        auto host = weak.lock();
+                        if (!host || host->destroyed) return S_OK;
+                        auto it = host->frames.find(key);
+                        if (it != host->frames.end()) {
+                          RetireFrameTree(host.get(), key);
+                          it = host->frames.find(key);
+                          if (it != host->frames.end()) {
+                            host->RetireDocument(it->second.document);
+                            Impl::Frame retired = std::move(it->second);
+                            host->frames.erase(it);
+                            (void)retired;
+                          }
+                        }
+                        return S_OK;
+                      }).get(), &token);
+  if (SUCCEEDED(hr)) hr = messages->add_NavigationStarting(
+      GESHER_CALLBACK(ICoreWebView2FrameNavigationStartingEventHandler,
+                      [weak, key](ICoreWebView2Frame*, ICoreWebView2NavigationStartingEventArgs*) -> HRESULT {
+                        auto host = weak.lock();
+                        if (!host || host->destroyed) return S_OK;
+                        auto it = host->frames.find(key);
+                        if (it != host->frames.end()) {
+                          RetireFrameTree(host.get(), key);
+                          it = host->frames.find(key);
+                          if (it != host->frames.end()) it->second.document = host->NewDocument(it->second.document);
+                        }
+                        return S_OK;
+                      }).get(), &token);
+  if (SUCCEEDED(hr)) hr = messages->add_WebMessageReceived(
+      GESHER_CALLBACK(ICoreWebView2FrameWebMessageReceivedEventHandler,
+                      [weak, key](ICoreWebView2Frame*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                        auto host = weak.lock();
+                        if (!host || host->destroyed) return S_OK;
+                        auto it = host->frames.find(key);
+                        if (it == host->frames.end()) return S_OK;
+                        CoString json, source;
+                        if (FAILED(args->get_WebMessageAsJson(json.Put())) || FAILED(args->get_Source(source.Put()))) return S_OK;
+                        host->Report(kWebMessage, it->second.document, 1, json.str(), source.str());
+                        return S_OK;
+                      }).get(), &token);
+  if (FAILED(hr)) {
+    auto it = impl->frames.find(key);
+    if (it != impl->frames.end()) {
+      impl->RetireDocument(it->second.document);
+      Impl::Frame retired = std::move(it->second);
+      impl->frames.erase(it);
+      (void)retired;
+    }
+    return;
+  }
+  Com<ICoreWebView2Frame7> nested;
+  if (frame.As(IID_ICoreWebView2Frame7, &nested)) {
+    nested->add_FrameCreated(
+        GESHER_CALLBACK(ICoreWebView2FrameChildFrameCreatedEventHandler,
+                        [weak, key](ICoreWebView2Frame*, ICoreWebView2FrameCreatedEventArgs* args) -> HRESULT {
+                          auto host = weak.lock();
+                          if (!host || host->destroyed) return S_OK;
+                          Com<ICoreWebView2Frame> child;
+                          if (SUCCEEDED(args->get_Frame(child.Put())) && child) RegisterFrame(host, child.get(), key);
+                          return S_OK;
+                        }).get(), &token);
+  }
+}
+
 // Registers the controller's and the WebView's handlers. The WebView thread.
 void AddHandlers(const std::shared_ptr<Impl>& shared) {
   Impl* impl = shared.get();
   std::weak_ptr<Impl> weak = shared;
   EventRegistrationToken token;
   ICoreWebView2* wv = impl->webview.get();
+  impl->main_document_token = impl->NewDocument(0);
+  Com<ICoreWebView2_4> frame_source;
+  if (impl->webview.As(IID_ICoreWebView2_4, &frame_source)) {
+    frame_source->add_FrameCreated(
+        GESHER_CALLBACK(ICoreWebView2FrameCreatedEventHandler,
+                        [weak](ICoreWebView2*, ICoreWebView2FrameCreatedEventArgs* args) -> HRESULT {
+                          auto host = weak.lock();
+                          if (!host || host->destroyed) return S_OK;
+                          Com<ICoreWebView2Frame> frame;
+                          if (SUCCEEDED(args->get_Frame(frame.Put())) && frame) RegisterFrame(host, frame.get(), 0);
+                          return S_OK;
+                        }).get(), &token);
+  }
 
   wv->add_NavigationStarting(
       GESHER_CALLBACK(ICoreWebView2NavigationStartingEventHandler,
@@ -707,6 +931,8 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         std::wstring url = uri.str();
                         if (!impl->auth_retry.empty() && url == impl->auth_retry && !redirect) {
                           impl->auth_retry.clear();
+                          RetireFrameTree(impl.get(), 0);
+                          impl->main_document_token = impl->NewDocument(impl->main_document_token);
                           impl->main_document = url;
                           return S_OK;
                         }
@@ -722,6 +948,8 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                           impl->cancelled.insert(nav);
                           return S_OK;
                         }
+                        RetireFrameTree(impl.get(), 0);
+                        impl->main_document_token = impl->NewDocument(impl->main_document_token);
                         impl->main_document = url;
                         if (!redirect) {
                           UINT64 nav = 0;
@@ -960,7 +1188,7 @@ void AddHandlers(const std::shared_ptr<Impl>& shared) {
                         CoString json, source;
                         args->get_WebMessageAsJson(json.Put());
                         args->get_Source(source.Put());
-                        impl->Report(kWebMessage, 0, 0, json.str(), source.str());
+                        impl->Report(kWebMessage, impl->main_document_token, 0, json.str(), source.str());
                         return S_OK;
                       })
           .get(),
@@ -1409,8 +1637,15 @@ Host* Host::Create(Listener* listener, const HostOptions& options) {
 
 void Host::Destroy() {
   std::shared_ptr<Impl> impl = std::move(impl_);
+  {
+    std::lock_guard<std::mutex> guard(impl->document_mutex);
+    impl->documents_closed = true;
+    impl->current_documents.clear();
+  }
   PostToWebViewThread([impl] {
     if (impl->destroyed) return;
+    ClearDocumentTimer(impl.get());
+    impl->document_waiting.clear();
     // Pending requests and dialogs go on unanswered.
     for (auto& r : impl->requests) r.second.deferral->Complete();
     impl->requests.clear();
@@ -1431,6 +1666,9 @@ void Host::Destroy() {
     }
     impl->deferred.clear();
     impl->find.Reset();
+    // Reentrant frame-destroy callbacks must not mutate the map being released.
+    impl->destroyed = true;
+    impl->frames.clear();
     g_live.erase(impl.get());
     if (impl->controller) impl->controller->Close();
     impl->receivers.clear();
@@ -1441,7 +1679,6 @@ void Host::Destroy() {
     impl->container = nullptr;
     impl->pending.clear();
     Listener* listener = impl->listener;
-    impl->destroyed = true;
     if (listener != nullptr) listener->OnDestroyed();
   });
   delete this;
@@ -1450,6 +1687,7 @@ void Host::Destroy() {
 void Host::Navigate(const std::wstring& url, const std::wstring& headers,
                     const std::wstring& method, std::vector<uint8_t> body) {
   Do(impl_, [url, headers, method, body = std::move(body)](Impl* impl) {
+    RunDocumentNavigation(impl, [url, headers, method, body](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
@@ -1474,37 +1712,44 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
       impl->api_navigation = false;
       impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"Navigate " + url + L": " + Hex(hr));
     }
+    });
   });
 }
 
 void Host::NavigateToString(const std::wstring& html) {
   Do(impl_, [html](Impl* impl) {
+    RunDocumentNavigation(impl, [html](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = impl->webview->NavigateToString(html.c_str());
     if (FAILED(hr)) {
       impl->api_navigation = false;
       impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"NavigateToString: " + Hex(hr));
     }
+    });
   });
 }
 
 void Host::Run(Command command) {
   Do(impl_, [command](Impl* impl) {
+    if (command == kStop) {
+      impl->document_waiting.clear();
+      impl->webview->Stop();
+      return;
+    }
+    if (command == kReload || command == kGoBack || command == kGoForward) {
+      RunDocumentNavigation(impl, [command](Impl* current) {
+        current->api_navigation = true;
+        if (command == kReload) current->webview->Reload();
+        else if (command == kGoBack) current->webview->GoBack();
+        else current->webview->GoForward();
+      });
+      return;
+    }
     switch (command) {
       case kReload:
-        impl->api_navigation = true;
-        impl->webview->Reload();
-        break;
       case kStop:
-        impl->webview->Stop();
-        break;
       case kGoBack:
-        impl->api_navigation = true;
-        impl->webview->GoBack();
-        break;
       case kGoForward:
-        impl->api_navigation = true;
-        impl->webview->GoForward();
         break;
       case kFocus:
         impl->controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -1618,28 +1863,50 @@ void Host::ExecuteScript(const std::wstring& script, int64_t callback_id) {
 void Host::SetDocumentScript(const std::wstring& script) {
   std::weak_ptr<Impl> weak = impl_;
   Do(impl_, [script, weak](Impl* impl) {
+    impl->document_script_failed = false;
     if (!impl->document_script_id.empty()) {
-      impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
+      HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
+      if (FAILED(removed)) {
+        impl->document_script_failed = true;
+        impl->document_waiting.clear();
+        impl->Report(kFailed, 0, static_cast<int32_t>(removed), L"document script removal failed");
+        return;
+      }
       impl->document_script_id.clear();
     }
     uint64_t generation = ++impl->document_script_generation;
-    if (script.empty()) return;
-    impl->webview->AddScriptToExecuteOnDocumentCreated(
+    if (script.empty()) { DrainDocumentNavigations(impl); return; }
+    ++impl->document_script_inflight;
+    ArmDocumentTimer(impl->shared_from_this());
+    if (impl->document_script_failed) { --impl->document_script_inflight; return; }
+    HRESULT started = impl->webview->AddScriptToExecuteOnDocumentCreated(
         script.c_str(),
         GESHER_CALLBACK(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
                         [weak, generation](HRESULT error, LPCWSTR id) -> HRESULT {
                           auto impl = weak.lock();
-                          if (!impl || FAILED(error) || id == nullptr) return S_OK;
-                          if (impl->destroyed || !impl->webview) return S_OK;
-                          if (generation != impl->document_script_generation) {
-                            // Replaced while it was being added.
-                            impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
-                          } else {
-                            impl->document_script_id = id;
+                          if (!impl || impl->destroyed || !impl->webview) return S_OK;
+                          if (SUCCEEDED(error) && id != nullptr) {
+                            if (generation != impl->document_script_generation) {
+                              HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
+                              if (FAILED(removed)) impl->document_script_failed = true;
+                            } else {
+                              impl->document_script_id = id;
+                            }
+                          } else if (generation == impl->document_script_generation) {
+                            impl->document_script_failed = true;
                           }
+                          --impl->document_script_inflight;
+                          if (impl->document_script_failed) impl->Report(kFailed, 0, E_FAIL, L"document script registration or removal failed");
+                          DrainDocumentNavigations(impl.get());
                           return S_OK;
                         })
             .get());
+    if (FAILED(started)) {
+      --impl->document_script_inflight;
+      impl->document_script_failed = true;
+      impl->Report(kFailed, 0, static_cast<int32_t>(started), L"document script registration failed");
+      DrainDocumentNavigations(impl);
+    }
   });
 }
 
@@ -1723,6 +1990,31 @@ void Host::PostWebMessage(const std::wstring& json) {
     HRESULT hr = impl->webview->PostWebMessageAsJson(json.c_str());
     if (FAILED(hr)) {
       impl->Report(kFailed, 0, static_cast<int32_t>(hr), L"PostWebMessageAsJson: " + Hex(hr));
+    }
+  });
+}
+
+bool Host::IsDocumentCurrent(int64_t document) const {
+  std::shared_ptr<Impl> impl = impl_;
+  std::lock_guard<std::mutex> guard(impl->document_mutex);
+  return document > 0 && impl->current_documents.count(document) != 0;
+}
+
+void Host::PostFrameMessage(int64_t document, const std::wstring& json) {
+  Do(impl_, [document, json](Impl* impl) {
+    {
+      std::lock_guard<std::mutex> guard(impl->document_mutex);
+      if (document <= 0 || impl->current_documents.count(document) == 0) return;
+    }
+    if (document == impl->main_document_token) {
+      impl->webview->PostWebMessageAsJson(json.c_str());
+      return;
+    }
+    for (auto& pair : impl->frames) {
+      if (pair.second.document == document) {
+        pair.second.messages->PostWebMessageAsJson(json.c_str());
+        return;
+      }
     }
   });
 }

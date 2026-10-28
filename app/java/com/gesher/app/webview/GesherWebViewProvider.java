@@ -175,7 +175,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         final String name;
         final String[] rules;
         final java.lang.reflect.InvocationHandler listener;
-        final Map<String, Object> replyProxies = new ConcurrentHashMap<>();
+        final Map<Long, Object> replyProxies = new ConcurrentHashMap<>();
 
         MessageListener(String name, String[] rules, java.lang.reflect.InvocationHandler listener) {
             this.name = name;
@@ -264,11 +264,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     /** A JavaScriptReplyProxy's message to the page's object {@code name}. */
-    void postToListener(String name, String data) {
-        postToListener(name, new WebMessage(data));
+    void postToListener(long document, String name, String data) {
+        postToListener(document, name, new WebMessage(data));
     }
 
-    void postToListener(String name, WebMessage message) {
+    void postToListener(long document, String name, WebMessage message) {
         WebView2Host host = mHost;
         if (host == null) return;
         try {
@@ -276,7 +276,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             m.put("gesher", "listener");
             m.put("name", name);
             WebMessagePayload.write(m, message);
-            host.postWebMessage(m.toString());
+            host.postFrameMessage(document, m.toString());
         } catch (org.json.JSONException e) {
             throw new IllegalStateException(e);
         }
@@ -1996,7 +1996,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 if (chrome != null) chrome.onCloseWindow(mView);
                 break;
             case WebView2Host.EVENT_WEB_MESSAGE:
-                webMessage(a, b);
+                webMessage(id, arg != 0, a, b);
+                break;
+            case WebView2Host.EVENT_DOCUMENT_RETIRED:
+                synchronized (mMessageListeners) {
+                    for (MessageListener listener : mMessageListeners.values()) {
+                        listener.replyProxies.remove(id);
+                    }
+                }
                 break;
             case WebView2Host.EVENT_DEVTOOLS_RESULT: {
                 ValueCallback<String> cb = mDevToolsCallbacks.remove(id);
@@ -2100,24 +2107,30 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     /** chrome.webview.postMessage from the page: a page port's message (PageScripts.PORTS). */
-    private void webMessage(String json, String source) {
+    private void webMessage(long document, boolean childFrame, String json, String source) {
         try {
             Object v = new org.json.JSONTokener(json).nextValue();
             if (!(v instanceof JSONObject)) return;
             JSONObject m = (JSONObject) v;
             if (m.has("gesherGeo")) {
-                mGeolocation.onMessage(m, source);
+                if (!childFrame) mGeolocation.onMessage(m, source);
                 return;
             }
             String listener = m.optString("gesherListener", null);
             if (listener != null) {
                 MessageListener l = mMessageListeners.get(listener);
-                if (l != null) SupportLib.deliver(this, l, WebMessagePayload.read(m), source);
+                // The injection guard alone is not an authorization boundary:
+                // a page can post its own envelope through chrome.webview.
+                WebView2Host host = mHost;
+                if (l != null && host != null && host.isDocumentCurrent(document)
+                        && ListenerOrigins.allows(l.rules, source)) {
+                    SupportLib.deliver(this, l, WebMessagePayload.read(m), source, document, !childFrame);
+                }
                 return;
             }
             String id = m.optString("gesherPort", null);
             GesherWebMessagePort port = id != null ? mPagePorts.get(id) : null;
-            if (port != null) port.fromPage(WebMessagePayload.read(m));
+            if (!childFrame && port != null) port.fromPage(WebMessagePayload.read(m));
         } catch (Exception e) {
             // not a port's message
         }

@@ -381,18 +381,17 @@ public final class SupportLib {
      * WebView's Looper, with the reply proxy of the page (one per document, as Chromium's).
      */
     static void deliver(GesherWebViewProvider provider, GesherWebViewProvider.MessageListener l,
-            WebMessage message, String source) {
-        String origin = GesherWebViewProvider.originOf(source != null ? source
-                : provider.currentUrl());
+            WebMessage message, String source, long document, boolean mainFrame) {
+        String origin = FileUrls.isFile(source) ? "null" : GesherWebViewProvider.originOf(source);
         if (origin.endsWith("/")) origin = origin.substring(0, origin.length() - 1);
-        Object reply = l.replyProxies.computeIfAbsent(origin,
-                o -> Boundary.of(new ReplyProxy(provider, l.name)));
+        Object reply = l.replyProxies.computeIfAbsent(document,
+                o -> Boundary.of(new ReplyProxy(provider, l.name, document)));
         try {
             call(l.listener, "WebMessageListenerBoundaryInterface", "onPostMessage",
                     new Class<?>[] {WebView.class, InvocationHandler.class, Uri.class,
                             boolean.class, InvocationHandler.class},
                     provider.view(), Boundary.of(new Message(message, null)), Uri.parse(origin),
-                    true, reply);
+                    mainFrame, reply);
         } catch (RuntimeException e) {
             Log.e(TAG, "WebMessageListener.onPostMessage", e);
             throw e;
@@ -403,21 +402,23 @@ public final class SupportLib {
     public static final class ReplyProxy {
         private final GesherWebViewProvider mProvider;
         private final String mName;
+        private final long mDocument;
         private Object mPeer;
 
-        ReplyProxy(GesherWebViewProvider provider, String name) {
+        ReplyProxy(GesherWebViewProvider provider, String name, long document) {
             mProvider = provider;
             mName = name;
+            mDocument = document;
         }
 
         public void postMessage(String message) {
-            mProvider.postToListener(mName, message);
+            mProvider.postToListener(mDocument, mName, message);
         }
 
         public void postMessageWithPayload(InvocationHandler payload) {
             int type = (Integer) call(payload, "WebMessagePayloadBoundaryInterface", "getType", NONE);
             if (type == 1) {
-                mProvider.postToListener(mName, new WebMessagePayload((byte[]) call(payload,
+                mProvider.postToListener(mDocument, mName, new WebMessagePayload((byte[]) call(payload,
                         "WebMessagePayloadBoundaryInterface", "getAsArrayBuffer", NONE), null));
             } else if (type == 0) {
                 postMessage((String) call(payload, "WebMessagePayloadBoundaryInterface", "getAsString", NONE));

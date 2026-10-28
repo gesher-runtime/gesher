@@ -91,7 +91,7 @@ final class PageScripts {
             + "    var m = /^([a-zA-Z][a-zA-Z0-9+.-]*):\\/\\/(\\*\\.)?([^:\\/]*)(?::(\\d+))?\\/?$/.exec(r);\n"
             + "    if (!m || m[1].toLowerCase() !== scheme) continue;\n"
             + "    var h = m[3].toLowerCase();\n"
-            + "    if (m[2] ? !(host === h || host.endsWith('.' + h)) : host !== h) continue;\n"
+            + "    if (m[2] ? !host.endsWith('.' + h) : host !== h) continue;\n"
             + "    if ((m[4] || defaults[scheme] || '') !== port) continue;\n"
             + "    return true;\n"
             + "  }\n"
@@ -109,7 +109,7 @@ final class PageScripts {
      */
     static String messageListener(String name, String[] rules) {
         return "(function(name, rules){\n"
-                + "if (window.top !== window || !window.chrome || !chrome.webview"
+                + "if (!window.chrome || !chrome.webview"
                 + " || !window.__gesherOriginAllowed(rules)) return;\n"
                 + "var listeners = [], obj = {onmessage: null};\n"
                 + "obj.postMessage = function(data) {\n"
