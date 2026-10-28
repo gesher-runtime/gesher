@@ -656,3 +656,49 @@ prepared source, not retroactive expansion of f6b1fbfa's nine-control proof.
 No production C/C++ changed from1dc2e245 and no fixture ran locally. Python,
 YAML, embedded PowerShell source parsing and diff checks precede independent
 review of this exact diagnostic/source delta before any CI dispatch.
+
+### Actual 4f8ad228 stack diagnostic: component remains failed
+
+Run40674284726 is terminal FAILURE (required120s watch exit1). Actual metadata,
+preflight, producer and both Windows plain logs are retained at
+C:/work/gesher-ci-review/native3-commands-40674284726-*; no local artifact.
+Preflight122768615427 passed canonical helper hashes and all15 actual controls.
+Producer122768663211 passed with Linux161 rows/mismatches0. Windows2022
+122769230303 passed all161 rows and four actual full WCT chains. Windows2025
+122769230252 failed the original chain assertion after the matching135-row
+prefix:324 successful WCT queries still expose only one blocked thread node.
+The actual closer did not complete before owner unlock. Both Windows still
+completed all13 duplicate modes/8399 assertions/0 failures,1000 actual duplicate
+operations/0 errors with2565 (2022) and3580 (2025) concurrent raw publications;
+real broker clients/controlled211 stop/job reap remain bounded passing slices.
+None substitutes for the missing required Windows2025 actual owner chain.
+
+The checked suspend/resume diagnostic captured the actual owned closer3752,
+pid6116, birth134376578797745013, FILE0000019450b75d40, fd3, nine PCs, original
+suspend count0 and resume count1. Its exact worker return RVAs are0x9836 and
+0x3a02. The System32 ntdll/ucrtbase module addresses, paths, versions and byte
+hashes are recorded in the actual job log. Nearest-export strings are hints,
+not private-symbol, critical-section-identity or ownership proof. All runtime
+qualification and inherited-OFD/atomic-spawn/blocking/signals/ABI/ART/copy-race/
+full/package/e2e requirements remain open; no inventory checkbox changed.
+
+### Prepared exact-original-binary symbolization, no runtime retry
+
+The next separate narrow workflow will decode the existing archived worker,
+without compiling or executing it. It binds original source4f8ad228, failed
+run40674284726/attempt1 but successful compile job122768663211, artifact12809029365,
+ZIPsha2563c91e9cb37f3d6ac5df3cb7c572a5a45559d774eeb02df91250a16c71f3c1e4b
+and exact workerSHA25610c93728553e8ed90cb5d89450c8b090ad392e98761f26a1ee273ad70af29734.
+Current API repository/run/source/attempt/job/upload/artifact timestamps are
+checked before the reviewed strict downloader authenticates the raw archive.
+The exact eight-member set, original whole tracked-source manifest, original
+compiler archive digest and all seven prior output byte hashes are mandatory.
+The checksum-pinned original compiler tools then read PE image base, inline
+DWARF and nearby actual instructions at both observed RVAs and return-PC minus1.
+Unknown mappings fail this diagnostic. No locally downloaded binary/map is used.
+
+This is a new static diagnostic of the SAME produced binary, not an unchanged
+runtime retry or acceptance. Only its actual output can support the next
+lock-identity/owner/same-held-FILE causal diagnostic. The original WCT criterion
+and5s/10s/180s budgets remain unchanged. Source parsing/diff checks only ran
+locally; this workflow and script require independent focused review before push.

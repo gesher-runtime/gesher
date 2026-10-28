@@ -1,0 +1,44 @@
+name: native3-locks-original-symbolization
+on:
+  push:
+    branches: ['wip/native3-locks']
+    paths: ['.github/workflows/native3-locks-symbolize.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native3-locks-original-symbolization-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  symbolize-original:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 4f8ad228d02157fdbd38d6b87d02688ef6a777b7
+          path: original-source
+      - name: Fetch checksum-pinned original compiler tools without rebuilding worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C original-source rev-parse HEAD)" = '4f8ad228d02157fdbd38d6b87d02688ef6a777b7'
+          printf 'DIAGNOSTIC_SOURCE %s RUN %s ATTEMPT %s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o toolchain.tar.xz
+          printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain
+          tar -xJf toolchain.tar.xz -C toolchain
+      - name: Authenticate original failed-run producer bytes then decode actual worker RVAs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/native3-locks/symbolize_original.py
+          --source-root original-source
+          --toolchain toolchain/${{ env.LLVM_MINGW_NAME }}
+          --destination original-fixture
