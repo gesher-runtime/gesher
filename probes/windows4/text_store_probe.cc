@@ -101,6 +101,20 @@ int main() {
   formatted.text = u"A\u00e9\U0001f600B";
   store->Update(formatted);
   IDataObject* snapshot = nullptr;
+  TextDocument with_nul = formatted; with_nul.text = std::u16string(u"A\0B", 3);
+  store->Update(with_nul);
+  sink->action = [&](DWORD) -> HRESULT {
+    IDataObject* rejected = reinterpret_cast<IDataObject*>(1);
+    Check(store->GetFormattedText(0, 3, &rejected) == E_FAIL && !rejected, "embedded NUL range rejected");
+    IDataObject* suffix = nullptr;
+    Check(store->GetFormattedText(2, 3, &suffix) == S_OK && suffix, "range excluding NUL accepted");
+    if (suffix) suffix->Release();
+    return S_OK;
+  };
+  Check(sink->Lock(store) == S_OK, "NUL policy checked under lock");
+  sink->action = nullptr;
+  Check(Text(store, sink) == with_nul.text, "NUL rejection preserves document");
+  store->Update(formatted);
   Check(store->GetFormattedText(0, 1, &snapshot) == TS_E_NOLOCK && !snapshot, "formatted text requires lock");
   sink->action = [&](DWORD) -> HRESULT {
     Check(store->GetFormattedText(0, 1, &snapshot) == TS_E_NOLOCK && !snapshot, "read lock is insufficient for formatted text");
@@ -141,6 +155,8 @@ int main() {
     bad = format; bad.tymed = TYMED_ISTREAM; Check(snapshot->QueryGetData(&bad) == DV_E_TYMED, "medium rejected");
     DVTARGETDEVICE device = {}; bad = format; bad.ptd = &device;
     Check(snapshot->QueryGetData(&bad) == DV_E_FORMATETC, "target device rejected");
+    STGMEDIUM failed = {}; failed.tymed = TYMED_HGLOBAL; failed.hGlobal = reinterpret_cast<HGLOBAL>(1);
+    Check(snapshot->GetData(&bad, &failed) == DV_E_FORMATETC && failed.tymed == TYMED_NULL && !failed.hGlobal && !failed.pUnkForRelease, "failed GetData clears medium");
     STGMEDIUM a = {}, b = {}; IEnumFORMATETC* enumeration = nullptr; IEnumFORMATETC* clone = nullptr;
     Check(snapshot->GetDataHere(&format, &a) == E_NOTIMPL, "GetDataHere unsupported");
     Check(snapshot->EnumFormatEtc(DATADIR_GET, &enumeration) == S_OK && enumeration, "format enumerator");
@@ -149,11 +165,18 @@ int main() {
       Check(enumeration->Clone(&clone) == S_OK && clone, "independent enumerator clone");
       Check(enumeration->Next(1, &found, &fetched) == S_OK && fetched == 1 && found.cfFormat == CF_UNICODETEXT, "enumerates text");
       Check(enumeration->Next(1, &found, &fetched) == S_FALSE && fetched == 0, "enumeration ends");
+      IEnumFORMATETC* at_end = nullptr;
+      Check(enumeration->Clone(&at_end) == S_OK && at_end, "clone at end");
+      if (at_end) { Check(at_end->Next(1, &found, &fetched) == S_FALSE && fetched == 0, "clone preserves cursor"); at_end->Release(); }
+      Check(enumeration->Reset() == S_OK && enumeration->Skip(1) == S_OK && enumeration->Skip(1) == S_FALSE, "reset and skip cursor");
+      Check(enumeration->Reset() == S_OK && enumeration->Skip(2) == S_FALSE && enumeration->Next(1, &found, &fetched) == S_FALSE, "partial skip reaches end");
       if (clone) { Check(clone->Next(1, &found, &fetched) == S_OK, "clone cursor independent"); clone->Release(); }
       enumeration->Release();
     }
     Check(snapshot->GetData(&format, &a) == S_OK, "first consumer medium");
     store->Disconnect();
+    Check(store->Release() == 0, "source store destroyed");
+    store = nullptr;
     Check(snapshot->GetData(&format, &b) == S_OK && a.hGlobal != b.hGlobal, "independent medium after source teardown");
     snapshot->AddRef(); snapshot->Release(); snapshot->Release(); snapshot = nullptr;
     const char16_t expected[] = u"\u00e9\U0001f600B";
@@ -169,7 +192,7 @@ int main() {
     if (b.tymed != TYMED_NULL) ReleaseStgMedium(&b);
   }
   // Restore a fresh store after testing teardown; keep the rest of the existing fixture intact.
-  store->Release();
+  if (store) store->Release();
   store = new TextStore(window, [&](DocumentEdit edit) { edits.push_back(edit); if (host_feedback) host_feedback(edit); }, [&] { ++scheduled; });
   Check(SUCCEEDED(store->AdviseSink(IID_ITextStoreACPSink, sink, TS_AS_ALL_SINKS)), "subscribe after snapshot teardown");
   store->Update(original);

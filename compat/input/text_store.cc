@@ -368,6 +368,8 @@ HRESULT TextStore::GetFormattedText(LONG start, LONG end, IDataObject** out) {
   if (end == -1) end = static_cast<LONG>(document_.text.size());
   if (!Range(start, end)) return TS_E_INVALIDPOS;
   size_t length = static_cast<size_t>(end - start);
+  // CF_UNICODETEXT ends at the first NUL; do not silently lose a suffix.
+  if (std::find(document_.text.begin() + start, document_.text.begin() + end, u'\0') != document_.text.begin() + end) return E_FAIL;
   if (length > (SIZE_MAX / sizeof(char16_t)) - 1) return E_OUTOFMEMORY;
   auto* copy = new (std::nothrow) char16_t[length + 1];
   if (!copy) return E_OUTOFMEMORY;
