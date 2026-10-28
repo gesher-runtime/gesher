@@ -18,13 +18,19 @@ namespace zygote {
 // `breakaway` asks to leave this process's jobs, so that it outlives a
 // console or job the starter belongs to. Returns the pid, or -(Win32 error).
 // The child starts suspended; its actual process handle and birth are retained
-// before resuming. This local bookkeeping grants no Binder registration authority.
+// before resuming. Package children require the inherited writer channel and a
+// broker registration acknowledgement before resume; generic spawns get no rights.
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, int uid = -1, const std::u16string& package = {},
           const std::u16string& install = {});
 // Revokes exact owned child instances; does not reopen numeric PIDs.
 bool RevokeInstall(const std::u16string& package, const std::u16string& install);
+bool IsAuthority();
+bool OwnedInstall(int pid, const std::u16string& package, const std::u16string& install);
+std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
+                            const std::vector<std::u16string>& logs,
+                            const std::vector<std::u16string>& env);
 
 // The process's creation time (a FILETIME), or 0 when no such process runs.
 // Owned children use the retained CreateProcess instance. Unknown/adopted PIDs

@@ -11,7 +11,8 @@ import java.util.List;
  * Controlled real install fixture, to compile against the exact rebuilt gesher-app and
  * framework classes. Run only in an owned, empty ANDROID_DATA whose final directory name
  * starts with uid-identity-fixture-. Arguments: package-A.apk package-B.apk update-A.apk.
- * This exercises installer records and PM, NOT Binder transport authentication.
+ * Starts the real private native bootstrap, then runs the install/child probes in
+ * its dedicated owned writer VM. Requires exact rebuilt binderd/servicemanager.
  */
 public final class PackageIdentityFixture {
     private static void check(boolean condition, String message) {
@@ -19,7 +20,45 @@ public final class PackageIdentityFixture {
     }
 
     public static void main(String[] args) throws Exception {
-        check(args.length == 3, "requires two distinct real APKs and a real update of A");
+        String root = System.getenv("ANDROID_ROOT");
+        if (root == null) root = "/system";
+        com.gesher.app.Main.bootstrap("uid-fixture", root + "/build.prop",
+                root + "/framework/framework-res.apk");
+        check(args.length == 3 || args.length == 5, "requires two APKs and an update of A");
+        if (!Zygote.nativeIsAuthority()) {
+            check(args.length == 3, "private writer bootstrap required for inherited arguments");
+            String exe = Zygote.exePath();
+            String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
+            String device = "uid-fixture-" + java.util.UUID.randomUUID();
+            android.system.Os.setenv("GESHER_BINDER", device, true);
+            String vm = Zygote.vmCommandLine(PackageIdentityFixture.class.getName());
+            File logs = new File(Device.dataDir(), "bootstrap");
+            check(logs.mkdirs() || logs.isDirectory(), "bootstrap log directory");
+            int[] owned = Zygote.startDevice(List.of(
+                    Zygote.quote(dir + "binderd.exe") + " " + device,
+                    Zygote.quote(dir + "servicemanager.exe"),
+                    Zygote.commandLine(vm, PackageIdentityFixture.class.getName(),
+                            List.of(args[0], args[1], args[2]))),
+                    List.of(new File(logs, "broker.log").getPath(),
+                            new File(logs, "manager.log").getPath(),
+                            new File(logs, "writer.log").getPath()),
+                    List.of("GESHER_BINDER=" + device));
+            long deadline = android.os.SystemClock.uptimeMillis() + 180_000;
+            int code;
+            while ((code = Zygote.exitCode(owned[2])) == Zygote.STILL_ACTIVE) {
+                check(android.os.SystemClock.uptimeMillis() < deadline, "writer timeout");
+                Thread.sleep(20);
+            }
+            Zygote.kill(owned[0]); Zygote.kill(owned[1]);
+            check(code == 0, "dedicated writer fixture failed: " + code);
+            check(java.nio.file.Files.readString(new File(logs, "writer.log").toPath())
+                    .contains("PACKAGE_INSTALL_UID_IDENTITY_PASS"), "writer result missing");
+            System.out.println("PRIVATE_BOOTSTRAP_PACKAGE_UID_PASS");
+            System.exit(0);
+        }
+        check(args.length == 5 && "--adopt".equals(args[3]), "owned bootstrap adoption");
+        check(Zygote.joinJob(0), "writer lifetime job");
+        for (String pid : args[4].split(",")) check(Zygote.joinJob(Integer.parseInt(pid)), "owned child job");
         File data = new File(Device.dataDir());
         check(data.getName().startsWith("uid-identity-fixture-"), "owned fixture directory required");
         check(!new File(data, "system/packages.list").exists(), "requires empty install registry");
@@ -33,6 +72,18 @@ public final class PackageIdentityFixture {
         check("installed".equals(installer.install(args[1])[1]), "initial B install");
         PackageIdentity first = pm.launchIdentity(a);
         PackageIdentity other = pm.launchIdentity(b);
+        android.os.ServiceManager.addService("gesher.uid.fixture", new android.os.Binder() {
+            @Override protected boolean onTransact(int code, android.os.Parcel data,
+                    android.os.Parcel reply, int flags) {
+                int expected = data.readInt();
+                int actual = android.os.Binder.getCallingUid();
+                check((expected == first.uid || expected == other.uid) && actual == expected,
+                        "remote Binder caller UID must equal PM authority");
+                reply.writeInt(actual);
+                return true;
+            }
+        });
+        SystemServer.startBinderThreads("uid-fixture", 3);
         check(first.uid != other.uid, "distinct installed packages must have distinct uids");
         // Real VMs for both identities, with deliberately wrong inherited/replaced
         // UID environment. Includes B, whose nondefault UID caught the peer defect.
@@ -78,7 +129,7 @@ public final class PackageIdentityFixture {
         String vm = Zygote.vmCommandLine(PackageIdentityFixture.class.getName());
         File output = new File(Device.dataDir(), "child-" + identity.uid + ".log");
         int pid = Zygote.spawnPackage(Zygote.commandLine(vm, PackageUidChild.class.getName(),
-                List.of(String.valueOf(identity.uid))),
+                List.of(String.valueOf(identity.uid), "gesher.uid.fixture")),
                 List.of("GESHER_UID=19999", "GESHER_BINDER_UID=1000"),
                 output.getPath(), identity);
         long deadline = android.os.SystemClock.uptimeMillis() + 30_000;

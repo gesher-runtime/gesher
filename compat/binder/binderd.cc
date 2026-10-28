@@ -38,6 +38,8 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <chrono>
+#include <iterator>
 #include <list>
 #include <map>
 #include <mutex>
@@ -50,10 +52,16 @@
 
 #include "../posix/src/binder_wire.h"
 #include "../posix/src/binder_sg.h"
+#include "../posix/src/launch_context.h"
+#include "launch_control.h"
+#include "launch_registry.h"
 
 namespace {
 
 namespace wire = gesher::binder_wire;
+namespace control = gesher::launch_control;
+gesher::binder_launch::Registry g_registry;
+gesher::binder_launch::Registry::Lease g_owner; // guarded by g_lock
 
 bool g_trace = false;
 
@@ -197,7 +205,7 @@ struct Proc {
   uint64_t key = 0;
   int pid = 0;
   uint32_t uid = 0;
-  HANDLE peer_process = nullptr;  // retained instance; guarded by g_lock
+  gesher::binder_launch::Registry::Lease launch;
   uint64_t peer_birth = 0;
   bool is_dead = false;
   std::map<uint64_t, Node*> nodes;
@@ -466,32 +474,30 @@ bool UpdateRefForHandle(Proc* proc, uint32_t desc, bool increment, bool strong) 
 }
 
 // --- transactions --------------------------------------------------------------
+bool PeerAlive(const Proc* proc);
 
 constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
 
 // A handle of another process, for a BINDER_TYPE_FD object: duplicated from
 // the sender into the receiver (0 if that fails), or closed in its process.
-uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+uint64_t DuplicateRemoteHandle(Proc* from_proc, Proc* to_proc, uint64_t handle) {
   if (handle == 0) return 0;
-  HANDLE from = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(from_pid));
-  HANDLE to = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(to_pid));
+  HANDLE from = from_proc->launch ? from_proc->launch->process : nullptr;
+  HANDLE to = to_proc->launch ? to_proc->launch->process : nullptr;
   HANDLE dup = nullptr;
   bool ok = from != nullptr && to != nullptr &&
             DuplicateHandle(from, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), to,
                             &dup, 0, FALSE, DUPLICATE_SAME_ACCESS);
-  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_pid, to_pid, GetLastError());
-  if (from != nullptr) CloseHandle(from);
-  if (to != nullptr) CloseHandle(to);
+  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_proc->pid, to_proc->pid, GetLastError());
   return ok ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(dup)) : 0;
 }
 
-void CloseRemoteHandle(int pid, uint64_t handle) {
+void CloseRemoteHandle(Proc* proc, uint64_t handle) {
   if (handle == 0) return;
-  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
+  HANDLE p = proc->launch ? proc->launch->process : nullptr;
   if (p == nullptr) return;
   DuplicateHandle(p, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
                   0, FALSE, DUPLICATE_CLOSE_SOURCE);
-  CloseHandle(p);
 }
 
 // binder_transaction_buffer_release: drops the references a buffer's objects
@@ -518,7 +524,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
       case BINDER_TYPE_FD:
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
-        CloseRemoteHandle(proc->pid, fp.binder);
+        CloseRemoteHandle(proc, fp.binder);
         break;
       default:
         break;
@@ -684,7 +690,7 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
         Log("proc %u: a file descriptor without a Windows handle cannot be sent", proc->id);
         return BR_FAILED_REPLY;
       }
-      uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
+      uint64_t dup = DuplicateRemoteHandle(proc, target_proc, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
       TRACE("proc %u: fd handle %llx -> %llx in proc %u", proc->id,
             (unsigned long long)fp.binder, (unsigned long long)dup, target_proc->id);
@@ -816,6 +822,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
       }
     }
   }
+  if (!PeerAlive(proc) || !PeerAlive(target_proc)) return fail(BR_DEAD_REPLY);
   gesher::binder_sg::Layout sg_layout;
   if (td.copy_error != 0 ||
       !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
@@ -931,7 +938,7 @@ void CloseStagingFds(Buffer* buffer) {
     const uint64_t staging = object.pad_binder;
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
-    CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseRemoteHandle(buffer->proc, staging);
   }
 }
 
@@ -1020,8 +1027,7 @@ void NodeRelease(Node* node) {
 }
 
 // binder_deferred_release
-void ProcRelease(Proc* proc) {
-  std::unique_lock<std::mutex> lock(g_lock);
+void ProcReleaseLocked(Proc* proc) {
   if (proc->is_dead) return;
   TRACE("proc %u (pid %d) released", proc->id, proc->pid);
   proc->is_dead = true;
@@ -1043,8 +1049,89 @@ void ProcRelease(Proc* proc) {
   for (auto& [id, buffer] : proc->buffers) buffers.push_back(buffer);
   for (Buffer* buffer : buffers) FreeBuffer(buffer, false);
   g_procs.erase(proc->id);
-  if (proc->peer_process != nullptr) CloseHandle(proc->peer_process);
-  proc->peer_process = nullptr;
+}
+void ProcRelease(Proc* proc) {
+  std::unique_lock<std::mutex> lock(g_lock);
+  ProcReleaseLocked(proc);
+}
+bool PeerAlive(const Proc* proc) {
+  return g_registry.Live(proc->launch) && g_registry.Live(g_owner);
+}
+void ReapRevokedLocked() {
+  std::vector<Proc*> dead;
+  for (const auto& item : g_procs) if (!PeerAlive(item.second)) dead.push_back(item.second);
+  for (Proc* proc : dead) ProcReleaseLocked(proc);
+}
+
+// The ONLY publication entry. Endpoint is inherited privately from the owner
+// that created binderd, then handed solely to the dedicated SystemServer child.
+void ControlWorker(HANDLE pipe) {
+  bool writer = false;
+  std::set<std::string> roots;
+  uint64_t initial_deadline = GetTickCount64() + 5000;
+  for (;;) {
+    {
+      std::lock_guard<std::mutex> lock(g_lock);
+      ReapRevokedLocked();
+      if ((g_owner && !g_registry.Live(g_owner)) ||
+          (!g_owner && GetTickCount64() >= initial_deadline)) break;
+    }
+    DWORD available = 0;
+    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) break;
+    if (!available) { Sleep(10); continue; }
+    control::Request req;
+    uint64_t deadline = GetTickCount64() + 5000;
+    if (!control::Transfer(pipe, &req, sizeof(req), false, deadline)) break;
+    int32_t status = -EPERM;
+    {
+      std::lock_guard<std::mutex> lock(g_lock);
+      HANDLE process = control::Handle(req.process);
+      bool valid = req.magic == 0x474c4350 && req.version == 1 &&
+          memchr(req.package, 0, sizeof(req.package)) != nullptr;
+      std::string package = valid ? req.package : "";
+      gesher::binder_launch::Install install{package, {}, req.uid, !writer};
+      std::copy(std::begin(req.generation), std::end(req.generation), install.generation.begin());
+      if (valid && req.op == control::kPublish && process &&
+          req.birth && control::Birth(process) == req.birth &&
+          (!writer ? (!roots.count(package) && (package == "@launcher" ||
+              package == "@servicemanager" || package == "@system_server"))
+                   : (!package.empty() && package[0] != '@' &&
+                      std::any_of(install.generation.begin(), install.generation.end(), [](uint8_t v) { return v != 0; })))) {
+        DWORD pid = GetProcessId(process);
+        // Publish consumes the transferred actual process HANDLE even on refusal.
+        if (g_registry.Publish(process, install)) {
+          status = 0;
+          if (!writer) roots.insert(package);
+          if (package == "@launcher") g_owner = g_registry.Find(pid, req.birth, req.uid);
+        }
+        process = nullptr;
+      } else if (valid && req.op == control::kHandoff && !writer && process &&
+                 roots.size() == 3 && control::Birth(process) == req.birth) {
+        auto owner = g_registry.Find(GetProcessId(process), req.birth, 1000);
+        if (owner && owner->install.package == "@system_server") {
+          g_owner = owner; writer = true; status = 0;
+        }
+      } else if (valid && req.op == control::kRevoke && writer && !process && !package.empty() && package[0] != '@') {
+        g_registry.RevokeGeneration(package, install.generation);
+        status = 0;
+      } else if (valid && req.op == control::kCancel && process &&
+                 req.birth && control::Birth(process) == req.birth) {
+        g_registry.Cancel(GetProcessId(process), req.birth);
+        status = 0;
+      }
+      if (process) CloseHandle(process);
+      ReapRevokedLocked();
+    }
+    if (!control::Transfer(pipe, &status, sizeof(status), true, deadline)) break;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_lock);
+    g_registry.AuthorityDied();
+    ReapRevokedLocked();
+  }
+  CloseHandle(pipe);
+  // The public listener must not survive loss of its only publication authority.
+  ExitProcess(1);
 }
 
 // --- BINDER_WRITE_READ ---------------------------------------------------------------
@@ -1307,12 +1394,14 @@ int ThreadRead(std::unique_lock<std::mutex>& lock, Proc* proc, Thread* thread,
   if (first) rs->Put32(BR_NOOP);
   int ret = 0;
 retry:
+  if (!PeerAlive(proc)) return -EBADF;
   bool wait_for_proc_work = AvailableForProcWork(thread);
   thread->looper |= kLooperWaiting;
   if (non_block) {
     if (!HasWork(thread, wait_for_proc_work)) ret = -EAGAIN;
   } else {
     for (;;) {
+      if (!PeerAlive(proc)) { ret = -EBADF; break; }
       if (HasWork(thread, wait_for_proc_work)) break;
       if (thread->is_dead || proc->is_dead) {
         ret = -EBADF;
@@ -1322,7 +1411,7 @@ retry:
         proc->waiting_threads.push_front(thread);
         thread->waiting = true;
       }
-      thread->cv.wait(lock);
+      thread->cv.wait_for(lock, std::chrono::milliseconds(100));
       if (thread->waiting) {
         proc->waiting_threads.remove(thread);
         thread->waiting = false;
@@ -1333,6 +1422,7 @@ retry:
   if (ret != 0) return ret;
 
   for (;;) {
+    if (!PeerAlive(proc)) return -EBADF;
     WorkList* list;
     if (!thread->todo.empty()) {
       list = &thread->todo;
@@ -1535,31 +1625,32 @@ uint64_t RandomKey() {
 // outside this boundary; same-user Windows processes are not isolated here.
 struct PipePeer {
   ULONG pid = 0;
-  HANDLE process = nullptr;
-  uint64_t birth = 0;
-  ~PipePeer() { if (process != nullptr) CloseHandle(process); }
   bool Capture(HANDLE pipe) {
-    if (!GetNamedPipeClientProcessId(pipe, &pid) || pid == 0 || pid > INT32_MAX) return false;
-    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
-    FILETIME created, exited, kernel, user;
-    ULONG again = 0;
-    if (process == nullptr || WaitForSingleObject(process, 0) != WAIT_TIMEOUT ||
-        !GetProcessTimes(process, &created, &exited, &kernel, &user) ||
-        !GetNamedPipeClientProcessId(pipe, &again) || again != pid) return false;
-    birth = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
-    return birth != 0;
+    return GetNamedPipeClientProcessId(pipe, &pid) && pid && pid <= INT32_MAX;
   }
 };
-
-bool PeerAlive(const Proc* proc) {
-  return proc->peer_process != nullptr &&
-      WaitForSingleObject(proc->peer_process, 0) == WAIT_TIMEOUT;
+bool ProvePeer(HANDLE pipe, const gesher::binder_launch::Registry::Lease& launch) {
+  if (!control::Mode(pipe, true)) return false;
+  bool ok = g_registry.Challenge(launch, [&](uint64_t value, uint64_t deadline) {
+    // A framed challenge precedes the final ordinary hello response.
+    uint32_t length = 12, tag = wire::kPeerChallenge;
+    return control::Transfer(pipe, &length, 4, true, deadline) &&
+        control::Transfer(pipe, &tag, 4, true, deadline) &&
+        control::Transfer(pipe, &value, 8, true, deadline);
+  }, [&](uint64_t deadline) {
+    uint32_t length = 0, tag = 0;
+    return control::Transfer(pipe, &length, 4, false, deadline) && length == 4 &&
+        control::Transfer(pipe, &tag, 4, false, deadline) && tag == wire::kPeerAck;
+  });
+  return control::Mode(pipe, false) && ok;
 }
 
 void ServeProc(HANDLE pipe, In in, PipePeer& peer) {
   uint32_t version, pid, uid;
-  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
-  if (pid != peer.pid || WaitForSingleObject(peer.process, 0) != WAIT_TIMEOUT) {
+  uint64_t birth;
+  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid) || !in.Get(&birth)) return;
+  auto launch = g_registry.Find(peer.pid, birth, uid);
+  if (pid != peer.pid || !launch || !ProvePeer(pipe, launch)) {
     Out rejected;
     rejected.Put<int32_t>(-EPERM);
     WriteMessage(pipe, rejected);
@@ -1568,15 +1659,13 @@ void ServeProc(HANDLE pipe, In in, PipePeer& peer) {
   Proc* proc = new Proc;
   {
     std::lock_guard<std::mutex> lock(g_lock);
+    if (!g_registry.Live(launch) || !g_registry.Live(g_owner)) { delete proc; return; }
     proc->id = g_next_proc_id++;
     proc->key = RandomKey();
     proc->pid = static_cast<int>(peer.pid);
-    proc->peer_process = peer.process;
-    proc->peer_birth = peer.birth;
-    peer.process = nullptr;  // ProcRelease owns the retained handle now.
-    // Compatibility only: UID is still untrusted until a launch registry and
-    // authenticated bootstrap capability exist. Do not use this as UID proof.
-    proc->uid = uid;
+    proc->launch = launch;
+    proc->peer_birth = launch->birth;
+    proc->uid = launch->install.uid;
     g_procs[proc->id] = proc;
   }
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
@@ -1648,13 +1737,20 @@ void ServeThread(HANDLE pipe, In in, const PipePeer& peer) {
   }
   Thread* thread = nullptr;
   Proc* proc = nullptr;
+  gesher::binder_launch::Registry::Lease launch;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
     if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
         it->second->pid == static_cast<int>(peer.pid) &&
-        it->second->peer_birth == peer.birth && PeerAlive(it->second) &&
-        WaitForSingleObject(peer.process, 0) == WAIT_TIMEOUT) {
+        PeerAlive(it->second)) launch = it->second->launch;
+  }
+  bool proved = launch && ProvePeer(pipe, launch);
+  {
+    std::lock_guard<std::mutex> lock(g_lock);
+    auto it = g_procs.find(proc_id);
+    if (proved && it != g_procs.end() && it->second->launch == launch &&
+        it->second->key == key && !it->second->is_dead && PeerAlive(it->second)) {
       proc = it->second;
       thread = new Thread;
       thread->proc = proc;
@@ -1748,6 +1844,13 @@ void Serve(HANDLE pipe) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto& startup = gesher::launch::kStartup;
+  if (!startup.present || startup.kind != 1 || !startup.control || startup.broker) {
+    Log("private owned bootstrap required");
+    return 3;
+  }
+  HANDLE control_pipe = control::Handle(startup.control);
+  if (!SetHandleInformation(control_pipe, HANDLE_FLAG_INHERIT, 0) || !control::Mode(control_pipe, true)) return 3;
   const char* trace = getenv("GESHER_BINDER_TRACE");
   g_trace = trace != nullptr && trace[0] == '1';
   std::string device;
@@ -1777,6 +1880,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (first) {
+      std::thread(ControlWorker, control_pipe).detach();
       Log("serving device %s", device.c_str());
       fflush(stderr);
     }

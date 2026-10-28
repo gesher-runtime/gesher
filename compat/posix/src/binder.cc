@@ -32,6 +32,7 @@
 #include "binder_sg.h"
 #include "binder_wire.h"
 #include "launch_context.h"
+#include "../../binder/launch_control.h"
 #include "internal.h"
 
 namespace gesher {
@@ -89,6 +90,20 @@ bool Receive(HANDLE pipe, std::vector<uint8_t>* out) {
   if (!ReadExact(pipe, &len, sizeof(len)) || len > (64u << 20)) return false;
   out->resize(len);
   return ReadExact(pipe, out->data(), len);
+}
+bool ReceiveHello(HANDLE pipe, std::vector<uint8_t>* out) {
+  if (!Receive(pipe, out)) return false;
+  uint32_t tag = 0;
+  if (out->size() == 12) memcpy(&tag, out->data(), 4);
+  if (tag != wire::kPeerChallenge) return true; // ordinary rejection
+  uint64_t value = 0;
+  memcpy(&value, out->data() + 4, 8);
+  HANDLE event = gesher::launch_control::Handle(value);
+  bool signalled = SetEvent(event) != FALSE;
+  CloseHandle(event);
+  Message ack;
+  ack.Put<uint32_t>(wire::kPeerAck);
+  return signalled && Send(pipe, ack) && Receive(pipe, out);
 }
 
 struct Reader {
@@ -279,7 +294,7 @@ HANDLE ThreadPipe(const std::shared_ptr<BinderFile>& file) {
   hello.Put<uint32_t>(GetCurrentThreadId());
   std::vector<uint8_t> reply;
   int32_t status = -EBADF;
-  if (!Send(pipe, hello) || !Receive(pipe, &reply) || reply.size() < 4) {
+  if (!Send(pipe, hello) || !ReceiveHello(pipe, &reply) || reply.size() < 4) {
     CloseHandle(pipe);
     return errno = EBADF, INVALID_HANDLE_VALUE;
   }
@@ -661,8 +676,9 @@ int OpenBinder(int flags) {
   hello.Put<uint32_t>(wire::kVersion);
   hello.Put<uint32_t>(GetCurrentProcessId());
   hello.Put<uint32_t>(BinderUid());
+  hello.Put<uint64_t>(gesher::launch_control::Birth(GetCurrentProcess()));
   std::vector<uint8_t> reply;
-  if (!Send(pipe, hello) || !Receive(pipe, &reply)) return errno = EIO, -1;
+  if (!Send(pipe, hello) || !ReceiveHello(pipe, &reply)) return errno = EIO, -1;
   Reader r{reply.data(), reply.data() + reply.size()};
   int32_t status;
   if (!r.Get(&status) || status != 0 || !r.Get(&file->proc_id) || !r.Get(&file->key)) {

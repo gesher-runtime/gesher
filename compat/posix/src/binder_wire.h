@@ -39,12 +39,14 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
+constexpr uint32_t kPeerChallenge = 0x47504348;
+constexpr uint32_t kPeerAck = 0x47504143;
 
 enum Op : uint32_t {
-  // -> {magic, version, pid, uid}; <- {status, proc id, key (u64)}
+  // -> {magic, version, pid, uid, birth (u64)}; <- challenge then {status, proc id, key (u64)}
   kHelloProc = 1,
-  // -> {magic, version, proc id, key (u64), tid}; <- {status}
+  // -> {magic, version, proc id, key (u64), tid}; <- challenge then {status}
   kHelloThread = 2,
   // -> {read_size (u64), write stream}; <- {status (-errno or 0),
   //    commands consumed (u32), read stream}

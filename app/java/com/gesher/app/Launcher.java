@@ -265,32 +265,23 @@ public final class Launcher {
         state.setProperty(Device.STATE_DEVICE, name);
         state.setProperty(Device.STATE_SHUTDOWN_EVENT, Device.shutdownEventName());
         state.setProperty("started", String.valueOf(System.currentTimeMillis()));
-        int binderd = Zygote.spawn(Zygote.quote(dir + "binderd.exe") + " " + name, env,
-                new File(logs, "binderd.log").getPath(), true);
-        record(state, Device.BINDERD, binderd);
-        if (!Zygote.waitForBinder(name, binderd, 30_000)) {
-            int code = Zygote.exitCode(binderd);
-            Zygote.kill(binderd);
-            printTail(new File(logs, "binderd.log"), 40);
-            throw new IllegalStateException("the binder endpoint of the Gesher device "
-                    + name + " did not complete its connection handshake (binderd exit " + code + ")");
-        }
-        log("binder endpoint accepted a protocol connection: " + name + " (pid " + binderd + ")");
-        int servicemanager = Zygote.spawn(Zygote.quote(dir + "servicemanager.exe"), env,
-                new File(logs, "servicemanager.log").getPath(), true);
-        record(state, Device.SERVICEMANAGER, servicemanager);
-        Device.write(Device.stateFile(), state);
-
         String idle = System.getenv("GESHER_IDLE_TIMEOUT");
-        List<String> args = new ArrayList<>(List.of("--persistent", "--adopt",
-                binderd + "," + servicemanager));
+        List<String> args = new ArrayList<>(List.of("--persistent"));
         if (idle != null && !idle.isEmpty()) {
             args.add("--idle-timeout");
             args.add(idle);
         }
-        int server = Zygote.spawn(Zygote.commandLine(
-                Zygote.vmCommandLine(Launcher.class.getName()), SystemServer.class.getName(),
-                args), env, new File(logs, "system_server.log").getPath(), true);
+        int[] owned = Zygote.startDevice(List.of(
+                Zygote.quote(dir + "binderd.exe") + " " + name,
+                Zygote.quote(dir + "servicemanager.exe"),
+                Zygote.commandLine(Zygote.vmCommandLine(Launcher.class.getName()),
+                        SystemServer.class.getName(), args)),
+                List.of(new File(logs, "binderd.log").getPath(),
+                        new File(logs, "servicemanager.log").getPath(),
+                        new File(logs, "system_server.log").getPath()), env);
+        int binderd = owned[0], servicemanager = owned[1], server = owned[2];
+        record(state, Device.BINDERD, binderd);
+        record(state, Device.SERVICEMANAGER, servicemanager);
         record(state, Device.SYSTEM_SERVER, server);
         Device.write(Device.stateFile(), state);
         if (!waitReady(state)) {

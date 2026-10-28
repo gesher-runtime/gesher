@@ -11,6 +11,7 @@
 #include <cwchar>
 #include <climits>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -20,12 +21,61 @@
 #include "services_zygote.h"
 #include "../posix/src/binder_wire.h"
 #include "../posix/src/launch_context.h"
+#include "../binder/launch_control.h"
 
 namespace gesher {
 namespace zygote {
 namespace {
 
 std::mutex g_lock;
+std::recursive_mutex g_spawn_lock; // serializes allowlist inheritance and private publication
+HANDLE g_control = nullptr, g_broker = nullptr;
+bool g_writer = false;
+bool g_control_initialized = false;
+std::atomic<bool> g_host_uid{false};
+namespace control = gesher::launch_control;
+
+void InitControl() {
+  if (g_control_initialized) return;
+  g_control_initialized = true;
+  const auto& startup = launch::kStartup;
+  if (startup.present && startup.kind == 2 && startup.uid == 1000 &&
+      startup.control && startup.broker) {
+    g_control = control::Handle(startup.control);
+    g_broker = control::Handle(startup.broker);
+    SetHandleInformation(g_control, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(g_broker, HANDLE_FLAG_INHERIT, 0);
+    g_writer = true;
+  }
+}
+bool Request(control::Request& request, HANDLE process = nullptr) {
+  if (!g_control || !g_broker || WaitForSingleObject(g_broker, 0) != WAIT_TIMEOUT) return false;
+  if (process) {
+    HANDLE remote = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), process, g_broker, &remote,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) return false;
+    request.process = control::Value(remote);
+    request.birth = control::Birth(process);
+  }
+  uint64_t deadline = GetTickCount64() + 5000;
+  int32_t reply = -1;
+  if (control::Transfer(g_control, &request, sizeof(request), true, deadline) &&
+      control::Transfer(g_control, &reply, sizeof(reply), false, deadline)) return reply == 0;
+  // A partial/ambiguous request poisons the sole channel. Never continue on a
+  // shifted stream or resume a child without an affirmative broker response.
+  CloseHandle(g_control); g_control = nullptr;
+  return false;
+}
+bool Identity(control::Request* request, int uid, const std::u16string& package,
+              const std::u16string& install) {
+  if (package.empty() || package.size() >= sizeof(request->package)) return false;
+  for (size_t i = 0; i < package.size(); ++i) {
+    if (package[i] > 127 || package[i] <= 32) return false;
+    request->package[i] = char(package[i]);
+  }
+  request->uid = uid;
+  return package[0] == u'@' || control::Generation(install, request->generation);
+}
 struct Child {
   HANDLE process;
   int64_t birth;
@@ -100,11 +150,15 @@ HANDLE Job() {
 
 }  // namespace
 
-int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
+static int SpawnOwned(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, int uid, const std::u16string& package,
-          const std::u16string& install) {
+          const std::u16string& install, const launch::Context* bootstrap = nullptr) {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
   if (uid < -1 || uid > 19999) return -ERROR_INVALID_PARAMETER;
+  if (!package.empty() && (!g_control || (g_writer && package[0] == u'@')))
+    return -ERROR_ACCESS_DENIED;
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
   // Appending only: stdout and stderr share the handle, and every write goes
   // to the end, also with another process appending to the same log.
@@ -119,15 +173,18 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     CloseHandle(log);
     return -static_cast<int>(error);
   }
-  HANDLE handles[] = {log, nul};
+  std::vector<HANDLE> handles{log, nul};
+  if (bootstrap && bootstrap->control) handles.push_back(control::Handle(bootstrap->control));
+  if (bootstrap && bootstrap->broker) handles.push_back(control::Handle(bootstrap->broker));
+  for (HANDLE handle : handles) SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
   SIZE_T size = 0;
   InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
   std::vector<char> storage(size);
   auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
   int result = 0;
   if (!InitializeProcThreadAttributeList(attributes, 1, 0, &size) ||
-      !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
-                                 sizeof(handles), nullptr, nullptr)) {
+      !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles.data(),
+                                 handles.size() * sizeof(HANDLE), nullptr, nullptr)) {
     result = -static_cast<int>(GetLastError());
   }
   if (result == 0) {
@@ -138,6 +195,7 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     si.StartupInfo.hStdOutput = log;
     si.StartupInfo.hStdError = log;
     launch::Context context;
+    if (bootstrap) context = *bootstrap;
     if (uid >= 0) {
       context.uid = static_cast<uint32_t>(uid);
       si.StartupInfo.cbReserved2 = sizeof(context);
@@ -170,12 +228,23 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
       } else {
         int64_t birth = (static_cast<int64_t>(created.dwHighDateTime) << 32) |
                         created.dwLowDateTime;
-        std::lock_guard<std::mutex> guard(g_lock);
         int pid = static_cast<int>(pi.dwProcessId);
+        bool authorized = true;
+        if (!package.empty()) {
+          control::Request request;
+          request.op = control::kPublish;
+          authorized = Identity(&request, uid, package, install) && Request(request, pi.hProcess);
+          if (authorized && bootstrap && bootstrap->kind == 2) {
+            control::Request handoff;
+            handoff.op = control::kHandoff;
+            authorized = Request(handoff, pi.hProcess);
+          }
+        }
+        std::lock_guard<std::mutex> guard(g_lock);
         // Retain the actual CreateProcess instance before any child instruction.
-        // This local child map is not yet the broker's authorized launch registry.
+        // Package/system publication already succeeded on the private channel.
         auto inserted = g_children.emplace(pid, Child{pi.hProcess, birth, package, install});
-        if (!birth || !inserted.second) {
+        if (!authorized || !birth || !inserted.second) {
           if (inserted.second) g_children.erase(inserted.first);
           result = -static_cast<int>(ERROR_INVALID_DATA);
         } else if (ResumeThread(pi.hThread) == static_cast<DWORD>(-1)) {
@@ -186,6 +255,11 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
         }
       }
       if (result <= 0) {
+        if (!package.empty() && g_control) {
+          control::Request cancel;
+          cancel.op = control::kCancel;
+          Request(cancel, pi.hProcess);
+        }
         TerminateProcess(pi.hProcess, 137);
         if (WaitForSingleObject(pi.hProcess, 5000) == WAIT_OBJECT_0) {
           CloseHandle(pi.hProcess);
@@ -204,11 +278,92 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
   }
   CloseHandle(nul);
   CloseHandle(log);
+  if (bootstrap && bootstrap->control) SetHandleInformation(control::Handle(bootstrap->control), HANDLE_FLAG_INHERIT, 0);
+  if (bootstrap && bootstrap->broker) SetHandleInformation(control::Handle(bootstrap->broker), HANDLE_FLAG_INHERIT, 0);
   return result;
 }
 
+int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
+          const std::vector<std::u16string>& unset, const std::u16string& log_path,
+          bool breakaway, int uid, const std::u16string& package, const std::u16string& install) {
+  // Public generic spawn never receives private channel/broker handles.
+  return SpawnOwned(command_line, set, unset, log_path, breakaway, uid, package, install);
+}
+
+bool IsAuthority() {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
+  return g_writer && g_control && g_broker && WaitForSingleObject(g_broker, 0) == WAIT_TIMEOUT;
+}
+bool OwnedInstall(int pid, const std::u16string& package, const std::u16string& install) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto found = g_children.find(pid);
+  return found != g_children.end() && found->second.package == package &&
+      found->second.install == install &&
+      WaitForSingleObject(found->second.process, 0) == WAIT_TIMEOUT &&
+      control::Birth(found->second.process) == static_cast<uint64_t>(found->second.birth);
+}
+
+// Called once by Launcher.startDevice. Commands contain no capabilities.
+// The caller becomes an admitted host client, not a continuing registry writer.
+std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
+                            const std::vector<std::u16string>& logs,
+                            const std::vector<std::u16string>& env) {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
+  if (commands.size() != 3 || logs.size() != 3 || g_control || g_broker ||
+      launch::kStartup.present || g_host_uid) return {};
+  HANDLE server = INVALID_HANDLE_VALUE, client = INVALID_HANDLE_VALUE;
+  if (!control::Channel(&server, &client)) return {};
+  launch::Context broker_start;
+  broker_start.kind = 1; broker_start.control = control::Value(server);
+  int broker = SpawnOwned(commands[0], env, {u"GESHER_BINDER_UID", u"GESHER_UID"},
+                          logs[0], true, 0, {}, {}, &broker_start);
+  CloseHandle(server);
+  if (broker <= 0) { CloseHandle(client); return {}; }
+  {
+    std::lock_guard<std::mutex> guard(g_lock);
+    auto child = g_children.find(broker);
+    if (child == g_children.end() || !DuplicateHandle(GetCurrentProcess(), child->second.process,
+        GetCurrentProcess(), &g_broker, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+      CloseHandle(client); return {};
+    }
+  }
+  g_control = client;
+  control::Request host;
+  host.op = control::kPublish;
+  bool ok = Identity(&host, 2000, u"@launcher", {}) && Request(host, GetCurrentProcess());
+  int manager = ok ? SpawnOwned(commands[1], env, {u"GESHER_BINDER_UID", u"GESHER_UID"},
+      logs[1], true, 1000, u"@servicemanager", {}) : 0;
+  launch::Context writer;
+  writer.kind = 2; writer.control = control::Value(client); writer.broker = control::Value(g_broker);
+  std::wstring adoption = L" --adopt " + std::to_wstring(broker) + L"," + std::to_wstring(manager);
+  int system = manager > 0 ? SpawnOwned(commands[2] + U(adoption.c_str(), adoption.size()), env, {u"GESHER_BINDER_UID", u"GESHER_UID"},
+      logs[2], true, 1000, u"@system_server", {}, &writer) : 0;
+  if (g_control) CloseHandle(g_control);
+  g_control = nullptr;
+  CloseHandle(g_broker); g_broker = nullptr;
+  if (system <= 0) {
+    Kill(broker);
+    if (manager > 0) Kill(manager);
+    return {};
+  }
+  // Java selects this original host's honest compatibility UID only after the
+  // owned record exists. It retains neither inherited control endpoint nor writer.
+  g_host_uid = true;
+  return {broker, manager, system};
+}
+
 bool RevokeInstall(const std::u16string& package, const std::u16string& install) {
+  std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
+  InitControl();
   if (package.empty() || install.empty()) return false;
+  if (g_writer) {
+    control::Request request;
+    request.op = control::kRevoke;
+    // Revoke identifies package+generation; broker does not trust a UID supplied here.
+    if (!Identity(&request, 0, package, install) || !Request(request)) return false;
+  } else return false;
   std::lock_guard<std::mutex> guard(g_lock);
   bool ok = true;
   for (const auto& entry : g_children) {
@@ -381,12 +536,29 @@ bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms)
     }
     return true;
   };
-  uint32_t hello[]{5 * sizeof(uint32_t), binder_wire::kHelloProc, binder_wire::kMagic,
-                    binder_wire::kVersion, GetCurrentProcessId(), 10000};
+  uint32_t uid = launch::kStartup.present ? launch::kStartup.uid : g_host_uid ? 2000 : 10000;
+  uint32_t words[]{7 * sizeof(uint32_t), binder_wire::kHelloProc, binder_wire::kMagic,
+                    binder_wire::kVersion, GetCurrentProcessId(), uid};
+  unsigned char hello[32]{};
+  std::memcpy(hello, words, sizeof(words));
+  uint64_t birth = control::Birth(GetCurrentProcess());
+  std::memcpy(hello + sizeof(words), &birth, sizeof(birth));
   uint32_t length = 0;
   unsigned char reply[16]{};
-  if (!transfer(hello, sizeof(hello), true) || !transfer(&length, sizeof(length), false) ||
-      length != sizeof(reply) || !transfer(reply, sizeof(reply), false)) return false;
+  if (!transfer(hello, sizeof(hello), true) || !transfer(&length, sizeof(length), false)) return false;
+  if (length == 12) {
+    unsigned char challenge[12]{};
+    uint32_t tag = 0; uint64_t locator = 0;
+    if (!transfer(challenge, sizeof(challenge), false)) return false;
+    std::memcpy(&tag, challenge, 4); std::memcpy(&locator, challenge + 4, 8);
+    if (tag != binder_wire::kPeerChallenge) return false;
+    HANDLE proof = control::Handle(locator);
+    bool signalled = SetEvent(proof) != FALSE;
+    CloseHandle(proof);
+    uint32_t ack[]{4, binder_wire::kPeerAck};
+    if (!signalled || !transfer(ack, sizeof(ack), true) || !transfer(&length, 4, false)) return false;
+  }
+  if (length != sizeof(reply) || !transfer(reply, sizeof(reply), false)) return false;
   int32_t status;
   uint32_t process;
   std::memcpy(&status, reply, sizeof(status));

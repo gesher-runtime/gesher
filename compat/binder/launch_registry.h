@@ -1,5 +1,5 @@
 // Broker-owned launch/admission primitive. This is NOT a public wire operation.
-// The caller of Publish must be the future private bootstrap control worker;
+// The caller of Publish is the private inherited bootstrap control worker;
 // never invoke it from a client hello, PID query, environment or claimed role.
 #pragma once
 #include <windows.h>
@@ -17,8 +17,10 @@ struct Install {
   std::string package;
   std::array<uint8_t, 16> generation;
   uint32_t uid;
+  bool system = false; // only private bootstrap worker may select reserved instances
   bool operator==(const Install& other) const {
-    return package == other.package && generation == other.generation && uid == other.uid;
+    return package == other.package && generation == other.generation && uid == other.uid &&
+        system == other.system;
   }
 };
 
@@ -44,8 +46,12 @@ class Registry {
   bool Publish(HANDLE owned_process, const Install& install) {
     FILETIME born{}, exited{}, kernel{}, user{};
     DWORD pid = owned_process ? GetProcessId(owned_process) : 0;
-    if (!pid || pid > INT32_MAX || install.package.empty() || install.uid < 10000 ||
-        install.uid > 19999 || WaitForSingleObject(owned_process, 0) != WAIT_TIMEOUT ||
+    bool valid_uid = install.system
+        ? ((install.package == "@launcher" && install.uid == 2000) ||
+           ((install.package == "@servicemanager" || install.package == "@system_server") && install.uid == 1000))
+        : (!install.package.empty() && install.package[0] != '@' && install.uid >= 10000 && install.uid <= 19999);
+    if (!pid || pid > INT32_MAX || !valid_uid ||
+        WaitForSingleObject(owned_process, 0) != WAIT_TIMEOUT ||
         !GetProcessTimes(owned_process, &born, &exited, &kernel, &user)) {
       if (owned_process) CloseHandle(owned_process);
       return false;
@@ -124,11 +130,32 @@ class Registry {
       } else ++it;
     }
   }
+  void RevokeGeneration(const std::string& package, const std::array<uint8_t, 16>& generation) {
+    std::lock_guard<std::mutex> guard(lock_);
+    for (auto it = records_.begin(); it != records_.end();) {
+      if (!it->second->install.system && it->second->install.package == package &&
+          it->second->install.generation == generation) {
+        it->second->revoked = true;
+        revoked_.emplace(it->second->pid, it->second->birth);
+        it = records_.erase(it);
+      } else ++it;
+    }
+  }
   void AuthorityDied() {
+    // All retained leases become invalid even while an accepted pipe stays open.
     std::lock_guard<std::mutex> guard(lock_);
     authority_alive_ = false;
     for (auto& entry : records_) entry.second->revoked = true;
     records_.clear();
+  }
+  void Cancel(DWORD pid, uint64_t birth) {
+    std::lock_guard<std::mutex> guard(lock_);
+    auto found = records_.find(pid);
+    if (found != records_.end() && found->second->birth == birth) {
+      found->second->revoked = true;
+      revoked_.emplace(pid, birth);
+      records_.erase(found);
+    }
   }
  private:
   bool LiveLocked(const Lease& record) {

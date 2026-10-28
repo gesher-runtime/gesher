@@ -27,6 +27,23 @@ public final class Zygote {
     static native int nativeSpawn(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, boolean breakaway, int uid, String packageName, String installInstance);
     static native boolean nativeRevokeInstall(String packageName, String installInstance);
+    private static native int[] nativeStartDevice(String[] commands, String[] logs, String[] env);
+    static native boolean nativeIsAuthority();
+    static native boolean nativeOwnedInstall(int pid, String packageName, String installInstance);
+
+    /** Creates one owned private bootstrap; no capability appears in these strings. */
+    public static int[] startDevice(List<String> commands, List<String> logs, List<String> env) {
+        String[] paths = logs.stream().map(Zygote::windowsPath).toArray(String[]::new);
+        int[] children = nativeStartDevice(commands.toArray(new String[0]), paths,
+                env.toArray(new String[0]));
+        if (children == null || children.length != 3) {
+            throw new IllegalStateException("private device bootstrap failed");
+        }
+        // Honest original host only. Broker UID comes from its prepublished owned record.
+        try { android.system.Os.setenv("GESHER_BINDER_UID", "2000", true); }
+        catch (Exception e) { throw new IllegalStateException(e); }
+        return children;
+    }
     static native long nativeStartTime(int pid);
     static native int nativeExitCode(int pid);
     static native boolean nativeKill(int pid);

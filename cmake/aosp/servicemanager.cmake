@@ -10,6 +10,14 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
+# Source-only authority fixture. Never part of the ordinary production payload;
+# requires an explicit exact-source future CI build and an outer run watchdog.
+add_executable(binder_private_admission_fixture EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/windows/binder-private-admission-fixture.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc)
+target_compile_options(binder_private_admission_fixture PRIVATE -Wall -Wextra -Werror -fexceptions)
+target_link_options(binder_private_admission_fixture PRIVATE -municode)
+
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its
 # own (compat/binder/servicemanager_main.cc).

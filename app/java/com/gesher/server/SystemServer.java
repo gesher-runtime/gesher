@@ -113,6 +113,9 @@ public final class SystemServer {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
 
         Main.bootstrap(TAG, buildProp, frameworkRes);
+        if (!Zygote.nativeIsAuthority()) {
+            throw new SecurityException("SystemServer requires its private owned launcher bootstrap");
+        }
 
         if (persistent) {
             // The device goes as a whole: binderd, servicemanager and the app processes
@@ -189,9 +192,7 @@ public final class SystemServer {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
             vm = Dexopt.appVmOptions(Zygote.vmCommandLine(SystemServer.class.getName()));
         } catch (Throwable t) {
-            log("app processes are not started on demand (" + t + "): they attach by"
-                    + " themselves");
-            return;
+            throw new IllegalStateException("dedicated server cannot enable owned app starts", t);
         }
         final String binder = System.getenv("GESHER_BINDER");
         atm.setProcessStarter((identity, startSeq, targetSdk) -> {

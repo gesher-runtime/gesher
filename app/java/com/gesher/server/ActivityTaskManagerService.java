@@ -866,12 +866,36 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * ({@code startSeq}), or one that offers itself.
      */
     void attachApplication(IApplicationThread thread, int pid, long startSeq) {
+        // Native spawn resumes before returning its PID. Serialize attach with
+        // PID publication and install mutation, including the captured pid0 window.
+        synchronized (mPm.launchGate) {
+            attachApplicationGuarded(thread, pid, startSeq);
+        }
+    }
+
+    private void attachApplicationGuarded(IApplicationThread thread, int pid, long startSeq) {
         ProcessRecord app = new ProcessRecord(pid, thread);
         boolean bind = false;
         synchronized (this) {
+            PendingProcess started = startSeq > 0 ? mStarting.get(startSeq) : null;
+            if (mStarter != null) {
+                // A sequence is correlation, never a credential. Validate BEFORE
+                // mutating either pending starts or published process records.
+                if (started == null || started.pid <= 0 || started.pid != pid
+                        || Binder.getCallingUid() != started.identity.uid) {
+                    throw new SecurityException("attach does not match an owned pending process");
+                }
+                PackageIdentity current = mPm.launchIdentity(started.packageName);
+                if (current.uid != started.identity.uid
+                        || !current.installInstance.equals(started.identity.installInstance)
+                        || !Zygote.nativeOwnedInstall(pid, current.packageName, current.installInstance)
+                        || processFor(started.packageName) != null) {
+                    throw new SecurityException("attach install identity is no longer current");
+                }
+            }
             mProcesses.add(app);
             updateIdle();
-            PendingProcess started = startSeq > 0 ? mStarting.remove(startSeq) : null;
+            if (started != null) mStarting.remove(startSeq);
             String waiting = null;
             if (started != null) {
                 app.spawned = true;

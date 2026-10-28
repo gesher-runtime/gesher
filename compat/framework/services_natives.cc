@@ -168,6 +168,22 @@ static jboolean Zygote_revokeInstall(JNIEnv* env, jclass, jstring package, jstri
     return gesher::zygote::RevokeInstall(ZygoteString(env, package), ZygoteString(env, install))
         ? JNI_TRUE : JNI_FALSE;
 }
+static jboolean Zygote_authority(JNIEnv*, jclass) {
+    return gesher::zygote::IsAuthority() ? JNI_TRUE : JNI_FALSE;
+}
+static jboolean Zygote_ownedInstall(JNIEnv* env, jclass, jint pid, jstring package, jstring install) {
+    return gesher::zygote::OwnedInstall(pid, ZygoteString(env, package), ZygoteString(env, install))
+        ? JNI_TRUE : JNI_FALSE;
+}
+static jintArray Zygote_startDevice(JNIEnv* env, jclass, jobjectArray commands,
+                                   jobjectArray logs, jobjectArray set) {
+    auto result = gesher::zygote::StartDevice(ZygoteStrings(env, commands),
+        ZygoteStrings(env, logs), ZygoteStrings(env, set));
+    jintArray array = env->NewIntArray(static_cast<jsize>(result.size()));
+    if (array && !result.empty()) env->SetIntArrayRegion(array, 0,
+        static_cast<jsize>(result.size()), result.data());
+    return array;
+}
 
 static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::StartTime(pid);
@@ -218,6 +234,9 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
 }
 
 static const JNINativeMethod gZygoteMethods[] = {
+    {"nativeStartDevice", "([Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)[I", GESHER_JNI(Zygote_startDevice)},
+    {"nativeIsAuthority", "()Z", GESHER_JNI(Zygote_authority)},
+    {"nativeOwnedInstall", "(ILjava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_ownedInstall)},
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;ZILjava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_spawn)},
