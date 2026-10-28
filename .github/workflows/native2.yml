@@ -48,6 +48,7 @@ jobs:
             tests/apps/native2app
             tests/apps/net4resolverapp
             tests/e2e
+            tools/net-udp
 
       - name: Cache the Android NDK
         id: ndk
@@ -122,6 +123,8 @@ jobs:
               -Wl,-soname,libnet4resolver.so -o "$o/libnet4resolver.so" tests/native2/net4_resolver_jni.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+              -o "$o/net_udp_trunc" tests/native2/net_udp_trunc.cpp
             echo "--- $abi libnative2.so: needed"
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
@@ -188,6 +191,7 @@ jobs:
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
             sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
+            sets+=("net-udp=$o/net_udp_trunc")
             sets+=("libc++_shared=$o/libc++_shared.so")
             for app in apks/*; do
               if [ -d "$app/$abi" ]; then
@@ -201,6 +205,20 @@ jobs:
             python3 tests/native2/symbols.py "$llvm/bin/llvm-readelf" "dist/symbols-$abi.txt" "${sets[@]}" --api "${api[@]}"
           done
           ls -laR dist | head -80
+
+      - name: Independent real Linux UDP contract and exact payload identity
+        run: |
+          set -euo pipefail
+          mkdir -p dist/net-udp
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread tests/native2/net_udp_trunc.cpp -o /tmp/net-udp-reference
+          /tmp/net-udp-reference | tee dist/net-udp/linux-reference.txt
+          if /tmp/net-udp-reference --negative > /tmp/net-udp-negative.txt 2>&1; then
+            echo 'FAIL negative missing MSG_TRUNC was accepted'; exit 1
+          fi
+          grep -F 'FAIL UDP: negative missing MSG_TRUNC rejected' /tmp/net-udp-negative.txt
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version > dist/net-udp/ndk-compiler.txt
+          g++ --version > dist/net-udp/linux-compiler.txt
+          python3 tools/net-udp/payload.py create dist
 
       - uses: actions/upload-artifact@v4
         with:

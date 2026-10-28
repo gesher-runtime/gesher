@@ -286,6 +286,7 @@ int ToMsgFlags(int flags) {
   if (flags & MSG_PEEK) result |= ws::kMsgPeek;
   if (flags & MSG_DONTROUTE) result |= ws::kMsgDontRoute;
   if (flags & MSG_WAITALL) result |= ws::kMsgWaitAll;
+  if (flags & MSG_TRUNC) result |= ws::kMsgTrunc;
   return result;
 }
 
@@ -310,7 +311,7 @@ ssize_t SendBuffers(int fd, ws::Buffer* buffers, size_t count, int flags,
 }
 
 ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockaddr* addr,
-                    socklen_t* addrlen) {
+                    socklen_t* addrlen, int* result_flags = nullptr) {
   SocketFd state;
   if (!Lookup(fd, &state)) return -1;
   // There is no error queue: Linux reports EAGAIN when it is empty.
@@ -318,7 +319,7 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
   ws::Address from;
   ssize_t n = ws::Recv(state.socket, buffers, count, ToMsgFlags(flags),
-                       addr != nullptr ? &from : nullptr);
+                       addr != nullptr ? &from : nullptr, result_flags);
   if (n >= 0 && addr != nullptr) FromAddress(from, addr, addrlen);
   return n;
 }
@@ -368,12 +369,13 @@ ssize_t recvfrom(int fd, void* buf, size_t len, int flags, struct sockaddr* addr
 ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
   std::vector<ws::Buffer> buffers;
   if (!ToBuffers(msg, &buffers)) return -1;
+  int result_flags = 0;
   ssize_t n = RecvBuffers(fd, buffers.data(), buffers.size(), flags,
                           static_cast<sockaddr*>(msg->msg_name),
-                          msg->msg_name != nullptr ? &msg->msg_namelen : nullptr);
+                          msg->msg_name != nullptr ? &msg->msg_namelen : nullptr, &result_flags);
   if (n >= 0) {
     msg->msg_controllen = 0;  // no ancillary data
-    msg->msg_flags = 0;
+    msg->msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
   }
   return n;
 }
