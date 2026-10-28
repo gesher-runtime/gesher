@@ -3,7 +3,9 @@
 Base: accepted integration f1550540186b4ae3f17a5e501a886ec1c4d5d613.
 Exclusive tree C:/work/gesher-pthread-foreign-cpu-clock, branch
 wip/pthread-foreign-cpu-clock. Existing ADR0075; test90 is reserved.
-No local native/Java/C# compilation or execution. No CI result yet.
+No local native/Java/C# compilation or execution. Narrow Linux observation
+run 40790238879 at 9f748617e951aaccad3608ddd8b630ce06e1448e is pending; it
+does not compile or exercise the Windows source.
 
 ## Bounded source change
 
@@ -35,9 +37,12 @@ The original Windows/package/e2e assertions remain in force.
 
 Linux reference CI records actual post-join gettime/getres errors before the
 compatibility decision is accepted. Its observation is not a Windows proof.
-Resource capacity/exhaustion, detached and external-self concurrency, invalid
-negative IDs, native Win32 independent target brackets and handle-count reaping
-still need dedicated test90 controls. Null external-registry entries on handle
+Dedicated test90 now has source-only independent brackets against owned Win32
+thread handles, 257 real concurrent external self identities, 256-slot capacity
+and EAGAIN/output controls, invalid IDs, 1024 acquisitions with no handle-count
+growth, and actual target exits plus handle-count reaping. All remain unbuilt
+and unrun; detached lifetimes and fault-injected resource paths still need
+additional controls. Null external-registry entries on handle
 duplication failure retain an EAGAIN marker; their cleanup needs a bounded
 failure-path policy before acceptance. No scope checkbox is closed.
 
@@ -50,9 +55,16 @@ No ENOTSUP or ESRCH substitution for valid host threads qualifies as a fix.
 
 ## Required host supplier patch
 
-CI pins LLVM_MINGW_TAG=20261006. Resolve that release's exact mingw-w64 source
-revision from the supplier build metadata before authoring the patch; a current
-upstream source inspection is only a design reference, not proof of the pin.
+CI pins LLVM_MINGW_TAG=20261006. Read-only GitHub source inspection resolved
+annotated tag 1719710a305c261491784d4c68f77e2b50b27904 to llvm-mingw
+commit e1878a59f8bf3e1a73afe28f1b83168b1d029ed8; its build-mingw-w64.sh
+pins mingw-w64 a3d93999ef0521681d45e445c39964a7af0f593f. This identifies
+supplier source, not the downloaded archive's build identity. At that exact
+revision, detached create sets tv->h=0 and closes its original thread handle.
+The new authority must therefore retain a distinct handle during creation and
+self attachment, not merely add a locked getter. The exact pinned thread.c
+also closes handles outside its registry lookup lock in TLS detach, native
+exit and join; each close/replace site needs a synchronized lifecycle audit.
 Add an exported atomic duplicate API inside winpthreads, returning a retained
 query/synchronize handle and a nonreused thread generation. The lookup,
 validation and duplication must hold the same lock as every thread-handle
@@ -70,5 +82,6 @@ counts, then independent source peer before Windows CI. Full qualification
 requires exact source/attempt/compiler/ZIP role/member/digest receipts, both
 original whole Windows suites zero, installed package23 and both e2e zero.
 
-Upstream design reference (not the pinned supplier):
-https://github.com/mingw-w64/mingw-w64/blob/master/mingw-w64-libraries/winpthreads/src/thread.c
+Exact source references:
+https://github.com/mstorsjo/llvm-mingw/blob/e1878a59f8bf3e1a73afe28f1b83168b1d029ed8/build-mingw-w64.sh
+https://github.com/mingw-w64/mingw-w64/blob/a3d93999ef0521681d45e445c39964a7af0f593f/mingw-w64-libraries/winpthreads/src/thread.c
