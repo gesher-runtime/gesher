@@ -83,6 +83,7 @@ public class FrameActivity extends Activity {
 
     private void check() {
         view.evaluateJavascript("JSON.stringify(window.web4Seen)", value -> {
+            Web3.log("frame pending callback observed " + (pendingNavigationReply != null));
             boolean observed = value != null && value.contains("a-reply:reply-a")
                     && value.contains("b-reply:reply-b") && value.contains("nested-reply:reply-nested")
                     && value.contains("a2-reply:reply-a2") && value.contains("bad-forge-attempt")
