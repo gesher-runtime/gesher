@@ -111,11 +111,45 @@ try {
     $env:ANDROID_DATA = NoDrive "$ivRoot/data"
     $env:GESHER_LOGS = NoDrive "$ivRoot/logs"
     $env:GESHER_DISPLAY = '400x800@160'
+    $watchStarted = [DateTime]::UtcNow
+    $watch = Start-ThreadJob -ArgumentList @("$ivRoot/logs/com.gesher.surfacegl.log", (Resolve-Path "$Dir/dalvikvm.exe").Path, $watchStarted) -ScriptBlock {
+      param($log, $expectedExe, $started)
+      $until = [DateTime]::UtcNow.AddSeconds(620)
+      while ([DateTime]::UtcNow -lt $until) {
+        $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
+        $match = [regex]::Match("$text", 'app process for com\.gesher\.surfacegl: pid (\d+)')
+        if ($match.Success) {
+          $child = Get-Process -Id ([int]$match.Groups[1].Value) -ErrorAction SilentlyContinue
+          if ($child) {
+            try {
+              $handle = $child.Handle # Pin this actual process, even if its PID is later reused.
+              $born = $child.StartTime.ToUniversalTime()
+              if ($born -lt $started -or $child.Path -ine $expectedExe) { throw 'Unexpected app process birth or executable' }
+              if (-not $child.WaitForExit(620000)) { throw 'Actual app process did not exit within observer bound' }
+              return @{ Pid = $child.Id; Birth = $born; Exit = $child.ExitCode; End = $child.ExitTime.ToUniversalTime(); Handle = "$handle" }
+            } finally { $child.Dispose() }
+          }
+        }
+        Start-Sleep -Milliseconds 100
+      }
+      throw 'Did not acquire the actual fresh app process while it was running'
+    }
     try {
       $ivResult = SurfaceRun @('com.gesher.app.Launcher', 'launch', $ivApk, '--hidden-window',
         '--activity', $ivActivity) "invalidation-device-$ivAbi" @("$ivRoot/logs/com.gesher.surfacegl.log") 'surfacegl: invalidation' 2
+      $observedDeadline = [DateTime]::UtcNow
+      $null = Wait-Job -Job $watch -Timeout 2
+      $childEvidence = if ($watch.State -eq 'Completed') { Receive-Job -Job $watch } else { $null }
+      if (-not $childEvidence -or $childEvidence.Exit -ne 0 -or $childEvidence.End -gt $observedDeadline) {
+        Write-Host "FAIL  surface invalidation ($ivAbi): fresh actual app process did not independently complete normally within the original run"
+        $script:failed++
+      } else {
+        Write-Host "INFO  surface invalidation ($ivAbi): owned app pid=$($childEvidence.Pid) birth=$($childEvidence.Birth.ToString('o')) native-exit=$($childEvidence.Exit) ended=$($childEvidence.End.ToString('o'))"
+      }
       InvalidationPhaseChecks "device $ivAbi" $ivAbi $ivResult
     } finally {
+      if ($watch.State -in @('NotStarted','Running')) { Stop-Job -Job $watch }
+      Remove-Job -Job $watch -Force
       $ivStop = InvalidationBounded "$Dir/dalvikvm.exe" (@($dvmSurfaces) + @('com.gesher.app.Launcher', 'shutdown')) 30
       if ($ivStop.Exit -ne 0) {
         Write-Host "FAIL  surface invalidation ($ivAbi): device shutdown exit $($ivStop.Exit): $($ivStop.Text)"
