@@ -34,3 +34,29 @@ C# compilation and fixtures stay CI-only; no local artifact downloads.
 After actual component qualification, a changed-union canonical full/package/
 two e2e is mandatory before any primary code merge. StaticSDK, secondary dex,
 factory loaders, unrelated roadmap/hardware and main/release stay open.
+
+## Fresh component source prepared, independent peer pending
+
+The new component has six top-level jobs: early source/canonical15-helper
+controls, fresh canonical host build, fresh framework/tools, current ARM64,
+current boot-image and both Windows AOT tests. Expanded counts come from actual
+CI later. Its host job is byte-identical to current ci.yml after removing only
+two added typed-inventory capture/upload steps. That inventory remains outside
+the production artifact; it binds every host file/directory, all selected
+source/helper hashes and actual productionOFF compiler. Actual missing/extra
+host-member controls restore the original payload before consumption.
+
+Every runtime supplier is current source/run/attempt with strict canonical
+receipt/raw ZIP SHA and explicit ownership assembly; no old pinned baseline
+native/Java/image overlay. Runtime preconditions require the new resource APK
+and both added PCL/DLC APKs alongside every original fixture/tool. The wrapper
+loads exact original helper ASTs, hashes five actual jars, verifies all fifteen
+image copies, executes all four track73 policies and requires the final original
+resource hash. Original real fresh-app completion/shutdown/cleanup/error gates
+remain. Static Python/YAML/PowerShell parse and exact host-body comparison pass;
+no local C/C++/Java/C# build or fixture was run.
+
+This checkpoint is held LOCAL before its own workflow-path push trigger.
+Terra independently reviews automation/provenance before first dispatch; loader/
+fixture contract gets focused independent review as needed. All actual runtime
+and later coherent full acceptance remain pending. No primary code changed.
