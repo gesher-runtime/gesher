@@ -1,11 +1,5 @@
 name: native3-locks-commands
 on:
-  push:
-    branches: ['wip/native3-locks']
-    paths:
-      - '.github/workflows/native3-locks-commands.yml'
-      - 'tests/native3-locks/command_worker.cc'
-      - 'tests/native3-locks/command_oracle.py'
   workflow_dispatch:
 permissions:
   contents: read

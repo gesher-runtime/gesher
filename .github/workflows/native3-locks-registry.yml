@@ -1,18 +1,5 @@
 name: native3-locks-registry
 on:
-  push:
-    branches: ['wip/native3-locks']
-    paths:
-      - '.github/workflows/native3-locks-registry.yml'
-      - 'tests/native3-locks/registry_windows_test.cc'
-      - 'compat/posix/src/record_lock_registry.h'
-      - 'compat/posix/src/record_lock_registry.cc'
-      - 'compat/posix/src/record_lock_liveness.h'
-      - 'compat/posix/src/record_lock_liveness.cc'
-      - 'compat/posix/src/record_lock_ranges.h'
-      - 'compat/posix/src/internal.h'
-      - 'compat/posix/src/internal.cc'
-      - 'compat/posix/include/**'
   workflow_dispatch:
 permissions:
   contents: read

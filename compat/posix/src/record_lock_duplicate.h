@@ -7,6 +7,7 @@ namespace gesher::record_locks {
 // input or the public fcntl entry. A successful close callback MUST perform
 // the actual close; failure leaves the real owned resource observable.
 struct DuplicateOperations {
+  void (*reserved)(int descriptor) = nullptr;
   int (*set_inherit)(int descriptor, void* native_handle, bool inherit) = nullptr;
   int (*close_nul)(int descriptor) = nullptr;
   int (*close_unpublished)(int descriptor) = nullptr;

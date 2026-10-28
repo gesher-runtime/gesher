@@ -111,6 +111,7 @@ int Reserve(int minimum, PrivateDescriptor** target, const DuplicateOperations* 
     }
     owned = {PrivateKind::kNul, fd, nullptr};
     if (fd >= minimum) {
+      if (operations && operations->reserved) operations->reserved(fd);
       error = DisposeAllNuls(fd, operations);
       if (!error) { *target = &owned; return 0; }
       break;

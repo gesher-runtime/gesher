@@ -26,6 +26,9 @@
 namespace locks = gesher::record_locks;
 namespace {
 unsigned failures = 0, assertions = 0;
+// Capacity/error controls intentionally inspect invalid descriptors. Let the
+// UCRT report EBADF instead of terminating before those errno assertions.
+void InvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {}
 int observed_target = -1, observed_nul = -1;
 void Check(bool condition, const char* text) {
   ++assertions;
@@ -40,6 +43,14 @@ bool Empty() {
 int DenyFlag(int fd, void*, bool) { observed_target = fd; return EACCES; }
 int DenyNulClose(int fd) { if (observed_nul < 0) observed_nul = fd; return EIO; }
 int DenyUnpublishedClose(int) { return EIO; }
+std::atomic<int> reserved_target{-1};
+std::atomic<bool> raw_ready{false}, raw_release{false};
+void ActualReservationBarrier(int fd) {
+  reserved_target.store(fd, std::memory_order_release);
+  auto end = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!raw_ready.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < end) std::this_thread::yield();
+  Check(raw_ready.load(std::memory_order_acquire), "real raw allocator reached held-reservation phase");
+}
 DWORD Handles() {
   DWORD count = 0;
   if (!GetProcessHandleCount(GetCurrentProcess(), &count)) std::_Exit(94);
@@ -70,6 +81,34 @@ int RawSentinel(const char* path) {
 bool Sentinel(int fd) {
   char value = 0;
   return lseek(fd, 0, SEEK_SET) == 0 && read(fd, &value, 1) == 1 && value == 'S';
+}
+struct RawOwned { int descriptor = -1; HANDLE witness = nullptr; };
+RawOwned RawWitness(const char* path) {
+  RawOwned result;
+  HANDLE file = CreateFileW(gesher::Widen(path).c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return result;
+  if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &result.witness,
+                        0, FALSE, DUPLICATE_SAME_ACCESS)) { CloseHandle(file); return result; }
+  result.descriptor = _open_osfhandle(reinterpret_cast<intptr_t>(file), _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+  if (result.descriptor < 0) { CloseHandle(file); CloseHandle(result.witness); result.witness = nullptr; }
+  return result;
+}
+bool RawIdentity(const RawOwned& owned) {
+  if (owned.descriptor < 0 || !owned.witness) return false;
+  bool same = false;
+  return locks::SameDescription(owned.witness, gesher::HandleFromFd(owned.descriptor), &same) == 0 && same;
+}
+bool RawCanary(const RawOwned& owned) {
+  char byte = 0;
+  return RawIdentity(owned) && _lseeki64(owned.descriptor, 0, SEEK_SET) == 0 &&
+      _read(owned.descriptor, &byte, 1) == 1 && byte == 'S';
+}
+bool CloseRaw(RawOwned* owned) {
+  bool closed = RawIdentity(*owned) && _close(owned->descriptor) == 0;
+  if (owned->witness) closed = CloseHandle(owned->witness) && closed;
+  *owned = {};
+  return closed;  // A foreign/reused fd is NEVER closed by this cleanup.
 }
 bool Lock(int fd, int command, short kind, off_t start) {
   struct flock value{};
@@ -266,12 +305,98 @@ void Quarantine(const char* kind, const char* file, const char* sentinel) {
     Check(_close(raw) == 0, "known fixture sentinel closes despite retained quarantine");
   }
 }
+
+void RawRace(const char* file, const char* sentinel) {
+  int source = open(file, O_RDWR);
+  Check(source >= 0, "actual regular source opened for raw publisher race");
+  if (source < 0) return;
+  Warm(source);
+  DWORD before = Handles();
+  std::atomic<unsigned> errors{0}, published{0};
+  std::thread held([&] {
+    auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (reserved_target.load(std::memory_order_acquire) < 0 && std::chrono::steady_clock::now() < end) std::this_thread::yield();
+    RawOwned owned = RawWitness(sentinel);  // Deliberately bypasses DescriptorGuard.
+    if (owned.descriptor < 0 || owned.descriptor == reserved_target.load(std::memory_order_acquire) || !RawCanary(owned)) ++errors;
+    raw_ready.store(true, std::memory_order_release);
+    while (!raw_release.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < end) std::this_thread::yield();
+    if (!raw_release.load(std::memory_order_acquire) || !RawCanary(owned)) ++errors;
+    if (!CloseRaw(&owned)) ++errors;
+  });
+  locks::DuplicateOperations operations{};
+  operations.reserved = ActualReservationBarrier;
+  int reserved = locks::DuplicateAtLeast(source, 32, false, &operations);
+  raw_release.store(true, std::memory_order_release);
+  held.join();  // Every barrier above has a finite native deadline; outer CI also bounds the process.
+  Check(reserved >= 32 && errors == 0, "actual occupied NUL target survives simultaneous raw CRT sentinel allocation");
+  if (reserved >= 0) Check(close(reserved) == 0, "deterministic reservation duplicate closes");
+
+  std::atomic<bool> stop{false}, ready{false};
+  std::thread publisher([&] {
+    ready.store(true, std::memory_order_release);
+    auto end = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!stop.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < end) {
+      RawOwned owned = RawWitness(sentinel);
+      if (!RawCanary(owned)) ++errors;
+      for (unsigned turn = 0; turn < 4; ++turn) std::this_thread::yield();
+      if (!RawCanary(owned)) ++errors;
+      if (!CloseRaw(&owned)) ++errors;
+      ++published;
+    }
+  });
+  auto end = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!ready.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < end) std::this_thread::yield();
+  unsigned completed = 0;
+  for (; completed < 1000 && std::chrono::steady_clock::now() < end; ++completed) {
+    int copy = fcntl(source, F_DUPFD, 8 + completed % 48);
+    if (copy < 0) { ++errors; break; }
+    bool same = false;
+    if (locks::SameDescription(gesher::HandleFromFd(source), gesher::HandleFromFd(copy), &same) || !same) ++errors;
+    if (close(copy)) ++errors;
+  }
+  stop.store(true, std::memory_order_release);
+  publisher.join();
+  Check(completed == 1000 && published > 0 && errors == 0, "1000 actual minimum duplicates preserve concurrent raw publisher witnesses and sentinel bytes");
+  std::printf("ACTUAL_RAW_PUBLISHER duplicates=%u raw-publications=%u errors=%u\n", completed, published.load(), errors.load());
+  Check(Empty() && HandleParity(before), "raw publisher race leaves no private fd or native handle growth");
+  Check(close(source) == 0, "raw publisher source closes");
+}
+
+void Capacity(const char* file, const char* sentinel) {
+  int source = open(file, O_RDWR);
+  Check(source >= 0, "actual source opened for CRT capacity boundary");
+  if (source < 0) return;
+  Warm(source);
+  DWORD before = Handles();
+  std::array<int, 8192> descriptors{};
+  size_t count = 0;
+  int error = 0;
+  for (; count < descriptors.size(); ++count) {
+    int fd = RawSentinel(sentinel);  // No emulated capacity or success marker.
+    if (fd < 0) { error = gesher_errno_from_crt(errno); break; }
+    descriptors[count] = fd;
+  }
+  Check(count > 0 && count < descriptors.size() && error == EMFILE, "actual CRT allocator reaches real EMFILE");
+  unsigned occupied = 0;
+  for (int fd = 0; fd < 8192; ++fd) occupied += _get_osfhandle(fd) != -1;
+  Check(occupied == 8192, "all8192 actual low-I/O descriptor slots are occupied");
+  errno = 123;
+  int copy = fcntl(source, F_DUPFD, 32);
+  Check(copy == -1 && errno == EMFILE && Empty(), "actual full-table duplicate fails EMFILE with native reservation cleanup");
+  Check(_get_osfhandle(source) != -1, "capacity failure preserves original source fd");
+  for (size_t index = 0; index < count; ++index) Check(_close(descriptors[index]) == 0, "actual capacity sentinel closes");
+  Check(HandleParity(before) && Empty(), "capacity failure returns native handles and private ownership to baseline");
+  Check(close(source) == 0, "capacity source closes");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
   if (!std::getenv("GITHUB_ACTIONS") || std::strcmp(std::getenv("GITHUB_ACTIONS"), "true")) return 90;
   if (argc != 4) return 91;
+  _set_invalid_parameter_handler(InvalidParameter);
   if (!std::strcmp(argv[1], "retained-nul")) RetainedNul(argv[2], argv[3]);
+  else if (!std::strcmp(argv[1], "raw-race")) RawRace(argv[2], argv[3]);
+  else if (!std::strcmp(argv[1], "capacity")) Capacity(argv[2], argv[3]);
   else if (!std::strncmp(argv[1], "quarantine-", 11)) Quarantine(argv[1] + 11, argv[2], argv[3]);
   else FlagRollback(argv[1], argv[2], argv[3]);
   std::printf("ACTUAL_DUPLICATE_UNIT assertions=%u failures=%u scope=actual-resource-dependency-controls atomic-spawn-open\n", assertions, failures);

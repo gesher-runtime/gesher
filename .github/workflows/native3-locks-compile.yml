@@ -1,0 +1,41 @@
+name: native3-locks-compile
+on:
+  push:
+    branches: ['wip/native3-locks']
+    paths:
+      - '.github/workflows/native3-locks-compile.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native3-locks-compile-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  compile-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact toolchain and pinned AOSP source prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o toolchain.tar.xz
+          printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain
+          tar -xJf toolchain.tar.xz -C toolchain
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build
+          tools/fetch-aosp.sh
+      - name: Compile actual POSIX and bionic sources plus both native fixtures (no runtime qualification)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
+          ninja -C out gesher_bionic native3_lock_command_worker native3_lock_duplicate_test
+          sha256sum out/native3_lock_command_worker.exe out/native3_lock_duplicate_test.exe
+          printf 'COMPILE_ONLY source=%s runtime=NOT_EXECUTED semantics=UNQUALIFIED\n' "$GITHUB_SHA"

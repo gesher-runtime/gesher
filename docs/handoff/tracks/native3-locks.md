@@ -280,3 +280,41 @@ archive's actual headers/objects must decide any toolchain-specific claim.
 No cross-edits to Binder/Exec/Media were made. Coordinate Binder changes with
 /root/integration_next and preserve the selected ordered-spawn Exec leaf;
 Windows owns the bounded independent peer before any production CI.
+
+### 2026-10-28 resumed compile-only checkpoint
+
+Resumed on actual branch wip/native3-locks at54f4604f. Three preserved dirty
+files (same01:46:26 write time) continue the interrupted native worker's
+pending raw-publisher/EMFILE fixture scope; their source was reviewed and
+retained, not discarded. Internal reserved(fd) dependency pauses after a real
+occupied NUL target exists; an actual unguarded CRT publisher must retain its
+FILE_OBJECT witness and sentinel bytes. A further1000 actual F_DUPFD calls
+race repeated raw publications. A real low-I/O table fill requires EMFILE,
+all8192 slots occupied, retained source and complete cleanup. These fixtures
+remain source-only. Main installs an explicit CRT invalid-parameter handler
+so invalid-fd controls return errno rather than aborting. Microsoft's
+[_get_osfhandle](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/get-osfhandle)
+requires this for invalid descriptors; the documented8192 low-I/O ceiling in
+[_setmaxstdio](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmaxstdio)
+is independent of its512 default FILE-stream ceiling.
+
+Bounded Windows peer found no concrete blocker in the new compile-only gate;
+this is not final semantic peer approval. New native3-locks-compile.yml builds
+the actual common POSIX and bionic sources and both native fixture targets
+with warnings as errors and the pinned archive hash. No native fixture runs
+and no artifact is downloaded locally. Old command and registry workflows
+retain explicit manual dispatch but their push triggers are removed to avoid
+running unreviewed runtime source or unrelated storage qualification when
+pushing this compile-only checkpoint. Every existing runtime assertion is
+preserved. The new compile push trigger is branch/path restricted. Local
+Python/YAML source parsing and git diff --check passed; no local compilation
+or native/JVM/C# fixture execution occurred.
+
+No qualified nonblocking fcntl, descriptor, stdio or spawn evidence exists yet.
+Historical interval40559255447 and storage40579579092 remain the only relevant
+qualified slices. Atomic F_DUPFD_CLOEXEC versus CreateProcess, concurrent
+page-protection TOCTOU, inherited OFD adoption, ordered suspended spawn,
+blocking7/38, deadlock, targeted signal/EINTR/SA_RESTART, bionic cross-ABI,
+ART and all full/package/e2e gates remain open. Source-only compile success
+will not close any of them. Existing ordered Exec82d41 production semantics
+must be preserved. Integration and release remain owned by the integrator.
