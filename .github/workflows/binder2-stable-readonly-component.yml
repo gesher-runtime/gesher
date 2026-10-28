@@ -26,6 +26,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Actual shared strict archive negative controls before producers
+        run: |
+          python3 tools/binder/verify-helper-source.py
+          python3 tools/surface/test-verified-artifact.py
       - name: Require exact selected prerequisite and actual mode build proof
         shell: pwsh
         run: |
@@ -41,11 +45,30 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Missing exact selected prerequisite $ancestor" }
           }
           $allowed = @('compat/posix/src/binder.cc','tests/binder/sg-actor.h','tests/binder/run-modes.ps1',
-            'tests/binder/OutputPageObserver.cs','.github/workflows/binder2-stable-readonly-component.yml')
+            'tests/binder/OutputPageObserver.cs','.github/workflows/binder2-stable-readonly-component.yml',
+            'tools/binder/verify-component-suppliers.ps1','tools/binder/verify-helper-source.py','tools/surface/download-verified-artifact.py',
+            'tools/surface/assemble-artifacts.py','tools/surface/test-verified-artifact.py')
           $changed = @(git diff --name-only $baseline HEAD -- . ':!docs/**')
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect exact successor source delta' }
           foreach ($path in $changed) { if ($path -cnotin $allowed) { throw "Unreviewed Binder successor source delta: $path" } }
           Write-Host "ACTUAL_BINDER_READONLY_BASE source=$baseline union=$qualified full=40596167427 attempt=1 ordinary=ed741c99367d61df2bb2c07ae4d01753d9a03c06 current=${{ github.sha }}"
+      - name: Verify one real pinned archive before expensive producers
+        shell: pwsh
+        run: |
+          $a = gh api repos/${{ github.repository }}/actions/artifacts/12777738989 | ConvertFrom-Json
+          $digest = 'sha256:c0eb14751722b28dac9d0024e168cd8fb8e6441798f8b747063d092432baee9d'
+          if ($LASTEXITCODE -ne 0 -or $a.id -ne 12777738989 -or $a.name -cne 'boot-image' -or $a.expired -or
+              $a.digest -cne $digest -or $a.workflow_run.id -ne 40596167427 -or
+              $a.workflow_run.head_sha -cne '30db7709838839d28be68d8b467a57b26a3ac667' -or
+              "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or
+              "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID) { throw 'Known archive positive control identity mismatch' }
+          $j = gh api repos/${{ github.repository }}/actions/jobs/122529052458 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $j.conclusion -cne 'success' -or $j.run_id -ne 40596167427 -or $j.run_attempt -ne 1 -or
+              $j.head_sha -cne '30db7709838839d28be68d8b467a57b26a3ac667' -or
+              [datetime]$a.created_at -lt [datetime]$j.started_at -or [datetime]$a.created_at -gt [datetime]$j.completed_at) { throw 'Known archive producer attempt mismatch' }
+          python3 tools/surface/download-verified-artifact.py --id 12777738989 --digest $digest --destination preflight-only-accepted-boot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host 'ACTUAL_BINDER_ARCHIVE_PREFLIGHT pinned-source=30db run=40596167427 current-runtime-input=False'
   fixtures:
     needs: prerequisite
     uses: ./.github/workflows/binder2-sg-modes-build.yml
@@ -102,8 +125,85 @@ jobs:
           name: windows-x64
           path: dist/
   boot-image:
+    name: boot-image / compile
     needs: [host, framework]
-    uses: ./.github/workflows/boot-image.yml
+    runs-on: windows-2022
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact reviewed helper bytes on boot compiler host
+        shell: pwsh
+        run: python tools/binder/verify-helper-source.py
+      - name: Verify exact current boot supplier identities
+        id: suppliers
+        shell: pwsh
+        run: tools/binder/verify-component-suppliers.ps1 -Stage Boot
+      - name: Verify host archive before boot compilation
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.windows_x64 }}" --digest "${{ steps.suppliers.outputs.windows_x64_digest }}" --destination boot-suppliers/host
+      - name: Verify framework archive before boot compilation
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.framework }}" --digest "${{ steps.suppliers.outputs.framework_digest }}" --destination boot-suppliers/framework
+      - name: Assemble nonoverlapping current boot inputs
+        shell: pwsh
+        run: |
+          python tools/surface/assemble-artifacts.py --source boot-suppliers/host --destination dist --ledger boot-owners.json --owner binder_host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source boot-suppliers/framework --destination dist --ledger boot-owners.json --owner binder_framework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # AOSP's boot image profiles, at aosp.lock's tag (ADR 0054).
+      - name: Fetch the boot image profiles
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/boot-image/fetch-profiles.ps1 -Out boot-image/profiles
+
+      - name: Compile the boot image
+        shell: pwsh
+        # BOOT_IMAGE_VERBOSE: compiler logs dex2oat's phases; a dex2oat that
+        # hangs is stopped after the timeout, with its threads' stacks.
+        # speed-profile with AOSP's boot image profiles, as Android compiles
+        # its boot image: the primary image (core-oj, core-libart, core-icu4j)
+        # and framework.jar's extension get AOT code for the profile's methods
+        # and hold the profile's classes (docs/compiled-code.md, ADR 0054);
+        # gesher-app.jar, which no AOSP profile covers, is compiled `speed`.
+        # gesher-base maps the oat files' code as views (ADR 0036).
+        run: >-
+          pwsh -NoProfile -File tools/boot-image/compile.ps1 -Dist dist -Out boot-image
+          -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed
+          -BootProfiles boot-image/profiles/art-boot-image-profile.txt,boot-image/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt
+          -TimeoutMinutes 15
+
+      # A first look before the test jobs: Hello runs on the image.
+      - name: Hello on the boot image
+        shell: pwsh
+        run: |
+          function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
+          $root = Join-Path $env:RUNNER_TEMP 'gesher-root'
+          foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
+          Copy-Item dist/icudt*l.dat (Join-Path $root 'i18n/etc/icu')
+          $env:ANDROID_ROOT = NoDrive "$root/system"
+          $env:ANDROID_ART_ROOT = NoDrive "$root/art"
+          $env:ANDROID_DATA = NoDrive "$root/data"
+          $env:ANDROID_I18N_ROOT = NoDrive "$root/i18n"
+          $env:ANDROID_TZDATA_ROOT = NoDrive "$root/tzdata"
+          $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
+          $env:GESHER_TRACE_FAULTS = '1'
+          $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$PWD/dist/$_.jar" }) -join ':'
+          $out = & dist/dalvikvm.exe "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$PWD/boot-image/framework/boot.art")" `
+            -Xint '-Xusejit:false' -cp (NoDrive "$PWD/dist/hello.dex") gesher.Hello 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and (Test-Path dist/dalvikvm.map)) {
+            $out | python tools/symbolize.py dist/dalvikvm.map | Out-Host
+          }
+          Write-Host $out
+          if ($code -ne 0 -or -not $out.Contains('Hello from ART on Windows') -or $out -notmatch 'gesher: boot image loaded') {
+            throw ('Hello did not run on the boot image (exit 0x{0:X8})' -f $code)
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-image
+          path: boot-image/
   test:
     needs: [fixtures, framework, translator, host, boot-image]
     strategy:
@@ -116,60 +216,31 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Require exact current-run artifact identities
+      - name: Actual shared strict archive negatives on this Windows host
         shell: pwsh
         run: |
-          $run = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $run.head_sha -cne '${{ github.sha }}' -or
-              $run.run_attempt -ne ${{ github.run_attempt }} -or $run.repository.full_name -cne '${{ github.repository }}') {
-            throw 'SG component current run/source identity mismatch'
-          }
-          $jobs = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs --paginate | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual SG supplier job attempts' }
-          foreach ($name in 'prerequisite','host','framework / host-tools','framework / framework',
-              'translator / fpsr-reference / reference','translator / build','fixtures / host-compile','fixtures / modes-build','boot-image / compile') {
-            $job = @($jobs.jobs | Where-Object name -CEQ $name)
-            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success' -or $job[0].head_sha -cne $run.head_sha -or
-                $job[0].run_id -ne $run.id -or $job[0].run_attempt -ne $run.run_attempt) {
-              throw "Unproved SG supplier job/source/run/attempt $name"
-            }
-            Write-Host "ACTUAL_SG_SUPPLIER job=$name id=$($job[0].id) source=$($job[0].head_sha) run=$($job[0].run_id) attempt=$($job[0].run_attempt) conclusion=$($job[0].conclusion)"
-          }
-          $inventory = gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts --paginate | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect SG current artifact inventory' }
-          foreach ($name in 'windows-x64','framework','arm64','boot-image','binder2-sg-modes') {
-            $artifact = @($inventory.artifacts | Where-Object name -CEQ $name)
-            if ($artifact.Count -ne 1 -or $artifact[0].expired -or $artifact[0].id -le 0 -or $artifact[0].size_in_bytes -le 0 -or
-                $artifact[0].workflow_run.id -ne $run.id -or $artifact[0].workflow_run.head_sha -cne $run.head_sha -or
-                $artifact[0].workflow_run.repository_id -ne $run.repository.id -or
-                $artifact[0].workflow_run.head_repository_id -ne $run.repository.id -or
-                $artifact[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "SG artifact identity mismatch $name" }
-            $producer = @{ 'windows-x64'='host'; framework='framework / framework'; arm64='translator / build'; 'boot-image'='boot-image / compile'; 'binder2-sg-modes'='fixtures / modes-build' }[$name]
-            $job = @($jobs.jobs | Where-Object name -CEQ $producer)[0]
-            if ([datetime]$artifact[0].created_at -lt [datetime]$job.started_at -or
-                [datetime]$artifact[0].created_at -gt [datetime]$job.completed_at) { throw "Artifact is outside its current producer attempt: $name" }
-            Write-Host "ACTUAL_SG_ARTIFACT name=$name id=$($artifact[0].id) digest=$($artifact[0].digest) source=$($run.head_sha) run=$($run.id) attempt=$($run.run_attempt) repository=$($run.repository.id)"
-          }
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-x64
-          path: current-host
-      - uses: actions/download-artifact@v4
-        with:
-          name: framework
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: arm64
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: boot-image
-          path: boot-image
-      - uses: actions/download-artifact@v4
-        with:
-          name: binder2-sg-modes
-          path: fixtures
+          python tools/binder/verify-helper-source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/test-verified-artifact.py
+      - name: Require exact current-run artifact identities
+        id: suppliers
+        shell: pwsh
+        run: tools/binder/verify-component-suppliers.ps1 -Stage Runtime
+      - name: Verify exact windows_x64 archive before extraction
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.windows_x64 }}" --digest "${{ steps.suppliers.outputs.windows_x64_digest }}" --destination current-host
+      - name: Verify exact framework archive before extraction
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.framework }}" --digest "${{ steps.suppliers.outputs.framework_digest }}" --destination suppliers/framework
+      - name: Verify exact arm64 archive before extraction
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.arm64 }}" --digest "${{ steps.suppliers.outputs.arm64_digest }}" --destination suppliers/arm64
+      - name: Verify exact boot_image archive before extraction
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.boot_image }}" --digest "${{ steps.suppliers.outputs.boot_image_digest }}" --destination boot-image
+      - name: Verify exact binder2_sg_modes archive before extraction
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.binder2_sg_modes }}" --digest "${{ steps.suppliers.outputs.binder2_sg_modes_digest }}" --destination fixtures
       - name: Verify whole current host payload and actual configured compiler
         shell: pwsh
         run: |
@@ -183,7 +254,14 @@ jobs:
           $hostRoot = [IO.Path]::GetFullPath('current-host') + [IO.Path]::DirectorySeparatorChar
           $expected = @($manifest.files.PSObject.Properties.Name)
           $actual = @(Get-ChildItem -LiteralPath current-host -Recurse -File | ForEach-Object { $_.FullName.Substring($hostRoot.Length).Replace('\','/') } | Where-Object { $_ -cne 'binder-output-host-manifest.json' })
-          if ($expected.Count -eq 0 -or @(Compare-Object $expected $actual -CaseSensitive).Count) { throw 'Current host payload missing or extra files' }
+          function Exact-HostInventory([string[]]$declared, [string[]]$found) {
+            return $declared.Count -gt 0 -and @($declared | Select-Object -Unique).Count -eq $declared.Count -and
+              @(Compare-Object $declared $found -CaseSensitive).Count -eq 0
+          }
+          if (-not (Exact-HostInventory @('a','b') @('a','b')) -or
+              (Exact-HostInventory @('a','b') @('a')) -or (Exact-HostInventory @('a','b') @('a','b','extra'))) { throw 'Host manifest negative controls failed' }
+          Write-Host 'ACTUAL_BINDER_HOST_NEGATIVES missing/extra=rejected'
+          if (-not (Exact-HostInventory $expected $actual)) { throw 'Current host payload missing or extra files' }
           foreach ($entry in $manifest.files.PSObject.Properties) {
             $path = [IO.Path]::GetFullPath((Join-Path $hostRoot $entry.Name))
             if (-not $path.StartsWith($hostRoot, [StringComparison]::OrdinalIgnoreCase) -or
@@ -191,7 +269,12 @@ jobs:
                 (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $entry.Value) { throw "Current host payload mismatch $($entry.Name)" }
             Write-Host "ACTUAL_BINDER_OUTPUT_HOST_MEMBER name=$($entry.Name) sha256=$($entry.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
           }
-          Copy-Item -Path current-host/* -Destination dist -Recurse -Force
+          python tools/surface/assemble-artifacts.py --source current-host --destination dist --ledger runtime-owners.json --owner binder_host --exclude binder-output-host-manifest.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source suppliers/framework --destination dist --ledger runtime-owners.json --owner binder_framework
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source suppliers/arm64 --destination dist --ledger runtime-owners.json --owner binder_arm64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Stage actual same-source root and check every consumed image copy
         shell: pwsh
         run: |
