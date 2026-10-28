@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <string>
 #include <vector>
 
@@ -40,8 +41,11 @@ static bool write_bytes(HANDLE h, const char* text, DWORD size) {
 }
 static constexpr char kRows[] =
     "PASS child actual-token-sid\n"
-    "PASS child host-process-denied error=5\n"
-    "PASS child host-thread-denied error=5\n"
+    "PASS child host-process-dup-denied error=5\n"
+    "PASS child host-process-write-denied error=5\n"
+    "PASS child host-process-thread-denied error=5\n"
+    "PASS child host-thread-context-denied error=5\n"
+    "PASS child host-thread-suspend-denied error=5\n"
     "PASS child trusted-code-write-denied error=5\n"
     "PASS child trusted-config-write-denied error=5\n"
     "PASS child host-ipc-denied error=5\n"
@@ -55,8 +59,10 @@ static int child(int argc, wchar_t** argv) {
   LocalFree(expected);
   if (!actual) return 12;
   const DWORD pid = wcstoul(argv[3], nullptr, 10), tid = wcstoul(argv[4], nullptr, 10);
-  if (!denied(OpenProcess(PROCESS_DUP_HANDLE | PROCESS_VM_WRITE | PROCESS_CREATE_THREAD, FALSE, pid))) return 13;
-  if (!denied(OpenThread(THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, tid))) return 14;
+  for (DWORD rights : {PROCESS_DUP_HANDLE, PROCESS_VM_WRITE, PROCESS_CREATE_THREAD})
+    if (!denied(OpenProcess(rights, FALSE, pid))) return 13;
+  for (DWORD rights : {THREAD_SET_CONTEXT, THREAD_SUSPEND_RESUME})
+    if (!denied(OpenThread(rights, FALSE, tid))) return 14;
   for (int i = 5; i <= 6; ++i) {
     // A readable existing resource, so a missing path cannot satisfy denial.
     Handle readable;
@@ -79,8 +85,9 @@ struct Fixture {
   std::wstring root, executable, code, config, profile;
   PSID sid = nullptr;
   bool directory = false, profile_created = false;
+  bool child_stopped = true;
   bool cleanup() {
-    bool ok = true;
+    bool ok = child_stopped;
     for (const auto* path : {&executable, &code, &config}) {
       if (!path->empty() && !DeleteFileW(path->c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND) ok = false;
     }
@@ -115,6 +122,14 @@ static bool unchanged(const std::wstring& path) {
   return f.valid() && ReadFile(f.h, buf, sizeof(buf), &n, nullptr) && n == 10 && memcmp(buf, "trusted-v1", 10) == 0;
 }
 static int exercise(Fixture& f) {
+  for (DWORD rights : {PROCESS_DUP_HANDLE, PROCESS_VM_WRITE, PROCESS_CREATE_THREAD}) {
+    Handle positive; positive.h = OpenProcess(rights, FALSE, GetCurrentProcessId());
+    if (!positive.valid()) return 51;
+  }
+  for (DWORD rights : {THREAD_SET_CONTEXT, THREAD_SUSPEND_RESUME}) {
+    Handle positive; positive.h = OpenThread(rights, FALSE, GetCurrentThreadId());
+    if (!positive.valid()) return 52;
+  }
   wchar_t exe[32768], temp[32768], unique[MAX_PATH];
   if (!GetModuleFileNameW(nullptr, exe, 32768) || !GetTempPathW(32768, temp) ||
       !GetTempFileNameW(temp, L"gsi", 0, unique)) return 20;
@@ -166,14 +181,15 @@ static int exercise(Fixture& f) {
   limits.BasicLimitInformation.ActiveProcessLimit = 1;
   if (!job.valid() || !SetInformationJobObject(job.h, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) return 33;
   SIZE_T bytes = 0;
-  InitializeProcThreadAttributeList(nullptr, 2, 0, &bytes);
+  InitializeProcThreadAttributeList(nullptr, 3, 0, &bytes);
   std::vector<BYTE> storage(bytes);
   auto attrs = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
-  if (!InitializeProcThreadAttributeList(attrs, 2, 0, &bytes)) return 34;
+  if (!InitializeProcThreadAttributeList(attrs, 3, 0, &bytes)) return 34;
   SECURITY_CAPABILITIES caps{}; caps.AppContainerSid = f.sid;
   HANDLE handles[]{in_read.h, out_write.h};
   bool configured = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &caps, sizeof(caps), nullptr, nullptr) &&
-      UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, sizeof(handles), nullptr, nullptr);
+      UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, sizeof(handles), nullptr, nullptr) &&
+      UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job.h, sizeof(job.h), nullptr, nullptr);
   std::wstring cmd = L"\"" + f.executable + L"\" child " + sid_text + L" " + std::to_wstring(GetCurrentProcessId()) +
       L" " + std::to_wstring(GetCurrentThreadId()) + L" \"" + f.code + L"\" \"" + f.config + L"\" \"" + pipe_name + L"\" " +
       std::to_wstring(reinterpret_cast<ULONG_PTR>(in_read.h)) + L" " + std::to_wstring(reinterpret_cast<ULONG_PTR>(out_write.h));
@@ -186,15 +202,19 @@ static int exercise(Fixture& f) {
   if (!started) { fprintf(stderr, "launch error=%lu\n", start_error); return 35; }
   Handle process, thread; process.h = pi.hProcess; thread.h = pi.hThread;
   struct OwnedChild {
-    HANDLE process;
+    HANDLE process, job; bool& stopped;
     ~OwnedChild() {
       if (WaitForSingleObject(process, 0) != WAIT_OBJECT_0) {
-        TerminateProcess(process, 90); WaitForSingleObject(process, 5000);
+        if (!TerminateJobObject(job, 90)) fprintf(stderr, "owned job termination failed error=%lu\n", GetLastError());
       }
+      stopped = WaitForSingleObject(process, 5000) == WAIT_OBJECT_0;
+      if (!stopped) fprintf(stderr, "owned process not signaled after cleanup deadline\n");
     }
-  } owned{process.h};
+  } owned{process.h, job.h, f.child_stopped};
+  f.child_stopped = false;
   in_read.reset(); out_write.reset();
-  if (!AssignProcessToJobObject(job.h, process.h) || !token_is(process.h, f.sid)) return 36;
+  BOOL in_job = FALSE;
+  if (!IsProcessInJob(process.h, job.h, &in_job) || !in_job || !token_is(process.h, f.sid)) return 36;
   printf("PASS parent suspended-token-sid pid=%lu tid=%lu owned-job=1\n", pi.dwProcessId, pi.dwThreadId);
   if (ResumeThread(thread.h) == static_cast<DWORD>(-1)) return 37;
   if (WaitForSingleObject(process.h, 15000) != WAIT_OBJECT_0) return 38;

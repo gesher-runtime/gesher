@@ -18,17 +18,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
-        id: toolchain
-        with:
-          path: ~/toolchain
-          key: ${{ env.LLVM_MINGW_NAME }}
-      - name: Fetch pinned llvm-mingw
-        if: steps.toolchain.outputs.cache-hit != 'true'
+      - name: Fetch and verify pinned llvm-mingw archive
         run: |
           set -euo pipefail
           mkdir -p ~/toolchain
-          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz | tar -xJ -C ~/toolchain
+          curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz -o toolchain.tar.xz
+          echo '5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4  toolchain.tar.xz' | sha256sum -c -
+          tar -xJf toolchain.tar.xz -C ~/toolchain
       - name: Compile actual fixture and bind compiler receipt
         run: python3 tests/guest-isolation/receipt.py build
       - uses: actions/upload-artifact@v4
@@ -75,8 +71,11 @@ jobs:
           $expected = @(
             'PASS parent suspended-token-sid pid=',
             'PASS child actual-token-sid',
-            'PASS child host-process-denied error=5',
-            'PASS child host-thread-denied error=5',
+            'PASS child host-process-dup-denied error=5',
+            'PASS child host-process-write-denied error=5',
+            'PASS child host-process-thread-denied error=5',
+            'PASS child host-thread-context-denied error=5',
+            'PASS child host-thread-suspend-denied error=5',
             'PASS child trusted-code-write-denied error=5',
             'PASS child trusted-config-write-denied error=5',
             'PASS child host-ipc-denied error=5',
