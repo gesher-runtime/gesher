@@ -430,8 +430,8 @@ final class Dexopt {
         }
         long deadline = SystemClock.uptimeMillis() + TOOL_TIMEOUT_MS;
         while (true) {
-            int code = Zygote.exitCode(pid);
-            if (code != Zygote.STILL_ACTIVE) return code;
+            long code = Zygote.exitStatus(pid);
+            if (code != Zygote.EXIT_RUNNING) return (int) code;
             if (SystemClock.uptimeMillis() > deadline) {
                 Zygote.kill(pid);
                 SystemServer.log("dexopt: " + tool + " took more than " + TOOL_TIMEOUT_MS / 1000

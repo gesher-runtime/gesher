@@ -189,6 +189,10 @@ static jlong Zygote_startTime(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::StartTime(pid);
 }
 
+static jlong Zygote_exitStatus(JNIEnv*, jclass, jint pid) {
+    return gesher::zygote::ExitStatus(pid);
+}
+
 static jint Zygote_exitCode(JNIEnv*, jclass, jint pid) {
     return gesher::zygote::ExitCode(pid);
 }
@@ -243,6 +247,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeRevokeInstall", "(Ljava/lang/String;Ljava/lang/String;)Z", GESHER_JNI(Zygote_revokeInstall)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeExitCode", "(I)I", GESHER_JNI(Zygote_exitCode)},
+    {"nativeExitStatus", "(I)J", GESHER_JNI(Zygote_exitStatus)},
     {"nativeKill", "(I)Z", GESHER_JNI(Zygote_kill)},
     {"nativeJoinJob", "(I)Z", GESHER_JNI(Zygote_joinJob)},
     {"nativeLock", "(Ljava/lang/String;I)J", GESHER_JNI(Zygote_lock)},

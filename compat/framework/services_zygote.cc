@@ -404,17 +404,25 @@ int64_t StartTime(int pid) {
   return result;
 }
 
-int ExitCode(int pid) {
+int64_t ExitStatus(int pid) {
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
-  if (it == g_children.end()) return -1;
+  if (it == g_children.end()) return kExitUnknown;
+  DWORD state = WaitForSingleObject(it->second.process, 0);
+  if (state == WAIT_TIMEOUT) return kExitRunning;
+  // Unknown API failures are never evidence of either liveness or completion.
+  // Retain the exact instance so a later observer can retry.
+  if (state != WAIT_OBJECT_0) return kExitUnknown;
   DWORD code = 0;
-  if (!GetExitCodeProcess(it->second.process, &code)) return -1;
-  if (code != STILL_ACTIVE) {
-    CloseHandle(it->second.process);
-    g_children.erase(it);
-  }
-  return static_cast<int>(code);
+  if (!GetExitCodeProcess(it->second.process, &code)) return kExitUnknown;
+  CloseHandle(it->second.process);
+  g_children.erase(it);
+  return static_cast<int64_t>(code);
+}
+
+int ExitCode(int pid) {
+  int64_t status = ExitStatus(pid);
+  return status == kExitRunning ? STILL_ACTIVE : static_cast<int>(status);
 }
 
 bool Kill(int pid) {

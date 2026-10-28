@@ -1047,8 +1047,15 @@ void ProcReleaseLocked(Proc* proc) {
   ReleaseWork(&proc->delivered_death);
   std::vector<Buffer*> buffers;
   for (auto& [id, buffer] : proc->buffers) buffers.push_back(buffer);
-  for (Buffer* buffer : buffers) FreeBuffer(buffer, false);
+  // Revocation can release a still-running process. Roll back any remaining
+  // FD staging duplicates using the lease before dropping it; dead Binder
+  // node/ref updates are skipped by ReleaseBufferObjects.
+  for (Buffer* buffer : buffers) FreeBuffer(buffer, true);
   g_procs.erase(proc->id);
+  // Raw Proc/Thread objects can still be named by transactions. Keep those
+  // objects, but release their process capability after all FD/buffer/work and
+  // transaction cleanup above. Outstanding challenges own independent leases.
+  proc->launch.reset();
 }
 void ProcRelease(Proc* proc) {
   std::unique_lock<std::mutex> lock(g_lock);
@@ -1058,6 +1065,7 @@ bool PeerAlive(const Proc* proc) {
   return g_registry.Live(proc->launch) && g_registry.Live(g_owner);
 }
 void ReapRevokedLocked() {
+  g_registry.PruneDead(); // g_lock -> Registry lock, never the reverse
   std::vector<Proc*> dead;
   for (const auto& item : g_procs) if (!PeerAlive(item.second)) dead.push_back(item.second);
   for (Proc* proc : dead) ProcReleaseLocked(proc);
@@ -1668,6 +1676,7 @@ void ServeProc(HANDLE pipe, In in, PipePeer& peer) {
     proc->uid = launch->install.uid;
     g_procs[proc->id] = proc;
   }
+  launch.reset(); // admission-local ownership must not pin a revoked open pipe
   TRACE("proc %u: pid %u opened the device", proc->id, pid);
   Out reply;
   reply.Put<int32_t>(0);
@@ -1759,6 +1768,7 @@ void ServeThread(HANDLE pipe, In in, const PipePeer& peer) {
     }
   }
   Out hello;
+  launch.reset(); // proof completed; Proc owns the active dispatch lease
   hello.Put<int32_t>(thread != nullptr ? 0 : -ESRCH);
   if (!WriteMessage(pipe, hello) || thread == nullptr) return;
 

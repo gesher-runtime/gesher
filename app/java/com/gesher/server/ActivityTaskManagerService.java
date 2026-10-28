@@ -685,20 +685,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // A process that dies before it attaches fails what waited for it.
         Thread watch = new Thread(() -> {
             while (true) {
-                int code;
+                long code;
                 synchronized (this) {
                     if (mStarting.get(seq) != pending) return;  // attached
-                    // exitCode consumes the native handle on completion. Keep
+                    // exitStatus consumes the native handle on completion. Keep
                     // lookup and publication atomic with attach handing it to
                     // processDied's observer, so two readers cannot consume it.
-                    code = Zygote.exitCode(pid);
-                    if (code != Zygote.STILL_ACTIVE) {
-                        mExitStatus.exited(packageName, seq, pid, code);
+                    code = Zygote.exitStatus(pid);
+                    if (code >= 0) {
+                        mExitStatus.exited(packageName, seq, pid, (int) code);
                     }
                 }
-                if (code != Zygote.STILL_ACTIVE) {
+                if (code != Zygote.EXIT_RUNNING) {
                     SystemServer.log("process " + pid + " for " + packageName
-                            + " exited before attaching (exit code " + code + ")");
+                            + (code >= 0 ? " exited before attaching (exit code " + code + ")"
+                                    : " exit status unavailable; failing pending start"));
                     startFailed(seq, pending);
                     return;
                 }
@@ -1035,15 +1036,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (app.spawned && app.packageName != null) {
             // Its exit code, once Windows has it (binder may tell first).
             Thread t = new Thread(() -> {
-                int code = Zygote.STILL_ACTIVE;
-                for (int i = 0; i < 40 && code == Zygote.STILL_ACTIVE; i++) {
-                    code = Zygote.exitCode(app.pid);
-                    if (code == Zygote.STILL_ACTIVE) SystemClock.sleep(250);
+                long code = Zygote.EXIT_RUNNING;
+                for (int i = 0; i < 40 && code < 0; i++) {
+                    code = Zygote.exitStatus(app.pid);
+                    if (code < 0) SystemClock.sleep(250);
                 }
-                if (code != Zygote.STILL_ACTIVE) {
+                if (code >= 0) {
                     boolean published;
                     synchronized (this) {
-                        published = mExitStatus.exited(app.packageName, app.startSeq, app.pid, code);
+                        published = mExitStatus.exited(app.packageName, app.startSeq, app.pid, (int) code);
                     }
                     if (published) SystemServer.log(app + " exited with code " + code);
                 }

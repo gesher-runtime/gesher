@@ -45,8 +45,8 @@ public final class PackageIdentityFixture {
                             new File(logs, "writer.log").getPath()),
                     List.of("GESHER_BINDER=" + device));
             long deadline = android.os.SystemClock.uptimeMillis() + 180_000;
-            int code;
-            while ((code = Zygote.exitCode(owned[2])) == Zygote.STILL_ACTIVE) {
+            long code;
+            while ((code = Zygote.exitStatus(owned[2])) == Zygote.EXIT_RUNNING) {
                 check(android.os.SystemClock.uptimeMillis() < deadline, "writer timeout");
                 Thread.sleep(20);
             }
@@ -134,8 +134,8 @@ public final class PackageIdentityFixture {
                 List.of("GESHER_UID=19999", "GESHER_BINDER_UID=1000"),
                 output.getPath(), identity);
         long deadline = android.os.SystemClock.uptimeMillis() + 30_000;
-        int code;
-        while ((code = Zygote.exitCode(pid)) == Zygote.STILL_ACTIVE) {
+        long code;
+        while ((code = Zygote.exitStatus(pid)) == Zygote.EXIT_RUNNING) {
             if (android.os.SystemClock.uptimeMillis() > deadline) {
                 Zygote.kill(pid);
                 throw new AssertionError("real child UID probe timed out");

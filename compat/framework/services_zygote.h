@@ -37,8 +37,14 @@ std::vector<int> StartDevice(const std::vector<std::u16string>& commands,
 // still use OpenProcess and must not be treated as authenticated launch records.
 int64_t StartTime(int pid);
 
-// A spawned process's exit code: 259 (STILL_ACTIVE) while it runs, -1 when
-// this process did not start it or does not know.
+// Completion is separate from the full unsigned DWORD terminal code (including
+// 259). Consumes the retained child only after a signaled HANDLE and code query.
+constexpr int64_t kExitRunning = -2;
+constexpr int64_t kExitUnknown = -1;
+int64_t ExitStatus(int pid);
+
+// Legacy ambiguous sentinel API, retained for existing external callers.
+// New lifetime observers must use ExitStatus.
 int ExitCode(int pid);
 
 // Ends the process (TerminateProcess, exit code 137).

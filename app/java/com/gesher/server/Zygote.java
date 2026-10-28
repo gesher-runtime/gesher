@@ -46,6 +46,7 @@ public final class Zygote {
     }
     static native long nativeStartTime(int pid);
     static native int nativeExitCode(int pid);
+    static native long nativeExitStatus(int pid);
     static native boolean nativeKill(int pid);
     static native boolean nativeJoinJob(int pid);
     static native long nativeLock(String name, int timeoutMs);
@@ -57,7 +58,10 @@ public final class Zygote {
     static native String nativeCommandLine();
     static native String nativeExePath();
 
-    /** STILL_ACTIVE, the exit code of a process that runs. */
+    public static final long EXIT_RUNNING = -2;
+    public static final long EXIT_UNKNOWN = -1;
+
+    /** Legacy ambiguous sentinel; lifetime observers use exitStatus. */
     public static final int STILL_ACTIVE = 259;
 
     /**
@@ -103,7 +107,11 @@ public final class Zygote {
         return t != 0 && (startTime == 0 || t == startTime);
     }
 
-    /** The exit code of a process this one started: STILL_ACTIVE, or -1 if unknown. */
+    /** Full unsigned terminal code, EXIT_RUNNING, or EXIT_UNKNOWN on lookup/API failure.
+     * Completion consumes the owned child; terminal 259 is distinct from running. */
+    public static long exitStatus(int pid) { return nativeExitStatus(pid); }
+
+    /** Legacy ambiguous API retained for binary compatibility; prefer exitStatus. */
     public static int exitCode(int pid) {
         return nativeExitCode(pid);
     }

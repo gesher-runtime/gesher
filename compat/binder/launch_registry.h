@@ -120,6 +120,18 @@ class Registry {
     std::lock_guard<std::mutex> guard(lock_);
     return LiveLocked(record);
   }
+  // Worker maintenance also covers published children that never open Binder.
+  // Erase only on actual HANDLE signal; WAIT_FAILED is not proof of death.
+  // Shared challenges/cleanup retain their own leases until their use completes.
+  void PruneDead() {
+    std::lock_guard<std::mutex> guard(lock_);
+    for (auto it = records_.begin(); it != records_.end();) {
+      if (WaitForSingleObject(it->second->process, 0) == WAIT_OBJECT_0) {
+        it->second->revoked = true;
+        it = records_.erase(it);
+      } else ++it;
+    }
+  }
   void Revoke(const Install& install) {
     std::lock_guard<std::mutex> guard(lock_);
     for (auto it = records_.begin(); it != records_.end();) {
