@@ -20,10 +20,8 @@ final class PageScripts {
      * to a port1 goes back as chrome.webview.postMessage({gesherPort: id, data}).
      */
     static final String PORTS = "(function(){\n"
-            + "if (window.top !== window || !window.chrome || !chrome.webview"
-            + " || window.__gesherPorts) return;\n"
-            + "var ports = {};\n"
-            + "Object.defineProperty(window, '__gesherPorts', {value: ports});\n"
+            + "if (!window.chrome || !chrome.webview || window.__gesherEncodeMessage"
+            + " || (window.top === window && window.__gesherPorts)) return;\n"
             + "var byteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;\n"
             + "function isBuffer(data) { try { byteLength.call(data); return true; } catch (e) { return false; } }\n"
             + "function encode(data) {\n"
@@ -42,6 +40,9 @@ final class PageScripts {
             + "Object.defineProperty(window, '__gesherEncodeMessage', {value: encode});\n"
             + "Object.defineProperty(window, '__gesherDecodeMessage', {value: decode});\n"
             + "Object.defineProperty(window, '__gesherIsArrayBuffer', {value: isBuffer});\n"
+            + "if (window.top !== window) return;\n"
+            + "var ports = {};\n"
+            + "Object.defineProperty(window, '__gesherPorts', {value: ports});\n"
             + "function channels(ids) {\n"
             + "  return (ids || []).map(function(id) {\n"
             + "    var ch = new MessageChannel();\n"
