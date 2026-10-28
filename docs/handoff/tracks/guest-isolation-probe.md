@@ -29,7 +29,29 @@ cleanup controls remain strict. No root cause or correction is claimed.
 The sole integrator source peer accepted this diagnostic diff before its push.
 `git diff --check` passed; no local compilation or fixture was performed.
 
-Current changed-source scoped run: `40783823671`, attempt 1, exact `c2d667ea`.
+Diagnostic run `40783823671`, attempt 1, exact `c2d667ea`, completed red on
+both Windows. Actual raw child handle was INVALID_HANDLE_VALUE, error 2
+(FILE_NOT_FOUND), requested access `0xc0000000`; the host positive opened its
+LOCAL endpoint. Actual token had the expected AppContainer SID, low integrity
+4096, zero capabilities and no restricted SIDs. The protected pipe DACL was
+OW-only; owner was BA. This proves the attempted LOCAL endpoint was unreachable
+from the child, not that its ACL denied access. Saved plain logs are
+`guest-40783823671-job-123152001909.log` and `...1957.log` under the review folder.
+
+Current changed-source scoped run: `40784976349`, attempt 1, exact
+`4458ce295721d56e0bbd8de8afbfaeba9d841fa1`. Its source peer accepted the
+diagnostic design before push. The endpoint now uses the unpackaged host path.
+Before requiring denial, the same server handle/name temporarily grants only
+the exact AppContainer SID read/write access at low integrity. An actual fresh
+isolated connection must report the host server PID and send the exact inherited
+resource challenge through that endpoint. After the child closes, the parent
+restores the exact protected OW-only DACL, checks actual ACEs/SIDs/masks and the
+low mandatory label, proves fresh host access, and releases the child to attempt
+fresh read/write access. Only INVALID_HANDLE_VALUE plus exact error 5 passes.
+Both initial and tightened descriptors are read back and asserted. No namespace
+or ACL compatibility, strict denial or isolation is claimed before actual CI.
+The original LOCAL failure remains recorded; error 2 never qualifies denial.
+
 Build/runtime results are pending. Previous same-ref run was terminal before
 the account-gated gh-credential HTTPS push. No duplicate dispatch was used.
 Watch uses `gh run watch --exit-status --interval 120`. No unchanged red retry
@@ -37,6 +59,13 @@ is authorized; retain actual failures and make a concrete correction first.
 The sole integrator owns the single watcher and terminal runtime/receipt audit;
 this worker has no observer. Read the new diagnostics before proposing any
 correction. Neither the old red run nor a diagnostic-only run qualifies isolation.
+
+Addressing references: Microsoft's [IPC documentation](https://learn.microsoft.com/en-us/windows/apps/develop/communication/interprocess-communication)
+describes AppContainer pipe namespace constraints; its
+[CreateFile documentation](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilea)
+distinguishes missing pipes from busy instances. The changed address remains
+an empirically gated hypothesis: only the actual same-endpoint isolated
+positive followed by strict ACL denial can qualify this disposable fixture.
 
 The fixture starts its child suspended with SECURITY_CAPABILITIES, zero
 capabilities, an explicit two-handle allowlist and atomic JOB_LIST membership in
