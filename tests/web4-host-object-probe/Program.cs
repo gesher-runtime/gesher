@@ -91,6 +91,7 @@ sealed class ProbeForm : Form
             var topObject = NewObject();
             core.AddHostObjectToScript("rootProbe", topObject);
             core.FrameCreated += (_, e) => RegisterFrame(e.Frame);
+            long initialStart = Stopwatch.GetTimestamp();
             core.Navigate($"http://127.0.0.1:{port}/main");
             string[] selected = { "a", "b", "nested", "bad", "opaque" };
             await Wait(() => observations.ContainsKey("opaque") && pages.ContainsKey("opaque"), TimeSpan.FromSeconds(15), limit.Token);
@@ -98,8 +99,11 @@ sealed class ProbeForm : Form
             if (!opaqueContext.Default || opaqueContext.Unique.Length == 0 || opaqueContext.Frame.Length == 0 || opaqueContext.Origin != "://" || eventFailure)
                 throw new Exception("selected opaque CDP context identity/origin missing");
             Console.WriteLine($"OPAQUE_CDP session={opaqueContext.Session} context={opaqueContext.Id} unique={opaqueContext.Unique} frame={opaqueContext.Frame} origin={opaqueContext.Origin} nativeFrameId={frames["opaque"].Frame.FrameId} correlation=controlled-label-only");
+            TimeSpan remaining = TimeSpan.FromSeconds(15) - Stopwatch.GetElapsedTime(initialStart);
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException("initial outcome deadline exceeded");
             await Wait(() => selected.All(pages.ContainsKey) && selected.All(frames.ContainsKey) &&
-                ProbeObject.Calls.Any(c => c.Attempt == "root:first"), TimeSpan.FromSeconds(15), limit.Token);
+                ProbeObject.Calls.Any(c => c.Attempt == "root:first"), remaining, limit.Token);
+            if (Stopwatch.GetElapsedTime(initialStart) >= TimeSpan.FromSeconds(15)) throw new TimeoutException("initial outcome observed after deadline");
             if (selected.Select(name => frames[name].Frame.FrameId).Any(id => id == 0) ||
                 selected.Select(name => frames[name].Frame.FrameId).Distinct().Count() != selected.Length)
                 throw new Exception("frame native IDs are missing or ambiguous");
