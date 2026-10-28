@@ -38,7 +38,7 @@ public class FrameActivity extends Activity {
                     }
                     String name = data.substring(0, data.indexOf('|'));
                     if (name.equals("during")) {
-                        invalid = true;
+                        if (main || reply != replies.get("a")) invalid = true;
                         pendingNavigationReply = reply;
                         return;
                     }
