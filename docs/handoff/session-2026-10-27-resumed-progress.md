@@ -616,3 +616,16 @@ at most three concurrent workers; there is exactly one integrator for
 integration/main/PR/tag/release. Current workers are integration_resume,
 native_resume and windows_terra; primary/media4-muxer ownership remains with
 the integrator. No model cost/speed claim is inferred from this preference.
+
+## Archive-integrity contract audit, 2026-10-28
+
+Later source review identified a distinct open whole-ZIP integrity contract:
+API digest metadata and download-artifact@v4 checks are not an independent
+fail-closed raw archive hash gate before extraction. Full405961's actual31/0,
+exact code identity and independent exe/map/role checks remain valid; do not
+retroactively claim every archive byte cryptographically verified. Its hook
+exact-ID downloads already use merge-multiple:true. This durable known gap is
+in gap-ledger-2026-10-27.md and the exact accepted report. Terra owns initial
+Surface CI-only strict fetch/hash/extract helper and negative controls;
+integration owns Binder/future canonical propagation only after peer and
+qualification. No local artifact download or primary code merge occurred.

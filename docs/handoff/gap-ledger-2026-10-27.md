@@ -183,3 +183,30 @@ reader/task/pipe ownership follow-up remains source WIP and excluded from30db.
 Even a green current full must not close that broader cleanup contract.
 C:/work/gesher-ci-review/semantic-gap-process-ownership-2026-10-28.json records
 the source/evidence/owner/dependency/acceptance boundary and release consumer.
+
+## CI archive integrity: fail-closed ZIP gate still open (2026-10-28)
+
+Canonical full40596167427/source30db remains actual31jobs25success/6intentional
+skips, both normal Windows0 and selected runtime/package/e2e proof with exact
+post-merge code identity. Its independent role checks fail closed on actual
+production/hook exe/maps, source/run/attempt, shared source/compiler and role
+sentinel; those bounded checks remain valid. Hook ID downloads already use
+merge-multiple:true; the later Surface ID-subdirectory finding does not apply
+to that full's extraction layout.
+
+However, verify_full_suppliers.ps1 checks API archive digest metadata, not the
+downloaded archive bytes; download-artifact@v4 handling alone is not a
+fail-closed whole-ZIP gate. Logged jar/image hashes and image copy equality are
+not whole-archive verification. Reviewed actual normal/hook/package logs had
+no digest-mismatch diagnostic, which does not close this missing contract.
+Do not retrospectively claim all archives were independently verified.
+
+Required next: independently SHA256 the exact ID's raw archive before ANY
+extraction; validate exact source/run/attempt/repository supplier identity and
+digest; require empty isolated destinations, complete member accounting,
+ZipSlip/link/case-insensitive duplicate and overlay-collision rejection, then
+explicit ordered assembly. CI-only archive transfer/inspection; no local CI
+artifact download. Terra owns initial Surface helper and negative CI controls;
+integrator coordinates Binder/future canonical reuse after peer and actual
+qualification. No primary code merge before required coherent full. Runtime
+full acceptance is not general cryptographic archive acceptance.
