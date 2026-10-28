@@ -347,3 +347,39 @@ found no concrete false-positive blocker;180s is deliberately an overall
 failure bound, not13 times60s. This orchestration is source-only and has not
 been dispatched; final runtime peer and the corrected compile gate are still
 prerequisites. No runtime assertions or mandatory open gates were removed.
+
+### Corrected compile-only gate: actual success, no runtime proof
+
+Exact7b61deab111c6eeb5108e19d2aed2b1acc135ba5 passed run40656771343,
+job122709582665, success1/1 and required watch exit0. Actual plain logs show
+330 steps completing the common POSIX and bionic libraries and linking both
+fixture executables with the pinned toolchain archive checksum verified.
+Actual command executable SHA256:
+3e46a0b8f741568003a868229871bc8460a066a1f3aa16a8a496f33b9ccf44c2.
+Actual duplicate executable SHA256:
+bdc872de2751ea70cf5455d686c025573d0bbebfb91b13801ba8123e32157dbc.
+The actual completion line is
+`COMPILE_ONLY source=7b61deab111c6eeb5108e19d2aed2b1acc135ba5 runtime=NOT_EXECUTED semantics=UNQUALIFIED`.
+Final metadata, watch and actual compile log are preserved in
+C:\work\gesher-ci-review\native3-compile-40656771343-*; no CI artifact was
+downloaded locally. The prior40655921479 red result remains documented above.
+
+Independent final pointer/lifetime source review is assigned to the sole
+integrator after its separate Binder checkpoint. Earlier Windows checks were
+only bounded compile-workflow and orchestration reviews. Runtime dispatch
+still waits for final production-path review and resolution of any concrete
+blocker. No common fcntl/dup/stdio semantics have yet been runtime-qualified.
+
+Prepared runtime gate requires exactly13 fresh processes/modes:
+regular/device/event/socket/binder, retained-nul, quarantine of each of those
+five resource kinds, raw-race and capacity. Every actual mode must exit0,
+emit exactly one completion with assertions>0/failures0 and preserve real
+resource checks. Per-mode actual counts must be retained and audited; the
+capacity allocation count and explicit raw fd-reuse staging branch can vary
+between hosts. The raw publisher result separately requires1000 duplicates,
+at least one actual raw publication and zero errors. These are explicit
+internal failure dependencies using actual resources, not proof of real OS
+permission/close denial. Same-source Linux/Windows command rows are compared
+exactly using genuine independent processes. Controller bounds are60s/mode,
+10s/command,5s owned cleanup,180s Windows suite/process-tree bound. Every
+mandatory gate and copy-limit caveat listed above remains open.
