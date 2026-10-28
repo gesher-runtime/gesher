@@ -65,22 +65,47 @@ unsigned ThreadId() {
   return static_cast<unsigned>(syscall(SYS_gettid));
 #endif
 }
+#ifdef _WIN32
+constexpr DWORD kWaitChainNodeCapacity = 16;
+struct WaitTrace {
+  unsigned samples = 0;
+  DWORD error = 0, count = 0;
+  BOOL complete = FALSE, cycle = FALSE;
+  WAITCHAIN_NODE_INFO nodes[kWaitChainNodeCapacity]{};
+};
+WaitTrace wait_trace;
+void DumpWaitTrace(unsigned waiting, unsigned owner, FILE* stream, int descriptor, bool completed) {
+  std::fprintf(stderr, "ACTUAL_WCT samples=%u success=%d error=%lu count=%lu cycle=%d closer=%u owner=%u FILE=%p fd=%d HANDLE=%p completed-before-unlock=%d\n",
+      wait_trace.samples, wait_trace.complete, wait_trace.error, wait_trace.count, wait_trace.cycle,
+      waiting, owner, static_cast<void*>(stream), descriptor,
+      reinterpret_cast<void*>(_get_osfhandle(descriptor)), completed);
+  for (DWORD index = 0; index < wait_trace.count && index < kWaitChainNodeCapacity; ++index) {
+    const auto& node = wait_trace.nodes[index];
+    std::fprintf(stderr, "ACTUAL_WCT_NODE index=%lu type=%d status=%d pid=%lu tid=%lu\n", index,
+        static_cast<int>(node.ObjectType), static_cast<int>(node.ObjectStatus),
+        node.ObjectType == WctThreadType ? node.ThreadObject.ProcessId : 0UL,
+        node.ObjectType == WctThreadType ? node.ThreadObject.ThreadId : 0UL);
+  }
+}
+#endif
 bool StreamWaitObserved(unsigned waiting, unsigned owner) {
 #ifdef _WIN32
+  unsigned samples = wait_trace.samples + 1;
+  wait_trace = {}; wait_trace.samples = samples;
   HWCT session = OpenThreadWaitChainSession(0, nullptr);
-  if (!session) return false;
+  if (!session) { wait_trace.error = GetLastError(); return false; }
   // The pinned mingw wct.h omits this SDK macro. Microsoft's canonical
   // WinSDK header defines WCT_MAX_NODE_COUNT as16:
   // https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/wct.h
-  constexpr DWORD kWaitChainNodeCapacity = 16;
 #ifdef WCT_MAX_NODE_COUNT
   static_assert(WCT_MAX_NODE_COUNT == kWaitChainNodeCapacity);
 #endif
-  WAITCHAIN_NODE_INFO nodes[kWaitChainNodeCapacity]{};
-  DWORD count = kWaitChainNodeCapacity;
-  BOOL cycle = FALSE;
-  const bool complete = GetThreadWaitChain(session, 0, 0, waiting, &count, nodes, &cycle);
+  auto& nodes = wait_trace.nodes;
+  DWORD& count = wait_trace.count;
+  count = kWaitChainNodeCapacity;
+  const bool complete = GetThreadWaitChain(session, 0, 0, waiting, &count, nodes, &wait_trace.cycle);
   const DWORD error = complete ? ERROR_SUCCESS : GetLastError();
+  wait_trace.complete = complete; wait_trace.error = error;
   if (count > kWaitChainNodeCapacity || error == ERROR_MORE_DATA || error == ERROR_TOO_MANY_THREADS)
     std::fprintf(stderr, "COMMAND_WCT_INCOMPLETE count=%lu error=%lu\n", count, error);
   bool observed = complete && count >= 3 && count <= kWaitChainNodeCapacity &&
@@ -246,6 +271,9 @@ int main(int argc, char** argv) {
       std::atomic<unsigned> entering{0};
       std::atomic<bool> completed{false};
       int stream_result = -1, stream_error = 0;
+#ifdef _WIN32
+      wait_trace = {};
+#endif
       LockStream(stream);
       std::thread closer([&] {
         entering.store(ThreadId(), std::memory_order_release);
@@ -265,6 +293,10 @@ int main(int argc, char** argv) {
         contended = StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
         if (!contended) std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
+#ifdef _WIN32
+      DumpWaitTrace(entering.load(std::memory_order_acquire), ThreadId(), stream, stream_fd,
+          completed.load(std::memory_order_acquire));
+#endif
       errno = 123;
       int close_result = close(close_fd), close_error = errno;
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE independent-fd-closed result=%d\n", close_result);

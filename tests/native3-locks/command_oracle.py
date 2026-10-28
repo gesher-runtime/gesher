@@ -12,6 +12,7 @@ import queue
 import subprocess
 import tempfile
 import threading
+import traceback
 
 
 class Client:
@@ -295,21 +296,34 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference', type=Path)
     parser.add_argument('--duplicate-worker', type=Path)
+    parser.add_argument('--broker', type=Path)
     args = parser.parse_args()
-    rows = run(args.worker.resolve())
-    actual = dict(schema=1, scope='nonblocking common-layer command worker', rows=rows)
-    args.output.write_text(json.dumps(actual, indent=2) + '\n')
-    if args.reference:
-        reference = json.loads(args.reference.read_text())
-        assert reference['schema'] == actual['schema']
-        assert len(reference['rows']) == len(rows), 'reference row count differs'
-        for index, (expected, observed) in enumerate(zip(reference['rows'], rows)):
-            assert expected == observed, (index, expected, observed)
-    print('ACTUAL_COMMAND_ORACLE rows=' + str(len(rows)) + ' mismatches=0', flush=True)
+    failures = []
+    try:
+        rows = run(args.worker.resolve())
+        actual = dict(schema=1, scope='nonblocking common-layer command worker', rows=rows)
+        args.output.write_text(json.dumps(actual, indent=2) + '\n')
+        if args.reference:
+            reference = json.loads(args.reference.read_text())
+            assert reference['schema'] == actual['schema']
+            assert len(reference['rows']) == len(rows), 'reference row count differs'
+            for index, (expected, observed) in enumerate(zip(reference['rows'], rows)):
+                assert expected == observed, (index, expected, observed)
+        print('ACTUAL_COMMAND_ORACLE rows=' + str(len(rows)) + ' mismatches=0', flush=True)
+    except Exception as error:
+        traceback.print_exc()
+        failures.append('actual commands: ' + str(error))
     if args.duplicate_worker:
-        from duplicate_oracle import run as run_duplicates
-        duplicates = run_duplicates(args.duplicate_worker.resolve(strict=True))
-        args.output.with_name('windows-duplicates.json').write_text(json.dumps(duplicates, indent=2) + '\n')
+        try:
+            assert args.broker, 'Actual owned broker executable is required'
+            from duplicate_oracle import run as run_duplicates
+            duplicates = run_duplicates(args.duplicate_worker.resolve(strict=True), args.broker.resolve(strict=True))
+            args.output.with_name('windows-duplicates.json').write_text(json.dumps(duplicates, indent=2) + '\n')
+        except Exception as error:
+            traceback.print_exc()
+            failures.append('actual duplicate resources: ' + str(error))
+    if failures:
+        raise AssertionError('; '.join(failures))
 
 
 if __name__ == '__main__':

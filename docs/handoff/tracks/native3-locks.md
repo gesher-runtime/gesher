@@ -481,3 +481,62 @@ production/fixture/workflow delta needs its own focused independent source
 peer before any changed-source CI; the earlier7b61 peer does not cover it.
 The auto compile-only40658999459 was explicitly cancelled as superseded by
 the fresh actual component producer; it is not qualification evidence.
+
+### Third command component: real Windows evidence, suite still failed
+
+Exact1dc2e24587130997d562054b16c2edd6a5b30ed0 ran40660954505; required
+watch exited1. Final metadata/plain producer122723551074 and Windows2022
+122724226864 / Windows2025 122724226871 logs are saved under
+C:\work\gesher-ci-review\native3-commands-40660954505-*.
+Actual Linux completed161 rows/mismatches0, including the Unicode successful
+reopen/any-close and genuine missing-disk control. Windows2022 completed the
+same161 rows with zero actual row differences, then real resource duplicate
+modes regular/device/event/socket passed23/17/17/21 assertions respectively.
+Binder mode then correctly failed to open an actual source: this isolated
+component had not started/configured its own real broker. Later duplicate
+modes were not reached. Windows2025 selected one real Python executable and
+its first135 rows matched the Linux prefix, then the first actual stdio
+contention request returned contended=false despite successful actual closes.
+The strict assertion failed. Neither suite is accepted and no mandatory gap
+is closed; the previous partial observations remain scoped evidence only.
+
+Prepared continuation changes fixture/controller/workflow only; production
+C/C++ remains identical to focused-peer1dc2e245. The actual WCT criterion is
+unchanged: full closer->critical-section->owner chain is still required.
+New diagnostics snapshot the last real query success/error/count/cycle and
+node type/status/PID/TID, plus actual FILE pointer/fd/HANDLE/owner/closer and
+completed-before-unlock. Five-second internal/ten-second command budgets and
+held-stream/independent-close/unlock ordering remain unchanged. Missing WCT
+is still failure; no sleep, timeout or inferred wall-time contention is PASS.
+
+The fresh producer additionally builds/import-checks/hashes actual binderd.exe
+and its import list (seven exact output members). The duplicate controller
+creates an isolated UUID endpoint and child-only legitimate GESHER_BINDER
+selection, requires the actual pipe-created broker message, existing real
+Binder ioctls and exactly two actual broker opens matching the two known
+Binder fixture PIDs. All13 direct client handles must report normal exit0
+before a healthy broker's intentional owned termination/five-second reap.
+Binderd is designed to serve until killed: its teardown exit is reported
+explicitly and never called normal broker exit0. An unnamed noninherited
+KILL_ON_JOB_CLOSE job owns exact Popen kernel process handles and performs
+shared-five-second reap of owned children on close; failure teardown cannot
+qualify client/broker success. No runner-wide name kill is used. The fixtures
+spawn no children before job assignment; general atomic spawn remains open.
+Command failure diagnostics are preserved while the independent duplicate
+suite is also attempted; aggregate failure remains nonzero and the absolute
+external180s root/process-tree bound is unchanged.
+
+Strict archive utilities are byte-identical imports from reviewed21441571:
+Git blobs c12018f78db23e7696298abc864ce1c4d9d788e8 (download),
+8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2 (assembly),
+a97840fd9760ed65f8b317621266e67e8092f10f (negative controls), under
+tools/native3-locks/artifact/. A cheap CI preflight checks these canonical
+blobs and nine adversarial controls before producer compilation. Windows
+validates actual successful current producer/run/attempt/repository/SHA and
+artifact creation time first, then authenticates raw ZIP SHA256 before any
+extraction and verifies exact source/output members before execution. No
+native fixture or these CI-only controls ran locally; Python/YAML/embedded
+PowerShell source parsing and diff checks passed. This continuation requires
+its own independent fixture/ownership/workflow source peer before dispatch.
+All blocking7/38, inherited-OFD/atomic-spawn, targeted signals, ABI/ART,
+concurrent copy/protection, full/package/e2e and wider requirements remain open.
