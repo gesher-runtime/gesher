@@ -14,7 +14,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, pathlib, subprocess, tempfile
-          base = '8ab7a1b0035eec3446597451b624e456ddf006ca'
+          base = '4cf52e9a12d50b90ec58542d1f4613513b73fc6f'
           allowed = {'.github/workflows/ci.yml', '.github/workflows/coherent-union-trusted-source.yml'}
           def git(*args): return subprocess.check_output(['git', *args], text=True).strip()
           sha = os.environ['GITHUB_SHA']
