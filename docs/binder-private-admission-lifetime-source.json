@@ -1,0 +1,40 @@
+{
+  "source": "3c1c066de20c4a91516f21402f0f96f9ebbd8fea",
+  "parent": "0e1f7bec05d85ea85ee3f6d68dd90cbc704779ac",
+  "peer_report_sha256": "bc004331ecc7c2ed9b270cf70ef67446547b83f74e495bab2802073620adbf6f",
+  "runtime_executed": false,
+  "disposition": "SOURCE UNQUALIFIED; new independent peer and supported plus mandatory legacy regressions and fresh full-after required",
+  "changed_source_paths": [
+    "app/java/com/gesher/server/ActivityTaskManagerService.java",
+    "app/java/com/gesher/server/Dexopt.java",
+    "app/java/com/gesher/server/Zygote.java",
+    "compat/binder/binderd.cc",
+    "compat/binder/launch_registry.h",
+    "compat/framework/services_natives.cc",
+    "compat/framework/services_zygote.cc",
+    "compat/framework/services_zygote.h",
+    "tests/dex-package-identity/com/gesher/server/PackageIdentityFixture.java",
+    "tests/windows/binder-private-admission-fixture.cc"
+  ],
+  "unchanged_original_blob_count": 8,
+  "blobs": {
+    "app/java/com/gesher/app/Launcher.java": "97e4c9a2ed205653078deddf1f9ade32b9fba753",
+    "app/java/com/gesher/server/ActivityTaskManagerService.java": "07250c4b7daba2efc47a16db9c97f3ac9886d6e2",
+    "app/java/com/gesher/server/SystemServer.java": "2f032a7bd4128932c400ebbc856c1848fae60fd1",
+    "app/java/com/gesher/server/Zygote.java": "6e9ac24346d6ee8fdc3c49522b4121727456c76a",
+    "cmake/aosp/servicemanager.cmake": "9a5e82b08e6821ada0716ae550987d19d74c093a",
+    "compat/binder/binderd.cc": "8484b5ba7f5b70a21b18c97eafe7f631ac3ee986",
+    "compat/binder/launch_control.h": "7c1be3f6e5fc0b2a8dcf9ee5a985554aa5669d7f",
+    "compat/binder/launch_registry.h": "345114afe0d923ea6f4c22ff1973f953020c8414",
+    "compat/framework/services_natives.cc": "b774de7c19b5af200c5b7621cb9472c62bddee60",
+    "compat/framework/services_zygote.cc": "69258265fd5cbecda82139d5cae707d83d1b788c",
+    "compat/framework/services_zygote.h": "28662ec825bf37f508ae18032a44c7101ed7b22f",
+    "compat/posix/src/binder.cc": "91982ec527f1567b72f396c9c914c5d25d7b37f5",
+    "compat/posix/src/binder_wire.h": "13a0d985396998ea9caff67706909f7e6232fa28",
+    "compat/posix/src/launch_context.h": "b6fe600aaae6d2f2f60be4294278c2412cd5ad67",
+    "tests/dex-package-identity/com/gesher/server/PackageIdentityFixture.java": "5fbecbcbe8981b5047d8759b07965609a8666a38",
+    "tests/dex-package-identity/com/gesher/server/PackageUidChild.java": "3df906657f3bf81302647a60b646ae9def837626",
+    "tests/windows/binder-private-admission-fixture.cc": "e70e0160d574d0333187da50e271521f18408d5c",
+    "app/java/com/gesher/server/Dexopt.java": "79f22e41a5e2f1555ba0b75e75d067588fca267d"
+  }
+}

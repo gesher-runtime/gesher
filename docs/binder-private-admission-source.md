@@ -1,3 +1,9 @@
+Current lifetime correction source: `3c1c066de20c4a91516f21402f0f96f9ebbd8fea`.
+See [the source-only lifetime handoff](binder-private-admission-lifetime-source.md)
+and its JSON for the two P2 corrections, exact18-path blobs and mandatory remaining
+gaps. The checkpoint below is historical active-admission source, not the current
+lifetime implementation. P1 remains open and runtime/legacy qualification is owed.
+
 # Active dedicated-device admission: unqualified source checkpoint
 
 Disposition: SOURCE UNQUALIFIED. This connects an initial owned persistent-device
