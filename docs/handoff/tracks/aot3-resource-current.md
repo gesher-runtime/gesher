@@ -163,3 +163,40 @@ libcore patches are explicit in the source boundary/typed host source hashes.
 Pinned-source patch application is checked locally without Java/native compile.
 Independent exact-source peer and a fresh changed-source CI remain required.
 Raw logs/terminal JSON/independent failure audit retain both previous red runs.
+
+## Third changed-source result: bounded component accepted
+
+Run40727982352 attempt1 at exactc544665819d13bbed83debd3ecff7afd9159bc55
+is terminal SUCCESS:10 expanded jobs,9success and1 intended standalone ARM
+smoke skip. Both actual Windows2022/2025 suites end0 test(s) failed.
+Independent integrator parsing uses timestamped actual output, not echoed
+workflow source; saved script/JSON are
+C:/work/gesher-ci-review/aot3-resource-40727982352-independent-actual-audit.*.
+
+Per host, four before/after x PCL/DLC policies have24/24/25/25 scoped checks,
+including cleanup/identity guards. All32 actual Main/device states pass:
+24matching compiled positives and8 stale rejections, including all12 after-
+policy matching positives and four after-stale cases that distinguish the two
+previous bugs. The15 original real-jar graph controls repeat four times
+(60records,12 distinct printed labels; repeated error labels are not new
+controls). Four actual Resources values are false,false,true,true. All four
+owned-device shutdown-before-policy checks, exact resource/background-policy
+restores, same-path dependency counterfactuals and unchanged-APK refresh pass.
+The final resource SHA remains
+1E79A1235F26794E1C0D0BF6C186BEE90CD8A98A57F8E47C5144C954E3D14A3F.
+
+All15 archive adversarial controls and identity/upload-policy controls pass.
+Five authenticated current-source/run/attempt archives are identical across
+hosts; five jar hashes and15 copied image hashes match. Whole253-member host
+inventory, missing/extra controls,15 selected source hashes including both
+production patches, configured compiler and required oatdump/profman/dexdump
+are checked. The actual changed ART translation unit compiled; freshly built
+resource variants have identical R/Manifest bytes and distinct APK bytes.
+Plain build/framework/boot/preflight/two-Windows logs and terminal JSON are
+retained under the same run prefix. No CI artifact was downloaded locally.
+
+This freeze changes documentation only above verifiedc544. Earlier407141 and
+407243 remain red. This qualifies the bounded component, not aggregate AOT,
+installed-app independent HANDLE observation, full/package/e2e or release.
+Fresh coherent full with all old/new gates remains required before primary
+code merge; static SDK/secondary/factory/hardware and other gaps remain open.
