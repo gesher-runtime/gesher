@@ -72,14 +72,6 @@ sealed class ProbeForm : Form
             var topObject = NewObject();
             core.AddHostObjectToScript("rootProbe", topObject);
             core.FrameCreated += (_, e) => RegisterFrame(e.Frame);
-            core.WebMessageReceived += (_, e) => {
-                try {
-                    string text = e.TryGetWebMessageAsString();
-                    string[] parts = text.Split('|', 3);
-                    if (parts.Length != 3 || !pages.TryAdd(parts[1], parts[0] + "|" + parts[2])) failure = true;
-                    Console.WriteLine("PAGE_OBSERVATION " + text);
-                } catch (Exception ex) { failure = true; Console.WriteLine("PAGE_OBSERVATION_FAILURE " + ex); }
-            };
             core.Navigate($"http://127.0.0.1:{port}/main");
             string[] selected = { "a", "b", "nested", "bad", "opaque" };
             await Wait(() => selected.All(pages.ContainsKey) && selected.All(frames.ContainsKey) &&
@@ -153,6 +145,15 @@ sealed class ProbeForm : Form
             var state = new FrameState { Name = name, Frame = frame, Current = NewObject() };
             if (!frames.TryAdd(name, state)) throw new Exception("duplicate or missing frame name: " + name);
             Install(state);
+            frame.WebMessageReceived += (_, e) => {
+                try {
+                    string text = e.TryGetWebMessageAsString();
+                    string[] parts = text.Split('|', 3);
+                    string expected = state.Name == "a" && state.LastNavigation.Contains("/held?name=a2", StringComparison.Ordinal) ? "a2" : state.Name;
+                    if (parts.Length != 3 || parts[1] != expected || !pages.TryAdd(parts[1], parts[0] + "|" + parts[2])) failure = true;
+                    Console.WriteLine($"FRAME_OBSERVATION frame={state.Name} frameId={frame.FrameId} payload={text}");
+                } catch (Exception ex) { failure = true; Console.WriteLine("FRAME_OBSERVATION_FAILURE " + ex); }
+            };
             frame.FrameCreated += (_, e) => RegisterFrame(e.Frame);
             frame.NavigationStarting += (_, e) => {
                 state.NavigationStarts++;
@@ -203,9 +204,9 @@ sealed class ProbeForm : Form
             string line = await reader.ReadLineAsync() ?? ""; string path = line.Split(' ').Skip(1).FirstOrDefault() ?? "/";
             while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
             if (path.StartsWith("/held")) { held.TrySetResult(); await release.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
-            string child = "<script>let n=new URLSearchParams(location.search).get('name');if(!window.chrome||!chrome.webview||!chrome.webview.hostObjects||!chrome.webview.hostObjects.sync){top.postMessage('INFRA|'+n+'|missing host namespace','*')}else{try{let p=chrome.webview.hostObjects.sync.probe;if(!p){top.postMessage('INFRA|'+n+'|missing proxy','*')}else{try{let v=p.Ping('first:'+n);top.postMessage('OK|'+n+'|'+v,'*')}catch(e){top.postMessage('DENIED|'+n+'|CALL:'+String(e),'*')}}}catch(e){top.postMessage('DENIED|'+n+'|GET:'+String(e),'*')}}</script>";
+            string child = "<script>let n=new URLSearchParams(location.search).get('name');if(!window.chrome||!chrome.webview||!chrome.webview.hostObjects||!chrome.webview.hostObjects.sync){chrome.webview.postMessage('INFRA|'+n+'|missing host namespace')}else{try{let p=chrome.webview.hostObjects.sync.probe;if(!p){chrome.webview.postMessage('INFRA|'+n+'|missing proxy')}else{try{let v=p.Ping('first:'+n);chrome.webview.postMessage('OK|'+n+'|'+v)}catch(e){chrome.webview.postMessage('DENIED|'+n+'|CALL:'+String(e))}}}catch(e){chrome.webview.postMessage('DENIED|'+n+'|GET:'+String(e))}}</script>";
             string html = path.StartsWith("/main")
-                ? $"<script>window.addEventListener('message',e=>chrome.webview.postMessage(String(e.data)));chrome.webview.hostObjects.sync.rootProbe.Ping('root:first')</script><iframe name='a' src='/child?name=a'></iframe><iframe name='b' src='/child?name=b'></iframe><iframe name='bad' src='http://localhost:{port}/child?name=bad'></iframe><iframe name='opaque' sandbox='allow-scripts' src='/child?name=opaque'></iframe>"
+                ? $"<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:first')</script><iframe name='a' src='/child?name=a'></iframe><iframe name='b' src='/child?name=b'></iframe><iframe name='bad' src='http://localhost:{port}/child?name=bad'></iframe><iframe name='opaque' sandbox='allow-scripts' src='/child?name=opaque'></iframe>"
                 : path.StartsWith("/other") ? "<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:cross')</script>"
                 : child + (path.EndsWith("name=a") ? "<iframe name='nested' src='/child?name=nested'></iframe>" : "");
             byte[] body = Encoding.UTF8.GetBytes("<!doctype html>" + html);
