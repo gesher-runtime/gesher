@@ -365,7 +365,7 @@ sealed class ProbeForm : Form
                 Console.WriteLine($"{tag}_DECISION_FAULT type={current.GetType().FullName} hresult=0x{current.HResult:X8} message={current.Message}");
             Console.WriteLine($"{tag}_DECISION_CHAIN {outcome.Error}");
         }
-        if (outcome.Tick >= deadlineTick) throw new TimeoutException("backend completed after the absolute deadline");
+        if (outcome.Tick >= deadlineTick) throw new TimeoutException("backend outcome was not observed before the absolute deadline");
         if (outcome.Error != null)
         {
             Exception original = outcome.Error is AggregateException aggregate && aggregate.InnerExceptions.Count == 1
