@@ -210,3 +210,39 @@ artifact download. Terra owns initial Surface helper and negative CI controls;
 integrator coordinates Binder/future canonical reuse after peer and actual
 qualification. No primary code merge before required coherent full. Runtime
 full acceptance is not general cryptographic archive acceptance.
+
+## New canonical integrity and Binder candidate, 2026-10-28
+
+Strict helper/source/upload-policy preflight40670202635 at1ac73c5e is bounded
+green on both Windows, including15 actual adversarial controls and a real ZIP.
+This supersedes the older helper-preparation state only; canonical receipt/
+download/assembly/fresh-framework coverage is pending full40678371420 at exact
+7bbccfcddbac826f50b78175f4d23f8702fd7741. Surface16102, reader921418 and
+Binder7c72a3af are component-qualified leaves in that candidate; primary code
+remains30db. Binder component40664399508 proves9x9 ordinary stable RW/RO/page/
+FD/PID controls per Windows, not concurrent protection/partial-copy atomicity,
+filtered public-prefix transport loss, or all Binder2. Native failed leaf and
+source-only Web4 are excluded. Read the newest resumed-progress entry for
+exact sources/scopes/ownership. All old roadmap/ADR/hardware/release requirements
+remain; no generic archive integrity or overall gap closure follows from the
+new candidate's launch.
+
+## Canonical archive and ordinary Binder full acceptance, 2026-10-28
+
+Full40678371420/attempt1/source7bbccfcd is independently accepted35jobs29success/
+six intended skips, both normal0, real package23 and two ten-app e2e0. Phase4
+merge695ef6b81ac31662f3a51fa3195ace11923058e2 has the exact entire non-doc tree
+of verified7bb; frozen2634c778 is docs-only. All1157 inventory fields/history
+remain blob55e03c68. [Exact bounded proof](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md).
+
+The current canonical consumer paths now have actual fail-closed raw ZIP
+verification for all80 receipts, strict15 negative controls and current exact
+producer/source/run/attempt/time binding. This closes that scoped canonical
+gap; older warning-only and future standalone/release consumers are not thereby
+qualified. Surface80/86/reader and ordinary Binder9x9 RW/RO/page/FD/PID gates
+are full-verified only within their detailed limits. Concurrent protection/
+partial-copy/public-prefix loss, broader Binder2, every unqualified Native3/
+Web4/AOT after-resource/staticSDK/secondary/factory, roadmap/hardware and release
+requirements stay open. The owner goal is not complete and main/release remain
+held. Next bounded source refresh is the six-file after-resource slice from
+prepared7aff in gesher-aot3-after-union onto this newly qualified primary.

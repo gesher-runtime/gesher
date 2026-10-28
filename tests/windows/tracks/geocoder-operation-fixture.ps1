@@ -7,6 +7,7 @@ function Assert-True([bool] $condition, [string] $message) {
   if (-not $condition) { throw "fixture assertion: $message" }
 }
 function Invoke-ControlledCase([string] $case) {
+  $elapsed = [Diagnostics.Stopwatch]::StartNew()
   $worker = [ControlledGeocoderWorker]::new(($case -eq 'error'), $false)
   $worker.AwaitStarted()
   $state = @{ calls = 0 }
@@ -68,6 +69,8 @@ function Invoke-ControlledCase([string] $case) {
   }
   $worker.Close()
   Assert-True ($worker.CloseCalls -eq 2 -and $worker.ResourcesDisposed) "${case}: repeated cleanup"
+  $elapsed.Stop()
+  Write-Host "case=$case elapsed_ms=$($elapsed.ElapsedMilliseconds) status=$($worker.Status) cancel_calls=$($worker.CancelCalls) cancel_observed=$($worker.CancelObserved) result_reads=$($worker.ResultReads) success_callbacks=$($worker.SuccessCallbacks) worker_exited=$($worker.WorkerExited) resources_disposed=$($worker.ResourcesDisposed) close_calls=$($worker.CloseCalls)"
 }
 
 if ($NoncooperativeChild) {
@@ -102,6 +105,7 @@ try {
   $p.Kill($true)
   Assert-True ($p.WaitForExit(10000)) 'noncooperative child reaped'
   Assert-True ($p.ExitCode -ne 0) 'noncooperative child fails'
+  Write-Host "child pid=$($p.Id) barriers=worker-started,cancel-entered blocked_before_kill=True exited=$($p.HasExited) exit_code=$($p.ExitCode)"
 } finally {
   if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit() }
   $p.Dispose()
