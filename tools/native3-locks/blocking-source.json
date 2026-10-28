@@ -1,0 +1,16 @@
+{
+  "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
+  "status": "LOCAL source only; independent peer and fresh component required",
+  "blobs": {
+    ".github/workflows/native3-locks-blocking.yml": "4ccf9ae4a5da0a4e9ab69811ce4246113a97a3df",
+    "CMakeLists.txt": "d0b993c727e71542afbfeb2a770b358127d5cf56",
+    "compat/posix/posix.cmake": "bd7a73bd589c30617b9a4ee29b4d15bba3f20221",
+    "compat/posix/src/record_lock_registry.cc": "bfeb0ece2917df0fae1d56f6a1ac5e19d6a18805",
+    "compat/posix/src/record_lock_registry.h": "86e81b23b6573073cc95e037f32380826763961b",
+    "compat/posix/src/record_lock_wait.cc": "51c76f37d99237688eee086746da513cb235cc62",
+    "compat/posix/src/record_lock_wait.h": "49332f98a69f2d8d3f94c35f1a561bbced65429e",
+    "tests/native3-locks/blocking_oracle.py": "6705307c174bf60884e6a3f86eafa11f024d15b8",
+    "tests/native3-locks/blocking_worker.cc": "db6bb4288586239c53874b5f382e2e941bd1519c",
+    "tools/native3-locks/blocking_source_guard.py": "a255b8105d9a3f58e904e9a7797f492676a6481d"
+  }
+}

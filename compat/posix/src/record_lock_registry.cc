@@ -1,6 +1,7 @@
 // Versioned cross-session metadata with checked fixed-size transactions.
 // The all-users metadata is advisory: no mandatory lock covers user file data.
 #include "record_lock_registry.h"
+#include "record_lock_wait.h"
 #include "internal.h"
 #include <sddl.h>
 #include <shlobj.h>
@@ -270,10 +271,15 @@ int Registry::Validate() {
   return 0;
 }
 
-int Registry::Begin(RegistryState** state) {
+int Registry::Begin(RegistryState** state, DWORD timeout, HANDLE cancel) {
   if (!disk_ || !staged_ || held_ || state == nullptr) return EINVAL;
-  DWORD wait = WaitForSingleObject(mutex_, INFINITE);
-  if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) return wait == WAIT_FAILED ? WinError() : EIO;
+  HANDLE handles[]{cancel, mutex_};
+  DWORD wait = cancel ? WaitForMultipleObjects(2, handles, FALSE, timeout) : WaitForSingleObject(mutex_, timeout);
+  if (cancel && wait == WAIT_OBJECT_0) return ECANCELED;
+  if (wait == WAIT_TIMEOUT) return ETIMEDOUT;
+  const DWORD acquired = cancel ? WAIT_OBJECT_0 + 1 : WAIT_OBJECT_0;
+  const DWORD abandoned = cancel ? WAIT_ABANDONED_0 + 1 : WAIT_ABANDONED_0;
+  if (wait != acquired && wait != abandoned) return wait == WAIT_FAILED ? WinError() : EIO;
   held_ = true;
   int error = Validate();
   if (error) { Unlock(); return error; }
@@ -299,6 +305,10 @@ int Registry::Commit() {
   InterlockedExchange(&disk->header.active, 1 - active_);
   active_ = 1 - active_;
   generation_ = next.generation;
+  // Publication is already authoritative. Notification failure must never
+  // turn a successful committed mutation into a reported rollback. Waiters
+  // also revalidate on finite liveness intervals and their absolute deadline.
+  NotifyRecordWaiters(*staged_);
   return 0;
 }
 

@@ -146,6 +146,11 @@ target_compile_options(native3_lock_duplicate_test PRIVATE -Wall -Wextra -Werror
   "SHELL:-idirafter ${AOSP_DIR}/bionic/libc/kernel/uapi")
 target_link_libraries(native3_lock_duplicate_test PRIVATE gesher_posix)
 
+# Internal finite wait checkpoint: public blocking commands remain unsupported.
+add_executable(native3_lock_blocking_worker EXCLUDE_FROM_ALL tests/native3-locks/blocking_worker.cc)
+target_compile_options(native3_lock_blocking_worker PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
