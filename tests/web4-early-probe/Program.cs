@@ -332,8 +332,14 @@ sealed class ProbeForm : Form
     {
         long started = Stopwatch.GetTimestamp();
         var resumed = new ResumeWait();
-        if (!resumeSignals.TryAdd(session, resumed))
+        while (!resumeSignals.TryAdd(session, resumed))
         {
+            if (!resumeSignals.TryGetValue(session, out var previous)) continue;
+            if (previous.Issued && previous.Signal.Task.IsCompletedSuccessfully)
+            {
+                if (resumeSignals.TryUpdate(session, resumed, previous)) break;
+                continue;
+            }
             eventFailure = true;
             Console.WriteLine("EARLY_OVERLAPPING_PAUSE session=" + session);
             try { await Call(session, "Debugger.resume", "{}"); }
@@ -386,7 +392,7 @@ sealed class ProbeForm : Form
             catch (Exception e) { eventFailure = true; Console.WriteLine("EARLY_RESUME_FAILURE " + e); }
             if (deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= TimeSpan.FromSeconds(3))
             { eventFailure = true; Console.WriteLine("EARLY_PAUSE_DEADLINE_EXCEEDED"); }
-            resumeSignals.TryRemove(session, out _);
+            ((ICollection<KeyValuePair<string, ResumeWait>>)resumeSignals).Remove(new(session, resumed));
         }
     }
 
