@@ -90,54 +90,37 @@ jobs:
         id: suppliers
         shell: pwsh
         run: tools/surface/verify-component-suppliers.ps1
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_windows_x64 }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_framework }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_graphics }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_angle }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_media }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_webview }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_exec }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.base_boot_image }}
-          run-id: 40596167427
-          github-token: ${{ github.token }}
-          path: dist
+      - name: Verify and extract base_windows_x64 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_windows_x64 }}" --digest "${{ steps.suppliers.outputs.base_windows_x64_digest }}" --destination "suppliers/base_windows_x64"
+      - name: Verify and extract base_framework archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_framework }}" --digest "${{ steps.suppliers.outputs.base_framework_digest }}" --destination "suppliers/base_framework"
+      - name: Verify and extract base_graphics archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_graphics }}" --digest "${{ steps.suppliers.outputs.base_graphics_digest }}" --destination "suppliers/base_graphics"
+      - name: Verify and extract base_angle archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_angle }}" --digest "${{ steps.suppliers.outputs.base_angle_digest }}" --destination "suppliers/base_angle"
+      - name: Verify and extract base_media archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_media }}" --digest "${{ steps.suppliers.outputs.base_media_digest }}" --destination "suppliers/base_media"
+      - name: Verify and extract base_webview archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_webview }}" --digest "${{ steps.suppliers.outputs.base_webview_digest }}" --destination "suppliers/base_webview"
+      - name: Verify and extract base_exec archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_exec }}" --digest "${{ steps.suppliers.outputs.base_exec_digest }}" --destination "suppliers/base_exec"
+      - name: Verify and extract base_boot_image archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.base_boot_image }}" --digest "${{ steps.suppliers.outputs.base_boot_image_digest }}" --destination "suppliers/base_boot_image"
+      - name: Assemble qualified baseline in original supplier order
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          foreach ($key in 'base_windows_x64','base_framework','base_graphics','base_angle','base_media','base_webview','base_exec','base_boot_image') {
+            Copy-Item -Path "suppliers/$key/*" -Destination dist -Recurse -Force
+          }
       - name: Preserve baseline jars for comparison
         shell: pwsh
         run: |
@@ -145,26 +128,29 @@ jobs:
           foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
             Copy-Item -LiteralPath "dist/$name.jar" -Destination "old-jars/$name.jar"
           }
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.current_framework }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.current_media4_surface_component_host }}
-          path: current-host
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.current_arm64 }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.current_native2 }}
-          path: dist/native2
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.suppliers.outputs.current_surfaces }}
-          path: dist
+      - name: Verify and extract current_framework archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_framework }}" --digest "${{ steps.suppliers.outputs.current_framework_digest }}" --destination "suppliers/current_framework"
+      - name: Verify and extract current_media4_surface_component_host archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_media4_surface_component_host }}" --digest "${{ steps.suppliers.outputs.current_media4_surface_component_host_digest }}" --destination "current-host"
+      - name: Verify and extract current_arm64 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_arm64 }}" --digest "${{ steps.suppliers.outputs.current_arm64_digest }}" --destination "suppliers/current_arm64"
+      - name: Verify and extract current_native2 archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_native2 }}" --digest "${{ steps.suppliers.outputs.current_native2_digest }}" --destination "suppliers/current_native2"
+      - name: Verify and extract current_surfaces archive
+        shell: pwsh
+        run: python tools/surface/download-verified-artifact.py --id "${{ steps.suppliers.outputs.current_surfaces }}" --digest "${{ steps.suppliers.outputs.current_surfaces_digest }}" --destination "suppliers/current_surfaces"
+      - name: Assemble exact current non-host suppliers
+        shell: pwsh
+        run: |
+          foreach ($key in 'current_framework','current_arm64','current_surfaces') {
+            Copy-Item -Path "suppliers/$key/*" -Destination dist -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force dist/native2 | Out-Null
+          Copy-Item -Path suppliers/current_native2/* -Destination dist/native2 -Recurse -Force
       - name: Verify current host members and rebuild boot image from current five jars
         shell: pwsh
         run: |
