@@ -1,0 +1,40 @@
+name: ci-artifact-integrity-preflight
+on:
+  push:
+    branches: [wip/ci-artifact-integrity]
+    paths:
+      - .github/workflows/ci-artifact-integrity-preflight.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Actual negative and positive receipt controls
+        shell: pwsh
+        run: |
+          python tools/ci/receipt_identity.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/test-verified-artifact.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify exact qualified boot artifact identity
+        shell: pwsh
+        run: |
+          $run = gh api repos/${{ github.repository }}/actions/runs/40596167427 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.name -cne 'ci' -or $run.head_sha -cne '30db7709838839d28be68d8b467a57b26a3ac667' -or $run.run_attempt -ne 1 -or $run.conclusion -cne 'success' -or "$($run.repository.id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($run.head_repository.id)" -cne $env:GITHUB_REPOSITORY_ID) { throw 'Pinned full run identity mismatch' }
+          $job = gh api repos/${{ github.repository }}/actions/jobs/122529052458 | ConvertFrom-Json
+          $a = gh api repos/${{ github.repository }}/actions/artifacts/12777738989 | ConvertFrom-Json
+          $digest = 'sha256:c0eb14751722b28dac9d0024e168cd8fb8e6441798f8b747063d092432baee9d'
+          if ($LASTEXITCODE -ne 0 -or $job.name -cne 'boot-image / compile' -or $job.conclusion -cne 'success' -or $job.run_id -ne $run.id -or $job.run_attempt -ne 1 -or $job.head_sha -cne $run.head_sha -or $a.id -ne 12777738989 -or $a.name -cne 'boot-image' -or $a.expired -or $a.digest -cne $digest -or $a.workflow_run.id -ne $run.id -or $a.workflow_run.head_sha -cne $run.head_sha -or "$($a.workflow_run.repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or "$($a.workflow_run.head_repository_id)" -cne $env:GITHUB_REPOSITORY_ID -or [datetime]$a.created_at -lt [datetime]$job.started_at -or [datetime]$a.created_at -gt [datetime]$job.completed_at) { throw 'Pinned artifact producer/source/attempt/digest mismatch' }
+          python tools/surface/download-verified-artifact.py --id 12777738989 --digest $digest --destination ci-positive-archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "CI_ARTIFACT_PREFLIGHT real_archive=12777738989 source=$($run.head_sha) supplier_run=$($run.id) supplier_attempt=1 source_checkout=$env:GITHUB_SHA"
