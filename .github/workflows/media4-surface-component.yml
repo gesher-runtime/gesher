@@ -157,6 +157,13 @@ jobs:
       - name: Verify current host members and rebuild boot image from current five jars
         shell: pwsh
         run: |
+          function Exact-HostMembers([string[]] $expected, [string[]] $actual) {
+            return $expected.Count -gt 0 -and @($expected | Select-Object -Unique).Count -eq $expected.Count -and @(Compare-Object $expected $actual -CaseSensitive).Count -eq 0
+          }
+          if (-not (Exact-HostMembers @('a','b') @('a','b')) -or
+              (Exact-HostMembers @('a','b') @('a')) -or
+              (Exact-HostMembers @('a','b') @('a','b','extra'))) { throw 'Host missing/extra member negative controls failed' }
+          Write-Host 'SURFACE_HOST_NEGATIVES missing/extra=rejected'
           $manifest = Get-Content current-host/surface-component-manifest.json -Raw | ConvertFrom-Json
           if ($manifest.source -cne $env:GITHUB_SHA -or "$($manifest.run)" -cne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -cne $env:GITHUB_RUN_ATTEMPT) { throw 'Current host manifest identity mismatch' }
           foreach ($language in 'C','CXX') {
@@ -166,9 +173,8 @@ jobs:
             Write-Host "SURFACE_COMPILER language=$language driver=$($compiler.configured) sha256=$($compiler.sha256) metadata=$($compiler.metadata_sha256) launcher=$($compiler.launcher) launcher_sha256=$($compiler.launcher_sha256) source=$($compiler.actual_source) version=$($compiler.version)"
           }
           $manifestNames = @($manifest.files.PSObject.Properties.Name)
-          if ($manifestNames.Count -eq 0 -or @($manifestNames | Select-Object -Unique).Count -ne $manifestNames.Count) { throw 'Empty or duplicate host manifest' }
           $actualNames = @(Get-ChildItem -LiteralPath current-host -Force | ForEach-Object { if ($_.PSIsContainer) { throw 'Unexpected host subdirectory' }; $_.Name } | Where-Object { $_ -cne 'surface-component-manifest.json' })
-          if (@(Compare-Object $manifestNames $actualNames -CaseSensitive).Count -ne 0) { throw 'Missing or extra host payload member' }
+          if (-not (Exact-HostMembers $manifestNames $actualNames)) { throw 'Empty, duplicate, missing or extra host payload member' }
           foreach ($name in $manifestNames) {
             if ([IO.Path]::GetFileName($name) -cne $name -or $name -in @('.','..','surface-component-manifest.json')) { throw "Invalid host member path: $name" }
             $expected = $manifest.files.$name
