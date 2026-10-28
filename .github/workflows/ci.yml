@@ -15,6 +15,15 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  union-tsf:
+    needs: [artifact-preflight]
+    uses: ./.github/workflows/tsf-format-component.yml
+  union-services:
+    needs: [artifact-preflight]
+    uses: ./.github/workflows/services-geocoder-worker-component.yml
+  union-native-blocking:
+    needs: [artifact-preflight]
+    uses: ./.github/workflows/native3-locks-blocking.yml
   artifact-preflight:
     runs-on: ubuntu-24.04
     steps:
@@ -23,7 +32,7 @@ jobs:
           fetch-depth: 0
       - name: Strict archive adversarial controls
         run: |
-          python3 tools/native3-locks/current_payload.py preflight
+          python3 tools/native3-locks/union_payload.py preflight
           python3 tools/ci/receipt_identity.py
           python3 tools/surface/test-verified-artifact.py
 
@@ -158,7 +167,7 @@ jobs:
           PYCODE
 
       - name: Bind isolated Native fixtures to the actual current production compiler and source
-        run: python3 tools/native3-locks/current_payload.py host
+        run: python3 tools/native3-locks/union_payload.py host
 
       - uses: actions/upload-artifact@v4
         with:
@@ -194,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Actual Linux161 reference from the identical current worker/controller
-        run: python3 tools/native3-locks/current_payload.py reference
+        run: python3 tools/native3-locks/union_payload.py reference
       - uses: actions/upload-artifact@v4
         with:
           name: native3-locks-reference
@@ -224,12 +233,12 @@ jobs:
       - name: Actual Native whole-member source and role rejection controls
         shell: pwsh
         run: |
-          python tools/native3-locks/current_payload.py controls --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+          python tools/native3-locks/union_payload.py controls --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
           if ($LASTEXITCODE -ne 0) { throw 'Current Native supplier controls failed' }
       - name: Verify and assemble exact current Native production-compiler fixture roles
         shell: pwsh
         run: |
-          python tools/native3-locks/current_payload.py verify --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
+          python tools/native3-locks/union_payload.py verify --host ci-suppliers/native3_host --reference ci-suppliers/native3_reference
           if ($LASTEXITCODE -ne 0) { throw 'Current Native payload/source/compiler manifest failed' }
       - name: Mandatory161 strict rows all4 actual evidence routes and13 resource modes
         shell: pwsh

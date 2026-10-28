@@ -1,5 +1,6 @@
 name: Services geocoder worker component
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [wip/services3-cancel-current]
@@ -27,12 +28,12 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "Shared source mismatch: $path" }
             Write-Host "SHARED_SOURCE origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
           }
-      - name: Verify Services-only TSF routing adaptation
+      - name: Verify canonical TSF workflow identity
         shell: pwsh
         run: |
           $actual = git hash-object .github/workflows/tsf-format-component.yml
-          if ($LASTEXITCODE -ne 0 -or $actual -cne 'f1ca5f03ede402152bb5162b7d6f8ce50da4bd25') { throw 'TSF routing adaptation mismatch' }
-          Write-Host "SERVICES_TSF_ROUTING source=$env:GITHUB_SHA blob=$actual canonical_origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94"
+          if ($LASTEXITCODE -ne 0 -or $actual -cne '6d3925f22d0a4b0f9f2fc4292e45c2a0f122cc46') { throw 'TSF routing adaptation mismatch' }
+          Write-Host "SERVICES_TSF_CANONICAL source=$env:GITHUB_SHA blob=$actual canonical_origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94"
       - name: Qualify shared job controller
         shell: pwsh
         run: ./tools/windows4/test-tsf-job-supervisor.ps1

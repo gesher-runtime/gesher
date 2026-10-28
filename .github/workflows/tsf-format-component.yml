@@ -1,5 +1,6 @@
 name: tsf-format-component
 on:
+  workflow_call:
   push:
     branches: [wip/tsf-format-current]
     paths: [.github/workflows/tsf-format-component.yml]
