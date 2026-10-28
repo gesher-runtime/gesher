@@ -280,7 +280,7 @@ static int exercise(Fixture& f) {
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(positive_acl.c_str(), SDDL_REVISION_1, &host_sd, nullptr)) return 25;
   SECURITY_ATTRIBUTES host_sa{sizeof(host_sa), host_sd, FALSE};
   Handle host;
-  host.h = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+  host.h = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX | WRITE_DAC | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 512, 512, 0, &host_sa);
   LocalFree(host_sd);
   if (!host.valid()) return 26;
