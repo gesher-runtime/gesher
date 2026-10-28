@@ -1,0 +1,37 @@
+diff --git a/runtime/class_loader_context.cc b/runtime/class_loader_context.cc
+--- a/runtime/class_loader_context.cc
++++ b/runtime/class_loader_context.cc
+@@ -1441,14 +1441,33 @@
+                               *expected_info.shared_libraries[i].get(),
+                               context_spec,
+                               verify_names,
+                               verify_checksums)) {
+       return false;
+     }
+   }
++  // After-app libraries are part of the encoded dependency context too.
++  // Their own DEX or a nested dependency can change without changing the
++  // APK; ignoring this list can accept executable stale app code/images.
++  if (info.shared_libraries_after.size() != expected_info.shared_libraries_after.size()) {
++    LOG(WARNING) << "ClassLoaderContext after-app shared library size mismatch. "
++                 << "Expected=" << expected_info.shared_libraries_after.size()
++                 << ", found=" << info.shared_libraries_after.size() << " (" << context_spec << " | "
++                 << EncodeContextForOatFile("") << ")";
++    return false;
++  }
++  for (size_t i = 0; i < info.shared_libraries_after.size(); ++i) {
++    if (!ClassLoaderInfoMatch(*info.shared_libraries_after[i].get(),
++                             *expected_info.shared_libraries_after[i].get(),
++                             context_spec,
++                             verify_names,
++                             verify_checksums)) {
++      return false;
++    }
++  }
+   if (info.parent.get() == nullptr) {
+     if (expected_info.parent.get() != nullptr) {
+       LOG(WARNING) << "ClassLoaderContext parent mismatch. "
+                    << " (" << context_spec << " | " << EncodeContextForOatFile("") << ")";
+       return false;
+     }
+     return true;

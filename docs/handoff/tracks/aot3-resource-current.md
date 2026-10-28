@@ -96,3 +96,40 @@ initial snapshot. No local compiler/fixture or artifact download was used.
 This documentation checkpoint adds no code above5d3. Even a green component
 requires a new coherent canonical full/package/two-e2e before primary code
 merge. StaticSDK/secondary/factory/other gaps and aggregate release stay open.
+
+## First actual result and changed-source fix candidate
+
+Run40714173867/source5d3 is terminal FAILURE: ten expanded jobs, seven success,
+two Windows failures and one intended standalone ARM smoke skip. Both Windows
+execute the real four policy cases. Each has exactly four failures: after-app
+PCL/DLC, Main/device stale same-path dependency counterfactual. The dependency
+actually returns37/orderapplication, but old base.art still loads and ART logs
+two methods with AOT code. The unchanged assertion correctly fails; this is
+not waived as font-log noise or a process/transport flake.
+
+All five authenticated current supplier archives, whole-host missing/extra
+controls, five jar hashes/fifteen image-copy hashes and actual Resources array
+selection passed. The15 original real-jar graph controls repeated four times
+(60 raw records, not60 new controls). Initial and refreshed after-policy
+compiled states, rollback/counterfactual identity and all four exact resource
+restores passed. The final resource hash is
+1E79A1235F26794E1C0D0BF6C186BEE90CD8A98A57F8E47C5144C954E3D14A3F.
+Terminal JSON, both raw Windows logs and independent-failure-audit.json are
+saved under C:/work/gesher-ci-review/aot3-resource-40714173867-*.
+
+Pinned AOSP android-16.0.0_r4 runtime/class_loader_context.cc opens/encodes
+both shared-library lists, but ClassLoaderInfoMatch compares only ordinary
+shared_libraries before checking the parent. It omits the after-app list,
+including its nested dependency checksum. The exact upstream text was read
+from android.googlesource.com (source only, no artifact/clone/compiler) and
+saved as aot3-pinned-r4-class_loader_context.cc, SHA256
+ab973dcf370f8aab177f740e433fa259583df85b69cf50e44b31881cb6dc36b5.
+
+New patch0730-aot3-validate-after-shared-library-context.patch adds symmetric
+after-list size and recursive name/checksum comparison before the parent.
+It changes production validation, not the failed runtime assertion. The
+component performs an early compile of the changed actual ART translation
+unit; its source boundary and typed host-source manifest include the patch.
+The patch applies cleanly to the pinned source in a source-only check.
+Exact-source independent peer and a fresh changed-source component remain
+required; no local C/C++/Java/C# compile/fixture or artifact download occurred.
