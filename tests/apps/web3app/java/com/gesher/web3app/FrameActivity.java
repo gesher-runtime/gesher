@@ -53,7 +53,13 @@ public class FrameActivity extends Activity {
                         Web3.poll(view, "JSON.stringify(window.web4Seen)", s -> s.contains("a-reply:reply-a")
                                 && s.contains("b-reply:reply-b") && s.contains("nested-reply:reply-nested")
                                 && s.contains("bad-forge-sent") && s.contains("opaque-forge-sent"), 20,
-                                s -> view.evaluateJavascript("document.getElementById('a').src='/web4-child?name=a2'", null));
+                                s -> view.evaluateJavascript("(async()=>{let f=document.getElementById('a');"
+                                        + "f.src='/web4-hold?name=a2';let held=false;for(let i=0;i<100;i++){"
+                                        + "if(await (await fetch('/web4-hold-status')).text()==='held'){held=true;break;}"
+                                        + "await new Promise(r=>setTimeout(r,100));}"
+                                        + "if(held){try{f.contentWindow.web4.postMessage('during|true');"
+                                        + "web4Seen.push('during-sent');}catch(e){web4Seen.push('during-error');}}"
+                                        + "else web4Seen.push('hold-missing');await fetch('/web4-release');})()", null));
                     }
                     if (name.equals("a2")) {
                         replies.get("a").postMessage("STALE");
@@ -74,7 +80,8 @@ public class FrameActivity extends Activity {
                     && value.contains("b-reply:reply-b") && value.contains("nested-reply:reply-nested")
                     && value.contains("a2-reply:reply-a2") && value.contains("bad-forge-attempt")
                     && value.contains("opaque-forge-attempt") && value.contains("bad-forge-sent")
-                    && value.contains("opaque-forge-sent") && !value.contains("STALE");
+                    && value.contains("opaque-forge-sent") && value.contains("during-sent")
+                    && !value.contains("STALE");
             Web3.log("frame observed " + value);
             Web3.log("frame controlled checks " + (observed && !invalid && replies.size() == 5));
             Web3.log("frame done");

@@ -24,6 +24,7 @@ using Microsoft.Win32;
 public static class GesherWeb3Servers {
   static TcpListener proxy, http;
   public static int ProxyPort, HttpPort;
+  static volatile bool frameHeld, frameRelease;
   static readonly StringBuilder log = new StringBuilder();
   public static string Log { get { lock (log) return log.ToString(); } }
   static void Say(string s) { lock (log) log.Append(s).Append('\n'); }
@@ -156,6 +157,20 @@ public static class GesherWeb3Servers {
         string[] parts = line.Split(' ');
         string path = parts.Length > 1 ? parts[1] : "/";
         Say("http " + parts[0] + " " + path);
+        if (path.StartsWith("/web4-hold-status")) {
+          Reply(s, 200, "text/plain", frameHeld ? "held" : "waiting"); return;
+        }
+        if (path.StartsWith("/web4-release")) {
+          frameRelease = true; Reply(s, 200, "text/plain", "released"); return;
+        }
+        if (path.StartsWith("/web4-hold")) {
+          frameRelease = false; frameHeld = true;
+          var until = DateTime.UtcNow.AddSeconds(20);
+          while (!frameRelease && DateTime.UtcNow < until) Thread.Sleep(20);
+          frameHeld = false;
+          if (!frameRelease) { Reply(s, 404, "text/plain", "hold timed out"); return; }
+          path = "/web4-child?name=a2";
+        }
         if (path.StartsWith("/web4-main")) {
           Reply(s, 200, "text/html; charset=utf-8", "<!doctype html><html><body>frame test<script>"
               + "window.web4Seen=[];window.addEventListener('message',e=>web4Seen.push(String(e.data)));"
