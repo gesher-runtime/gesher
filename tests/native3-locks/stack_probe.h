@@ -119,9 +119,9 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
     }
   }
   DWORD resumed = ResumeThread(thread);
-  if (resumed == static_cast<DWORD>(-1)) {
+  if (previous != 0 || resumed != 1) {
     // Do not enter CRT logging or leave a thread suspended after probe failure.
-    static const char note[] = "ACTUAL_CLOSER_STACK resume-failed; owned worker terminates95\n";
+    static const char note[] = "ACTUAL_CLOSER_STACK resume-ownership-failed; owned worker terminates95\n";
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), note, sizeof(note) - 1, &written, nullptr);
     TerminateProcess(GetCurrentProcess(), 95);
