@@ -92,7 +92,7 @@ jobs:
         run: |
           import re
           from pathlib import Path
-          allowed = {'kernel32.dll', 'advapi32.dll', 'tdh.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
+          allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                      'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
                      'api-ms-win-core-synch-l1-2-0.dll',
                      'api-ms-win-crt-stdio-l1-1-0.dll', 'api-ms-win-crt-runtime-l1-1-0.dll',
@@ -105,7 +105,10 @@ jobs:
           for target in ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'native3_lock_blocking_worker', 'native3_lock_kernel_worker', 'binderd'):
               names = re.findall(r'^\s*Name:\s*(\S+)', Path(f'fixture/{target}.imports.txt').read_text(), re.MULTILINE)
               assert names, ('Missing actual PE imports', target)
-              assert not (set(name.casefold() for name in names) - allowed), (target, names)
+              target_allowed = allowed | ({'tdh.dll'} if target == 'native3_lock_kernel_worker' else set())
+              assert not (set(name.casefold() for name in names) - target_allowed), (target, names)
+              if target == 'native3_lock_kernel_worker':
+                  assert 'tdh.dll' in {name.casefold() for name in names}, 'Missing actual TDH dependency'
               print('VERIFIED_COMMAND_IMPORTS ' + target + ': ' + ', '.join(names))
       - name: Record exact source, syscall reference and executable bytes
         shell: python
@@ -118,7 +121,7 @@ jobs:
           files = {path: digest(path) for path in paths if path and Path(path).is_file()}
           assert files and 'tests/native3-locks/command_worker.cc' in files
           outputs = {path.name: digest(path) for path in Path('fixture').iterdir() if path.is_file()}
-          metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
+          metadata = dict(role='native3-internal-kernel-witness', producer='compile', repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
                           run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                           source=os.environ['GITHUB_SHA'], toolchain_sha256=os.environ['LLVM_MINGW_SHA256'],
                           files=files, outputs=outputs)
@@ -169,12 +172,17 @@ jobs:
           python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination command-fixture
           if ($LASTEXITCODE -ne 0) { throw 'Actual raw archive verification/extraction failed' }
           $manifest = Get-Content -LiteralPath command-fixture/provenance.json -Raw | ConvertFrom-Json
+          if ($manifest.role -ne 'native3-internal-kernel-witness' -or $manifest.producer -ne 'compile') { throw 'Wrong artifact role' }
           if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
               "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
           $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json', 'production-symbols.txt', 'fixture-symbols.txt', 'kernel-witness-symbols.txt', 'native3_lock_kernel_worker.exe', 'native3_lock_kernel_worker.imports.txt')
           if (@($manifest.files.PSObject.Properties).Count -eq 0 -or
               @(Compare-Object $expectedOutputs @($manifest.outputs.PSObject.Properties.Name)).Count -ne 0) { throw 'Incomplete source/output manifest' }
+          $actualMembers = @(Get-ChildItem -LiteralPath command-fixture -Recurse -File | ForEach-Object { [IO.Path]::GetRelativePath((Resolve-Path command-fixture).Path, $_.FullName).Replace('\','/') })
+          if (@(Compare-Object @($expectedOutputs + 'provenance.json') $actualMembers).Count -ne 0) { throw 'Archive member inventory mismatch' }
+          $tracked = @(git ls-files)
+          if ($LASTEXITCODE -ne 0 -or @(Compare-Object $tracked @($manifest.files.PSObject.Properties.Name)).Count -ne 0) { throw 'Source inventory mismatch' }
           foreach ($file in $manifest.files.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
           }
