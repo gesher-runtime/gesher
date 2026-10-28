@@ -286,6 +286,7 @@ def main():
     parser.add_argument('--worker', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference', type=Path)
+    parser.add_argument('--duplicate-worker', type=Path)
     args = parser.parse_args()
     rows = run(args.worker.resolve())
     actual = dict(schema=1, scope='nonblocking common-layer command worker', rows=rows)
@@ -297,6 +298,10 @@ def main():
         for index, (expected, observed) in enumerate(zip(reference['rows'], rows)):
             assert expected == observed, (index, expected, observed)
     print('ACTUAL_COMMAND_ORACLE rows=' + str(len(rows)) + ' mismatches=0', flush=True)
+    if args.duplicate_worker:
+        from duplicate_oracle import run as run_duplicates
+        duplicates = run_duplicates(args.duplicate_worker.resolve(strict=True))
+        args.output.with_name('windows-duplicates.json').write_text(json.dumps(duplicates, indent=2) + '\n')
 
 
 if __name__ == '__main__':

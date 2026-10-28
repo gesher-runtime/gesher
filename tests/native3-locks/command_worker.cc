@@ -67,10 +67,21 @@ bool StreamWaitObserved(unsigned waiting, unsigned owner) {
 #ifdef _WIN32
   HWCT session = OpenThreadWaitChainSession(0, nullptr);
   if (!session) return false;
-  WAITCHAIN_NODE_INFO nodes[WCT_MAX_NODE_COUNT]{};
-  DWORD count = WCT_MAX_NODE_COUNT;
+  // The pinned mingw wct.h omits this SDK macro. Microsoft's canonical
+  // WinSDK header defines WCT_MAX_NODE_COUNT as16:
+  // https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/wct.h
+  constexpr DWORD kWaitChainNodeCapacity = 16;
+#ifdef WCT_MAX_NODE_COUNT
+  static_assert(WCT_MAX_NODE_COUNT == kWaitChainNodeCapacity);
+#endif
+  WAITCHAIN_NODE_INFO nodes[kWaitChainNodeCapacity]{};
+  DWORD count = kWaitChainNodeCapacity;
   BOOL cycle = FALSE;
-  bool observed = GetThreadWaitChain(session, 0, 0, waiting, &count, nodes, &cycle) && count >= 3 &&
+  const bool complete = GetThreadWaitChain(session, 0, 0, waiting, &count, nodes, &cycle);
+  const DWORD error = complete ? ERROR_SUCCESS : GetLastError();
+  if (count > kWaitChainNodeCapacity || error == ERROR_MORE_DATA || error == ERROR_TOO_MANY_THREADS)
+    std::fprintf(stderr, "COMMAND_WCT_INCOMPLETE count=%lu error=%lu\n", count, error);
+  bool observed = complete && count >= 3 && count <= kWaitChainNodeCapacity &&
       nodes[0].ObjectType == WctThreadType && nodes[0].ThreadObject.ThreadId == waiting &&
       nodes[1].ObjectType == WctCriticalSectionType && nodes[2].ObjectType == WctThreadType &&
       nodes[2].ThreadObject.ThreadId == owner;

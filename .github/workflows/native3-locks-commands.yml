@@ -41,16 +41,16 @@ jobs:
           set -euo pipefail
           cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
             -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
-          ninja -C out native3_lock_command_worker
-          cp out/native3_lock_command_worker.exe fixture/
-          toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/native3_lock_command_worker.exe > fixture/imports.txt
+          ninja -C out native3_lock_command_worker native3_lock_duplicate_test
+          for target in native3_lock_command_worker native3_lock_duplicate_test; do
+            cp "out/$target.exe" fixture/
+            toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports "fixture/$target.exe" > "fixture/$target.imports.txt"
+          done
       - name: Require a nonempty explicit Windows system import set
         shell: python
         run: |
           import re
           from pathlib import Path
-          names = re.findall(r'^\s*Name:\s*(\S+)', Path('fixture/imports.txt').read_text(), re.MULTILINE)
-          assert names, 'Missing actual PE imports'
           allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
                      'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
                      'api-ms-win-core-synch-l1-2-0.dll',
@@ -61,8 +61,11 @@ jobs:
                      'api-ms-win-crt-environment-l1-1-0.dll', 'api-ms-win-crt-filesystem-l1-1-0.dll',
                      'api-ms-win-crt-time-l1-1-0.dll', 'api-ms-win-crt-process-l1-1-0.dll',
                      'api-ms-win-crt-utility-l1-1-0.dll'}
-          assert not (set(name.casefold() for name in names) - allowed), names
-          print('VERIFIED_COMMAND_IMPORTS ' + ', '.join(names))
+          for target in ('native3_lock_command_worker', 'native3_lock_duplicate_test'):
+              names = re.findall(r'^\s*Name:\s*(\S+)', Path(f'fixture/{target}.imports.txt').read_text(), re.MULTILINE)
+              assert names, ('Missing actual PE imports', target)
+              assert not (set(name.casefold() for name in names) - allowed), (target, names)
+              print('VERIFIED_COMMAND_IMPORTS ' + target + ': ' + ', '.join(names))
       - name: Record exact source, syscall reference and executable bytes
         shell: python
         run: |
@@ -126,7 +129,9 @@ jobs:
           if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
               "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
               $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
-          if (@($manifest.files.PSObject.Properties).Count -eq 0 -or @($manifest.outputs.PSObject.Properties).Count -ne 3) { throw 'Incomplete source/output manifest' }
+          $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt')
+          if (@($manifest.files.PSObject.Properties).Count -eq 0 -or
+              @(Compare-Object $expectedOutputs @($manifest.outputs.PSObject.Properties.Name)).Count -ne 0) { throw 'Incomplete source/output manifest' }
           foreach ($file in $manifest.files.PSObject.Properties) {
             if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
           }
@@ -143,11 +148,12 @@ jobs:
           $python = (Get-Command python -CommandType Application).Source
           $process = $null
           try {
-            $process = Start-Process -FilePath $python -ArgumentList @('tests/native3-locks/command_oracle.py', '--worker', 'command-fixture/native3_lock_command_worker.exe', '--reference', 'command-fixture/linux-reference.json', '--output', 'command-fixture/windows-actual.json') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-            if (-not $process.WaitForExit(120000)) { throw 'Actual command suite exceeded external120s bound' }
+            $process = Start-Process -FilePath $python -ArgumentList @('tests/native3-locks/command_oracle.py', '--worker', 'command-fixture/native3_lock_command_worker.exe', '--reference', 'command-fixture/linux-reference.json', '--output', 'command-fixture/windows-actual.json', '--duplicate-worker', 'command-fixture/native3_lock_duplicate_test.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(180000)) { throw 'Actual command and duplicate suites exceeded external180s bound' }
             $process.Refresh()
             if ($process.ExitCode -ne 0) { throw "Actual command suite exit=$($process.ExitCode)" }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_COMMAND_ORACLE rows=[1-9][0-9]* mismatches=0$' -Quiet)) { throw 'Missing actual command comparator completion' }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_DUPLICATE_ORACLE modes=13 failures=0 semantics=bounded-resource-controls$' -Quiet)) { throw 'Missing actual duplicate controller completion' }
           } finally {
             $cleanupProblems = @()
             if ($null -ne $process) {
@@ -173,5 +179,6 @@ jobs:
             ${{ runner.temp }}/commands.stdout.txt
             ${{ runner.temp }}/commands.stderr.txt
             command-fixture/windows-actual.json
+            command-fixture/windows-duplicates.json
           if-no-files-found: warn
           retention-days: 14

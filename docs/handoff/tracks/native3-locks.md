@@ -318,3 +318,32 @@ blocking7/38, deadlock, targeted signal/EINTR/SA_RESTART, bionic cross-ABI,
 ART and all full/package/e2e gates remain open. Source-only compile success
 will not close any of them. Existing ordered Exec82d41 production semantics
 must be preserved. Integration and release remain owned by the integrator.
+
+Compile-only40655921479 at exact813cffa9c454d71105a78e0890b5a1b5721f32e2
+failed in job122706814363. Required watch exited1; actual final metadata and
+plain compile log are saved at C:\work\gesher-ci-review\native3-compile-40655921479-*.
+Archive SHA256 validation succeeded; actual common POSIX/bionic source and
+duplicate fixture objects compiled, but command_worker.cc70/71 could not find
+WCT_MAX_NODE_COUNT in the pinned mingw header. Therefore the aggregate compile
+gate failed and no runtime assertion executed. This is a concrete source
+failure, not infrastructure retry authorization or completed compile proof.
+
+Correction uses the canonical Microsoft WinSDK16-node constant from
+https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/wct.h
+with a static_assert wherever the SDK macro exists. Real WCT success and the
+closer->critical-section->owner assertion remain mandatory; oversized counts,
+ERROR_MORE_DATA and ERROR_TOO_MANY_THREADS are diagnosed and cannot qualify a
+truncated chain. The next compile uses this changed worker source. The narrow
+compile push paths now include native3 fixture and record-lock source paths.
+
+Prepared controlled runtime orchestration additionally builds both native
+executables, checks each nonempty import allowlist and exactly five produced
+output names/byte hashes. An optional portable controller argument then runs
+thirteen fresh Windows duplicate fixture processes, each with a60s limit and
+owned cleanup; actual mode completion/assertion counts and raw1000-duplicate
+witness result are required. Windows parent has an external180s process-tree
+bound and requires both actual suite summaries. Bounded Windows source peer
+found no concrete false-positive blocker;180s is deliberately an overall
+failure bound, not13 times60s. This orchestration is source-only and has not
+been dispatched; final runtime peer and the corrected compile gate are still
+prerequisites. No runtime assertions or mandatory open gates were removed.

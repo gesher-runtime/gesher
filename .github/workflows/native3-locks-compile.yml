@@ -4,6 +4,9 @@ on:
     branches: ['wip/native3-locks']
     paths:
       - '.github/workflows/native3-locks-compile.yml'
+      - 'tests/native3-locks/**'
+      - 'compat/posix/src/record_lock*'
+      - 'compat/bionic/posix_bionic.cc'
   workflow_dispatch:
 permissions:
   contents: read
