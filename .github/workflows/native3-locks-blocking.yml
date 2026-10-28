@@ -253,3 +253,4 @@ jobs:
             command-fixture/stdio-evidence.json
           if-no-files-found: warn
           retention-days: 14
+# Trigger exact public rejection evidence component.
