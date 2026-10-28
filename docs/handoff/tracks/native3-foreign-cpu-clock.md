@@ -4,11 +4,14 @@ Base: accepted integration f1550540186b4ae3f17a5e501a886ec1c4d5d613.
 Exclusive tree C:/work/gesher-pthread-foreign-cpu-clock, branch
 wip/pthread-foreign-cpu-clock. Existing ADR0075; test90 is reserved.
 No local native/Java/C# compilation or execution. Narrow Linux observation
-run 40790238879 at 9f748617e951aaccad3608ddd8b630ce06e1448e succeeded;
+run 40790238879 / attempt 1 at 9f748617e951aaccad3608ddd8b630ce06e1448e succeeded;
 its actual job log reports post-join gettime=-1 errno22, getres=-1 errno22.
 It does not compile or exercise the Windows source. The observed EINVAL
 results are now asserted in subsequent Linux source and guest resolution
 controls; those new assertions have not run yet.
+Actual Linux observation log: job 123173374206, retained at
+C:/work/gesher-ci-review/diagnostic-job-123173374206.log. Its exact source,
+run and attempt must be bound into the later qualification supplier.
 
 ## Bounded source change
 
