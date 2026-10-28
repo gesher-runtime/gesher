@@ -86,13 +86,20 @@ bool SameFileBytes(HANDLE handle, const State& expected) {
 // Diagnostics only: PID-list entries are not an identity or cleanup authority.
 // Open only for query/synchronize, then record the actual handle's birth/image,
 // job membership and zero-time wait. Never signal a process found by PID.
-bool ProcessEvidence(const char* phase, const char* role, HANDLE process, HANDLE job, int expected_member = -1) {
+struct ProcessIdentity {
+  HANDLE handle = nullptr;  // Borrowed: the created handle stays open throughout.
+  DWORD pid = 0;
+  FILETIME birth{};
+  std::wstring image;
+  bool member = false, valid = false;
+};
+bool ProcessEvidence(const char* phase, const char* role, HANDLE process, HANDLE job,
+    int expected_member = -1, DWORD expected_pid = 0, ProcessIdentity* capture = nullptr) {
   FILETIME birth{}, end{}, kernel{}, user{};
   wchar_t image[32768]{}; DWORD length = 32768, code = 0;
   BOOL member = FALSE;
-  // A signaled owned handle remains our identity, but individual live-process
-  // queries can fail after exit. Capture each error immediately; never replace
-  // missing current evidence with a cached image/membership or suppress failure.
+  // Live observations only. Capture independent errors immediately. A created
+  // child's identity is pinned while suspended, never reconstructed by PID.
   auto checked = [&](bool ok, const char* operation) {
     const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
     if (!ok) std::fprintf(stderr,
@@ -114,18 +121,55 @@ bool ProcessEvidence(const char* phase, const char* role, HANDLE process, HANDLE
       phase, role, process, pid, pid_known, birth.dwHighDateTime, birth.dwLowDateTime,
       times_known, member, member_known, wait, wait_known, code, code_known,
       image_known, image_known ? image : L"<unavailable>");
-  return pid_known && times_known && image_known && code_known && member_known && wait_known &&
+  bool complete = pid_known && times_known && image_known && length > 0 && code_known && member_known && wait_known &&
       (wait == WAIT_OBJECT_0 || wait == WAIT_TIMEOUT) &&
+      (!expected_pid || pid == expected_pid) &&
       (expected_member < 0 || (member != FALSE) == (expected_member != 0));
+  if (capture) {
+    capture->valid = complete && wait == WAIT_TIMEOUT && code == STILL_ACTIVE;
+    if (capture->valid) {
+      capture->handle = process; capture->pid = pid; capture->birth = birth;
+      capture->image.assign(image, length); capture->member = member != FALSE;
+    }
+    complete = capture->valid;
+  }
+  return complete;
 }
-bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid) {
+bool CompletedChildEvidence(HANDLE process, HANDLE job, const ProcessIdentity& identity, DWORD expected_code) {
+  // Termination signals the process object and preserves its exit status, but
+  // does not promise a usable executable-image query. Historical image/member
+  // are labeled as such; current PID/birth/wait/exit still come from SAME handle.
+  if (!identity.valid || identity.handle != process || !identity.member) return false;
+  FILETIME birth{}, end{}, kernel{}, user{};
+  DWORD pid = GetProcessId(process), code = 0;
+  bool pid_known = pid != 0;
+  if (!pid_known) ApiFailure("CompletedChildPid");
+  bool times_known = GetProcessTimes(process, &birth, &end, &kernel, &user) != FALSE;
+  if (!times_known) ApiFailure("CompletedChildTimes");
+  bool code_known = GetExitCodeProcess(process, &code) != FALSE;
+  if (!code_known) ApiFailure("CompletedChildExit");
+  BOOL member = FALSE;
+  bool member_known = IsProcessInJob(process, job, &member) != FALSE;
+  if (!member_known) ApiFailure("CompletedChildMembership");
+  DWORD wait = WaitForSingleObject(process, 0);
+  if (wait == WAIT_FAILED) ApiFailure("CompletedChildWait");
+  bool same = pid_known && times_known && pid == identity.pid &&
+      birth.dwHighDateTime == identity.birth.dwHighDateTime && birth.dwLowDateTime == identity.birth.dwLowDateTime;
+  std::printf("CLOEXEC_COMPLETED_IDENTITY handle=%p pinned-handle=%p pid=%lu pid-known=%d birth=%lu:%lu times-known=%d same-identity=%d wait=%lu exit=%lu exit-known=%d current-member=%d current-member-known=%d suspended-member=%d image-source=suspended-same-owned-handle image=%ls\n",
+      process, identity.handle, pid, pid_known, birth.dwHighDateTime, birth.dwLowDateTime, times_known,
+      same, wait, code, code_known, member, member_known, identity.member, identity.image.c_str());
+  return same && code_known && code == expected_code && member_known && wait == WAIT_OBJECT_0;
+}
+bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid, HANDLE child,
+    const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION* first_accounting = nullptr) {
   // Fixed diagnostic capacity. Overflow/query/open errors remain failures, and
   // no observation loop, extra wait or deadline is introduced.
   alignas(JOBOBJECT_BASIC_PROCESS_ID_LIST) std::array<unsigned char,
       sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) + 7 * sizeof(ULONG_PTR)> storage{};
   auto* ids = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-  if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr))
+  if (first_accounting) accounting = *first_accounting;
+  else if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr))
     return ApiFailure("JobEvidenceAccounting");
   // These two queries are sequential snapshots, not one atomic history record.
   if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, ids, static_cast<DWORD>(storage.size()), nullptr))
@@ -134,15 +178,26 @@ bool JobEvidence(const char* phase, HANDLE job, DWORD child_pid) {
       phase, GetCurrentProcessId(), child_pid, accounting.TotalProcesses, accounting.ActiveProcesses,
       accounting.TotalTerminatedProcesses, ids->NumberOfAssignedProcesses, ids->NumberOfProcessIdsInList);
   if (ids->NumberOfAssignedProcesses != ids->NumberOfProcessIdsInList || ids->NumberOfProcessIdsInList > 8) return false;
-  // Actual positive/negative membership controls, not copied accounting fields.
-  bool complete = ProcessEvidence(phase, "fixture-parent", GetCurrentProcess(), job, false);
+  bool complete = true;
   for (DWORD i = 0; i < ids->NumberOfProcessIdsInList; ++i) {
+    if (ids->ProcessIdList[i] > MAXDWORD) { complete = false; continue; }
     DWORD pid = static_cast<DWORD>(ids->ProcessIdList[i]);
+    std::printf("CLOEXEC_JOB_PID phase=%s listed-pid=%lu role=%s identity=unverified-list-entry\n",
+        phase, pid, pid == child_pid ? "created-child-pid" : "unclassified-member");
+    // Never reopen the known child by PID (especially after termination).
+    if (pid == child_pid) {
+      DWORD actual = GetProcessId(child);
+      if (!actual) ApiFailure("JobEvidenceOwnedChildPid");
+      complete = actual == child_pid && complete;
+      continue;
+    }
     Handle member(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
     if (!member.value) { ApiFailure("OpenJobEvidenceMember"); complete = false; continue; }
-    bool recorded = ProcessEvidence(phase, pid == child_pid ? "created-child" : "unclassified-member", member.value, job, true);
+    bool recorded = ProcessEvidence(phase, "unclassified-member", member.value, job, true, pid);
     complete = member.Close() && recorded && complete;
   }
+  // Query transient members first; parent checks must not delay opening them.
+  complete = ProcessEvidence(phase, "fixture-parent", GetCurrentProcess(), job, false, GetCurrentProcessId()) && complete;
   return complete;
 }
 int Child(int argc, char** argv) {
@@ -220,8 +275,9 @@ bool ObserveChild(HANDLE candidate) {
   std::printf("CLOEXEC_CREATED parent-pid=%lu child-pid=%lu child-tid=%lu process-handle=%p thread-handle=%p thread-birth-known=%d thread-birth=%lu:%lu creation-flags=suspended,no-window,extended-startup broad-inherit=true\n",
       GetCurrentProcessId(), process.dwProcessId, process.dwThreadId, child.value, thread.value,
       thread_known, thread_birth.dwHighDateTime, thread_birth.dwLowDateTime);
-  bool evidence = ProcessEvidence("suspended", "created-child", child.value, job.value, true);
-  evidence = JobEvidence("suspended", job.value, process.dwProcessId) && evidence && thread_known;
+  ProcessIdentity child_identity;
+  bool evidence = ProcessEvidence("suspended", "created-child", child.value, job.value, true, process.dwProcessId, &child_identity);
+  evidence = JobEvidence("suspended", job.value, process.dwProcessId, child.value) && evidence && thread_known;
   BOOL in_job = FALSE;
   bool owned = IsProcessInJob(child.value, job.value, &in_job) && in_job;
   bool closed_writer = writer.Close();
@@ -248,6 +304,9 @@ bool ObserveChild(HANDLE candidate) {
   if (!GetExitCodeProcess(child.value, &code) ||
       !QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr))
     return ApiFailure("CompletedJobAudit");
+  // Next operation is the PID-list query, ahead of printing/identity/parent
+  // queries. It is still a sequential snapshot and may miss a transient member.
+  evidence = JobEvidence("first-post-wait", job.value, process.dwProcessId, child.value, &accounting) && evidence;
   // Retain the exact owned child's code and pipe contents even when the job
   // contains another process. These records previously vanished at the audit.
   std::printf("CLOEXEC_WAIT child-pid=%lu signaled=true actual-exit=%lu owned=%d resumed=%d\n",
@@ -257,8 +316,8 @@ bool ObserveChild(HANDLE candidate) {
   // overwrite this audit or erase TotalProcesses' lifetime history.
   std::printf("CLOEXEC_JOB_AUDIT phase=first-post-wait child-pid=%lu total=%lu active=%lu terminated=%lu source=acceptance-snapshot\n",
       process.dwProcessId, accounting.TotalProcesses, accounting.ActiveProcesses, accounting.TotalTerminatedProcesses);
-  evidence = ProcessEvidence("child-signaled", "created-child", child.value, job.value) && evidence;
-  evidence = JobEvidence("child-signaled", job.value, process.dwProcessId) && evidence;
+  evidence = CompletedChildEvidence(child.value, job.value, child_identity, code) && evidence;
+  evidence = JobEvidence("child-signaled", job.value, process.dwProcessId, child.value) && evidence;
   std::string output;
   for (;;) {
     DWORD available = 0;

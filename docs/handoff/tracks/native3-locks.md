@@ -1306,3 +1306,71 @@ runtime fix is asserted. No local native/JVM/C# build, fixture, artifact downloa
 push or CI dispatch occurred. Qualified156/ec3, production/Exec/controller and
 candidate81fd/full407319 remain unchanged; global Native/atomic spawn/OFD
 closure remains unqualified.
+
+### Terminated image-query cause: suspended identity pinned on the owned handle
+
+Actual40747753709/attempt1/source1439a58938ec538fe03b6caa38bfef03fd2bb30e
+remains red (both Windows exit95). Plain evidence is retained externally at
+ci-review/native3-1439-run40747753709.log. Both hosts now identify error31
+specifically as QueryFullProcessImageNameW on the signaled created-child handle;
+PID, creation time, membership, zero-time wait and exit queries succeed. The
+exact child exits23 with inherited/excluded controls and candidate-visible1,
+matching file identity/nonce. The first post-wait accounting remains total2 /
+active1; the later current snapshot is active0 / listed0. The additional
+lifetime process's identity, role and complete reaping remain UNKNOWN. Raw
+visible candidate bytes cannot qualify inheritance while job ownership fails.
+
+The source correction captures PID, birth, nonempty image and membership while
+the child is suspended on the exact CreateProcess process handle. Capture must
+also establish WAIT_TIMEOUT and STILL_ACTIVE; PID must match PROCESS_INFORMATION.
+Failure prevents resume and cannot create a valid pin. The same retained handle
+is checked after termination for current PID, matching birth, actual signaled
+wait and actual exit (matching the first exit query). Current membership is
+still queried and its API success required, without assuming a terminated
+process must remain a member. The image and suspended membership in the new
+completion record are explicitly historical, never reported as current query
+success. No terminated image query or PID-based reconstruction of the created
+child is used. Unclassified PID-list entries remain diagnostic only; opened
+query/synchronize handles require matching PID, actual birth/image/membership
+and wait evidence, with errors/overflow/incomplete lists failing closed.
+
+The first acceptance accounting query now passes its unchanged snapshot directly
+to JobEvidence, whose next API operation queries the PID list before any process
+identity/parent queries or diagnostic output. Listed PIDs are retained in logs
+even if OpenProcess fails. Unclassified member observation precedes parent
+controls. These are sequential snapshots, not an atomic history; an already
+vanished transient member can still be missed and remains unknown. There is
+no polling, retry, new event machinery or added nonzero wait. The later snapshot
+remains separate. No total2/conhost exception is accepted. Strict total1/active0,
+exact output/exit/native flag agreement, leak failure, cleanup and original
+clocks remain unchanged, as do launch flags and broad inheritance.
+
+Microsoft documents that created process handles remain valid after termination
+until closed, that termination signals the process object and preserves exit
+status, and that GetProcessTimes returns creation time. The executable-image
+API contract has no post-termination success guarantee. Error31 is the observed
+API failure, not a documented universal outcome for every terminated process.
+Primary references:
+https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers
+https://learn.microsoft.com/en-us/windows/win32/procthread/terminating-a-process
+https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess
+https://learn.microsoft.com/en-us/windows/win32/api/jobapi/nf-jobapi-isprocessinjob
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information
+https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list
+
+This fixes the demonstrated fixture lifetime precondition; it does not explain
+the lifetime total2 or establish successful runtime behavior. A startup-created
+helper, descendant, or failed association is still only a hypothesis. Fresh
+independent source/lifetime/workflow peer must review the frozen commit before
+a separately authorized fresh producer/two-Windows run. The expected next
+proof is successful owned completion identity plus immediate listed-member
+evidence; if the transient member still disappears, its identity remains
+unknown and strict rejection remains. Historical event capture, if needed,
+requires separate bounded review and cannot grant PID-based kill authority.
+Only source/diff and workflow YAML/embedded Python/PowerShell syntax and pins
+were checked locally. No local C++/Java/C# compile, fixture, artifact download,
+clone/cleanup, push or CI dispatch occurred. Production, Exec, controller,
+common156 and canonical81fd remain untouched. Global Native/atomic spawn/OFD
+closure remains unqualified.
