@@ -1,9 +1,10 @@
 # Net4 UDP truncation — source checkpoint
 
-Status: implementation and fixtures prepared; **no CI execution or acceptance**.
+Status: implementation and fixtures prepared; **production source blocked by
+peer review; no full CI or acceptance**. Linux observation only is active below.
 Base f1550540186b4ae3f17a5e501a886ec1c4d5d613, exclusive branch
 `wip/net-udp-trunc`, test89, existing ADR0070. Source peer is required before
-push/dispatch. This work does not modify native-api-coverage.json or any of
+production dispatch. This work does not modify native-api-coverage.json or any of
 its historical proofs and does not close the 82 resolver entries, ancillary
 data, generic socket ownership or aggregate Net4 scope.
 
@@ -59,3 +60,29 @@ unexpected. No local C/C++/Java/C# build or native fixture execution occurred.
 Shared additive changes: `.github/workflows/native2.yml` builds two new ELF
 members, includes them in symbol provenance, and creates Linux reference/
 identity members. Existing net, native2, package and full gates are unchanged.
+
+## Peer blocker and observational CI checkpoint
+
+Implementation source3148c3dbecf2eb3faf51702f135cb2a6e556c5b9 was independently
+reviewed. Its direct scatter memcpy can fault on a non-null invalid or
+unwritable guest destination after receiving the packet. Production acceptance
+is blocked until this becomes a fault-safe errno path matching independently
+observed Linux behavior. Do not assume that Linux preserves the datagram on
+EFAULT: partial scatter copying, MSG_PEEK and MSG_TRUNC need actual evidence.
+
+Observer source0fc59dad164675a89138f6ad103402a818878ba9 adds only a bounded
+Linux workflow and assertion-free C observation fixture. That observer-only
+slice received an independent source pass before push. Run40790499313,
+attempt1, was queued on2026-10-29; integration owns the sole watch. It records
+80 actual rows across both IP families, three APIs, four flag combinations,
+invalid/null/read-only destinations and partial scatter, including copied
+prefix, errno, output flags and a subsequent queue probe. No result is accepted
+yet. No native code was compiled or run locally.
+
+The existing canonical full preflight rejects this additional production
+delta. Before full, retain tools/native3-locks/current_payload.py unchanged
+and introduce a separately reviewed immutable reusable UDP guard pinned by
+commit in the caller, with external NET_UDP_FULL_CALLER_COMMIT authority
+resolved only inside that trusted guard, actual run identity, exact f155 plus
+reviewed blob inventory, caller bytes, full producer DAG and mutation controls.
+A mutable candidate script that approves its own pin list is insufficient.
