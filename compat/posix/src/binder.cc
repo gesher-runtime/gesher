@@ -387,6 +387,25 @@ bool CopyUser(void* destination, const void* source, size_t size) {
 
 bool CopyToUser(void* destination, const void* source, size_t size) {
   if (size == 0) return true;
+  // WriteProcessMemory can temporarily make read-only pages writable. Reject
+  // stable nonwritable output before using that API; this is not a guarantee
+  // against concurrent protection changes/unmapping or partial-copy races.
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(destination);
+  if (begin == 0 || size > UINTPTR_MAX - begin) return false;
+  const uintptr_t end = begin + size;
+  for (uintptr_t at = begin; at < end;) {
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<const void*>(at), &region, sizeof(region)) != sizeof(region) ||
+        region.State != MEM_COMMIT || (region.Protect & PAGE_GUARD) != 0) return false;
+    const DWORD protection = region.Protect & 0xff;
+    if (protection != PAGE_READWRITE && protection != PAGE_WRITECOPY &&
+        protection != PAGE_EXECUTE_READWRITE && protection != PAGE_EXECUTE_WRITECOPY) return false;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
+    if (base > at || region.RegionSize > UINTPTR_MAX - base) return false;
+    const uintptr_t next = base + region.RegionSize;
+    if (next <= at) return false;
+    at = next;
+  }
   SIZE_T copied = 0;
   return WriteProcessMemory(GetCurrentProcess(), destination, source, size, &copied) && copied == size;
 }
