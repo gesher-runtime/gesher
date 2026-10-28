@@ -120,9 +120,9 @@ jobs:
       - name: Assemble qualified baseline in original supplier order
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
           foreach ($key in 'base_windows_x64','base_framework','base_graphics','base_angle','base_media','base_webview','base_exec','base_boot_image') {
-            Copy-Item -Path "suppliers/$key/*" -Destination dist -Recurse -Force
+            python tools/surface/assemble-artifacts.py --source "suppliers/$key" --destination dist --ledger surface-owners.json --owner $key
+            if ($LASTEXITCODE -ne 0) { throw "Baseline assembly failed: $key" }
           }
       - name: Preserve baseline jars for comparison
         shell: pwsh
@@ -150,10 +150,11 @@ jobs:
         shell: pwsh
         run: |
           foreach ($key in 'current_framework','current_arm64','current_surfaces') {
-            Copy-Item -Path "suppliers/$key/*" -Destination dist -Recurse -Force
+            python tools/surface/assemble-artifacts.py --source "suppliers/$key" --destination dist --ledger surface-owners.json --owner $key
+            if ($LASTEXITCODE -ne 0) { throw "Current supplier assembly failed: $key" }
           }
-          New-Item -ItemType Directory -Force dist/native2 | Out-Null
-          Copy-Item -Path suppliers/current_native2/* -Destination dist/native2 -Recurse -Force
+          python tools/surface/assemble-artifacts.py --source suppliers/current_native2 --destination dist --ledger surface-owners.json --owner current_native2 --prefix native2
+          if ($LASTEXITCODE -ne 0) { throw 'Current native2 assembly failed' }
       - name: Verify current host members and rebuild boot image from current five jars
         shell: pwsh
         run: |
@@ -180,7 +181,8 @@ jobs:
             $expected = $manifest.files.$name
             if ($expected -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash -LiteralPath "current-host/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }
           }
-          Copy-Item -Path current-host/* -Destination dist -Force
+          python tools/surface/assemble-artifacts.py --source current-host --destination dist --ledger surface-owners.json --owner current_host --exclude surface-component-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Current host assembly failed' }
           foreach ($name in 'dalvikvm.exe','dex2oat.exe','profman.exe','dexdump.exe','gesher-exec.exe','arm64_elf_test.exe','surface_invalidation_test.exe','core-oj.jar','core-libart.jar','core-icu4j.jar') {
             $expected = $manifest.files.$name
             if (-not $expected -or (Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }

@@ -15,6 +15,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
+class HttpsOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlparse(newurl)
+        if target.scheme != 'https' or not target.hostname or target.username or target.password:
+            raise RuntimeError('Unsafe storage redirect')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
 def extract_verified(archive, expected, root, digest):
     root = Path(root).resolve()
     if root.exists() and any(root.iterdir()):
@@ -23,6 +30,8 @@ def extract_verified(archive, expected, root, digest):
         raise RuntimeError('Artifact archive digest mismatch')
     with zipfile.ZipFile(archive) as package:
         seen = set()
+        files = set()
+        directories = set()
         for member in package.infolist():
             name = member.filename
             path = PurePosixPath(name)
@@ -35,8 +44,17 @@ def extract_verified(archive, expected, root, digest):
             if key in seen:
                 raise RuntimeError('Artifact contains duplicate members')
             seen.add(key)
+            parts = key.split('/')
+            for index in range(1, len(parts)):
+                directories.add('/'.join(parts[:index]))
+            if member.is_dir():
+                directories.add(key)
+            else:
+                files.add(key)
             if not root.joinpath(*path.parts).resolve().is_relative_to(root):
                 raise RuntimeError('Artifact member escapes destination')
+        if files & directories:
+            raise RuntimeError('Artifact file/directory prefix collision')
         package.extractall(root)
 
 def main():
@@ -65,7 +83,7 @@ def main():
             archive = Path(temp) / 'artifact.zip'
             digest = hashlib.sha256()
             # No authorization header is sent to the signed storage URL or its redirects.
-            with urllib.request.urlopen(location, timeout=120) as response, archive.open('wb') as output:
+            with urllib.request.build_opener(HttpsOnly).open(location, timeout=120) as response, archive.open('wb') as output:
                 while chunk := response.read(1024 * 1024):
                     digest.update(chunk)
                     output.write(chunk)
