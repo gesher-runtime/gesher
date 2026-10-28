@@ -1,5 +1,7 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Newest accepted integration, 2026-10-28:** full40731915058/attempt1 at exact81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a is accepted:38jobs32success/6intentional skips, both normal whole0, all new AOT/selected Native and original gates,84 verified archive receipts, package23/two e2e0. Frozen80d5920e adds docs only; --no-ff mergef1550540186b4ae3f17a5e501a886ec1c4d5d613 has an empty entire non-doc diff to81fd before/after commit; inventory55e03/all1157 preserved. Read [the bounded acceptance](tracks/coherent-aot-native-40731915058-accepted.md). Services/TSF remain separate pending actual audit/future full; Native raw-CLOEXEC, blocking/signals, AOTsecondary and hardware/main/release stay open. This supersedes older active-full/component statuses below.
+
 **Newest active full, 2026-10-28:** read [the AOT / Native checkpoint](session-2026-10-28-aot-native-full.md). AOTc544 and selected Native156 components are accepted; canonical full40731915058/source81fd3eb1 is pending. Primary code remains7bb. This supersedes older source-only component status below.
 
 **Resume after cleanup, 2026-10-28:** read

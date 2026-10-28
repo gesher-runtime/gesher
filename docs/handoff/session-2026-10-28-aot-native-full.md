@@ -76,3 +76,42 @@ no local CI artifact download, and no blind push/automatic workflow trigger.
 Every GitHub write requires immediate gh user==palmoni5 and gh-only API/scoped
 gh credential transport. GPT6.1 Terra remains preferred for UI/automation/
 visual work; maximum three workers plus manager and sole integrator persist.
+
+## Actual full accepted and phase4 merged
+
+Canonical40731915058/source81fd/attempt1 is accepted:38jobs32success and six
+original intentional probe skips; both normal suites whole0. All84 strict
+archive receipts/source/compiler/role paths, AOT four policies, selectedNative
+161/four ownership routes/thirteen modes, preserved Binder/Surface/reader/
+Libcore/Env/Media/Exec/Process/defaultOFFWeb3, package23 and both ten-app e2e0
+were independently audited from saved plain logs and final metadata. Exact
+report: tracks/coherent-aot-native-40731915058-accepted.md.
+
+Docs-only freeze80d5920e5fb2be0db5ed32ac26f7d4365126374a was pushed. Authorized
+--no-ff mergef1550540186b4ae3f17a5e501a886ec1c4d5d613 has parents6b95a773 and
+80d5920e. Entire non-doc working/index tree before commit and HEAD after commit
+are identical to verified81fd3eb194c9a56f1e111c8d26d33aeccc5d8c1a; inventory
+55e03c68/all1157 unchanged. This subsequent checkpoint changes docs only.
+
+Separate TSFda559/40751383586 and Servicesd9e6/40751467438 components are green
+but detailed actual audits remain pending; do not claim qualification from
+job color alone or merge without new coherent mandatory gates/full. Native
+8816/40749991233 is red: retained suspended identity works, extra-member
+query denied5/origin unknown/reap unproved, no accepted inheritance verdict.
+Its prior terminated-image API failure31 and all historical reds are retained.
+
+Fresh SOURCE-ONLY Native blocking and AOT secondary tasks now own respectively
+C:/work/gesher-native3-blocking-current and reused AOTresource-current/new
+secondary branch from qualifiedf155. Their code/fixtures remain unqualified,
+no CI/push or imports into current primary. TSF/Services leaves own separate
+trees; their eventual selected port must retain current AOT/Native code.
+
+Latest owner policy is recorded in the acceptance report: fresh agents per
+independent bounded task, medium routine/high justifiedcomplex work, Terra UI/
+automation preference; human worker limit lifted but tool hardcap4including
+root. Dispatchers finish promptly; coordinator centralizes waits. Tool exec
+sessions proved agent-scoped, so stop only child local observers before a
+single central reattach to same run; never cancel CI or create duplicate
+observers. Exact saved log copies were hash-verified in canonical ci-review.
+No usage/goal resume API or automation workaround was invented. Main/PR/tag/
+release remain held by full outstanding roadmap/hardware requirements.
