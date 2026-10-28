@@ -135,14 +135,26 @@ sealed class ProbeForm : Form
             catch (Exception e) when (e.Message.StartsWith("evaluation exception:", StringComparison.Ordinal))
             { Console.WriteLine("LIVE_JS_EXCEPTION_CONTROL " + e.Message); scriptExceptionObserved = true; }
             if (!scriptExceptionObserved) throw new Exception("live-context exception control did not throw");
-            bool staleRejected = false;
-            try { await Evaluate(old, "realmProbe('stale-reply')"); }
-            catch (ContextGoneException e)
-            { Console.WriteLine("STALE_CONTEXT_REJECTION " + e.Message); staleRejected = true; }
+            const string comparison = "realmProbe('reply-comparison')";
+            await Evaluate(replacement, comparison);
+            while (!observations.ContainsKey("reply-comparison"))
+            { timeout.Token.ThrowIfCancellationRequested(); await Task.Delay(50, timeout.Token); }
+            if (observations["reply-comparison"].Unique != replacement.Unique)
+                throw new Exception("identical-expression live control reached the wrong context");
+            Console.WriteLine("LIVE_IDENTICAL_EVALUATE unique=" + replacement.Unique);
+            if (!observations.TryRemove("reply-comparison", out _)) throw new Exception("missing live control observation");
+            if (contexts.Values.Any(c => c.Unique == "0.0")) throw new Exception("nonexistent-context control is not unique");
+            Context nonexistent = old with { Unique = "0.0" };
+            Exception missingError = await RejectedEvaluate(nonexistent, comparison);
+            Exception oldError = await RejectedEvaluate(old, comparison);
+            Console.WriteLine($"NONEXISTENT_EVALUATE_REJECTED type={missingError.GetType().FullName} hresult=0x{missingError.HResult:X8} message={missingError.Message}");
+            Console.WriteLine($"DESTROYED_EVALUATE_REJECTED type={oldError.GetType().FullName} hresult=0x{oldError.HResult:X8} message={oldError.Message}");
+            if (oldError.GetType() != missingError.GetType() || oldError.HResult != missingError.HResult)
+                throw new Exception("destroyed and nonexistent controls had different rejection types or codes");
             await Task.Delay(500, timeout.Token);
-            if (!staleRejected || observations.ContainsKey("stale-reply")) throw new Exception("stale context accepted reply");
+            if (observations.ContainsKey("reply-comparison")) throw new Exception("rejected evaluation delivered a binding");
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
-            Console.WriteLine("PLATFORM_PROBE_PASS selected contexts, origins, binding callers, held navigation and same-frame stale rejection; OOPIF detach and stale lifecycle unexercised");
+            Console.WriteLine("PLATFORM_PROBE_PASS selected contexts, origins, binding callers, held navigation and rejected old-context operation; rejection reason and OOPIF detach/stale lifecycle unproven");
             Result = 0;
         }
         catch (Exception e) { Console.WriteLine("PLATFORM_PROBE_FAILURE " + e); }
@@ -234,6 +246,20 @@ sealed class ProbeForm : Form
             throw new Exception("CDP error: " + detail);
         }
         if (parsed.RootElement.TryGetProperty("exceptionDetails", out _)) throw new Exception("evaluation exception: " + result);
+    }
+
+    async Task<Exception> RejectedEvaluate(Context context, string expression)
+    {
+        Exception? rejected = null;
+        try { await Evaluate(context, expression); }
+        catch (ContextGoneException e) { rejected = e; }
+        catch (ArgumentException e)
+        {
+            Console.WriteLine($"EVALUATE_ARGUMENT_ERROR type={e.GetType().FullName} hresult=0x{e.HResult:X8} message={e.Message}");
+            if (e.GetType() != typeof(ArgumentException) || e.HResult != unchecked((int)0x80070057)) throw;
+            rejected = e;
+        }
+        return rejected ?? throw new Exception("evaluation unexpectedly succeeded");
     }
 
     async Task Serve(CancellationToken token)
