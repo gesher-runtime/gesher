@@ -1,5 +1,7 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Newest active full, 2026-10-28:** read [the AOT / Native checkpoint](session-2026-10-28-aot-native-full.md). AOTc544 and selected Native156 components are accepted; canonical full40731915058/source81fd3eb1 is pending. Primary code remains7bb. This supersedes older source-only component status below.
+
 **Resume after cleanup, 2026-10-28:** read
 [the retained-worktree/account checkpoint](session-2026-10-28-after-cleanup.md)
 before using any historical checkout path. Only canonical Git, integration,
