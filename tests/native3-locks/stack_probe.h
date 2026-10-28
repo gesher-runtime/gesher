@@ -69,6 +69,40 @@ inline uint64_t Birth(const FILETIME& value) {
   return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
 }
 
+// Match the original observed worker call shape using its actual bytes. An
+// unwind restores nonvolatile RSI at this frame; mov RSI,RCX immediately before
+// call [_lock_file IAT] makes that saved RSI the actual FILE argument. This is
+// a checked call-site witness, never a nearest-export or generic-RSI inference.
+inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
+  if (pc < 9 || rsi != reinterpret_cast<uintptr_t>(stream)) return false;
+  HMODULE worker = GetModuleHandleW(nullptr);
+  MEMORY_BASIC_INFORMATION instruction{}, import_region{};
+  if (!VirtualQuery(reinterpret_cast<const void*>(pc - 9), &instruction, sizeof(instruction)) ||
+      instruction.Type != MEM_IMAGE || instruction.AllocationBase != worker) return false;
+  unsigned char code[9]{};
+  SIZE_T copied = 0;
+  if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(pc - 9), code, sizeof(code), &copied) ||
+      copied != sizeof(code) || code[0] != 0x48 || code[1] != 0x89 || code[2] != 0xce ||
+      code[3] != 0xff || code[4] != 0x15) return false;
+  int32_t displacement = 0;
+  std::memcpy(&displacement, code + 5, sizeof(displacement));
+  uintptr_t slot = 0;
+  if (displacement < 0) {
+    uint64_t subtract = static_cast<uint64_t>(-static_cast<int64_t>(displacement));
+    if (pc < subtract) return false;
+    slot = pc - subtract;
+  } else {
+    if (pc > UINTPTR_MAX - static_cast<unsigned>(displacement)) return false;
+    slot = pc + static_cast<unsigned>(displacement);
+  }
+  if (!VirtualQuery(reinterpret_cast<const void*>(slot), &import_region, sizeof(import_region)) ||
+      import_region.Type != MEM_IMAGE || import_region.AllocationBase != worker) return false;
+  uintptr_t target = 0;
+  copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(slot), &target, sizeof(target), &copied) &&
+      copied == sizeof(target) && target == reinterpret_cast<uintptr_t>(&_lock_file);
+}
+
 // Reuse the established Rtl unwind pattern on this exact owned thread. Only
 // context/unwind/guarded reads run while suspended; description/logging follows
 // checked resume. The original caller's five-second deadline keeps running.
@@ -94,13 +128,15 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
     return false;
   }
   DWORD64 pcs[32]{};
+  DWORD64 rsis[32]{};
   unsigned count = 0;
   CONTEXT context{};
   context.ContextFlags = CONTEXT_FULL;
   bool captured = GetThreadContext(thread, &context);
   DWORD error = captured ? ERROR_SUCCESS : GetLastError();
   while (captured && count < 32 && context.Rip != 0) {
-    pcs[count++] = context.Rip;
+    pcs[count] = context.Rip;
+    rsis[count++] = context.Rsi;
     DWORD64 image_base = 0;
     PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &image_base, nullptr);
     if (function) {
@@ -133,9 +169,16 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
       captured, error, count, previous, resumed, closed);
   HMODULE modules[32]{};
   unsigned module_count = 0;
+  unsigned exact_file_calls = 0;
   for (unsigned index = 0; index < count; ++index) {
     std::fprintf(stderr, "ACTUAL_CLOSER_FRAME index=%u pc=0x%llx nearest-export=%s\n", index,
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
+    if (ExactFileCall(pcs[index], rsis[index], stream)) {
+      ++exact_file_calls;
+      std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-mov-rsi-rcx-and-lock-file-iat=true\n",
+          index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(rsis[index]),
+          static_cast<void*>(stream));
+    }
     HMODULE module = nullptr;
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(static_cast<uintptr_t>(pcs[index])), &module)) {
@@ -151,7 +194,8 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
       }
     }
   }
-  return captured && count > 0 && closed && previous == 0 && resumed == 1;
+  std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL_SUMMARY matches=%u required=1\n", exact_file_calls);
+  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1;
 }
 
 }  // namespace native3_stack_probe

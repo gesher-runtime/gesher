@@ -791,3 +791,15 @@ exception is made. This new source must receive focused pointer/lifetime/decode
 peer before fresh component CI. Local activity was source/YAML/diff checking
 only, with no C++ build or native fixture execution. All broader open requirements
 remain unchanged, including both ABI/bionic/ART and full/package/e2e acceptance.
+
+The final selected stack witness additionally retains fixed32 unwound RSI values
+beside PCs while suspended. After the already checked balanced resume, it accepts
+one actual worker-image return site only when guarded bytes match the observed
+movRSI,RCX followed immediately by call[IATrel32], the checked worker-image IAT
+resolves the actual public _lock_file, and that frame's restored nonvolatile RSI
+is the exact same FILE pointer. The preceding original4f8 disassembly established
+this instruction shape; unsupported new code or missing/ambiguous witness fails
+the diagnostic. No generic RSI/nearest-export inference is used. Code inspection
+and reporting happen after resume; no additional API/logging runs suspended.
+This ties the actual closer's call path to its FILE argument, alongside the new
+liveCS snapshots. It still does not replace the mandatory original WCT criterion.
