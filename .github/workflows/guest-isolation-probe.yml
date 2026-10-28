@@ -1,0 +1,30 @@
+name: Guest isolation source probe
+on:
+  push:
+    branches: [wip/guest-isolation-probe]
+    paths:
+      - 'tests/guest-isolation/**'
+      - '.github/workflows/guest-isolation-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile disposable fixture
+        shell: cmd
+        run: cl /nologo /W4 /WX /EHsc /std:c++17 tests\guest-isolation\probe.cc /Fe:guest-isolation-probe.exe
+      - name: Exercise process isolation
+        shell: pwsh
+        run: |
+          & .\guest-isolation-probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Probe failed with exit $LASTEXITCODE" }
+          throw "Incomplete security fixture: host IPC and separate code/config and resource pipe controls are not yet implemented"
