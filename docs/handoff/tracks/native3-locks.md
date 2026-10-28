@@ -540,3 +540,35 @@ PowerShell source parsing and diff checks passed. This continuation requires
 its own independent fixture/ownership/workflow source peer before dispatch.
 All blocking7/38, inherited-OFD/atomic-spawn, targeted signals, ABI/ART,
 concurrent copy/protection, full/package/e2e and wider requirements remain open.
+
+### Diagnostic/owned-broker component dispatched after independent source peer
+
+Exact sourcef6b1fbfa4f452efb18595b2314045f3ce0b822b0 is pushed and running
+component40667374462. Required120s watch is active; its local output is
+C:\work\gesher-ci-review\native3-commands-40667374462.watch.log. No current
+runtime result is claimed. Before pushing, all prior own-ref runs were
+terminal. Redundant auto compile-only40667374463 was cancelled because the
+component freshly compiles its own actual consumers and broker.
+
+Independent selected fixture/ownership/workflow review passed31fa4e68, with
+a concrete healthy-stop race found: Popen.terminate can hide ACCESS_DENIED
+when a process exits concurrently. Final f6b1fbfa replaces that call with a
+typed BOOL-returning TerminateProcess on the exact owned Popen kernel handle;
+the intentional-kill flag is set only after actual success and the actual
+reaped exit must be211. The sole final delta received focused peer approval.
+This remains intentional broker teardown, never normal broker exit0 proof.
+All13 actual client normal exits/PID and broker-open audits remain mandatory.
+Production C/C++ is unchanged from independently reviewed1dc2e245. WCT
+criterion,5s/10s/180s deadlines and all original assertions remain strict.
+
+The imported21441571 helper source has a newly documented selected validation
+limit: its ASCII reserved-device regex misses Windows' superscript COM/LPT
+names (Microsoft Naming Files conventions). Terra owns the canonical fix and
+its new pre-extraction control. The current actual producer emits the known
+ASCII consumers/imports/reference/provenance members; strict approved raw ZIP
+bytes and exact seven output names/hashes are still required before use.
+The nine existing negative controls do not qualify every reserved Unicode
+alias. Do not claim universal ZIP alias validation from this component or
+silently replace the pinned helper blobs without a new source/peer record.
+All prior failed runs, partial observations and mandatory open runtime/full
+requirements remain preserved above. No inventory checkbox changed.
