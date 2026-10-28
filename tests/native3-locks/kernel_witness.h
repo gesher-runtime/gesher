@@ -114,8 +114,7 @@ struct Properties {
   wchar_t name[128]{};
   wchar_t file[MAX_PATH]{};
 };
-inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel) {
-  LARGE_INTEGER frequency{}; Require(QueryPerformanceFrequency(&frequency), "QPC frequency");
+inline void EnableProfile() {
   HANDLE token = nullptr;
   Require(OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token), "open trace token");
   TOKEN_PRIVILEGES privileges{}; privileges.PrivilegeCount = 1;
@@ -125,6 +124,30 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel) {
   Require(AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr) &&
           GetLastError() == ERROR_SUCCESS, "enable profile privilege (no fallback)");
   Require(CloseHandle(token), "close token");
+}
+inline int Cleanup(const char* pid_text) {
+  char* end = nullptr;
+  const unsigned long pid = std::strtoul(pid_text, &end, 10);
+  Require(pid && end && !*end, "owned cleanup PID");
+  EnableProfile();
+  Properties properties;
+  std::swprintf(properties.name, 128, L"Gesher.Native3.KernelWitness.%lu", pid);
+  properties.value.Wnode.BufferSize = sizeof(properties);
+  properties.value.LoggerNameOffset = offsetof(Properties, name);
+  ULONG status = ControlTraceW(0, properties.name, &properties.value, EVENT_TRACE_CONTROL_QUERY);
+  Require(status == ERROR_SUCCESS || status == ERROR_WMI_INSTANCE_NOT_FOUND, "query exact owned trace during failure cleanup");
+  if (status == ERROR_SUCCESS) {
+    status = ControlTraceW(0, properties.name, &properties.value, EVENT_TRACE_CONTROL_STOP);
+    Require(status == ERROR_SUCCESS, "stop exact owned trace during failure cleanup");
+  }
+  Require(ControlTraceW(0, properties.name, &properties.value, EVENT_TRACE_CONTROL_QUERY) == ERROR_WMI_INSTANCE_NOT_FOUND,
+          "exact owned trace absent after failure cleanup");
+  std::puts("KERNEL_FAILURE_CLEANUP session=absent");
+  return 0;
+}
+inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel) {
+  LARGE_INTEGER frequency{}; Require(QueryPerformanceFrequency(&frequency), "QPC frequency");
+  EnableProfile();
   Properties properties;
   std::swprintf(properties.name, 128, L"Gesher.Native3.KernelWitness.%lu", static_cast<unsigned long>(GetCurrentProcessId()));
   // A caller-owned empty working directory makes this a bounded CI-local path.

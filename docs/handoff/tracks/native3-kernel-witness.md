@@ -36,7 +36,10 @@ pre-signaled cancellation returning ECANCELED without entering any wait phase.
 All threads have finite waits and external controller25s execution bounds.
 Owned trace storage is64MB maximum; normal cleanup stops the session, joins
 workers, closes retained handles, deletes ETL and proves the named session absent.
-Failure cleanup targets only the exact native process-owned logger via logman.
+Failure cleanup independently retires the native process, invokes a bounded
+native cleanup helper for the exact native process-owned logger, proves
+ControlTrace query returns ERROR_WMI_INSTANCE_NOT_FOUND, and always retires
+the holder. Errors are aggregated while preserving the original failure.
 
 The new component retains inherited strict archive helper controls, producer
 run/attempt/source/compiler receipts, actual161 comparator and13 duplicate

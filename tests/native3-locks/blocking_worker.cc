@@ -30,6 +30,9 @@ void Print(const char* label, int value) {
 }
 int main(int argc, char** argv) {
   if (argc != 5) return 80;
+#if defined(_WIN32) && defined(GESHER_RECORD_WAIT_WITNESS_TEST)
+  if (std::strcmp(argv[1], "kernel-cleanup") == 0) return kernel_witness::Cleanup(argv[3]);
+#endif
   int fd = open(argv[2], O_RDWR);
   if (fd < 0) return 81;
   int command = std::atoi(argv[3]);
