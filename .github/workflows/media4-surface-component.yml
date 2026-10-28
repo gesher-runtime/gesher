@@ -26,15 +26,25 @@ jobs:
       - uses: ./.github/actions/setup-build
         with:
           ccache-key: runtime
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
       - name: Build current API3 runtime, launcher, compiler and boot jars
         run: |
-          ninja -C out dalvikvm dex2oat gesher-exec arm64_elf_test surface_invalidation_test
+          ninja -C out dalvikvm dex2oat profman dexdump gesher-exec arm64_elf_test surface_invalidation_test
           tools/build-boot-jars.sh out/boot-jars
           tests/build-test-apps.sh out/test-apps
           mkdir -p dist-component
-          cp out/dalvikvm.exe out/dex2oat.exe out/gesher-exec.exe out/arm64_elf_test.exe out/surface_invalidation_test.exe dist-component/
+          cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe out/arm64_elf_test.exe out/surface_invalidation_test.exe dist-component/
           cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
-          printf '%s\n' "$GITHUB_SHA" > dist-component/surface-component-source.txt
+          python3 - <<'PYCODE'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('dist-component')
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}
+          (root / 'surface-component-manifest.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], files=files), sort_keys=True))
+          PYCODE
       - uses: actions/upload-artifact@v4
         with:
           name: media4-surface-component-host
@@ -53,70 +63,113 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify exact Locale build sources and download scaffolding inside CI only
+      - name: Verify qualified full and exact component producer identities
+        id: suppliers
+        shell: pwsh
+        run: tools/surface/verify-component-suppliers.ps1
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_windows_x64 }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_framework }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_graphics }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_angle }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_media }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_webview }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_exec }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.suppliers.outputs.base_boot_image }}
+          run-id: 40596167427
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Preserve baseline jars for comparison
         shell: pwsh
         run: |
-          $base = gh api repos/${{ github.repository }}/actions/runs/40516054280 | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $base.head_sha -cne 'ca4ed3cfff46d4843485d89859370dc5b86a4146' -or
-              $base.name -cne 'ci' -or $base.conclusion -cne 'failure' -or $base.run_attempt -ne 1) {
-            throw 'Unexpected immutable Locale run/source/attempt'
-          }
-          $jobs = gh api repos/${{ github.repository }}/actions/runs/40516054280/jobs --paginate | ConvertFrom-Json
-          foreach ($name in 'build','framework / framework','boot-image / compile','graphics / build','angle / build') {
-            $job = @($jobs.jobs | Where-Object name -CEQ $name)
-            if ($job.Count -ne 1 -or $job[0].conclusion -cne 'success') { throw "Unproved build prerequisite $name" }
-          }
-          git diff --exit-code $base.head_sha HEAD -- aosp.lock patches cmake/aosp/art.cmake compat/base
-          if ($LASTEXITCODE -ne 0) { throw 'Changed ART/boot-image compatibility source needs separate review' }
-          Write-Host "ACTUAL_COMPONENT_SCAFFOLD run=$($base.id) source=$($base.head_sha) overall=red-Web3 build/framework/boot=success"
-          foreach ($artifact in 'windows-x64','framework','graphics','angle','media','webview','exec','boot-image') {
-            gh run download 40516054280 -R '${{ github.repository }}' -n $artifact -D dist
-            if ($LASTEXITCODE -ne 0) { throw "Missing immutable scaffolding $artifact" }
-          }
           New-Item -ItemType Directory -Force old-jars | Out-Null
           foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
-            Copy-Item "dist/$name.jar" "old-jars/$name.jar"
+            Copy-Item -LiteralPath "dist/$name.jar" -Destination "old-jars/$name.jar"
           }
       - uses: actions/download-artifact@v4
         with:
-          name: framework
+          artifact-ids: ${{ steps.suppliers.outputs.current_framework }}
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          name: media4-surface-component-host
+          artifact-ids: ${{ steps.suppliers.outputs.current_media4_surface_component_host }}
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          name: arm64
+          artifact-ids: ${{ steps.suppliers.outputs.current_arm64 }}
           path: dist
       - uses: actions/download-artifact@v4
         with:
-          name: native2
+          artifact-ids: ${{ steps.suppliers.outputs.current_native2 }}
           path: dist/native2
       - uses: actions/download-artifact@v4
         with:
-          name: surfaces
+          artifact-ids: ${{ steps.suppliers.outputs.current_surfaces }}
           path: dist
-      - name: Guard all five actual boot jars and rebuild image on any byte difference
+      - name: Verify current host members and rebuild boot image from current five jars
         shell: pwsh
         run: |
-          if ((Get-Content dist/surface-component-source.txt -Raw).Trim() -cne '${{ github.sha }}') {
-            throw 'Current native runtime provenance mismatch'
+          $manifest = Get-Content dist/surface-component-manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.source -cne $env:GITHUB_SHA -or "$($manifest.run)" -cne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -cne $env:GITHUB_RUN_ATTEMPT) { throw 'Current host manifest identity mismatch' }
+          foreach ($name in 'dalvikvm.exe','dex2oat.exe','profman.exe','dexdump.exe','gesher-exec.exe','arm64_elf_test.exe','surface_invalidation_test.exe','core-oj.jar','core-libart.jar','core-icu4j.jar') {
+            $expected = $manifest.files.$name
+            if (-not $expected -or (Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }
           }
-          $same = $true
           foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
-            $old = (Get-FileHash "old-jars/$name.jar" -Algorithm SHA256).Hash
-            $new = (Get-FileHash "dist/$name.jar" -Algorithm SHA256).Hash
-            Write-Host "ACTUAL_COMPONENT_JAR name=$name old=$old current=$new identical=$($old -ceq $new)"
-            if ($old -cne $new) { $same = $false }
+            $old = (Get-FileHash -LiteralPath "old-jars/$name.jar" -Algorithm SHA256).Hash
+            $new = (Get-FileHash -LiteralPath "dist/$name.jar" -Algorithm SHA256).Hash
+            Write-Host "SURFACE_JAR name=$name baseline=$old current=$new"
           }
-          if ($same) {
-            Write-Host 'ACTUAL_COMPONENT_BOOT reused immutable Locale image: all five current jars byte-identical'
-          } else {
-            tools/boot-image/fetch-profiles.ps1 -Out rebuilt-boot/profiles
-            tools/boot-image/compile.ps1 -Dist dist -Out rebuilt-boot -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles rebuilt-boot/profiles/art-boot-image-profile.txt,rebuilt-boot/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt -TimeoutMinutes 15
-            Copy-Item -Recurse -Force rebuilt-boot/framework/* dist/framework/
-            Write-Host 'ACTUAL_COMPONENT_BOOT rebuilt from current native compiler and all five current jars'
+          foreach ($name in 'gesher_arm64.dll','arm64_smoke_test.exe','arm64_varargs_baseline.so','x86_64/arm64_varargs_test','arm64-v8a/arm64_varargs_test','surfacegl.apk','surfacegl-arm64.apk') {
+            Write-Host "SURFACE_CURRENT_MEMBER name=$name sha256=$((Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+          }
+          tools/boot-image/fetch-profiles.ps1 -Out rebuilt-boot/profiles
+          tools/boot-image/compile.ps1 -Dist dist -Out rebuilt-boot -Filter speed-profile -ExtensionFilter speed-profile -AppFilter speed -BootProfiles rebuilt-boot/profiles/art-boot-image-profile.txt,rebuilt-boot/profiles/framework-boot-image-profile.txt,tools/boot-image/gesher-startup-profile.txt -TimeoutMinutes 15
+          Copy-Item -Recurse -Force rebuilt-boot/framework/* dist/framework/
+          foreach ($image in 'boot','boot-core-libart','boot-core-icu4j','boot-framework','boot-gesher-app') {
+            foreach ($ext in 'art','oat','vdex') {
+              $from = "rebuilt-boot/framework/x86_64/$image.$ext"
+              $to = "dist/framework/x86_64/$image.$ext"
+              $hash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
+              if ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -cne $hash) { throw "Image copy mismatch $image.$ext" }
+              Write-Host "SURFACE_IMAGE name=$image.$ext sha256=$hash source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+            }
           }
       - name: Actual both-ABI Surface phases and unchanged variadic contracts
         shell: pwsh
