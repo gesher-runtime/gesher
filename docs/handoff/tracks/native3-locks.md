@@ -412,3 +412,31 @@ No compile-only artifact is reused as runtime proof. The native C/C++ files
 remain identical to reviewed/compiled7b61deab. Component results must still
 be audited from actual final plain logs before any bounded qualification.
 No blocker/source requirement is waived and no inventory gap is closed.
+
+### First actual command component: Linux reference timeout, Windows skipped
+
+Exact688ef531daf4bfe7a59a8f04b1b0d59b246ec8f5 ran component40658079598.
+Required watch exited1. Producer job122713924879 failed during the actual
+Linux syscall reference before toolchain fetching or Windows compilation;
+Windows was skipped, so there is no new Windows runtime proof. Actual plain
+log contains124 command rows, then the first contended_stdio0/1 exceeded the
+unchanged10s command bound. Cleanup attempted every registered worker and
+killed the owned hung worker; final metadata/plain log/watch are preserved
+at C:\work\gesher-ci-review\native3-commands-40658079598-*.
+The separately queued compile-only40658079560 was cancelled as redundant
+with this component's intended fresh producer compilation; it is not proof.
+
+Current fixture hypothesis, not a proven PC/stack diagnosis: the Linux wchan
+observer's fopen/fclose may itself wait on libc's global FILE-list lock while
+the other thread's fclose waits for our held stream. Prepared correction uses
+raw open/read/close for that proc read, still requiring the actual closer's
+kernel futex wait. It adds actual closer TID/wchan/raw-observer and phase
+output before/after independent close and stream unlock. The held-stream
+ordering, actual close/query assertions,5s internal and10s external command
+deadlines remain unchanged; no timeout or missing contention becomes PASS.
+Windows WCT behavior and production code are unchanged. Focused independent
+fixture peer is required before a changed-source component run. The next
+actual phase evidence must determine how far the observer proceeds; the
+previous timeout alone does not establish its root cause.
+
+Focused independent observer peer passed source blob33266879f0d64a4bdbbdb40eee33066c9c095267: actual futex/state evidence, checked NUL-terminated raw read, held-stream order and unchanged deadlines/errno capture preserved. Changed-source retry is justified; no prior timeout root-cause certainty follows.

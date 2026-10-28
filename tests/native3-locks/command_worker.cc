@@ -91,10 +91,15 @@ bool StreamWaitObserved(unsigned waiting, unsigned owner) {
   (void)owner;
   char path[96], state[128]{};
   std::snprintf(path, sizeof(path), "/proc/self/task/%u/wchan", waiting);
-  FILE* file = std::fopen(path, "r");
-  if (!file) return false;
-  bool observed = std::fgets(state, sizeof(state), file) && std::strstr(state, "futex");
-  std::fclose(file);
+  // A stdio observer can itself wait for libc's global FILE-list lock while
+  // fclose is waiting for our held target stream. Observe through raw syscalls
+  // without opening or closing another FILE object during this contention.
+  int file = open(path, O_RDONLY | O_CLOEXEC);
+  if (file < 0) return false;
+  ssize_t bytes = read(file, state, sizeof(state) - 1);
+  int closed = close(file);
+  bool observed = bytes > 0 && closed == 0 && std::strstr(state, "futex");
+  if (observed) std::fprintf(stderr, "ACTUAL_STDIO_WCHAN closer=%u state=%s observer=raw-syscalls\n", waiting, state);
   // After publishing its TID the closer calls only fclose, so this actual
   // kernel futex wait is its stdio lock, not a scheduler-readiness inference.
   return observed;
@@ -232,6 +237,7 @@ int main(int argc, char** argv) {
         if (std::chrono::steady_clock::now() >= limit) std::_Exit(93);
         std::this_thread::yield();
       }
+      std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-held closer-entered tid=%u\n", entering.load(std::memory_order_acquire));
       bool contended = false;
       while (!contended && std::chrono::steady_clock::now() < limit) {
         contended = StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
@@ -239,7 +245,9 @@ int main(int argc, char** argv) {
       }
       errno = 123;
       int close_result = close(close_fd), close_error = errno;
+      std::fprintf(stderr, "ACTUAL_STDIO_PHASE independent-fd-closed result=%d\n", close_result);
       UnlockStream(stream);
+      std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-unlocked\n");
       while (!completed.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() >= limit) std::_Exit(94);
         std::this_thread::yield();
