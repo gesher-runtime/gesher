@@ -9,12 +9,17 @@ the50 obsolete worktrees or deleted AOSP clones for this task.
 ## Selected source and evidence
 
 - Exact AOT5d3 initial ten source paths were ported, then the four-path
-  correction at2c26665109f8ad349fab53a15c18bd2769e6d0b5. Initial40714173867
+  correction at2c26665109f8ad349fab53a15c18bd2769e6d0b5, then the constructor
+  correction atc544665819d13bbed83debd3ecff7afd9159bc55. Initial40714173867
   remains red: after-resource PCL/DLC x Main/device accepts a stale app image
   after a real nested dependency changes. Its four runtime assertions per
   host stay unchanged. Patch0730 adds the omitted after-list/nested context
-  validation in pinned ART. Native's exact2c patch peer passed; changed-source
-  component40724339436 is active and must actually qualify before full dispatch.
+  validation in pinned ART. Exact2c peer passed, but40724339436 stayed red:
+  stale rejection passes while12 matching after-policy positives see an
+  incomplete runtime hierarchy(expected1/found0). The new libcore patch moves
+  the existing defensive after-array initialization before DexPathList/DEX open.
+  Native's exactc544 constructor peer passed; component40727982352 is active
+  and must actually qualify before full dispatch. Assertions stay unchanged.
 - Native runtime source15640777a5aa3065b514fd9998d8f0bc9c955819 is qualified
   only for common-layer161 rows, four stdio routes and13 resource modes in
   component40714975474. Frozenec3d58a8 adds docs only. Independent integrator
@@ -32,7 +37,7 @@ the50 obsolete worktrees or deleted AOSP clones for this task.
   Their resource controls do not qualify broad Native54/atomic spawn contracts.
   The proposed bionic Fcntl bridge is not runtime-ABI-qualified by host tests.
 
-All43 selected source blobs are pinned in the cheap canonical preflight;
+All44 selected source blobs are pinned in the cheap canonical preflight;
 only the three new canonical integration files are additionally permitted
 above verified7bb, besides docs. No inverse Binder/Media/Surface/reader/Exec
 changes are allowed. No inventory/proof history was changed.
@@ -74,8 +79,11 @@ peer passed exact7dba37da for the four canonical wiring files: graph, preserved
 jobs, typed OFF fixture/compiler/source roles, strict supplier controls and
 unchanged runtime body. Final tiny2c patch/source-pin/early-compile refresh
 passed Terra's focused recheck at4c9e54f79c8d6ad826ac2c1e47b47ff30d073da9;
-all43 pins match, with no new DAG/role/receipt/controller change. Saved proof:
+all43 then-current pins match, with no new DAG/role/receipt/controller change. Saved proof:
 C:/work/gesher-ci-review/coherent-7dba-4c9e-automation-peer.md and companion
 JSON with exact delta blob hashes. Static Python/YAML/PowerShell
 parsing and graph/source/body comparisons are source checks only. No compiler,
 fixture or CI artifact was executed/downloaded locally. Full is NOT dispatched.
+The finalc544 constructor-patch/source-pin refresh still needs its tiny
+automation recheck; it adds the44th pin/47th allowed path, with no new
+controller or canonical DAG/role/receipt change.

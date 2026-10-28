@@ -1,0 +1,26 @@
+diff --git a/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java b/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java
+--- a/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java
++++ b/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java
+@@ -153,19 +153,20 @@
+             boolean isTrusted) {
+         super(parent);
+         // Setup shared libraries before creating the path list. ART relies on the class loader
+         // hierarchy being finalized before loading dex files.
+         this.sharedLibraryLoaders = sharedLibraryLoaders == null
+                 ? null
+                 : Arrays.copyOf(sharedLibraryLoaders, sharedLibraryLoaders.length);
+-        this.pathList = new DexPathList(this, dexPath, librarySearchPath, null, isTrusted);
+-
+         this.sharedLibraryLoadersAfter = sharedLibraryLoadersAfter == null
+                 ? null
+                 : Arrays.copyOf(sharedLibraryLoadersAfter, sharedLibraryLoadersAfter.length);
++        // ART snapshots both shared-library lists while DexPathList opens the
++        // app DEX. Complete the after-app hierarchy before that native call too.
++        this.pathList = new DexPathList(this, dexPath, librarySearchPath, null, isTrusted);
+         // Run background verification after having set 'pathList'.
+         this.pathList.maybeRunBackgroundVerification(this);
+ 
+         reportClassLoaderChain();
+     }
+ 
+     /**

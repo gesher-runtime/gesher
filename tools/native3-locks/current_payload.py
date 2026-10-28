@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / 'tools/web3'))
 import host_roles
 
 # Qualified leaf bytes; only CMake fixture isolation and accepted bionic Chdir differ.
-PINNED_SOURCE = {'.github/workflows/aot3-after-resource-component.yml': '17682a9df3795f6d6be2cc05b0c202a350bcbf13',
+PINNED_SOURCE = {'.github/workflows/aot3-after-resource-component.yml': '27aa2b609cb52e934796075548690a42d338e344',
  '.github/workflows/framework.yml': 'db9dc36524cd27a9a67c85460d2e98b1cbb1d44b',
  '.github/workflows/native3-locks-commands.yml': '87095a77445bd19f39bed8fc8586dbcbc0e86172',
  'CMakeLists.txt': '7ae30a87e608f6c99f82a3fbb0c8d8e79436c098',
@@ -37,6 +37,7 @@ PINNED_SOURCE = {'.github/workflows/aot3-after-resource-component.yml': '17682a9
  'compat/posix/src/system.cc': 'b02024fc823b1c8db4469a4ba877edb3a47499d7',
  'compat/posix/src/unistd.cc': 'd7766c2183ada697a48efc6d4656c80378605925',
  'patches/art/0730-aot3-validate-after-shared-library-context.patch': '9a44a9d0e25edcb84c21f61ec7a12f8ad5d9670b',
+ 'patches/libcore/0730-aot3-complete-after-library-hierarchy-before-dex-open.patch': 'a5020001ad8b525bee34a3bc3bd373f4cb329179',
  'tests/apps/sharedlibraryapp/build.sh': 'd3f0640f5825ccab74759fb6a633b3466ade3bc2',
  'tests/dex-graphics/gesher/Aot3SharedLibraryTest.java': 'ba534155d23864c791e0ca2f264cded734e39f2a',
  'tests/native3-locks/command_oracle.py': 'e24cb4853975fd15f23eb4ebe613ec11688ab837',
@@ -49,8 +50,8 @@ PINNED_SOURCE = {'.github/workflows/aot3-after-resource-component.yml': '17682a9
  'tests/shared-libraries/after-res/values/config.xml': '8063ec46cfddf8644ab5f16d68f584a611cfff26',
  'tests/windows/run-aot3-resource-component.ps1': '65531b9d848c35e98308c60429e68be303d345d4',
  'tests/windows/tracks/73-aot3-shared-libraries.ps1': 'c5c3a03b083d0ff3e63cfca4f70ea47303166ecc',
- 'tools/aot3/host_payload.py': 'f83f06a5625782a1848085c5061ecd997e0781b0',
- 'tools/aot3/preflight.py': '1b1e6ab41d2afbfc335fc99ecae5390c8e79705d',
+ 'tools/aot3/host_payload.py': '7a8cda9d658cfec5e06e0a53cb16a5b47b8d774c',
+ 'tools/aot3/preflight.py': '3a434b353a6d3b347ee65c58662b529c24891ad9',
  'tools/build-framework-res.sh': '38dbf329a0340c23cd26b2cfcb13fd1c90afc162',
  'tools/native3-locks/artifact/assemble-artifacts.py': '8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2',
  'tools/native3-locks/artifact/download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
