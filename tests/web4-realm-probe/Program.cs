@@ -30,6 +30,7 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<string, Context> observations = new();
     readonly ConcurrentDictionary<string, bool> destroyed = new();
     readonly ConcurrentDictionary<string, string> parents = new();
+    readonly ConcurrentDictionary<string, string> targetTypes = new();
     readonly ConcurrentDictionary<string, Task> sessionSetup = new();
     readonly List<CoreWebView2DevToolsProtocolEventReceiver> receivers = new();
     readonly TcpListener server = new(IPAddress.Any, 0);
@@ -85,9 +86,12 @@ sealed class ProbeForm : Form
             }
             if (observations["a"].Unique == observations["b"].Unique || observations["a"].Frame == observations["b"].Frame)
                 throw new Exception("sibling contexts or frames are not distinct");
-            if (observations["cross"].Session.Length == 0) throw new Exception("cross-origin target session was not observed");
+            if (!targetTypes.TryGetValue(observations["cross"].Session, out var crossType) || crossType != "iframe")
+                throw new Exception("cross-origin iframe target session was not observed");
             if (observations["nestedCross"].Session.Length == 0 || observations["nestedCross"].Frame == observations["cross"].Frame)
                 throw new Exception("distinct nested cross-origin target was not observed");
+            if (!targetTypes.TryGetValue(observations["nestedCross"].Session, out var nestedType) || nestedType != "iframe")
+                throw new Exception("nested cross-origin iframe target session was not observed");
             if (!parents.TryGetValue(observations["nested"].Frame, out var nestedParent) || nestedParent != observations["a"].Frame ||
                 !parents.TryGetValue(observations["nestedCross"].Frame, out var crossParent) || crossParent != observations["a"].Frame)
                 throw new Exception("engine frame attachment did not establish nested parentage");
@@ -157,6 +161,7 @@ sealed class ProbeForm : Form
             else if (name == "Target.attachedToTarget")
             {
                 string child = root.GetProperty("sessionId").GetString() ?? "";
+                targetTypes[child] = root.GetProperty("targetInfo").GetProperty("type").GetString() ?? "";
                 sessionSetup[child] = SetupSession(child);
             }
             else if (name == "Runtime.executionContextCreated")
