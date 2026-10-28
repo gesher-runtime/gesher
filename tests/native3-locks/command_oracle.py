@@ -81,7 +81,7 @@ class Client:
             raise AssertionError('; '.join(failures))
 
 
-def run(executable):
+def run(executable, contention_failures):
     rows, clients = [], []
     with tempfile.TemporaryDirectory(prefix='gesher-lock-command-') as directory:
         root = Path(directory)
@@ -116,7 +116,12 @@ def run(executable):
                 if 'minimum' in actual:
                     assert actual['minimum'], (actor, text, actual)
                 if 'contended' in actual:
-                    assert actual['contended'] and actual['stream_result'] == 0, actual
+                    # Retain failure while collecting all four actual cycles.
+                    # The SAME Linux comparator still rejects every false row;
+                    # a missing WCT chain never becomes accepted contention.
+                    if not actual['contended'] or actual['stream_result'] != 0:
+                        contention_failures.append(dict(actor=actor, command=text, actual=actual.copy()))
+                        print('ACTUAL_CONTENTION_FAILURE ' + json.dumps(contention_failures[-1], sort_keys=True), flush=True)
                 rows.append(dict(actor=actor, command=text, actual=actual))
                 print('ACTUAL_COMMAND_ROW ' + json.dumps(rows[-1], sort_keys=True), flush=True)
                 return actual
@@ -300,15 +305,24 @@ def main():
     args = parser.parse_args()
     failures = []
     try:
-        rows = run(args.worker.resolve())
+        contention_failures = []
+        rows = run(args.worker.resolve(), contention_failures)
+        assert len(rows) == 161, ('missing required operation rows', len(rows))
         actual = dict(schema=1, scope='nonblocking common-layer command worker', rows=rows)
         args.output.write_text(json.dumps(actual, indent=2) + '\n')
+        mismatches = []
         if args.reference:
             reference = json.loads(args.reference.read_text())
             assert reference['schema'] == actual['schema']
             assert len(reference['rows']) == len(rows), 'reference row count differs'
             for index, (expected, observed) in enumerate(zip(reference['rows'], rows)):
-                assert expected == observed, (index, expected, observed)
+                if expected != observed:
+                    mismatches.append((index, expected, observed))
+                    print('ACTUAL_COMMAND_MISMATCH ' + json.dumps(dict(index=index, expected=expected, observed=observed), sort_keys=True), flush=True)
+        if mismatches or contention_failures:
+            print('ACTUAL_COMMAND_ORACLE_FAILURE rows=' + str(len(rows)) + ' mismatches=' + str(len(mismatches)) +
+                  ' contention_failures=' + str(len(contention_failures)), flush=True)
+            raise AssertionError(('strict operation/stdio evidence failed', mismatches, contention_failures))
         print('ACTUAL_COMMAND_ORACLE rows=' + str(len(rows)) + ' mismatches=0', flush=True)
     except Exception as error:
         traceback.print_exc()

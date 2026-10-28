@@ -73,9 +73,21 @@ struct WaitTrace {
   unsigned samples = 0;
   DWORD error = 0, count = 0;
   BOOL complete = FALSE, cycle = FALSE;
+  bool contradictory = false;
   WAITCHAIN_NODE_INFO nodes[kWaitChainNodeCapacity]{};
 };
 WaitTrace wait_trace;
+bool InvalidWaitTrace(const WaitTrace& trace, DWORD waiting, DWORD owner) {
+  if (!trace.complete || trace.error != ERROR_SUCCESS || trace.cycle || trace.count == 0 ||
+      trace.count > kWaitChainNodeCapacity) return true;
+  const auto& first = trace.nodes[0];
+  if (first.ObjectType != WctThreadType || first.ThreadObject.ProcessId != GetCurrentProcessId() ||
+      first.ThreadObject.ThreadId != waiting) return true;
+  if (trace.count == 1) return first.ObjectStatus != WctStatusRunning && first.ObjectStatus != WctStatusBlocked;
+  return trace.count < 3 || first.ObjectStatus != WctStatusBlocked ||
+      trace.nodes[1].ObjectType != WctCriticalSectionType || trace.nodes[2].ObjectType != WctThreadType ||
+      trace.nodes[2].ThreadObject.ProcessId != GetCurrentProcessId() || trace.nodes[2].ThreadObject.ThreadId != owner;
+}
 void DumpWaitTrace(unsigned waiting, unsigned owner, FILE* stream, int descriptor, bool completed) {
   std::fprintf(stderr, "ACTUAL_WCT samples=%u success=%d error=%lu count=%lu cycle=%d closer=%u owner=%u FILE=%p fd=%d HANDLE=%p completed-before-unlock=%d\n",
       wait_trace.samples, wait_trace.complete, wait_trace.error, wait_trace.count, wait_trace.cycle,
@@ -93,9 +105,10 @@ void DumpWaitTrace(unsigned waiting, unsigned owner, FILE* stream, int descripto
 bool StreamWaitObserved(unsigned waiting, unsigned owner) {
 #ifdef _WIN32
   unsigned samples = wait_trace.samples + 1;
-  wait_trace = {}; wait_trace.samples = samples;
+  bool contradictory = wait_trace.contradictory;
+  wait_trace = {}; wait_trace.samples = samples; wait_trace.contradictory = contradictory;
   HWCT session = OpenThreadWaitChainSession(0, nullptr);
-  if (!session) { wait_trace.error = GetLastError(); return false; }
+  if (!session) { wait_trace.error = GetLastError(); wait_trace.contradictory = true; return false; }
   // The pinned mingw wct.h omits this SDK macro. Microsoft's canonical
   // WinSDK header defines WCT_MAX_NODE_COUNT as16:
   // https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/wct.h
@@ -108,6 +121,7 @@ bool StreamWaitObserved(unsigned waiting, unsigned owner) {
   const bool complete = GetThreadWaitChain(session, 0, 0, waiting, &count, nodes, &wait_trace.cycle);
   const DWORD error = complete ? ERROR_SUCCESS : GetLastError();
   wait_trace.complete = complete; wait_trace.error = error;
+  wait_trace.contradictory |= InvalidWaitTrace(wait_trace, waiting, owner);
   if (count > kWaitChainNodeCapacity || error == ERROR_MORE_DATA || error == ERROR_TOO_MANY_THREADS)
     std::fprintf(stderr, "COMMAND_WCT_INCOMPLETE count=%lu error=%lu\n", count, error);
   bool observed = complete && count >= 3 && count <= kWaitChainNodeCapacity &&
@@ -279,7 +293,22 @@ int main(int argc, char** argv) {
 #endif
       std::atomic<bool> completed{false};
       int stream_result = -1, stream_error = 0;
+      const auto started = std::chrono::steady_clock::now();
+      const auto limit = started + std::chrono::seconds(5);
 #ifdef _WIN32
+      const ULONGLONG start_tick = GetTickCount64(), deadline_tick = start_tick + 5000;
+      static unsigned cycle_count = 0;
+      const unsigned cycle = ++cycle_count;
+      auto phase = [&](const char* name) {
+        std::fprintf(stderr, "ACTUAL_STDIO_CLOCK cycle=%u phase=%s tick=%llu deadline=%llu\n", cycle, name,
+            static_cast<unsigned long long>(GetTickCount64()), static_cast<unsigned long long>(deadline_tick));
+      };
+      auto exited_before_limit = [&](HANDLE thread) {
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(limit - std::chrono::steady_clock::now()).count();
+        return remaining > 0 && WaitForSingleObject(thread, static_cast<DWORD>(remaining)) == WAIT_OBJECT_0 &&
+            std::chrono::steady_clock::now() < limit;
+      };
+      phase("start");
       wait_trace = {};
       FILETIME owner_created{}, owner_exited{}, owner_kernel{}, owner_user{};
       if (!GetThreadTimes(GetCurrentThread(), &owner_created, &owner_exited, &owner_kernel, &owner_user))
@@ -290,11 +319,48 @@ int main(int argc, char** argv) {
       native3_crt_lock_probe::Snapshot before{}, held{}, waiting{};
       if (!crt_layout.Read(stream, &before) || before.owner != 0 || before.recursion != 0)
         return Failure("actual stream lock before owner acquisition");
+      FILE* other_stream = std::tmpfile();
+      FILE* completed_stream = std::tmpfile();
+      if (!other_stream || !completed_stream) {
+        if (other_stream) std::fclose(other_stream);
+        if (completed_stream) std::fclose(completed_stream);
+        return Failure("actual negative-control streams");
+      }
+      std::atomic<DWORD> control_tid{0};
+      std::atomic<uint64_t> control_birth{0};
+      std::atomic<bool> control_release{false}, control_completed{false};
+      int control_close = -1;
+      std::thread completed_closer([&] {
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
+          control_birth.store(native3_stack_probe::Birth(created), std::memory_order_release);
+        control_tid.store(GetCurrentThreadId(), std::memory_order_release);
+        while (!control_release.load(std::memory_order_acquire)) std::this_thread::yield();
+        control_close = std::fclose(completed_stream);
+        control_completed.store(true, std::memory_order_release);
+      });
+      while (!control_tid.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= limit) std::_Exit(97);
+        std::this_thread::yield();
+      }
+      HANDLE completed_thread = native3_stack_probe::OpenOwnedForExit(control_tid.load(std::memory_order_acquire),
+          control_birth.load(std::memory_order_acquire));
+      if (!completed_thread) std::_Exit(97);
+      control_release.store(true, std::memory_order_release);
+      if (!exited_before_limit(completed_thread) || !CloseHandle(completed_thread)) std::_Exit(97);
+      completed_closer.join();
+      if (!control_completed.load(std::memory_order_acquire) || control_close != 0) std::_Exit(97);
+      // The distinct live sibling has the SAME owner/recursion as the target,
+      // isolating FILE/CS identity from a simple owner-only predicate.
+      LockStream(other_stream);
+      native3_crt_lock_probe::Snapshot other_held{};
+      if (!crt_layout.Read(other_stream, &other_held) ||
+          !crt_layout.Matches(other_stream, other_held, stream_owner, false)) std::_Exit(97);
 #endif
       LockStream(stream);
 #ifdef _WIN32
       if (!crt_layout.Read(stream, &held) || held.address != before.address ||
-          held.owner != stream_owner || held.recursion != 1) {
+          !crt_layout.Matches(stream, held, stream_owner, false)) {
         Failure("actual stream lock held by expected owner"); std::_Exit(96);
       }
 #endif
@@ -310,34 +376,65 @@ int main(int argc, char** argv) {
         stream_error = errno;
         completed.store(true, std::memory_order_release);
       });
-      auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
       while (!entering.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() >= limit) std::_Exit(93);
         std::this_thread::yield();
       }
+#ifdef _WIN32
+      HANDLE closer_exit = native3_stack_probe::OpenOwnedForExit(entering.load(std::memory_order_acquire),
+          entering_birth.load(std::memory_order_acquire));
+      if (!closer_exit) std::_Exit(97);
+      phase("held-and-entered");
+#endif
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-held closer-entered tid=%u\n", entering.load(std::memory_order_acquire));
       bool contended = false;
-      while (!contended && std::chrono::steady_clock::now() < limit) {
-        contended = StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
+      while (std::chrono::steady_clock::now() < limit) {
+        contended |= StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
 #ifdef _WIN32
-        if (!contended && !stack_sampled && wait_trace.samples >= 3) {
+        if (wait_trace.contradictory) { DumpWaitTrace(entering.load(), stream_owner, stream, stream_fd, completed.load()); std::_Exit(98); }
+        if (!stack_sampled && wait_trace.samples >= 3 && wait_trace.nodes[0].ObjectStatus == WctStatusBlocked) {
           stack_sampled = true;
           if (!native3_stack_probe::Capture(entering.load(std::memory_order_acquire),
-                  entering_birth.load(std::memory_order_acquire), stream, stream_fd)) {
+                  entering_birth.load(std::memory_order_acquire), stream, stream_fd, other_stream)) {
             Failure("actual owned closer stack capture");
             std::_Exit(95);
           }
+          break;  // Diagnostic sample obtained; WCT-only acceptance is unchanged.
         }
+#else
+        if (contended) break;
 #endif
-        if (!contended) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
 #ifdef _WIN32
       // Read only while this real owner still holds the stream lock. Never
       // inspect the FILE/embedded lock after unlock permits fclose to free it.
-      if (completed.load(std::memory_order_acquire) || !crt_layout.Read(stream, &waiting) ||
-          waiting.address != held.address || waiting.owner != stream_owner || waiting.recursion != 1) {
+      if (!stack_sampled || completed.load(std::memory_order_acquire) || !crt_layout.Read(stream, &waiting) ||
+          waiting.address != held.address || !crt_layout.Matches(stream, waiting, stream_owner, false)) {
         Failure("actual live FILE lock owner during closer wait"); std::_Exit(96);
       }
+      bool wrong_birth = true;
+      if (entering_birth.load() == stream_owner_birth ||
+          !native3_stack_probe::MatchesBirth(entering.load(), stream_owner_birth, &wrong_birth) || wrong_birth ||
+          crt_layout.Matches(stream, other_held, stream_owner, false) ||
+          crt_layout.Matches(stream, held, entering.load(), false) ||
+          crt_layout.Matches(stream, held, stream_owner, control_completed.load()) ||
+          !crt_layout.RejectsUnsupportedCode()) std::_Exit(99);
+      std::fprintf(stderr, "ACTUAL_CRT_NEGATIVE_CONTROLS wrong-live-FILE-CS=reject wrong-live-owner=reject actual-other-birth=reject completed-real-closer=reject unsupported-code-copy=reject call-other-FILE-argument=reject\n");
+      native3_crt_lock_probe::Report("negative-sibling", other_stream, other_held, stream_owner, stream_owner_birth);
+      std::fprintf(stderr, "ACTUAL_CRT_NEGATIVE_VALUES cycle=%u closer=%u closer-birth=%llu wrong-owner=%u wrong-birth=%llu completed-control-tid=%lu completed-control-birth=%llu completed-control-close=%d completed-control-signaled=true\n",
+          cycle, entering.load(), static_cast<unsigned long long>(entering_birth.load()), entering.load(),
+          static_cast<unsigned long long>(stream_owner_birth), control_tid.load(),
+          static_cast<unsigned long long>(control_birth.load()), control_close);
+      WaitTrace error_copy = wait_trace, cycle_copy = wait_trace, wrong_thread_copy = wait_trace;
+      error_copy.complete = FALSE; error_copy.error = ERROR_INVALID_PARAMETER;
+      cycle_copy.cycle = TRUE;
+      wrong_thread_copy.nodes[0].ThreadObject.ThreadId = stream_owner;
+      if (!InvalidWaitTrace(error_copy, entering.load(), stream_owner) ||
+          !InvalidWaitTrace(cycle_copy, entering.load(), stream_owner) ||
+          !InvalidWaitTrace(wrong_thread_copy, entering.load(), stream_owner)) std::_Exit(99);
+      std::fprintf(stderr, "WCT_NEGATIVE_METADATA_COPIES error=reject cycle=reject wrong-live-thread=reject not-actual-OS-cycle=true\n");
+      phase("sample-and-negatives");
       native3_crt_lock_probe::Report("before", stream, before, stream_owner, stream_owner_birth);
       native3_crt_lock_probe::Report("held", stream, held, stream_owner, stream_owner_birth);
       native3_crt_lock_probe::Report("waiting", stream, waiting, stream_owner, stream_owner_birth);
@@ -348,13 +445,29 @@ int main(int argc, char** argv) {
       int close_result = close(close_fd), close_error = errno;
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE independent-fd-closed result=%d closer-completed-before-unlock=%d\n",
           close_result, completed.load(std::memory_order_acquire));
+#ifdef _WIN32
+      if (completed.load(std::memory_order_acquire)) std::_Exit(99);
+      phase("independent-close");
+#endif
       UnlockStream(stream);
+#ifdef _WIN32
+      phase("unlock");
+#endif
       std::fprintf(stderr, "ACTUAL_STDIO_PHASE stream-unlocked\n");
       while (!completed.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() >= limit) std::_Exit(94);
         std::this_thread::yield();
       }
+#ifdef _WIN32
+      if (!exited_before_limit(closer_exit) || !CloseHandle(closer_exit)) std::_Exit(94);
+#endif
       closer.join();  // Completion was observed; no unbounded callback remains.
+#ifdef _WIN32
+      phase("actual-thread-exit-and-join");
+      UnlockStream(other_stream);
+      if (std::fclose(other_stream) != 0 || std::chrono::steady_clock::now() >= limit) std::_Exit(97);
+      phase("control-cleanup");
+#endif
       streams[slot] = nullptr;
       if (stream_result == 0) Forget(stream_fd);
       if (close_result == 0) Forget(close_fd);

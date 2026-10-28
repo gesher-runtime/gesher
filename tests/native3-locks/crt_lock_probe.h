@@ -68,6 +68,25 @@ class Layout {
     return true;
   }
 
+  bool Matches(FILE* stream, const Snapshot& value, DWORD expected_owner, bool completed) const {
+    // Check completion before even deriving a FILE-relative address. The real
+    // stream must remain owned/alive throughout Read and this comparison.
+    if (completed) return false;
+    uintptr_t start = reinterpret_cast<uintptr_t>(stream);
+    return offset_ != 0 && start <= UINTPTR_MAX - offset_ - sizeof(CRITICAL_SECTION) &&
+        value.address == start + offset_ && value.owner == expected_owner && value.recursion == 1;
+  }
+
+  bool RejectsUnsupportedCode() const {
+    unsigned char code[11]{};
+    if (!Copy(reinterpret_cast<const void*>(GetProcAddress(module_, "_lock_file")), code, sizeof(code)) || !Shape(code))
+      return false;
+    // Corrupt only an owned copy of the actual observed export prefix. No
+    // system instruction, successful wait or production callback is mocked.
+    code[0] ^= 1;
+    return !Shape(code);
+  }
+
  private:
   static bool Copy(const void* from, void* to, size_t bytes) {
     SIZE_T copied = 0;
@@ -79,10 +98,7 @@ class Layout {
     // jmp [rip+disp32]. Unsupported code must fail, never guess a FILE ABI.
     unsigned char code[11]{};
     uintptr_t address = reinterpret_cast<uintptr_t>(function);
-    if (!Copy(reinterpret_cast<const void*>(address), code, sizeof(code)) ||
-        code[0] != 0x48 || code[1] != 0x83 || code[2] != 0xc1 ||
-        code[4] != 0x48 || code[5] != 0xff || code[6] != 0x25 ||
-        code[3] < sizeof(FILE) || code[3] >= 0x80) return false;
+    if (!Copy(reinterpret_cast<const void*>(address), code, sizeof(code)) || !Shape(code)) return false;
     int32_t displacement = 0;
     std::memcpy(&displacement, code + 7, sizeof(displacement));
     if (address > UINTPTR_MAX - sizeof(code)) return false;
@@ -110,6 +126,12 @@ class Layout {
     std::fprintf(stderr, "\n");
     *offset = code[3];
     return true;
+  }
+
+  static bool Shape(const unsigned char (&code)[11]) {
+    return code[0] == 0x48 && code[1] == 0x83 && code[2] == 0xc1 &&
+        code[4] == 0x48 && code[5] == 0xff && code[6] == 0x25 &&
+        static_cast<size_t>(code[3]) >= sizeof(FILE) && code[3] < 0x80;
   }
 
   HMODULE module_ = nullptr;

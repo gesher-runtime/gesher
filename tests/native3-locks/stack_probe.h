@@ -69,6 +69,29 @@ inline uint64_t Birth(const FILETIME& value) {
   return (static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime;
 }
 
+inline bool MatchesBirth(DWORD tid, uint64_t expected_birth, bool* matches) {
+  HANDLE thread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, tid);
+  if (!thread) return false;
+  FILETIME created{}, exited{}, kernel{}, user{};
+  bool queried = GetProcessIdOfThread(thread) == GetCurrentProcessId() &&
+      GetThreadTimes(thread, &created, &exited, &kernel, &user);
+  *matches = queried && expected_birth != 0 && Birth(created) == expected_birth;
+  bool closed = CloseHandle(thread);
+  return queried && closed;
+}
+
+inline HANDLE OpenOwnedForExit(DWORD tid, uint64_t expected_birth) {
+  HANDLE thread = OpenThread(SYNCHRONIZE | THREAD_QUERY_INFORMATION, FALSE, tid);
+  if (!thread) return nullptr;
+  FILETIME created{}, exited{}, kernel{}, user{};
+  DWORD code = 0;
+  bool owned = expected_birth != 0 && GetProcessIdOfThread(thread) == GetCurrentProcessId() &&
+      GetThreadTimes(thread, &created, &exited, &kernel, &user) && Birth(created) == expected_birth &&
+      GetExitCodeThread(thread, &code) && code == STILL_ACTIVE;
+  if (!owned) { CloseHandle(thread); return nullptr; }
+  return thread;
+}
+
 // Match the original observed worker call shape using its actual bytes. An
 // unwind restores nonvolatile RSI at this frame; mov RSI,RCX immediately before
 // call [_lock_file IAT] makes that saved RSI the actual FILE argument. This is
@@ -106,7 +129,7 @@ inline bool ExactFileCall(DWORD64 pc, DWORD64 rsi, FILE* stream) {
 // Reuse the established Rtl unwind pattern on this exact owned thread. Only
 // context/unwind/guarded reads run while suspended; description/logging follows
 // checked resume. The original caller's five-second deadline keeps running.
-inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
+inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd, FILE* other_live_stream) {
   HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
   if (!thread) {
     std::fprintf(stderr, "ACTUAL_CLOSER_STACK open-failed tid=%lu error=%lu\n", tid, GetLastError());
@@ -170,6 +193,17 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
   HMODULE modules[32]{};
   unsigned module_count = 0;
   unsigned exact_file_calls = 0;
+  unsigned other_file_calls = 0, enter_frames = 0;
+  FARPROC enter = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "EnterCriticalSection");
+  DWORD64 enter_image = 0;
+  PRUNTIME_FUNCTION enter_function = enter ? RtlLookupFunctionEntry(reinterpret_cast<uintptr_t>(enter), &enter_image, nullptr) : nullptr;
+  bool enter_bounds = enter_function &&
+      enter_image <= UINT64_MAX - enter_function->EndAddress &&
+      enter_function->BeginAddress < enter_function->EndAddress &&
+      reinterpret_cast<uintptr_t>(enter) >= enter_image + enter_function->BeginAddress &&
+      reinterpret_cast<uintptr_t>(enter) < enter_image + enter_function->EndAddress;
+  DWORD64 enter_begin = enter_bounds ? enter_image + enter_function->BeginAddress : 0;
+  DWORD64 enter_end = enter_bounds ? enter_image + enter_function->EndAddress : 0;
   for (unsigned index = 0; index < count; ++index) {
     std::fprintf(stderr, "ACTUAL_CLOSER_FRAME index=%u pc=0x%llx nearest-export=%s\n", index,
         static_cast<unsigned long long>(pcs[index]), Describe(pcs[index]).c_str());
@@ -178,6 +212,13 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
       std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL index=%u pc=0x%llx unwound-rsi=0x%llx FILE=%p exact-mov-rsi-rcx-and-lock-file-iat=true\n",
           index, static_cast<unsigned long long>(pcs[index]), static_cast<unsigned long long>(rsis[index]),
           static_cast<void*>(stream));
+    }
+    if (other_live_stream && ExactFileCall(pcs[index], rsis[index], other_live_stream)) ++other_file_calls;
+    if (enter_bounds && pcs[index] >= enter_begin && pcs[index] < enter_end) {
+      ++enter_frames;
+      std::fprintf(stderr, "ACTUAL_CLOSER_ENTER_FRAME index=%u pc=0x%llx named-entry=%p unwind-begin=0x%llx unwind-end=0x%llx\n",
+          index, static_cast<unsigned long long>(pcs[index]), reinterpret_cast<void*>(enter),
+          static_cast<unsigned long long>(enter_begin), static_cast<unsigned long long>(enter_end));
     }
     HMODULE module = nullptr;
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -194,8 +235,10 @@ inline bool Capture(DWORD tid, uint64_t expected_birth, FILE* stream, int fd) {
       }
     }
   }
-  std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL_SUMMARY matches=%u required=1\n", exact_file_calls);
-  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1;
+  std::fprintf(stderr, "ACTUAL_CLOSER_FILE_CALL_SUMMARY matches=%u required=1 enter-frames=%u other-FILE=%p other-matches=%u\n",
+      exact_file_calls, enter_frames, static_cast<void*>(other_live_stream), other_file_calls);
+  return captured && count > 0 && closed && previous == 0 && resumed == 1 && exact_file_calls == 1 &&
+      enter_frames == 1 && other_live_stream && other_live_stream != stream && other_file_calls == 0;
 }
 
 }  // namespace native3_stack_probe

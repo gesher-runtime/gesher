@@ -843,3 +843,55 @@ realunlock/fclose0, exact lifetimes, contradiction failure and unchanged clocks.
 No acceptance predicate has changed; a further exact Enter frame-bound witness
 and rejection controls are explicitly proposed for review rather than claimed.
 All prior red runs and all broader Native3/integration requirements remain open.
+
+### Mandatory all-four-cycle witness and rejection controls prepared (diagnostic only)
+
+Independent e25 proposal+actual406899 review confirmed the recorded CS/owner/
+closer/argument/release evidence but did not approve an alternative predicate.
+Its required next evidence is now prepared: actual named EnterCriticalSection
+RUNTIME_FUNCTION-bound captured frame; complete strong witness on all four real
+cycles on BOTH Windows; every phase through real thread exit/join under the
+SAME five-second absolute deadline; meaningful rejection controls and sticky
+failure for any observed WCT API error, cycle or contradictory identity/owner.
+
+The captured frame must lie inside the actual named Enter's checked unwind
+range, alongside the existing exact _lock_file call/restored-FILE witness.
+Sampling occurs early after three real queries even on Windows2022 full-WCT
+success, then independent close/unlock/real kernel-signaled closer exit and
+join finish before the original deadline. Monotonic start/held/sample/close/
+unlock/exit/control-cleanup timestamps retain one deadline per real cycle.
+No additional API or logging runs suspended. FILE/CS are never read after
+unlock permits fclose/free. Owned thread exit handles verify ownPID/birth/live
+identity before use and remain held until actual signaled exit/CloseHandle.
+
+Real per-cycle controls create a distinct live sibling FILE held by the SAME
+owner/recursion; its actual CS cannot satisfy the target FILE/CS or captured
+argument. Wrong-owner uses the actual live closer TID; wrong-birth uses the
+actual owner's different birth for the owned closer. A separate real temporary
+FILE closer is birth-verified, released, actually fclose0/kernel-signaled/joined
+before the target contention; its genuine completed flag must be rejected by
+the completion gate. This negative record is explicitly a different control,
+never a claim that the target closer completed while its lock was held.
+Unsupported-prefix rejection mutates only an owned copy of the actual export
+bytes. WCT error/cycle/wrong-thread copied-metadata rejection is labeled as
+copied metadata, NOT an exercised OS deadlock/cycle or successful mocked wait.
+Every actual WCT error/cycle/contradiction is sticky and fails the worker.
+
+An independent CI stderr validator requires four complete groups, each with
+all native semantic case IDs, decoded layout, before/held/wait/sibling fields,
+owned thread/call/Enter frames and all seven monotonic phase records before
+the unchanged deadline. It crosschecks actual values, not just positive counts.
+Its marker explicitly says runtime_acceptance=false. Native controls and this
+CI orchestration have not run locally; only AST/YAML/embeddedPowerShell/diff
+source parsing ran. A fresh exact source peer is mandatory before CI push.
+
+The ORIGINAL acceptance boolean remains full-WCT-only. The command controller
+now defers (rather than removes) contention failure so all four actual cycles
+and all161 Linux contract rows can be saved. It requires161 rows, compares each
+row strictly, prints every mismatch, preserves contention failures, and cannot
+print successful completion or exit0 with any such failure. Windows2025's four
+false WCT contention rows are therefore expected to remain RED while collecting
+all required evidence. Linux reference failures also remain failures. The13
+actual duplicate modes, broker/job cleanup, raw publisher/capacity gates and
+10s/180s bounds remain. No acceptance predicate/conjunction is adopted yet.
+Production stays1dc2e245; all previous red runs and wider gaps remain open.

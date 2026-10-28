@@ -163,7 +163,7 @@ jobs:
             Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
           }
           Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
-      - name: Actual Linux row comparison and independent live FILE critical-section owner snapshots
+      - name: Actual strict Linux rows and all-four-cycle CRT owner call-frame and negative witnesses
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -186,6 +186,8 @@ jobs:
             $process = Start-Process -FilePath $python -ArgumentList @('tests/native3-locks/command_oracle.py', '--worker', 'command-fixture/native3_lock_command_worker.exe', '--reference', 'command-fixture/linux-reference.json', '--output', 'command-fixture/windows-actual.json', '--duplicate-worker', 'command-fixture/native3_lock_duplicate_test.exe', '--broker', 'command-fixture/binderd.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
             if (-not $process.WaitForExit(180000)) { throw 'Actual command and duplicate suites exceeded external180s bound' }
             $process.Refresh()
+            & $python tests/native3-locks/validate_stdio_evidence.py --stderr $stderr --output command-fixture/stdio-evidence.json
+            if ($LASTEXITCODE -ne 0) { throw 'Missing or inconsistent four-cycle actual stdio diagnostic evidence' }
             if ($process.ExitCode -ne 0) { throw "Actual command suite exit=$($process.ExitCode)" }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_COMMAND_ORACLE rows=[1-9][0-9]* mismatches=0$' -Quiet)) { throw 'Missing actual command comparator completion' }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_DUPLICATE_ORACLE modes=13 failures=0 semantics=bounded-resource-controls$' -Quiet)) { throw 'Missing actual duplicate controller completion' }
@@ -215,5 +217,6 @@ jobs:
             ${{ runner.temp }}/commands.stderr.txt
             command-fixture/windows-actual.json
             command-fixture/windows-duplicates.json
+            command-fixture/stdio-evidence.json
           if-no-files-found: warn
           retention-days: 14

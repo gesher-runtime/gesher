@@ -134,9 +134,9 @@ than treating missing WCT ownership as success:
    PID/TID, and a checked captured call site resolving _lock_file with its
    restored actual FILE argument equal to that same FILE. Mere count1, API
    failure, wall time, a sleeping thread or an inferred export cannot pass.
-   Consider additionally checking the actual named EnterCriticalSection's
-   RUNTIME_FUNCTION bounds against a captured frame before implementing the
-   final rule; this stronger frame-bound condition is not yet collected.
+   A captured frame must also fall within the actual named
+   EnterCriticalSection's RUNTIME_FUNCTION bounds. This condition is mandatory;
+   a nearby export name or an optional unobserved frame cannot satisfy it.
 4. Independent close returns0 while the owner still holds that CS; closer
    completion remains false before unlock. A contradictory completed closer,
    owner, identity, decoded call or actual WCT chain fails even if another
@@ -144,7 +144,8 @@ than treating missing WCT ownership as success:
    hidden by an alternative branch. LockCount/DebugInfo are recorded only;
    their version-specific numeric meanings are not presumed.
 5. The real matching unlock happens once and real fclose returns0 with actual
-   completion/join before the SAME existing five-second absolute deadline.
+   kernel-signaled thread exit and join before the SAME existing five-second
+   absolute deadline, recorded with monotonic per-phase timestamps.
    The external10-second command and180-second root bounds remain unchanged.
    No new deadline starts after sampling, close, unlock or cleanup. No FILE/CS
    read is permitted after unlock allows fclose to invalidate the stream.
@@ -157,8 +158,8 @@ cleanup gates and actual process exit checks. A positive assertion count or
 an optional unexercised branch cannot substitute for a required case.
 
 Before adopting any alternative, independent review must examine both exact
-source and saved actual evidence, resolve whether the stronger Enter frame
-bound is required, and require meaningful rejection controls (different live
+source and saved actual evidence, verify the mandatory Enter frame bound in
+all four cycles on both hosts, and require meaningful rejection controls (different live
 FILE/CS, wrong owned thread birth/argument and conflicting ownership) without
 mocking a successful wait or adding guest/environment switches. Then freeze
 the reviewed test-intent/source change and run fresh CI on both Windows with
