@@ -38,6 +38,8 @@ class OwnedJob:
         self.api.SetInformationJobObject.restype = wintypes.BOOL
         self.api.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
         self.api.AssignProcessToJobObject.restype = wintypes.BOOL
+        self.api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.api.TerminateProcess.restype = wintypes.BOOL
         self.api.CloseHandle.argtypes = [wintypes.HANDLE]
         self.api.CloseHandle.restype = wintypes.BOOL
         self.handle = self.api.CreateJobObjectW(None, None)
@@ -68,6 +70,12 @@ class OwnedJob:
         for child in self.children:
             child.wait(timeout=max(0, deadline - time.monotonic()))
         print(f'ACTUAL_DUPLICATE_JOB_CLEANUP children={len(self.children)} reaped=true', flush=True)
+
+    def stop(self, process):
+        # Popen.terminate can swallow ACCESS_DENIED after a concurrent exit.
+        # Require an actual successful request on this exact owned handle.
+        if not self.api.TerminateProcess(wintypes.HANDLE(int(process._handle)), 211):
+            raise ctypes.WinError(ctypes.get_last_error())
 
 
 def required_cases(mode):
@@ -171,11 +179,13 @@ def run(worker, broker):
             try:
                 if service is not None:
                     if service.poll() is None:
-                        service.terminate()
+                        job.stop(service)
                         killed = True
                     service.wait(timeout=5)
                     if qualified and not killed:
                         raise AssertionError('Healthy owned broker exited before its controlled stop')
+                    if killed and service.returncode != 211:
+                        raise AssertionError(('Owned broker stop exit differs', service.returncode))
             finally:
                 broker_output.close()
                 print(broker_log.read_text(errors='replace'), end='', flush=True)
