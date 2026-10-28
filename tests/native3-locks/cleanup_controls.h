@@ -35,7 +35,9 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel, const ch
     locks::Registry registry;
     int error = registry.Open();
     if (!error) error = locks::WaitProcessLock(registry, prepared, cancel, timeout ? 1000 : 5000);
-    result.store(error);
+    // Publish preceding non-atomic hook counters through a C++ atomic. The
+    // Win32 event below provides bounded wakeup, not memory-model evidence.
+    result.store(error, std::memory_order_release);
     Require(SetEvent(returned), "publish actual return");
     // Stay genuinely alive after the request event destructor has run.
     Require(WaitForSingleObject(release, 15000) == WAIT_OBJECT_0, "owner release within bound");
@@ -73,7 +75,9 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel, const ch
   if (!timeout) Require(SetEvent(cancel), "cancel original registered request");
   Require(WaitForSingleObject(returned, 6000) == WAIT_OBJECT_0, "actual finite return");
   live();
-  Require(result.load() == (timeout ? ETIMEDOUT : ECANCELED), "original outcome preserved");
+  // -1 cannot satisfy this assertion; acquire must observe the owner's release
+  // before we read its failure counters below.
+  Require(result.load(std::memory_order_acquire) == (timeout ? ETIMEDOUT : ECANCELED), "original outcome preserved");
   Require(failure.begin_failures == (begin ? 1u : 0u) &&
           failure.commit_failures == (begin ? 0u : 1u), "exact final cleanup injection consumed");
   Require(observer.Begin(&state, 1000) == 0, "read authoritative bank after failed cleanup");
