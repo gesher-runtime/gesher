@@ -1112,7 +1112,8 @@ binding failure. The correction uses one switch per inventory comparison
 and disables Git path quoting for the whole source-name comparison. Additional
 AST duplicate-parameter scanning and a simple Compare-Object binding check
 pass; no native fixture ran. Corrected exact workflow peer is still required
-before push. Rejected3153 workflow was never published or dispatched.
+before push. Rejected3153 was corrected before branch publication; no CI run
+used it as its input HEAD (its ancestry is retained in Git).
 
 ### First isolated diagnostic run: actual compile, metadata failure, runtime skipped
 
@@ -1137,3 +1138,44 @@ CMake template, without importing its unrelated current-union assumptions.
 It is a provenance correction, not a native behavior change or unchanged rerun.
 Exact changed workflow peer is required before another guarded CI push. The
 first red run and immutable156 supplier remain unchanged.
+
+### Changed diagnostic40730886908: compiler provenance passes, upload service fails
+
+Exact4457279ba0904cc450ba773cb15329ece2deb108 received focused independent
+automation peer before the fresh account/ref-guarded push; report
+native-cloexec-774-445-automation-peer.md records both earlier corrections.
+Actual40730886908/attempt1 is terminal FAILURE (120s watch16927 exit1).
+Preflight122966557469 passes in9s, including all15 archive negatives. Producer
+122966705846 actually builds/links the probe and common library, validates
+imports and PASSES authoritative generated-compiler/source/output provenance.
+It then uploads440043 bytes before the artifact service returns
+"The server is busy" (request08e46124-e01e-004b-7afd-6667b9000000).
+The upload step and producer job FAIL. Final artifact API count is0; Windows
+is SKIPPED. No candidate-handle inheritance result, successful producer or
+approved runtime supplier exists from this run.
+
+Saved native3-cloexec-40730886908-* plain logs, job/run/artifact API metadata
+and independent audit JSON preserve exact scope and SHA. Actual configured
+compiler is Clang23.1.3, with generated record
+out/CMakeFiles/3.31.6/CMakeCXXCompiler.cmake SHA
+8afd29127374ec1e5597394c229921dfb0e99380019d8ee5c7b5ea12ab34de93,
+driverSHAc9b86311ade81d53235c93fafabdf98328d094de344ea9a9038e0dab6695ee9f,
+underlyingclangSHA5996bd5db24162e3767bdf7c75f7dcc0bf2bc3d1957433aecf176e62e153b40a,
+empty configured launcher and the exact warnings-as-errors probe compile
+command. Produced-but-not-approved-for-runtime outputs:
+
+```
+native3_cloexec_window_probe.exe 9e03a497507630c7a69c74d4b61ccf84c2057360f5f96f5c05366bae2d190a25
+native3_cloexec_window_probe.imports.txt aa3750f5cbbc3e88799d308eef97f5989670e55bd414f2c63f94533f88c54201
+```
+
+No unchanged rerun, artifact transport bypass or fake successful upload is
+performed. There is no evidence that changing concurrency/compression or an
+unrelated action-version update fixes this completed-upload service error.
+Any retry/transport implementation would need a meaningful separately reviewed
+source contract, typed transient-error versus quota/auth/content rejection,
+bounded timing and unchanged rawZIP/producer identity gates. Both diagnostic
+reds remain red. Immutable156/ec3 remains the sole accepted bounded supplier;
+the isolated raw-inheritance contract is still unobserved and open. Local
+cleanup recovery data and all qualified production/Exec/controller bytes are
+unchanged; no local build or artifact download occurred.
