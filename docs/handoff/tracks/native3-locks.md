@@ -803,3 +803,43 @@ the diagnostic. No generic RSI/nearest-export inference is used. Code inspection
 and reporting happen after resume; no additional API/logging runs suspended.
 This ties the actual closer's call path to its FILE argument, alongside the new
 liveCS snapshots. It still does not replace the mandatory original WCT criterion.
+
+### Actual708 CS/call-argument component40689909664 remains FAILURE
+
+Required watch exit1, preflight122821765909/producer122821816441/Windows2022
+122822731394 success, Windows2025 122822731309 failure. Actual Linux161 rows,
+2022 all161/mismatches0 and four original full WCT chains. Windows2025 has
+135 matching Linux prefix rows, then the unchanged actual chain assertion
+fails:321 successful WCT samples return only its one Blocked thread node.
+Both actual duplicate suites nevertheless finish all13 modes/8399 assertions/
+0 failures,1000 duplicate operations/errors0 and concurrent raw publications
+2690 (2022)/3249 (2025). Actual broker/client211-stop/job cleanup remains checked.
+
+Actual producer artifact12817220700 ZIPsha256
+ba34a2440d86ef1db68cd8d0c7f7f660b44528fb86b46ab8d25fe4ae49296135,
+workerSHA25616c759b251012a5b5e67abcd25fb28a316f79a666ce3c98fe4f4e242b440c16a,
+referenceSHA2563080bbfab5e57a197194217e8900527c6bef527fa30da39f2366d1b9e58ad0f1.
+Strict rawZIP/currentproducer/source/attempt/eightmembers/sevenoutputs and15
+negative helper controls pass. Saved final metadata/four plain job logs and
+independent raw-row/data audit JSON: C:/work/gesher-ci-review/native3-commands-40689909664-*.
+Some parallel gh run view log reads returned localcache EOF/invalidZIP; those
+plain-log reads were recovered directly with the job-logs API. No CI rerun
+or local artifact download occurred.
+
+New actual2025 CS and closer-argument evidence is detailed in ADR0080's proposed
+equivalence section. Actual FILE1a4148964c0, CS1a4148964f0, owner8384 with nonzero
+birth and recursion1 held/waiting; actual owned closer748 has one checked
+worker call site to actual _lock_file with restored RSI==sameFILE. Independent
+close0 while closerfalse, real unlock then actualfclose0. The WCT-only boolean
+is still false and causes the correct current red result. Windows2022 records
+12 before/held/waiting CS snapshots alongside its four full chains. No unknown
+LockCount/DebugInfo meaning or provider root cause is inferred.
+
+A DOCS-ONLY ADR/test-intent proposal is prepared for independent source+actual
+evidence review AFTER the coordinator's full acceptance/merge audit. It requires
+same liveFILE/decodedactualCS, owned ownerTID+birth/recursion, actualcloser call+
+restoredargument, actualBlockedThread, preunlocknoncompletion/independentclose0,
+realunlock/fclose0, exact lifetimes, contradiction failure and unchanged clocks.
+No acceptance predicate has changed; a further exact Enter frame-bound witness
+and rejection controls are explicitly proposed for review rather than claimed.
+All prior red runs and all broader Native3/integration requirements remain open.
