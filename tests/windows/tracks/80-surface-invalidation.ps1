@@ -117,9 +117,10 @@ try {
       $until = [DateTime]::UtcNow.AddSeconds(620)
       while ([DateTime]::UtcNow -lt $until) {
         $text = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
-        $match = [regex]::Match("$text", 'app process for com\.gesher\.surfacegl: pid (\d+)')
-        if ($match.Success) {
-          $child = Get-Process -Id ([int]$match.Groups[1].Value) -ErrorAction SilentlyContinue
+        $ids = @([regex]::Matches("$text", 'app process for com\.gesher\.surfacegl: pid (\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique)
+        if ($ids.Count -gt 1) { throw 'Multiple app process IDs in fresh log' }
+        if ($ids.Count -eq 1) {
+          $child = Get-Process -Id $ids[0] -ErrorAction SilentlyContinue
           if ($child) {
             try {
               $handle = $child.Handle # Pin this actual process, even if its PID is later reused.
@@ -141,7 +142,9 @@ try {
       $observedDeadline = [DateTime]::UtcNow
       $null = Wait-Job -Job $watch -Timeout 2
       $childEvidence = if ($watch.State -eq 'Completed') { Receive-Job -Job $watch } else { $null }
-      if (-not $childEvidence -or $childEvidence.Exit -ne 0 -or $childEvidence.End -gt $observedDeadline) {
+      $appLog = Get-Content -LiteralPath "$ivRoot/logs/com.gesher.surfacegl.log" -Raw -ErrorAction SilentlyContinue
+      $childIds = @([regex]::Matches("$appLog", 'app process for com\.gesher\.surfacegl: pid (\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique)
+      if (-not $childEvidence -or $childIds.Count -ne 1 -or $childIds[0] -ne $childEvidence.Pid -or $childEvidence.Exit -ne 0 -or $childEvidence.End -gt $observedDeadline) {
         Write-Host "FAIL  surface invalidation ($ivAbi): fresh actual app process did not independently complete normally within the original run"
         $script:failed++
       } else {
