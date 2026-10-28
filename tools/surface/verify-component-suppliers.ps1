@@ -12,7 +12,7 @@ $allowed = @('.github/workflows/ci.yml','.github/workflows/media4-surface-build.
   'tests/apps/surfacegl/java/com/gesher/surfacegl/InvalidationActivity.java',
   'tests/apps/surfacegl/jni/surfacegl.c','tests/e2e/apps.json','tests/e2e/run-e2e.ps1',
   'tests/surfaces/invalidation_test.cc','tests/windows/run-surface-invalidation-component.ps1',
-  'tests/windows/tracks/80-surface-invalidation.ps1','tools/surface/verify-component-suppliers.ps1')
+  'tests/windows/tracks/80-surface-invalidation.ps1','tools/surface/verify-component-suppliers.ps1','tools/surface/download-verified-artifact.py')
 $changed = @(git diff --name-only $baseSha HEAD)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect source delta' }
 foreach ($path in $changed) { if (-not $path.StartsWith('docs/') -and $path -cnotin $allowed) { throw "Unreviewed scaffold source delta: $path" } }
@@ -56,6 +56,7 @@ foreach ($source in @(@($baseId,$baseSha,'base',$baseline.Keys),@($env:GITHUB_RU
     }
     $key = "$($source[2])_$($name.Replace('-','_'))"
     "$key=$($a.id)" >> $env:GITHUB_OUTPUT
+    "${key}_digest=$($a.digest)" >> $env:GITHUB_OUTPUT
     Write-Host "SURFACE_SUPPLIER role=$($source[2]) name=$name id=$($a.id) digest=$($a.digest) source=$($source[1]) run=$($source[0])"
   }
 }
