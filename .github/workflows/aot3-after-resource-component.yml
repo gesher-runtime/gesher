@@ -1,0 +1,248 @@
+name: aot3-after-resource-component
+on:
+  push:
+    branches: [wip/aot3-resource-current]
+    paths: [.github/workflows/aot3-after-resource-component.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  LLVM_MINGW_TAG: "20261006"
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+jobs:
+  artifact-preflight:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Exact bounded source and archive helper controls before producers
+        run: |
+          python3 tools/aot3/preflight.py
+          python3 tools/ci/receipt_identity.py
+          python3 tools/surface/test-verified-artifact.py
+
+  build:
+    needs: [artifact-preflight]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build
+        with:
+          # The former runtime-port job's cache already holds the runtime.
+          ccache-key: runtime
+
+      - name: Build the separate bounded native teardown observer
+        run: bash tools/web3/build-teardown-probe.sh "$HOME/toolchain/$LLVM_MINGW_NAME"
+
+      - name: Build
+        run: |
+          # Canonical suite/package/e2e always receive the production role.
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          # Compile/link ordered spawn setup and its actual no-console caller first.
+          ninja -C out exec4_no_console_probe gesher-exec
+          # Check the new native format ABI bridge before the full AOSP graph.
+          ninja -C out CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj
+          ninja -C out surface_invalidation_test
+          ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
+          ninja -C out media_muxer_verify
+          ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
+          # Compile the new bridge before the full runtime to expose its
+          # header/ABI errors without waiting for every AOSP object.
+          ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
+          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
+          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
+          ninja -C out native3_unicode_test
+          ninja -C out native3_cpu_clock_test
+          ninja -C out
+
+      - name: Build and isolate ordinary Binder host actor under production OFF
+        run: |
+          ninja -C out binder_sg_actor
+          mkdir -p dist-binder-sg-host
+          mv out/binder_sg_actor.exe dist-binder-sg-host/
+          test ! -e out/binder_sg_wire_peer.exe
+          printf '%s\n' "$GITHUB_SHA" > dist-binder-sg-host/binder-sg-runtime-source.txt
+
+      - name: Check assembly boundaries use the System V ABI
+        run: python3 tools/abi-check.py out third_party/aosp
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build test apps
+        run: tests/build-test-apps.sh out/test-apps
+
+      - name: Build boot class path (core-oj, core-libart)
+        run: tools/build-boot-jars.sh out/boot-jars
+
+      - name: Build the framework's resources (framework-res.apk)
+        run: tools/build-framework-res.sh out/framework-res
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp out/*.exe out/dalvikvm.map out/dex2oat.map out/test-apps/* out/boot-jars/*.jar dist/
+          cp dist-web3-observer/web3_process_waits.exe dist/
+          # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+          cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat dist/
+          # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
+          tools/fonts/collect-fonts.sh third_party/aosp dist
+          # Time zone data, for $ANDROID_TZDATA_ROOT (docs/posix.md).
+          compat/libcore/collect-tzdata.sh third_party/aosp dist
+          # Android's CA certificates and the networking libraries' licenses (docs/network.md).
+          tools/net/collect.sh third_party/aosp dist
+          ls -la dist
+
+      - name: Freeze default-OFF production role and unchanged shared-code boundary
+        run: python3 tools/web3/host_roles.py capture-production --build out --dist dist --state out/web3-production-state.json
+
+      - name: Bind isolated ordinary Binder actor to exact production compiler and source
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib,json,sys,shutil
+          from pathlib import Path
+          sys.path.insert(0,str(Path('tools/web3').resolve()))
+          import host_roles
+          root=Path('dist-binder-sg-host')
+          production=json.loads(Path('dist/web3-production-role.json').read_text())
+          manifest=host_roles.context()
+          assert host_roles.cache(Path('out'))['GESHER_WEB3_QUERY_TESTS']=='OFF'
+          assert production['role']=='production' and production['test_hook_compiled'] is False
+          manifest.update(role='binder-ordinary-actor', compiler=production['compiler'],
+                          production_runtime_sha256=production['executable_sha256'])
+          actor_source=Path('tests/binder/sg-actor.cc').resolve()
+          actor_commands=[argv for key,argv in host_roles.commands(Path('out')).items() if Path(key[1]).resolve()==actor_source]
+          assert len(actor_commands)==1, 'Missing or ambiguous actual actor compile command'
+          argv=actor_commands[0]
+          configured=production['compiler']['configured_driver']
+          actor_launcher=None
+          if argv[0]!=configured:
+              actual_launcher=shutil.which(argv[0])
+              assert len(argv)>1 and argv[1]==configured and actual_launcher and production['compiler']['launcher'], 'Actor compiler differs from production'
+              actor_launcher=str(Path(actual_launcher).resolve())
+              assert actor_launcher==production['compiler']['launcher'], 'Actor launcher differs from production'
+          manifest['actor_compile_command']=argv
+          manifest['actor_launcher']=actor_launcher
+          manifest['files']={p.name:host_roles.sha(p) for p in root.iterdir() if p.is_file()}
+          manifest['sources']={p:host_roles.sha(p) for p in (
+              'compat/posix/src/binder.cc','compat/posix/src/binder_sg.h','compat/posix/src/binder_wire.h',
+              'compat/binder/binderd.cc','cmake/aosp/servicemanager.cmake','tests/binder/sg-actor.cc',
+              'tests/binder/sg-actor.h','tests/binder/run-modes.ps1','tests/binder/OutputPageObserver.cs')}
+          (root/'binder-host-source.json').write_text(json.dumps(manifest,sort_keys=True))
+          assert not Path('dist/binder_sg_actor.exe').exists() and not Path('dist/binder_sg_wire_peer.exe').exists()
+          PYCODE
+
+      - name: Bind the complete current production host payload for AOT
+        run: python3 tools/aot3/host_payload.py capture --root dist --manifest aot3-host-evidence/host.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aot3-host-evidence
+          path: aot3-host-evidence/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binder2-sg-host
+          path: dist-binder-sg-host/
+
+      - name: Build separately named same-source query-hook runtime after production package is sealed
+        run: |
+          cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+          ninja -C out dalvikvm
+          python3 tools/web3/host_roles.py capture-hook --build out --dist dist --state out/web3-production-state.json --out dist-web3-query
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web3-query-hook
+          path: dist-web3-query/
+          if-no-files-found: error
+
+  framework:
+    needs: artifact-preflight
+    uses: ./.github/workflows/framework.yml
+  arm64:
+    needs: artifact-preflight
+    uses: ./.github/workflows/arm64.yml
+  boot-image:
+    needs: [build, framework]
+    uses: ./.github/workflows/boot-image.yml
+  test:
+    needs: [build, framework, arm64, boot-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify strict current production host and its separate whole inventory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/ci/artifact_receipt.py --name windows-x64 --producer build --destination ci-suppliers/windows_x64
+          if ($LASTEXITCODE -ne 0) { throw 'Current production archive failed' }
+          python tools/ci/artifact_receipt.py --name aot3-host-evidence --producer build --destination ci-suppliers/host_evidence
+          if ($LASTEXITCODE -ne 0) { throw 'Current typed inventory archive failed' }
+          if (@(Get-ChildItem -LiteralPath ci-suppliers/host_evidence -Force).Count -ne 1 -or
+              -not (Test-Path -LiteralPath ci-suppliers/host_evidence/host.json -PathType Leaf)) { throw 'Unexpected typed host evidence member' }
+          python tools/aot3/host_payload.py verify --root ci-suppliers/windows_x64 --manifest ci-suppliers/host_evidence/host.json
+          if ($LASTEXITCODE -ne 0) { throw 'Current whole production host mismatch' }
+      - name: Actual host missing and extra member rejection controls
+        shell: pwsh
+        run: |
+          python tools/aot3/host_payload.py controls --root ci-suppliers/windows_x64 --manifest ci-suppliers/host_evidence/host.json
+          if ($LASTEXITCODE -ne 0) { throw 'Actual AOT host controls failed' }
+      - name: Strict current framework translator and rebuilt images
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name framework --producer 'framework / framework' --destination ci-suppliers/framework
+          if ($LASTEXITCODE -ne 0) { throw 'Current framework archive failed' }
+          python tools/ci/artifact_receipt.py --name arm64 --producer 'arm64 / build' --destination ci-suppliers/arm64
+          if ($LASTEXITCODE -ne 0) { throw 'Current translator archive failed' }
+          python tools/ci/artifact_receipt.py --name boot-image --producer 'boot-image / compile' --destination ci-suppliers/boot_image
+          if ($LASTEXITCODE -ne 0) { throw 'Current rebuilt images archive failed' }
+          foreach ($member in 'framework-res.apk','framework-res-after.apk','sharedlibraryapp.apk','sharedlibrarydlc.apk',
+              'sharedlibraryafter.apk','sharedlibraryafterdlc.apk','sharedlibrarybad.apk','graphics-tests.dex',
+              'shared-base-v1.jar','shared-base-v2.jar','shared-entry.jar') {
+            $file = Join-Path ci-suppliers/framework $member
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing current framework member: $member" }
+            Write-Host "ACTUAL_AOT_FRAMEWORK_MEMBER member=$member sha256=$((Get-FileHash -LiteralPath $file).Hash) source=$env:GITHUB_SHA"
+          }
+      - name: Assemble exact current supplier roles and verify default OFF
+        shell: pwsh
+        run: |
+          foreach ($pair in @(@('windows_x64','windows_x64'),@('framework','framework'),@('arm64','arm64'),@('boot_image','boot_image'))) {
+            python tools/surface/assemble-artifacts.py --source "ci-suppliers/$($pair[0])" --destination dist --ledger aot-owners.json --owner $pair[1]
+            if ($LASTEXITCODE -ne 0) { throw "Current AOT assembly failed: $($pair[0])" }
+          }
+          python tools/web3/host_roles.py verify --dist dist
+          if ($LASTEXITCODE -ne 0) { throw 'AOT component must use actual current production OFF role' }
+      - name: All four before-after PCL-DLC policies and unchanged original controls
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/windows/run-aot3-resource-component.ps1 -Dir "$PWD/dist" 2>&1 | Tee-Object -FilePath aot3-resource-results.log
+          $code = $LASTEXITCODE
+          exit $code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aot3-resource-logs-${{ matrix.os }}
+          path: |
+            aot3-resource-results.log
+            aot-owners.json
+            ci-suppliers/host_evidence/host.json
+            ${{ runner.temp }}/aot3-resource-*/logs/
+          if-no-files-found: warn
