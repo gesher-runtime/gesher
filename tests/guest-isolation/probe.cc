@@ -39,6 +39,57 @@ static bool write_bytes(HANDLE h, const char* text, DWORD size) {
   DWORD n = 0;
   return WriteFile(h, text, size, &n, nullptr) && n == size;
 }
+// Fixed-size observation precedes the unchanged success rows on the existing
+// explicit output pipe. Parent prints it even when the strict child check fails.
+struct IpcObservation {
+  ULONG_PTR handle;
+  DWORD error, requested;
+};
+static void print_sid(const char* field, PSID sid, DWORD attributes) {
+  LPWSTR text = nullptr;
+  if (sid && ConvertSidToStringSidW(sid, &text)) {
+    printf("DIAG token %s sid=%ls attributes=0x%08lx\n", field, text, attributes);
+    LocalFree(text);
+  } else printf("DIAG token %s sid-query-error=%lu\n", field, GetLastError());
+}
+static bool token_evidence(HANDLE process) {
+  Handle token;
+  if (!OpenProcessToken(process, TOKEN_QUERY, &token.h)) return false;
+  for (auto kind : {TokenUser, TokenAppContainerSid, TokenIntegrityLevel, TokenGroups, TokenRestrictedSids, TokenCapabilities}) {
+    DWORD size = 0;
+    GetTokenInformation(token.h, kind, nullptr, 0, &size);
+    std::vector<BYTE> data(size);
+    if (!size || !GetTokenInformation(token.h, kind, data.data(), size, &size)) return false;
+    if (kind == TokenUser) {
+      const auto* user = reinterpret_cast<TOKEN_USER*>(data.data());
+      print_sid("user", user->User.Sid, user->User.Attributes);
+    } else if (kind == TokenAppContainerSid) {
+      const auto* app = reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(data.data());
+      print_sid("appcontainer", app->TokenAppContainer, 0);
+    } else if (kind == TokenIntegrityLevel) {
+      const auto* label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(data.data());
+      print_sid("integrity", label->Label.Sid, label->Label.Attributes);
+    } else {
+      const auto* groups = reinterpret_cast<TOKEN_GROUPS*>(data.data());
+      const char* name = kind == TokenGroups ? "group" : kind == TokenRestrictedSids ? "restricted" : "capability";
+      printf("DIAG token %s count=%lu\n", name, groups->GroupCount);
+      for (DWORD i = 0; i < groups->GroupCount; ++i)
+        print_sid(name, groups->Groups[i].Sid, groups->Groups[i].Attributes);
+    }
+  }
+  return true;
+}
+static bool pipe_evidence(HANDLE pipe) {
+  PSECURITY_DESCRIPTOR sd = nullptr;
+  const SECURITY_INFORMATION fields = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+  const DWORD error = GetSecurityInfo(pipe, SE_KERNEL_OBJECT, fields, nullptr, nullptr, nullptr, nullptr, &sd);
+  if (error != ERROR_SUCCESS) { printf("DIAG host-ipc security-query-error=%lu\n", error); return false; }
+  LPWSTR text = nullptr;
+  const bool ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, fields, &text, nullptr) != FALSE;
+  if (ok) { printf("DIAG host-ipc actual-owner-group-dacl=%ls\n", text); LocalFree(text); }
+  LocalFree(sd);
+  return ok;
+}
 static constexpr char kRows[] =
     "PASS child actual-token-sid\n"
     "PASS child host-process-dup-denied error=5\n"
@@ -71,10 +122,17 @@ static int child(int argc, wchar_t** argv) {
     readable.reset();
     if (!denied(CreateFileW(argv[i], GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr))) return 16;
   }
-  if (!denied(CreateFileW(argv[7], GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr))) return 17;
   Handle input, output;
   input.h = reinterpret_cast<HANDLE>(_wcstoui64(argv[8], nullptr, 10));
   output.h = reinterpret_cast<HANDLE>(_wcstoui64(argv[9], nullptr, 10));
+  SetLastError(ERROR_SUCCESS);
+  HANDLE opened = CreateFileW(argv[7], GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+  const DWORD open_error = GetLastError();  // Capture before any logging/close.
+  const IpcObservation observation{reinterpret_cast<ULONG_PTR>(opened), open_error, GENERIC_READ | GENERIC_WRITE};
+  const bool ipc_denied = opened == INVALID_HANDLE_VALUE && open_error == ERROR_ACCESS_DENIED;
+  if (opened != nullptr && opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+  if (!write_bytes(output.h, reinterpret_cast<const char*>(&observation), sizeof(observation))) return 53;
+  if (!ipc_denied) return 17;
   char challenge[20]{}; DWORD n = 0;
   if (!ReadFile(input.h, challenge, sizeof(challenge)-1, &n, nullptr) || n != 19 ||
       memcmp(challenge, "Gesher-resource-v1\n", 19) != 0) return 18;
@@ -159,11 +217,15 @@ static int exercise(Fixture& f) {
       PIPE_TYPE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 512, 512, 0, &host_sa);
   LocalFree(host_sd);
   if (!host.valid()) return 26;
+  if (!pipe_evidence(host.h)) return 54;
   // Nonblocking listening state avoids an outstanding OVERLAPPED at cleanup.
   if (ConnectNamedPipe(host.h, nullptr) || GetLastError() != ERROR_PIPE_LISTENING) return 27;
   {
     Handle allowed;
+    SetLastError(ERROR_SUCCESS);
     allowed.h = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    const DWORD allowed_error = GetLastError();
+    printf("DIAG parent host-ipc-open handle=%p valid=%d error=%lu\n", allowed.h, allowed.valid(), allowed_error);
     if (!allowed.valid()) return 28;
   }
   if (!DisconnectNamedPipe(host.h)) return 30;
@@ -216,10 +278,24 @@ static int exercise(Fixture& f) {
   BOOL in_job = FALSE;
   if (!IsProcessInJob(process.h, job.h, &in_job) || !in_job || !token_is(process.h, f.sid)) return 36;
   printf("PASS parent suspended-token-sid pid=%lu tid=%lu owned-job=1\n", pi.dwProcessId, pi.dwThreadId);
+  printf("DIAG host-ipc path=%ls requested=0x%08lx share=0 creation=OPEN_EXISTING flags=0\n", pipe_name.c_str(), static_cast<DWORD>(GENERIC_READ | GENERIC_WRITE));
+  if (!token_evidence(process.h)) return 55;
   if (ResumeThread(thread.h) == static_cast<DWORD>(-1)) return 37;
   if (WaitForSingleObject(process.h, 15000) != WAIT_OBJECT_0) return 38;
   DWORD code = 99;
-  if (!GetExitCodeProcess(process.h, &code) || code != 0) { fprintf(stderr, "child exit=%lu\n", code); return 39; }
+  if (!GetExitCodeProcess(process.h, &code)) return 39;
+  DWORD observation_available = 0;
+  IpcObservation observation{}; DWORD observation_read = 0;
+  const bool observed = PeekNamedPipe(out_read.h, nullptr, 0, nullptr, &observation_available, nullptr) &&
+      observation_available >= sizeof(observation) &&
+      ReadFile(out_read.h, &observation, sizeof(observation), &observation_read, nullptr) && observation_read == sizeof(observation);
+  if (observed) printf("DIAG child host-ipc-open handle=%p invalid=%d error=%lu requested=0x%08lx expected-error=5\n",
+      reinterpret_cast<void*>(observation.handle), observation.handle == reinterpret_cast<ULONG_PTR>(INVALID_HANDLE_VALUE),
+      observation.error, observation.requested);
+  else printf("DIAG child host-ipc-open observation-missing exit=%lu available=%lu\n", code, observation_available);
+  if (code != 0) { fprintf(stderr, "child exit=%lu\n", code); return 39; }
+  if (!observed || observation.handle != reinterpret_cast<ULONG_PTR>(INVALID_HANDLE_VALUE) ||
+      observation.error != ERROR_ACCESS_DENIED || observation.requested != (GENERIC_READ | GENERIC_WRITE)) return 56;
   // Peek first: never make a blocking read against a retained pipe writer.
   DWORD available = 0;
   if (!PeekNamedPipe(out_read.h, nullptr, 0, nullptr, &available, nullptr) || available != sizeof(kRows)-1) return 40;
