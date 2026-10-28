@@ -138,7 +138,7 @@ sealed class ProbeForm : Form
             await Task.Delay(500, timeout.Token);
             if (!staleRejected || observations.ContainsKey("stale-reply")) throw new Exception("stale context accepted reply");
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
-            Console.WriteLine("PLATFORM_PROBE_PASS contexts, origins, binding callers, held navigation, unique-context replies and stale rejection");
+            Console.WriteLine("PLATFORM_PROBE_PASS selected contexts, origins, binding callers, held navigation and same-frame stale rejection; OOPIF detach and stale lifecycle unexercised");
             Result = 0;
         }
         catch (Exception e) { Console.WriteLine("PLATFORM_PROBE_FAILURE " + e); }
@@ -165,7 +165,9 @@ sealed class ProbeForm : Form
                 var aux = c.TryGetProperty("auxData", out var a) ? a : default;
                 int id = c.GetProperty("id").GetInt32();
                 string unique = c.TryGetProperty("uniqueId", out var u) ? u.GetString() ?? "" : "";
-                string origin = c.TryGetProperty("origin", out var o) ? o.GetString() ?? "" : "";
+                if (!c.TryGetProperty("origin", out var o) || o.ValueKind != JsonValueKind.String)
+                    throw new Exception("context origin property is missing or not a string");
+                string origin = o.GetString()!;
                 string frame = aux.ValueKind == JsonValueKind.Object && aux.TryGetProperty("frameId", out var f) ? f.GetString() ?? "" : "";
                 bool main = aux.ValueKind == JsonValueKind.Object && aux.TryGetProperty("isDefault", out var d) && d.ValueKind == JsonValueKind.True;
                 contexts[(session, id)] = new Context(session, id, unique, origin, frame, main);
