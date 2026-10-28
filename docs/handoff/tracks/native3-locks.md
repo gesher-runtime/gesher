@@ -618,3 +618,41 @@ fcntl/spawn acceptance. The overall component remains UNQUALIFIED because
 Windows2025's required actual chain is missing; no inventory gap is closed.
 All inherited-OFD/atomic-spawn/blocking/signal/ABI/ART/copy-race/full/package/
 e2e requirements and the214 helper's known reserved-alias limit remain open.
+
+### Prepared owned closer PC/unwind diagnostic (source only)
+
+The next diagnostic reuses the established ThreadWatch Unwind/Describe
+pattern from qualified shared source blob
+e65d1789f8ca8be3a72e2dfffdc9376a78d0a532, copied only into the private
+native3 fixture helper. It opens only the closer TID and requires this live
+process plus the closer's actual published creation FILETIME before suspend.
+While suspended it collects a fixed32-PC CONTEXT/RtlLookupFunctionEntry/
+RtlVirtualUnwind trace, using guarded process reads for leaf return addresses.
+Resume is checked before any module/symbol/stdio reporting; resume failure
+reports through raw Win32 output and terminates this owned worker with95.
+Suspend/context/identity/handle failures fail this diagnostic, never produce
+a fabricated frame. Addresses are labeled nearest-export hints plus actual
+PC/module RVAs and actual module paths, not presumed exact private symbols.
+
+The probe runs at most once per contention request after three unsuccessful
+actual WCT samples, while the same original owner-held five-second deadline
+keeps running. It does not reset a timer or replace the full actual WCT
+criterion. The main fixture still requires the original real chain; an
+unproved Windows2025 chain remains failure regardless of captured PCs.
+System32 ucrtbase/kernelbase/ntdll file versions and byte hashes are collected
+in the CI parent before starting the worker, outside the suspended section
+and stream-lock deadline, for comparison with actual captured module paths.
+All seven authenticated output hashes will also be printed after validation.
+No new runtime pass, equivalent-proof exception or ADR acceptance is claimed.
+
+Two helper files are updated by exact byte import from reviewed canonical
+977be820/1ac73c5e source: download blob
+cd5cc415e53102c664edac22b1604df639c8804b and negative-control blob
+af7324581ae011f39aacf87d81ae1f44ad4c85f6. Assembly remains8d01e508.
+The cheap canonical helper preflight now requires the six additional COM/LPT
+superscript-name controls (15 total), including a valid first member and no
+destination creation when the later reserved member is rejected. This is
+prepared source, not retroactive expansion of f6b1fbfa's nine-control proof.
+No production C/C++ changed from1dc2e245 and no fixture ran locally. Python,
+YAML, embedded PowerShell source parsing and diff checks precede independent
+review of this exact diagnostic/source delta before any CI dispatch.

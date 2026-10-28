@@ -21,6 +21,7 @@
 #include <shellapi.h>
 #include <wct.h>
 #include <io.h>
+#include "stack_probe.h"
 #else
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -269,6 +270,10 @@ int main(int argc, char** argv) {
       FILE* stream = streams[slot];
       int stream_fd = Descriptor(slot), close_fd = Descriptor(other);
       std::atomic<unsigned> entering{0};
+#ifdef _WIN32
+      std::atomic<uint64_t> entering_birth{0};
+      bool stack_sampled = false;
+#endif
       std::atomic<bool> completed{false};
       int stream_result = -1, stream_error = 0;
 #ifdef _WIN32
@@ -276,6 +281,11 @@ int main(int argc, char** argv) {
 #endif
       LockStream(stream);
       std::thread closer([&] {
+#ifdef _WIN32
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user))
+          entering_birth.store(native3_stack_probe::Birth(created), std::memory_order_release);
+#endif
         entering.store(ThreadId(), std::memory_order_release);
         errno = 123;
         stream_result = std::fclose(stream);
@@ -291,6 +301,16 @@ int main(int argc, char** argv) {
       bool contended = false;
       while (!contended && std::chrono::steady_clock::now() < limit) {
         contended = StreamWaitObserved(entering.load(std::memory_order_acquire), ThreadId());
+#ifdef _WIN32
+        if (!contended && !stack_sampled && wait_trace.samples >= 3) {
+          stack_sampled = true;
+          if (!native3_stack_probe::Capture(entering.load(std::memory_order_acquire),
+                  entering_birth.load(std::memory_order_acquire), stream, stream_fd)) {
+            Failure("actual owned closer stack capture");
+            std::_Exit(95);
+          }
+        }
+#endif
         if (!contended) std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
 #ifdef _WIN32

@@ -35,7 +35,12 @@ with tempfile.TemporaryDirectory(prefix='surface-archive-negative-') as temporar
     module.extract_verified(archive, good, root/'valid', digest)
     assert (root/'valid/nested/value.txt').read_text() == 'actual'
     reject(lambda: module.extract_verified(archive, good, root/'valid', digest), 'extra-existing-member')
-    for label, entries in [('traversal',[('../escape','x')]), ('duplicate',[('A.txt','x'),('a.txt','y')]), ('windows-alias',[('file.txt.','x')]), ('prefix-collision',[('A','x'),('a/child','y')])]:
+    bad = [('traversal',[('../escape','x')]), ('duplicate',[('A.txt','x'),('a.txt','y')]), ('windows-alias',[('file.txt.','x')]), ('prefix-collision',[('A','x'),('a/child','y')])]
+    for device in ('COM', 'LPT'):
+        for digit in ('\u00b9', '\u00b2', '\u00b3'):
+            label = f'{device.lower()}-superscript-{ord(digit):04x}'
+            bad.append((label, [('valid.txt','ok'), (f'folder/{device}{digit}.txt','x')]))
+    for label, entries in bad:
         archive, digest, good = fixture(root, label, entries)
         reject(lambda: module.extract_verified(archive, good, root/label, digest), label)
         assert not (root/label).exists()
@@ -55,4 +60,4 @@ with tempfile.TemporaryDirectory(prefix='surface-archive-negative-') as temporar
     assert (root/'assembled/framework.jar').read_text() == 'original'
     assembly.assemble(root/'refresh', root/'assembled', root/'owners.json', 'current_framework')
     assert (root/'assembled/framework.jar').read_text() == 'new'
-print('SURFACE_ARCHIVE_NEGATIVES complete=9', flush=True)
+print('SURFACE_ARCHIVE_NEGATIVES complete=15', flush=True)
