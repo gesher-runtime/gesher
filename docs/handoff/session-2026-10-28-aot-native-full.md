@@ -115,3 +115,11 @@ single central reattach to same run; never cancel CI or create duplicate
 observers. Exact saved log copies were hash-verified in canonical ci-review.
 No usage/goal resume API or automation workaround was invented. Main/PR/tag/
 release remain held by full outstanding roadmap/hardware requirements.
+
+## Continued audit and security dependency, 2026-10-29
+
+TSF component40769699534 at exact8ad629ccb1edc86b9f701e83f01838ab9eaa1e94: all six jobs success. Independent raw audit in C:/work/gesher-ci-review/tsf-8ad-40769699534-integrator-actual-audit.md records seven controller cases per Windows and 71 store plus three service PASS per Windows, with zero store failures and owned process/handle retirement. This is bounded component proof only; a coherent full and rich formatting, insertion and hardware remain open. Services40751467438/source d9e6 controlled-worker cases were independently audited in C:/work/gesher-ci-review/services-40751467438-integrator-actual-audit.json; its unbounded fallback was corrected in later source 03c8e614, which that run does not qualify. Real provider termination and positive geocoding remain open.
+
+Binder private admission worktree C:/work/gesher-binder-peer-identity-current at 6a591993 is source-only. Its dedicated authenticated SystemServer bootstrap and admission/lifetime changes require independent security/concurrency peer and actual CI, including error and revoke controls. Legacy cohost Main, CLI, launcher and harness routes require secure adaptation and unchanged regression coverage; no Java bypass. Client-supplied Binder identity is insecure, so secondary AOT d4d81150 cannot claim a trust root until private admission is independently qualified and integrated. A source peer without additional findings does not waive that dependency.
+
+The owner explicitly states no interactive hardware Windows CI exists. Physical hardware verification remains a real external blocker; do not ask again as if a runner may already exist. Keep all hardware requirements open. Fresh agents for independent tasks; medium routine, high security/concurrency, Terra preferred where appropriate. Hard cap three workers plus manager; centralize CI waits and fill available worker slots. Integration remains sole owner of integration/main/PR/tag/release; no release until all requirements and actual proof are complete.
