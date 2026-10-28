@@ -143,14 +143,14 @@ sealed class ProbeForm : Form
                 throw new Exception("identical-expression live control reached the wrong context");
             Console.WriteLine("LIVE_IDENTICAL_EVALUATE unique=" + replacement.Unique);
             if (!observations.TryRemove("reply-comparison", out _)) throw new Exception("missing live control observation");
-            if (contexts.Values.Any(c => c.Unique == "0.0")) throw new Exception("nonexistent-context control is not unique");
-            Context nonexistent = old with { Unique = "0.0" };
-            Exception missingError = await RejectedEvaluate(nonexistent, comparison);
+            if (contexts.Values.Any(c => c.Unique == "0.0")) throw new Exception("unobserved-context control is already present");
+            Context unobserved = old with { Unique = "0.0" };
+            Exception missingError = await RejectedEvaluate(unobserved, comparison);
             Exception oldError = await RejectedEvaluate(old, comparison);
-            Console.WriteLine($"NONEXISTENT_EVALUATE_REJECTED type={missingError.GetType().FullName} hresult=0x{missingError.HResult:X8} message={missingError.Message}");
+            Console.WriteLine($"UNOBSERVED_EVALUATE_REJECTED type={missingError.GetType().FullName} hresult=0x{missingError.HResult:X8} message={missingError.Message}");
             Console.WriteLine($"DESTROYED_EVALUATE_REJECTED type={oldError.GetType().FullName} hresult=0x{oldError.HResult:X8} message={oldError.Message}");
             if (oldError.GetType() != missingError.GetType() || oldError.HResult != missingError.HResult)
-                throw new Exception("destroyed and nonexistent controls had different rejection types or codes");
+                throw new Exception("destroyed and unobserved controls had different rejection types or codes");
             await Task.Delay(500, timeout.Token);
             if (observations.ContainsKey("reply-comparison")) throw new Exception("rejected evaluation delivered a binding");
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
