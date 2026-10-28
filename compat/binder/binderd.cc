@@ -197,6 +197,8 @@ struct Proc {
   uint64_t key = 0;
   int pid = 0;
   uint32_t uid = 0;
+  HANDLE peer_process = nullptr;  // retained instance; guarded by g_lock
+  uint64_t peer_birth = 0;
   bool is_dead = false;
   std::map<uint64_t, Node*> nodes;
   std::map<uint32_t, Ref*> refs_by_desc;
@@ -1041,6 +1043,8 @@ void ProcRelease(Proc* proc) {
   for (auto& [id, buffer] : proc->buffers) buffers.push_back(buffer);
   for (Buffer* buffer : buffers) FreeBuffer(buffer, false);
   g_procs.erase(proc->id);
+  if (proc->peer_process != nullptr) CloseHandle(proc->peer_process);
+  proc->peer_process = nullptr;
 }
 
 // --- BINDER_WRITE_READ ---------------------------------------------------------------
@@ -1524,15 +1528,54 @@ uint64_t RandomKey() {
   return x;
 }
 
-void ServeProc(HANDLE pipe, In in) {
+// Capture from the accepted transport, before reading any untrusted hello.
+// This authenticates a Windows connection owner, NOT a logical Android UID.
+// Retaining the handle and checking its signalled state prevents a reused PID
+// from attaching a thread to this Proc. Host handle delegation/injection is
+// outside this boundary; same-user Windows processes are not isolated here.
+struct PipePeer {
+  ULONG pid = 0;
+  HANDLE process = nullptr;
+  uint64_t birth = 0;
+  ~PipePeer() { if (process != nullptr) CloseHandle(process); }
+  bool Capture(HANDLE pipe) {
+    if (!GetNamedPipeClientProcessId(pipe, &pid) || pid == 0 || pid > INT32_MAX) return false;
+    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    FILETIME created, exited, kernel, user;
+    ULONG again = 0;
+    if (process == nullptr || WaitForSingleObject(process, 0) != WAIT_TIMEOUT ||
+        !GetProcessTimes(process, &created, &exited, &kernel, &user) ||
+        !GetNamedPipeClientProcessId(pipe, &again) || again != pid) return false;
+    birth = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    return birth != 0;
+  }
+};
+
+bool PeerAlive(const Proc* proc) {
+  return proc->peer_process != nullptr &&
+      WaitForSingleObject(proc->peer_process, 0) == WAIT_TIMEOUT;
+}
+
+void ServeProc(HANDLE pipe, In in, PipePeer& peer) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
+  if (pid != peer.pid || WaitForSingleObject(peer.process, 0) != WAIT_TIMEOUT) {
+    Out rejected;
+    rejected.Put<int32_t>(-EPERM);
+    WriteMessage(pipe, rejected);
+    return;
+  }
   Proc* proc = new Proc;
   {
     std::lock_guard<std::mutex> lock(g_lock);
     proc->id = g_next_proc_id++;
     proc->key = RandomKey();
-    proc->pid = static_cast<int>(pid);
+    proc->pid = static_cast<int>(peer.pid);
+    proc->peer_process = peer.process;
+    proc->peer_birth = peer.birth;
+    peer.process = nullptr;  // ProcRelease owns the retained handle now.
+    // Compatibility only: UID is still untrusted until a launch registry and
+    // authenticated bootstrap capability exist. Do not use this as UID proof.
     proc->uid = uid;
     g_procs[proc->id] = proc;
   }
@@ -1596,7 +1639,7 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
   }
 }
 
-void ServeThread(HANDLE pipe, In in) {
+void ServeThread(HANDLE pipe, In in, const PipePeer& peer) {
   uint32_t version, proc_id, tid;
   uint64_t key;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&proc_id) || !in.Get(&key) ||
@@ -1608,7 +1651,10 @@ void ServeThread(HANDLE pipe, In in) {
   {
     std::lock_guard<std::mutex> lock(g_lock);
     auto it = g_procs.find(proc_id);
-    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
+    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
+        it->second->pid == static_cast<int>(peer.pid) &&
+        it->second->peer_birth == peer.birth && PeerAlive(it->second) &&
+        WaitForSingleObject(peer.process, 0) == WAIT_TIMEOUT) {
       proc = it->second;
       thread = new Thread;
       thread->proc = proc;
@@ -1627,7 +1673,7 @@ void ServeThread(HANDLE pipe, In in) {
     if (!req.Get(&op)) break;
     Out reply;
     std::unique_lock<std::mutex> lock(g_lock);
-    if (thread->is_dead || proc->is_dead) {
+    if (thread->is_dead || proc->is_dead || !PeerAlive(proc)) {
       lock.unlock();
       reply.Put<int32_t>(-EBADF);
       if (!WriteMessage(pipe, reply)) break;
@@ -1682,15 +1728,16 @@ void ServeThread(HANDLE pipe, In in) {
 }
 
 void Serve(HANDLE pipe) {
+  PipePeer peer;
   std::vector<uint8_t> msg;
-  if (ReadMessage(pipe, &msg)) {
+  if (peer.Capture(pipe) && ReadMessage(pipe, &msg)) {
     In in{msg.data(), msg.data() + msg.size()};
     uint32_t op, magic;
     if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
       if (op == wire::kHelloProc) {
-        ServeProc(pipe, in);
+        ServeProc(pipe, in, peer);
       } else if (op == wire::kHelloThread) {
-        ServeThread(pipe, in);
+        ServeThread(pipe, in, peer);
       }
     }
   }
