@@ -44,7 +44,7 @@ jobs:
           cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe out/arm64_elf_test.exe out/surface_invalidation_test.exe dist-component/
           cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
           python3 - <<'PYCODE'
-          import hashlib, json, os, re, shlex, subprocess
+          import hashlib, json, os, re, shlex, shutil, subprocess
           from pathlib import Path
           root = Path('dist-component')
           files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}
@@ -62,9 +62,10 @@ jobs:
               assert commands, (language, 'missing actual compile command')
               argv = shlex.split(commands[0]['command'])
               assert matches[0] in argv[:2], (language, argv[:2], matches[0])
-              version = subprocess.run([str(driver), '--version'], check=True, text=True, capture_output=True).stdout.strip()
+              launcher = Path(shutil.which(argv[0])).resolve(strict=True) if argv[0] != matches[0] else None
+              version = subprocess.run([matches[0], '--version'], check=True, text=True, capture_output=True).stdout.strip()
               assert version, language
-              compilers[language] = dict(configured=matches[0], resolved=str(driver), sha256=hashlib.sha256(driver.read_bytes()).hexdigest(), metadata_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), version=version, actual_source=commands[0]['file'])
+              compilers[language] = dict(configured=matches[0], resolved=str(driver), sha256=hashlib.sha256(driver.read_bytes()).hexdigest(), metadata_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), version=version, actual_source=commands[0]['file'], launcher=str(launcher) if launcher else None, launcher_sha256=hashlib.sha256(launcher.read_bytes()).hexdigest() if launcher else None)
           (root / 'surface-component-manifest.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], compilers=compilers, files=files), sort_keys=True))
           PYCODE
       - uses: actions/upload-artifact@v4
@@ -172,7 +173,8 @@ jobs:
           foreach ($language in 'C','CXX') {
             $compiler = $manifest.compilers.$language
             if (-not $compiler.configured -or -not $compiler.version -or $compiler.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $compiler.metadata_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $compiler.actual_source) { throw "Missing configured compiler evidence: $language" }
-            Write-Host "SURFACE_COMPILER language=$language driver=$($compiler.configured) sha256=$($compiler.sha256) metadata=$($compiler.metadata_sha256) source=$($compiler.actual_source) version=$($compiler.version)"
+            if ($compiler.launcher -and $compiler.launcher_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Missing actual compiler launcher hash: $language" }
+            Write-Host "SURFACE_COMPILER language=$language driver=$($compiler.configured) sha256=$($compiler.sha256) metadata=$($compiler.metadata_sha256) launcher=$($compiler.launcher) launcher_sha256=$($compiler.launcher_sha256) source=$($compiler.actual_source) version=$($compiler.version)"
           }
           $manifestNames = @($manifest.files.PSObject.Properties.Name)
           if ($manifestNames.Count -eq 0 -or @($manifestNames | Select-Object -Unique).Count -ne $manifestNames.Count) { throw 'Empty or duplicate host manifest' }
