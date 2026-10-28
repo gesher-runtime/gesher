@@ -75,12 +75,12 @@ jobs:
             -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
           ninja -C out native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd
           toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/libgesher_posix.a > fixture/production-symbols.txt
-          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/native3_lock_blocking_worker.exe > fixture/fixture-symbols.txt
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/CMakeFiles/native3_lock_blocking_worker.dir/compat/posix/src/record_lock_registry.cc.obj > fixture/fixture-symbols.txt
           python3 - <<'PY'
           from pathlib import Path
           assert 'wait_test_hooks' not in Path('fixture/production-symbols.txt').read_text()
           assert 'wait_test_hooks' in Path('fixture/fixture-symbols.txt').read_text()
-          print('BLOCKING_HOOK_ISOLATION production=absent fixture=present activation=compile-only')
+          print('BLOCKING_HOOK_ISOLATION production=absent fixture_object=present activation=compile-only')
           PY
           for target in native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker binderd; do
             cp "out/$target.exe" fixture/

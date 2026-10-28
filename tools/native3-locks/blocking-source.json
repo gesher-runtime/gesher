@@ -2,7 +2,7 @@
   "base": "f1550540186b4ae3f17a5e501a886ec1c4d5d613",
   "status": "SOURCE ONLY: cleanup failure controls implemented; independent peer and CI required",
   "blobs": {
-    ".github/workflows/native3-locks-blocking.yml": "b657dce65c03d6df38dd6cd5098b397789baac27",
+    ".github/workflows/native3-locks-blocking.yml": "fd7f55947778c173317ebd0eb69d8fc19d78aff0",
     "CMakeLists.txt": "8ba137e29a5840600fe7d77fee4e833e6d0bfd73",
     "compat/posix/posix.cmake": "bd7a73bd589c30617b9a4ee29b4d15bba3f20221",
     "compat/posix/src/record_lock_registry.cc": "aaa91c010c276cc74a58eca96f44dc5f08ab1925",
