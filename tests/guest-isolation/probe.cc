@@ -43,7 +43,7 @@ static bool write_bytes(HANDLE h, const char* text, DWORD size) {
 // explicit output pipe. Parent prints it even when the strict child check fails.
 struct IpcObservation {
   ULONG_PTR handle;
-  DWORD error, requested;
+  DWORD error, requested, server_pid;
 };
 static void print_sid(const char* field, PSID sid, DWORD attributes) {
   LPWSTR text = nullptr;
@@ -79,14 +79,62 @@ static bool token_evidence(HANDLE process) {
   }
   return true;
 }
-static bool pipe_evidence(HANDLE pipe) {
+static bool pipe_evidence(HANDLE pipe, PSID allowed) {
   PSECURITY_DESCRIPTOR sd = nullptr;
-  const SECURITY_INFORMATION fields = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+  const SECURITY_INFORMATION fields = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
   const DWORD error = GetSecurityInfo(pipe, SE_KERNEL_OBJECT, fields, nullptr, nullptr, nullptr, nullptr, &sd);
   if (error != ERROR_SUCCESS) { printf("DIAG host-ipc security-query-error=%lu\n", error); return false; }
   LPWSTR text = nullptr;
-  const bool ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, fields, &text, nullptr) != FALSE;
-  if (ok) { printf("DIAG host-ipc actual-owner-group-dacl=%ls\n", text); LocalFree(text); }
+  bool ok = ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, fields, &text, nullptr) != FALSE;
+  if (ok) { printf("DIAG host-ipc actual-owner-group-dacl-label=%ls\n", text); LocalFree(text); }
+  PACL dacl = nullptr, sacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  SECURITY_DESCRIPTOR_CONTROL control = 0; DWORD revision = 0;
+  PSID owner_rights = nullptr, low = nullptr;
+  ok = ok && ConvertStringSidToSidW(L"S-1-3-4", &owner_rights) && ConvertStringSidToSidW(L"S-1-16-4096", &low) &&
+      GetSecurityDescriptorControl(sd, &control, &revision) && (control & SE_DACL_PROTECTED) &&
+      GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present && dacl && dacl->AceCount == (allowed ? 2 : 1);
+  GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
+  for (DWORD i = 0; ok && i < dacl->AceCount; ++i) {
+    void* raw = nullptr;
+    ok = GetAce(dacl, i, &raw) != FALSE;
+    if (!ok) break;
+    const auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+    DWORD mask = ace->Mask; MapGenericMask(&mask, &mapping);
+    ok = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
+        EqualSid(const_cast<DWORD*>(&ace->SidStart), i == 0 ? owner_rights : allowed) &&
+        mask == (i == 0 ? FILE_ALL_ACCESS : FILE_GENERIC_READ | FILE_GENERIC_WRITE);
+  }
+  ok = ok && GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted) && present && sacl && sacl->AceCount == 1;
+  if (ok) {
+    void* raw = nullptr; ok = GetAce(sacl, 0, &raw) != FALSE;
+    if (ok) {
+      const auto* label = static_cast<SYSTEM_MANDATORY_LABEL_ACE*>(raw);
+      ok = label->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE && label->Header.AceFlags == 0 &&
+          label->Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP && EqualSid(const_cast<DWORD*>(&label->SidStart), low);
+    }
+  }
+  if (owner_rights) LocalFree(owner_rights);
+  if (low) LocalFree(low);
+  LocalFree(sd);
+  return ok;
+}
+static bool read_observation(HANDLE input, HANDLE process, IpcObservation* value) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  do {
+    DWORD available = 0, read = 0;
+    if (PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr) && available >= sizeof(*value))
+      return ReadFile(input, value, sizeof(*value), &read, nullptr) && read == sizeof(*value);
+    if (WaitForSingleObject(process, 5) != WAIT_TIMEOUT) return false;
+  } while (GetTickCount64() < deadline);
+  return false;
+}
+static bool protect_pipe(HANDLE pipe) {
+  PSECURITY_DESCRIPTOR sd = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &sd, nullptr)) return false;
+  PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
+  bool ok = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present &&
+      SetSecurityInfo(pipe, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                      nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS;
   LocalFree(sd);
   return ok;
 }
@@ -125,17 +173,33 @@ static int child(int argc, wchar_t** argv) {
   Handle input, output;
   input.h = reinterpret_cast<HANDLE>(_wcstoui64(argv[8], nullptr, 10));
   output.h = reinterpret_cast<HANDLE>(_wcstoui64(argv[9], nullptr, 10));
+  char challenge[20]{}; DWORD n = 0;
+  if (!ReadFile(input.h, challenge, sizeof(challenge)-1, &n, nullptr) || n != 19 ||
+      memcmp(challenge, "Gesher-resource-v1\n", 19) != 0) return 18;
+  // Prove a fresh connection to the very same host endpoint before its DACL
+  // is tightened. A missing or rewritten namespace cannot pass this control.
+  SetLastError(ERROR_SUCCESS);
+  Handle positive;
+  positive.h = CreateFileW(argv[7], GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+  const DWORD positive_error = GetLastError();
+  ULONG server_pid = 0;
+  const bool endpoint = positive.valid() && GetNamedPipeServerProcessId(positive.h, &server_pid) && server_pid == pid &&
+      write_bytes(positive.h, challenge, 19);
+  const IpcObservation positive_observation{reinterpret_cast<ULONG_PTR>(positive.h), positive_error,
+      GENERIC_READ | GENERIC_WRITE, server_pid};
+  positive.reset();
+  if (!write_bytes(output.h, reinterpret_cast<const char*>(&positive_observation), sizeof(positive_observation))) return 53;
+  if (!endpoint) return 57;
+  char protected_ack = 0;
+  if (!ReadFile(input.h, &protected_ack, 1, &n, nullptr) || n != 1 || protected_ack != 'D') return 58;
   SetLastError(ERROR_SUCCESS);
   HANDLE opened = CreateFileW(argv[7], GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
   const DWORD open_error = GetLastError();  // Capture before any logging/close.
-  const IpcObservation observation{reinterpret_cast<ULONG_PTR>(opened), open_error, GENERIC_READ | GENERIC_WRITE};
+  const IpcObservation observation{reinterpret_cast<ULONG_PTR>(opened), open_error, GENERIC_READ | GENERIC_WRITE, 0};
   const bool ipc_denied = opened == INVALID_HANDLE_VALUE && open_error == ERROR_ACCESS_DENIED;
   if (opened != nullptr && opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
   if (!write_bytes(output.h, reinterpret_cast<const char*>(&observation), sizeof(observation))) return 53;
   if (!ipc_denied) return 17;
-  char challenge[20]{}; DWORD n = 0;
-  if (!ReadFile(input.h, challenge, sizeof(challenge)-1, &n, nullptr) || n != 19 ||
-      memcmp(challenge, "Gesher-resource-v1\n", 19) != 0) return 18;
   return write_bytes(output.h, kRows, sizeof(kRows)-1) ? 0 : 19;
 }
 
@@ -208,16 +272,19 @@ static int exercise(Fixture& f) {
   const std::wstring acl = L"D:P(A;OICI;FA;;;OW)(A;OICI;GRGX;;;" + sid_text + L")";
   if (!set_acl(f.root, acl, SE_FILE_OBJECT) || !CopyFileW(exe, f.executable.c_str(), TRUE) ||
       !marker(f.code) || !marker(f.config)) return 24;
-  const std::wstring pipe_name = L"\\\\.\\pipe\\LOCAL\\" + f.profile;
+  // Unpackaged Win32 host endpoint. LOCAL was rewritten in the AppContainer:
+  // actual c2d667ea CI40783823671 returned FILE_NOT_FOUND on both runners.
+  const std::wstring pipe_name = L"\\\\.\\pipe\\" + f.profile;
   PSECURITY_DESCRIPTOR host_sd = nullptr;
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &host_sd, nullptr)) return 25;
+  const std::wstring positive_acl = L"D:P(A;;GA;;;OW)(A;;GRGW;;;" + sid_text + L")S:(ML;;NW;;;LW)";
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(positive_acl.c_str(), SDDL_REVISION_1, &host_sd, nullptr)) return 25;
   SECURITY_ATTRIBUTES host_sa{sizeof(host_sa), host_sd, FALSE};
   Handle host;
   host.h = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
       PIPE_TYPE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 512, 512, 0, &host_sa);
   LocalFree(host_sd);
   if (!host.valid()) return 26;
-  if (!pipe_evidence(host.h)) return 54;
+  if (!pipe_evidence(host.h, f.sid)) return 54;
   // Nonblocking listening state avoids an outstanding OVERLAPPED at cleanup.
   if (ConnectNamedPipe(host.h, nullptr) || GetLastError() != ERROR_PIPE_LISTENING) return 27;
   {
@@ -235,7 +302,6 @@ static int exercise(Fixture& f) {
   if (!CreatePipe(&in_read.h, &in_write.h, &inherited, 0) || !CreatePipe(&out_read.h, &out_write.h, &inherited, 0) ||
       !SetHandleInformation(in_write.h, HANDLE_FLAG_INHERIT, 0) || !SetHandleInformation(out_read.h, HANDLE_FLAG_INHERIT, 0) ||
       !write_bytes(in_write.h, "Gesher-resource-v1\n", 19)) return 32;
-  in_write.reset();
   Handle job;
   job.h = CreateJobObjectW(nullptr, nullptr);
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -281,6 +347,29 @@ static int exercise(Fixture& f) {
   printf("DIAG host-ipc path=%ls requested=0x%08lx share=0 creation=OPEN_EXISTING flags=0\n", pipe_name.c_str(), static_cast<DWORD>(GENERIC_READ | GENERIC_WRITE));
   if (!token_evidence(process.h)) return 55;
   if (ResumeThread(thread.h) == static_cast<DWORD>(-1)) return 37;
+  IpcObservation positive_observation{};
+  if (!read_observation(out_read.h, process.h, &positive_observation)) return 59;
+  printf("DIAG child host-ipc-positive handle=%p error=%lu requested=0x%08lx server-pid=%lu\n",
+      reinterpret_cast<void*>(positive_observation.handle), positive_observation.error,
+      positive_observation.requested, positive_observation.server_pid);
+  if (!positive_observation.handle || positive_observation.handle == reinterpret_cast<ULONG_PTR>(INVALID_HANDLE_VALUE) ||
+      positive_observation.requested != (GENERIC_READ | GENERIC_WRITE) || positive_observation.server_pid != GetCurrentProcessId()) return 60;
+  char actual_challenge[20]{}; DWORD challenge_available = 0, challenge_read = 0;
+  if (!PeekNamedPipe(host.h, nullptr, 0, nullptr, &challenge_available, nullptr) || challenge_available != 19 ||
+      !ReadFile(host.h, actual_challenge, 19, &challenge_read, nullptr) || challenge_read != 19 ||
+      memcmp(actual_challenge, "Gesher-resource-v1\n", 19) != 0) return 61;
+  if (!DisconnectNamedPipe(host.h) || !protect_pipe(host.h) || !pipe_evidence(host.h, nullptr)) return 62;
+  if (ConnectNamedPipe(host.h, nullptr) || GetLastError() != ERROR_PIPE_LISTENING) return 63;
+  {
+    Handle fresh_host;
+    fresh_host.h = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (!fresh_host.valid()) return 64;
+  }
+  if (!DisconnectNamedPipe(host.h)) return 65;
+  if (ConnectNamedPipe(host.h, nullptr) || GetLastError() != ERROR_PIPE_LISTENING) return 66;
+  puts("PASS parent same-endpoint-isolated-positive-challenge fresh-host-positive protected-dacl");
+  if (!write_bytes(in_write.h, "D", 1)) return 67;
+  in_write.reset();
   if (WaitForSingleObject(process.h, 15000) != WAIT_OBJECT_0) return 38;
   DWORD code = 99;
   if (!GetExitCodeProcess(process.h, &code)) return 39;

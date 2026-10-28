@@ -70,6 +70,7 @@ jobs:
           if ($code -ne 0) { throw "fixture/supervisor failed: $code" }
           $expected = @(
             'PASS parent suspended-token-sid pid=',
+            'PASS parent same-endpoint-isolated-positive-challenge fresh-host-positive protected-dacl',
             'PASS child actual-token-sid',
             'PASS child host-process-dup-denied error=5',
             'PASS child host-process-write-denied error=5',
