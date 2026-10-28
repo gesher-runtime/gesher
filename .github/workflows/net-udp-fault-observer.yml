@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/net-udp-fault-observer.yml'
       - 'tests/native2/net_udp_fault_observer.c'
+      - 'tests/native2/net_udp_copy_observer.c'
 permissions:
   contents: read
 jobs:
@@ -22,3 +23,24 @@ jobs:
           sha256sum tests/native2/net_udp_fault_observer.c
           cc -std=c11 -O2 -Wall -Wextra -Werror tests/native2/net_udp_fault_observer.c -o /tmp/net-udp-fault-observer
           /tmp/net-udp-fault-observer
+  windows-copy-observer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Observe actual kernel guarded-copy destination behavior
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+          Get-FileHash (Get-Command cl.exe).Source -Algorithm SHA256
+          Get-FileHash tests/native2/net_udp_copy_observer.c -Algorithm SHA256
+          & cl.exe /nologo /W4 /WX tests/native2/net_udp_copy_observer.c /Fe:net_udp_copy_observer.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./net_udp_copy_observer.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
