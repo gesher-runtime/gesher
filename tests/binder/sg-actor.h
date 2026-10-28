@@ -297,7 +297,7 @@ inline int Client(const char* scenario, const std::string& prefix) {
   const bool oneway = !strcmp(scenario, "oneway") || !strcmp(scenario, "wire-queue");
   Payload payload(!strcmp(scenario, "smallmap"));
   int sent_fd = -1;
-  if (wire || !strcmp(scenario, "adoptfail")) {
+  if (wire || !strcmp(scenario, "adoptfail") || !strcmp(scenario, "readonly") || !strcmp(scenario, "readwrite")) {
     const std::string path = prefix + ".descriptor";
     sent_fd = open(path.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
     static const char identity[] = "sg-owned-file";
@@ -314,7 +314,7 @@ inline int Client(const char* scenario, const std::string& prefix) {
   if (oneway) return report.Finish(); // process really exits before receiver is released
   Command response;
   const bool rejected = wire || !strcmp(scenario, "smallmap") || !strcmp(scenario, "badread") ||
-      !strcmp(scenario, "prefixfault") || !strcmp(scenario, "adoptfail");
+      !strcmp(scenario, "prefixfault") || !strcmp(scenario, "adoptfail") || !strcmp(scenario, "readonly");
   const uint32_t expected = (!strcmp(scenario, "wire-finishloss") || !strcmp(scenario, "wire-death-afterfinish"))
       ? BR_DEAD_REPLY : rejected ? BR_FAILED_REPLY : BR_REPLY;
   if (!report.Check(driver.Next(&response, expected),
@@ -325,6 +325,85 @@ inline int Client(const char* scenario, const std::string& prefix) {
     report.Check(driver.Flush(), "reply allocation freed through real BC_FREE_BUFFER");
   }
   return report.Finish();
+}
+
+// Separate stable-output controls. The initial consumed offset is supplied by
+// this caller to omit the initial NOOP, not evidence of a transported prefix.
+// Ordinary marker files let the independent parent observe this same live
+// actor's whole page and real Windows protection before and after ioctl.
+inline int OutputPage(Driver* driver, bool readonly, const std::string& prefix, Report* report) {
+  const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  void* allocation = mmap(nullptr, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (!report->Check(allocation != MAP_FAILED, "actual output pages allocated")) return report->Finish();
+  auto* destination = static_cast<uint8_t*>(allocation) + page;
+  memset(destination, 0x5a, page);
+  if (!report->Check(!readonly || mprotect(destination, page, PROT_READ) == 0,
+      "stable output page protection established")) return report->Finish();
+  char description[160];
+  int length = snprintf(description, sizeof(description), "%u %llu %zu %u\n", static_cast<unsigned>(getpid()),
+      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(destination)), page, readonly ? 2U : 4U);
+  int metadata = open((prefix + ".output-page").c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+  bool described = metadata >= 0 && length > 0 && static_cast<size_t>(length) < sizeof(description) &&
+      write(metadata, description, static_cast<size_t>(length)) == length;
+  if (metadata >= 0) close(metadata);
+  if (!report->Check(described && Mark(prefix + ".output-ready") && WaitFile(prefix + ".output-inspected"),
+      "independent parent inspected actual pre-ioctl page")) return report->Finish();
+  int vacant = open("/dev/null", O_RDONLY);
+  if (!report->Check(vacant >= 0 && close(vacant) == 0 && fcntl(vacant, F_GETFD, 0) == -1 && errno == EBADF,
+      "actual candidate descriptor slot invalid before receiver adoption")) return report->Finish();
+  int result = EAGAIN;
+  binder_write_read rw{};
+  for (unsigned retry = 0; retry < 1500 && (result == EAGAIN || result == 0); ++retry) {
+    rw = {};
+    rw.read_buffer = reinterpret_cast<binder_uintptr_t>(destination - sizeof(uint32_t));
+    rw.read_size = page + sizeof(uint32_t);
+    rw.read_consumed = sizeof(uint32_t);
+    int status = ioctl(driver->fd, BINDER_WRITE_READ, &rw);
+    result = status < 0 ? errno : 0;
+    if (readonly ? result == EFAULT : (result == 0 && rw.read_consumed > sizeof(uint32_t))) break;
+    if (result != 0 && result != EAGAIN) break;
+    usleep(20000);
+  }
+  if (readonly) {
+    report->Check(result == EFAULT && rw.read_consumed == sizeof(uint32_t),
+        "stable readonly output returns EFAULT without publishing transaction bytes");
+    bool same = true;
+    for (size_t index = 0; index < page; ++index) same &= destination[index] == 0x5a;
+    report->Check(same, "whole readonly output page remains unchanged after failure");
+    report->Check(fcntl(vacant, F_GETFD, 0) == -1 && errno == EBADF,
+        "failed publication rolls back adopted owned descriptor slot");
+    int reused = open("/dev/null", O_RDONLY);
+    report->Check(reused == vacant, "rolled-back descriptor slot is actually reusable");
+    if (reused >= 0) close(reused);
+  } else {
+    uint32_t command = 0;
+    memcpy(&command, destination, sizeof(command));
+    binder_transaction_data transaction{};
+    memcpy(&transaction, destination + sizeof(command), sizeof(transaction));
+    bool delivered = result == 0 && command == BR_TRANSACTION &&
+        rw.read_consumed == 2 * sizeof(uint32_t) + sizeof(transaction) && transaction.data_size == 160 && transaction.offsets_size == 32;
+    if (report->Check(delivered, "same writable output body publishes real SG transaction and FD")) {
+      binder_fd_object descriptor{};
+      memcpy(&descriptor, reinterpret_cast<const uint8_t*>(transaction.data.ptr.buffer) + 136, sizeof(descriptor));
+      char identity[14]{};
+      report->Check(descriptor.hdr.type == BINDER_TYPE_FD && descriptor.fd == static_cast<uint32_t>(vacant) &&
+          read(static_cast<int>(descriptor.fd), identity, sizeof(identity)) == static_cast<ssize_t>(sizeof(identity)) &&
+          memcmp(identity, "sg-owned-file", sizeof(identity)) == 0,
+          "writable output receives actual owned descriptor and independent file bytes");
+      if (descriptor.hdr.type == BINDER_TYPE_FD) close(static_cast<int>(descriptor.fd));
+      binder_transaction_data payload = transaction;
+      payload.data_size = 136; payload.offsets_size = 24;
+      Verify(driver, payload, report);
+      driver->Free(transaction);
+      Payload reply;
+      reply.Queue(driver, BC_REPLY_SG, 0);
+      report->Check(driver->Flush(), "writable output actually frees receiver buffer and returns ordinary reply");
+    }
+  }
+  report->Check(Mark(prefix + ".output-complete") && WaitFile(prefix + ".output-observed"),
+      "independent parent inspected actual post-ioctl page before actor exit");
+  report->Check(munmap(allocation, page * 2) == 0, "actual output pages released after independent observation");
+  return report->Finish();
 }
 
 inline int Server(const char* scenario, const std::string& prefix) {
@@ -338,6 +417,9 @@ inline int Server(const char* scenario, const std::string& prefix) {
   driver.Code(BC_ENTER_LOOPER);
   if (!report.Check(driver.Flush() && Mark(prefix + ".ready"), "receiver ready without consuming queued transaction")) return report.Finish();
   if (!report.Check(WaitFile(prefix + ".release"), "parent releases actual delivery")) return report.Finish();
+  if (!strcmp(scenario, "readonly") || !strcmp(scenario, "readwrite")) {
+    return OutputPage(&driver, !strcmp(scenario, "readonly"), prefix, &report);
+  }
   const bool adopt_failure = !strcmp(scenario, "adoptfail");
   if (small || !strcmp(scenario, "badread") || !strcmp(scenario, "prefixfault") || adopt_failure) {
     const int expected = small ? ENOMEM : adopt_failure ? EMFILE : EFAULT;

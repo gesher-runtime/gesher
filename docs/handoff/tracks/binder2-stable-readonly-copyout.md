@@ -63,6 +63,31 @@ source unchanged. Scoped proof must precede a later canonical full/package/e2e.
 
 ## Explicit exclusions
 
+## Fixture source checkpoint (not compiled or run)
+
+Prepared two additive scenarios `readwrite`/`readonly` in the existing shared
+actor and all nine contexts. Existing seven scenario bodies/assertions remain
+unchanged. A real transferred owned descriptor is included in both new paths.
+The receiver uses two real mapped pages, a supplied initial consumed offset
+(not a transported prefix), stable RO/RW protection and whole-page sentinel.
+RW checks actual command/payload/descriptor bytes and free/reply; RO checks
+EFAULT, unchanged sentinel, unpublished consumed offset, invalid/reusable
+descriptor slot after the normal claim/adopt/publication-abandon path.
+
+The parent compiles OutputPageObserver.cs only inside CI, holds one actual
+Windows process handle across ioctl, independently VirtualQueryEx/RPM-observes
+the whole aligned page/protection/hash before and after, and checks that PID
+against the later actual normally completed actor PID. Marker files hold the
+actor alive for observation. Source hash and actual observations are emitted.
+The existing actor completion/distinct-PID/open audits remain mandatory.
+PowerShell parsing and diff whitespace checks passed locally; no C/C++/C#/
+Java compilation or fixture execution occurred. This checkpoint still needs
+independent source peer, refreshed exact component prerequisite/source guards,
+fresh producers and actual both-Windows runtime. Do not push historical
+component workflow wiring as a qualifying run.
+
+## Explicit exclusions (continued)
+
 Existing prefixfault/adoptfail/invalid/mapped-capacity and normal FD/Bitmap/
 InputChannel regressions remain untouched. This work does not resume filtered
 b52/public-prefix/ACK-loss/raw-wire experiments or substitute for their missing
