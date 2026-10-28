@@ -35,10 +35,24 @@ with tempfile.TemporaryDirectory(prefix='surface-archive-negative-') as temporar
     module.extract_verified(archive, good, root/'valid', digest)
     assert (root/'valid/nested/value.txt').read_text() == 'actual'
     reject(lambda: module.extract_verified(archive, good, root/'valid', digest), 'extra-existing-member')
-    for label, entries in [('traversal',[('../escape','x')]), ('duplicate',[('A.txt','x'),('a.txt','y')]), ('windows-alias',[('file.txt.','x')])]:
+    for label, entries in [('traversal',[('../escape','x')]), ('duplicate',[('A.txt','x'),('a.txt','y')]), ('windows-alias',[('file.txt.','x')]), ('prefix-collision',[('A','x'),('a/child','y')])]:
         archive, digest, good = fixture(root, label, entries)
         reject(lambda: module.extract_verified(archive, good, root/label, digest), label)
         assert not (root/label).exists()
     reject(lambda: module.extract_verified(root/'absent.zip', good, root/'missing', digest), 'missing-archive')
+    reject(lambda: module.HttpsOnly().redirect_request(None, None, 302, '', {}, 'http://example.test/file'), 'insecure-redirect')
     assert not (root/'escape').exists()
-print('SURFACE_ARCHIVE_NEGATIVES complete=6', flush=True)
+    spec2 = importlib.util.spec_from_file_location('surface_assembly', Path(__file__).with_name('assemble-artifacts.py'))
+    assembly = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(assembly)
+    for name in ('baseline', 'refresh', 'unexpected'):
+        (root/name).mkdir()
+    (root/'baseline/framework.jar').write_text('original')
+    (root/'refresh/framework.jar').write_text('new')
+    (root/'unexpected/framework.jar').write_text('foreign')
+    assembly.assemble(root/'baseline', root/'assembled', root/'owners.json', 'base_framework')
+    reject(lambda: assembly.assemble(root/'unexpected', root/'assembled', root/'owners.json', 'base_graphics'), 'unexpected-overlay')
+    assert (root/'assembled/framework.jar').read_text() == 'original'
+    assembly.assemble(root/'refresh', root/'assembled', root/'owners.json', 'current_framework')
+    assert (root/'assembled/framework.jar').read_text() == 'new'
+print('SURFACE_ARCHIVE_NEGATIVES complete=9', flush=True)
