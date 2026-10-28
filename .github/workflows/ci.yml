@@ -15,6 +15,8 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  union-trusted-source:
+    uses: gesher-runtime/gesher/.github/workflows/coherent-union-trusted-source.yml@fd664dab1e7aabfc4cc7bdddc3d92d3a01c257f4
   union-tsf:
     needs: [artifact-preflight]
     uses: ./.github/workflows/tsf-format-component.yml
@@ -25,6 +27,7 @@ jobs:
     needs: [artifact-preflight]
     uses: ./.github/workflows/native3-locks-blocking.yml
   artifact-preflight:
+    needs: [union-trusted-source]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
