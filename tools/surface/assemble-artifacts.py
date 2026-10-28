@@ -7,9 +7,7 @@ import shutil
 
 FRAMEWORK = set('framework.jar framework-res.apk gesher-app.jar build.prop lifecycle.apk components.apk peer.apk uiapp.apk dbapp.apk devsvc.apk devices.apk nodevices.apk popupapp.apk gesher-camera.apk rtlapp.apk imeapp.apk lifeapp.apk localeapp.apk locale2app.apk locale2other.apk surfaceapp.apk winapp.apk winlegacy.apk netapp.apk nonetapp.apk web3app.apk services-tests.dex exitstatusapp.apk sharedlibraryapp.apk sharedlibrarydlc.apk sharedlibrarybad.apk shared-base-v1.jar shared-base-v2.jar shared-entry.jar graphics-tests.dex web3-query-tests.dex'.split())
 HOST = set('dalvikvm.exe dex2oat.exe profman.exe dexdump.exe gesher-exec.exe arm64_elf_test.exe surface_invalidation_test.exe dalvikvm.map dex2oat.map core-oj.jar core-libart.jar core-icu4j.jar hello.dex'.split())
-GRAPHICS = set('skia_probe.exe skia_gl_probe.exe window_probe.exe windows4_input_pane_probe.exe windows4_text_store_probe.exe windows4_ime_tsf_probe.exe'.split())
-ALLOWED = {'current_framework': ('base_framework', FRAMEWORK), 'current_host': ('base_windows_x64', HOST),
-           'base_graphics': ('base_windows_x64', GRAPHICS)}
+ALLOWED = {'current_framework': ('base_framework', FRAMEWORK), 'current_host': ('base_windows_x64', HOST)}
 
 def assemble(source, dest, ledger, owner, prefix='', exclude=()):
     source, dest, ledger = Path(source).resolve(), Path(dest).resolve(), Path(ledger).resolve()

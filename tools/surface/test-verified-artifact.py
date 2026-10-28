@@ -55,12 +55,4 @@ with tempfile.TemporaryDirectory(prefix='surface-archive-negative-') as temporar
     assert (root/'assembled/framework.jar').read_text() == 'original'
     assembly.assemble(root/'refresh', root/'assembled', root/'owners.json', 'current_framework')
     assert (root/'assembled/framework.jar').read_text() == 'new'
-    # Use fresh isolated roots to prove the one explicitly owned baseline replacement.
-    (root/'base-graphics').mkdir()
-    (root/'graphics').mkdir()
-    (root/'base-graphics/skia_probe.exe').write_text('base probe')
-    (root/'graphics/skia_probe.exe').write_text('graphics probe')
-    assembly.assemble(root/'base-graphics', root/'graphics-out', root/'graphics-owners.json', 'base_windows_x64')
-    assembly.assemble(root/'graphics', root/'graphics-out', root/'graphics-owners.json', 'base_graphics')
-    assert (root/'graphics-out/skia_probe.exe').read_text() == 'graphics probe'
 print('SURFACE_ARCHIVE_NEGATIVES complete=9', flush=True)
