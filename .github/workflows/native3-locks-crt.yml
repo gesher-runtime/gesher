@@ -1,0 +1,42 @@
+name: native3-locks-actual-crt-implementation
+on:
+  push:
+    branches: ['wip/native3-locks']
+    paths: ['.github/workflows/native3-locks-crt.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native3-locks-actual-crt-implementation-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  inspect-actual-crt:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Authenticate pinned Windows disassembler tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Diagnostic checkout mismatch' }
+          Write-Host "ACTUAL_CRT_SOURCE $env:GITHUB_SHA RUN $env:GITHUB_RUN_ID ATTEMPT $env:GITHUB_RUN_ATTEMPT OS $env:ImageOS VERSION $env:ImageVersion"
+          $archive = Join-Path $env:RUNNER_TEMP 'llvm-mingw-windows.zip'
+          Invoke-WebRequest -Uri 'https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-x86_64.zip' -OutFile $archive
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne '317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a') { throw 'Disassembler archive digest mismatch' }
+          Write-Host "ACTUAL_CRT_TOOLCHAIN_ARCHIVE_SHA256 $hash"
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'native3-crt-tools')
+      - name: Inspect actual loaded CRT named lock functions without assuming private layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $module = Get-Item -LiteralPath (Join-Path $env:SystemRoot 'System32/ucrtbase.dll')
+          Write-Host "ACTUAL_CRT_SYSTEM_MODULE path=$($module.FullName) version=$($module.VersionInfo.FileVersion) sha256=$((Get-FileHash -LiteralPath $module.FullName -Algorithm SHA256).Hash)"
+          $objdump = Join-Path $env:RUNNER_TEMP 'native3-crt-tools/llvm-mingw-20261006-ucrt-x86_64/bin/llvm-objdump.exe'
+          python tools/native3-locks/inspect_crt_lock.py --objdump $objdump
+          if ($LASTEXITCODE -ne 0) { throw 'Actual named CRT implementation inspection failed' }

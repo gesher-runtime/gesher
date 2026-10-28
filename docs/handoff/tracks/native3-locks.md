@@ -725,3 +725,31 @@ recovery, if needed, must require full rebuilt executable SHA equality to the
 original before consuming any map; the original PE also embeds a link timestamp,
 so default current-time relinking is not byte-identical. No such map is prepared
 or accepted now. No original runtime requirement/deadline has changed.
+
+### Actual original IAT diagnostic40684287454: named CRT call only
+
+Sourcec2ae549c/run40684287454 succeeded1/1 (required watch exit0). All original
+source4f8/failed run40674284726/successful compile122768663211 provenance, raw ZIP,
+whole original source and seven byte-hash gates passed again. Exact archived
+worker instruction bytes e81e5e0000 atRVA0x39fd call0x9820/return0x3a02;
+ff156aaa0b00 atRVA0x9830 callIAT0xc42a0/return0x9836. That exact import-table
+slot is api-ms-win-crt-filesystem-l1-1-0.dll!_lock_file. This is direct named
+import evidence from the SAME worker, not nearest-export inference or private
+symbol/critical-section address/owner proof. Source peer required all Symbol
+lines fullmatch1:1 before IAT indexing and AMD64/PE32+ checks before stride8.
+Plain logs/metadata: C:/work/gesher-ci-review/native3-symbolize-40684287454*.
+OriginalDWARF40683188044 remains failed; actual runtime40674284726 remains failed.
+
+The next separate CI-only diagnostic resolves named _lock_file/_unlock_file
+from an explicitly System32-loaded CRT on each real Windows runner, retains
+its module lifetime, resolves each actual owning module by address and records
+file version/SHA256. Guarded ReadProcessMemory must match the exact file-backed
+128 bytes at each export RVA before checksum-pinned llvm-objdump prints its
+actual implementation. The Windows LLVM release archive317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a
+was obtained from official20261006 release metadata, not an unverified tool.
+No private FILE/critical-section offset is assumed, no lock is acquired and no
+owner/lifetime acceptance is claimed. This collects implementation evidence
+before designing actual CS/OwningThread/same-FILE causal observation. A changed
+module hash cannot be relabeled as the prior2025 module. No Native component
+criterion/deadline changed. Local checks were source AST/YAML/diff parsing only;
+independent focused peer is required before this separate diagnostic CI push.
