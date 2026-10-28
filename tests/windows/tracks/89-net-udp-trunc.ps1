@@ -21,6 +21,14 @@ try {
       throw "UDP $abi missing-truncation negative fixture was not rejected"
     }
     Write-Host "PASS  UDP ${abi}: actual missing-MSG_TRUNC negative rejected"
+    $faultReference = [IO.File]::ReadAllText((Join-Path $n2 'net-udp/linux-fault-reference.txt')).Replace("`r`n", "`n").Trim()
+    $fault = Aot2Run "$n2Dir/gesher-exec.exe" @('--elf', "$n2/$abi/net_udp_fault", 'net_udp_fault') $environment 90
+    Write-Host $fault.Out
+    $faultRows = (@($fault.Out.Replace("`r`n", "`n").Split("`n") | Where-Object { $_.StartsWith('UDPFAULT ') }) -join "`n").Trim()
+    if ($fault.Exit -ne 0 -or $faultRows -cne $faultReference) {
+      throw "UDP $abi fault/metadata output differs from actual Linux (exit $($fault.Exit))"
+    }
+    Write-Host "PASS  UDP ${abi}: 96 actual Linux-identical EFAULT/partial-scatter/queue/metadata rows"
   }
 } catch {
   Write-Host "FAIL  UDP truncation contract: $_"

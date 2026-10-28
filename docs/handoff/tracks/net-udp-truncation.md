@@ -79,6 +79,22 @@ invalid/null/read-only destinations and partial scatter, including copied
 prefix, errno, output flags and a subsequent queue probe. No result is accepted
 yet. No native code was compiled or run locally.
 
+The completed40790499313 Linux log is saved at
+`C:/work/gesher-ci-review/udp-fault-40790499313-linux.log`. All80 rows return
+EFAULT14. Flags0/32 consume the packet (next read EAGAIN11); flags2/34 retain
+it (next read9bytes). Partial scatter always copies the first four bytes
+`abcd`; read-only bytes and input msg_flags0x5a5a remain unchanged on error.
+This is Linux evidence, not a Windows implementation proof.
+
+Observer0c9ba94961e6a2fd59a5a9fe0a32e21400fe32fd received an observer-only
+source pass and started40791021504/attempt1. Its96 Linux rows add invalid
+iovec-descriptor/message-header pointers. Both Windows runners independently
+observe ReadProcessMemory with valid, invalid, null, read-only, inaccessible,
+cross-page and guarded destinations, logging return/error/copied count,
+protection and bytes. No copy mechanism has been selected pending those
+actual results. Integration owns the sole watch. Both NDK ABI fault executables
+and96-row actual Linux comparison are prepared as required full gates.
+
 The existing canonical full preflight rejects this additional production
 delta. Before full, retain tools/native3-locks/current_payload.py unchanged
 and introduce a separately reviewed immutable reusable UDP guard pinned by

@@ -125,6 +125,8 @@ jobs:
               -o "$o/net4_resolver_test" tests/native2/net4_resolver_main.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
               -o "$o/net_udp_trunc" tests/native2/net_udp_trunc.cpp
+            "$llvm/bin/${triple}29-clang" -std=c11 -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+              -o "$o/net_udp_fault" tests/native2/net_udp_fault_observer.c
             echo "--- $abi libnative2.so: needed"
             "$llvm/bin/llvm-readelf" -d "$o/libnative2.so" | grep NEEDED
           done
@@ -191,7 +193,7 @@ jobs:
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
             sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
-            sets+=("net-udp=$o/net_udp_trunc")
+            sets+=("net-udp=$o/net_udp_trunc,$o/net_udp_fault")
             sets+=("libc++_shared=$o/libc++_shared.so")
             for app in apks/*; do
               if [ -d "$app/$abi" ]; then
@@ -212,6 +214,8 @@ jobs:
           mkdir -p dist/net-udp
           g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread tests/native2/net_udp_trunc.cpp -o /tmp/net-udp-reference
           /tmp/net-udp-reference | tee dist/net-udp/linux-reference.txt
+          cc -std=c11 -O2 -Wall -Wextra -Werror tests/native2/net_udp_fault_observer.c -o /tmp/net-udp-fault-reference
+          /tmp/net-udp-fault-reference | tee dist/net-udp/linux-fault-reference.txt
           if /tmp/net-udp-reference --negative > /tmp/net-udp-negative.txt 2>&1; then
             echo 'FAIL negative missing MSG_TRUNC was accepted'; exit 1
           fi
