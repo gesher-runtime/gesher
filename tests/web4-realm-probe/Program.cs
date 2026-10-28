@@ -126,7 +126,7 @@ sealed class ProbeForm : Form
             }
             Context replacement = observations["a2"];
             if (!replacement.Default || replacement.Unique.Length == 0 || replacement.Frame.Length == 0 ||
-                replacement.Unique == old.Unique || replacement.Frame != old.Frame)
+                replacement.Unique == old.Unique || replacement.Frame != old.Frame || replacement.Session != old.Session)
                 throw new Exception("replacement context identity does not establish same-frame new document");
             Console.WriteLine($"OBS a2 session={replacement.Session} id={replacement.Id} unique={replacement.Unique} origin={replacement.Origin} frame={replacement.Frame}");
             bool scriptExceptionObserved = false;
