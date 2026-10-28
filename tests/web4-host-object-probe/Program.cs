@@ -46,6 +46,15 @@ sealed class ProbeForm : Form
         public int NavigationStarts;
         public string LastNavigation = "";
     }
+    record Context(string Session, int Id, string Unique, string Origin, string Frame, bool Default);
+    readonly ConcurrentDictionary<(string, int), Context> contexts = new();
+    readonly ConcurrentDictionary<string, Context> observations = new();
+    readonly ConcurrentDictionary<string, bool> destroyed = new();
+    readonly ConcurrentDictionary<string, string> parents = new();
+    readonly ConcurrentDictionary<string, string> targetTypes = new();
+    readonly ConcurrentDictionary<string, Task> sessionSetup = new();
+    readonly List<CoreWebView2DevToolsProtocolEventReceiver> receivers = new();
+    bool eventFailure;
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly ConcurrentDictionary<string, FrameState> frames = new();
     readonly ConcurrentDictionary<string, string> pages = new();
@@ -69,11 +78,26 @@ sealed class ProbeForm : Form
             await web.EnsureCoreWebView2Async(env);
             Console.WriteLine("RUNTIME " + env.BrowserVersionString);
             var core = web.CoreWebView2;
+            foreach (string name in new[] { "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Runtime.bindingCalled", "Page.frameAttached", "Target.attachedToTarget", "Target.detachedFromTarget" })
+            {
+                var receiver = core.GetDevToolsProtocolEventReceiver(name);
+                receiver.DevToolsProtocolEventReceived += (_, e) => Event(name, e.SessionId ?? "", e.ParameterObjectAsJson);
+                receivers.Add(receiver);
+            }
+            await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
+            await core.CallDevToolsProtocolMethodAsync("Page.enable", "{}");
+            await core.CallDevToolsProtocolMethodAsync("Runtime.addBinding", "{\"name\":\"realmProbe\"}");
+            await core.CallDevToolsProtocolMethodAsync("Target.setAutoAttach", "{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}");
             var topObject = NewObject();
             core.AddHostObjectToScript("rootProbe", topObject);
             core.FrameCreated += (_, e) => RegisterFrame(e.Frame);
             core.Navigate($"http://127.0.0.1:{port}/main");
             string[] selected = { "a", "b", "nested", "bad", "opaque" };
+            await Wait(() => observations.ContainsKey("opaque") && pages.ContainsKey("opaque"), TimeSpan.FromSeconds(15), limit.Token);
+            var opaqueContext = observations["opaque"];
+            if (!opaqueContext.Default || opaqueContext.Unique.Length == 0 || opaqueContext.Frame.Length == 0 || opaqueContext.Origin != "://" || eventFailure)
+                throw new Exception("selected opaque CDP context identity/origin missing");
+            Console.WriteLine($"OPAQUE_CDP session={opaqueContext.Session} context={opaqueContext.Id} unique={opaqueContext.Unique} frame={opaqueContext.Frame} origin={opaqueContext.Origin} nativeFrameId={frames["opaque"].Frame.FrameId} correlation=controlled-label-only");
             await Wait(() => selected.All(pages.ContainsKey) && selected.All(frames.ContainsKey) &&
                 ProbeObject.Calls.Any(c => c.Attempt == "root:first"), TimeSpan.FromSeconds(15), limit.Token);
             if (selected.Select(name => frames[name].Frame.FrameId).Any(id => id == 0) ||
@@ -134,7 +158,74 @@ sealed class ProbeForm : Form
             Result = 0;
         }
         catch (Exception e) { Console.WriteLine("HOST_OBJECT_PROBE_FAILURE " + e); }
-        finally { release.TrySetResult(); limit.Cancel(); server.Stop(); Close(); }
+        finally {
+            foreach (var call in ProbeObject.Calls) Console.WriteLine($"NATIVE_CALL object={call.ObjectId} attempt={call.Attempt} retired={call.Retired}");
+            release.TrySetResult(); limit.Cancel(); server.Stop(); Close();
+        }
+    }
+
+    void Event(string name, string session, string json)
+    {
+        Console.WriteLine("CDP " + name + " session=" + session + " " + json);
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (name == "Page.frameAttached")
+                parents[root.GetProperty("frameId").GetString() ?? ""] = root.GetProperty("parentFrameId").GetString() ?? "";
+            else if (name == "Target.attachedToTarget")
+            {
+                string child = root.GetProperty("sessionId").GetString() ?? "";
+                targetTypes[child] = root.GetProperty("targetInfo").GetProperty("type").GetString() ?? "";
+                sessionSetup[child] = SetupSession(child);
+            }
+            else if (name == "Runtime.executionContextCreated")
+            {
+                var c = root.GetProperty("context");
+                var aux = c.TryGetProperty("auxData", out var a) ? a : default;
+                int id = c.GetProperty("id").GetInt32();
+                string unique = c.TryGetProperty("uniqueId", out var u) ? u.GetString() ?? "" : "";
+                if (!c.TryGetProperty("origin", out var o) || o.ValueKind != JsonValueKind.String)
+                    throw new Exception("context origin property is missing or not a string");
+                string origin = o.GetString()!;
+                string frame = aux.ValueKind == JsonValueKind.Object && aux.TryGetProperty("frameId", out var f) ? f.GetString() ?? "" : "";
+                bool main = aux.ValueKind == JsonValueKind.Object && aux.TryGetProperty("isDefault", out var d) && d.ValueKind == JsonValueKind.True;
+                contexts[(session, id)] = new Context(session, id, unique, origin, frame, main);
+            }
+            else if (name == "Runtime.bindingCalled")
+            {
+                if (root.GetProperty("name").GetString() != "realmProbe") return;
+                int id = root.GetProperty("executionContextId").GetInt32();
+                string label = root.GetProperty("payload").GetString() ?? "";
+                if (contexts.TryGetValue((session, id), out var c))
+                {
+                    if (!observations.TryAdd(label, c)) { eventFailure = true; Console.WriteLine("DUPLICATE_BINDING " + label); }
+                }
+                else { eventFailure = true; Console.WriteLine("UNMATCHED_BINDING " + label); }
+            }
+            else if (name == "Runtime.executionContextDestroyed")
+            {
+                if (root.TryGetProperty("executionContextUniqueId", out var unique)) destroyed[unique.GetString() ?? ""] = true;
+                if (root.TryGetProperty("executionContextId", out var id) && contexts.TryRemove((session, id.GetInt32()), out var old)) destroyed[old.Unique] = true;
+            }
+            else if (name == "Runtime.executionContextsCleared")
+                foreach (var key in contexts.Keys.Where(k => k.Item1 == session)) contexts.TryRemove(key, out _);
+        }
+        catch (Exception e) { eventFailure = true; Console.WriteLine("CDP_EVENT_FAILURE " + e); }
+    }
+
+    async Task SetupSession(string session)
+    {
+        try
+        {
+            var core = web.CoreWebView2;
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.enable", "{}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Page.enable", "{}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.addBinding", "{\"name\":\"realmProbe\"}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Target.setAutoAttach", "{\"autoAttach\":true,\"waitForDebuggerOnStart\":true,\"flatten\":true}");
+            await core.CallDevToolsProtocolMethodForSessionAsync(session, "Runtime.runIfWaitingForDebugger", "{}");
+        }
+        catch (Exception e) { eventFailure = true; Console.WriteLine("SESSION_SETUP_FAILURE " + session + " " + e); }
     }
 
     void RegisterFrame(CoreWebView2Frame frame)
@@ -154,7 +245,8 @@ sealed class ProbeForm : Form
                     Console.WriteLine($"FRAME_OBSERVATION frame={state.Name} frameId={frame.FrameId} payload={text}");
                 } catch (Exception ex) { failure = true; Console.WriteLine("FRAME_OBSERVATION_FAILURE " + ex); }
             };
-            frame.FrameCreated += (_, e) => RegisterFrame(e.Frame);
+            try { frame.FrameCreated += (_, e) => RegisterFrame(e.Frame); }
+            catch (NotImplementedException e) { failure = true; Console.WriteLine("NESTED_FRAME_CAPABILITY_FAILURE " + e); }
             frame.NavigationStarting += (_, e) => {
                 state.NavigationStarts++;
                 state.LastNavigation = e.Uri;
@@ -204,7 +296,7 @@ sealed class ProbeForm : Form
             string line = await reader.ReadLineAsync() ?? ""; string path = line.Split(' ').Skip(1).FirstOrDefault() ?? "/";
             while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
             if (path.StartsWith("/held")) { held.TrySetResult(); await release.Task.WaitAsync(TimeSpan.FromSeconds(15)); }
-            string child = "<script>let n=new URLSearchParams(location.search).get('name');if(!window.chrome||!chrome.webview||!chrome.webview.hostObjects||!chrome.webview.hostObjects.sync){chrome.webview.postMessage('INFRA|'+n+'|missing host namespace')}else{try{let p=chrome.webview.hostObjects.sync.probe;if(!p){chrome.webview.postMessage('INFRA|'+n+'|missing proxy')}else{try{let v=p.Ping('first:'+n);chrome.webview.postMessage('OK|'+n+'|'+v)}catch(e){chrome.webview.postMessage('DENIED|'+n+'|CALL:'+String(e))}}}catch(e){chrome.webview.postMessage('DENIED|'+n+'|GET:'+String(e))}}</script>";
+            string child = "<script>let n=new URLSearchParams(location.search).get('name');realmProbe(n);if(!window.chrome||!chrome.webview||!chrome.webview.hostObjects||!chrome.webview.hostObjects.sync){chrome.webview.postMessage('INFRA|'+n+'|missing host namespace')}else{try{let p=chrome.webview.hostObjects.sync.probe;if(!p){chrome.webview.postMessage('INFRA|'+n+'|missing proxy')}else{try{let v=p.Ping('first:'+n);chrome.webview.postMessage('OK|'+n+'|'+v)}catch(e){chrome.webview.postMessage('DENIED|'+n+'|CALL:'+String(e))}}}catch(e){chrome.webview.postMessage('DENIED|'+n+'|GET:'+String(e))}}</script>";
             string html = path.StartsWith("/main")
                 ? $"<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:first')</script><iframe name='a' src='/child?name=a'></iframe><iframe name='b' src='/child?name=b'></iframe><iframe name='bad' src='http://localhost:{port}/child?name=bad'></iframe><iframe name='opaque' sandbox='allow-scripts' src='/child?name=opaque'></iframe>"
                 : path.StartsWith("/other") ? "<script>chrome.webview.hostObjects.sync.rootProbe.Ping('root:cross')</script>"
