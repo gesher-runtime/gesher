@@ -795,3 +795,63 @@ Original normal/Web3-defaultOFF, Surface+original/traced TIC, AOT/Libcore/Env/
 Media/Process/Exec, production/hook chronology, installed package and both e2e
 gates remain required. No component/source peer substitutes for actual full.
 No primary code merge/main/PR/tag/release or aggregate completion is claimed.
+
+## Full40678371420 accepted and integrated, 2026-10-28
+
+This entry supersedes the pending candidate state above. Exact source
+7bbccfcddbac826f50b78175f4d23f8702fd7741/attempt1 is terminal SUCCESS:
+35 actual jobs29success/six original intentional standalone probes skipped.
+Both normal122801461100/windows2022 and122801461113/windows2025 have whole0
+after42m49s. All29 successful plain logs, final metadata/artifact inventory and
+normal/roles/e2e actual-review JSON are saved under
+C:/work/gesher-ci-review/coherent-40678371420-*.
+
+Actual audit requires original14defaultOFF Web3, eight Exec, Process43 including
+the original25 plus eight separate reader observations,15 Libcore child groups
+plus verdict,18resolver,21PCL+21DLC rows with the same15 actual graph controls
+repeated per loader, four environment contexts x256, Native2/FPCR/FPSR/JNI/
+variadic and all eight18/12/10/10 muxer contexts. Surface has seven actual
+scheduling controls, four ABI/mode cold-logger/phase/pixel contexts (16 captures
+each68400/68400), two pinned fresh app native0 and original86. Counts stay
+bounded semantic evidence, not export inventory or whole-roadmap closure.
+
+Both mandatory Binder jobs have all9x9 ordinary cases,1944actor/963parent0,
+36 independent page observations, RW9/RO9, actual FD rollback/reuse, PID/open/
+normal-completion proof and current5jars/15copied images. Package has23 actual
+installed UI/input/uninstall passes. Both e2e have ten actual apps, four APK
+transport/cache controls, association/shortcut and0unexpected; TIC default
+flags-unset PASS is preserved before a separate fresh traced PASS. Both actual
+hook jobs retain47 boundary assertions and four real joins within3500ms.
+
+All80 current receipts independently match raw ZIP SHA-before-extraction and
+API exact ID/name/digest/source/run/attempt/producer/time. Fresh framework tools
+and actual current jars/images are qualified for these canonical consumer
+paths. Historical full405961's missing rawZIP gate is not retroactively closed;
+future release/standalone consumers need their own guards/qualification.
+Production5894c8e2 is sealed before hooke0e4e189; the ordinary actor stays in a
+separate typed artifact outside installer/normal/hook roles. Twelve shared and
+nine actor source hashes independently match canonical Git blobs/compiler.
+
+Frozen2634c778ed49d2c0f948fbf910566f718e12abd5 adds exactly two docs files above
+verified7bb. Integration --no-ff merge
+695ef6b81ac31662f3a51fa3195ace11923058e2 was pushed clean after both staged and
+postcommit entire non-doc diffs to7bb were EMPTY. Inventory remains exact
+55e03c68ed061ecbfa718cfa02ca64516b9d9233/all1157 fields/proof history. No extra
+rule-g full is required for identical code. The next changed candidate needs
+its own full before any further primary code merge.
+
+Native3 remains excluded/unqualified despite later actual IAT/CRT diagnostics;
+Windows2025's original WCT criterion is still required. Web4 standalone realm/
+early-injection experiments remain separate. Filteredb52 public-prefix/ACK-loss
+was not resumed/run; raw peer is not built/run. Stable Binder protection only
+is proved, with concurrent protection/unmap/partial-copy and wider Binder2 open.
+All other explicit roadmap/ADR/hardware/main/release requirements remain.
+
+Next integrator task: dedicated fresh AOT after-resource source from newly
+qualified primary. Prepared7aff867b/f8f33c0f lives in
+C:/work/gesher-aot3-after-union, wip/aot3-after-union, not historical
+gesher-aot3-after-resource/958bea20. Port only its six-file producer/resource/
+Java/track73 delta onto current strict canonical source, preserve every
+original gate, require actual before/after resource lookups and exact restoration/
+owned child exits, current fresh host/DLL/5jars/15images and independent peer
+before CI. Never run old prepared source as though it qualified this prerequisite.
