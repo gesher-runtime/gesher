@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <errno.h>
 
 namespace gesher::bionic {
@@ -39,13 +40,24 @@ void Check(bool ok, const char* name) {
   std::printf("%s  pthread target core: %s\n", ok ? "PASS" : "FAIL", name);
   if (!ok) ++failures;
 }
+[[noreturn]] void TargetExitFailure() {
+  // Actor storage and stop remain reachable by every live target. Do not
+  // unwind this process's stack or close shared resources on a failed join.
+  std::puts("FAIL  pthread target core: target exit deadline; terminate fixture process");
+  std::fflush(stdout);
+  TerminateProcess(GetCurrentProcess(), 1);
+  std::_Exit(1);
+}
 }
 
 int main() {
   using namespace gesher::bionic;
   uint64_t self = PthreadSelfId();
   DWORD baseline = 0;
-  GetProcessHandleCount(GetCurrentProcess(), &baseline);
+  if (!GetProcessHandleCount(GetCurrentProcess(), &baseline)) {
+    Check(false, "read baseline handle count");
+    return 1;
+  }
   int untouched = 77;
   int64_t untouched_time = 99;
   Check(PthreadCpuClock(UINT64_MAX, &untouched) == ESRCH && untouched == 77 &&
@@ -90,26 +102,26 @@ int main() {
     }
     Check(bracket, "128 busy target samples match independent owned Win32 handle brackets");
     DWORD before = 0, after = 0;
-    GetProcessHandleCount(GetCurrentProcess(), &before);
+    bool count_before = GetProcessHandleCount(GetCurrentProcess(), &before) != 0;
     bool repeat = true;
     for (int i = 0; i < 1024; ++i) {
       int clock = 0;
       repeat &= PthreadCpuClock(actors[0].id.load(), &clock) == 0 && clock == clocks[0];
     }
-    GetProcessHandleCount(GetCurrentProcess(), &after);
-    Check(repeat && before == after, "1024 acquisitions allocate no additional handles at capacity");
+    bool count_after = GetProcessHandleCount(GetCurrentProcess(), &after) != 0;
+    Check(repeat && count_before && count_after && before == after,
+          "1024 acquisitions allocate no additional handles at capacity");
   }
   for (size_t i = 0; i < count; ++i) actors[i].busy.store(false);
   SetEvent(stop);
-  bool exited = true;
   deadline = GetTickCount64() + 15000;
   for (size_t i = 0; i < count; ++i) {
     ULONGLONG now = GetTickCount64();
     DWORD remaining = now < deadline ? static_cast<DWORD>(deadline - now) : 0;
-    exited &= WaitForSingleObject(handles[i], remaining) == WAIT_OBJECT_0;
+    if (WaitForSingleObject(handles[i], remaining) != WAIT_OBJECT_0) TargetExitFailure();
     CloseHandle(handles[i]);
   }
-  Check(exited, "all external targets actually exit within one deadline");
+  Check(true, "all external targets actually exit within one deadline");
   CloseHandle(stop);
   int self_clock = 0;
   Check(PthreadCpuClock(self, &self_clock) == 0, "exit reaping restores capacity");
@@ -117,8 +129,8 @@ int main() {
   Check(capacity && ReadPthreadCpuClock(clocks[0], &sample) == EINVAL,
         "retired ID cannot alias the newly acquired caller clock");
   DWORD remaining = 0;
-  GetProcessHandleCount(GetCurrentProcess(), &remaining);
-  Check(remaining <= baseline + 2, "terminated external and clock handles are reclaimed");
+  bool counted = GetProcessHandleCount(GetCurrentProcess(), &remaining) != 0;
+  Check(counted && remaining <= baseline + 2, "terminated external and clock handles are reclaimed");
   std::printf("INFO  pthread target core: handles baseline=%lu remaining=%lu\n",
               static_cast<unsigned long>(baseline), static_cast<unsigned long>(remaining));
   std::printf("%d test(s) failed\n", failures);
