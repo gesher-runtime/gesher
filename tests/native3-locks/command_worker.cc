@@ -88,10 +88,14 @@ bool InvalidWaitTrace(const WaitTrace& trace, DWORD waiting, DWORD owner) {
       trace.nodes[1].ObjectType != WctCriticalSectionType || trace.nodes[2].ObjectType != WctThreadType ||
       trace.nodes[2].ThreadObject.ProcessId != GetCurrentProcessId() || trace.nodes[2].ThreadObject.ThreadId != owner;
 }
+bool SingleBlockedCloser(const WaitTrace& trace, DWORD waiting, DWORD owner) {
+  return !trace.contradictory && !InvalidWaitTrace(trace, waiting, owner) && trace.count == 1 &&
+      trace.nodes[0].ObjectStatus == WctStatusBlocked;
+}
 void DumpWaitTrace(unsigned waiting, unsigned owner, FILE* stream, int descriptor, bool completed) {
-  std::fprintf(stderr, "ACTUAL_WCT samples=%u success=%d error=%lu count=%lu cycle=%d closer=%u owner=%u FILE=%p fd=%d HANDLE=%p completed-before-unlock=%d\n",
+  std::fprintf(stderr, "ACTUAL_WCT samples=%u success=%d error=%lu count=%lu cycle=%d contradictory=%d closer=%u owner=%u FILE=%p fd=%d HANDLE=%p completed-before-unlock=%d\n",
       wait_trace.samples, wait_trace.complete, wait_trace.error, wait_trace.count, wait_trace.cycle,
-      waiting, owner, static_cast<void*>(stream), descriptor,
+      wait_trace.contradictory, waiting, owner, static_cast<void*>(stream), descriptor,
       reinterpret_cast<void*>(_get_osfhandle(descriptor)), completed);
   for (DWORD index = 0; index < wait_trace.count && index < kWaitChainNodeCapacity; ++index) {
     const auto& node = wait_trace.nodes[index];
@@ -399,7 +403,7 @@ int main(int argc, char** argv) {
             Failure("actual owned closer stack capture");
             std::_Exit(95);
           }
-          break;  // Diagnostic sample obtained; WCT-only acceptance is unchanged.
+          break;  // Both evidence routes still require every strong witness below.
         }
 #else
         if (contended) break;
@@ -434,6 +438,14 @@ int main(int argc, char** argv) {
           !InvalidWaitTrace(cycle_copy, entering.load(), stream_owner) ||
           !InvalidWaitTrace(wrong_thread_copy, entering.load(), stream_owner)) std::_Exit(99);
       std::fprintf(stderr, "WCT_NEGATIVE_METADATA_COPIES error=reject cycle=reject wrong-live-thread=reject not-actual-OS-cycle=true\n");
+      WaitTrace running_copy = wait_trace, sticky_copy = wait_trace;
+      running_copy.count = sticky_copy.count = 1;
+      running_copy.nodes[0].ObjectStatus = WctStatusRunning;
+      sticky_copy.nodes[0].ObjectStatus = WctStatusBlocked;
+      sticky_copy.contradictory = true;
+      if (SingleBlockedCloser(running_copy, entering.load(), stream_owner) ||
+          SingleBlockedCloser(sticky_copy, entering.load(), stream_owner)) std::_Exit(99);
+      std::fprintf(stderr, "STDIO_ROUTE_METADATA_COPIES single-running=reject sticky-contradiction=reject not-actual-OS-waits=true\n");
       phase("sample-and-negatives");
       native3_crt_lock_probe::Report("before", stream, before, stream_owner, stream_owner_birth);
       native3_crt_lock_probe::Report("held", stream, held, stream_owner, stream_owner_birth);
@@ -467,6 +479,19 @@ int main(int argc, char** argv) {
       UnlockStream(other_stream);
       if (std::fclose(other_stream) != 0 || std::chrono::steady_clock::now() >= limit) std::_Exit(97);
       phase("control-cleanup");
+      // Decide only after the complete live-lock witness, all real rejection
+      // controls, independent close, unlock, actual fclose and signaled exit/
+      // join have finished under the SAME original deadline. A single WCT
+      // node supplies no owner proof; the decoded CRT/FILE/call-frame conjunction
+      // above supplies that proof only for this controlled stdio regression.
+      const bool full_wct = contended && !wait_trace.contradictory &&
+          !InvalidWaitTrace(wait_trace, entering.load(), stream_owner) && wait_trace.count >= 3;
+      const bool single_blocked = SingleBlockedCloser(wait_trace, entering.load(), stream_owner);
+      if ((!full_wct && !single_blocked) || close_result != 0 || stream_result != 0 ||
+          !completed.load(std::memory_order_acquire) || std::chrono::steady_clock::now() >= limit) std::_Exit(99);
+      contended = true;
+      std::fprintf(stderr, "ACTUAL_STDIO_ROUTE cycle=%u route=%s full-wct=%d single-blocked=%d strong-witness=true independent-close=%d fclose=%d preunlock-completed=false signaled-exit=true joined=true\n",
+          cycle, full_wct ? "full-wct" : "decoded-crt-lock", full_wct, single_blocked, close_result, stream_result);
 #endif
       streams[slot] = nullptr;
       if (stream_result == 0) Forget(stream_fd);

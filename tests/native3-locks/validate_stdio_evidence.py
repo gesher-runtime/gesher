@@ -1,4 +1,4 @@
-"""Validate four actual stderr witness groups; this never accepts missing WCT."""
+"""Validate four complete stdio witnesses and their exact WCT/conjunctive routes."""
 import argparse
 import json
 import os
@@ -80,7 +80,8 @@ def main():
         assert summary['matches'] == summary['required'] == summary['enter-frames'] == '1' and summary['other-matches'] == '0'
         assert hexvalue(summary['other-FILE']) == hexvalue(other['FILE'])
         trace = exactly(group, 'ACTUAL_WCT samples=')
-        assert trace['success'] == '1' and trace['error'] == trace['cycle'] == trace['completed-before-unlock'] == '0'
+        assert trace['success'] == '1' and trace['error'] == trace['cycle'] == trace['contradictory'] == trace['completed-before-unlock'] == '0'
+        assert int(trace['samples']) >= 3
         assert trace['closer'] == stack['closer'] and trace['owner'] == held['owner'] and hexvalue(trace['FILE']) == hexvalue(held['FILE'])
         nodes = [fields(line) for line in group if line.startswith('ACTUAL_WCT_NODE ')]
         assert len(nodes) == int(trace['count']) and nodes[0]['type'] == '8' and nodes[0]['status'] == '3'
@@ -102,13 +103,27 @@ def main():
         assert int(values['completed-control-tid']) > 0 and int(values['completed-control-birth']) > 0
         copies = exactly(group, 'WCT_NEGATIVE_METADATA_COPIES ')
         assert copies == dict(error='reject', cycle='reject', **{'wrong-live-thread': 'reject', 'not-actual-OS-cycle': 'true'})
+        route_copies = exactly(group, 'STDIO_ROUTE_METADATA_COPIES ')
+        assert route_copies == {'single-running': 'reject', 'sticky-contradiction': 'reject', 'not-actual-OS-waits': 'true'}
+        route = exactly(group, 'ACTUAL_STDIO_ROUTE ')
+        assert int(route['cycle']) == index and route['strong-witness'] == 'true'
+        assert route['independent-close'] == route['fclose'] == '0'
+        assert route['preunlock-completed'] == 'false' and route['signaled-exit'] == route['joined'] == 'true'
+        if len(nodes) >= 3:
+            assert route['route'] == 'full-wct' and route['full-wct'] == '1' and route['single-blocked'] == '0'
+        else:
+            assert len(nodes) == 1 and route['route'] == 'decoded-crt-lock'
+            assert route['full-wct'] == '0' and route['single-blocked'] == '1'
+        assert group.index(next(line for line in group if line.startswith('ACTUAL_STDIO_ROUTE '))) > group.index(
+            next(line for line in group if line.startswith('ACTUAL_STDIO_CLOCK ') and fields(line)['phase'] == 'control-cleanup'))
         summaries.append(dict(cycle=index, file=held['FILE'], cs=held['cs'], owner=held['owner'],
                               owner_birth=held['owner-birth'], closer=stack['closer'], closer_birth=stack['birth'],
                               elapsed_ms=ticks[-1] - ticks[0], wct_count=len(nodes), actual_enter_frame=enter,
-                              real_negative_cases=sorted(expected_negatives), runtime_acceptance=False))
+                              real_negative_cases=sorted(expected_negatives), evidence_route=route['route'],
+                              accepted_scope='controlled stdio lock-order regression'))
     args.output.write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'],
                                            attempt=os.environ['GITHUB_RUN_ATTEMPT'], cycles=summaries), indent=2) + '\n')
-    print('STDIO_DIAGNOSTIC_EVIDENCE_COMPLETE cycles=4 runtime_acceptance=false', flush=True)
+    print('STDIO_EVIDENCE_COMPLETE cycles=4 scope=controlled-stdio-lock-order', flush=True)
 
 
 if __name__ == '__main__':

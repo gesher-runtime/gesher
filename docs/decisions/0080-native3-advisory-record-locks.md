@@ -169,3 +169,36 @@ peer, static diagnostics or this proposal cannot qualify the runtime contract.
 This proposal only concerns evidence for the stdio lock-order test. Inherited
 OFD adoption, atomic CLOEXEC/spawn, blocking7/38, targeted signals/EINTR/restart,
 ABI/bionic/ART, concurrent protection/copy, and full/package/e2e remain open.
+
+### Conjunctive route candidate after independent actual65 review
+
+Independent source and plain-log review of actual40711407869/source65c83f7e
+confirmed all four mandatory strong witnesses on BOTH Windows within the same
+five-second deadline. The review is saved separately as
+native3-40711407869-equivalent-evidence-review.md and its independent audit JSON.
+It permits implementing the following narrow route; it does not retrospectively
+accept that failed run or qualify an unseen source checkpoint.
+
+The new candidate retains full-WCT evidence and makes every decoded FILE/CS,
+actual owner birth/recursion, exact restored FILE argument/named Enter frame,
+six real-resource/identity negatives and lifetime/completion check mandatory
+for BOTH routes in ALL four cycles. Full WCT remains the selected route when
+the current valid full owner chain is present. The alternative additionally
+requires the current API-successful exact single Blocked closer node with the
+matching process/thread identity. A running node cannot qualify. Sticky WCT
+API errors, cycles or contradictions fail before either decision.
+
+Only after independent close0/preunlock-noncompletion, actual unlock/fclose0,
+owned kernel-signaled exit/join and control cleanup finish within the SAME
+original5s can the worker publish contended=true. The route record names
+full-wct or decoded-crt-lock and is independently checked against the raw WCT
+shape and complete witness groups. Copied metadata negatives explicitly test
+single-running and sticky-contradiction rejection without claiming actual OS
+waits. No FILE/CS memory is inspected after unlock. Linux161 rows remain strict,
+unnormalized actual JSON comparisons;13 duplicate/resource modes and all
+broker/raw-publication/capacity/cleanup/external10s/180s gates remain unchanged.
+
+Fresh exact-source peer and fresh two-Windows CI remain required. Windows2025
+full WCT owner reporting itself remains unavailable in the recorded run; this
+route addresses only the controlled stdio lock-order evidence contract. Every
+previous red run and the broader gaps above remain open.

@@ -944,3 +944,30 @@ Production remains1dc2e245 and all inheritedOFD/atomicspawn/blocking/signals/ABI
 bionic/ART/copy-race/full/package/e2e and physical context gaps remain open.
 Cleanup recovery manifests/files are preserved; removed historical clones and
 runtime duplicates were neither recreated nor used by this fresh CI run.
+
+### Narrow conjunctive evidence route prepared after actual65 independent review
+
+Integrator independently verified all four actual witness groups on both
+hosts in40711407869, including raw161 rows/identities/one absolute5s. Its saved
+native3-40711407869-equivalent-evidence-review.md permits implementing a narrow
+alternative, pending exact-source peer and fresh CI. That original run remains
+FAILURE and production remains1dc2e245.
+
+The candidate changes only command-worker test acceptance and its independent
+stderr validator. Every existing strong decoded CRT/FILE/CS/ownerbirth/call/
+named-Enter/negative/control/lifetime/completion witness stays mandatory in
+all four cycles on BOTH hosts. Full WCT remains a route; an alternative needs
+the current successful exact single Blocked closer node PLUS every strong
+witness. Sticky errors/cycles/contradictions cannot pass. Only actual close0,
+preunlockfalse, unlock/fclose0, kernel-signaled exit/join and control cleanup
+under the original5s permit an explicit selected route/contended=true record.
+The validator crosschecks route against raw node shape and all evidence, and
+also requires labeled copied-metadata running/sticky rejection controls.
+
+Workflow changes only the validation failure description; its own narrow push
+path thereby runs the frozen changed source. The original controller,161 strict
+Linux JSON comparisons,13 duplicate modes, actual broker/job checks, compiler,
+strict suppliers and10s/180s bounds are unchanged. No local native/JVM/C# compile
+or fixture execution, no artifact download and no cleanup-state mutation.
+Source/ADR peer and actual two-host runtime remain pending; no Native3/global
+acceptance, full-WCT-provider claim or primary integration is implied.

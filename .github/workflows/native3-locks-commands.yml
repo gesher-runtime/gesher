@@ -187,7 +187,7 @@ jobs:
             if (-not $process.WaitForExit(180000)) { throw 'Actual command and duplicate suites exceeded external180s bound' }
             $process.Refresh()
             & $python tests/native3-locks/validate_stdio_evidence.py --stderr $stderr --output command-fixture/stdio-evidence.json
-            if ($LASTEXITCODE -ne 0) { throw 'Missing or inconsistent four-cycle actual stdio diagnostic evidence' }
+            if ($LASTEXITCODE -ne 0) { throw 'Missing or inconsistent four-cycle actual stdio conjunctive evidence/route' }
             if ($process.ExitCode -ne 0) { throw "Actual command suite exit=$($process.ExitCode)" }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_COMMAND_ORACLE rows=[1-9][0-9]* mismatches=0$' -Quiet)) { throw 'Missing actual command comparator completion' }
             if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_DUPLICATE_ORACLE modes=13 failures=0 semantics=bounded-resource-controls$' -Quiet)) { throw 'Missing actual duplicate controller completion' }
