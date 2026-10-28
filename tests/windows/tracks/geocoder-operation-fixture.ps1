@@ -89,25 +89,18 @@ if ($NoncooperativeChild) {
 }
 
 foreach ($case in @('success', 'error', 'timeout', 'after', 'unobserved')) { Invoke-ControlledCase $case }
-# This proves containment of an owned child, not shutdown of a Maps provider.
-$psi = [Diagnostics.ProcessStartInfo]::new('powershell.exe')
-foreach ($arg in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-NoncooperativeChild')) { $psi.ArgumentList.Add($arg) }
-$psi.UseShellExecute = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError = $true
-$p = [Diagnostics.Process]::Start($psi)
-try {
-  foreach ($expected in @('worker-started', 'cancel-entered')) {
-    $line = $p.StandardOutput.ReadLineAsync()
-    Assert-True ($line.Wait(30000) -and $line.Result -eq $expected) "child barrier $expected"
-  }
-  Assert-True (-not $p.WaitForExit(1000)) 'noncooperative child remains blocked'
-  $p.Kill($true)
-  Assert-True ($p.WaitForExit(10000)) 'noncooperative child reaped'
-  Assert-True ($p.ExitCode -ne 0) 'noncooperative child fails'
-  Write-Host "child pid=$($p.Id) barriers=worker-started,cancel-entered blocked_before_kill=True exited=$($p.HasExited) exit_code=$($p.ExitCode)"
-} finally {
-  if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit() }
-  $p.Dispose()
-}
+# The supervisor owns the actual PowerShell child through timeout and retirement.
+# Output is inspected only after the root is signaled and the job is empty.
+Add-Type -Path (Join-Path $PSScriptRoot '../../../tools/windows4/TsfJobSupervisor.cs')
+$exe = [Environment]::ProcessPath
+$arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -NoncooperativeChild'
+$r = [TsfJobSupervisor]::Run($exe, $arguments, 45000, '')
+Write-Host ('SERVICES_JOB_KERNEL_EVIDENCE ' + ($r | ConvertTo-Json -Depth 6 -Compress))
+Assert-True ($r.Reason -ceq 'timeout' -and $r.ExitCode -eq 124 -and $r.Errors.Count -eq 0) 'intentional blocked Cancel timeout'
+Assert-True ($r.Assigned -and $r.MemberBeforeResume -and $r.SuspendedSingleThread -and $r.PreResumeActive -eq 1 -and $r.SuspendedThreadCount -eq 1) 'suspended job assignment'
+Assert-True ($r.Pid -ne 0 -and $r.Birth -gt 0 -and $r.RootHandleValue -ne 0 -and $r.JobHandleValue -ne 0 -and [string]::Equals($r.Image, $exe, [StringComparison]::OrdinalIgnoreCase)) 'child identity'
+Assert-True ($r.TerminateRequested -and $r.TerminateSucceeded -and $r.RootSignaled -and $r.RootWaitResult -eq 0 -and $r.RootHandleClosed -and $r.ThreadHandleClosed -and $r.JobEmpty -and $r.LastJobActive -eq 0 -and $r.OwnedHandles -eq $r.ClosedHandles -and $r.CleanupMilliseconds -lt 5000) 'job terminated, reaped and handles closed'
+Assert-True ($r.WritersRetired -and $r.OutputRead -and $r.ExclusiveSnapshot -and $r.StdoutBytes -le 1048576 -and $r.StderrBytes -le 1048576) 'bounded exclusive output after retirement'
+Assert-True ($r.TotalProcesses -eq $r.Processes.Count -and @($r.Processes | Where-Object { -not $_.Member -or -not $_.Signaled -or -not $_.Closed -or $_.WaitResult -ne 0 -or $_.Birth -le 0 -or $_.HandleValue -eq 0 }).Count -eq 0) 'all job identities reaped'
+Assert-True ($r.Output -match '(?m)^worker-started\r?$' -and $r.Output -match '(?m)^cancel-entered\r?$') 'actual child reached both barriers'
 Write-Host 'PASS controlled geocoder worker and child containment'

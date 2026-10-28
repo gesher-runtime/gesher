@@ -13,6 +13,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify shared controller source identities
+        shell: pwsh
+        run: |
+          $expected = @{
+            'tools/windows4/TsfJobSupervisor.cs' = 'd1cf9319268df1bccf03177e7f8dde52a7f55510'
+            'tools/windows4/TsfJobWorker.cs' = '08f29f78f56195825d96de2f2f6632bf91133e1e'
+            'tools/windows4/test-tsf-job-supervisor.ps1' = '91e6946c4ab05a42ffbf6917166193c3dad07872'
+            'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
+            '.github/workflows/tsf-format-component.yml' = 'a9d9835431bd7132fa1d65ddbacd1ec88149010a'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = git hash-object $path
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw "Shared source mismatch: $path" }
+            Write-Host "SHARED_SOURCE origin=8ad629ccb1edc86b9f701e83f01838ab9eaa1e94 path=$path blob=$actual"
+          }
+      - name: Qualify shared job controller
+        shell: pwsh
+        run: ./tools/windows4/test-tsf-job-supervisor.ps1
       - name: Exercise owned worker and child containment
         shell: pwsh
         run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
