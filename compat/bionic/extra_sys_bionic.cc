@@ -205,9 +205,8 @@ int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
   }
   return 0;
 }
-int BIONIC_SYSV PthreadGetcpuclockid(uint64_t, int* clock) {
-  *clock = 3;  // CLOCK_THREAD_CPUTIME_ID (the calling thread's)
-  return 0;
+int BIONIC_SYSV PthreadGetcpuclockid(uint64_t thread, int* clock) {
+  return PthreadCpuClock(thread, clock);
 }
 int BIONIC_SYSV PthreadMutexattrGetpshared(const int64_t*, int* v) {
   *v = 0;

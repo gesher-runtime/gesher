@@ -431,6 +431,10 @@ int BIONIC_SYSV ClockGettime(int clock, LinuxTimespec* ts) {
       ns = ThreadCpuNanos();
       break;
     default:
+      if (clock <= -65536 && ts != nullptr) {
+        int error = ReadPthreadCpuClock(clock, &ns);
+        if (error == 0) break;
+      }
       errno = kEINVAL;
       return -1;
   }
@@ -438,7 +442,11 @@ int BIONIC_SYSV ClockGettime(int clock, LinuxTimespec* ts) {
   ts->tv_nsec = ns % 1000000000;
   return 0;
 }
-int BIONIC_SYSV ClockGetres(int, LinuxTimespec* ts) {
+int BIONIC_SYSV ClockGetres(int clock, LinuxTimespec* ts) {
+  if (clock < 0) {
+    int64_t unused;
+    if (ReadPthreadCpuClock(clock, &unused) != 0) { errno = kEINVAL; return -1; }
+  }
   if (ts) {
     ts->tv_sec = 0;
     ts->tv_nsec = 100;
