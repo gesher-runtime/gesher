@@ -34,7 +34,7 @@ jobs:
           printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
           mkdir toolchain
           tar -xJf toolchain.tar.xz -C toolchain
-      - name: Authenticate original failed-run producer bytes then decode actual worker RVAs
+      - name: Authenticate original bytes then decode actual call instructions and named IAT slot
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
@@ -42,3 +42,4 @@ jobs:
           --source-root original-source
           --toolchain toolchain/${{ env.LLVM_MINGW_NAME }}
           --destination original-fixture
+          --diagnostic iat

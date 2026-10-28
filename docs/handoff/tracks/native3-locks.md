@@ -702,3 +702,26 @@ runtime retry or acceptance. Only its actual output can support the next
 lock-identity/owner/same-held-FILE causal diagnostic. The original WCT criterion
 and5s/10s/180s budgets remain unchanged. Source parsing/diff checks only ran
 locally; this workflow and script require independent focused review before push.
+
+### Original-binary symbolization40683188044: stripped DWARF, preserved failure
+
+Sourcea6671d73/run40683188044 is terminal FAILURE (watch exit1). Exact prior
+producer/archive/whole-source/eight-member/seven-output gates all passed; the
+actual archived worker has PointerToSymbolTable0, SymbolCount0 and DebugRVA0.
+CMake's existing GESHER_STRIP defaultON removes executable symbols. All four
+DWARF lookups returned unknown and the explicit unresolved gate failed.
+Plain log and final metadata: C:/work/gesher-ci-review/native3-symbolize-40683188044*.
+No private symbol claim is made. Original exact disassembly nevertheless shows
+RVA0x39fd direct call to0x9820 returning0x3a02, and RVA0x9830 indirect call through
+IAT slot0xc42a0 returning0x9836. Neither fact alone identifies lock owner/data.
+
+The next changed static diagnostic retains original DWARF-failure mode and
+adds a separately labeled IAT mode. It authenticates the SAME old artifact,
+reads its PE section table and actual two call encodings, then requires one
+named import-table entry at the exact computed IAT slot. It makes no private
+symbol/lock-owner/runtime acceptance claim and executes/rebuilds no worker.
+Only the original source/ZIP/output bytes are consumed in CI. A later map
+recovery, if needed, must require full rebuilt executable SHA equality to the
+original before consuming any map; the original PE also embeds a link timestamp,
+so default current-time relinking is not byte-identical. No such map is prepared
+or accepted now. No original runtime requirement/deadline has changed.

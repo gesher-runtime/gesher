@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import subprocess
 
 SOURCE = '4f8ad228d02157fdbd38d6b87d02688ef6a777b7'
@@ -50,6 +51,7 @@ def main():
     parser.add_argument('--source-root', required=True, type=Path)
     parser.add_argument('--toolchain', required=True, type=Path)
     parser.add_argument('--destination', required=True, type=Path)
+    parser.add_argument('--diagnostic', choices=('dwarf', 'iat'), default='dwarf')
     args = parser.parse_args()
     assert os.environ.get('GITHUB_ACTIONS') == 'true', 'CI only'
     assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
@@ -106,6 +108,52 @@ def main():
     bases = re.findall(r'^\s*ImageBase:\s*(0x[0-9A-Fa-f]+)\s*$', headers, re.MULTILINE)
     assert len(bases) == 1
     base = int(bases[0], 16)
+    if args.diagnostic == 'iat':
+        # Read actual archived PE instruction bytes, not a newly linked image.
+        # Section RVAs and raw offsets come from its own PE section table.
+        data = binary.read_bytes()
+        pe = struct.unpack_from('<I', data, 0x3c)[0]
+        assert data[pe:pe + 4] == b'PE\0\0'
+        sections = struct.unpack_from('<H', data, pe + 6)[0]
+        optional_size = struct.unpack_from('<H', data, pe + 20)[0]
+        table = pe + 24 + optional_size
+
+        def bytes_at(rva, size):
+            matches = []
+            for index in range(sections):
+                section = table + index * 40
+                virtual, raw_size, raw = struct.unpack_from('<III', data, section + 12)
+                if virtual <= rva and rva + size <= virtual + raw_size:
+                    offset = raw + rva - virtual
+                    assert offset + size <= len(data)
+                    matches.append(data[offset:offset + size])
+            assert len(matches) == 1, ('Ambiguous or non-file-backed RVA', rva)
+            return matches[0]
+
+        indirect = bytes_at(0x9830, 6)
+        assert indirect[:2] == b'\xff\x15'
+        iat = 0x9836 + struct.unpack_from('<i', indirect, 2)[0]
+        direct = bytes_at(0x39fd, 5)
+        assert direct[0] == 0xe8
+        destination = 0x3a02 + struct.unpack_from('<i', direct, 1)[0]
+        assert iat == 0xc42a0 and destination == 0x9820
+        imports = command([tool / 'llvm-readobj', '--coff-imports', binary])
+        print(imports, flush=True)
+        matches = []
+        for block in re.findall(r'^Import \{\n(.*?)^\}', imports, re.MULTILINE | re.DOTALL):
+            dll = re.findall(r'^\s*Name: (\S+)\s*$', block, re.MULTILINE)
+            addresses = re.findall(r'^\s*ImportAddressTableRVA: (0x[0-9a-fA-F]+)\s*$', block, re.MULTILINE)
+            symbols = re.findall(r'^\s*Symbol: (.*?) \([0-9]+\)\s*$', block, re.MULTILINE)
+            assert len(dll) == len(addresses) == 1 and symbols
+            first = int(addresses[0], 16)
+            for index, symbol in enumerate(symbols):
+                if first + 8 * index == iat:
+                    matches.append((dll[0], symbol))
+        assert len(matches) == 1 and matches[0][1], ('Unique named original IAT slot not found', matches)
+        print(f'ORIGINAL_DIRECT_CALL return_rva=0x3a02 call_rva=0x39fd target_rva={hex(destination)} bytes={direct.hex()}', flush=True)
+        print(f'ORIGINAL_IAT_CALL return_rva=0x9836 call_rva=0x9830 slot_rva={hex(iat)} dll={matches[0][0]} symbol={matches[0][1]} bytes={indirect.hex()}', flush=True)
+        print('ORIGINAL_IAT_DIAGNOSTIC_COMPLETE selected_calls=2 private_symbols=false lock_owner_proof=false runtime_acceptance=false', flush=True)
+        return
     unresolved = []
     for rva in (0x9836, 0x3a02):
         # An unwound caller PC is the return address; include its preceding
