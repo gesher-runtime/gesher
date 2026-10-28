@@ -33,6 +33,8 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "linux_socket.h"
+#include "record_lock_descriptors.h"
+#include "record_lock_duplicate.h"
 #include "socket_internal.h"
 
 namespace {
@@ -253,6 +255,17 @@ int waitid(idtype_t, id_t, siginfo_t*, int) { return errno = ECHILD, -1; }
 // --- fcntl and friends --------------------------------------------------------
 
 int fcntl(int fd, int cmd, ...) {
+  static_assert(sizeof(struct flock) == sizeof(gesher::record_locks::LinuxFlock));
+  static_assert(offsetof(struct flock, l_start) == 8 && offsetof(struct flock, l_pid) == 24);
+  // Win64 long is32bits. Consume Linux lock pointers BEFORE entering the
+  // unchanged integer-command varargs path.
+  if (cmd == F_GETLK || cmd == F_SETLK || cmd == F_OFD_GETLK || cmd == F_OFD_SETLK) {
+    va_list pointers;
+    va_start(pointers, cmd);
+    struct flock* argument = va_arg(pointers, struct flock*);
+    va_end(pointers);
+    return gesher::record_locks::DescriptorFcntl(fd, cmd, argument);
+  }
   HANDLE h = gesher::HandleFromFd(fd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   va_list args;
@@ -304,16 +317,7 @@ int fcntl(int fd, int cmd, ...) {
       return 0;
     case F_DUPFD:
     case F_DUPFD_CLOEXEC: {
-      // The lowest free number >= arg, as on Linux. dup (fd.cc) duplicates
-      // sockets and eventfds too; fds are never inherited, so the two match.
-      if (arg < 0) return errno = EINVAL, -1;
-      int dup_fd = dup(fd);
-      if (dup_fd < 0 || dup_fd >= arg) return dup_fd;
-      int target = static_cast<int>(arg);
-      while (gesher::HandleFromFd(target) != INVALID_HANDLE_VALUE) ++target;
-      int moved = dup2(dup_fd, target);
-      close(dup_fd);
-      return moved;
+      return gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
     }
     case F_ADD_SEALS:
     case F_GET_SEALS:
@@ -498,6 +502,7 @@ int memfd_create(const char* name, unsigned int flags) {
                          CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  gesher::record_locks::DescriptorGuard descriptor_guard;
   int fd = gesher::CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h),
                            _O_RDWR | _O_BINARY | ((flags & MFD_CLOEXEC) != 0 ? _O_NOINHERIT : 0)));
   if (fd < 0) CloseHandle(h);

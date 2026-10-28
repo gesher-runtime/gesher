@@ -77,6 +77,15 @@ cp "$res/remote_color_resources_res/symbols.xml" "$colors/raw/res/values/"
 compile "$colors/raw" "$flat" "$(native res/raw/remote_views_color_resources.arsc)"
 compile "$colors/raw" "$flat" "$(native res/values/symbols.xml)"
 
+# Optional CI resource overlay. The normal resource table remains the default;
+# a caller using this must independently compare every generated R/Manifest byte.
+overlay=()
+if [[ -n ${FRAMEWORK_RES_OVERLAY_DIR:-} ]]; then
+  [[ -d $FRAMEWORK_RES_OVERLAY_DIR ]] || { echo 'Missing framework resource overlay directory' >&2; exit 2; }
+  compile "$FRAMEWORK_RES_OVERLAY_DIR" "$flat/fixture-overlay.zip" --dir . --feature-flags "$flags"
+  overlay=(-R "$(native "$flat/fixture-overlay.zip")")
+fi
+
 java=$out/framework-res-java
 rm -rf "$java" && mkdir -p "$java"
 "$aapt2" link -o "$(native "$out/framework-res.apk")" \
@@ -85,6 +94,6 @@ rm -rf "$java" && mkdir -p "$java"
   --enable-sparse-encoding --min-sdk-version 36 --target-sdk-version 36 \
   --feature-flags "$flags" --java "$(native "$java")" \
   "$(native "$flat/res.zip")" "$(native "$flat/raw_remote_views_color_resources.arsc.flat")" \
-  "$(native "$flat/values_symbols.arsc.flat")"
+  "$(native "$flat/values_symbols.arsc.flat")" "${overlay[@]}"
 ls -la "$out"
 find "$java" -name '*.java'

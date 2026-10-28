@@ -120,6 +120,11 @@ std::string WindowsZoneId();
 // gesher-base serves itself: a socket, eventfd or epoll.
 int ReserveFd();
 
+// Roll back a private, unpublished duplication while another guarded user
+// alias survives. Retires actual virtual resources/bookkeeping without
+// treating internal housekeeping as a user POSIX any-close operation.
+int CloseUnpublishedDuplicate(int fd);
+
 // Character devices Windows lacks: a CRT fd on NUL whose reads fd.cc serves.
 enum class Device { kZero, kRandom };
 // Takes over `fd`, which must be open on NUL.
