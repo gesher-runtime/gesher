@@ -29,8 +29,21 @@ jobs:
               assert subprocess.check_output(['git','hash-object','tools/native3-locks/artifact/'+name], text=True).strip() == expected
           PY
           python3 tools/native3-locks/artifact/test-verified-artifact.py
-  compile:
+  controller:
     needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Qualify owned job and file controller with kernel evidence
+        shell: pwsh
+        run: tools/windows4/test-tsf-job-supervisor.ps1
+  compile:
+    needs: [preflight, controller]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

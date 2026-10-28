@@ -21,23 +21,14 @@ foreach ($f in $m.sources.PSObject.Properties) { if ((Get-FileHash -LiteralPath 
 foreach ($f in $m.outputs.PSObject.Properties) { if ((Get-FileHash -LiteralPath (Join-Path tsf-fixture $f.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $f.Value) { throw "Output mismatch $($f.Name)" } }
 Write-Host "TSF_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT job=$($jobs[0].id) artifact=$($a.id) digest=$($a.digest)"
 Write-Host ($m.compiler | ConvertTo-Json -Depth 8)
-$start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path tsf-fixture/windows4_text_store_probe.exe).Path)
-$start.UseShellExecute = $false
-$start.CreateNoWindow = $true
-$start.RedirectStandardOutput = $true
-$start.RedirectStandardError = $true
-$p = [Diagnostics.Process]::Start($start)
-try {
-  $out = $p.StandardOutput.ReadToEndAsync(); $err = $p.StandardError.ReadToEndAsync()
-  if (-not $p.WaitForExit(45000)) { $p.Kill($true); $p.WaitForExit(); throw 'TSF fixture timed out' }
-  if (-not $out.Wait(10000) -or -not $err.Wait(10000)) { throw 'TSF output did not drain' }
-  $text = $out.Result + $err.Result
-  Write-Host $text
-  if ($p.ExitCode -ne 0 -or $text -match '(?m)^FAIL' -or $text -notmatch '(?m)^0 windows4 TSF store check\(s\) failed\s*$') { throw "TSF fixture failed: exit $($p.ExitCode)" }
-  foreach ($label in @('embedded NUL range rejected','range excluding NUL accepted','end one selects exactly one unit','empty range accepted','invalid range rejected')) {
-    if (-not $text.Contains("PASS  windows4 TSF store: $label")) { throw "Missing assertion: $label" }
-  }
-} finally {
-  if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit() }
-  $p.Dispose()
+if ($env:GITHUB_ACTIONS -cne 'true') { throw 'TSF execution is CI only' }
+Add-Type -Path tools/windows4/TsfJobSupervisor.cs
+$result = [TsfJobSupervisor]::Run((Resolve-Path tsf-fixture/windows4_text_store_probe.exe).Path, '', 45000, '')
+Write-Host ('TSF_JOB_KERNEL_EVIDENCE ' + ($result | ConvertTo-Json -Depth 6 -Compress))
+if (-not $result.Success) { throw "TSF fixture lifetime failed: $($result.Reason), exit $($result.ExitCode), errors $($result.Errors -join '; ')" }
+$text = $result.Output + $result.Error
+Write-Host $text
+if ($result.ExitCode -ne 0 -or $text -match '(?m)^FAIL' -or $text -notmatch '(?m)^0 windows4 TSF store check\(s\) failed\s*$') { throw "TSF fixture failed: exit $($result.ExitCode)" }
+foreach ($label in @('embedded NUL range rejected','range excluding NUL accepted','end one selects exactly one unit','empty range accepted','invalid range rejected')) {
+  if (-not $text.Contains("PASS  windows4 TSF store: $label")) { throw "Missing assertion: $label" }
 }
