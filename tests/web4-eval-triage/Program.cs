@@ -149,7 +149,7 @@ sealed class TriageForm : Form
         long start = Environment.TickCount64, deadline = start + 3000;
         var state = new PauseState();
         if (!pauses.TryAdd(session, state)) { failure = true; Console.WriteLine("AMBIGUOUS_PAUSE " + session); return; }
-        bool pausedEval = false, liveEval = false;
+        bool pausedEval = false, liveEval = false, frameValidated = role == "iframe";
         Context? context = null;
         try
         {
@@ -199,6 +199,14 @@ sealed class TriageForm : Form
                 await Command(session, "Debugger.setBreakpointsActive", "{\"active\":false}");
                 if (context != null)
                 {
+                    if (role == "root")
+                    {
+                        string tree = await Command("", "Page.getFrameTree", "{}");
+                        using var frameTree = JsonDocument.Parse(tree);
+                        string rootFrame = frameTree.RootElement.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString() ?? "";
+                        frameValidated = rootFrame == context.Frame && rootFrame.Length != 0;
+                        Console.WriteLine($"ROOT_FRAME_CHECK observed={context.Frame} tree={rootFrame} valid={frameValidated}");
+                    }
                     string parameters = JsonSerializer.Serialize(new { expression = "1", uniqueContextId = context.Unique, returnByValue = true });
                     string result = await Command(session, "Runtime.evaluate", parameters);
                     using var parsed = JsonDocument.Parse(result);
@@ -208,8 +216,8 @@ sealed class TriageForm : Form
             }
             catch (Exception e) { Console.WriteLine($"RESUME_OR_LIVE_FAILURE role={role} type={e.GetType().FullName} hresult=0x{e.HResult:X8} chain={e}"); }
             pauses.TryRemove(session, out _);
-            results[role] = pausedEval && liveEval && !state.Premature;
-            Console.WriteLine($"TRIAGE_RESULT role={role} paused={pausedEval} live={liveEval} prematureResume={state.Premature}");
+            results[role] = pausedEval && liveEval && frameValidated && !state.Premature;
+            Console.WriteLine($"TRIAGE_RESULT role={role} paused={pausedEval} live={liveEval} frameValidated={frameValidated} prematureResume={state.Premature}");
         }
     }
 
