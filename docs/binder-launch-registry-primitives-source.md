@@ -1,5 +1,10 @@
 # Package child snapshot and launch registry primitives: incomplete authority
 
+Follow-up: [active dedicated-device admission source](binder-private-admission-source.md),
+checkpoint `cc13e24c288f550bb9134b3062bf6b886061e38c`. The inventory below describes
+the earlier disconnected primitive; the follow-up connects the initial private
+device path while leaving global CLI closure and all runtime qualification open.
+
 Disposition: SOURCE UNQUALIFIED; P1 PRIVATE BOOTSTRAP/TRANSPORT UID AUTHORITY
 REMAINS OPEN. This checkpoint corrects the reported P2 in source and adds concrete
 native registry/lifetime primitives. It does not complete the requested P1. No
