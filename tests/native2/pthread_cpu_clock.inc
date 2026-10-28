@@ -62,6 +62,9 @@ Part PthreadCpuClocks() {
   timespec sample{};
   errno = 0;
   p.Check(clock_gettime(clock, &sample) == -1 && errno == EINVAL, "dead retained clock rejected");
+  errno = 0;
+  p.Check(clock_getres(clock, &sample) == -1 && errno == EINVAL,
+          "dead clock resolution matches observed Linux EINVAL");
   // Replacement threads must never revive the retired clock even if kernel
   // or userspace allocators reuse their storage or thread identifiers.
   bool retired = true;
@@ -79,7 +82,7 @@ Part PthreadCpuClocks() {
     retired &= clock_gettime(clock, &sample) == -1 && errno == EINVAL;
     // Skip the CPU burn for replacement controls.
     replacement.phase.store(4);
-    pthread_join(fresh, nullptr);
+    retired &= pthread_join(fresh, nullptr) == 0;
   }
   p.Check(retired, "64 replacements cannot revive retired identity");
   p.notes.push_back("target_ns=" + std::to_string(target_delta) +
