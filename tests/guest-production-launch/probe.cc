@@ -229,6 +229,9 @@ static constexpr char kRows[] =
 static int child(int argc, wchar_t** argv) {
   if (argc != 11) return 10;
   HANDLE omitted = reinterpret_cast<HANDLE>(_wcstoui64(argv[10], nullptr, 10));
+  HANDLE diagnostic = reinterpret_cast<HANDLE>(_wcstoui64(argv[9], nullptr, 10));
+  const IpcObservation before_omitted{reinterpret_cast<ULONG_PTR>(omitted), 0, 0x47444941, 0};
+  if (!write_bytes(diagnostic, reinterpret_cast<const char*>(&before_omitted), sizeof(before_omitted))) return 75;
   SetLastError(ERROR_SUCCESS);
   if (SetEvent(omitted) || GetLastError() != ERROR_INVALID_HANDLE) return 72;
   PSID expected = nullptr;
@@ -468,6 +471,10 @@ static int exercise(Fixture& f) {
   printf("DIAG host-ipc path=%ls requested=0x%08lx share=0 creation=OPEN_EXISTING flags=0\n", pipe_name.c_str(), static_cast<DWORD>(GENERIC_READ | GENERIC_WRITE));
   if (!token_evidence(process.h)) return 55;
   if (launch.Resume().error != ERROR_SUCCESS || launch.Resume().error != ERROR_INVALID_STATE) return 37;
+  IpcObservation breadcrumb{};
+  if (!read_observation(out_read.h, process.h, &breadcrumb)) return 76;
+  printf("DIAG child before-omitted handle=%p marker=0x%08lx\n", reinterpret_cast<void*>(breadcrumb.handle), breadcrumb.requested);
+  if (breadcrumb.requested != 0x47444941 || breadcrumb.server_pid != 0) return 77;
   IpcObservation positive_observation{};
   if (!read_observation(out_read.h, process.h, &positive_observation)) return 59;
   printf("DIAG child host-ipc-positive handle=%p error=%lu requested=0x%08lx server-pid=%lu\n",
