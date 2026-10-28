@@ -35,6 +35,7 @@ $ivControls = @('no-env-then-recovery', 'no-view-then-recovery',
 $ivRun = InvalidationBounded "$Dir/surface_invalidation_test.exe" @() 30
 $ivText = $ivRun.Text
 $ivExit = $ivRun.Exit
+Write-Host $ivText
 $ivMissing = @($ivControls | Where-Object { -not $ivText.Contains("surface invalidation ${_}: ok") })
 if ($ivExit -eq 0 -and $ivMissing.Count -eq 0 -and $ivText.Contains('surface invalidation: 0 failure(s)')) {
   Write-Host 'PASS  surface invalidation: failed posts recover, newer posts survive old failures, successful posts coalesce, binding precedes acknowledgement under controlled barriers'
