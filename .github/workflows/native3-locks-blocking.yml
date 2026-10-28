@@ -1,6 +1,9 @@
 name: native3-locks-blocking
 on:
   workflow_dispatch:
+  push:
+    branches: [wip/native3-blocking-current]
+    paths: [.github/workflows/native3-locks-blocking.yml]
 permissions:
   contents: read
   actions: read
