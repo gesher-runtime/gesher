@@ -210,3 +210,19 @@ artifact download. Terra owns initial Surface helper and negative CI controls;
 integrator coordinates Binder/future canonical reuse after peer and actual
 qualification. No primary code merge before required coherent full. Runtime
 full acceptance is not general cryptographic archive acceptance.
+
+## New canonical integrity and Binder candidate, 2026-10-28
+
+Strict helper/source/upload-policy preflight40670202635 at1ac73c5e is bounded
+green on both Windows, including15 actual adversarial controls and a real ZIP.
+This supersedes the older helper-preparation state only; canonical receipt/
+download/assembly/fresh-framework coverage is pending full40678371420 at exact
+7bbccfcddbac826f50b78175f4d23f8702fd7741. Surface16102, reader921418 and
+Binder7c72a3af are component-qualified leaves in that candidate; primary code
+remains30db. Binder component40664399508 proves9x9 ordinary stable RW/RO/page/
+FD/PID controls per Windows, not concurrent protection/partial-copy atomicity,
+filtered public-prefix transport loss, or all Binder2. Native failed leaf and
+source-only Web4 are excluded. Read the newest resumed-progress entry for
+exact sources/scopes/ownership. All old roadmap/ADR/hardware/release requirements
+remain; no generic archive integrity or overall gap closure follows from the
+new candidate's launch.
