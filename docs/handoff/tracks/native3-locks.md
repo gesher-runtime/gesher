@@ -1113,3 +1113,27 @@ and disables Git path quoting for the whole source-name comparison. Additional
 AST duplicate-parameter scanning and a simple Compare-Object binding check
 pass; no native fixture ran. Corrected exact workflow peer is still required
 before push. Rejected3153 workflow was never published or dispatched.
+
+### First isolated diagnostic run: actual compile, metadata failure, runtime skipped
+
+Fixture3f52 source peer and corrected774a4a4b workflow peer passed before the
+guarded palmoni5 push. Actual40729229702/attempt1/source774 is terminal FAILURE
+(required120s watch25879 exit1). Preflight122960685775 passes in6s; producer
+122960765635 actually compiles/links the48-step probe/common graph under Clang
+23.1.3 and validates explicit imports, but provenance extraction fails before
+upload because CMakeCache has no CMAKE_CXX_COMPILER entry. The toolchain sets
+that as a normal variable. Windows is SKIPPED; there is NO inheritance proof
+or published probe artifact from this failed producer. Plain logs and final
+metadata are native3-cloexec-40729229702-* in ci-review.
+
+The changed workflow now requires exactly one actual generated
+CMakeFiles/*/CMakeCXXCompiler.cmake record and its one absolute compiler path,
+crosschecks the actual unique probe compile-command driver and pinned archive
+containment, and records generated-record/cache/compiler/clang SHA and version.
+An optional compiler cache entry may only corroborate that record, never be
+required or contradict it. Compiler launcher is explicitly empty and checked.
+This follows the qualified current host_roles compiler() principle and official
+CMake template, without importing its unrelated current-union assumptions.
+It is a provenance correction, not a native behavior change or unchanged rerun.
+Exact changed workflow peer is required before another guarded CI push. The
+first red run and immutable156 supplier remain unchanged.

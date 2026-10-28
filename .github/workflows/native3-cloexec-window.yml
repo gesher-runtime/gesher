@@ -67,7 +67,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_CXX_COMPILER_LAUNCHER= \
+            -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
           ninja -C out -v native3_cloexec_window_probe
           mkdir fixture
           cp out/native3_cloexec_window_probe.exe fixture/
@@ -88,8 +89,17 @@ jobs:
           names = re.findall(r'^\s*Name:\s*(\S+)', Path('fixture/native3_cloexec_window_probe.imports.txt').read_text(), re.MULTILINE)
           assert names and not (set(name.casefold() for name in names) - allowed), names
           print('CLOEXEC_ACTUAL_IMPORTS ' + ', '.join(names))
+          records = list(Path('out/CMakeFiles').glob('*/CMakeCXXCompiler.cmake'))
+          assert len(records) == 1, ('Expected one configured compiler record', records)
+          configured = re.findall(r'^\s*set\(CMAKE_CXX_COMPILER\s+"([^"\n]+)"\)\s*$', records[0].read_text(encoding='utf-8'), re.MULTILINE)
+          assert len(configured) == 1, ('Missing/ambiguous configured compiler', records[0])
+          compiler = configured[0]
+          assert Path(compiler).is_absolute()
           cache = Path('out/CMakeCache.txt').read_text()
-          compiler = re.search(r'^CMAKE_CXX_COMPILER:[^=]+=(.+)$', cache, re.MULTILINE).group(1)
+          cached = re.findall(r'^CMAKE_CXX_COMPILER:[^=]+=(.+)$', cache, re.MULTILINE)
+          assert len(cached) <= 1 and (not cached or Path(cached[0]).resolve() == Path(compiler).resolve()), 'Compiler cache contradicts configured record'
+          launcher = re.findall(r'^CMAKE_CXX_COMPILER_LAUNCHER:[^=]+=(.*)$', cache, re.MULTILINE)
+          assert len(launcher) == 1 and launcher[0] == '', 'Unexpected compiler launcher'
           toolchain = Path('toolchain', os.environ['LLVM_MINGW_NAME']).resolve()
           assert Path(compiler).resolve().is_relative_to(toolchain)
           commands = json.loads(Path('out/compile_commands.json').read_text())
@@ -100,6 +110,8 @@ jobs:
           assert {'-Wall', '-Wextra', '-Werror'} <= set(argv)
           compiler_info = dict(path=compiler, sha256=digest(Path(compiler).resolve()),
               clang_sha256=digest(toolchain / 'bin/clang'),
+              configured_record=str(records[0]), configured_record_sha256=digest(records[0]), launcher='',
+              cache_sha256=digest('out/CMakeCache.txt'),
               version=subprocess.check_output([compiler, '--version'], text=True), command=selected[0])
           paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
           files = {path: digest(path) for path in paths if path}
