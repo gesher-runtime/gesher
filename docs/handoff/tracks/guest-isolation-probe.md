@@ -38,7 +38,7 @@ OW-only; owner was BA. This proves the attempted LOCAL endpoint was unreachable
 from the child, not that its ACL denied access. Saved plain logs are
 `guest-40783823671-job-123152001909.log` and `...1957.log` under the review folder.
 
-Current changed-source scoped run: `40784976349`, attempt 1, exact
+Changed-source scoped run: `40784976349`, attempt 1, exact
 `4458ce295721d56e0bbd8de8afbfaeba9d841fa1`. Its source peer accepted the
 diagnostic design before push. The endpoint now uses the unpackaged host path.
 Before requiring denial, the same server handle/name temporarily grants only
@@ -52,8 +52,24 @@ Both initial and tightened descriptors are read back and asserted. No namespace
 or ACL compatibility, strict denial or isolation is claimed before actual CI.
 The original LOCAL failure remains recorded; error 2 never qualifies denial.
 
-Build/runtime results are pending. Previous same-ref run was terminal before
-the account-gated gh-credential HTTPS push. No duplicate dispatch was used.
+Run `40784976349` completed red on both Windows at stage 62, after a valid
+isolated read/write positive connection with error 0, actual host server PID and
+exact challenge. The initial descriptor had the expected exact AppContainer ACE
+and low mandatory label; assertions passed. The combined disconnect/protection
+transition failed before its second descriptor readback. Exact denial was never
+reached. The owned server handle requested duplex data rights but omitted
+WRITE_DAC, which [CreateNamedPipe requires explicitly](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createnamedpipea)
+for DACL modification. This source oversight was identified after push and
+retained with the actual red run. Saved plain logs are the three
+`guest-40784976349-job-*.log` files under the review folder.
+
+Source candidate `1e90373f2f7f3e785454d823bc053ade83163ccf` adds WRITE_DAC
+only on the owned host handle and captures separate raw disconnect result,
+SetSecurityInfo returned Win32 status, and descriptor assertion phase/result.
+Guest access, ACLs, mandatory label and exact error-5 gate are unchanged. Source
+peer and fresh CI are pending; no local compilation or fixture was performed.
+Previous same-ref runs were terminal before each account-gated gh-credential
+HTTPS push. No duplicate dispatch was used.
 Watch uses `gh run watch --exit-status --interval 120`. No unchanged red retry
 is authorized; retain actual failures and make a concrete correction first.
 The sole integrator owns the single watcher and terminal runtime/receipt audit;
