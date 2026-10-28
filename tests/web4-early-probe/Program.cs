@@ -206,7 +206,8 @@ sealed class ProbeForm : Form
                 throw new Exception("destroyed and unobserved controls had different rejection types or codes");
             await Task.Delay(500, timeout.Token);
             if (observations.ContainsKey("reply-comparison") || observations.ContainsKey("early-reply:a:same") ||
-                observations.ContainsKey("early-reply:a2:same")) throw new Exception("rejected operation delivered a binding");
+                observations.ContainsKey("early-reply:a2:same") || observations.ContainsKey("wrong-object"))
+                throw new Exception("rejected operation or replacement object delivered a binding");
             await Task.WhenAll(pauseTasks.ToArray()).WaitAsync(TimeSpan.FromSeconds(3));
             if (eventFailure) throw new Exception("an event, binding or session setup failed");
             Console.WriteLine("EARLY_PLATFORM_PROBE_PASS selected origin-gated exposure and realm observations; OOPIF detach, BFCache, no-script documents and production unproven");
