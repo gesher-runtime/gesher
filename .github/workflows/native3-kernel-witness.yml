@@ -285,3 +285,4 @@ jobs:
           retention-days: 14
 # Trigger exact public rejection evidence component.
 # Trigger bounded kernel event diagnostics.
+# Trigger bounded TDH property diagnostics.
