@@ -25,15 +25,15 @@ try {
     if ($r.RootHandleValue -eq 0 -or $r.JobHandleValue -eq 0 -or $r.RootWaitResult -ne 0 -or $r.SuspendedThreadCount -ne 1 -or $r.PreResumeActive -ne 1) { throw "Raw handle/wait/census evidence failed: $case" }
     if (-not $r.Assigned -or -not $r.MemberBeforeResume -or -not $r.SuspendedSingleThread -or $r.Pid -eq 0 -or $r.Birth -le 0 -or -not [string]::Equals($r.Image, $worker, [StringComparison]::OrdinalIgnoreCase) -or -not $r.RootSignaled -or -not $r.RootHandleClosed -or -not $r.ThreadHandleClosed -or $r.OwnedHandles -ne $r.ClosedHandles -or $r.OwnedHandles -lt 7 -or $r.CleanupMilliseconds -ge 5000 -or $r.MainMilliseconds -gt 5000) { throw "Kernel ownership/lifetime evidence failed: $case" }
     if ($case -eq 'query-denied') {
-      if ($r.Success -or $r.JobEmpty -or $r.OutputRead -or $r.Errors.Count -eq 0 -or ($r.Errors -join ' ') -notmatch 'Cleanup unproved' -or ($r.Errors -join ' ') -notmatch 'QueryInformationJobObject Win32=5') { throw 'Unproved cleanup accepted' }
+      if ($r.Success -or $r.JobEmpty -or $r.OutputRead -or -not $r.ControlStarted -or $r.Reason -cne 'timeout' -or $r.ExitCode -ne 124 -or -not $r.TerminateSucceeded -or $r.Errors.Count -eq 0 -or ($r.Errors -join ' ') -notmatch 'Cleanup unproved' -or ($r.Errors -join ' ') -notmatch 'QueryInformationJobObject Win32=5') { throw 'Unproved cleanup accepted' }
       continue
     }
-    if (-not $r.JobEmpty -or $r.LastJobActive -ne 0 -or $r.TotalProcesses -lt 1) { throw "Job not reaped: $case" }
+    if (-not $r.JobEmpty -or $r.LastJobActive -ne 0 -or -not $r.WritersRetired -or -not $r.ControlStarted -or $r.TotalProcesses -ne $r.Processes.Count -or @($r.Processes | Where-Object { -not $_.Member -or -not $_.Signaled -or -not $_.Closed -or $_.WaitResult -ne 0 -or $_.Birth -le 0 -or $_.HandleValue -eq 0 -or -not $_.Role }).Count -ne 0 -or @($r.Processes.Pid | Sort-Object -Unique).Count -ne $r.Processes.Count) { throw "Job identities not reaped: $case" }
     if ($case -eq 'normal' -and (-not $r.Success -or $r.ExitCode -ne 0 -or $r.Output -notmatch 'CONTROL normal' -or $r.Error -notmatch 'CONTROL stderr')) { throw 'Normal control failed' }
     if ($case -eq 'exit23' -and ($r.Success -or $r.ExitCode -ne 23 -or $r.Reason -cne 'exit' -or $r.Errors.Count -ne 0)) { throw 'Nonzero exit accepted or hidden' }
-    if ($case -eq 'descendant' -and (-not $r.Success -or $r.TotalProcesses -ne 2 -or -not $r.TerminateRequested -or -not $r.TerminateSucceeded -or $r.Output -notmatch 'DESCENDANT_PID=\d+')) { throw 'Retained descendant not proved reaped' }
-    if ($case -eq 'hang' -and ($r.Success -or $r.Reason -cne 'timeout' -or $r.ExitCode -ne 124 -or $r.Errors.Count -ne 0 -or -not $r.TerminateSucceeded)) { throw 'Timeout control failed' }
-    if ($case -eq 'output' -and ($r.Success -or $r.OutputRead -or $r.Errors.Count -eq 0)) { throw 'Output cap not enforced' }
+    if ($case -eq 'descendant' -and (-not $r.Success -or -not $r.DescendantSuspended -or $r.DescendantThreadCount -ne 1 -or -not $r.RetainedWriterReady -or @($r.Processes | Where-Object Role -eq 'descendant').Count -ne 1 -or -not $r.TerminateRequested -or -not $r.TerminateSucceeded -or $r.Output -notmatch "DESCENDANT_PID=$($r.DescendantPid)\r?\n" -or $r.Output -notmatch 'RETAINED_WRITER_READY' -or -not $r.ExclusiveSnapshot)) { throw 'Retained descendant not proved reaped' }
+    if ($case -eq 'hang' -and ($r.Success -or $r.Reason -cne 'timeout' -or $r.ExitCode -ne 124 -or $r.Errors.Count -ne 0 -or -not $r.TerminateSucceeded -or $r.Output -notmatch 'CONTROL hang')) { throw 'Timeout control failed' }
+    if ($case -eq 'output' -and ($r.Success -or $r.OutputRead -or $r.ExclusiveSnapshot -or $r.CapturedBytes -ne 0 -or $r.StdoutBytes -le 1048576 -or $r.Reason -cne 'output-limit' -or $r.ExitCode -ne 124 -or $r.Errors.Count -ne 0 -or -not $r.TerminateSucceeded)) { throw 'Output cap not proved by byte count and exact reason' }
     if ($case -eq 'terminate-denied' -and ($r.Success -or ($r.Errors -join ' ') -notmatch 'Terminate denied Win32=5' -or $r.ExitCode -ne 124)) { throw 'Actual denied termination was hidden' }
   }
 } finally {

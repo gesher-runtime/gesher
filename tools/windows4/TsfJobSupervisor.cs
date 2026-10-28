@@ -30,6 +30,11 @@ public static class TsfJobSupervisor {
   [StructLayout(LayoutKind.Sequential)] struct ThreadEntry {
     public uint size,usage,id,pid; public int priority,delta; public uint flags;
   }
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct ProcessEntry {
+    public uint size,usage,pid; public UIntPtr heap; public uint module,threads,parent;
+    public int priority; public uint flags;
+    [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string exe;
+  }
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr sa,string name);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int cls,ref Extended info,uint size);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int cls,out Accounting info,uint size,IntPtr length);
@@ -46,6 +51,10 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool Thread32First(IntPtr snapshot,ref ThreadEntry entry);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool Thread32Next(IntPtr snapshot,ref ThreadEntry entry);
+  [DllImport("kernel32.dll",SetLastError=true,EntryPoint="QueryInformationJobObject")] static extern bool QueryPidList(IntPtr job,int cls,IntPtr list,uint size,IntPtr length);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string path,uint access,uint share,ref SA sa,uint creation,uint flags,IntPtr template);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileSizeEx(IntPtr handle,out long length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr list,int count,uint flags,ref UIntPtr bytes);
@@ -59,14 +68,24 @@ public static class TsfJobSupervisor {
     public uint Pid, ExitCode, TotalProcesses, TerminatedProcesses;
     public uint LastJobActive=UInt32.MaxValue, RootWaitResult=UInt32.MaxValue, PreResumeActive;
     public long RootHandleValue, JobHandleValue;
-    public int SuspendedThreadCount;
+    public int SuspendedThreadCount, DescendantThreadCount, SnapshotWin32Error;
     public long Birth, MainMilliseconds, CleanupMilliseconds;
     public string Image="", Output="", Error="", Reason="";
     public bool Assigned, MemberBeforeResume, SuspendedSingleThread, RootSignaled, JobEmpty, OutputRead;
     public bool TerminateRequested, TerminateSucceeded, RootHandleClosed, ThreadHandleClosed;
     public int OwnedHandles, ClosedHandles;
     public List<string> Errors=new List<string>();
+    public List<Identity> Processes=new List<Identity>();
+    public uint DescendantPid;
+    public long StdoutBytes, StderrBytes, CapturedBytes;
+    public bool ControlStarted, DescendantSuspended, RetainedWriterReady, WritersRetired, ExclusiveSnapshot;
     public bool Success { get { return Reason=="exit" && ExitCode==0 && RootSignaled && JobEmpty && OutputRead && Errors.Count==0 && OwnedHandles==ClosedHandles; } }
+  }
+  public sealed class Identity {
+    public uint Pid, Parent, WaitResult=UInt32.MaxValue;
+    public long Birth, HandleValue; public string Image="", Role="";
+    public bool Member, Signaled, Closed;
+    internal IntPtr Handle;
   }
   static Exception Native(string operation) { int error=Marshal.GetLastWin32Error(); return new Win32Exception(error,operation+" Win32="+error); }
   static void Check(bool ok,string operation) { if(!ok) throw Native(operation); }
@@ -78,13 +97,61 @@ public static class TsfJobSupervisor {
     owned[index]=IntPtr.Zero; r.ClosedHandles++; return true;
   }
   static Accounting Count(IntPtr h) { Accounting a; Check(QueryInformationJobObject(h,1,out a,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero),"QueryInformationJobObject"); return a; }
-  static string Snapshot(string path) {
+  static string Snapshot(string path,Result r) {
     // Called only after every owned process is gone; at most cap bytes allocated/read.
-    using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)) {
+    using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.None)) {
       if(file.Length>OutputCap) throw new IOException("Output cap exceeded");
       byte[] data=new byte[(int)file.Length]; int used=0;
       while(used<data.Length) { int n=file.Read(data,used,data.Length-used); if(n==0) throw new IOException("Short output read"); used+=n; }
-      return Encoding.UTF8.GetString(data);
+      r.CapturedBytes+=used; return Encoding.UTF8.GetString(data);
+    }
+  }
+  static List<uint> Pids(IntPtr job) {
+    // JOBOBJECT_BASIC_PROCESS_ID_LIST: two DWORDs followed by ULONG_PTR entries.
+    // Bounded allocation; ERROR_MORE_DATA or an inconsistent census fails closed.
+    const int capacity=64; int size=8+capacity*IntPtr.Size;
+    IntPtr list=Marshal.AllocHGlobal(size);
+    try {
+      Check(QueryPidList(job,3,list,(uint)size,IntPtr.Zero),"Query job PID list");
+      int assigned=Marshal.ReadInt32(list),count=Marshal.ReadInt32(list,4);
+      if(count<0 || count>capacity || assigned!=count) throw new IOException("Incomplete job PID census");
+      var result=new List<uint>();
+      for(int i=0;i<count;i++) {
+        uint pid=checked((uint)Marshal.ReadIntPtr(list,8+i*IntPtr.Size).ToInt64());
+        if(result.Contains(pid)) throw new IOException("Duplicate job PID"); result.Add(pid);
+      }
+      return result;
+    } finally { Marshal.FreeHGlobal(list); }
+  }
+  static uint Parent(uint pid,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own) {
+    IntPtr snapshot=own(CreateToolhelp32Snapshot(2,0));
+    try {
+      ProcessEntry e=new ProcessEntry(); e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
+      Check(Process32First(snapshot,ref e),"Process32First");
+      do { if(e.pid==pid) return e.parent; e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry)); } while(Process32Next(snapshot,ref e));
+      throw new IOException("Live job PID missing from parent census: "+pid);
+    } finally { if(!CloseOwned(owned,snapshot,r)) throw new IOException("Close process census failed"); }
+  }
+  static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable) {
+    var ids=Pids(job);
+    // The kernel list has no ordering contract. Capture the expected suspended
+    // descendant before classifying any console host whose parent is that PID.
+    if(r.DescendantPid!=0 && ids.Remove(r.DescendantPid)) ids.Insert(0,r.DescendantPid);
+    foreach(uint pid in ids) {
+      if(r.Processes.Exists(p=>p.Pid==pid)) continue;
+      Identity p=new Identity {Pid=pid}; r.Processes.Add(p);
+      p.Handle=own(OpenProcess(0x100000|0x1000,false,pid)); p.HandleValue=p.Handle.ToInt64();
+      // Only inspect a live retained handle. Never query an exited image or kill by PID.
+      if(WaitForSingleObject(p.Handle,0)!=WAIT_TIMEOUT) throw new IOException("Job identity exited before capture: "+pid);
+      long exit,kernel,user; Check(GetProcessTimes(p.Handle,out p.Birth,out exit,out kernel,out user),"Job identity birth");
+      var image=new StringBuilder(32768); uint length=(uint)image.Capacity;
+      Check(QueryFullProcessImageName(p.Handle,0,image,ref length),"Live job identity image"); p.Image=image.ToString();
+      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member; p.Parent=Parent(pid,r,owned,own);
+      Identity parent=r.Processes.Find(q=>q.Pid==p.Parent && (q.Role=="root" || q.Role=="descendant"));
+      if(pid==r.DescendantPid && parent!=null && parent.Role=="root" && p.Birth>=parent.Birth && String.Equals(p.Image,executable,StringComparison.OrdinalIgnoreCase)) p.Role="descendant";
+      else if(parent!=null && p.Birth>=parent.Birth && !r.Processes.Exists(q=>q.Role=="console-host" && q.Parent==p.Parent) && String.Equals(p.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) p.Role="console-host";
+      else throw new IOException("Unexpected job identity: "+pid+" parent="+p.Parent+" image="+p.Image);
+      if(!p.Member || p.Birth<=0) throw new IOException("Job identity ownership failed");
     }
   }
   // mainMs is fixed at 45000 for the real probe; shorter only in controlled CI tests.
@@ -94,12 +161,14 @@ public static class TsfJobSupervisor {
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
-    bool attrsReady=false; string dir=null,stdout=null,stderr=null; bool created=false;
+    bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
+    bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="output";
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
       dir=Path.Combine(Path.GetTempPath(),"tsf-job-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
       stdout=Path.Combine(dir,"stdout"); stderr=Path.Combine(dir,"stderr");
+      if(controlled) { protocol=Path.Combine(dir,"protocol"); Directory.CreateDirectory(protocol); arguments+=" \""+protocol+"\""; }
       SA sa=new SA {size=Marshal.SizeOf(typeof(SA)),inherit=1};
       output=own(CreateFile(stdout,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
       error=own(CreateFile(stderr,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
@@ -125,6 +194,8 @@ public static class TsfJobSupervisor {
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity; Check(QueryFullProcessImageName(root,0,image,ref length),"Capture suspended root image"); r.Image=image.ToString();
       if(!String.Equals(r.Image,executable,StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Root image mismatch");
+      Identity rootIdentity=new Identity {Pid=r.Pid,Birth=r.Birth,Image=r.Image,Role="root",Handle=root,HandleValue=root.ToInt64()};
+      r.Processes.Add(rootIdentity);
       IntPtr snapshot=own(CreateToolhelp32Snapshot(4,0)); ThreadEntry entry=new ThreadEntry(); entry.size=(uint)Marshal.SizeOf(typeof(ThreadEntry));
       Check(Thread32First(snapshot,ref entry),"Thread32First"); int threads=0;
       do { if(entry.pid==r.Pid) threads++; entry.size=(uint)Marshal.SizeOf(typeof(ThreadEntry)); } while(Thread32Next(snapshot,ref entry));
@@ -133,16 +204,46 @@ public static class TsfJobSupervisor {
       if(!CloseOwned(owned,snapshot,r)) throw new IOException("Thread census handle closure failed");
       Check(AssignProcessToJobObject(job,root),"Assign suspended root"); r.Assigned=true;
       bool member; Check(IsProcessInJob(root,job,out member),"Validate job membership"); r.MemberBeforeResume=member;
+      rootIdentity.Member=member;
       Accounting before=Count(job); r.PreResumeActive=before.active; if(!member || before.active!=1 || before.total!=1) throw new InvalidOperationException("Pre-resume job census failed");
       if(ResumeThread(thread)!=1) throw Native("Resume exactly one suspension");
       while(true) {
         long remaining=mainMs-main.ElapsedMilliseconds;
         if(remaining<=0) { r.Reason="timeout"; break; }
+        if(controlled) {
+          if(File.Exists(Path.Combine(protocol,"started")) && !r.ControlStarted) {
+            Census(job,r,owned,own,executable); r.ControlStarted=true;
+            File.WriteAllText(Path.Combine(protocol,"start-go"),"go");
+          }
+          if(File.Exists(Path.Combine(protocol,"child")) && !r.DescendantSuspended) {
+            r.DescendantPid=UInt32.Parse(File.ReadAllText(Path.Combine(protocol,"child")));
+            if(r.DescendantPid==0 || r.DescendantPid==r.Pid) throw new IOException("Invalid descendant PID");
+            Census(job,r,owned,own,executable);
+            Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
+            if(child==null) throw new IOException("Suspended descendant not in job");
+            IntPtr childThreads=own(CreateToolhelp32Snapshot(4,0));
+            ThreadEntry e=new ThreadEntry(); e.size=(uint)Marshal.SizeOf(typeof(ThreadEntry));
+            Check(Thread32First(childThreads,ref e),"Descendant Thread32First");
+            do { if(e.pid==r.DescendantPid) r.DescendantThreadCount++; e.size=(uint)Marshal.SizeOf(typeof(ThreadEntry)); } while(Thread32Next(childThreads,ref e));
+            if(Marshal.GetLastWin32Error()!=18 || r.DescendantThreadCount!=1) throw new IOException("Suspended descendant thread census failed");
+            if(!CloseOwned(owned,childThreads,r)) throw new IOException("Descendant thread census close failed");
+            // Worker publishes only while its CREATE_SUSPENDED primary thread is held.
+            r.DescendantSuspended=true; File.WriteAllText(Path.Combine(protocol,"child-go"),"go");
+          }
+          if(File.Exists(Path.Combine(protocol,"writer-ready")) && !r.RetainedWriterReady) {
+            Identity child=r.Processes.Find(p=>p.Pid==r.DescendantPid && p.Role=="descendant");
+            if(child==null || WaitForSingleObject(child.Handle,0)!=WAIT_TIMEOUT) throw new IOException("Retainer startup not live");
+            Census(job,r,owned,own,executable); r.RetainedWriterReady=true;
+            File.WriteAllText(Path.Combine(protocol,"writer-go"),"go");
+          }
+        } else Census(job,r,owned,own,executable);
+        remaining=mainMs-main.ElapsedMilliseconds;
+        if(remaining<=0) { r.Reason="timeout"; break; }
         uint wait=WaitForSingleObject(root,(uint)Math.Min(25,remaining));
         if(wait==WAIT_OBJECT_0) { r.Reason="exit"; break; }
         if(wait!=WAIT_TIMEOUT) throw Native("Root wait");
-        long a,b; Check(GetFileSizeEx(output,out a),"Stdout size"); Check(GetFileSizeEx(error,out b),"Stderr size");
-        if(a>OutputCap || b>OutputCap) { r.Reason="output-limit"; break; }
+        Check(GetFileSizeEx(output,out r.StdoutBytes),"Stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Stderr size");
+        if(r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap) { r.Reason="output-limit"; break; }
       }
     } catch(Exception ex) { r.Errors.Add(ex.Message); r.Reason="controller-error"; }
     finally {
@@ -172,16 +273,30 @@ public static class TsfJobSupervisor {
                 // Release our process references before requiring accounting active==0.
                 r.ThreadHandleClosed=CloseOwned(owned,thread,r);
                 r.RootHandleClosed=CloseOwned(owned,root,r);
+                Identity p=r.Processes.Find(q=>q.Role=="root"); if(p!=null) { p.WaitResult=wait; p.Signaled=true; p.Closed=r.RootHandleClosed; }
                 if(!r.ThreadHandleClosed || !r.RootHandleClosed) throw new IOException("Root handle closure failed");
               }
             }
+            foreach(Identity p in r.Processes) {
+              if(p.Role=="root" || p.Closed || !Valid(p.Handle)) continue;
+              p.WaitResult=WaitForSingleObject(p.Handle,0);
+              if(p.WaitResult!=WAIT_OBJECT_0 && p.WaitResult!=WAIT_TIMEOUT) throw Native("Owned job identity wait");
+              if(p.WaitResult==WAIT_OBJECT_0) { p.Signaled=true; p.Closed=CloseOwned(owned,p.Handle,r); }
+            }
             if(r.Assigned && r.RootSignaled) { Accounting a=Count(query); r.TotalProcesses=a.total; r.TerminatedProcesses=a.terminated; r.LastJobActive=a.active; r.JobEmpty=a.active==0; }
             else r.JobEmpty=false;
-            if(r.RootSignaled && (r.JobEmpty || !r.Assigned)) break;
+            r.WritersRetired=r.Processes.TrueForAll(p=>p.Signaled && p.Closed);
+            if(r.RootSignaled && r.WritersRetired && (r.JobEmpty || !r.Assigned)) break;
           } catch(Exception ex) { r.Errors.Add(ex.Message); break; }
           int remaining=5000-(int)cleanup.ElapsedMilliseconds; if(remaining>0) Thread.Sleep(Math.Min(10,remaining));
         }
-        if(!r.RootSignaled || !r.JobEmpty) r.Errors.Add("Cleanup unproved within shared 5000ms budget");
+        if(!r.RootSignaled || !r.JobEmpty || !r.WritersRetired) r.Errors.Add("Cleanup unproved within shared 5000ms budget");
+        if(r.JobEmpty && r.TotalProcesses!=r.Processes.Count) r.Errors.Add("Cumulative associations do not match captured unique identities: total="+r.TotalProcesses+" identities="+r.Processes.Count);
+      }
+      if(Valid(output) && Valid(error)) {
+        try { Check(GetFileSizeEx(output,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Final stderr size");
+          if(r.Reason=="exit" && (r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap)) r.Reason="output-limit";
+        } catch(Exception ex) { r.Errors.Add(ex.Message); }
       }
       for(int i=owned.Count-1;i>=0;i--) { if(Valid(owned[i])) CloseOwned(owned,owned[i],r); }
       if(attrsReady) DeleteProcThreadAttributeList(attrs);
@@ -191,10 +306,13 @@ public static class TsfJobSupervisor {
       r.CleanupMilliseconds=cleanup.ElapsedMilliseconds;
     }
     // Files are local owned regular files. No reader exists during the process lifetime.
-    if(r.RootSignaled && r.JobEmpty && r.OwnedHandles==r.ClosedHandles && cleanup.ElapsedMilliseconds<5000) {
-      try { r.Output=Snapshot(stdout); r.Error=Snapshot(stderr); r.OutputRead=true; } catch(Exception ex) { r.Errors.Add(ex.Message); }
+    if(r.RootSignaled && r.JobEmpty && r.WritersRetired && r.Errors.Count==0 && r.Reason!="output-limit" && r.OwnedHandles==r.ClosedHandles && cleanup.ElapsedMilliseconds<5000) {
+      try { r.Output=Snapshot(stdout,r); r.Error=Snapshot(stderr,r); r.OutputRead=true; r.ExclusiveSnapshot=true; }
+      catch(Exception ex) { r.SnapshotWin32Error=ex.HResult & 65535; r.Errors.Add("Exclusive output retirement proof Win32="+r.SnapshotWin32Error+": "+ex.Message); }
     }
-    try { if(stdout!=null && File.Exists(stdout)) File.Delete(stdout); if(stderr!=null && File.Exists(stderr)) File.Delete(stderr); if(dir!=null) Directory.Delete(dir); }
+    try { if(stdout!=null && File.Exists(stdout)) File.Delete(stdout); if(stderr!=null && File.Exists(stderr)) File.Delete(stderr);
+      if(protocol!=null) { foreach(string file in Directory.GetFiles(protocol)) File.Delete(file); Directory.Delete(protocol); }
+      if(dir!=null) Directory.Delete(dir); }
     catch(Exception ex) { r.Errors.Add("Owned temporary file cleanup: "+ex.Message); }
     r.CleanupMilliseconds=cleanup.ElapsedMilliseconds;
     if(r.CleanupMilliseconds>=5000) r.Errors.Add("Cleanup budget exhausted including output/file cleanup");
