@@ -1,5 +1,7 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
+**Current continuation:** [2026-10-29 manager checkpoint](session-2026-10-29-continuation.md) supersedes older live status below.
+
 [Bounded requirement matrix and unsurveyed scope](requirement-matrix-2026-10-29.md).
 
 **Latest continuation, 2026-10-29:** TSF8ad component actual audit is complete and bounded; Binder authenticated private admission remains source-only and is a security prerequisite for secondary AOT. Services corrected fixture needs fresh proof. Interactive hardware Windows CI does not exist; hardware remains an external blocker. Read [the continuation checkpoint](session-2026-10-28-aot-native-full.md#continued-audit-and-security-dependency-2026-10-29).
