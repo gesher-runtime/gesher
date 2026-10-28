@@ -115,6 +115,7 @@ static bool pipe_evidence(HANDLE pipe, PSID allowed) {
   }
   if (owner_rights) LocalFree(owner_rights);
   if (low) LocalFree(low);
+  printf("DIAG host-ipc descriptor-assertion phase=%s success=%d\n", allowed ? "allowed" : "protected", ok);
   LocalFree(sd);
   return ok;
 }
@@ -130,11 +131,17 @@ static bool read_observation(HANDLE input, HANDLE process, IpcObservation* value
 }
 static bool protect_pipe(HANDLE pipe) {
   PSECURITY_DESCRIPTOR sd = nullptr;
-  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &sd, nullptr)) return false;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1, &sd, nullptr)) {
+    printf("DIAG host-ipc protect-sddl error=%lu\n", GetLastError()); return false;
+  }
   PACL dacl = nullptr; BOOL present = FALSE, defaulted = FALSE;
-  bool ok = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present &&
-      SetSecurityInfo(pipe, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                      nullptr, nullptr, dacl, nullptr) == ERROR_SUCCESS;
+  bool ok = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present;
+  if (ok) {
+    const DWORD status = SetSecurityInfo(pipe, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                        nullptr, nullptr, dacl, nullptr);
+    printf("DIAG host-ipc protect-SetSecurityInfo status=%lu\n", status);
+    ok = status == ERROR_SUCCESS;
+  } else printf("DIAG host-ipc protect-GetSecurityDescriptorDacl error=%lu present=%d\n", GetLastError(), present);
   LocalFree(sd);
   return ok;
 }
@@ -358,7 +365,10 @@ static int exercise(Fixture& f) {
   if (!PeekNamedPipe(host.h, nullptr, 0, nullptr, &challenge_available, nullptr) || challenge_available != 19 ||
       !ReadFile(host.h, actual_challenge, 19, &challenge_read, nullptr) || challenge_read != 19 ||
       memcmp(actual_challenge, "Gesher-resource-v1\n", 19) != 0) return 61;
-  if (!DisconnectNamedPipe(host.h) || !protect_pipe(host.h) || !pipe_evidence(host.h, nullptr)) return 62;
+  const BOOL disconnected_positive = DisconnectNamedPipe(host.h);
+  const DWORD disconnect_error = disconnected_positive ? ERROR_SUCCESS : GetLastError();
+  printf("DIAG host-ipc positive-disconnect success=%d error=%lu\n", disconnected_positive, disconnect_error);
+  if (!disconnected_positive || !protect_pipe(host.h) || !pipe_evidence(host.h, nullptr)) return 62;
   if (ConnectNamedPipe(host.h, nullptr) || GetLastError() != ERROR_PIPE_LISTENING) return 63;
   {
     Handle fresh_host;
