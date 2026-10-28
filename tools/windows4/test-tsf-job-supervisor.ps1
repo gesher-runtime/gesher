@@ -13,7 +13,8 @@ $worker = Join-Path $directory 'TsfJobWorker.exe'
 try {
   # Framework csc emits a real console executable; no fixture or compilation occurs locally.
   $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-  & $compiler /nologo /target:exe "/out:$worker" tools/windows4/TsfJobWorker.cs
+  $workerSource = Join-Path $PWD 'tools\windows4\TsfJobWorker.cs'
+  & $compiler /nologo /target:exe "/out:$worker" $workerSource
   if ($LASTEXITCODE -ne 0) { throw 'Controlled worker compilation failed' }
   Write-Host "TSF_CONTROL_COMPILER path=$compiler sha256=$((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()) worker_sha256=$((Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant())"
   foreach ($case in @('normal','exit23','hang','descendant','output','terminate-denied','query-denied')) {
