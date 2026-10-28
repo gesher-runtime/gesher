@@ -232,6 +232,20 @@ inline int Run(const locks::PreparedOperation& prepared, HANDLE cancel) {
   ULONG processed = ProcessTrace(&reader, 1, nullptr, nullptr);
   ULONG closed = CloseTrace(reader);
   Require(processed == ERROR_SUCCESS && closed == ERROR_SUCCESS && log.EventsLost == 0, "complete actual ETL decode");
+  std::printf("KERNEL_DIAG supported=%d births=%zu switches=%zu phases=%u owner=%lu release=%lld\n",
+      evidence.supported, evidence.births.size(), evidence.switches.size(), phase_count,
+      static_cast<unsigned long>(owner_id.tid), static_cast<long long>(release));
+  for (const auto& birth : evidence.births) if (birth.tid == owner_id.tid)
+    std::printf("KERNEL_DIAG_BIRTH pid=%lu tid=%lu qpc=%lld\n",
+        static_cast<unsigned long>(birth.pid), static_cast<unsigned long>(birth.tid), static_cast<long long>(birth.qpc));
+  for (unsigned i = 0; i < phase_count; ++i)
+    std::printf("KERNEL_DIAG_PHASE index=%u begin=%lld end=%lld\n", i,
+        static_cast<long long>(phases[i].begin), static_cast<long long>(phases[i].end));
+  unsigned printed = 0;
+  for (const auto& row : evidence.switches) if ((row.old_tid == owner_id.tid || row.new_tid == owner_id.tid) && printed++ < 128)
+    std::printf("KERNEL_DIAG_SWITCH old=%lu new=%lu state=%u reason=%u mode=%u qpc=%lld\n",
+        static_cast<unsigned long>(row.old_tid), static_cast<unsigned long>(row.new_tid),
+        row.state, row.reason, row.mode, static_cast<long long>(row.qpc));
   bool actual = false;
   for (unsigned i = 0; i < phase_count; ++i) {
     const auto phase = phases[i];
