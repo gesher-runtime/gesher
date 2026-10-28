@@ -1,5 +1,10 @@
 # Package/install UID authority prerequisite: unqualified source
 
+Current follow-up: [child UID snapshot and registry primitives](binder-launch-registry-primitives-source.md),
+source `109584a809f6a16dd1f5f44f2609e734a759f0f0`. It corrects P2 in source;
+private bootstrap and P1 transport UID authority remain incomplete. The inventory
+below describes the earlier `69739417` checkpoint.
+
 Disposition: SOURCE UNQUALIFIED, P1 TRANSPORT UID AUTHORITY STILL OPEN. This is
 concrete source progress beyond the PID foundation, not the requested complete
 launch registry/bootstrap. Do not merge into qualified primary or reuse old AOT

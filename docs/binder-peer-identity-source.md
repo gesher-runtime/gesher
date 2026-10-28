@@ -1,5 +1,8 @@
 # Binder Windows peer hardening: bounded, unqualified source
 
+Newest follow-up: [child UID snapshot and registry primitives](binder-launch-registry-primitives-source.md),
+source `109584a809f6a16dd1f5f44f2609e734a759f0f0`; P1 remains open.
+
 Current follow-up: [package/install identity and suspended-child source](binder-package-uid-source.md),
 source `69739417566b932cf0cd580fb6bb6c76ddeda1e3`. The text below records the
 earlier transport foundation at `8404eb00`; its package/launch implementation
