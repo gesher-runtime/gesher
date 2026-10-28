@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
@@ -49,6 +50,7 @@ sealed class ProbeForm : Form
     bool eventFailure;
     public int Result { get; private set; } = 1;
     record Context(string Session, int Id, string Unique, string Origin, string Frame, bool Default);
+    record BackendOutcome(long Tick, string? Result, Exception? Error, bool Canceled);
 
     public ProbeForm()
     {
@@ -62,6 +64,7 @@ sealed class ProbeForm : Form
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
         try
         {
+            await CheckBackendFaultPrecedence();
             server.Start();
             port = ((IPEndPoint)server.LocalEndpoint).Port;
             _ = Serve(timeout.Token);
@@ -313,18 +316,77 @@ sealed class ProbeForm : Form
 
     async Task<string> Call(string session, string method, string parameters)
     {
-        bool traceEval = method == "Debugger.evaluateOnCallFrame";
-        long started = Environment.TickCount64;
-        if (traceEval) Console.WriteLine($"EARLY_EVAL_BEGIN session={session} tick={started} parameters={parameters}");
         Task<string> call = session.Length == 0
             ? web.CoreWebView2.CallDevToolsProtocolMethodAsync(method, parameters)
             : web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(session, method, parameters);
-        if (traceEval)
-        {
-            _ = call.ContinueWith(done => Console.WriteLine($"EARLY_EVAL_BACKEND session={session} tick={Environment.TickCount64} elapsed={Environment.TickCount64 - started} status={done.Status}"),
-                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-        }
         return await call.WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    static async Task<string> ObserveBackend(Task<string> backend, string tag, long started, long deadlineTick, CancellationToken deadline)
+    {
+        var observed = new TaskCompletionSource<BackendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = backend.ContinueWith(done => {
+            long tick = Environment.TickCount64;
+            Exception? error = done.IsFaulted ? done.Exception : null;
+            string? result = done.IsCompletedSuccessfully ? done.Result : null;
+            var outcome = new BackendOutcome(tick, result, error, done.IsCanceled);
+            observed.TrySetResult(outcome);
+            Console.WriteLine($"{tag}_BACKEND_OBSERVED tick={tick} elapsed={tick - started} status={done.Status}");
+            if (error != null)
+            {
+                for (Exception? current = error; current != null; current = current.InnerException)
+                    Console.WriteLine($"{tag}_FAULT type={current.GetType().FullName} hresult=0x{current.HResult:X8} message={current.Message}");
+                Console.WriteLine($"{tag}_FAULT_CHAIN {error}");
+            }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        BackendOutcome outcome;
+        try { outcome = await observed.Task.WaitAsync(deadline); }
+        catch (OperationCanceledException)
+        {
+            if (!observed.Task.IsCompletedSuccessfully || observed.Task.Result.Tick >= deadlineTick) throw;
+            outcome = observed.Task.Result;
+        }
+        Console.WriteLine($"{tag}_DECISION tick={outcome.Tick} deadline={deadlineTick} canceled={outcome.Canceled}");
+        if (outcome.Error != null)
+        {
+            for (Exception? current = outcome.Error; current != null; current = current.InnerException)
+                Console.WriteLine($"{tag}_DECISION_FAULT type={current.GetType().FullName} hresult=0x{current.HResult:X8} message={current.Message}");
+            Console.WriteLine($"{tag}_DECISION_CHAIN {outcome.Error}");
+        }
+        if (outcome.Tick >= deadlineTick) throw new TimeoutException("backend completed after the absolute deadline");
+        if (outcome.Error != null)
+        {
+            Exception original = outcome.Error is AggregateException aggregate && aggregate.InnerExceptions.Count == 1
+                ? aggregate.InnerExceptions[0] : outcome.Error;
+            ExceptionDispatchInfo.Capture(original).Throw();
+        }
+        if (outcome.Canceled) throw new OperationCanceledException("backend canceled");
+        return outcome.Result ?? throw new Exception("backend returned no result");
+    }
+
+    static async Task CheckBackendFaultPrecedence()
+    {
+        long started = Environment.TickCount64;
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        bool seen = false;
+        try
+        {
+            await ObserveBackend(Task.FromException<string>(new InvalidOperationException("immediate-fault-control")),
+                "EARLY_FAULT_CONTROL", started, started + 3000, canceled.Token);
+        }
+        catch (InvalidOperationException e) when (e.Message == "immediate-fault-control") { seen = true; }
+        if (!seen) throw new Exception("immediate fault was lost to cancellation");
+        Console.WriteLine("EARLY_IMMEDIATE_FAULT_CONTROL_PASS");
+        var late = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        long lateStart = Environment.TickCount64;
+        using var lateDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        bool timedOut = false;
+        try { await ObserveBackend(late.Task, "EARLY_LATE_FAULT_CONTROL", lateStart, lateStart + 50, lateDeadline.Token); }
+        catch (OperationCanceledException) { timedOut = true; }
+        late.SetException(new InvalidOperationException("late-fault-control"));
+        if (!timedOut) throw new Exception("late fault did not preserve timeout");
+        Console.WriteLine("EARLY_LATE_FAULT_CONTROL_PASS");
     }
 
     async Task CallOriginal(Context context, string objectId, string value)
@@ -339,6 +401,7 @@ sealed class ProbeForm : Form
     async Task HandlePause(string session, JsonElement paused)
     {
         long started = Stopwatch.GetTimestamp();
+        long deadlineTick = Environment.TickCount64 + 3000;
         var resumed = new ResumeWait();
         while (!resumeSignals.TryAdd(session, resumed))
         {
@@ -374,7 +437,21 @@ sealed class ProbeForm : Form
                 {
                     string expression = "(()=>{let o={postMessage:function(x){realmProbe('object-call:'+x)}};Object.defineProperty(window,'__web4EarlyObject',{value:o,configurable:true});return o})()";
                     string parameters = JsonSerializer.Serialize(new { callFrameId = callFrame, expression, returnByValue = false });
-                    string result = await Call(session, "Debugger.evaluateOnCallFrame", parameters).WaitAsync(deadline.Token);
+                    long evalStart = Environment.TickCount64;
+                    Console.WriteLine($"EARLY_EVAL_BEGIN session={session} tick={evalStart} deadline={deadlineTick} parameters={parameters}");
+                    Task<string> backend;
+                    try
+                    {
+                        backend = session.Length == 0
+                            ? web.CoreWebView2.CallDevToolsProtocolMethodAsync("Debugger.evaluateOnCallFrame", parameters)
+                            : web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(session, "Debugger.evaluateOnCallFrame", parameters);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"EARLY_EVAL_SUBMISSION_FAULT type={e.GetType().FullName} hresult=0x{e.HResult:X8} chain={e}");
+                        throw;
+                    }
+                    string result = await ObserveBackend(backend, "EARLY_EVAL", evalStart, deadlineTick, deadline.Token);
                     using var parsed = JsonDocument.Parse(result);
                     if (parsed.RootElement.TryGetProperty("error", out _) || parsed.RootElement.TryGetProperty("exceptionDetails", out _))
                         throw new Exception("early injection evaluation failed: " + result);
