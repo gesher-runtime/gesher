@@ -37,11 +37,13 @@ static void observe(int family, int api, int flags, int fault) {
   struct iovec iov[2] = {{bad, 4}, {NULL, 0}};
   if (fault == 3) { iov[0].iov_base = prefix; iov[1].iov_base = (void*)(uintptr_t)1; iov[1].iov_len = 4; }
   struct msghdr msg = {0}; msg.msg_iov = iov; msg.msg_iovlen = 2; msg.msg_flags = 0x5a5a;
+  if (fault == 4) msg.msg_iov = (void*)(uintptr_t)1;
+  struct msghdr* message = fault == 5 ? (void*)(uintptr_t)1 : &msg;
   struct sockaddr_storage peer = {0}; socklen_t peer_len = sizeof(peer);
   errno = 0;
   ssize_t n = api == 0 ? recv(rx, bad, 4, flags) :
               api == 1 ? recvfrom(rx, bad, 4, flags, (void*)&peer, &peer_len) :
-                         recvmsg(rx, &msg, flags);
+                         recvmsg(rx, message, flags);
   int error = errno;
   unsigned char next[16] = {0}; errno = 0;
   ssize_t queued = recv(rx, next, sizeof(next), MSG_DONTWAIT);
@@ -56,7 +58,7 @@ int main(void) {
   const int families[] = {AF_INET, AF_INET6};
   const int flags[] = {0, MSG_TRUNC, MSG_PEEK, MSG_PEEK | MSG_TRUNC};
   for (int f = 0; f < 2; ++f) for (int api = 0; api < 3; ++api)
-    for (int k = 0; k < 4; ++k) for (int fault = 0; fault < (api == 2 ? 4 : 3); ++fault)
+    for (int k = 0; k < 4; ++k) for (int fault = 0; fault < (api == 2 ? 6 : 3); ++fault)
       observe(families[f], api, flags[k], fault);
   return 0;
 }
