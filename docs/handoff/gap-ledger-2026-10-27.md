@@ -226,3 +226,23 @@ source-only Web4 are excluded. Read the newest resumed-progress entry for
 exact sources/scopes/ownership. All old roadmap/ADR/hardware/release requirements
 remain; no generic archive integrity or overall gap closure follows from the
 new candidate's launch.
+
+## Canonical archive and ordinary Binder full acceptance, 2026-10-28
+
+Full40678371420/attempt1/source7bbccfcd is independently accepted35jobs29success/
+six intended skips, both normal0, real package23 and two ten-app e2e0. Phase4
+merge695ef6b81ac31662f3a51fa3195ace11923058e2 has the exact entire non-doc tree
+of verified7bb; frozen2634c778 is docs-only. All1157 inventory fields/history
+remain blob55e03c68. [Exact bounded proof](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md).
+
+The current canonical consumer paths now have actual fail-closed raw ZIP
+verification for all80 receipts, strict15 negative controls and current exact
+producer/source/run/attempt/time binding. This closes that scoped canonical
+gap; older warning-only and future standalone/release consumers are not thereby
+qualified. Surface80/86/reader and ordinary Binder9x9 RW/RO/page/FD/PID gates
+are full-verified only within their detailed limits. Concurrent protection/
+partial-copy/public-prefix loss, broader Binder2, every unqualified Native3/
+Web4/AOT after-resource/staticSDK/secondary/factory, roadmap/hardware and release
+requirements stay open. The owner goal is not complete and main/release remain
+held. Next bounded source refresh is the six-file after-resource slice from
+prepared7aff in gesher-aot3-after-union onto this newly qualified primary.

@@ -1,14 +1,17 @@
 # Handoff: closing the known gaps (wave after PR #3)
 
-**Newest candidate checkpoint, 2026-10-28:** full40678371420/attempt1 is
-running at exact7bbccfcddbac826f50b78175f4d23f8702fd7741. It combines frozen
-Surface16102, reader921418, strict canonical integrityb80e4e8d and ordinary
-Binder7c72a3af. New canonical Binder wiring and actor production-OFF separation
-passed independent source peer; actual full acceptance is pending. Primary
-still has the entire non-doc tree of qualified30db. Read the newest resumed
-progress entry; older active/pending component states below are historical.
+**Newest integration acceptance, 2026-10-28:** canonical full40678371420/attempt1
+at exact7bbccfcddbac826f50b78175f4d23f8702fd7741 is accepted:35jobs29success/
+six original intentional probes skipped, both actual normal Windows whole0,
+mandatory Binder/Surface/reader and strict80-archive supplier paths, installed
+package23 and both ten-app e2e0. Frozen2634c778 adds docs only; --no-ff phase4
+merge695ef6b81ac31662f3a51fa3195ace11923058e2 has an independently verified
+empty entire non-doc diff to7bb before and after commit. Inventory55e03/all1157
+is unchanged. Read [the exact bounded report](tracks/coherent-surface-reader-binder-integrity-40678371420-accepted.md)
+and newest resumed-progress entry. Failed Native3, source/diagnostic Web4,
+AOT after-resource and all remaining roadmap/hardware/release gates stay open.
 
-**Latest bounded integration acceptance, 2026-10-28:** canonical full40596167427
+**Prior bounded integration acceptance, 2026-10-28:** canonical full40596167427
 attempt1 at exact30db7709838839d28be68d8b467a57b26a3ac667 is accepted:
 31jobs25success/6intentional reusable probes skipped, both actual Windows
 whole0, package23 and both complete ten-app e2e0. Frozen6a057ccc adds docs only;
