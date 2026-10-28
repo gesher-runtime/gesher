@@ -1,5 +1,6 @@
 // CI-only WebView2/CDP early-injection experiment. Not the Gesher bridge.
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -35,7 +36,9 @@ sealed class ProbeForm : Form
     readonly ConcurrentDictionary<string, bool> initialized = new();
     readonly ConcurrentDictionary<string, string> remoteObjects = new();
     readonly ConcurrentDictionary<string, string> exposures = new();
-    readonly ConcurrentDictionary<string, bool> rejectedForgeries = new();
+    readonly ConcurrentDictionary<string, Context> rejectedForgeries = new();
+    sealed class ResumeWait { public bool Issued; public readonly TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+    readonly ConcurrentDictionary<string, ResumeWait> resumeSignals = new();
     readonly ConcurrentBag<Task> pauseTasks = new();
     readonly ConcurrentDictionary<string, Task> sessionSetup = new();
     readonly List<CoreWebView2DevToolsProtocolEventReceiver> receivers = new();
@@ -67,7 +70,7 @@ sealed class ProbeForm : Form
             await web.EnsureCoreWebView2Async(env);
             var core = web.CoreWebView2;
             Console.WriteLine("RUNTIME " + env.BrowserVersionString);
-            foreach (string name in new[] { "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Runtime.bindingCalled", "Debugger.scriptParsed", "Debugger.paused", "Page.frameAttached", "Target.attachedToTarget", "Target.detachedFromTarget" })
+            foreach (string name in new[] { "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared", "Runtime.bindingCalled", "Debugger.scriptParsed", "Debugger.paused", "Debugger.resumed", "Page.frameAttached", "Target.attachedToTarget", "Target.detachedFromTarget" })
             {
                 var receiver = core.GetDevToolsProtocolEventReceiver(name);
                 receiver.DevToolsProtocolEventReceived += (_, e) => Event(name, e.SessionId ?? "", e.ParameterObjectAsJson);
@@ -103,7 +106,10 @@ sealed class ProbeForm : Form
                     observations["object-call:" + label].Unique != observations[label].Unique)
                     throw new Exception("allowed object absent or wrong realm before page script: " + label);
             foreach (string label in denied)
-                if (!exposures.TryGetValue(label, out var value) || value != "undefined") throw new Exception("unallowed object exposed before page script: " + label);
+                if (!exposures.TryGetValue(label, out var value) || value != "undefined" ||
+                    rejectedForgeries[label].Unique != observations[label].Unique ||
+                    rejectedForgeries[label].Session != observations[label].Session)
+                    throw new Exception("unallowed exposure or forged sender mismatch: " + label);
             if (observations["replaced-b"].Unique != observations["b"].Unique) throw new Exception("replacement control came from wrong realm");
             foreach (string label in allowed)
             {
@@ -247,7 +253,7 @@ sealed class ProbeForm : Form
                 {
                     if (!contexts.TryGetValue((session, id), out var sender) || !sender.Default ||
                         sender.Origin == $"http://127.0.0.1:{port}" ||
-                        !rejectedForgeries.TryAdd(label.Substring("forged:".Length), true))
+                        !rejectedForgeries.TryAdd(label.Substring("forged:".Length), sender))
                         throw new Exception("forged message identity or rejection ambiguous");
                     Console.WriteLine($"FORGERY_REJECTED session={session} context={sender.Unique} origin={sender.Origin}");
                     return;
@@ -271,6 +277,12 @@ sealed class ProbeForm : Form
             }
             else if (name == "Debugger.paused")
                 pauseTasks.Add(HandlePause(session, root.Clone()));
+            else if (name == "Debugger.resumed")
+            {
+                if (!resumeSignals.TryGetValue(session, out var signal) || !signal.Issued)
+                    Console.WriteLine("EARLY_UNMATCHED_RESUME session=" + session);
+                else if (!signal.Signal.TrySetResult()) throw new Exception("duplicate debugger resume event");
+            }
             else if (name == "Runtime.executionContextDestroyed")
             {
                 if (root.TryGetProperty("executionContextUniqueId", out var unique)) destroyed[unique.GetString() ?? ""] = true;
@@ -317,6 +329,16 @@ sealed class ProbeForm : Form
 
     async Task HandlePause(string session, JsonElement paused)
     {
+        long started = Stopwatch.GetTimestamp();
+        var resumed = new ResumeWait();
+        if (!resumeSignals.TryAdd(session, resumed))
+        {
+            eventFailure = true;
+            Console.WriteLine("EARLY_OVERLAPPING_PAUSE session=" + session);
+            try { await Call(session, "Debugger.resume", "{}"); }
+            catch (Exception e) { Console.WriteLine("EARLY_RESUME_FAILURE " + e); }
+            return;
+        }
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
@@ -351,9 +373,19 @@ sealed class ProbeForm : Form
         catch (Exception e) { eventFailure = true; Console.WriteLine("EARLY_PAUSE_FAILURE " + e); }
         finally
         {
-            try { await Call(session, "Debugger.resume", "{}"); }
+            try
+            {
+                resumed.Issued = true;
+                string result = await Call(session, "Debugger.resume", "{}");
+                using var parsed = JsonDocument.Parse(result);
+                if (parsed.RootElement.TryGetProperty("error", out _)) throw new Exception("resume protocol error: " + result);
+                await resumed.Signal.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                Console.WriteLine("EARLY_RESUME_OBSERVED session=" + session);
+            }
             catch (Exception e) { eventFailure = true; Console.WriteLine("EARLY_RESUME_FAILURE " + e); }
-            if (deadline.IsCancellationRequested) { eventFailure = true; Console.WriteLine("EARLY_PAUSE_DEADLINE_EXCEEDED"); }
+            if (deadline.IsCancellationRequested || Stopwatch.GetElapsedTime(started) >= TimeSpan.FromSeconds(3))
+            { eventFailure = true; Console.WriteLine("EARLY_PAUSE_DEADLINE_EXCEEDED"); }
+            resumeSignals.TryRemove(session, out _);
         }
     }
 
