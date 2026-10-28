@@ -36,6 +36,7 @@ jobs:
           java-version: 21
       - name: Build current API3 runtime, launcher, compiler and boot jars
         run: |
+          cmake -S . -B out -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGESHER_WEB3_QUERY_TESTS=OFF
           ninja -C out dalvikvm dex2oat profman dexdump gesher-exec arm64_elf_test surface_invalidation_test
           tools/build-boot-jars.sh out/boot-jars
           tests/build-test-apps.sh out/test-apps
@@ -43,11 +44,28 @@ jobs:
           cp out/dalvikvm.exe out/dex2oat.exe out/profman.exe out/dexdump.exe out/gesher-exec.exe out/arm64_elf_test.exe out/surface_invalidation_test.exe dist-component/
           cp out/dalvikvm.map out/dex2oat.map out/boot-jars/*.jar out/test-apps/hello.dex dist-component/
           python3 - <<'PYCODE'
-          import hashlib, json, os
+          import hashlib, json, os, re, shlex, subprocess
           from pathlib import Path
           root = Path('dist-component')
           files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}
-          (root / 'surface-component-manifest.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], files=files), sort_keys=True))
+          database = json.loads(Path('out/compile_commands.json').read_text())
+          compilers = {}
+          for language, suffix in [('C','tests/apps/surfacegl/jni/surfacegl.c'), ('CXX','compat/media/surface/surface_jni.cc')]:
+              records = list(Path('out/CMakeFiles').glob('*/CMake' + language + 'Compiler.cmake'))
+              assert len(records) == 1, (language, records)
+              record = records[0]
+              matches = re.findall(r'^\s*set\(CMAKE_' + language + r'_COMPILER\s+"([^"]+)"\)\s*$', record.read_text(), re.MULTILINE)
+              assert len(matches) == 1 and Path(matches[0]).is_absolute(), (language, matches)
+              driver = Path(matches[0]).resolve(strict=True)
+              # surfacegl.c is NDK-built separately, so validate an actual C command from this host graph.
+              commands = [row for row in database if (row['file'].endswith(suffix) if language == 'CXX' else row['file'].endswith('.c'))]
+              assert commands, (language, 'missing actual compile command')
+              argv = shlex.split(commands[0]['command'])
+              assert matches[0] in argv[:2], (language, argv[:2], matches[0])
+              version = subprocess.run([str(driver), '--version'], check=True, text=True, capture_output=True).stdout.strip()
+              assert version, language
+              compilers[language] = dict(configured=matches[0], resolved=str(driver), sha256=hashlib.sha256(driver.read_bytes()).hexdigest(), metadata_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), version=version, actual_source=commands[0]['file'])
+          (root / 'surface-component-manifest.json').write_text(json.dumps(dict(source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'], compilers=compilers, files=files), sort_keys=True))
           PYCODE
       - uses: actions/upload-artifact@v4
         with:
@@ -133,7 +151,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.suppliers.outputs.current_media4_surface_component_host }}
-          path: dist
+          path: current-host
       - uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ steps.suppliers.outputs.current_arm64 }}
@@ -149,8 +167,23 @@ jobs:
       - name: Verify current host members and rebuild boot image from current five jars
         shell: pwsh
         run: |
-          $manifest = Get-Content dist/surface-component-manifest.json -Raw | ConvertFrom-Json
+          $manifest = Get-Content current-host/surface-component-manifest.json -Raw | ConvertFrom-Json
           if ($manifest.source -cne $env:GITHUB_SHA -or "$($manifest.run)" -cne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -cne $env:GITHUB_RUN_ATTEMPT) { throw 'Current host manifest identity mismatch' }
+          foreach ($language in 'C','CXX') {
+            $compiler = $manifest.compilers.$language
+            if (-not $compiler.configured -or -not $compiler.version -or $compiler.sha256 -cnotmatch '^[0-9a-f]{64}$' -or $compiler.metadata_sha256 -cnotmatch '^[0-9a-f]{64}$' -or -not $compiler.actual_source) { throw "Missing configured compiler evidence: $language" }
+            Write-Host "SURFACE_COMPILER language=$language driver=$($compiler.configured) sha256=$($compiler.sha256) metadata=$($compiler.metadata_sha256) source=$($compiler.actual_source) version=$($compiler.version)"
+          }
+          $manifestNames = @($manifest.files.PSObject.Properties.Name)
+          if ($manifestNames.Count -eq 0 -or @($manifestNames | Select-Object -Unique).Count -ne $manifestNames.Count) { throw 'Empty or duplicate host manifest' }
+          $actualNames = @(Get-ChildItem -LiteralPath current-host -Force | ForEach-Object { if ($_.PSIsContainer) { throw 'Unexpected host subdirectory' }; $_.Name } | Where-Object { $_ -cne 'surface-component-manifest.json' })
+          if (@(Compare-Object $manifestNames $actualNames -CaseSensitive).Count -ne 0) { throw 'Missing or extra host payload member' }
+          foreach ($name in $manifestNames) {
+            if ([IO.Path]::GetFileName($name) -cne $name -or $name -in @('.','..','surface-component-manifest.json')) { throw "Invalid host member path: $name" }
+            $expected = $manifest.files.$name
+            if ($expected -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileHash -LiteralPath "current-host/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }
+          }
+          Copy-Item -Path current-host/* -Destination dist -Force
           foreach ($name in 'dalvikvm.exe','dex2oat.exe','profman.exe','dexdump.exe','gesher-exec.exe','arm64_elf_test.exe','surface_invalidation_test.exe','core-oj.jar','core-libart.jar','core-icu4j.jar') {
             $expected = $manifest.files.$name
             if (-not $expected -or (Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) { throw "Current host member mismatch: $name" }

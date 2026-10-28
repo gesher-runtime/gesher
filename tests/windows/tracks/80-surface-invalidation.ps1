@@ -68,6 +68,11 @@ function InvalidationPhaseChecks([string] $Mode, [string] $Abi, $Result) {
       @('producer blue', 10, 10, 190, 390, 0x0000ff), @('producer yellow', 210, 10, 390, 390, 0xffff00)))
   }
   if ($Result.Exit -ne 0) { $problems += "process exit $($Result.Exit)" }
+  if ($Mode -like 'device *') {
+    $ended = [regex]::Match($Result.Text, '(?m)^gesher-app: the process of com\.gesher\.surfacegl ended \(exit code (-?\d+)\)\r?$')
+    if (-not $ended.Success -or $ended.Groups[1].Value -cne '0') { $problems += 'missing normal exit-code-zero completion of the actual app process' }
+    Write-Host "INFO  surface invalidation ($Mode) actual child: $(if ($ended.Success) { $ended.Value.Trim() } else { '(missing)' })"
+  }
   if (-not $Result.Text.Contains('surfacegl: invalidation: surface destroyed') -or
       -not $Result.Text.Contains('surfacegl: invalidation: done')) { $problems += 'missing complete teardown' }
   $problems = @($problems | Where-Object { $_ })
