@@ -1072,3 +1072,36 @@ Native leaf retains old pre-qualified ordered-spawn files, so any later
 Exec work must use current protected7bb/union blobs rather than copying this
 leaf's old versions. The independent source-only plan and protected blob IDs
 are saved as native3-next-cloexec-inheritance-plan-ec3d58a8.md in ci-review.
+
+### Isolated temporal diagnostic workflow prepared, peer pending
+
+Exact3f52b3f3 fixture received independent source/lifetime/API peer for preparing
+narrow CI only (native3-3f52b3f3-cloexec-source-peer.md and hashes). No runtime
+or compiler proof follows from that peer. Its frozen CMake/probe Git blobs
+are pinned by the new independent native3-cloexec-window workflow. The source
+guard limits the entire change from accepted docs checkpoint ec3d58a8 to
+those two files, this workflow and the track; qualified production, original
+controllers and ordered Exec are unchanged.
+
+The own-branch workflow first checks exact reviewed three artifact helper
+blobs and runs all15 canonical rejection controls, then builds only the new
+EXCLUDE_FROM_ALL probe and common library with the pinned toolchain/archive
+SHA and warnings-as-errors. It captures actual configured compiler path/hash,
+underlying clang hash/version, actual compile command, all tracked source
+hashes and the exact executable/import outputs. It makes no production-mode,
+Linux-reference, ordered-spawn or full Native qualification claim.
+
+Both Windows consume only the unique actual successful same-source/run/attempt
+producer/upload. API repository identities, upload/job timestamps, raw ZIP SHA
+before extraction and exact three-member payload/source/output inventories
+are mandatory before execution. Runtime module versions/hashes, actual result
+code and all stdout/stderr survive failure. The new probe keeps its source10s
+bound; workflow outer30s kills its owned tree and bounds reaping5s if needed.
+A real leaked candidate/exit1 remains a failed Windows job despite final flags
+or successful cleanup. Exit0 additionally needs the exact nonleaking control/
+child-job/reap verdict. No failure is relabeled a successful diagnostic gate.
+
+YAML/embedded Python and PowerShell AST parsing and diff checks pass locally;
+no fixture or compilation ran. Workflow/provenance/watchdog peer is required
+before authenticated guarded push/CI. This isolated diagnostic is NOT a new
+supplier for the in-flight canonical candidate, which stays pinned to156.

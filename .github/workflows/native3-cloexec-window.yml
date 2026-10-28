@@ -1,0 +1,232 @@
+name: native3-cloexec-window
+on:
+  push:
+    branches: ['wip/native3-locks']
+    paths: ['.github/workflows/native3-cloexec-window.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native3-cloexec-window-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bound isolated diagnostic source and immutable helper bytes
+        shell: python
+        run: |
+          import os, subprocess
+          assert os.environ['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == os.environ['GITHUB_SHA']
+          allowed = {'CMakeLists.txt', 'tests/native3-locks/cloexec_window_probe.cc',
+                     '.github/workflows/native3-cloexec-window.yml', 'docs/handoff/tracks/native3-locks.md'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only',
+              'ec3d58a85eb398814fdeba53dd75d6834458e569..HEAD'], text=True).splitlines())
+          assert changed and changed <= allowed, ('Unreviewed isolated delta', changed - allowed)
+          pins = {'CMakeLists.txt': '0a9ccffa649b555240a7051f1894c55bf508331a',
+                  'tests/native3-locks/cloexec_window_probe.cc': 'c2f830f3345c0e515e4635aa8de101864ddd61d8',
+                  'tools/native3-locks/artifact/download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
+                  'tools/native3-locks/artifact/assemble-artifacts.py': '8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2',
+                  'tools/native3-locks/artifact/test-verified-artifact.py': 'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}
+          for path, expected in pins.items():
+              actual = subprocess.check_output(['git', 'hash-object', path], text=True).strip()
+              assert actual == expected, (path, actual, expected)
+              print('CLOEXEC_SOURCE_PIN path=' + path + ' blob=' + actual)
+          print('CLOEXEC_ISOLATED_SOURCE production=unchanged ordered-spawn=unchanged qualified-supplier=15640777')
+      - name: Actual canonical archive rejection controls before compilation
+        run: python3 tools/native3-locks/artifact/test-verified-artifact.py
+  compile:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact toolchain and pinned source prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o toolchain.tar.xz
+          printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain
+          tar -xJf toolchain.tar.xz -C toolchain
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build
+          tools/fetch-aosp.sh
+      - name: Build only actual raw inheritance diagnostic and common library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
+          ninja -C out -v native3_cloexec_window_probe
+          mkdir fixture
+          cp out/native3_cloexec_window_probe.exe fixture/
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports fixture/native3_cloexec_window_probe.exe > fixture/native3_cloexec_window_probe.imports.txt
+      - name: Bind exact source, compiler, target command and output bytes
+        shell: python
+        run: |
+          import hashlib, json, os, re, shlex, subprocess
+          from pathlib import Path
+          def digest(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          allowed = {'kernel32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
+                     'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
+                     'api-ms-win-core-synch-l1-2-0.dll',
+                     *('api-ms-win-crt-' + name + '-l1-1-0.dll' for name in
+                       ('stdio','runtime','locale','heap','private','string','convert','math','environment',
+                        'filesystem','time','process','utility'))}
+          names = re.findall(r'^\s*Name:\s*(\S+)', Path('fixture/native3_cloexec_window_probe.imports.txt').read_text(), re.MULTILINE)
+          assert names and not (set(name.casefold() for name in names) - allowed), names
+          print('CLOEXEC_ACTUAL_IMPORTS ' + ', '.join(names))
+          cache = Path('out/CMakeCache.txt').read_text()
+          compiler = re.search(r'^CMAKE_CXX_COMPILER:[^=]+=(.+)$', cache, re.MULTILINE).group(1)
+          toolchain = Path('toolchain', os.environ['LLVM_MINGW_NAME']).resolve()
+          assert Path(compiler).resolve().is_relative_to(toolchain)
+          commands = json.loads(Path('out/compile_commands.json').read_text())
+          selected = [row for row in commands if Path(row['file']).name == 'cloexec_window_probe.cc']
+          assert len(selected) == 1
+          argv = shlex.split(selected[0]['command'])
+          assert Path(argv[0]).resolve() == Path(compiler).resolve()
+          assert {'-Wall', '-Wextra', '-Werror'} <= set(argv)
+          compiler_info = dict(path=compiler, sha256=digest(Path(compiler).resolve()),
+              clang_sha256=digest(toolchain / 'bin/clang'),
+              version=subprocess.check_output([compiler, '--version'], text=True), command=selected[0])
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          files = {path: digest(path) for path in paths if path}
+          outputs = {path.name: digest(path) for path in Path('fixture').iterdir() if path.is_file()}
+          assert set(outputs) == {'native3_cloexec_window_probe.exe', 'native3_cloexec_window_probe.imports.txt'}
+          metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
+              source=os.environ['GITHUB_SHA'], run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+              toolchain_sha256=os.environ['LLVM_MINGW_SHA256'], compiler=compiler_info, files=files, outputs=outputs,
+              scope='isolated raw CreateProcess internal duplication diagnostic; no ordered-spawn/OFD acceptance')
+          Path('fixture/provenance.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          print('CLOEXEC_ACTUAL_COMPILER ' + json.dumps(compiler_info, sort_keys=True))
+          for name, value in outputs.items():
+              print('CLOEXEC_PRODUCED_OUTPUT name=' + name + ' sha256=' + value)
+      - name: Upload exact CLOEXEC diagnostic bytes
+        uses: actions/upload-artifact@v4
+        with:
+          name: native3-cloexec-window-${{ github.sha }}-a${{ github.run_attempt }}
+          path: fixture
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify actual producer identity, exact ZIP and whole source payload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD).Trim() -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Checkout source mismatch' }
+          $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect producer attempt' }
+          $producer = @(($raw | ConvertFrom-Json).jobs | Where-Object name -eq 'compile')
+          if ($producer.Count -ne 1 -or $producer[0].conclusion -ne 'success' -or
+              "$($producer[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($producer[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+              $producer[0].head_sha -cne $env:GITHUB_SHA) { throw 'Producer attempt/source mismatch' }
+          $upload = @($producer[0].steps | Where-Object name -eq 'Upload exact CLOEXEC diagnostic bytes')
+          if ($upload.Count -ne 1 -or $upload[0].conclusion -ne 'success') { throw 'Producer upload step not uniquely successful' }
+          $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect producer artifact' }
+          $name = "native3-cloexec-window-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+          $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $name)
+          if ($rows.Count -ne 1) { throw 'Producer artifact not unique' }
+          $artifact = $rows[0]
+          if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
+              $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
+              "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              "$($artifact.workflow_run.head_repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              $artifact.workflow_run.head_sha -cne $env:GITHUB_SHA) { throw 'Artifact repository/source mismatch' }
+          if ([datetime]$artifact.created_at -lt [datetime]$producer[0].started_at -or
+              [datetime]$artifact.created_at -gt [datetime]$producer[0].completed_at -or
+              [datetime]$artifact.created_at -lt [datetime]$upload[0].started_at -or
+              [datetime]$artifact.created_at -gt [datetime]$upload[0].completed_at) { throw 'Artifact outside actual producer upload interval' }
+          python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination cloexec-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Raw ZIP SHA/pre-extract member validation failed' }
+          $members = @(Get-ChildItem -LiteralPath cloexec-fixture -Recurse -Force)
+          $expected = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt','provenance.json')
+          if (@($members | Where-Object PSIsContainer).Count -or @(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $expected @($members.Name)).Count) { throw 'Whole payload inventory differs' }
+          $manifest = Get-Content -LiteralPath cloexec-fixture/provenance.json -Raw | ConvertFrom-Json
+          if ($manifest.repository -cne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+              $manifest.source -cne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -cne $env:LLVM_MINGW_SHA256) { throw 'Manifest identity mismatch' }
+          $tracked = @(git ls-files)
+          if ($LASTEXITCODE -ne 0 -or @(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $tracked @($manifest.files.PSObject.Properties.Name)).Count) { throw 'Whole source inventory differs' }
+          foreach ($file in $manifest.files.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
+          }
+          $outputs = @('native3_cloexec_window_probe.exe','native3_cloexec_window_probe.imports.txt')
+          if (@(Compare-Object -CaseSensitive -CaseSensitive -CaseSensitive $outputs @($manifest.outputs.PSObject.Properties.Name)).Count) { throw 'Output inventory differs' }
+          foreach ($file in $manifest.outputs.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath (Join-Path cloexec-fixture $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $file.Value) { throw "Output byte mismatch: $($file.Name)" }
+            Write-Host "CLOEXEC_VERIFIED_OUTPUT name=$($file.Name) sha256=$($file.Value)"
+          }
+          Write-Host "CLOEXEC_VERIFIED_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT job=$($producer[0].id) artifact=$($artifact.id) digest=$($artifact.digest)"
+          Write-Host "CLOEXEC_VERIFIED_COMPILER $($manifest.compiler | ConvertTo-Json -Depth 5 -Compress)"
+      - name: Observe raw inheritance and retain a leaked candidate as failure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stdout = Join-Path $env:RUNNER_TEMP cloexec.stdout.txt
+          $stderr = Join-Path $env:RUNNER_TEMP cloexec.stderr.txt
+          foreach ($name in 'ucrtbase.dll','kernelbase.dll','ntdll.dll') {
+            $path = Join-Path $env:SystemRoot "System32/$name"
+            Write-Host "CLOEXEC_SYSTEM_MODULE name=$name version=$((Get-Item -LiteralPath $path).VersionInfo.FileVersion) sha256=$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash)"
+          }
+          $process = $null
+          try {
+            $process = Start-Process -FilePath (Join-Path $PWD 'cloexec-fixture/native3_cloexec_window_probe.exe') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(30000)) { throw 'Raw inheritance diagnostic exceeded outer30s bound' }
+            $process.Refresh()
+            $exit = $process.ExitCode
+            $text = [IO.File]::ReadAllText($stdout)
+            $summary = @($text -split '\r?\n' | Where-Object { $_ -match '^CLOEXEC_WINDOW_PROBE ' })
+            @{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; attempt=$env:GITHUB_RUN_ATTEMPT; exit=$exit; summary=$summary; scope='raw-CreateProcess diagnostic only' } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP cloexec.result.json)
+            Write-Host "CLOEXEC_RUNTIME_RESULT actual-exit=$exit source=$env:GITHUB_SHA ordered-spawn=unqualified"
+            if ($exit -ne 0) { throw "Actual raw inheritance diagnostic exit=$exit; a leaked candidate remains failure" }
+            if ($summary.Count -ne 1 -or $summary[0] -cne 'CLOEXEC_WINDOW_PROBE observed=1 transient-native-inherit=0 candidate-leaked=0 final-cloexec=1 cleanup=1 scope=raw-CreateProcess-internal-duplicate-helper ordered-spawn-unqualified') { throw 'Missing exact nonleaking diagnostic verdict' }
+            if (@($text -split '\r?\n' | Where-Object { $_ -ceq 'CLOEXEC_CHILD_AUDIT actual-exit=0 processes=1 active=0 atomic-job-assignment=true checked-suspended-resume=true reaped=true' }).Count -ne 1) { throw 'Missing actual child controls/exit/reap audit' }
+          } finally {
+            $errors = @()
+            if ($null -ne $process) {
+              try {
+                if (-not $process.HasExited) {
+                  $process.Kill($true)
+                  if (-not $process.WaitForExit(5000)) { $errors += 'Owned probe tree did not exit after kill' }
+                }
+              } catch { $errors += "Owned probe cleanup: $_" }
+              try { $process.Dispose() } catch { $errors += "Owned probe handle disposal: $_" }
+            }
+            try { if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout } } catch { $errors += "Stdout replay: $_" }
+            try { if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr } } catch { $errors += "Stderr replay: $_" }
+            if ($errors.Count) { throw ($errors -join '; ') }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native3-cloexec-window-logs-${{ matrix.os }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/cloexec.stdout.txt
+            ${{ runner.temp }}/cloexec.stderr.txt
+            ${{ runner.temp }}/cloexec.result.json
+          if-no-files-found: warn
+          retention-days: 14
