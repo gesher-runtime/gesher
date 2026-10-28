@@ -21,6 +21,10 @@ static class Program
 
 sealed class ProbeForm : Form
 {
+    sealed class ContextGoneException : Exception
+    {
+        public ContextGoneException(string message) : base(message) { }
+    }
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     readonly ConcurrentDictionary<(string, int), Context> contexts = new();
     readonly ConcurrentDictionary<string, Context> observations = new();
@@ -121,9 +125,15 @@ sealed class ProbeForm : Form
                 replacement.Unique == old.Unique || replacement.Frame != old.Frame)
                 throw new Exception("replacement context identity does not establish same-frame new document");
             Console.WriteLine($"OBS a2 session={replacement.Session} id={replacement.Id} unique={replacement.Unique} origin={replacement.Origin} frame={replacement.Frame}");
+            bool scriptExceptionObserved = false;
+            try { await Evaluate(replacement, "throw new Error('context')"); }
+            catch (ContextGoneException) { throw new Exception("live script exception misclassified as context removal"); }
+            catch (Exception e) when (e.Message.StartsWith("evaluation exception:", StringComparison.Ordinal))
+            { scriptExceptionObserved = true; }
+            if (!scriptExceptionObserved) throw new Exception("live-context exception control did not throw");
             bool staleRejected = false;
             try { await Evaluate(old, "realmProbe('stale-reply')"); }
-            catch (Exception e) when (e.Message.Contains("context", StringComparison.OrdinalIgnoreCase))
+            catch (ContextGoneException e)
             { Console.WriteLine("STALE_CONTEXT_REJECTION " + e.Message); staleRejected = true; }
             await Task.Delay(500, timeout.Token);
             if (!staleRejected || observations.ContainsKey("stale-reply")) throw new Exception("stale context accepted reply");
@@ -199,11 +209,23 @@ sealed class ProbeForm : Form
     async Task Evaluate(Context context, string expression)
     {
         string parameters = JsonSerializer.Serialize(new { expression, uniqueContextId = context.Unique, returnByValue = true });
-        string result = context.Session.Length == 0
-            ? await web.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate", parameters)
-            : await web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(context.Session, "Runtime.evaluate", parameters);
+        string result;
+        try
+        {
+            result = context.Session.Length == 0
+                ? await web.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate", parameters)
+                : await web.CoreWebView2.CallDevToolsProtocolMethodForSessionAsync(context.Session, "Runtime.evaluate", parameters);
+        }
+        catch (Exception e) when (e.Message.Contains("Cannot find context with specified id", StringComparison.OrdinalIgnoreCase))
+        { throw new ContextGoneException(e.Message); }
         using var parsed = JsonDocument.Parse(result);
-        if (parsed.RootElement.TryGetProperty("error", out var error)) throw new Exception("CDP error: " + error);
+        if (parsed.RootElement.TryGetProperty("error", out var error))
+        {
+            string detail = error.ToString();
+            if (detail.Contains("Cannot find context with specified id", StringComparison.OrdinalIgnoreCase))
+                throw new ContextGoneException(detail);
+            throw new Exception("CDP error: " + detail);
+        }
         if (parsed.RootElement.TryGetProperty("exceptionDetails", out _)) throw new Exception("evaluation exception: " + result);
     }
 
