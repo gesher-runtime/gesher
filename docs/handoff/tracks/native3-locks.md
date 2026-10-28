@@ -1036,3 +1036,39 @@ bionic/ABI/ART, protection/copy races and physical contexts remain open. Any
 selected integration requires independent port review and fresh coherent
 canonical full/package/two-e2e with these exact161/four-route/13-mode gates and
 strict supplier checks. No primary merge follows from this component alone.
+
+### Isolated raw CreateProcess temporal diagnostic source WIP
+
+The next fixture is separate from immutable156 and its accepted13-mode
+supplier. No qualified production implementation or ordered Exec source is
+changed. New EXCLUDE_FROM_ALL target native3_cloexec_window_probe invokes the
+actual common DuplicateAtLeast helper with the existing direct internal
+set_inherit dependency to observe its real native alias BEFORE final flags.
+That test dependency is never guest/environment/public-fcntl selected.
+
+A real same-binary child is created through raw broad-inheritance CreateProcess
+without a HANDLE_LIST. A JOB_LIST attribute assigns the owned kill-on-close
+job atomically at creation; actual membership is checked while still suspended,
+then exact ResumeThread previous1 is required before the child runs. The child
+checks the exact candidate HANDLE against actual file ID/volume and a random
+nonce, alongside intended-inherited and always-noninherited controls on the
+same real file. It reports actual accessibility and exits23 for a leaked
+candidate,0 only for no leak with passing controls. Parent verifies exact
+output/code, actual one-process job exit/reap, final CLOEXEC and resource/file
+cleanup. A genuine leaked alias makes this diagnostic return failure even if
+the final flag state is correct; it is not another accepted resource mode.
+
+This intentionally pauses the internal unit dependency while the parent owns
+its process-local descriptor guard. The child performs only raw kernel file
+probes, not a parent registry callback or a wait on that parent's guard. No
+production callback, generic lock-wait proof, OFD adoption or ordered-spawn
+atomicity is inferred. Its own new absolute10s probe bound, at most5s child
+wait and separate at most5s failed-child cleanup do not alter any accepted
+stdio5s/command10s/root180s gate.
+
+Source/ownership/compile/API peer is required before any diagnostic CI. No
+workflow or dispatch is prepared yet; no local native compile/fixture runs.
+Native leaf retains old pre-qualified ordered-spawn files, so any later
+Exec work must use current protected7bb/union blobs rather than copying this
+leaf's old versions. The independent source-only plan and protected blob IDs
+are saved as native3-next-cloexec-inheritance-plan-ec3d58a8.md in ci-review.

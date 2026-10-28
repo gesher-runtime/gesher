@@ -146,6 +146,11 @@ target_compile_options(native3_lock_duplicate_test PRIVATE -Wall -Wextra -Werror
   "SHELL:-idirafter ${AOSP_DIR}/bionic/libc/kernel/uapi")
 target_link_libraries(native3_lock_duplicate_test PRIVATE gesher_posix)
 
+# Isolated temporal diagnostic, never part of the accepted13-mode supplier.
+add_executable(native3_cloexec_window_probe EXCLUDE_FROM_ALL tests/native3-locks/cloexec_window_probe.cc)
+target_compile_options(native3_cloexec_window_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native3_cloexec_window_probe PRIVATE gesher_posix)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)
