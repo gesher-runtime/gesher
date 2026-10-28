@@ -32,9 +32,9 @@ add_executable(binder_probe ${CMAKE_SOURCE_DIR}/probes/binder/binder_probe.cc)
 target_compile_options(binder_probe PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
 # ADR0068/test88: independent real driver actors, also compiled for Android.
-add_executable(binder_sg_actor ${CMAKE_SOURCE_DIR}/tests/binder/sg-actor.cc)
+add_executable(binder_sg_actor EXCLUDE_FROM_ALL ${CMAKE_SOURCE_DIR}/tests/binder/sg-actor.cc)
 target_compile_options(binder_sg_actor PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
-add_executable(binder_sg_wire_peer ${CMAKE_SOURCE_DIR}/tests/binder/sg-wire-peer.cc)
+add_executable(binder_sg_wire_peer EXCLUDE_FROM_ALL ${CMAKE_SOURCE_DIR}/tests/binder/sg-wire-peer.cc)
 target_compile_options(binder_sg_wire_peer PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 
 add_executable(libbinder_probe ${CMAKE_SOURCE_DIR}/probes/binder/libbinder_probe.cc)
