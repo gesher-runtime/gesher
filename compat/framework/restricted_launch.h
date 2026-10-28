@@ -3,6 +3,7 @@
 #pragma once
 #include <windows.h>
 #include <vector>
+#include <mutex>
 
 namespace gesher::guest {
 
@@ -14,11 +15,30 @@ namespace gesher::guest {
 // remain alive for the entire child lifetime. Stop() proves bounded retirement.
 class RestrictedLaunch {
  public:
+  struct [[nodiscard]] Retirement {
+    bool confirmed = true;
+    DWORD terminate_error = ERROR_SUCCESS;
+    DWORD wait_error = ERROR_SUCCESS;
+  };
+  struct [[nodiscard]] Result {
+    DWORD error;
+    Retirement cleanup;
+    Result(DWORD value) : error(value) {}
+    Result(DWORD value, Retirement retired) : error(value), cleanup(retired) {}
+  };
   RestrictedLaunch() = default;
   RestrictedLaunch(const RestrictedLaunch&) = delete;
   RestrictedLaunch& operator=(const RestrictedLaunch&) = delete;
   ~RestrictedLaunch() {
-    Stop();
+    Retirement retired = Stop();
+    if (!retired.confirmed) {
+      // Keep all owned handles available for explicit retry. Never silently
+      // classify an unproved rollback as an ordinary rejected launch.
+      std::lock_guard<std::mutex> lock(QuarantineLock());
+      Quarantine().push_back({process_, thread_, job_, retired});
+      OutputDebugStringW(L"Gesher restricted launch: retirement unconfirmed; owner quarantined\n");
+      return;
+    }
     if (thread_) CloseHandle(thread_);
     if (job_) CloseHandle(job_);  // kill-on-close even after failed termination
     if (process_) CloseHandle(process_);
@@ -27,7 +47,7 @@ class RestrictedLaunch {
   // The command buffer is writable as required by CreateProcessW. Startup may
   // carry stdio and reserved launch metadata; its attribute list is replaced.
   // Only one attempt per object, including failed attempts. Errors are Win32.
-  DWORD Start(const wchar_t* executable, wchar_t* command, void* environment,
+  Result Start(const wchar_t* executable, wchar_t* command, void* environment,
               const wchar_t* directory, const STARTUPINFOW& startup, DWORD flags,
               PSID sid, const std::vector<HANDLE>& inherited) {
     if (attempted_) return ERROR_INVALID_STATE;
@@ -98,30 +118,45 @@ class RestrictedLaunch {
       }
     }
     DeleteProcThreadAttributeList(attrs);
-    if (error != ERROR_SUCCESS) Stop();
+    if (error != ERROR_SUCCESS) return {error, Stop()};
     return error;
   }
 
-  DWORD Resume() {
+  Result Resume() {
     if (!ready_ || resumed_) return ERROR_INVALID_STATE;
     // Exactly one suspended primary-thread count is expected. Never report
     // successful launch when guest execution is still suspended.
-    DWORD previous = ResumeThread(thread_);
+    DWORD previous = resume_(thread_);
     if (previous != 1) {
       DWORD error = previous == static_cast<DWORD>(-1) ? GetLastError() : ERROR_INVALID_STATE;
       ready_ = false;
-      Stop();
-      return error;
+      return {error, Stop()};
     }
     resumed_ = true;
     return ERROR_SUCCESS;
   }
-  bool Stop() {
+  Retirement Stop() {
     ready_ = false;
-    if (!process_) return true;
-    if (WaitForSingleObject(process_, 0) != WAIT_OBJECT_0)
-      TerminateJobObject(job_, 137);
-    return WaitForSingleObject(process_, 5000) == WAIT_OBJECT_0;
+    return Retire(process_, job_, terminate_, wait_);
+  }
+  // An owner destroyed after unconfirmed cleanup remains tracked. A trusted
+  // supervisor can retry all such exact instances and inspect pending evidence.
+  static std::vector<Retirement> PendingRetirements() {
+    std::lock_guard<std::mutex> lock(QuarantineLock());
+    std::vector<Retirement> result;
+    for (const auto& pending : Quarantine()) result.push_back(pending.evidence);
+    return result;
+  }
+  static size_t RetryQuarantined() {
+    std::lock_guard<std::mutex> lock(QuarantineLock());
+    auto& pending = Quarantine();
+    for (auto it = pending.begin(); it != pending.end();) {
+      it->evidence = Retire(it->process, it->job, TerminateJobObject, WaitForSingleObject);
+      if (!it->evidence.confirmed) { ++it; continue; }
+      CloseHandle(it->thread); CloseHandle(it->job); CloseHandle(it->process);
+      it = pending.erase(it);
+    }
+    return pending.size();
   }
   HANDLE process() const { return process_; }
   HANDLE job() const { return job_; }
@@ -129,6 +164,26 @@ class RestrictedLaunch {
   DWORD tid() const { return tid_; }
 
  private:
+  friend struct RestrictedLaunchTestAccess;  // fixture-only private fault injection
+  using Terminate = BOOL (WINAPI*)(HANDLE, UINT);
+  using Wait = DWORD (WINAPI*)(HANDLE, DWORD);
+  struct Pending { HANDLE process, thread, job; Retirement evidence; };
+  static std::vector<Pending>& Quarantine() { static std::vector<Pending> pending; return pending; }
+  static std::mutex& QuarantineLock() { static std::mutex lock; return lock; }
+  static Retirement Retire(HANDLE process, HANDLE job, Terminate terminate, Wait wait) {
+    Retirement result;
+    if (!process) return result;
+    if (wait(process, 0) != WAIT_OBJECT_0) {
+      if (!terminate(job, 137)) result.terminate_error = GetLastError();
+    }
+    DWORD state = wait(process, 5000);
+    result.confirmed = state == WAIT_OBJECT_0;
+    if (!result.confirmed) result.wait_error = state == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
+    return result;
+  }
+  DWORD (WINAPI*resume_)(HANDLE) = ResumeThread;
+  Terminate terminate_ = TerminateJobObject;
+  Wait wait_ = WaitForSingleObject;
   bool TokenMatches(PSID expected) const {
     HANDLE token = nullptr;
     if (!OpenProcessToken(process_, TOKEN_QUERY, &token)) return false;

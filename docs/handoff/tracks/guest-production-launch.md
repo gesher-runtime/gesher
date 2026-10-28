@@ -2,7 +2,7 @@
 
 Worktree `C:/work/gesher-guest-production-launch`, branch
 `wip/guest-production-launch`, base `f1550540186b4ae3f17a5e501a886ec1c4d5d613`.
-Source-only pending independent source peer and exact-source CI.
+Source-only pending corrected independent source peer and exact-source CI.
 
 Integration explicitly assigned this bounded additive API and migrated fixture,
 without editing the independently active Binder branch. This is not production
@@ -20,8 +20,13 @@ then checks actual SID, low integrity, empty token capabilities and job before
 returning. Publication must precede explicit Resume. The owner stays alive until
 child death. Stop terminates only its private job and requires a signaled exact
 process handle within five seconds. Failure never invokes unrestricted creation;
-no breakaway flags or retries are accepted. The destructor retains kill-on-close
-protection even if explicit termination fails; failed retirement is not success.
+no breakaway flags or retries are accepted. Start/Resume return structured original-error and cleanup evidence; Stop returns
+confirmation plus termination and wait errors. A failed stop retains exact handles
+for retry. The destructor moves unconfirmed ownership and error evidence into a
+tracked quarantine, emits an OutputDebugString diagnostic, and never drops owned
+handles. The supervisor can inspect PendingRetirements and RetryQuarantined; only
+a signaled process allows handle retirement. This is not an orphan-free claim
+when termination cannot be confirmed.
 No profile creation, ACL grants or implicit network capability is performed.
 
 The migrated fixture copies the actual disposable d549283d source, preserving
@@ -66,3 +71,14 @@ code before CI. Profile provisioning, install-generation ACLs, APK/dalvikvm code
 and runtime dependencies, logging/stdio, Binder endpoint resource access and
 host/guest compatibility remain explicit subsequent work. Documentation or
 Microsoft API semantics alone cannot qualify those boundaries.
+
+## Initial source peer correction
+
+The integrator blocked af9c3709 before push: Start/Resume and the destructor hid
+failed cleanup confirmation. Corrected source exposes original and retirement
+errors separately, retains failed owners for retry and quarantines unconfirmed
+destructor cleanup. A private friend fixture injects resume failure, termination
+denial and wait failure against a real suspended child. It checks exact error
+evidence and retained process/job identity, restores real functions and proves
+actual retirement; another real suspended owner exercises destructor quarantine,
+pending evidence and successful retry. No runtime result is inferred from source.

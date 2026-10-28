@@ -12,6 +12,19 @@
 #include <vector>
 #include "../../compat/framework/restricted_launch.h"
 
+namespace gesher::guest {
+struct RestrictedLaunchTestAccess {
+  static BOOL WINAPI DenyTermination(HANDLE, UINT) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+  static DWORD WINAPI FailWait(HANDLE, DWORD) { SetLastError(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
+  static DWORD WINAPI FailResume(HANDLE) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return static_cast<DWORD>(-1); }
+  static void Inject(RestrictedLaunch& owner, bool failing) {
+    owner.resume_ = failing ? FailResume : ResumeThread;
+    owner.terminate_ = failing ? DenyTermination : TerminateJobObject;
+    owner.wait_ = failing ? FailWait : WaitForSingleObject;
+  }
+};
+}
+
 struct Handle {
   HANDLE h = nullptr;
   ~Handle() { reset(); }
@@ -326,27 +339,54 @@ static int exercise(Fixture& f) {
     gesher::guest::RestrictedLaunch invalid;
     std::wstring bad = cmd;
     if (invalid.Start(f.executable.c_str(), bad.data(), nullptr, f.root.c_str(), startup,
-                      CREATE_BREAKAWAY_FROM_JOB, f.sid, allowlist) != ERROR_INVALID_PARAMETER ||
-        invalid.process() || invalid.Resume() != ERROR_INVALID_STATE || !invalid.Stop()) return 70;
+                      CREATE_BREAKAWAY_FROM_JOB, f.sid, allowlist).error != ERROR_INVALID_PARAMETER ||
+        invalid.process() || invalid.Resume().error != ERROR_INVALID_STATE || !invalid.Stop().confirmed) return 70;
   }
   {
     gesher::guest::RestrictedLaunch rollback;
     std::wstring rollback_cmd = cmd;
     if (rollback.Start(f.executable.c_str(), rollback_cmd.data(), nullptr, f.root.c_str(), startup,
-                       0, f.sid, allowlist) != ERROR_SUCCESS || !rollback.process() ||
-        !rollback.Stop() || WaitForSingleObject(rollback.process(), 0) != WAIT_OBJECT_0 ||
-        rollback.Resume() != ERROR_INVALID_STATE) return 71;
+                       0, f.sid, allowlist).error != ERROR_SUCCESS || !rollback.process() ||
+        !rollback.Stop().confirmed || WaitForSingleObject(rollback.process(), 0) != WAIT_OBJECT_0 ||
+        rollback.Resume().error != ERROR_INVALID_STATE) return 71;
   }
+  {
+    gesher::guest::RestrictedLaunch rollback;
+    std::wstring rollback_cmd = cmd;
+    if (rollback.Start(f.executable.c_str(), rollback_cmd.data(), nullptr, f.root.c_str(), startup,
+                       0, f.sid, allowlist).error != ERROR_SUCCESS) return 75;
+    HANDLE exact_process = rollback.process(), exact_job = rollback.job();
+    gesher::guest::RestrictedLaunchTestAccess::Inject(rollback, true);
+    const auto rejected = rollback.Resume();
+    const auto failed = rejected.cleanup;
+    if (rejected.error != ERROR_NOT_ENOUGH_MEMORY || failed.confirmed || failed.terminate_error != ERROR_ACCESS_DENIED ||
+        failed.wait_error != ERROR_INVALID_HANDLE || rollback.process() != exact_process ||
+        rollback.job() != exact_job || WaitForSingleObject(exact_process, 0) != WAIT_TIMEOUT) return 76;
+    gesher::guest::RestrictedLaunchTestAccess::Inject(rollback, false);
+    if (!rollback.Stop().confirmed || WaitForSingleObject(exact_process, 0) != WAIT_OBJECT_0) return 77;
+  }
+  {
+    gesher::guest::RestrictedLaunch abandoned;
+    std::wstring rollback_cmd = cmd;
+    if (abandoned.Start(f.executable.c_str(), rollback_cmd.data(), nullptr, f.root.c_str(), startup,
+                        0, f.sid, allowlist).error != ERROR_SUCCESS) return 78;
+    gesher::guest::RestrictedLaunchTestAccess::Inject(abandoned, true);
+  }
+  const auto pending = gesher::guest::RestrictedLaunch::PendingRetirements();
+  if (pending.size() != 1 || pending[0].confirmed || pending[0].terminate_error != ERROR_ACCESS_DENIED ||
+      pending[0].wait_error != ERROR_INVALID_HANDLE || gesher::guest::RestrictedLaunch::RetryQuarantined() != 0 ||
+      !gesher::guest::RestrictedLaunch::PendingRetirements().empty()) return 79;
+  puts("PASS shared-api unconfirmed-retirement-evidence-owned-retry-quarantine");
   puts("PASS shared-api forbidden-flags-fail-closed suspended-owned-rollback");
   gesher::guest::RestrictedLaunch launch;
-  const DWORD start_error = launch.Start(f.executable.c_str(), cmd.data(), nullptr,
+  const auto start = launch.Start(f.executable.c_str(), cmd.data(), nullptr,
       f.root.c_str(), startup, 0, f.sid, allowlist);
-  if (start_error != ERROR_SUCCESS) { fprintf(stderr, "launch error=%lu\n", start_error); return 35; }
+  if (start.error != ERROR_SUCCESS || !start.cleanup.confirmed) { fprintf(stderr, "launch error=%lu cleanup=%d terminate-error=%lu wait-error=%lu\n", start.error, start.cleanup.confirmed, start.cleanup.terminate_error, start.cleanup.wait_error); return 35; }
   struct Borrowed { HANDLE h; } process{launch.process()}, job{launch.job()};
   struct OwnedChild {
     gesher::guest::RestrictedLaunch& launch; bool& stopped;
     ~OwnedChild() {
-      stopped = launch.Stop();
+      stopped = launch.Stop().confirmed;
       if (!stopped) fprintf(stderr, "owned process not signaled after cleanup deadline\n");
     }
   } owned{launch, f.child_stopped};
@@ -357,7 +397,7 @@ static int exercise(Fixture& f) {
   printf("PASS parent suspended-token-sid pid=%lu tid=%lu owned-job=1\n", launch.pid(), launch.tid());
   printf("DIAG host-ipc path=%ls requested=0x%08lx share=0 creation=OPEN_EXISTING flags=0\n", pipe_name.c_str(), static_cast<DWORD>(GENERIC_READ | GENERIC_WRITE));
   if (!token_evidence(process.h)) return 55;
-  if (launch.Resume() != ERROR_SUCCESS || launch.Resume() != ERROR_INVALID_STATE) return 37;
+  if (launch.Resume().error != ERROR_SUCCESS || launch.Resume().error != ERROR_INVALID_STATE) return 37;
   IpcObservation positive_observation{};
   if (!read_observation(out_read.h, process.h, &positive_observation)) return 59;
   printf("DIAG child host-ipc-positive handle=%p error=%lu requested=0x%08lx server-pid=%lu\n",

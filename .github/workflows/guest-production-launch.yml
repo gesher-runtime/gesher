@@ -69,6 +69,7 @@ jobs:
           Write-Host $output
           if ($code -ne 0) { throw "fixture/supervisor failed: $code" }
           $expected = @(
+            'PASS shared-api unconfirmed-retirement-evidence-owned-retry-quarantine',
             'PASS shared-api forbidden-flags-fail-closed suspended-owned-rollback',
             'PASS shared-api unlisted-inheritable-event-denied',
             'PASS parent suspended-token-sid pid=',
