@@ -156,6 +156,15 @@ target_compile_definitions(native3_lock_blocking_worker PRIVATE GESHER_RECORD_WA
 target_compile_options(native3_lock_blocking_worker PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(native3_lock_blocking_worker PRIVATE gesher_posix)
 
+# Dedicated ETW witness fixture; production and the accepted fixture have no
+# phase callback definition. Cross-build and all native execution are CI only.
+add_executable(native3_lock_kernel_worker EXCLUDE_FROM_ALL tests/native3-locks/blocking_worker.cc)
+target_sources(native3_lock_kernel_worker PRIVATE
+  compat/posix/src/record_lock_registry.cc compat/posix/src/record_lock_wait.cc)
+target_compile_definitions(native3_lock_kernel_worker PRIVATE GESHER_RECORD_WAIT_WITNESS_TEST=1)
+target_compile_options(native3_lock_kernel_worker PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(native3_lock_kernel_worker PRIVATE gesher_posix advapi32 tdh)
+
 # Phase 7: the ELF loader loads an arm64-v8a Android .so and the arm64
 # translator (gesher_arm64.dll) runs it (docs/arm64.md, ADR 0047).
 add_executable(arm64_elf_test tests/native/arm64_elf_test.cc)

@@ -13,6 +13,9 @@
 #include "../../compat/posix/src/record_lock_wait.h"
 #include "../../compat/posix/src/internal.h"
 namespace locks = gesher::record_locks;
+#ifdef GESHER_RECORD_WAIT_WITNESS_TEST
+#include "kernel_witness.h"
+#endif
 #ifdef GESHER_RECORD_WAIT_TEST
 #include "cleanup_controls.h"
 #endif
@@ -69,6 +72,13 @@ int main(int argc, char** argv) {
   if (locks::PrepareOperation(gesher::HandleFromFd(fd), F_SETLK, &lock, &prepared)) return 89;
   HANDLE cancel = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!cancel) return 90;
+#ifdef GESHER_RECORD_WAIT_WITNESS_TEST
+  if (std::strcmp(argv[1], "kernel-witness") == 0) {
+    int result = kernel_witness::Run(prepared, cancel);
+    if (!CloseHandle(cancel)) return 96;
+    return close(fd) ? 97 : result;
+  }
+#endif
 #ifdef GESHER_RECORD_WAIT_TEST
   if (std::strcmp(argv[1], "cleanup-controls") == 0) {
     int error = cleanup_controls::Run(prepared, cancel, argv[4]);

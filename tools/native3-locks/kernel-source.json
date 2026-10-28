@@ -1,0 +1,13 @@
+{
+  "base": "1037c8f103a341b5b733a78c064efd1db2b54e72",
+  "blobs": {
+    "CMakeLists.txt": "9f0c91c4d952bdbe7fa8e300d9cd6574bffbc6a9",
+    ".github/workflows/native3-kernel-witness.yml": "06939b0c6854f06d31538a6c62091727ef1cb960",
+    "compat/posix/src/record_lock_wait.cc": "f344e63be858481bfee56a2c9e2c13e82680faa9",
+    "compat/posix/src/record_lock_witness_hook.h": "bfd43a42765cb25ef9eea6677791db08226022c7",
+    "tests/native3-locks/blocking_worker.cc": "ae0333b5383b00f77f1b3f8019034e5c173703cf",
+    "tests/native3-locks/kernel_witness.h": "161d9fa813de51f261d1e01ace3d2ef97a30ec12",
+    "tests/native3-locks/kernel_witness_controller.py": "a5e479ca6e0d9d44bb969cee1c3691264dc80dfa",
+    "tools/native3-locks/kernel_source_guard.py": "b3d1fb2ac6ef559ce4d1aa5ca85e96976e5072fc"
+  }
+}

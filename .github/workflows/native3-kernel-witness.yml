@@ -1,0 +1,278 @@
+name: native3-kernel-witness
+on:
+  workflow_dispatch:
+  push:
+    branches: [wip/native-kernel-witness]
+    paths: [.github/workflows/native3-kernel-witness.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: native3-kernel-witness-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify byte-identical reviewed strict helper source
+        shell: python
+        run: |
+          import subprocess
+          expected = {'download-verified-artifact.py': 'cd5cc415e53102c664edac22b1604df639c8804b',
+                      'assemble-artifacts.py': '8d01e5084c8b0aac7f06bc7eae75cf14e431f5b2',
+                      'test-verified-artifact.py': 'af7324581ae011f39aacf87d81ae1f44ad4c85f6'}
+          for name, digest in expected.items():
+              actual = subprocess.check_output(['git', 'hash-object', 'tools/native3-locks/artifact/' + name], text=True).strip()
+              assert actual == digest, (name, actual, digest)
+              print('NATIVE3_STRICT_HELPER name=' + name + ' canonical_blob=' + actual)
+      - name: Require exact reviewed blocking source checkpoint
+        run: python3 tools/native3-locks/kernel_source_guard.py
+      - name: Actual strict archive adversarial controls before producer compilation
+        run: python3 tools/native3-locks/artifact/test-verified-artifact.py
+  compile:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Actual Linux syscall reference from the identical portable worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir fixture
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/native3-locks/command_worker.cc -o /tmp/record-lock-command-worker
+          timeout --signal=KILL 120s python3 tests/native3-locks/command_oracle.py \
+            --worker /tmp/record-lock-command-worker --output fixture/linux-reference.json
+      - name: Actual Linux blocking and signal reference
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/native3-locks/blocking_worker.cc -o /tmp/blocking-worker
+          timeout --signal=KILL 120s python3 tests/native3-locks/blocking_oracle.py --worker /tmp/blocking-worker --output fixture/blocking-linux.json
+      - name: Fetch exact toolchain and pinned AOSP source prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" -o toolchain.tar.xz
+          printf '%s  toolchain.tar.xz\n' "$LLVM_MINGW_SHA256" | sha256sum --check --strict
+          mkdir toolchain
+          tar -xJf toolchain.tar.xz -C toolchain
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build
+          tools/fetch-aosp.sh
+      - name: Build actual common POSIX library and command worker with warnings as errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B out -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw.cmake \
+            -DLLVM_MINGW="$GITHUB_WORKSPACE/toolchain/$LLVM_MINGW_NAME"
+          ninja -C out native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker native3_lock_kernel_worker binderd
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/libgesher_posix.a > fixture/production-symbols.txt
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/CMakeFiles/native3_lock_blocking_worker.dir/compat/posix/src/record_lock_registry.cc.obj > fixture/fixture-symbols.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          assert 'wait_test_hooks' not in Path('fixture/production-symbols.txt').read_text()
+          assert 'wait_test_hooks' in Path('fixture/fixture-symbols.txt').read_text()
+          print('BLOCKING_HOOK_ISOLATION production=absent fixture_object=present activation=compile-only')
+          PY
+          toolchain/$LLVM_MINGW_NAME/bin/llvm-nm --defined-only out/CMakeFiles/native3_lock_kernel_worker.dir/compat/posix/src/record_lock_wait.cc.obj > fixture/kernel-witness-symbols.txt
+          for target in native3_lock_command_worker native3_lock_duplicate_test native3_lock_blocking_worker native3_lock_kernel_worker binderd; do
+            cp "out/$target.exe" fixture/
+            toolchain/$LLVM_MINGW_NAME/bin/llvm-readobj --coff-imports "fixture/$target.exe" > "fixture/$target.imports.txt"
+          done
+      - name: Require a nonempty explicit Windows system import set
+        shell: python
+        run: |
+          import re
+          from pathlib import Path
+          allowed = {'kernel32.dll', 'advapi32.dll', 'tdh.dll', 'shell32.dll', 'ole32.dll', 'ntdll.dll',
+                     'ws2_32.dll', 'iphlpapi.dll', 'psapi.dll', 'bcrypt.dll',
+                     'api-ms-win-core-synch-l1-2-0.dll',
+                     'api-ms-win-crt-stdio-l1-1-0.dll', 'api-ms-win-crt-runtime-l1-1-0.dll',
+                     'api-ms-win-crt-locale-l1-1-0.dll', 'api-ms-win-crt-heap-l1-1-0.dll',
+                     'api-ms-win-crt-private-l1-1-0.dll', 'api-ms-win-crt-string-l1-1-0.dll',
+                     'api-ms-win-crt-convert-l1-1-0.dll', 'api-ms-win-crt-math-l1-1-0.dll',
+                     'api-ms-win-crt-environment-l1-1-0.dll', 'api-ms-win-crt-filesystem-l1-1-0.dll',
+                     'api-ms-win-crt-time-l1-1-0.dll', 'api-ms-win-crt-process-l1-1-0.dll',
+                     'api-ms-win-crt-utility-l1-1-0.dll'}
+          for target in ('native3_lock_command_worker', 'native3_lock_duplicate_test', 'native3_lock_blocking_worker', 'native3_lock_kernel_worker', 'binderd'):
+              names = re.findall(r'^\s*Name:\s*(\S+)', Path(f'fixture/{target}.imports.txt').read_text(), re.MULTILINE)
+              assert names, ('Missing actual PE imports', target)
+              assert not (set(name.casefold() for name in names) - allowed), (target, names)
+              print('VERIFIED_COMMAND_IMPORTS ' + target + ': ' + ', '.join(names))
+      - name: Record exact source, syscall reference and executable bytes
+        shell: python
+        run: |
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          def digest(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          files = {path: digest(path) for path in paths if path and Path(path).is_file()}
+          assert files and 'tests/native3-locks/command_worker.cc' in files
+          outputs = {path.name: digest(path) for path in Path('fixture').iterdir() if path.is_file()}
+          metadata = dict(repository=os.environ['GITHUB_REPOSITORY'], repository_id=os.environ['GITHUB_REPOSITORY_ID'],
+                          run=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                          source=os.environ['GITHUB_SHA'], toolchain_sha256=os.environ['LLVM_MINGW_SHA256'],
+                          files=files, outputs=outputs)
+          Path('fixture/provenance.json').write_text(json.dumps(metadata, indent=2) + '\n')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native3-kernel-witness-${{ github.sha }}-a${{ github.run_attempt }}
+          path: fixture
+          if-no-files-found: error
+          retention-days: 14
+  windows:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact successful producer, source and artifact before execution
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $jobsRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/attempts/$env:GITHUB_RUN_ATTEMPT/jobs?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect actual producer' }
+          $jobs = @(($jobsRaw | ConvertFrom-Json).jobs | Where-Object name -eq 'compile')
+          if ($jobs.Count -ne 1 -or $jobs[0].conclusion -ne 'success' -or
+              "$($jobs[0].run_id)" -ne $env:GITHUB_RUN_ID -or "$($jobs[0].run_attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+              $jobs[0].head_sha -ne $env:GITHUB_SHA) { throw 'Producer source/run/attempt mismatch' }
+          $raw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/artifacts?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect artifact' }
+          $expected = "native3-kernel-witness-$env:GITHUB_SHA-a$env:GITHUB_RUN_ATTEMPT"
+          $rows = @(($raw | ConvertFrom-Json).artifacts | Where-Object name -eq $expected)
+          if ($rows.Count -ne 1) { throw 'Artifact is not unique' }
+          $artifact = $rows[0]
+          if ($artifact.id -le 0 -or $artifact.size_in_bytes -le 0 -or $artifact.expired -or
+              $artifact.digest -notmatch '^sha256:[0-9a-f]{64}$' -or "$($artifact.workflow_run.id)" -ne $env:GITHUB_RUN_ID -or
+              "$($artifact.workflow_run.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              "$($artifact.workflow_run.head_repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              $artifact.workflow_run.head_sha -ne $env:GITHUB_SHA) { throw 'Artifact source/repository mismatch' }
+          if ([datetime]$artifact.created_at -lt [datetime]$jobs[0].started_at -or
+              [datetime]$artifact.created_at -gt [datetime]$jobs[0].completed_at) { throw 'Artifact did not originate in this producer attempt' }
+          python tools/native3-locks/artifact/download-verified-artifact.py --id "$($artifact.id)" --digest $artifact.digest --destination command-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Actual raw archive verification/extraction failed' }
+          $manifest = Get-Content -LiteralPath command-fixture/provenance.json -Raw | ConvertFrom-Json
+          if ($manifest.repository -ne $env:GITHUB_REPOSITORY -or "$($manifest.repository_id)" -ne $env:GITHUB_REPOSITORY_ID -or
+              "$($manifest.run)" -ne $env:GITHUB_RUN_ID -or "$($manifest.attempt)" -ne $env:GITHUB_RUN_ATTEMPT -or
+              $manifest.source -ne $env:GITHUB_SHA -or $manifest.toolchain_sha256 -ne $env:LLVM_MINGW_SHA256) { throw 'Manifest producer mismatch' }
+          $expectedOutputs = @('linux-reference.json', 'native3_lock_command_worker.exe', 'native3_lock_duplicate_test.exe', 'binderd.exe', 'native3_lock_command_worker.imports.txt', 'native3_lock_duplicate_test.imports.txt', 'binderd.imports.txt', 'native3_lock_blocking_worker.exe', 'native3_lock_blocking_worker.imports.txt', 'blocking-linux.json', 'production-symbols.txt', 'fixture-symbols.txt', 'kernel-witness-symbols.txt', 'native3_lock_kernel_worker.exe', 'native3_lock_kernel_worker.imports.txt')
+          if (@($manifest.files.PSObject.Properties).Count -eq 0 -or
+              @(Compare-Object $expectedOutputs @($manifest.outputs.PSObject.Properties.Name)).Count -ne 0) { throw 'Incomplete source/output manifest' }
+          foreach ($file in $manifest.files.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath $file.Name -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw "Source byte mismatch: $($file.Name)" }
+          }
+          foreach ($file in $manifest.outputs.PSObject.Properties) {
+            if ((Get-FileHash -LiteralPath (Join-Path command-fixture $file.Name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $file.Value) { throw "Producer output mismatch: $($file.Name)" }
+            Write-Host "ACTUAL_COMMAND_OUTPUT name=$($file.Name) sha256=$($file.Value) source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT"
+          }
+          Write-Host "VERIFIED_COMMAND_PRODUCER source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$env:GITHUB_RUN_ATTEMPT artifact=$($artifact.id) digest=$($artifact.digest) exe=$($manifest.outputs.'native3_lock_command_worker.exe') reference=$($manifest.outputs.'linux-reference.json')"
+      - name: Require fixture-only phase callback isolation
+        shell: python
+        run: |
+          from pathlib import Path
+          assert 'record_wait_phase' not in Path('command-fixture/production-symbols.txt').read_text()
+          assert 'record_wait_phase' in Path('command-fixture/kernel-witness-symbols.txt').read_text()
+          print('KERNEL_HOOK_ISOLATION production=absent dedicated_fixture=present')
+      - name: Actual internal kernel-wait transition and seven controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tests/native3-locks/kernel_witness_controller.py --worker command-fixture/native3_lock_kernel_worker.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Actual kernel wait witness/controller failed' }
+      - name: Actual finite blocking controls against actual Linux reference
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $worker = $null
+          try {
+            $worker = Start-Process -FilePath (Get-Command python -CommandType Application | Select-Object -First 1).Source -ArgumentList @('tests/native3-locks/blocking_oracle.py', '--worker', 'command-fixture/native3_lock_blocking_worker.exe', '--windows', '--reference', 'command-fixture/blocking-linux.json', '--output', 'command-fixture/blocking-windows.json') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/blocking.stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP/blocking.stderr.txt"
+            if (-not $worker.WaitForExit(120000)) { throw 'Blocking controller exceeded original120s bound' }
+            $worker.Refresh()
+            if ($worker.ExitCode -ne 0) { throw "Blocking controller exit=$($worker.ExitCode)" }
+            if (-not (Select-String -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt" -Pattern '^BLOCKING_SUMMARY rows=12 failures=0 public_blocking_closed=false$' -Quiet)) { throw 'Missing exact finite blocking completion' }
+          } finally {
+            if ($null -ne $worker) {
+              if (-not $worker.HasExited) { $worker.Kill($true); if (-not $worker.WaitForExit(5000)) { throw 'Owned blocking process tree failed termination' } }
+              $worker.Dispose()
+            }
+            if (Test-Path -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt") { Get-Content -LiteralPath "$env:RUNNER_TEMP/blocking.stdout.txt" }
+            if (Test-Path -LiteralPath "$env:RUNNER_TEMP/blocking.stderr.txt") { Get-Content -LiteralPath "$env:RUNNER_TEMP/blocking.stderr.txt" }
+          }
+      - name: Actual strict Linux rows and all-four-cycle CRT owner call-frame and negative witnesses
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stdout = Join-Path $env:RUNNER_TEMP commands.stdout.txt
+          $stderr = Join-Path $env:RUNNER_TEMP commands.stderr.txt
+          $pythonCommand = Get-Command python -CommandType Application | Select-Object -First 1
+          $python = $pythonCommand.Source
+          if ($python -isnot [string] -or -not (Test-Path -LiteralPath $python -PathType Leaf) -or
+              [IO.Path]::GetExtension($python) -ine '.exe') { throw 'Missing single actual Python executable' }
+          Write-Host "ACTUAL_COMMAND_PYTHON path=$python"
+          & $python --version
+          if ($LASTEXITCODE -ne 0) { throw 'Selected Python executable failed version check' }
+          foreach ($name in 'ucrtbase.dll','kernelbase.dll','ntdll.dll') {
+            $modulePath = Join-Path $env:SystemRoot "System32/$name"
+            $moduleInfo = Get-Item -LiteralPath $modulePath
+            Write-Host "ACTUAL_SYSTEM_MODULE name=$name path=$modulePath version=$($moduleInfo.VersionInfo.FileVersion) sha256=$((Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash)"
+          }
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $python -ArgumentList @('tests/native3-locks/command_oracle.py', '--worker', 'command-fixture/native3_lock_command_worker.exe', '--reference', 'command-fixture/linux-reference.json', '--output', 'command-fixture/windows-actual.json', '--duplicate-worker', 'command-fixture/native3_lock_duplicate_test.exe', '--broker', 'command-fixture/binderd.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(180000)) { throw 'Actual command and duplicate suites exceeded external180s bound' }
+            $process.Refresh()
+            & $python tests/native3-locks/validate_stdio_evidence.py --stderr $stderr --output command-fixture/stdio-evidence.json
+            if ($LASTEXITCODE -ne 0) { throw 'Missing or inconsistent four-cycle actual stdio conjunctive evidence/route' }
+            if ($process.ExitCode -ne 0) { throw "Actual command suite exit=$($process.ExitCode)" }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_COMMAND_ORACLE rows=[1-9][0-9]* mismatches=0$' -Quiet)) { throw 'Missing actual command comparator completion' }
+            if (-not (Select-String -LiteralPath $stdout -Pattern '^ACTUAL_DUPLICATE_ORACLE modes=13 failures=0 semantics=bounded-resource-controls$' -Quiet)) { throw 'Missing actual duplicate controller completion' }
+          } finally {
+            $cleanupProblems = @()
+            if ($null -ne $process) {
+              try {
+                if (-not $process.HasExited) {
+                  $process.Kill($true)
+                  if (-not $process.WaitForExit(5000)) { $cleanupProblems += 'Owned command process tree did not terminate' }
+                }
+              } catch { $cleanupProblems += "Owned command cleanup: $_" }
+              try { $process.Dispose() } catch { $cleanupProblems += "Owned command disposal: $_" }
+            }
+            try { if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout } }
+            catch { $cleanupProblems += "Actual stdout replay: $_" }
+            try { if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr } }
+            catch { $cleanupProblems += "Actual stderr replay: $_" }
+            if ($cleanupProblems.Count) { throw ($cleanupProblems -join '; ') }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native3-locks-blocking-logs-${{ matrix.os }}-${{ github.sha }}-a${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/commands.stdout.txt
+            ${{ runner.temp }}/commands.stderr.txt
+            command-fixture/blocking-windows.json
+            ${{ runner.temp }}/blocking.stdout.txt
+            ${{ runner.temp }}/blocking.stderr.txt
+            command-fixture/windows-actual.json
+            command-fixture/windows-duplicates.json
+            command-fixture/stdio-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
+# Trigger exact public rejection evidence component.

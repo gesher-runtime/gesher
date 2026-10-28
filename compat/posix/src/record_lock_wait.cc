@@ -1,11 +1,15 @@
 #include "record_lock_wait.h"
 #include "internal.h"
 #include "record_lock_test_hooks.h"
+#include "record_lock_witness_hook.h"
 #include <bcrypt.h>
 #include <sddl.h>
 #include <cwchar>
 
 namespace gesher::record_locks {
+#ifdef GESHER_RECORD_WAIT_WITNESS_TEST
+thread_local void (*record_wait_phase)(bool) = nullptr;
+#endif
 namespace {
 constexpr DWORD kLivenessInterval = 100;
 int WinError() { return gesher::ErrnoFromWin32(GetLastError()); }
@@ -133,8 +137,14 @@ int WaitProcessLock(Registry& registry, const PreparedOperation& prepared, HANDL
     registry.Unlock();
     if (error || acquired) break;
     HANDLE handles[]{cancel, event.value};
+#ifdef GESHER_RECORD_WAIT_WITNESS_TEST
+    if (record_wait_phase) record_wait_phase(true);
+#endif
     DWORD wait = WaitForMultipleObjects(2, handles, FALSE,
       (Remaining(deadline) < kLivenessInterval ? Remaining(deadline) : kLivenessInterval));
+#ifdef GESHER_RECORD_WAIT_WITNESS_TEST
+    if (record_wait_phase) record_wait_phase(false);
+#endif
     if (wait == WAIT_FAILED) { error = WinError(); break; }
     if (wait != WAIT_OBJECT_0 && wait != WAIT_OBJECT_0 + 1 && wait != WAIT_TIMEOUT) { error = EIO; break; }
     // Recheck cancellation/deadline/conflict inside the next transaction.
