@@ -38,6 +38,13 @@ on the Binder/services identity work. No aggregate roadmap box is checked.
 
 ## Status and next steps
 
+Current continuation: full40784262363 was red at historical preflight only;
+it produced no runtime proof. The repaired independent immutable boundary and
+fresh changed-source full40787172396/attempt1 at9005f4fb are documented in
+[Exec full preflight trust](exec-full-preflight-trust.md). This supersedes the
+historical pending/watch details below. Root/integration owns its sole watch;
+the fresh full and notification runtime qualification remain pending.
+
 Base f1550540186b4ae3f17a5e501a886ec1c4d5d613, branch
 wip/exec-property-policy. Integration peer approved the architecture before
 editing. Local checks are source inspection, diff whitespace and PowerShell

@@ -51,3 +51,28 @@ negative controls and workflow dependency inspection. No Java/native fixture or
 build ran locally. A fresh independent automation source peer is required before
 any GitHub write, variable update or CI dispatch. Full Windows/runtime/package/
 e2e evidence remains pending; no acceptance or completion is claimed.
+
+## Status and next steps, 2026-10-29
+
+Exact caller/source9005f4fbf91805ff057355cbb8b0e6f0e1591688 received independent
+source PASS from integration and a second read-only guest-track peer before
+qualification. No definite source blocker was reported. The historical guard
+still has an empty diff to f155 and the entire runtime/test tree remains
+f155 plus exactly the two approved test blobs. Local static checks passed for
+the complete Git inventory/checkout and all25 top-level dependency chains.
+
+After the mandatory immediate palmoni5 check for each GitHub write, the branch
+was pushed using gh-authenticated HTTPS. Repository variable
+EXEC_FULL_CALLER_COMMIT was absent, then set and read back as exact9005f4fb
+(full40-character SHA above). The immutable ca955deb commit was independently
+confirmed on the remote before dispatch. An active-ref guard found only the
+completed failed historical run40784262363; no unchanged-red retry occurred.
+
+Canonical full40787172396/attempt1 was dispatched from exact9005f4fb. Actual
+run metadata confirms workflow_dispatch, ci.yml, exact source and referenced
+reusable exec-full-preflight.yml at immutableca955deb. The full is pending;
+root/integration owns the single interval120 watch. There is no local watcher.
+Read actual trusted-job controls/summary and every original full gate before
+acceptance. Both Windows report-state/PID/count/value/removal/Binder-death
+records, whole-suite zero, compiler/archive receipts, package23 and both e2e
+remain required. Docs after9005 do not require changing external caller identity.
