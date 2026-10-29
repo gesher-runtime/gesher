@@ -2778,3 +2778,35 @@
    struct _pthread_v *pv;
      int r, pr = 0;
      //if (!t.p) t = pthread_self();
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -65,2 +65,29 @@
++#ifdef GESHER_PTHREAD_ROUTING_PROBE
++/* Private key registry only; callbacks run after this lock is dropped. */
++static SRWLOCK _pthread_key_lock = SRWLOCK_INIT;
++static HANDLE gesher_key_probe_contended;
++__declspec(dllexport) void __cdecl gesher_key_probe_arm_v1(void *contended)
++{ gesher_key_probe_contended=(HANDLE)contended; }
++__declspec(dllexport) int __cdecl gesher_key_probe_hold_v1(void *entered, void *release)
++{
++  DWORD wait;
++  AcquireSRWLockExclusive(&_pthread_key_lock);
++  if (!SetEvent((HANDLE)entered)) { ReleaseSRWLockExclusive(&_pthread_key_lock); return 1; }
++  wait=WaitForSingleObject((HANDLE)release,5000);
++  ReleaseSRWLockExclusive(&_pthread_key_lock);
++  return wait==WAIT_OBJECT_0 ? 0 : 2;
++}
++static void gesher_key_probe_lock(SRWLOCK *lock)
++{
++  if (!TryAcquireSRWLockExclusive(lock)) {
++    if (gesher_key_probe_contended && !SetEvent(gesher_key_probe_contended)) abort();
++    AcquireSRWLockExclusive(lock);
++  }
++}
++#define pthread_rwlock_rdlock(lock) (gesher_key_probe_lock(lock), 0)
++#define pthread_rwlock_wrlock(lock) (gesher_key_probe_lock(lock), 0)
++#define pthread_rwlock_unlock(lock) (ReleaseSRWLockExclusive(lock), 0)
++#else
+ static pthread_rwlock_t _pthread_key_lock = PTHREAD_RWLOCK_INITIALIZER;
++#endif
+ static unsigned long _pthread_key_max=0L;
