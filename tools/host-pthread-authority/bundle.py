@@ -13,7 +13,8 @@ MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'imports-host.txt', 'imports-dynamic.txt', 'compiler.json',
            'host_pthread_authority_fault_test.exe', 'host_pthread_public_static_test.exe',
            'host_pthread_public_static_test.o', 'imports-static.txt', 'fault-supplier.json',
-           'host-production-role.json', 'host-fault-role.json'}
+           'host-production-role.json', 'host-fault-role.json',
+           'host_pthread_mixed_provider_test.exe', 'imports-mixed.txt'}
 
 
 def compile_client(llvm):
@@ -33,9 +34,14 @@ def compile_client(llvm):
                    '-o', str(DIST / 'host_pthread_public_static_test.exe')]
     subprocess.run(static_compile, check=True)
     subprocess.run(static_link, check=True)
+    mixed_link = [str(driver), '-D_WIN32_WINNT=0x0A00', '-Wall', '-Wextra', '-Werror',
+                  str(ROOT / 'tests/native/host_pthread_mixed_provider_test.c'),
+                  str(llvm / 'x86_64-w64-mingw32/lib/libwinpthread.a'),
+                  '-o', str(DIST / 'host_pthread_mixed_provider_test.exe')]
+    subprocess.run(mixed_link, check=True)
     (DIST / 'compiler.json').write_text(json.dumps({
         'configured_driver': str(cxx), 'sha256': sha(cxx), 'client_command': command,
-        'client_driver_sha256': sha(driver), 'static_compile': static_compile,
+        'client_driver_sha256': sha(driver), 'mixed_link': mixed_link, 'static_compile': static_compile,
         'static_link': static_link}, sort_keys=True))
 
 
@@ -47,7 +53,7 @@ def context():
     assert os.environ.get('GITHUB_ACTIONS') == 'true'
     c = {k: os.environ[k] for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY')}
     assert c['GITHUB_REPOSITORY'] == 'gesher-runtime/gesher'
-    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/host-public-clock-dispatch'
+    assert os.environ.get('GITHUB_REF') == 'refs/heads/wip/pthread-provider-completion'
     assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == c['GITHUB_SHA']
     subprocess.check_call(['git', 'diff', '--exit-code', 'HEAD', '--'])
     return c
@@ -79,6 +85,7 @@ def record():
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-host.txt').read_text().lower()
     assert 'libwinpthread-1.dll' in (DIST / 'imports-dynamic.txt').read_text().lower()
     assert 'libwinpthread-1.dll' not in (DIST / 'imports-static.txt').read_text().lower()
+    assert 'libwinpthread-1.dll' not in (DIST / 'imports-mixed.txt').read_text().lower()
     (DIST / 'bundle.json').write_text(json.dumps(data, sort_keys=True, indent=2))
 
 
