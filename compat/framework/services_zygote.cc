@@ -173,7 +173,7 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
   if (installed_guest && package == guest::kSelectedPackage) {
     auto found = g_installed.find(package);
     if (g_retiring_installed || !g_writer || bootstrap || breakaway || found == g_installed.end() ||
-        found->second->retiring || found->second->uid != uid || found->second->install != install)
+        !GetProcessId(g_broker) || found->second->retiring || found->second->uid != uid || found->second->install != install)
       return -ERROR_ACCESS_DENIED;
     policy = found->second;
   }
@@ -216,6 +216,7 @@ static int SpawnOwned(const std::u16string& command_line, const std::vector<std:
     if (bootstrap) context = *bootstrap;
     if (uid >= 0) {
       context.uid = static_cast<uint32_t>(uid);
+      if (policy) context.server_pid = GetProcessId(g_broker);
       si.StartupInfo.cbReserved2 = sizeof(context);
       si.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(&context);
     }
@@ -384,7 +385,7 @@ bool ProvisionInstalled(const std::u16string& package, const std::u16string& ins
 
 bool VerifyRestrictedGuest() {
   const auto& startup = launch::kStartup;
-  if (!startup.present || startup.kind || startup.control || startup.broker ||
+  if (!startup.present || startup.kind || startup.control || startup.broker || !startup.server_pid ||
       startup.uid < 10000 || startup.uid > 19999) return false;
   HANDLE token = nullptr;
   DWORD count = 0, isolated = 0;
@@ -430,6 +431,16 @@ bool VerifyRestrictedGuest() {
   std::wstring guest_device(device);
   auto suffix = guest_device.rfind(L"-guest-");
   if (suffix == std::wstring::npos) return false;
+  auto cannot_serve = [](const std::wstring& name) {
+    HANDLE pipe = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_UNLIMITED_INSTANCES, 1024, 1024, 0, nullptr);
+    DWORD error = GetLastError();
+    if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
+    return pipe == INVALID_HANDLE_VALUE && error == ERROR_ACCESS_DENIED;
+  };
+  ok = cannot_serve(std::wstring(binder_wire::kPipePrefix) + guest_device) && ok;
+  ok = cannot_serve(std::wstring(binder_wire::kPipePrefix) + guest_device.substr(0, suffix)) && ok;
   ok = denied(std::wstring(binder_wire::kPipePrefix) + guest_device.substr(0, suffix),
       FILE_GENERIC_READ | (FILE_GENERIC_WRITE & ~FILE_APPEND_DATA)) && ok;
   return ok;

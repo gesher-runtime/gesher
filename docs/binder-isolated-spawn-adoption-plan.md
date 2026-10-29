@@ -25,16 +25,26 @@ slot for retry. A stale profile after an abnormal server death currently causes
 fail-closed provisioning, not silent adoption. Normal persistent-device shutdown
 now blocks new installed admissions, revokes and retires all installed policies,
 and fails explicitly if exact child/resource retirement is unconfirmed.
-Inherited directory ACL/label mutations also require a bounded recursive
-snapshot with every descendant pinned during the operation; any reparse entry
-rejects the operation. A reparse introduced into app data causes unconfirmed
-retirement with policy ownership retained and future admissions blocked.
+The initial recursive-inheritance candidate was rejected at source peer because
+enumeration cannot prevent namespace insertion after the snapshot. The revised
+policy enumerates existing directories by retained handles, opens one-component
+child names with NtCreateFile/RootDirectory/OPEN_REPARSE_POINT, and rejects
+reparse and multiply linked files. Host ACL/label changes address each retained
+object individually. Directory handles use MAXIMUM_ALLOWED, for which the
+[documented SetSecurityInfo contract](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)
+suppresses propagation to existing children. New guest-created app-data objects
+receive intentional inheritance; the host never rescans their paths at cleanup.
+Mutable descendants retain DELETE sharing so guests can rename/delete their own
+data. This API behavior requires actual adversarial CI proof, not documentation
+alone. Injected cleanup failure retains the policy and blocks future admission.
 
 The separate `installed-guest-policy.yml` component prepares actual Windows
 profile tests for subtree reparse rejection, unchanged outside target ACL/label,
 ancestor/directory/final-file rename error32 while pinned, failed cleanup
 retention, removal of the hostile entry, confirmed retry, and successful rename
-after all owned handles are released. Its actual compiler, archive, member,
+after all owned handles are released, a new reparse inserted after enumeration
+whose target ACL/label remains unchanged through real grant/revoke, and an
+actual restricted child that creates/reopens/reads/deletes nested data. Its actual compiler, archive, member,
 source/header and current-run/attempt receipt derives from the qualified helper
 fixture contract. It is not a replacement for actual APK/Binder full-CI proof.
 
@@ -51,6 +61,16 @@ and the unchanged actual-process challenge/lease/FD protocol. The private writer
 channel and default host public endpoint have explicit protected OW-only ACLs.
 Guest Binder clients request explicit data access without the pipe-instance bit
 aliased by GENERIC_WRITE. The guest cannot publish a launch on any public pipe.
+The reserved startup record now carries the actual expected broker PID under
+ABI version3; restricted guests require it, and each actual Binder client
+connection rejects a different named-pipe server PID. The real guest startup
+also attempts CreateNamedPipe on both its SID endpoint and the host endpoint,
+requiring exact access-denied errors rather than relying on the mask alone.
+The resource component also creates the actual OW-only bootstrap Channel,
+observes both endpoint handles non-inheritable, and has its real lowbox child
+attempt CreateNamedPipe on that exact private name. The private channel's
+one-instance constraint also remains in force; that denial alone does not
+attribute a unique ACL cause or prove a new client could otherwise connect.
 
 The actual installed guest startup now checks its real lowbox/zero-capability
 token, fresh own-data write/read/delete, exact access-denied errors opening the

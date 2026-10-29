@@ -1,12 +1,14 @@
 // Host-owned install generation policy for the first migrated package route.
 #pragma once
 #include <windows.h>
+#include <winternl.h>
 #include <aclapi.h>
 #include <userenv.h>
 #include <memory>
 #include <algorithm>
 #include <cwctype>
 #include <cwchar>
+#include <cstddef>
 #include <array>
 #include <atomic>
 #include <string>
@@ -25,14 +27,15 @@ struct InstalledPolicy {
   int uid = -1;
   bool retiring = false;
   std::vector<std::wstring> grants;
-  struct Pin { std::wstring path; HANDLE handle; };
+  struct Pin { std::wstring path; HANDLE handle; bool directory = false; bool writable = false; };
   std::vector<Pin> pins;
   std::vector<HANDLE> ancestors;
   HMODULE userenv = nullptr;
-  std::wstring writable_path;
-  PSECURITY_DESCRIPTOR old_label = nullptr;
+  struct Label { HANDLE handle; PSECURITY_DESCRIPTOR original; };
+  std::vector<Label> labels;
   using DeleteProfile = HRESULT (WINAPI*)(PCWSTR);
   DeleteProfile delete_profile = nullptr;
+  decltype(&SetSecurityInfo) set_security_ = SetSecurityInfo; // fixture fault seam, no JNI setter
   std::atomic<InstalledPolicy*>* slot = nullptr;
   static std::array<std::atomic<InstalledPolicy*>, 64>& Slots() {
     static std::array<std::atomic<InstalledPolicy*>, 64> slots{}; return slots;
@@ -63,14 +66,13 @@ struct InstalledPolicy {
       if (Grant(*it, 0, REVOKE_ACCESS)) it = grants.erase(it);
       else { ok = false; ++it; }
     }
-    if (old_label) {
-      TreeGuard tree;
+    for (auto it = labels.begin(); it != labels.end();) {
       PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
-      if (tree.Walk(writable_path) && GetSecurityDescriptorSacl(old_label, &present, &label, &defaulted) &&
-          SetSecurityInfo(Pinned(writable_path), SE_FILE_OBJECT,
-            LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, label) == ERROR_SUCCESS) {
-        LocalFree(old_label); old_label = nullptr;
-      } else ok = false;
+      if (Deleted(it->handle) || (GetSecurityDescriptorSacl(it->original, &present, &label, &defaulted) &&
+          set_security_(it->handle, SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, label) == ERROR_SUCCESS)) {
+        LocalFree(it->original); it = labels.erase(it);
+      } else { ok = false; ++it; }
     }
     if (ok && delete_profile && !profile.empty()) {
       if (SUCCEEDED(delete_profile(profile.c_str()))) profile.clear();
@@ -88,73 +90,119 @@ struct InstalledPolicy {
     for (const auto& pin : pins) if (pin.path == path) return pin.handle;
     return INVALID_HANDLE_VALUE;
   }
-  bool PinResource(const std::wstring& path) {
+  bool PinResource(const std::wstring& path, bool writable = false) {
     if (Pinned(path) != INVALID_HANDLE_VALUE) return true;
     for (size_t i = 3; i <= path.size(); ++i) {
       if (i != 3 && i != path.size() && path[i] != L'\\') continue;
       bool final = i == path.size();
+      if (!final && Pinned(path.substr(0, i)) != INVALID_HANDLE_VALUE) continue;
+      DWORD attributes = final ? GetFileAttributesW(path.c_str()) : FILE_ATTRIBUTE_DIRECTORY;
+      if (attributes == INVALID_FILE_ATTRIBUTES) return false;
+      bool directory = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
       HANDLE handle = CreateFileW(path.substr(0, i).c_str(),
-          FILE_READ_ATTRIBUTES | (final ? READ_CONTROL | WRITE_DAC | WRITE_OWNER : 0),
+          final && directory ? MAXIMUM_ALLOWED : FILE_READ_ATTRIBUTES | (final ? READ_CONTROL | WRITE_DAC | WRITE_OWNER : 0),
           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
       if (handle == INVALID_HANDLE_VALUE) return false;
       FILE_ATTRIBUTE_TAG_INFO tag{};
       if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
-          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) { CloseHandle(handle); return false; }
+          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+          directory != bool(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { CloseHandle(handle); return false; }
       // No DELETE sharing: each already opened ancestor remains the same object
       // while resolving its child, and no root can be replaced before cleanup.
-      if (final) pins.push_back({path, handle});
+      if (final) pins.push_back({path, handle, directory, writable});
       else ancestors.push_back(handle);
     }
     return Pinned(path) != INVALID_HANDLE_VALUE;
   }
-  struct TreeGuard {
-    std::vector<HANDLE> handles;
-    ~TreeGuard() { for (HANDLE handle : handles) CloseHandle(handle); }
-    bool Walk(const std::wstring& path, unsigned depth = 0) {
-      if (depth > 128 || handles.size() >= 65536) return false;
-      HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
-          nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-      if (handle == INVALID_HANDLE_VALUE) return false;
-      handles.push_back(handle);
-      FILE_ATTRIBUTE_TAG_INFO tag{};
-      if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag)) ||
-          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
-      if (!(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return true;
-      WIN32_FIND_DATAW item{};
-      HANDLE search = FindFirstFileW((path + L"\\*").c_str(), &item);
-      if (search == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
-      bool ok = true;
-      do {
-        if (!wcscmp(item.cFileName, L".") || !wcscmp(item.cFileName, L"..")) continue;
-        if (!Walk(path + L"\\" + item.cFileName, depth + 1)) { ok = false; break; }
-      } while (FindNextFileW(search, &item));
-      DWORD error = GetLastError(); FindClose(search);
-      return ok && error == ERROR_NO_MORE_FILES;
+  static bool Deleted(HANDLE handle) {
+    FILE_STANDARD_INFO info{};
+    return GetFileInformationByHandleEx(handle, FileStandardInfo, &info, sizeof(info)) && info.DeletePending;
+  }
+  // Enumeration is observational, not a promise that no concurrent entry can
+  // appear. Each opened child is resolved relative to its retained directory,
+  // with a single-component name and OPEN_REPARSE_POINT. Host mutations below
+  // always address these exact handles and never recurse through a pathname.
+  bool Gather(size_t index, unsigned depth = 0) {
+    if (depth > 128 || pins.size() > 65536) return false;
+    Pin parent = pins[index];
+    if (!parent.directory) {
+      FILE_STANDARD_INFO info{};
+      return GetFileInformationByHandleEx(parent.handle, FileStandardInfo, &info, sizeof(info)) && info.NumberOfLinks == 1;
     }
-  };
+    HMODULE library = GetModuleHandleW(L"ntdll.dll");
+    if (!library) return false;
+    auto open = reinterpret_cast<decltype(&NtCreateFile)>(GetProcAddress(library, "NtCreateFile"));
+    if (!open) return false;
+    std::vector<BYTE> buffer(65536);
+    bool first = true;
+    for (;;) {
+      BOOL result = GetFileInformationByHandleEx(parent.handle,
+          first ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo,
+          buffer.data(), static_cast<DWORD>(buffer.size()));
+      first = false;
+      if (!result) return GetLastError() == ERROR_NO_MORE_FILES;
+      size_t offset = 0;
+      for (;;) {
+        if (offset + offsetof(FILE_ID_BOTH_DIR_INFO, FileName) > buffer.size()) return false;
+        auto* item = reinterpret_cast<FILE_ID_BOTH_DIR_INFO*>(buffer.data() + offset);
+        if (item->FileNameLength % sizeof(wchar_t) ||
+            item->FileNameLength > buffer.size() - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) return false;
+        std::wstring name(item->FileName, item->FileNameLength / sizeof(wchar_t));
+        if (name != L"." && name != L"..") {
+          if (name.empty() || name.find_first_of(L"\\/:") != std::wstring::npos ||
+              (item->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || pins.size() >= 65536) return false;
+          bool directory = (item->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+          UNICODE_STRING unicode{};
+          unicode.Buffer = name.data(); unicode.Length = static_cast<USHORT>(name.size() * sizeof(wchar_t));
+          unicode.MaximumLength = unicode.Length;
+          OBJECT_ATTRIBUTES attributes{};
+          attributes.Length = sizeof(attributes); attributes.RootDirectory = parent.handle;
+          attributes.ObjectName = &unicode; attributes.Attributes = 0x40; // OBJ_CASE_INSENSITIVE
+          IO_STATUS_BLOCK io{}; HANDLE child = nullptr;
+          NTSTATUS status = open(&child, directory ? MAXIMUM_ALLOWED :
+              FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER | SYNCHRONIZE,
+              &attributes, &io, nullptr, 0,
+              FILE_SHARE_READ | FILE_SHARE_WRITE | (parent.writable ? FILE_SHARE_DELETE : 0),
+              1, 0x00200000 | 0x00004000 | 0x00000020, nullptr, 0);
+          if (status < 0 || !child) return false;
+          FILE_ATTRIBUTE_TAG_INFO tag{};
+          if (!GetFileInformationByHandleEx(child, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+              (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+              directory != bool(tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { CloseHandle(child); return false; }
+          size_t child_index = pins.size();
+          pins.push_back({parent.path + L"\\" + name, child, directory, parent.writable});
+          if (!Gather(child_index, depth + 1)) return false;
+        }
+        if (!item->NextEntryOffset) break;
+        if (item->NextEntryOffset < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) ||
+            item->NextEntryOffset > buffer.size() - offset) return false;
+        offset += item->NextEntryOffset;
+      }
+    }
+  }
   bool Grant(const std::wstring& path, DWORD rights, ACCESS_MODE mode = GRANT_ACCESS) {
     PACL old_acl = nullptr, acl = nullptr;
     PSECURITY_DESCRIPTOR sd = nullptr;
     HANDLE handle = Pinned(path);
     if (handle == INVALID_HANDLE_VALUE) return false;
-    // No inherited ACL operation traverses an unchecked reparse subtree. The
-    // caller retires all guest children before revoke, so guests cannot create
-    // fresh entries during this bounded tree snapshot and ACL operation.
-    TreeGuard tree;
-    if (!tree.Walk(path)) return false;
+    if (mode == REVOKE_ACCESS && Deleted(handle)) return true;
     DWORD error = GetSecurityInfo(handle, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_acl, nullptr, &sd);
     if (error != ERROR_SUCCESS) return false;
     EXPLICIT_ACCESSW entry{};
     entry.grfAccessPermissions = rights;
     entry.grfAccessMode = mode;
+    // Directory handles were opened MAXIMUM_ALLOWED. SetSecurityInfo therefore
+    // does not propagate to existing children (documented API contract); newly
+    // created objects receive this install's intended inheritance. Files have
+    // no descendants. Never substitute a metadata-only directory handle here.
     entry.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
     entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
     entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
     entry.Trustee.ptstrName = static_cast<wchar_t*>(sid);
     error = SetEntriesInAclW(1, &entry, old_acl, &acl);
-    if (error == ERROR_SUCCESS) error = SetSecurityInfo(
+    if (error == ERROR_SUCCESS) error = set_security_(
         handle, SE_FILE_OBJECT,
         DACL_SECURITY_INFORMATION, nullptr, nullptr, acl, nullptr);
     if (acl) LocalFree(acl);
@@ -238,24 +286,32 @@ struct InstalledPolicy {
     if (FAILED(result)) { policy->profile.clear(); return {}; }
     resources.push_back(exe);
     for (const auto& path : resources) {
+      if (policy->Pinned(path) != INVALID_HANDLE_VALUE) continue;
+      size_t root = policy->pins.size();
       if (!policy->PinResource(path)) return {};
-      policy->grants.push_back(path);
-      if (!policy->Grant(path, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)) return {};
+      if (!policy->Gather(root)) return {};
     }
-    if (!policy->PinResource(writable)) return {};
-    policy->grants.push_back(writable);
-    if (!policy->Grant(writable, FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE)) return {};
-    policy->writable_path = writable;
-    if (GetSecurityInfo(policy->Pinned(writable), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
-        nullptr, nullptr, nullptr, nullptr, &policy->old_label) != ERROR_SUCCESS) return {};
+    size_t data_root = policy->pins.size();
+    if (!policy->PinResource(writable, true) || !policy->Gather(data_root)) return {};
     PSECURITY_DESCRIPTOR low = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)",
         SDDL_REVISION_1, &low, nullptr)) return {};
     PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
-    TreeGuard tree;
-    bool labeled = tree.Walk(writable) && GetSecurityDescriptorSacl(low, &present, &label, &defaulted) &&
-        SetSecurityInfo(policy->Pinned(writable), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
-            nullptr, nullptr, nullptr, label) == ERROR_SUCCESS;
+    bool labeled = GetSecurityDescriptorSacl(low, &present, &label, &defaulted) != FALSE;
+    for (const auto& pin : policy->pins) {
+      policy->grants.push_back(pin.path);
+      DWORD rights = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE |
+          (pin.writable ? FILE_GENERIC_WRITE | DELETE : 0);
+      if (!policy->Grant(pin.path, rights)) { labeled = false; break; }
+      if (pin.writable) {
+        PSECURITY_DESCRIPTOR original = nullptr;
+        if (GetSecurityInfo(pin.handle, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+            nullptr, nullptr, nullptr, nullptr, &original) != ERROR_SUCCESS) { labeled = false; break; }
+        policy->labels.push_back({pin.handle, original});
+        if (policy->set_security_(pin.handle, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+            nullptr, nullptr, nullptr, label) != ERROR_SUCCESS) { labeled = false; break; }
+      }
+    }
     LocalFree(low);
     if (!labeled) return {};
     return policy;
