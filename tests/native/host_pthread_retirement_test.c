@@ -37,6 +37,7 @@ static void retired(struct target *t) {
 }
 static void finish(struct target *t) { close_owned(t->thread); close_owned(t->cap); close_owned(t->ready); close_owned(t->start); }
 static DWORD WINAPI detacher(void *p) { struct target *t=p; check(pthread_detach(t->id)==0,"detach after publication"); return 0; }
+static void counts(const char *phase) { DWORD count=0; check(GetProcessHandleCount(GetCurrentProcess(),&count),"phase handle count"); printf("RETIREMENT_COUNTS phase=%s handles=%lu owned=%d destructors=%ld\n",phase,count,owned,destructors); fflush(stdout); }
 static void contention(void) {
   for (int i=0;i<64;++i) {
     struct target t={0}; HANDLE entered=event(), release=event(), contended=event(); LONG before=destructors;
@@ -98,6 +99,7 @@ static void live_and_reuse(void) {
   puts("PASS retirement 256 concurrent-live detach join ended-detach reuse original-capability");
 }
 int main(int argc,char **argv) {
+  setvbuf(stdout,NULL,_IONBF,0);
   DWORD before,after; check(argc==1 || (argc==2 && strcmp(argv[1],"--tls-clear-failure")==0),"arguments");
   tls_failure=argc==2;
   if (tls_failure) { SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX); _set_abort_behavior(0,_WRITE_ABORT_MSG|_CALL_REPORTFAULT); }
@@ -106,8 +108,10 @@ int main(int argc,char **argv) {
     struct target t={0}; launch(&t); check(gesher_winpthread_cpu_test_control_v1(3,1)==0,"inject TLS clear failure");
     check(SetEvent(t.start),"failure start"); await(t.thread); puts("FAIL TLS-clear-failure survived"); return 9;
   }
-  contention(); unlocked_destructor(); live_join(); live_and_reuse();
+  counts("baseline"); contention(); counts("contention"); unlocked_destructor(); counts("destructor"); live_join(); counts("join"); live_and_reuse(); counts("reuse");
   check(destructors==338,"all exact destructors"); check(pthread_key_delete(key)==0,"delete key"); check(owned==0,"all fixture handles closed");
-  check(GetProcessHandleCount(GetCurrentProcess(),&after) && after<=before+8,"unchanged original handle bound");
+  check(GetProcessHandleCount(GetCurrentProcess(),&after),"final handle count");
+  printf("RETIREMENT_COUNTS phase=final before=%lu after=%lu owned=%d destructors=%ld\n",before,after,owned,destructors);
+  check(after<=before+8,"unchanged original handle bound");
   printf("PASS retirement all 338 destructors owned=0 handles=%lu/%lu\n",before,after); return 0;
 }

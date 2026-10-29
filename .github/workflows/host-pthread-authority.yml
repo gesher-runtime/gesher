@@ -147,7 +147,8 @@ jobs:
             } finally {
               if (-not $process.HasExited) { $process.Kill($true); if (-not $process.WaitForExit(5000)) { throw 'Retirement cleanup failed' } }
               $process.Dispose()
-              Get-Content (Join-Path $retirementDir "$tag.err")
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.out")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.out") }
+              if (Test-Path -LiteralPath (Join-Path $retirementDir "$tag.err")) { Get-Content -LiteralPath (Join-Path $retirementDir "$tag.err") }
             }
           }
           if ($problems.Count -gt 0) { throw ($problems -join '; ') }
