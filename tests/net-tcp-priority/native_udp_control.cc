@@ -41,8 +41,15 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
   require(lookup != nullptr, "actual native unwind function lookup");
   auto code = [&](const char* label, uintptr_t pc) {
     DWORD64 base = 0; auto* function = lookup(static_cast<DWORD64>(pc), &base, nullptr);
-    printf("TCP_PRIORITY_KNOWN_CODE name=%s mapped=%d rva=%llu begin=%lu end=%lu\n", label, function ? 1 : 0,
-        static_cast<unsigned long long>(base && pc >= base ? pc - base : 0), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
+    HMODULE image = nullptr;
+    require(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              reinterpret_cast<LPCWSTR>(pc), &image) != FALSE, "known function actual module");
+    require(!function || base == reinterpret_cast<uintptr_t>(image), "known function unwind and module bases match");
+    wchar_t path[1024]{}; const DWORD size = GetModuleFileNameW(image, path, 1024);
+    require(size > 0 && size < 1024 && pc >= reinterpret_cast<uintptr_t>(image), "bounded known function module name");
+    const wchar_t* name = wcsrchr(path, L'\\'); name = name ? name + 1 : path;
+    printf("TCP_PRIORITY_KNOWN_CODE name=%s module=%ls range_valid=%d rva=%llu begin=%lu end=%lu\n", label, name, function ? 1 : 0,
+        static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
   };
   static std::vector<uintptr_t> previous_values;
   if (mode == -1) {
@@ -119,7 +126,8 @@ void DumpOwnHandleTypes(int mode, uintptr_t caller, uintptr_t observer) {
           if (!size || size >= 1024 || pc < reinterpret_cast<uintptr_t>(image)) continue;
           const wchar_t* base = wcsrchr(path, L'\\'); base = base ? base + 1 : path;
           DWORD64 function_image = 0; auto* function = lookup(static_cast<DWORD64>(pc), &function_image, nullptr);
-          printf("TCP_PRIORITY_HANDLE_TRACE_FRAME mode=%d record=%lu frame=%d module=%ls rva=%llu begin=%lu end=%lu\n", mode, j, frame, base,
+          require(!function || function_image == reinterpret_cast<uintptr_t>(image), "trace unwind and module bases match");
+          printf("TCP_PRIORITY_HANDLE_TRACE_FRAME mode=%d record=%lu frame=%d module=%ls range_valid=%d rva=%llu begin=%lu end=%lu\n", mode, j, frame, base, function ? 1 : 0,
               static_cast<unsigned long long>(pc - reinterpret_cast<uintptr_t>(image)), function ? function->BeginAddress : 0UL, function ? function->EndAddress : 0UL);
         }
       }

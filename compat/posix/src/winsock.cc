@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <pthread.h>
 
 #include <mutex>
@@ -729,9 +730,13 @@ int AwaitConnectRetirement(const std::shared_ptr<ConnectOperation>& operation, i
     HMODULE image = nullptr;
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                           reinterpret_cast<LPCWSTR>(&ConnectOwner), &image)) {
-      printf("TCP_PRIORITY_OWNER_CODE owner_rva=%llu reaper_rva=%llu\n",
-          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectOwner) - reinterpret_cast<uintptr_t>(image)),
-          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectReaper) - reinterpret_cast<uintptr_t>(image)));
+      wchar_t path[1024]{}; const DWORD size = GetModuleFileNameW(image, path, 1024);
+      if (size > 0 && size < 1024) {
+        const wchar_t* name = wcsrchr(path, L'\\'); name = name ? name + 1 : path;
+        printf("TCP_PRIORITY_OWNER_CODE module=%ls owner_rva=%llu reaper_rva=%llu\n", name,
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectOwner) - reinterpret_cast<uintptr_t>(image)),
+            static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&ConnectReaper) - reinterpret_cast<uintptr_t>(image)));
+      }
     }
     printf("TCP_PRIORITY_OPERATION_HANDLES submitted=%llu event=%llu reaper=%llu native_retired=1\n",
         static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(operation->submitted)),

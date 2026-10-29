@@ -691,3 +691,8 @@ and known same-binary requester/observer/pthread functions, plus the exact ownin
 pthread/reaper code RVAs from private retirement evidence. It neither downloads
 an executable locally nor guesses function names from another binary's offsets.
 No completion, lifetime, callback, cleanup or strict-census behavior changes.
+
+Range telemetry also requires the unwind API's function image to equal the
+independently mapped PC module before printing ranges. Every known/trace/owner
+code row includes its module identity; an unmapped leaf is explicitly labeled
+range_valid0. Cross-module equal RVA numbers cannot establish a function match.
