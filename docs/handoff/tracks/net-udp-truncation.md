@@ -212,3 +212,16 @@ proof is claimed. The diagnostic-only successor prints exact PE role/file/hash,
 raw llvm-readobj output, complete parsed imports and missing/extra before
 retaining the same rejection policy. No allowlist entry is added. Saved full
 guard/caller requires another final source refresh; no full is dispatched.
+
+Exact diagnostic0e8583b73025c2ffb5245171f6b3ec2d41078ae5 received independent
+source peer before push. Component40797303398/attempt1 is active, rebuilding
+all roles without reusing prior archives. Integration owns the sole watch;
+no repeated unchanged red source was dispatched. Its import allowlist remains
+unchanged pending raw actual PE identities. Remote full caller still points
+to an obsolete source map and is not approved for dispatch.
+
+Current next steps: audit actual PE import output before any policy/bundle
+correction, obtain fresh complete component with192/176 rows and negatives
+on both actual ABIs and Windows versions, then refresh the immutable fixed
+map/caller and independent source peer/external authority before full. No
+inventory entry, aggregate Net4 status, main, PR, tag or release was changed.
