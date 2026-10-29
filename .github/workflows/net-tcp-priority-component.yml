@@ -1,5 +1,5 @@
 name: net-tcp-priority-component
-# Verify shared connect lifecycle after Linux reference40862384927 passed.
+# Record actual caller SO_ERROR after readiness; retain the strict ownership assertion.
 on:
   workflow_dispatch:
   push:

@@ -179,7 +179,7 @@ static void connection_controls() {
   sockaddr_storage peer{}; length = sizeof(peer);
   const int peer_rc = getpeername(client, reinterpret_cast<sockaddr*>(&peer), &length);
   const int peer_error = peer_rc < 0 ? errno : 0;
-  printf("TCP_PRIORITY_REFUSED connect_rc=%d connect_errno=%d poll_rc=%d revents=%d poll_errno=%d elapsed_ms=%lld peer_rc=%d peer_errno=%d SO_ERROR=untouched\n",
+  printf("TCP_PRIORITY_REFUSED connect_rc=%d connect_errno=%d poll_rc=%d revents=%d poll_errno=%d elapsed_ms=%lld peer_rc=%d peer_errno=%d SO_ERROR=not-read\n",
          connected, connect_error, polled, refused.revents, poll_error, elapsed, peer_rc, peer_error);
   fflush(stdout);
   require(polled == 1 && (refused.revents & (POLLERR | POLLHUP)) && !(refused.revents & POLLPRI), "refused error never priority");
@@ -189,7 +189,9 @@ static void connection_controls() {
   require(poll(&alias_error, 1, 0) == 1 && (alias_error.revents & (POLLERR | POLLHUP)) && !(alias_error.revents & POLLPRI), "refused alias error never priority");
   require(close(alias) == 0, "refused alias cleanup");
   int error = 0; length = sizeof(error);
-  require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
+  const int error_rc = getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length);
+  printf("TCP_PRIORITY_SO_ERROR rc=%d value=%d errno=%d length=%u expected=%d\n", error_rc, error, errno, static_cast<unsigned>(length), ECONNREFUSED); fflush(stdout);
+  require(error_rc == 0 && error == ECONNREFUSED, "readiness preserved SO_ERROR");
   error = -1; length = sizeof(error);
   require(getsockopt(client, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0, "only caller consumed SO_ERROR");
   pollfd consumed{client, POLLPRI, 0};

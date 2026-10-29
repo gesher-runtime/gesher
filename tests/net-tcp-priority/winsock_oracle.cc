@@ -1,4 +1,5 @@
-// Independent WinSDK characterization; never links Gesher or consumes SO_ERROR.
+// Independent WinSDK characterization; no Gesher. Error ownership controls
+// read SO_ERROR explicitly only after the named observation sequence completes.
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <mstcpip.h>
@@ -47,6 +48,69 @@ static void snapshot(SOCKET s, const char* phase, int inline_oob) {
          m, mark_error, mark, available, band_rc, band_error, band.revents);
   fflush(stdout);
 }
+static SOCKET duplicate(SOCKET s) {
+  WSAPROTOCOL_INFOW info{};
+  require(WSADuplicateSocketW(s, GetCurrentProcessId(), &info) == 0, "ownership duplicate info");
+  SOCKET copy = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &info, 0,
+                          WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
+  require(copy != INVALID_SOCKET, "ownership duplicate socket");
+  u_long nonblocking = 1; require(ioctlsocket(copy, FIONBIO, &nonblocking) == 0, "ownership duplicate nonblocking");
+  return copy;
+}
+static void error_ownership(int mode) {
+  SOCKET reserved = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  require(reserved != INVALID_SOCKET, "ownership reserved");
+  sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  require(bind(reserved, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "ownership bind");
+  int length = sizeof(address);
+  require(getsockname(reserved, reinterpret_cast<sockaddr*>(&address), &length) == 0, "ownership address");
+  SOCKET original = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  require(original != INVALID_SOCKET, "ownership socket");
+  u_long nonblocking = 1; require(ioctlsocket(original, FIONBIO, &nonblocking) == 0, "ownership nonblocking");
+  SOCKET connecting = (mode == 3 || mode == 5) ? duplicate(original) : original;
+  require(connect(connecting, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK, "ownership connect pending");
+  if (connecting != original) require(closesocket(connecting) == 0, "ownership close connecting alias");
+  const ULONGLONG start = GetTickCount64();
+  if (mode == 0) {
+    fd_set exceptions; FD_ZERO(&exceptions); FD_SET(original, &exceptions); timeval wait{5, 0};
+    require(select(0, nullptr, nullptr, &exceptions, &wait) == 1, "ownership select refusal");
+  } else {
+    if (mode == 5) {
+      int value = 0; length = sizeof(value);
+      require(getsockopt(original, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&value), &length) == 0, "ownership type");
+      length = sizeof(value);
+      require(getsockopt(original, SOL_SOCKET, SO_ACCEPTCONN, reinterpret_cast<char*>(&value), &length) == 0, "ownership listener");
+      sockaddr_storage peer{}; length = sizeof(peer);
+      int rc = getpeername(original, reinterpret_cast<sockaddr*>(&peer), &length);
+      printf("WINDOWS_ERROR mode=%d phase=pre-peer rc=%d error=%d\n", mode, rc, rc == SOCKET_ERROR ? WSAGetLastError() : 0);
+    }
+    WSAPOLLFD p{}; p.fd = original; p.events = POLLRDBAND | POLLWRNORM;
+    int rc = WSAPoll(&p, 1, 5000);
+    printf("WINDOWS_ERROR mode=%d phase=poll rc=%d revents=%d error=%d elapsed_ms=%llu\n", mode, rc, p.revents, rc == SOCKET_ERROR ? WSAGetLastError() : 0, GetTickCount64() - start);
+    require(rc == 1, "ownership poll refusal");
+  }
+  if (mode == 2 || mode == 5) {
+    sockaddr_storage peer{}; length = sizeof(peer);
+    int rc = getpeername(original, reinterpret_cast<sockaddr*>(&peer), &length);
+    printf("WINDOWS_ERROR mode=%d phase=post-peer rc=%d error=%d\n", mode, rc, rc == SOCKET_ERROR ? WSAGetLastError() : 0);
+  }
+  if (mode == 4 || mode == 5) {
+    SOCKET alias = duplicate(original);
+    WSAPOLLFD p{}; p.fd = alias; p.events = POLLRDBAND | POLLWRNORM;
+    int rc = WSAPoll(&p, 1, 0);
+    printf("WINDOWS_ERROR mode=%d phase=alias-poll rc=%d revents=%d error=%d\n", mode, rc, p.revents, rc == SOCKET_ERROR ? WSAGetLastError() : 0);
+    require(closesocket(alias) == 0, "ownership late alias close");
+  }
+  int first = -1; length = sizeof(first);
+  int first_rc = getsockopt(original, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&first), &length);
+  int first_error = first_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
+  int second = -1; length = sizeof(second);
+  int second_rc = getsockopt(original, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&second), &length);
+  printf("WINDOWS_ERROR mode=%d phase=caller-consumes first_rc=%d value=%d error=%d second_rc=%d second=%d elapsed_ms=%llu\n", mode, first_rc, first, first_error, second_rc, second, GetTickCount64() - start);
+  fflush(stdout);
+  require(first_rc == 0 && second_rc == 0, "ownership explicit caller getsockopt");
+  require(closesocket(original) == 0 && closesocket(reserved) == 0, "ownership cleanup");
+}
 int main() {
   WSADATA data{};
   require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "startup");
@@ -54,7 +118,7 @@ int main() {
   require(fresh != INVALID_SOCKET, "fresh stream");
   WSAPOLLFD initial{}; initial.fd = fresh; initial.events = POLLRDBAND | POLLWRNORM;
   int initial_rc = WSAPoll(&initial, 1, 0);
-  printf("WINDOWS_URG fresh-stream events=%d rc=%d revents=%d SO_ERROR=untouched\n", initial.events, initial_rc, initial.revents);
+  printf("WINDOWS_URG fresh-stream events=%d rc=%d revents=%d SO_ERROR=not-read\n", initial.events, initial_rc, initial.revents);
   require(closesocket(fresh) == 0, "fresh stream cleanup");
   for (int inline_oob = 0; inline_oob <= 4; ++inline_oob) {
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -159,7 +223,7 @@ int main() {
   WSAPOLLFD refused_band{}; refused_band.fd = failed; refused_band.events = POLLRDBAND;
   int refused_rc = WSAPoll(&refused_band, 1, 5000);
   int refused_error = refused_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
-  printf("WINDOWS_URG refused-band rc=%d revents=%d error=%d elapsed_ms=%llu SO_ERROR=untouched\n",
+  printf("WINDOWS_URG refused-band rc=%d revents=%d error=%d elapsed_ms=%llu SO_ERROR=not-read\n",
          refused_rc, refused_band.revents, refused_error, GetTickCount64() - poll_start);
   fflush(stdout);
   fd_set exceptions; FD_ZERO(&exceptions); FD_SET(failed, &exceptions); timeval wait{5, 0};
@@ -167,16 +231,17 @@ int main() {
   sockaddr_storage peer{}; length = sizeof(peer);
   int peer_rc = getpeername(failed, reinterpret_cast<sockaddr*>(&peer), &length);
   int peer_error = peer_rc == SOCKET_ERROR ? WSAGetLastError() : 0;
-  printf("WINDOWS_URG refused-connect except=1 peer_rc=%d peer_error=%d SO_ERROR=untouched\n", peer_rc, peer_error);
+  printf("WINDOWS_URG refused-connect except=1 peer_rc=%d peer_error=%d SO_ERROR=not-read\n", peer_rc, peer_error);
   require(peer_rc == SOCKET_ERROR && peer_error == WSAENOTCONN, "refused is not connected");
   const SHORT refused_interests[] = {POLLRDBAND, POLLRDBAND | POLLRDNORM, POLLRDBAND | POLLWRNORM, POLLRDBAND | POLLRDNORM | POLLWRNORM};
   for (SHORT events : refused_interests) {
     WSAPOLLFD observed{}; observed.fd = failed; observed.events = events;
     int rc = WSAPoll(&observed, 1, 0);
     int error = rc == SOCKET_ERROR ? WSAGetLastError() : 0;
-    printf("WINDOWS_URG refused-complete events=%d rc=%d revents=%d error=%d SO_ERROR=untouched\n", events, rc, observed.revents, error);
+    printf("WINDOWS_URG refused-complete events=%d rc=%d revents=%d error=%d SO_ERROR=not-read\n", events, rc, observed.revents, error);
   }
   require(closesocket(failed) == 0 && closesocket(reserved) == 0, "refused cleanup");
+  for (int mode = 0; mode < 6; ++mode) error_ownership(mode);
   require(WSACleanup() == 0, "cleanup");
   puts("PASS Windows TCP urgent characterization");
 }
