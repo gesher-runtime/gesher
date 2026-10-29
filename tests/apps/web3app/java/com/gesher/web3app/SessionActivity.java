@@ -24,7 +24,10 @@ public class SessionActivity extends Activity {
             Class<?> cls = Class.forName("com.gesher.app.webview.WebView2Host");
             Class<?> client = Class.forName("com.gesher.app.webview.WebView2Host$Client");
             CountDownLatch ready = new CountDownLatch(1), result = new CountDownLatch(1);
-            CountDownLatch reentrant = new CountDownLatch(1);
+            CountDownLatch reentrant = new CountDownLatch(1), timeout = new CountDownLatch(1),
+                    lateMarker = new CountDownLatch(1);
+            AtomicReference<String> latePayload = new AtomicReference<>("");
+            AtomicInteger timeoutCount = new AtomicInteger(), timeoutStatus = new AtomicInteger();
             AtomicReference<Object> hostRef = new AtomicReference<>();
             AtomicReference<Boolean> closeResult = new AtomicReference<>(false);
             AtomicInteger count = new AtomicInteger(), status = new AtomicInteger(-1);
@@ -39,6 +42,15 @@ public class SessionActivity extends Activity {
                                 status.set((Integer) args[2]);
                                 payload.set((String) args[3]);
                                 result.countDown();
+                            }
+                            if (type == 30 && (Long) args[1] == 2L) {
+                                timeoutCount.incrementAndGet();
+                                timeoutStatus.set((Integer) args[2]);
+                                timeout.countDown();
+                            }
+                            if (type == 30 && (Long) args[1] == 6L) {
+                                latePayload.set((String) args[3]);
+                                lateMarker.countDown();
                             }
                             if (type == 30 && (Long) args[1] == 3L) {
                                 try {
@@ -64,16 +76,29 @@ public class SessionActivity extends Activity {
                     "{\"expression\":\"6*7\",\"returnByValue\":true}", 5000);
             boolean completed = result.await(10, TimeUnit.SECONDS);
             int duplicate = (Integer) submit.invoke(host, 1L, "", "Runtime.enable", "{}", 5000);
-            int invalid = (Integer) submit.invoke(host, 2L, "", "Runtime.enable", "{}", 0);
+            int invalid = (Integer) submit.invoke(host, 5L, "", "Runtime.enable", "{}", 0);
+            int delayed = (Integer) submit.invoke(host, 2L, "", "Runtime.evaluate",
+                    "{\"expression\":\"new Promise(r => setTimeout(() => {window.__sessionLate=7; r(7)}, 1000))\","
+                            + "\"awaitPromise\":true,\"returnByValue\":true}", 100);
+            boolean timedOut = timeout.await(5, TimeUnit.SECONDS);
+            Thread.sleep(1500); // let the real late CDP completion arrive before checking count
+            int marker = (Integer) submit.invoke(host, 6L, "", "Runtime.evaluate",
+                    "{\"expression\":\"window.__sessionLate\",\"returnByValue\":true}", 5000);
+            boolean markerObserved = lateMarker.await(5, TimeUnit.SECONDS)
+                    && latePayload.get().contains("\"value\":7");
             int third = (Integer) submit.invoke(host, 3L, "", "Runtime.enable", "{}", 5000);
             boolean closed = reentrant.await(10, TimeUnit.SECONDS) && closeResult.get();
             int afterClose = (Integer) submit.invoke(host, 4L, "", "Runtime.enable", "{}", 5000);
             passed = accepted == 0 && completed && status.get() == 0 && count.get() == 1
                     && payload.get().contains("\"value\":42") && duplicate == -3 && invalid == -2
+                    && delayed == 0 && timedOut && timeoutStatus.get() == 0x800705b4
+                    && timeoutCount.get() == 1 && marker == 0 && markerObserved
                     && third == 0 && closed && afterClose == -1;
             Web3.log("session request accepted=" + accepted + " completed=" + completed
                     + " hresult=" + status.get() + " count=" + count.get()
                     + " duplicate=" + duplicate + " invalid=" + invalid
+                    + " timeout=" + timedOut + " timeoutHresult=" + timeoutStatus.get()
+                    + " timeoutCount=" + timeoutCount.get() + " marker=" + markerObserved
                     + " reentrant=" + closed + " afterClose=" + afterClose);
         } catch (Throwable e) {
             Web3.log("session exception " + e);
