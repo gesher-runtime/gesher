@@ -41,6 +41,17 @@ try {
   & $compiler /nologo /target:exe "/out:$worker" $workerSource
   if ($LASTEXITCODE -ne 0) { throw 'Controlled worker compilation failed' }
   Write-Host "TSF_CONTROL_COMPILER path=$compiler sha256=$((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()) worker_sha256=$((Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant())"
+  # The identical executable and arguments can actually run outside the limited
+  # job; a missing executable or broken command must not masquerade as denial.
+  $positiveDir = Join-Path $directory 'limit-positive'
+  [void][IO.Directory]::CreateDirectory($positiveDir)
+  try {
+    [TsfJobSupervisor]::TestLimitPositive($worker, $positiveDir)
+    Write-Host 'TSF_LIMIT_POSITIVE child=executed marker=present'
+  } finally {
+    Remove-Item -LiteralPath (Join-Path $positiveDir 'limit-child-ran') -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $positiveDir
+  }
   foreach ($case in @('normal','exit23','hang','descendant','race','unknown','orphan','limit','output','terminate-denied','query-denied')) {
     $mode = if ($case -in @('terminate-denied','query-denied')) { 'hang' } else { $case }
     $fault = if ($case -in @('terminate-denied','query-denied')) { $case } else { '' }

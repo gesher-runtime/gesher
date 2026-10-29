@@ -66,6 +66,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attr,IntPtr value,UIntPtr size,IntPtr previous,IntPtr returned);
   [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SIX si,out PI pi);
+  [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode,EntryPoint="CreateProcessW")] static extern bool CreateProcessSimple(string app,StringBuilder command,IntPtr psa,IntPtr tsa,bool inherit,uint flags,IntPtr env,string cwd,ref SI si,out PI pi);
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool DuplicateHandle(IntPtr source,IntPtr handle,IntPtr target,out IntPtr copy,uint access,bool inherit,uint options);
 
@@ -169,6 +170,20 @@ public static class TsfJobSupervisor {
       try { Parent(restricted,expectedPid); return false; }
       catch(IOException e) { return e.Message.Contains("NTSTATUS=0xC0000022"); }
     } finally { Check(CloseHandle(restricted),"Close parent-query denial handle"); }
+  }
+  public static void TestLimitPositive(string executable,string protocol) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    SI si=new SI(); si.size=Marshal.SizeOf(typeof(SI)); PI child;
+    Check(CreateProcessSimple(executable,new StringBuilder("\""+executable+"\" limit-child \""+protocol+"\""),IntPtr.Zero,IntPtr.Zero,false,0x8,IntPtr.Zero,null,ref si,out child),"Positive child creation");
+    try {
+      if(WaitForSingleObject(child.process,5000)!=WAIT_OBJECT_0) {
+        Check(TerminateProcess(child.process,124),"Terminate positive child");
+        if(WaitForSingleObject(child.process,5000)!=WAIT_OBJECT_0) throw new IOException("Positive child cleanup unproved");
+        throw new IOException("Positive child wait failed");
+      }
+      uint code; Check(GetExitCodeProcess(child.process,out code),"Positive child exit");
+      if(code!=96 || !File.Exists(Path.Combine(protocol,"limit-child-ran"))) throw new IOException("Positive child did not execute");
+    } finally { Check(CloseHandle(child.thread),"Close positive thread"); Check(CloseHandle(child.process),"Close positive process"); }
   }
   static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable,string raceProtocol) {
     var ids=Pids(job);
