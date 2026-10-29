@@ -7,6 +7,25 @@ foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJo
   Write-Host "TSF_CONTROLLER_SOURCE source=$env:GITHUB_SHA path=$source blob=$blob sha256=$((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant())"
 }
 Add-Type -Path tools/windows4/TsfJobSupervisor.cs
+# The PID is absent from a subsequent process census, but the retained
+# handle still refers to the exact exited child and must expose its parent.
+$start = [Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /c exit 0')
+$start.UseShellExecute = $false
+$raceChild = [Diagnostics.Process]::Start($start)
+try {
+  $raceHandle = $raceChild.Handle
+  $racePid = [uint32]$raceChild.Id
+  if (-not $raceChild.WaitForExit(5000) -or $raceChild.ExitCode -ne 0) { throw 'Parent-query control child did not exit normally' }
+  if ([TsfJobSupervisor]::TestRetainedParent($raceHandle, $racePid) -ne [uint32]$PID) { throw 'Retained exited child parent mismatch' }
+  if (-not [TsfJobSupervisor]::TestDeniedParent($raceHandle, $racePid)) { throw 'Parent query accepted a denied handle' }
+  $rejected = $false
+  try { [void][TsfJobSupervisor]::TestRetainedParent($raceHandle, ($racePid + 1)) } catch { $rejected = $true }
+  if (-not $rejected) { throw 'Wrong retained PID accepted' }
+  Write-Host "TSF_RETAINED_PARENT exited=$racePid expected_parent=$PID denied=actual wrong_pid=rejected"
+} finally {
+  if (-not $raceChild.HasExited) { $raceChild.Kill(); if (-not $raceChild.WaitForExit(5000)) { throw 'Control child cleanup unproved' } }
+  $raceChild.Dispose()
+}
 $directory = Join-Path $env:RUNNER_TEMP ('tsf-worker-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($directory)
 $worker = Join-Path $directory 'TsfJobWorker.exe'

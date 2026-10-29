@@ -27,6 +27,9 @@ public static class TsfJobSupervisor {
   [StructLayout(LayoutKind.Sequential)] struct Accounting {
     public long user,kernel,periodUser,periodKernel; public uint faults,total,active,terminated;
   }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessBasicInfo {
+    public IntPtr reserved1, peb, reserved2a, reserved2b, processId, parentId;
+  }
   [StructLayout(LayoutKind.Sequential)] struct ThreadEntry {
     public uint size,usage,id,pid; public int priority,delta; public uint flags;
   }
@@ -53,6 +56,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool Thread32Next(IntPtr snapshot,ref ThreadEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,EntryPoint="QueryInformationJobObject")] static extern bool QueryPidList(IntPtr job,int cls,IntPtr list,uint size,IntPtr length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process,int infoClass,out ProcessBasicInfo info,uint length,out uint returned);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string path,uint access,uint share,ref SA sa,uint creation,uint flags,IntPtr template);
@@ -123,14 +127,34 @@ public static class TsfJobSupervisor {
       return result;
     } finally { Marshal.FreeHGlobal(list); }
   }
-  static uint Parent(uint pid,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own) {
-    IntPtr snapshot=own(CreateToolhelp32Snapshot(2,0));
+  // Query the kernel object bound by the retained handle, not a later PID
+  // snapshot: an exiting child can disappear from Toolhelp after capture.
+  static uint Parent(IntPtr process,uint expectedPid) {
+    ProcessBasicInfo info; uint returned;
+    int status=NtQueryInformationProcess(process,0,out info,(uint)Marshal.SizeOf(typeof(ProcessBasicInfo)),out returned);
+    if(status<0) throw new IOException("Retained process parent query NTSTATUS=0x"+unchecked((uint)status).ToString("X8"));
+    if(returned!=Marshal.SizeOf(typeof(ProcessBasicInfo)) || info.processId.ToInt64()!=expectedPid)
+      throw new IOException("Retained process parent identity mismatch");
+    long parent=info.parentId.ToInt64();
+    if(parent<=0 || parent>UInt32.MaxValue) throw new IOException("Invalid retained process parent");
+    return (uint)parent;
+  }
+  // Called only by CI controlled fixture with an actual retained, already
+  // signaled child handle; production classification still checks image, job,
+  // parent identity and creation-time ordering.
+  public static uint TestRetainedParent(IntPtr process,uint expectedPid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    if(WaitForSingleObject(process,0)!=WAIT_OBJECT_0) throw new IOException("Test child is not signaled");
+    return Parent(process,expectedPid);
+  }
+  public static bool TestDeniedParent(IntPtr process,uint expectedPid) {
+    if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
+    IntPtr restricted;
+    Check(DuplicateHandle(GetCurrentProcess(),process,GetCurrentProcess(),out restricted,0x100000,false,0),"Duplicate parent-query denial handle");
     try {
-      ProcessEntry e=new ProcessEntry(); e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry));
-      Check(Process32First(snapshot,ref e),"Process32First");
-      do { if(e.pid==pid) return e.parent; e.size=(uint)Marshal.SizeOf(typeof(ProcessEntry)); } while(Process32Next(snapshot,ref e));
-      throw new IOException("Live job PID missing from parent census: "+pid);
-    } finally { if(!CloseOwned(owned,snapshot,r)) throw new IOException("Close process census failed"); }
+      try { Parent(restricted,expectedPid); return false; }
+      catch(IOException e) { return e.Message.Contains("NTSTATUS=0xC0000022"); }
+    } finally { Check(CloseHandle(restricted),"Close parent-query denial handle"); }
   }
   static void Census(IntPtr job,Result r,List<IntPtr> owned,Func<IntPtr,IntPtr> own,string executable) {
     var ids=Pids(job);
@@ -146,7 +170,7 @@ public static class TsfJobSupervisor {
       long exit,kernel,user; Check(GetProcessTimes(p.Handle,out p.Birth,out exit,out kernel,out user),"Job identity birth");
       var image=new StringBuilder(32768); uint length=(uint)image.Capacity;
       Check(QueryFullProcessImageName(p.Handle,0,image,ref length),"Live job identity image"); p.Image=image.ToString();
-      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member; p.Parent=Parent(pid,r,owned,own);
+      bool member; Check(IsProcessInJob(p.Handle,job,out member),"Job identity membership"); p.Member=member; p.Parent=Parent(p.Handle,pid);
       Identity parent=r.Processes.Find(q=>q.Pid==p.Parent && (q.Role=="root" || q.Role=="descendant"));
       if(pid==r.DescendantPid && parent!=null && parent.Role=="root" && p.Birth>=parent.Birth && String.Equals(p.Image,executable,StringComparison.OrdinalIgnoreCase)) p.Role="descendant";
       else if(parent!=null && p.Birth>=parent.Birth && !r.Processes.Exists(q=>q.Role=="console-host" && q.Parent==p.Parent) && String.Equals(p.Image,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"conhost.exe"),StringComparison.OrdinalIgnoreCase)) p.Role="console-host";
