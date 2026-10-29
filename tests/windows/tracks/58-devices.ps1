@@ -186,6 +186,9 @@ function LegacyCameraCheck([string] $Mode, [string] $Out, [int] $Code) {
 
 # Geocoder: Windows.Services.Maps (MapLocationFinder) without a map service key. The app's
 # Geocoder stays absent (isPresent false, IOException) while this is what Windows answers.
+. (Join-Path $PSScriptRoot '../helpers/geocoder-compile.ps1')
+try {
+New-GeocoderProbeAssembly
 $geoScript = Join-Path $PSScriptRoot '../helpers/geocoder-provider-probe.ps1'
 # Bound activation/COM startup as well as the asynchronous wait. Reading Result
 # after a false Wait used to block until the entire test job timed out.
@@ -196,6 +199,8 @@ if ($LASTEXITCODE -eq 0 -and $geo -match 'status: ([A-Za-z]+)') {
   Write-Host "FAIL  devices: geocoder: Windows.Services.Maps did not answer: $geo"
   $script:failed++
 }
+
+} finally { Remove-GeocoderProbeAssembly }
 
 # Single process: the services in the app's own process (gesher-app --single-process).
 $out = DevRun "$Dir/dalvikvm.exe" ($dvmDev + 'com.gesher.app.Main', (NoDrive "$Dir/devices.apk")) 400

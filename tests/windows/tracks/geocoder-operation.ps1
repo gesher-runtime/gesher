@@ -81,14 +81,33 @@ function Get-GeocoderSourceSha256([string] $Path) {
   }
 }
 
-# CI receipt for Windows PowerShell's .NET Framework CodeDOM compilation.
+# Runtime loads the exact producer bytes. Never invoke CodeDOM in an owned
+# runtime child; the unchanged supervisor must reject compiler descendants.
 function Import-GeocoderProbeType([string] $Source) {
-  $compiler = Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'csc.exe'
-  if (-not [IO.File]::Exists($compiler)) { throw 'Expected .NET Framework C# compiler' }
-  Add-Type -AssemblyName Microsoft.CSharp
-  $provider = [Microsoft.CSharp.CSharpCodeProvider]::new()
-  try {
-    Write-Host "WINRT_COMPILER source_sha=$env:GITHUB_SHA source=$Source source_sha256=$(Get-GeocoderSourceSha256 $Source) compiler=$compiler compiler_sha256=$(Get-GeocoderSourceSha256 $compiler) compiler_version=$([Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion) provider=$($provider.GetType().Assembly.FullName) ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
-  } finally { $provider.Dispose() }
-  Add-Type -Path $Source
+  $manifest = $env:GESHER_GEOCODER_RECEIPT
+  if (-not $manifest) { throw 'Compiled helper receipt absent' }
+  $manifestBytes = [IO.File]::ReadAllBytes($manifest)
+  $manifestHasher = [Security.Cryptography.SHA256]::Create()
+  try { $manifestHash = [BitConverter]::ToString($manifestHasher.ComputeHash($manifestBytes)).Replace('-', '').ToLowerInvariant() }
+  finally { $manifestHasher.Dispose() }
+  if ($manifestHash -cne $env:GESHER_GEOCODER_RECEIPT_SHA256) { throw 'Compiled helper receipt mismatch' }
+  Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+  $receipt = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
+  if ($receipt.Repository -cne $env:GITHUB_REPOSITORY -or $receipt.RunId -cne $env:GITHUB_RUN_ID -or $receipt.RunAttempt -cne $env:GITHUB_RUN_ATTEMPT -or $receipt.Role -cne 'geocoder-helper-compiler') { throw 'Compiled helper producer context mismatch' }
+  if ($receipt.SourceRevision -cne $env:GITHUB_SHA) { throw 'Compiled helper revision mismatch' }
+  $sourcePath = [IO.Path]::GetFullPath($Source)
+  $entry = @($receipt.Sources | Where-Object { $_.Path -ceq $sourcePath })
+  if ($entry.Count -ne 1 -or $entry[0].Sha256 -cne (Get-GeocoderSourceSha256 $sourcePath)) { throw 'Compiled helper source mismatch' }
+  foreach ($dependency in @($receipt.Sources) + @($receipt.References)) {
+    if ((Get-GeocoderSourceSha256 $dependency.Path) -cne $dependency.Sha256) { throw 'Compiled helper input mismatch' }
+  }
+  if ((Get-GeocoderSourceSha256 $receipt.Compiler) -cne $receipt.CompilerSha256 -or [Diagnostics.FileVersionInfo]::GetVersionInfo($receipt.Compiler).FileVersion -cne $receipt.CompilerVersion) { throw 'Compiled helper compiler mismatch' }
+  # Hash and load the SAME byte array, avoiding a check/load file race.
+  $bytes = [IO.File]::ReadAllBytes($receipt.Output)
+  $hasher = [Security.Cryptography.SHA256]::Create()
+  try { $actual = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant() }
+  finally { $hasher.Dispose() }
+  if ($actual -cne $receipt.OutputSha256) { throw 'Compiled helper DLL mismatch' }
+  $assembly = [Reflection.Assembly]::Load($bytes)
+  Write-Host "WINRT_RUNTIME_LOAD source_sha=$env:GITHUB_SHA dll_sha256=$actual assembly=$($assembly.FullName) receipt_sha256=$env:GESHER_GEOCODER_RECEIPT_SHA256 compilation=False ps=$($PSVersionTable.PSVersion) clr=$([Environment]::Version)"
 }
