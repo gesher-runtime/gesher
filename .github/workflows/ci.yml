@@ -377,6 +377,7 @@ jobs:
         with:
           sparse-checkout: |
             tools/package
+            tools/net-udp
             tools/ci
             tools/surface
             tools/web3
@@ -834,6 +835,7 @@ jobs:
             tools/boot-image
             tools/web3
             tools/package
+            tools/net-udp
             tools/windows4
             probes/native3/unicode
 
