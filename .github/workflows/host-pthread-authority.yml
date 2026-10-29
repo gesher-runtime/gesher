@@ -1,4 +1,4 @@
-# Initial compiler correction preserves -Werror; no unchanged red retry.
+# Correct the real libc++ Win32 native_handle oracle without handle/ID casts.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
