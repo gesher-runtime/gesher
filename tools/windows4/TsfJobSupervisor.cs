@@ -229,7 +229,7 @@ public static class TsfJobSupervisor {
   // mainMs is fixed at 45000 for the real probe; shorter only in controlled CI tests.
   public static Result Run(string executable,string arguments,int mainMs,string fault) {
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("CI only");
-    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied")) throw new ArgumentException();
+    if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
     IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero;
@@ -238,6 +238,7 @@ public static class TsfJobSupervisor {
     bool limited=arguments=="limit";
     bool controlled=arguments=="normal" || arguments=="exit23" || arguments=="hang" || arguments=="descendant" || arguments=="unknown" || arguments=="race" || arguments=="orphan" || arguments=="output" || limited;
     limited=limited || !controlled;
+    if(fault=="diag-detached-unlimited" || fault=="diag-console-unlimited") limited=false;
     Stopwatch main=Stopwatch.StartNew(); Stopwatch cleanup=null;
     Func<IntPtr,IntPtr> own=h=> { if(!Valid(h)) throw Native("Create owned handle"); owned.Add(h); r.OwnedHandles++; return h; };
     try {
@@ -255,7 +256,7 @@ public static class TsfJobSupervisor {
       Extended actual; Check(QueryExtended(job,9,out actual,(uint)Marshal.SizeOf(typeof(Extended)),IntPtr.Zero),"Read job limits");
       if(limited && ((actual.basic.flags&0x8)==0 || actual.basic.active!=1)) throw new IOException("Active process limit not enforced");
       r.ActiveProcessLimit=actual.basic.active;
-      if(fault!="") {
+      if(fault=="terminate-denied" || fault=="query-denied") {
         IntPtr copy; Check(DuplicateHandle(GetCurrentProcess(),job,GetCurrentProcess(),out copy,fault=="terminate-denied"?4u:1u,false,0),"Duplicate restricted job handle");
         denied=own(copy); if(fault=="query-denied") query=denied;
       }
@@ -268,7 +269,9 @@ public static class TsfJobSupervisor {
       Check(UpdateProcThreadAttribute(attrs,0,new IntPtr(0x20002),handles,new UIntPtr((uint)(3*IntPtr.Size)),IntPtr.Zero,IntPtr.Zero),"Whitelist inherited handles");
       SIX start=new SIX(); start.si.size=Marshal.SizeOf(typeof(SIX)); start.si.flags=0x100; start.si.input=input; start.si.output=output; start.si.error=error; start.attributes=attrs;
       PI pi; executable=Path.GetFullPath(executable);
-      uint creation=limited?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
+      bool detached=limited || fault=="diag-detached-unlimited";
+      if(fault=="diag-console-limited") detached=false;
+      uint creation=detached?0x0008000cu:0x08080004u; // Detached when constrained; controlled descendants retain their original path.
       Check(CreateProcess(executable,new StringBuilder("\""+executable+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,creation,IntPtr.Zero,Path.GetDirectoryName(executable),ref start,out pi),"Create suspended child");
       root=own(pi.process); thread=own(pi.thread); created=true; r.Pid=pi.pid; r.RootHandleValue=root.ToInt64();
       long exit,kernel,user; Check(GetProcessTimes(root,out r.Birth,out exit,out kernel,out user),"Capture root birth");

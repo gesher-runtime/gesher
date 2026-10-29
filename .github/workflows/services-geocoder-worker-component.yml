@@ -18,7 +18,7 @@ jobs:
         shell: pwsh
         run: |
           $expected = @{
-            'tools/windows4/TsfJobSupervisor.cs' = 'c0de69395b7ed5176e75805744db28de2f6e2e1e'
+            'tools/windows4/TsfJobSupervisor.cs' = '042c47d32688923f06c0032bd36a828b141958c4'
             'tools/windows4/TsfJobWorker.cs' = 'e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
             'tools/windows4/test-tsf-job-supervisor.ps1' = '11229b16ded45970e6b9102fdb44ba8ae8e076f4'
             'tools/windows4/run-tsf-component.ps1' = '4474bae13d5fe73038e8569be454753cdb21df43'
@@ -37,6 +37,9 @@ jobs:
       - name: Qualify shared job controller
         shell: pwsh
         run: ./tools/windows4/test-tsf-job-supervisor.ps1
+      - name: Characterize PowerShell process startup
+        shell: pwsh
+        run: ./tools/windows4/diagnose-pwsh-job.ps1
       - name: Exercise owned worker and child containment
         shell: pwsh
         run: ./tests/windows/tracks/geocoder-operation-fixture.ps1
