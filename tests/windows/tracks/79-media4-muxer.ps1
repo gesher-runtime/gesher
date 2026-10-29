@@ -74,6 +74,15 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   foreach ($line in @($verification.Text -split "`r?`n" | Where-Object { $_ })) {
     Write-Host "INFO  media4 muxer ($Abi; $Mode): $line"
   }
+  $cueAudit = InvokeMuxer (Get-Command python).Source @(
+    "$PSScriptRoot/../../media/ndk-muxer/verify-webm-cues.py", (NoDrive $Output)) @{} 30
+  Write-Host $cueAudit.Text
+  if ($cueAudit.Code -eq 0 -and $cueAudit.Text.Contains('webm cue verification: 0 failures')) {
+    Write-Host "PASS  media4 muxer ($Abi; $Mode): WebM cue points address video clusters"
+  } else {
+    Write-Host "FAIL  media4 muxer ($Abi; $Mode): WebM cue structure exit $($cueAudit.Code)"
+    $script:failed++
+  }
   $decodedOgg = [regex]::Match($verification.Text, 'audio trace: [^\r\n]*opus-interleaved\.ogg; [^\r\n]*frames (\d+)')
   $decodedFrames = if ($decodedOgg.Success) { $decodedOgg.Groups[1].Value } else { '-1' }
   $packetAudit = InvokeMuxer (Get-Command python).Source @(
