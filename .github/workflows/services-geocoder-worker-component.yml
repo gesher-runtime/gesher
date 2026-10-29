@@ -50,8 +50,9 @@ jobs:
             'tests/windows/tracks/geocoder-winrt-supplier.cs' = '11da9f04efdbb98de30006b0c26e169bec6d8b19'
             'tests/windows/helpers/geocoder-provider-probe.ps1' = 'd02fc316ccaca1ac856eaeae64df6e4053da569c'
             'tests/windows/helpers/geocoder-winrt-fixture.ps1' = 'cbde2ac48b603f3cc12e544a3e42d744d9b58864'
-            'tests/windows/helpers/geocoder-roslyn-worker.ps1' = 'ac718dc7748281dd2fd06d714fca6953af9d2165'
-            'tests/windows/helpers/geocoder-compile.ps1' = 'b0f94c18b90e27c7cb69e62eb8990301cfc8b7ae'
+            'tests/windows/helpers/geocoder-roslyn-worker.ps1' = '31491e2cb20bf72e78c49476c9ab874649fee6c9'
+            'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'
+            'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
             'tests/windows/tracks/58-devices.ps1' = '83b8a8455fb77ee8ca2bda7f10afbbd34c13cc78'
           }

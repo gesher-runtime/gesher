@@ -6,7 +6,10 @@ if ((Get-GeocoderSourceSha256 $inputPath) -cne $env:GESHER_GEOCODER_COMPILER_INP
 $config = [IO.File]::ReadAllText($inputPath) | ConvertFrom-Json
 if ($config.SourceRevision -cne $env:GITHUB_SHA -or $config.RunId -cne $env:GITHUB_RUN_ID -or $config.RunAttempt -cne $env:GITHUB_RUN_ATTEMPT) { throw 'Compiler context mismatch' }
 if ((Get-GeocoderSourceSha256 $PSCommandPath) -cne $config.WorkerSha256 -or [IO.Path]::GetFullPath($PSCommandPath) -cne $config.Worker) { throw 'Compiler worker identity mismatch' }
-if ($PSVersionTable.PSVersion.ToString() -cne '7.6.9') { throw 'Unpinned compiler host' }
+Write-Host "WINRT_COMPILER_HOST version=$($PSVersionTable.PSVersion) home=$PSHOME clr=$([Environment]::Version)"
+if ($PSVersionTable.PSVersion.ToString() -cne '7.6.9' -or $config.PowerShell -cne '7.6.9') { throw 'Unpinned compiler host' }
+$executable = [IO.Path]::GetFullPath((Join-Path $PSHOME 'pwsh.exe'))
+if ($executable -cne $config.Compiler -or (Get-GeocoderSourceSha256 $executable) -cne $config.CompilerSha256) { throw 'Compiler host identity mismatch' }
 foreach ($dependency in @($config.Compilers) + @($config.Sources) + @($config.References)) {
   if ((Get-GeocoderSourceSha256 $dependency.Path) -cne $dependency.Sha256) { throw 'Compiler dependency mismatch' }
 }

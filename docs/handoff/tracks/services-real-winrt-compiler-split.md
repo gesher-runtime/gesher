@@ -1,5 +1,24 @@
 # Services actual WinRT compiler/runtime split
 
+## Private compiler host correction (pending CI)
+
+The 408009 Windows-2025 host-pin failure is corrected by acquiring the same
+official PowerShell 7.6.9 portable x64 ZIP on both runners, without consulting
+or changing the installed host. Official release 423544544 / asset 675639558
+publishes SHA256 ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d,
+also independently listed by the release's hashes.sha256. This fixed checksum
+and exact 109620855-byte length are enforced before extraction. Network reads
+have a 120-second deadline and byte bound; extraction checks paths, duplicates,
+links, entry count and expanded size. A unique RUNNER_TEMP tool directory is
+removed in producer cleanup, including partial acquisition failures. It never
+enters PATH or shipping artifacts. The private pwsh remains a separately owned
+supervisor root; runtime remains Windows PowerShell 5 with unchanged WinRT,
+typed result, source/controller identities, descendant rules and all controls.
+Exact original Roslyn DLL hashes and compiler APIs/options remain mandatory.
+Both orchestrator and actual private host versions are printed, and the receipt
+adds package provenance. Local verification is source/parser/diff only. Fresh
+both-Windows component proof and integration union/full remain pending.
+
 ## Current correction: owned in-process Roslyn
 
 40799322272 at af5883f3 is terminal red on both runners: the direct Framework
