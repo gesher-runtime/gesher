@@ -9,6 +9,7 @@
 #include <cwctype>
 #include <cwchar>
 #include <cstddef>
+#include <cstdio>
 #include <array>
 #include <atomic>
 #include <string>
@@ -247,19 +248,25 @@ struct InstalledPolicy {
   static std::shared_ptr<InstalledPolicy> Create(const std::u16string& package,
       const std::u16string& install, int uid, const std::u16string& executable,
       const std::vector<std::u16string>& read, const std::u16string& data) {
+    // Report a bounded stage without resource paths or identity data. Some
+    // validation failures have no Win32 error; zero means unavailable.
+    auto failed = [](const char* stage, unsigned long error = 0) {
+      std::fprintf(stderr, "installed guest policy: stage=%s error=%lu\n", stage, error);
+      return std::shared_ptr<InstalledPolicy>{};
+    };
     launch_control::Request identity;
     if (package != kSelectedPackage || uid < 10000 || uid > 19999 ||
-        !launch_control::Generation(install, identity.generation) || read.empty()) return {};
+        !launch_control::Generation(install, identity.generation) || read.empty()) return failed("identity");
     RetryRetired();
     auto policy = std::shared_ptr<InstalledPolicy>(new InstalledPolicy(), Release);
     for (auto& slot : Slots()) {
       InstalledPolicy* expected = nullptr;
       if (slot.compare_exchange_strong(expected, Busy(), std::memory_order_acquire)) { policy->slot = &slot; break; }
     }
-    if (!policy->slot) return {};
+    if (!policy->slot) return failed("slot");
     policy->package = package; policy->install = install; policy->uid = uid;
     std::wstring exe = Path(executable), writable = Path(data);
-    if (exe.empty() || writable.empty()) return {};
+    if (exe.empty() || writable.empty()) return failed("executable-or-data-path");
     policy->executable.assign(reinterpret_cast<const char16_t*>(exe.c_str()));
     std::vector<std::wstring> resources;
     // Runtime files beside this exact host executable; never grant its parent
@@ -267,7 +274,7 @@ struct InstalledPolicy {
     std::wstring runtime = exe.substr(0, exe.find_last_of(L'\\'));
     WIN32_FIND_DATAW file{};
     HANDLE scan = FindFirstFileW((runtime + L"\\*").c_str(), &file);
-    if (scan == INVALID_HANDLE_VALUE) return {};
+    if (scan == INVALID_HANDLE_VALUE) return failed("runtime-scan", GetLastError());
     do {
       if (file.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) continue;
       std::wstring name = file.cFileName;
@@ -277,48 +284,49 @@ struct InstalledPolicy {
     } while (FindNextFileW(scan, &file));
     DWORD scan_error = GetLastError();
     FindClose(scan);
-    if (scan_error != ERROR_NO_MORE_FILES) return {};
+    if (scan_error != ERROR_NO_MORE_FILES) return failed("runtime-scan-next", scan_error);
     std::wstring framework = runtime + L"\\framework";
     DWORD framework_attributes = GetFileAttributesW(framework.c_str());
     if (framework_attributes != INVALID_FILE_ATTRIBUTES) {
       auto checked = Path(std::u16string(reinterpret_cast<const char16_t*>(framework.c_str())));
-      if (checked.empty() || !(framework_attributes & FILE_ATTRIBUTE_DIRECTORY)) return {};
+      if (checked.empty() || !(framework_attributes & FILE_ATTRIBUTE_DIRECTORY)) return failed("framework-path");
       resources.push_back(std::move(checked));
     }
     for (const auto& item : read) {
       auto path = Path(item);
-      if (path.empty()) return {};
+      if (path.empty()) return failed("read-path");
       // No read tree can encompass app data (or vice versa).
       std::wstring a = path + L'\\', b = writable + L'\\';
       std::transform(a.begin(), a.end(), a.begin(), towlower);
       std::transform(b.begin(), b.end(), b.begin(), towlower);
-      if (a.compare(0, b.size(), b) == 0 || b.compare(0, a.size(), a) == 0) return {};
+      if (a.compare(0, b.size(), b) == 0 || b.compare(0, a.size(), a) == 0) return failed("read-data-overlap");
       resources.push_back(std::move(path));
     }
     policy->profile = launch_control::Profile(identity.generation);
     policy->userenv = LoadLibraryW(L"userenv.dll");
-    if (!policy->userenv) return {};
+    if (!policy->userenv) return failed("userenv-load", GetLastError());
     using CreateProfile = HRESULT (WINAPI*)(PCWSTR, PCWSTR, PCWSTR, PSID_AND_ATTRIBUTES, DWORD, PSID*);
     auto create = reinterpret_cast<CreateProfile>(GetProcAddress(policy->userenv, "CreateAppContainerProfile"));
     policy->delete_profile = reinterpret_cast<DeleteProfile>(GetProcAddress(policy->userenv, "DeleteAppContainerProfile"));
-    if (!create || !policy->delete_profile) return {};
+    if (!create || !policy->delete_profile) return failed("userenv-exports", GetLastError());
     HRESULT result = create(policy->profile.c_str(), policy->profile.c_str(), L"Gesher installed guest", nullptr, 0, &policy->sid);
     // Existing profiles are not adopted: their ownership/lifetime is unknown.
-    if (FAILED(result)) { policy->profile.clear(); return {}; }
+    if (FAILED(result)) { policy->profile.clear(); return failed("profile-create-hresult", static_cast<unsigned long>(result)); }
     resources.push_back(exe);
     for (const auto& path : resources) {
       if (policy->Pinned(path) != INVALID_HANDLE_VALUE) continue;
       size_t root = policy->pins.size();
-      if (!policy->PinResource(path)) return {};
-      if (!policy->Gather(root)) return {};
+      if (!policy->PinResource(path)) return failed("resource-pin");
+      if (!policy->Gather(root)) return failed("resource-gather");
     }
     size_t data_root = policy->pins.size();
-    if (!policy->PinResource(writable, true) || !policy->Gather(data_root)) return {};
+    if (!policy->PinResource(writable, true)) return failed("data-pin");
+    if (!policy->Gather(data_root)) return failed("data-gather");
     for (const auto& pin : policy->pins)
-      if (!pin.writable && !ReadOnlyIntegrity(pin.handle)) return {};
+      if (!pin.writable && !ReadOnlyIntegrity(pin.handle)) return failed("resource-integrity");
     PSECURITY_DESCRIPTOR low = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)",
-        SDDL_REVISION_1, &low, nullptr)) return {};
+        SDDL_REVISION_1, &low, nullptr)) return failed("label-descriptor", GetLastError());
     PACL label = nullptr; BOOL present = FALSE, defaulted = FALSE;
     bool labeled = GetSecurityDescriptorSacl(low, &present, &label, &defaulted) != FALSE;
     for (const auto& pin : policy->pins) {
@@ -336,7 +344,7 @@ struct InstalledPolicy {
       }
     }
     LocalFree(low);
-    if (!labeled) return {};
+    if (!labeled) return failed("grant-or-label");
     return policy;
   }
 };

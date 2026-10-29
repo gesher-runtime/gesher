@@ -375,11 +375,19 @@ bool ProvisionInstalled(const std::u16string& package, const std::u16string& ins
     int uid, const std::vector<std::u16string>& read, const std::u16string& data) {
   std::lock_guard<std::recursive_mutex> spawning(g_spawn_lock);
   InitControl();
-  if (g_retiring_installed || !g_writer || !g_control || !g_broker) return false;
+  if (g_retiring_installed || !g_writer || !g_control || !g_broker) {
+    fprintf(stderr, "installed guest policy: stage=authority retiring=%d writer=%d control=%d broker=%d\n",
+        static_cast<int>(g_retiring_installed), static_cast<int>(g_writer),
+        static_cast<int>(g_control != nullptr), static_cast<int>(g_broker != nullptr));
+    return false;
+  }
   if (package != guest::kSelectedPackage) return true;
   auto found = g_installed.find(package);
-  if (found != g_installed.end()) return !found->second->retiring &&
-      found->second->install == install && found->second->uid == uid;
+  if (found != g_installed.end()) {
+    bool matches = !found->second->retiring && found->second->install == install && found->second->uid == uid;
+    if (!matches) fprintf(stderr, "installed guest policy: stage=existing-mismatch\n");
+    return matches;
+  }
   auto policy = guest::InstalledPolicy::Create(package, install, uid, ExePath(), read, data);
   if (!policy) return false;
   g_installed.emplace(package, std::move(policy));
