@@ -27,6 +27,7 @@ public class SessionActivity extends Activity {
             CountDownLatch reentrant = new CountDownLatch(1), timeout = new CountDownLatch(1),
                     lateMarker = new CountDownLatch(1);
             AtomicReference<String> latePayload = new AtomicReference<>("");
+            AtomicInteger lateStatus = new AtomicInteger(-1);
             AtomicInteger timeoutCount = new AtomicInteger(), timeoutStatus = new AtomicInteger();
             AtomicReference<Object> hostRef = new AtomicReference<>();
             AtomicReference<Boolean> closeResult = new AtomicReference<>(false);
@@ -49,6 +50,7 @@ public class SessionActivity extends Activity {
                                 timeout.countDown();
                             }
                             if (type == 30 && (Long) args[1] == 6L) {
+                                lateStatus.set((Integer) args[2]);
                                 latePayload.set((String) args[3]);
                                 lateMarker.countDown();
                             }
@@ -81,11 +83,11 @@ public class SessionActivity extends Activity {
                     "{\"expression\":\"new Promise(r => setTimeout(() => {window.__sessionLate=7; r(7)}, 1000))\","
                             + "\"awaitPromise\":true,\"returnByValue\":true}", 100);
             boolean timedOut = timeout.await(5, TimeUnit.SECONDS);
-            Thread.sleep(1500); // let the real late CDP completion arrive before checking count
+            Thread.sleep(1500); // allow time for the page-side marker
             int marker = (Integer) submit.invoke(host, 6L, "", "Runtime.evaluate",
                     "{\"expression\":\"window.__sessionLate\",\"returnByValue\":true}", 5000);
             boolean markerObserved = lateMarker.await(5, TimeUnit.SECONDS)
-                    && latePayload.get().contains("\"value\":7");
+                    && lateStatus.get() == 0 && latePayload.get().contains("\"value\":7");
             int third = (Integer) submit.invoke(host, 3L, "", "Runtime.enable", "{}", 5000);
             boolean closed = reentrant.await(10, TimeUnit.SECONDS) && closeResult.get();
             int afterClose = (Integer) submit.invoke(host, 4L, "", "Runtime.enable", "{}", 5000);
