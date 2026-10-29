@@ -592,3 +592,19 @@ This is a fixture ordering correction, not reset acceptance or production error
 normalization. Original strict reset/SO_ERROR gaps remain OPEN. Raw logs:
 `C:/work/gesher-ci-review/tcp-409358-linux.log`,
 `C:/work/gesher-ci-review/tcp-409371-linux-alias-close.log`.
+
+Current-source c3347dc8/409376 characterization is terminal GREEN. Direct Linux
+raw audit confirms both original inline/noninline scenarios, finite60ms endpoint
+waits, freshHUP16, strict refusal24/caller111 then0/HUP16, concurrent error
+consumption, requester/reuse/reset controls, proven blocking-failed listener
+transition, all three named strict alias EOF0 phases, normal urgent-stream drain0
+and peer EAGAIN11 before last close, shared flags/UDP payload, delayed arrival and
+the complete-contract final marker. Both independent WinSDK jobs also succeeded.
+Raw current Linux log: `C:/work/gesher-ci-review/tcp-409376-linux.log`.
+
+The next comment-only workflow change requests one fresh component build and
+actual HOST/x86_64/arm64 contexts on both Windows versions, after independent
+trigger peer. No production source or assertion changes accompany that trigger.
+The real owned-mode/cancel/SNDTIMEO/owner-retirement/census, finalized-native-poll
+race, legacy lease, UDP error and all compiler/archive/member/import/source-role
+gates remain mandatory. No Windows product path has yet qualified this source.

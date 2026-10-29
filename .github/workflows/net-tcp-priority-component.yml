@@ -1,5 +1,6 @@
 name: net-tcp-priority-component
-# Record actual caller SO_ERROR after readiness; retain the strict ownership assertion.
+# Exercise reviewed owned completion/alias lifetime and actual native poll races.
+# Current full Linux reference passed; all Windows product contexts remain owed.
 on:
   workflow_dispatch:
   push:
