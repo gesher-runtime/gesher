@@ -170,7 +170,7 @@ int main(int argc,char **argv) {
   HANDLE controller_event=(HANDLE)pthread_getevent();
   check(controller && controller_thread && controller_event,"controller bookkeeping");
   check(GetThreadId(controller_thread)==GetCurrentThreadId(),"controller handle identity");
-  check(GetProcessHandleCount(GetCurrentProcess(),&after_observation) && before_observation==after_observation,"controller observation did not attach");
+  check(GetProcessHandleCount(GetCurrentProcess(),&after_observation) && before_observation==after_observation,"controller observation net count unchanged");
   printf("CONTROLLER_HANDLES thread=%p event=%p tid=%lu\n",controller_thread,controller_event,GetCurrentThreadId());
   check(destructors==338,"all exact destructors"); check(pthread_key_delete(key)==0,"delete key"); check(owned==0,"all fixture handles closed");
   check(GetProcessHandleCount(GetCurrentProcess(),&after),"final handle count");

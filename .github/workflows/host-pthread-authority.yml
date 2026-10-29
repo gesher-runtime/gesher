@@ -1,5 +1,5 @@
 # Separate fault supplier/host roles prove production hooks OFF by object/export.
-# Retirement inventory correlates controller bookkeeping with kernel identities.
+# Retirement inventory observes controller bookkeeping with unchanged net count.
 name: host pthread authority initial controls
 on:
   workflow_dispatch:
