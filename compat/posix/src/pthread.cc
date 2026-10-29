@@ -98,6 +98,15 @@ int ReadTargetClock(clockid_t id, timespec* value, bool resolution) {
 
 extern "C" {
 
+#if defined(GESHER_HOST_CPU_CLOCK_TEST_FAULTS)
+// Linked only into the separately named fault fixture role. No runtime switch.
+int gesher_host_cpu_clock_test_exhaust_ids_v1() {
+  std::lock_guard<std::mutex> guard(cpu_clock_lock);
+  next_cpu_clock = static_cast<int64_t>(INT_MIN) - 1;
+  return 0;
+}
+#endif
+
 int gesher_pthread_key_create(pthread_key_t* key, void (*destructor)(void*)) {
   if (destructor == nullptr) return pthread_key_create(key, nullptr);
   std::lock_guard<std::mutex> guard(slot_lock);

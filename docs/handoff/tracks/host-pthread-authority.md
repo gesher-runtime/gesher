@@ -36,6 +36,35 @@ handle through checked CloseHandle calls. No leak cause or correction is
 claimed before those actual counts are available. The dynamic pairing
 client was not reached in that failed workflow step.
 
+Diagnostic40803889036 at40228099 reproduces the same failure on both Windows.
+Actual fixture-owned handles are zero at every retirement. Capacity returns
+to stress-entry135/144;64 race rounds add32 (one per detached round), cancel
+adds zero, and1024 rapid detached exits add exactly1024 (1191/1200 final).
+Independent read-only peer identified source ownership loss: cleanup always
+lazily allocates the spin_keys Event, but the wrapper's detached branch went
+directly from p_clock destruction to pool memset without replace_spin_keys.
+The new supplier patch uses the same retirement helper as join/TLS before
+pool retirement. The wrapper already holds the registry lock, excluding
+concurrent key-deletion traversal; cleanup has returned after unlocking the
+spin lock, and no external API borrows that private spin-key lock. Event is
+the source-predicted type, not a measured object-type observation. Actual
+changed-source counts must verify the fix under the original bound.
+
+The separate fault provider adds its control API only via a second patch,
+applied only to a private copied compiler with role `fault`. The production
+DLL/static supplier prove its test-control symbol absent; production POSIX
+object proves the host exhaustion symbol absent and option OFF. The fault
+object proves option ON and its symbol present. The real-target fixture
+checks512 duplicate failures with untouched outputs/recovery, cached success
+and a new-target failure at host ID exhaustion, permanent generation
+exhaustion rejecting new registration, and real joins/reclaimed handles.
+There is no production runtime environment fault switch. This variant and
+the detached correction are source-prepared and require peer plus fresh CI.
+Externally attached threads calling pthread_exit after detach have additional
+manual retirement paths identified by the peer; those require their own
+real controls and remain open. Whole provider/direct-prebuilt ABI routes are
+listed in `host-pthread-authority-adoption-plan.md`.
+
 Earlier failures remain part of the record. Run40800633035 at exact
 358bb280 failed during whole supplier DLL link: upstream's GCC-only
 `-Wc,-no-pthread` reached Clang as an unused argument under `-Werror`.

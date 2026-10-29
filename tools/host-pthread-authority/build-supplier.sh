@@ -3,9 +3,15 @@
 set -euo pipefail
 test "${GITHUB_ACTIONS:-}" = true
 llvm=$(realpath "${1:?private compiler directory}")
+role=${2:-production}
+case "$role" in
+  production) suffix= ;;
+  fault) suffix=-fault ;;
+  *) exit 2 ;;
+esac
 root=$(git rev-parse --show-toplevel)
 test "$llvm" != "$HOME/toolchain/${LLVM_MINGW_NAME:-}"
-supplier="$PWD/host-authority-supplier"
+supplier="$PWD/host-authority-supplier$suffix"
 test ! -e "$supplier"
 mkdir "$supplier"
 git -C "$supplier" init -q
@@ -15,6 +21,10 @@ git -C "$supplier" checkout --detach FETCH_HEAD
 python3 "$root/tools/host-pthread-authority/receipt.py" inputs "$supplier"
 git -C "$supplier" apply --check "$root/tools/host-pthread-authority/supplier.patch"
 git -C "$supplier" apply "$root/tools/host-pthread-authority/supplier.patch"
+if test "$role" = fault; then
+  git -C "$supplier" apply --check "$root/tools/host-pthread-authority/fault-supplier.patch"
+  git -C "$supplier" apply "$root/tools/host-pthread-authority/fault-supplier.patch"
+fi
 export PATH="$llvm/bin:$PATH"
 mkdir "$supplier/build"
 cd "$supplier/build"
@@ -34,4 +44,4 @@ make install "libwinpthread_la_LDFLAGS=$supplier_ldflags" 2>&1 | tee install-com
 mkdir -p "$llvm/x86_64-w64-mingw32/share/mingw32"
 cp ../mingw-w64-libraries/winpthreads/COPYING "$llvm/x86_64-w64-mingw32/share/mingw32/COPYING.winpthreads.txt"
 cd "$root"
-python3 tools/host-pthread-authority/receipt.py supplier "$supplier" "$llvm"
+python3 tools/host-pthread-authority/receipt.py supplier "$supplier" "$llvm" "$role"

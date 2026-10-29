@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'host-authority-fixture'
 MEMBERS = {'host_pthread_authority_test.exe', 'host_pthread_supplier_test.exe',
            'libwinpthread-1.dll', 'supplier.json', 'COPYING.winpthreads.txt',
-           'imports-host.txt', 'imports-dynamic.txt', 'compiler.json'}
+           'imports-host.txt', 'imports-dynamic.txt', 'compiler.json',
+           'host_pthread_authority_fault_test.exe', 'fault-supplier.json',
+           'host-production-role.json', 'host-fault-role.json'}
 
 
 def compile_client(llvm):
@@ -79,6 +81,13 @@ def verify():
     supplier = json.loads((DIST / 'supplier.json').read_text())
     assert supplier['files']['bin/libwinpthread-1.dll'] == sha(DIST / 'libwinpthread-1.dll')
     assert supplier['files']['share/mingw32/COPYING.winpthreads.txt'] == sha(DIST / 'COPYING.winpthreads.txt')
+    for role, member in (('production', 'supplier.json'), ('fault', 'fault-supplier.json')):
+        host = json.loads((DIST / ('host-' + role + '-role.json')).read_text())
+        provider = json.loads((DIST / member).read_text())
+        assert host['role'] == role and host['test_hook_compiled'] == (role == 'fault')
+        assert host['supplier_receipt_sha256'] == sha(DIST / member)
+        assert all(host['context'][key] == value for key, value in context().items() if key in host['context'])
+        assert all(provider[key] == value for key, value in context().items())
     print('Verified initial host authority bundle; no full/guest/stress qualification implied')
 
 
